@@ -2117,9 +2117,17 @@ function validateAppSpec(spec, opts = {}) {
       const k = name.trim().toLowerCase();
       if (seen.has(k)) { errors.push(`${label}: mainFormOrder lists '${name}' more than once`); continue; }
       seen.add(k);
-      const matches = mains.filter((f) => f.name === name);
-      if (matches.length > 1) {
-        errors.push(`${label}: mainFormOrder names '${name}', but ${matches.length} Main forms of this table share that name — rename one so the order can address it`);
+      // The build finds a deployed form with a server-side `name eq` filter, which compares names the way
+      // Dataverse does — ignoring case and, in most languages, accents (dashboardNameKey: a dashboard is a
+      // systemform too, so its measured folding is a form name's) — so Main forms whose names compare
+      // equal there are one name to the build, and the order could not address either. The listed name
+      // must still be spelled exactly as in forms[]: it is a cross-reference into this spec, resolved
+      // exactly (listedMainForms, form-order.js).
+      const twins = mains.filter((f) => dashboardNameKey(f.name) === dashboardNameKey(name));
+      const matches = twins.filter((f) => f.name === name);
+      if (twins.length > 1) {
+        const spellings = [...new Set(twins.map((f) => `'${f.name}'`))];
+        errors.push(`${label}: mainFormOrder names '${name}', but ${twins.length} Main forms of this table share that name${spellings.length > 1 ? ` (${spellings.join(', ')}: Dataverse compares form names ignoring case and, in most languages, accents)` : ''} — rename one so the order can address it`);
       } else if (!matches.length) {
         const other = formsOfEntity.find((f) => f.name === name);
         errors.push(other
@@ -2655,7 +2663,10 @@ function validateAppSpec(spec, opts = {}) {
     // rebuild binds to before trying the name. Two entries pinning one id would bind two nav targets
     // to one dashboard, so each must be a distinct GUID.
     if (d.dashboardId !== undefined) {
-      const pin = typeof d.dashboardId === 'string' ? d.dashboardId.trim().replace(/^\{|\}$/g, '').toLowerCase() : '';
+      // A bare GUID, or one in braces as Dataverse writes it in sitemap XML — both braces or none: an id
+      // with a lone brace is malformed, not one to bind a dashboard to.
+      const raw = typeof d.dashboardId === 'string' ? d.dashboardId.trim() : '';
+      const pin = (/^\{.*\}$/.test(raw) ? raw.slice(1, -1) : raw).toLowerCase();
       if (!FORM_GUID_RE.test(pin)) {
         errors.push(`dashboard '${d.name}': dashboardId must be a GUID (got ${JSON.stringify(d.dashboardId)}) — it is the deployed dashboard's id, which a download writes; leave it out of an authored spec`);
       } else if (seenDashboardIds.has(pin)) {

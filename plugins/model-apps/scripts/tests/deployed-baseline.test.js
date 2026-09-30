@@ -32,6 +32,33 @@ test('a baseline is returned only for the app and environment it was written for
   }
 });
 
+// A plain write cut short by a crash or a full disk left a truncated file, which reads as no baseline — and
+// without one the spec wins over every nav change made in the designer. The baseline is written atomically
+// (writeFileAtomic, apply-snapshot-store.js), so a write that fails leaves the previous one, still readable.
+test('a baseline write that fails leaves the previous baseline readable, and no temp file', (t) => {
+  const dir = tmp();
+  try {
+    const ws = path.join(dir, '.maker-workspace');
+    const identity = { appDir: dir, environment: ENV, appUniqueName: 'new_a' };
+    writeBaseline(ws, spec(), identity);
+    const before = fs.readFileSync(baselinePath(ws), 'utf8');
+    const next = { ...spec(), app: { name: 'Renamed', uniqueName: 'new_a' } };
+    for (const step of ['fsyncSync', 'renameSync']) {
+      const mock = t.mock.method(fs, step, () => { throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' }); });
+      assert.throws(() => writeBaseline(ws, next, identity), { code: 'ENOSPC' }, step);
+      mock.mock.restore();
+      assert.strictEqual(fs.readFileSync(baselinePath(ws), 'utf8'), before, `${step}: the previous baseline is untouched`);
+      assert.strictEqual(readBaseline(ws, { environment: ENV, appUniqueName: 'new_a' }).app.name, 'A', step);
+      assert.deepStrictEqual(fs.readdirSync(ws), ['last-applied.json'], `${step}: no temp is left`);
+    }
+    writeBaseline(ws, next, identity);
+    assert.strictEqual(readBaseline(ws, { environment: ENV, appUniqueName: 'new_a' }).app.name, 'Renamed');
+    assert.deepStrictEqual(fs.readdirSync(ws), ['last-applied.json']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('a snapshot with no stamps, or one that cannot be read, is not a baseline', () => {
   const dir = tmp();
   try {

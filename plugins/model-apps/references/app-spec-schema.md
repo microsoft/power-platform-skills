@@ -713,7 +713,9 @@ at the same order, as every new form is — were served with the `isdefault` for
     "mainFormOrder": ["Work Item", "Work Item — Summary", "My Work — Work Item"] }
   ```
   The first form is the one the table opens with (an `isDefault` form must be first). A partial list
-  puts the listed forms first; the table's other spec forms follow in their current order.
+  puts the listed forms first; the table's other spec forms follow in their current order. Each name
+  is spelled as in `forms[]`, and must not match another Main form of the table ignoring case and
+  accents — Dataverse, and so the build, compares form names that way, and could not tell them apart.
 - **Neither set:** on a table this spec creates, the first Main form in spec order comes first and
   the others follow in spec order. On any other table the order is left as it is, and a Main form the
   build *creates* there is put after the table's other Main forms — adding an alternate form does not

@@ -25,6 +25,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { annotateContentHashes } = require('./content-hash.js');
 const { migrateAppSpec } = require('./app-spec.js');
+const { writeFileAtomic } = require('./apply-snapshot-store.js');
 
 const FILE = 'last-applied.json';
 // Stored beside the spec's own top-level keys. phase-diff.js compares only its per-phase slices, so
@@ -99,7 +100,11 @@ function writeBaseline(workspaceDir, spec, { appDir, environment, appUniqueName,
     [IDS_KEY]: deployedIdsFor(v2, { created, previous, fromSpec }),
   };
   fs.mkdirSync(workspaceDir, { recursive: true });
-  fs.writeFileSync(baselinePath(workspaceDir), JSON.stringify(snapshot));
+  // Atomically, like the apply snapshot: a crash or a full disk part-way through a plain write left a
+  // truncated file, which reads as no baseline — and without one the spec wins over every nav change made
+  // in the designer. A failed write now leaves the previous snapshot of this app and environment, which is
+  // still right about everything the latest apply did not change.
+  writeFileAtomic(baselinePath(workspaceDir), JSON.stringify(snapshot));
 }
 
 /**

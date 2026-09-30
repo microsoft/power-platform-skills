@@ -157,6 +157,36 @@ test('mainFormOrder rejects ambiguous same-table Main form names', () => {
   );
 });
 
+// The build finds a deployed form by name with a server-side filter that ignores case (and, in most languages,
+// accents), so Main forms whose names differ only that way are one name to it, and the order could address neither.
+test('mainFormOrder rejects Main forms whose names differ only by case or accents', () => {
+  errorFor(
+    (s) => {
+      s.forms.push(main(WORK_ITEM, 'work item'));
+      workItemEntity(s).mainFormOrder = ['Work Item'];
+    },
+    /mainFormOrder names 'Work Item', but 2 Main forms of this table share that name \('Work Item', 'work item': Dataverse compares form names ignoring case/
+  );
+  errorFor(
+    (s) => {
+      s.forms.push(main(WORK_ITEM, 'Wörk Item'));
+      workItemEntity(s).mainFormOrder = ['Wörk Item'];
+    },
+    /mainFormOrder names 'Wörk Item', but 2 Main forms of this table share that name/
+  );
+  // Only Main forms are in the Main Form Set, and the build looks a form up by its type too: a Quick View with a
+  // case-variant name is no twin.
+  const quickView = baseSpec();
+  quickView.forms.push({ entity: WORK_ITEM, name: 'work item', formType: 'QuickView', layout: 'auto' });
+  const r = validate(quickView);
+  assert.ok(!(r.errors || []).some((e) => /share that name/.test(e)), JSON.stringify(r.errors));
+  // The listed name is a cross-reference into forms[], so it must still be spelled exactly as there.
+  errorFor(
+    (s) => { workItemEntity(s).mainFormOrder = ['WORK ITEM']; },
+    /mainFormOrder names 'WORK ITEM', which is not a Main form of this table in forms\[\] \(its Main forms: 'Work Item'/
+  );
+});
+
 test('mainFormOrder must agree with an explicit default form', () => {
   errorFor(
     (s) => {

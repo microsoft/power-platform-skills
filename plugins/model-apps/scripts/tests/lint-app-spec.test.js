@@ -447,7 +447,7 @@ test('#631: the other likely mix-ups name their fix, and every key the build rea
 
 // AB#6726727: a downloaded dashboard carries the id it was read from (edit-snapshot, like pages[].pageId).
 // It must be a GUID, and two entries cannot pin one dashboard — both nav entries would bind to it.
-test('dashboards[].dashboardId must be a distinct GUID; a braced one is accepted', () => {
+test('dashboards[].dashboardId must be a distinct GUID; a braced one is accepted, a lone brace is not', () => {
   const withDashboards = (dashboards) => {
     const s = good();
     s.views = [{ entity: 'c_order', name: 'All Orders', columns: ['c_name'] }];
@@ -464,4 +464,9 @@ test('dashboards[].dashboardId must be a distinct GUID; a braced one is accepted
   assert.ok(dup.errors.some((e) => /dashboard 'Other': has the same dashboardId as dashboard 'Ops'/.test(e)), JSON.stringify(dup.errors));
   const ok = withDashboards([{ name: 'Ops', dashboardId: '{AAAA1111-2222-3333-4444-555566667777}', tiles: tile }]);
   assert.ok(!ok.errors.some((e) => /dashboardId/.test(e)), JSON.stringify(ok.errors));
+  // Both braces or none: an id with a lone brace is malformed, not one to bind a dashboard to.
+  for (const lone of ['{aaaa1111-2222-3333-4444-555566667777', 'aaaa1111-2222-3333-4444-555566667777}', '{{aaaa1111-2222-3333-4444-555566667777}}']) {
+    const r = withDashboards([{ name: 'Ops', dashboardId: lone, tiles: tile }]);
+    assert.ok(r.errors.some((e) => /dashboard 'Ops': dashboardId must be a GUID/.test(e)), `${lone}: ${JSON.stringify(r.errors)}`);
+  }
 });

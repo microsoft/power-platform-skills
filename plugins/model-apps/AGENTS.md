@@ -268,8 +268,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   case-sensitive match — and verify fails an entry without it (`subarea-dashboard-launcher`, which
   reads only real nav entries — a `SubArea` directly under `SiteMap/Area/Group`, never one in a comment
   or elsewhere — as the kept-icon check below does). With a
-  **baseline** — `.maker-workspace/last-applied.json`, written by a successful apply and by download,
-  stamped with its environment and app (`scripts/lib/deployed-baseline.js`) — a nav entry's
+  **baseline** — `.maker-workspace/last-applied.json`, written atomically by a successful apply and
+  by download, stamped with its environment and app (`scripts/lib/deployed-baseline.js`) — a nav entry's
   title/icon that the spec has not changed since, but the designer has, is kept and reported rather
   than reverted (`keepsLiveValue`); without one the spec wins and every change to an existing entry is
   reported. Baseline entries are lined up with live ones by the ids the baseline RECORDED for its
@@ -788,7 +788,7 @@ scripts/
     content-hash.js / hash.js  ← content-aware phase diff: fold on-disk .tsx/contentPath byte hashes into the diff (changed-only)
     classify-changes.js        ← changed-only: classify a spec diff → fast (page-content) | full | noop + sticky debt
     apply-snapshot.js          ← changed-only: pure eligibility state machine (identity bind, debt, tombstone, generation CAS)
-    apply-snapshot-store.js    ← changed-only: atomic snapshot write + workspace lease + invalidate/claim/tombstone/delete + distrust marker
+    apply-snapshot-store.js    ← changed-only: atomic snapshot write (writeFileAtomic, also the baseline's) + workspace lease + invalidate/claim/tombstone/delete + distrust marker
     apply-snapshot-index.js    ← changed-only: build result.created → snapshot artifact map
     workspace-paths.js         ← the `.maker-workspace` name + the guard that gates destructive --clear-workspace cleanup
     changed-only-flow.js       ← changed-only: --changed-only orchestration (decide fast/full, live identity, snapshot lifecycle)
