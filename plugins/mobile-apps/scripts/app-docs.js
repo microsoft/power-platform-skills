@@ -222,12 +222,17 @@ const AWAITING_LABEL = {
   design: 'the design system', offline: 'the offline profile', trust: 'the trust report',
 };
 
+// An active phase announces it is blocked through its note. Both spellings are accepted because
+// a gate writes "Gate 2 - awaiting your approval" while an ordinary question reads more naturally
+// as "Waiting for your answers"; matching only the first missed every prompt that is not a gate.
+const AWAITING_NOTE = /\bawaiting\b|\bwaiting for\b/i;
+
 function awaitingInput(state, active) {
   const states = state.sectionStates || {};
   for (const name of Object.keys(AWAITING_LABEL)) {
     if (states[name] === 'proposed') return `Review ${AWAITING_LABEL[name]} above, then answer in your terminal`;
   }
-  if (active && /awaiting/i.test(active.note || '')) return active.note;
+  if (active && AWAITING_NOTE.test(active.note || '')) return active.note;
   return '';
 }
 

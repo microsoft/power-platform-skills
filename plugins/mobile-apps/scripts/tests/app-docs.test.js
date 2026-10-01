@@ -267,6 +267,38 @@ test('nav icons come from blocks that actually render', () => {
   assert.equal(icons.includes(0x2637), false, 'TRIGRAM FOR EARTH does not render');
 });
 
+test('an ordinary question raises the banner, not just an approval gate', () => {
+  const root = project('docs-waiting');
+  const state = initState(root, { appName: 'App' });
+
+  // The first real prompt is the Step 2b setup questions, long before any section is proposed.
+  // Matching only /awaiting/ missed it, so the page looked busy while the run was blocked.
+  applyStep(state, { id: 'requirements', status: 'active', note: 'Waiting for your answers to the setup questions' });
+  assert.equal(summarize(state).awaitingInput, 'Waiting for your answers to the setup questions');
+
+  // A gate's own wording still works.
+  applyStep(state, { id: 'architecture', status: 'active', note: 'Gate 1 — awaiting your approval' });
+  assert.match(summarize(state).awaitingInput, /awaiting your approval/);
+
+  // Answering clears it, because the note does not outlive its status.
+  applyStep(state, { id: 'architecture', status: 'done' });
+  assert.equal(summarize(state).awaitingInput, '');
+
+  // An active phase that is merely working must not raise it.
+  applyStep(state, { id: 'screens', status: 'active', note: '3 of 12 screens built' });
+  assert.equal(summarize(state).awaitingInput, '');
+});
+
+test('the skill flags the run as blocked before its first question', () => {
+  const skill = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
+  );
+  const open = skill.match(/step --id requirements --status active([^\n]*)/);
+  assert.ok(open, 'the requirements phase must be opened');
+  assert.match(open[1], /--note "Waiting for your answers/,
+    'the first prompt must raise the waiting banner');
+});
+
 test('phase order matches the order the skill actually runs them', () => {
   const order = PHASES.map((phase) => phase.id);
   const at = (id) => order.indexOf(id);

@@ -345,8 +345,13 @@ Create the plan now that the display name is known, and open the first phase:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" init --app-name "<displayName>" --data-platform unknown
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id requirements --status active
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id requirements --status active --note "Waiting for your answers to the setup questions"
 ```
+
+The note is what raises the waiting-for-input banner on the plan, so the user can tell from the page
+that the run is blocked on them rather than still working. **Set one whenever you are about to ask a
+question and the answer gates the run.** It clears itself on the next status change, so there is
+nothing to remember to take down.
 
 > **Goal:** Turn the user's thin prompt into a confirmed feature brief before the planner runs. The planner agent receives this brief verbatim — richer input means better data model inference, accurate connector detection, and correct screen specs.
 
