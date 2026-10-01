@@ -52,6 +52,7 @@ If you prefer to install manually, run these commands inside a GitHub Copilot CL
     /plugin install power-apps-mobile-extension@power-platform-skills
     /plugin install canvas-apps@power-platform-skills
     /plugin install power-automate@power-platform-skills
+    /plugin install dataverse@power-platform-skills
     ```
 
 ## Available Plugins
@@ -116,6 +117,16 @@ Author Power Apps Canvas Apps using the Canvas Authoring MCP server.
 Build, edit, run, and debug Power Automate cloud flows via the FlowAgent MCP server.
 
 **Stack**: Node.js 18+, Azure CLI (`az login`), self-contained MCP bundle
+
+### [Dataverse](https://github.com/microsoft/Dataverse-skills) (external)
+
+Work with Microsoft Dataverse: connect to an environment, query and change records, manage tables and columns, and handle security, administration, and solutions.
+
+**Stack**: Dataverse MCP server, Dataverse CLI, Python SDK, and PAC CLI
+
+This plugin is maintained in [microsoft/Dataverse-skills](https://github.com/microsoft/Dataverse-skills), and this marketplace installs it straight from that repository's default branch.
+Report issues and send changes there.
+If you already installed `dataverse` from the `dataverse-skills` marketplace, keep only one of the two installs so its skills are not loaded twice.
 
 ## Local Development
 
@@ -281,6 +292,11 @@ plugin entry is intentionally just `name` plus repository-root-relative `source`
 Plugin descriptions, versions, licenses, and keywords are controlled from each
 plugin's `.plugin/plugin.json`. This keeps existing subscriptions updating without
 duplicating display/update metadata.
+
+Plugins maintained in other repositories, such as `dataverse`, use a remote `source` object instead of a path.
+Copilot CLI reads `marketplace.json` and Claude Code reads `.claude-plugin/marketplace.json`, and they spell a plugin in a repository subdirectory differently.
+So `marketplace.json` uses `"source": "github"` with `repo` and `path`, and the legacy file uses `"source": "git-subdir"` with `url` and `path`.
+`scripts/validate-legacy-compatibility.js` enforces that pairing.
 
 ## Documentation
 

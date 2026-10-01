@@ -182,6 +182,21 @@ drifting these files can force users to reinstall. Because mirrors are committed
 files (not symlinks), update both source and legacy copies together, then run
 `node scripts/validate-legacy-compatibility.js` after metadata changes.
 
+### External plugins
+
+A plugin maintained in another repository (today `dataverse`, from `microsoft/Dataverse-skills`) is listed with a remote `source` object instead of a `./plugins/<name>` path.
+Its metadata and legacy mirrors live in that repository, so nothing for it is committed under `plugins/`.
+This is the one place where the two marketplace files intentionally differ, because each host reads a different file and spells a subdirectory source differently:
+
+- `marketplace.json` (read by Copilot CLI): `{ "source": "github", "repo": "owner/repo", "path": "sub/dir" }`.
+  Copilot CLI rejects `git-subdir` and then refuses the whole marketplace, breaking every plugin in it.
+- `.claude-plugin/marketplace.json` (read by Claude Code): `{ "source": "git-subdir", "url": "owner/repo", "path": "sub/dir" }`.
+  Claude Code's `github` source ignores `path`, installs the repository root, and loads no skills while still reporting success.
+
+Carry any `ref` or `sha` pin into both entries.
+The validator enforces the pairing, and `scripts/tests/validate-legacy-compatibility.test.js` covers it.
+After adding or changing an external entry, install it from a local checkout in both hosts (`copilot plugin marketplace add <checkout>` and `claude plugin marketplace add <checkout>`) and confirm its skills load.
+
 ## Code Conventions
 
 **DRY (Don't Repeat Yourself):** Never duplicate logic across files. Each plugin has shared utilities (e.g., `scripts/lib/`) and shared reference docs (e.g., `references/`). Always check for and reuse existing helpers before writing new code. When adding shared logic, put it in the plugin's shared modules — not in individual skill directories.

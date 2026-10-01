@@ -23,6 +23,9 @@ jobs:
             - name: validate-open-plugin-names
               run: node scripts/validate-plugin-names.js
 
+            - name: test-legacy-compatibility-validator
+              run: node --test scripts/tests/validate-legacy-compatibility.test.js
+
             - name: validate-legacy-compatibility
               run: node scripts/validate-legacy-compatibility.js
 
