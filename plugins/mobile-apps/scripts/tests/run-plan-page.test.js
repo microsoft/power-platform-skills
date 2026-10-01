@@ -893,6 +893,22 @@ test('the two plan-document links are siblings, not one inside the other', () =>
   assert.match(template, /container\.appendChild\(link\);\s*\n\s*container\.appendChild\(raw\);/);
 });
 
+test('mockup CSS cannot reach past the phone frame', () => {
+  const template = fs.readFileSync(path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8');
+
+  // CSS is the one vector the CSP cannot close: `style-src 'unsafe-inline'` is required for this
+  // page's own stylesheet and for Mermaid's, so an injected stylesheet would be permitted.
+  // A `<style>` element's selectors are global and could restyle the approval banner or the
+  // trust report - hiding or spoofing the UI a reviewer is reading.
+  assert.match(template, /MOCKUP_BANNED_TAGS = \[[^\]]*'STYLE'/);
+
+  // `style=` attributes survive, because they are what makes a mockup look like the screen. They
+  // only affect their own element - except `position: fixed`, which would otherwise lay out
+  // against the viewport. `contain: paint` makes the frame a containing block for fixed and
+  // absolute descendants, so an injected overlay stays inside the phone.
+  assert.match(template, /\.car-frame\{[^}]*contain:layout paint/);
+});
+
 test('every function the page defines is defined exactly once', () => {
   // `showSource` was defined twice, the second copy silently replacing the first. Duplicates are
   // invisible at runtime, so the only way to see one is to count the definitions.

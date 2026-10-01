@@ -466,7 +466,7 @@ planning degradation; it never relaxes `/add-dataverse` reconciliation.
 
 Set tentative defaults (the preview preference applies at Step 6.75):
 
-- `<visual_companion> = yes` — automatically open `_plan_preview.html` in the browser at Step 6.75, after the design choice. Gate 4 remains markdown-only regardless of this preference. `/design-system` may change it to `no`; persist the final value to memory-bank for future runs.
+- `<visual_companion> = yes` — render `_plan_preview.html` at Step 6.75, after the design choice. **Nothing is opened in a browser during a create run**, whatever this is set to: the build plan shows the same screens in its phone frame and links out to the file, and every opener in `/design-system` and its style picker is gated on `CODE_APPS_NATIVE_ORCHESTRATING=1`, which this skill passes. The flag governs only a later standalone `/preview-screens` or `/edit-app` re-plan, where there is no plan page to link from. Gate 4 remains markdown-only regardless. `/design-system` may change it to `no`; persist the final value to memory-bank for future runs.
 - `<design_vibe_opt_in> = deferred` — Step 6.75 sets the real value. While `deferred`, the planner does NOT prompt for a direction; it writes a placeholder `## Design Direction: <deferred — set by /design-system>` block so screen-planner can still run.
 
 **`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no`, skips the style-picker handoff at Step 3a entirely, and short-circuits Step 6.75 to a no-op (placeholder block stays in `native-app-plan.md`; screen-builders fall back to industry-inferred defaults).

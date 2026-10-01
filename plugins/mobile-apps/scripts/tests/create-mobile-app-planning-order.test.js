@@ -389,3 +389,23 @@ test('the screen preview has exactly one filename, everywhere it is named', () =
   assert.ok(written.length > 0 && printed.length > 0, 'the preview must be written and announced');
   assert.deepEqual([...new Set(written.concat(printed))], ['_plan_preview.html']);
 });
+
+test('no instruction promises a browser window during an orchestrated run', () => {
+  const skill = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
+  );
+  // Step 6.75 guarantees no window opens, but the Step 2b preference definition still told the
+  // agent that `visual_companion = yes` opens one - a directive it could legitimately follow.
+  const preference = skill.split('\n').find((l) => l.startsWith('- `<visual_companion> = yes`'));
+  assert.ok(preference, 'the preference must be defined');
+  assert.doesNotMatch(preference, /automatically open/);
+  assert.match(preference, /Nothing is opened in a browser during a create run/);
+
+  // And the nested skill's own branch descriptions say which runs they apply to.
+  const designSystem = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'design-system', 'SKILL.md'), 'utf8',
+  );
+  for (const line of designSystem.split('\n').filter((l) => /opens browser|Open in browser/.test(l))) {
+    assert.match(line, /standalone runs only/, `ungated opener: ${line.trim().slice(0, 70)}`);
+  }
+});

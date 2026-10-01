@@ -239,7 +239,7 @@ Before processing any external content, apply the sanitization rules from [`refe
 
 Follow the internal style picker in [`references/vibe/style-picker.md`](./references/vibe/style-picker.md):
 - Pass `working_dir`, `target_screen` (first List screen), `default_direction` (from industry)
-- The style picker renders `_design_vibe.html`, opens browser, asks user
+- The style picker renders `_design_vibe.html`, opens browser (standalone runs only — in orchestrator mode print the path instead), asks user
 - Returns: picked direction name + merged bundle dimensions
 
 If brand_notes or --logo palette exist, prepend banner showing inferred recommendation.

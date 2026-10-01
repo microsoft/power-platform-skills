@@ -94,7 +94,12 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 @keyframes railFade{to{opacity:1;}}
 /* Stage 2 - carousel */
 .car{position:absolute;inset:0;background:#fff;}
-.car-frame{position:absolute;inset:0;overflow:auto;}
+.car-frame{position:absolute;inset:0;overflow:auto;contain:layout paint;}
+/* `contain: paint` makes this a containing block for absolutely AND fixed positioned
+   descendants, so an injected `style="position:fixed;inset:0"` in a mockup is trapped in the
+   phone frame instead of covering the plan. Attribute styles survive sanitizing because they
+   are what makes a mockup look like the screen; this is what keeps them local.
+   https://developer.mozilla.org/en-US/docs/Web/CSS/contain */
 .car-nav{position:absolute;bottom:0;left:0;right:0;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;background:linear-gradient(to top,rgba(0,0,0,.55),transparent);z-index:4;}
 .car-btn{width:30px;height:30px;border-radius:50%;border:0;background:rgba(255,255,255,.92);color:#201f1e;font-size:15px;cursor:pointer;display:grid;place-items:center;box-shadow:var(--shadow-4);}
 .car-btn:disabled{opacity:.35;cursor:default;}
@@ -782,7 +787,13 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 
   // Elements that execute, navigate, or reach the network. `link`/`meta`/`base` are included
   // because a mockup is a fragment of a document and must not redefine this one's head.
-  var MOCKUP_BANNED_TAGS = ['SCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META', 'BASE', 'FORM'];
+  // `STYLE` is here for a different reason from the rest. The others execute or navigate; a
+  // stylesheet cannot, but its selectors are global, so a mockup carrying one could restyle the
+  // approval banner or the trust report - hiding or spoofing the very UI a reviewer is reading.
+  // The CSP cannot refuse it: `style-src 'unsafe-inline'` is required for this page's own
+  // stylesheet and for Mermaid's. Mockups keep their `style=` attributes, which only ever affect
+  // the element carrying them; see `.car-frame` for how those are kept inside the phone.
+  var MOCKUP_BANNED_TAGS = ['SCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META', 'BASE', 'FORM', 'STYLE'];
   // `javascript:` executes; `data:text/html` navigates to attacker-controlled markup with this
   // document's privileges. Images as `data:` are fine and are how the QR is drawn.
   var MOCKUP_BANNED_URL = /^\s*(javascript:|data:text\/html)/i;
