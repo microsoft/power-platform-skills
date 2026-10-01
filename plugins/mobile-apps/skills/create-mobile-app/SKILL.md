@@ -1619,22 +1619,37 @@ visual_companion: <yes|no>   # default from Step 2b; applied at Step 6.75 and la
 **Print before starting:**
 > "→ [Step 6.75/13] Locking your design system — source of truth for every screen built next. Takes 5 sec to 3 min depending on path."
 
-Open the design phase (Step 6.75 marks it done once the tokens are written):
+**Skip this step if `--no-design` is in `$ARGUMENTS`** — record it as skipped rather than leaving
+it open, because this branch never reaches the `done` call below:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id design --status skipped
+```
+
+Marking it `active` here instead would leave it active through auth and most of Step 8, until
+opening the next phase auto-closed it as `done` — reporting a design system that was never built.
+
+**On the skip branch** — placeholder `## Design Direction: <deferred>` block stays in the plan, screen-builders fall back to industry-inferred defaults from `universal-patterns.md`.
+
+**Otherwise**, open the phase and invoke `/design-system` (ships with this plugin):
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id design --status active
 ```
 
-**Skip this step if `--no-design` is in `$ARGUMENTS`** — placeholder `## Design Direction: <deferred>` block stays in the plan, screen-builders fall back to industry-inferred defaults from `universal-patterns.md`.
-
-**Otherwise**, invoke `/design-system` (ships with this plugin):
-
 ```
 Invoke skill: /design-system
+
+Environment:
+  CODE_APPS_NATIVE_ORCHESTRATING=1
 
 Arguments:
   --working-dir <working_dir>
 ```
+
+The `Environment` block is load-bearing, and follows the nested-skill handoff `/edit-app` already
+uses. `/design-system` and its style picker gate every browser opener on that variable; without it
+they detect a standalone run and open tabs over the build plan.
 
 The skill detects orchestrator mode (`CODE_APPS_NATIVE_ORCHESTRATING=1`), collects brand inputs, presents the cost picker (a/b/c/d), runs the internal style picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders `brand/design-system.html`, and returns with status.
 

@@ -221,7 +221,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   background:var(--surface);border:1px solid var(--border);border-radius:999px;
   font-size:13px;color:var(--accent);text-decoration:none;box-shadow:var(--shadow-4);}
 .plan-doc:hover{border-color:var(--accent-border);background:var(--accent-bg);}
-.plan-doc-raw{font-family:var(--mono);font-size:12px;color:var(--text-dim);text-decoration:none;}
+.plan-doc-raw{font-family:var(--mono);font-size:12px;color:var(--text-dim);text-decoration:none;margin-left:8px;align-self:center;}
 .plan-doc-raw:hover{color:var(--accent);text-decoration:underline;}
 .bullets{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;}
 .bullets li{line-height:1.55;}
@@ -1046,7 +1046,11 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       (table.relationships || []).forEach(function (rel) {
         var to = ids[rel.relatedTable];
         if (!from || !to || from === to) return;
-        var pairKey = [from, to].sort().join('|');
+        // Both tables declare the same relationship from their own side, so the reverse
+        // declaration is a duplicate and is suppressed - but only for that same relationship.
+        // The name is part of the identity, or a second lookup between the same two tables is
+        // lost.
+        var pairKey = [from, to].sort().join('|') + '|' + erLabel(rel.name || 'related');
         if (seen[pairKey]) return;
         seen[pairKey] = true;
         lines.push('    ' + from + ' ' + erCardinality(rel.cardinality) + ' ' + to + ' : "' + erLabel(rel.name || 'related') + '"');
@@ -1364,8 +1368,8 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     var raw = el('a', 'plan-doc-raw', 'native-app-plan.md');
     raw.setAttribute('href', summary.planDocHref);
     raw.setAttribute('title', 'Open as plain text in this browser instead');
-    link.appendChild(raw);
     container.appendChild(link);
+    container.appendChild(raw);
   }
 
   function renderScreens() {

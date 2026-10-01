@@ -140,7 +140,7 @@ const PHONE_STAGES = new Set(['building', 'screens', 'qr']);
 /**
  * The device rail beside the plan. It moves through three stages as the run proceeds:
  *   building  an animation, from the first phase until the design is locked
- *   screens   a carousel of the plan-time screen previews `/design-system` renders at Step 4,
+ *   screens   a carousel of the plan-time screen previews `/design-system` renders at Step 6.75,
  *             which exist before any TSX is written
  *   qr        the Metro QR code, so the last thing the plan shows is how to open the real app
  */
@@ -335,8 +335,12 @@ function editorHref(projectRoot, fileName) {
   if (!fs.existsSync(absolute)) return '';
   const forwardSlashed = absolute.replace(/\\/g, '/');
   const rooted = forwardSlashed.startsWith('/') ? forwardSlashed : `/${forwardSlashed}`;
-  // encodeURI, not encodeURIComponent: the separators must survive as separators.
-  return `vscode://file${encodeURI(rooted)}`;
+  // encodeURI keeps `/` as a separator, which is what this needs, but it also leaves `?` and
+  // `#` alone - and both are legal in a POSIX path. `/tmp/app#1/native-app-plan.md` would parse
+  // as pathname `/tmp/app` with the rest as a fragment, so the editor opens nothing. Escape
+  // those two afterwards; every other character encodeURI already handles.
+  const escaped = encodeURI(rooted).replace(/\?/g, '%3F').replace(/#/g, '%23');
+  return `vscode://file${escaped}`;
 }
 
 function render(projectRoot, state) {
@@ -365,11 +369,6 @@ function render(projectRoot, state) {
   });
 }
 
-/**
- * Put the brand mark next to the rendered page so its `./power-apps-icon.svg` reference
- * resolves when the file is opened straight from disk. Best-effort, matching the sibling
- * power-pages behaviour: a missing icon must not fail a render.
- */
 /**
  * The brand mark as a `data:` URI.
  *

@@ -849,6 +849,50 @@ test('the third-party script is pinned by version and by content', () => {
   assert.match(template, /Mermaid could not load/);
 });
 
+test('two relationships between the same tables both survive into the diagram', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-rels-'));
+  let state = initState(root, { appName: 'Rels', dataPlatform: 'dataverse' });
+  state = setSection(state, 'dataModel', {
+    tables: [
+      {
+        logicalName: 'contoso_request', displayName: 'Request', status: 'new',
+        columns: [{ logicalName: 'contoso_requestid', type: 'Unique identifier', key: 'PK' }],
+        // A requester and an approver lookup to the same table. Keying the dedup on the table
+        // pair alone drew the first and silently dropped the second.
+        relationships: [
+          { relatedTable: 'systemuser', name: 'requested by', cardinality: 'N:1' },
+          { relatedTable: 'systemuser', name: 'approved by', cardinality: 'N:1' },
+        ],
+      },
+      {
+        logicalName: 'systemuser', displayName: 'User', status: 'reused',
+        columns: [{ logicalName: 'systemuserid', type: 'Unique identifier', key: 'PK' }],
+        relationships: [],
+      },
+    ],
+  }, 'approved');
+  save(root, state);
+
+  const { diagrams, thrown } = runPage(outputPath(root));
+  assert.deepEqual(thrown.map((e) => e.message), []);
+  const er = diagrams.find((d) => d.source.startsWith('erDiagram'));
+  assert.ok(er, 'the ER diagram must render');
+  assert.match(er.source, /"requested by"/);
+  assert.match(er.source, /"approved by"/);
+
+  // The reverse declaration of the same relationship is still suppressed.
+  const edges = [...er.source.matchAll(/^ {4}\S+ \S+ \S+ : "([^"]+)"$/gm)].map((m) => m[1]);
+  assert.equal(edges.length, new Set(edges).size, 'no relationship may be drawn twice');
+});
+
+test('the two plan-document links are siblings, not one inside the other', () => {
+  const template = fs.readFileSync(path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8');
+  // An <a> inside an <a> is invalid and leaves keyboard and screen-reader users with an
+  // ambiguous control.
+  assert.doesNotMatch(template, /link\.appendChild\(raw\)/);
+  assert.match(template, /container\.appendChild\(link\);\s*\n\s*container\.appendChild\(raw\);/);
+});
+
 test('every function the page defines is defined exactly once', () => {
   // `showSource` was defined twice, the second copy silently replacing the first. Duplicates are
   // invisible at runtime, so the only way to see one is to count the definitions.

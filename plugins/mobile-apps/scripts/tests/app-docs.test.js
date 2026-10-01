@@ -366,6 +366,53 @@ test('the skill marks a phase failed before it stops', () => {
   assert.match(skill, /No argument switches this protocol off/);
 });
 
+test('an editor link survives a path containing ? or #', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-url-#1-'));
+  fs.writeFileSync(path.join(root, 'native-app-plan.md'), '# plan\n');
+  save(root, initState(root, { appName: 'App' }));
+
+  const summary = JSON.parse(
+    fs.readFileSync(outputPath(root), 'utf8')
+      .match(/<script id="summaryData" type="application\/json">([\s\S]*?)<\/script>/)[1],
+  );
+
+  // encodeURI keeps `/` as a separator but leaves `?` and `#` alone, and both are legal in a
+  // POSIX path. Unescaped, `/tmp/app#1/plan.md` parses as pathname `/tmp/app` with the rest a
+  // fragment, so the editor opens nothing.
+  assert.doesNotMatch(summary.planDocEditorHref, /#(?!23)/, 'a # must be percent-encoded');
+  const pathname = new URL(summary.planDocEditorHref).pathname;
+  assert.match(pathname, /native-app-plan\.md$/, 'the whole path must survive into the URL');
+});
+
+test('the skill records a skipped design step instead of leaving it open', () => {
+  const skill = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
+  );
+  const design = skill.slice(skill.indexOf('### Step 6.75'), skill.indexOf('### Step 7 '));
+
+  // `--no-design` returns before the `done` call. Opening the phase on that branch left it
+  // active through auth and most of Step 8, until opening the next phase auto-closed it as
+  // done - reporting a design system that was never built.
+  const skipAt = design.indexOf('step --id design --status skipped');
+  const openAt = design.indexOf('step --id design --status active');
+  assert.ok(skipAt !== -1, 'the skip branch must record itself');
+  assert.ok(openAt !== -1, 'the real path must open the phase');
+  assert.ok(skipAt < openAt, 'the skip branch comes first, so the phase is only opened when used');
+});
+
+test('nested skills are handed the orchestration flag, not just told about it', () => {
+  const skill = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
+  );
+  // `/design-system` and its style picker gate every browser opener on this variable. Asserting
+  // it was set without passing it made those guards dead code: the nested skill saw a standalone
+  // run and opened tabs over the build plan anyway.
+  const invocation = skill.slice(skill.indexOf('Invoke skill: /design-system'));
+  const block = invocation.slice(0, invocation.indexOf('```'));
+  assert.match(block, /Environment:\s*\n\s*CODE_APPS_NATIVE_ORCHESTRATING=1/,
+    'the invocation must pass the flag the guards read');
+});
+
 test('phase order matches the order the skill actually runs them', () => {
   const order = PHASES.map((phase) => phase.id);
   const at = (id) => order.indexOf(id);
