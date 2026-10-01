@@ -1,0 +1,13 @@
+<form>
+  <tabs><tab><columns><column><sections><section><rows><row>
+    <cell><control id="new_rating" classid="{F9A8A302-114E-466A-B582-6771B2AE0D92}" datafieldname="new_rating" uniqueid="{ABCDEFAB-1234-4ABC-8ABC-ABCDEFABCDEF}" /></cell>
+  </row></rows></section></sections></column></columns></tab></tabs>
+  <controlDescriptions>
+    <controlDescription forControl="{abcdefab-1234-4abc-8abc-abcdefabcdef}">
+      <customControl id="{4273EDBD-AC1D-40d3-9FB2-095C621B552D}"><parameters><datafieldname>new_rating</datafieldname></parameters></customControl>
+      <customControl formFactor="0" name="new_Contoso.Controls.StarRating"><parameters><value>new_rating</value></parameters></customControl>
+      <customControl formFactor="1" name="new_Contoso.Controls.StarRating"><parameters><value>new_rating</value></parameters></customControl>
+      <customControl formFactor="2" name="new_Contoso.Controls.StarRating"><parameters><value>new_rating</value></parameters></customControl>
+    </controlDescription>
+  </controlDescriptions>
+</form>

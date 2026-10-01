@@ -1,0 +1,247 @@
+import { IInputs, IOutputs } from "./generated/ManifestTypes";
+import { loadLookupOptions, LookupOption } from "./lookupData";
+import "./css/{{name}}.css";
+
+const STRINGS = {
+    selectLabel: "Lookup_Select_Label",
+    emptyOption: "Lookup_Empty_Option",
+    loading: "Lookup_Loading",
+    bindLookup: "Lookup_Bind_Message",
+    permission: "Lookup_Permission_Message",
+    noOptions: "Lookup_No_Options",
+    moreRows: "Lookup_More_Rows",
+    unavailable: "Lookup_Unavailable_Message",
+    targetMismatch: "Lookup_Target_Mismatch_Message",
+};
+
+const FALLBACKS: Record<string, string> = {
+    [STRINGS.selectLabel]: "Lookup value",
+    [STRINGS.emptyOption]: "(Clear lookup)",
+    [STRINGS.loading]: "Loading lookup options...",
+    [STRINGS.bindLookup]: "Bind this component to a lookup column.",
+    [STRINGS.permission]: "You do not have permission to read this lookup.",
+    [STRINGS.noOptions]: "No active lookup rows were found.",
+    [STRINGS.moreRows]: "More rows exist. Refine the selectable filter to narrow the list.",
+    [STRINGS.unavailable]: "Unable to load lookup options.",
+    [STRINGS.targetMismatch]: "Target table configuration does not match the selected lookup value.",
+};
+
+export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOutputs> {
+    private root: HTMLDivElement | null = null;
+    private select: HTMLSelectElement | null = null;
+    private status: HTMLDivElement | null = null;
+    private notifyOutputChanged: (() => void) | null = null;
+    private options: LookupOption[] = [];
+    private selected: LookupOption | undefined;
+    private lastCommittedKey = "";
+    private loadToken = 0;
+    private strings = FALLBACKS;
+    private currentQueryKey = "";
+    private loadMessage = "";
+    private latestContext: ComponentFramework.Context<IInputs> | null = null;
+
+    private readonly onChange = (): void => {
+        if (!this.select) return;
+        const next = this.options.find((option) => sameId(option.id, this.select?.value || ""));
+        const nextKey = lookupKey(next);
+        if (nextKey === this.lastCommittedKey) return;
+
+        this.selected = next;
+        this.lastCommittedKey = nextKey;
+        this.notifyOutputChanged?.();
+    };
+
+    public init(
+        context: ComponentFramework.Context<IInputs>,
+        notifyOutputChanged: () => void,
+        _state: ComponentFramework.Dictionary,
+        container: HTMLDivElement,
+    ): void {
+        this.notifyOutputChanged = notifyOutputChanged;
+        this.strings = Object.fromEntries(
+            Object.entries(FALLBACKS).map(([key, fallback]) => [key, stringResource(context, key, fallback)]),
+        );
+
+        this.root = document.createElement("div");
+        this.root.className = "{{cssClass}}";
+
+        this.select = document.createElement("select");
+        this.select.className = "{{cssInputClass}}";
+        this.select.setAttribute("aria-label", this.strings[STRINGS.selectLabel]);
+        this.select.addEventListener("change", this.onChange);
+
+        this.status = document.createElement("div");
+        this.status.className = "{{cssMessageClass}}";
+        this.status.setAttribute("role", "status");
+
+        this.root.append(this.select, this.status);
+        container.append(this.root);
+        this.updateView(context);
+    }
+
+    public updateView(context: ComponentFramework.Context<IInputs>): void {
+        this.latestContext = context;
+        const lookup = context.parameters.lookupValue;
+        const readable = lookup?.security?.readable ?? true;
+        const editable = lookup?.security?.editable ?? true;
+        this.selected = normalizeLookupValue(lookup?.raw);
+        this.lastCommittedKey = lookupKey(this.selected);
+
+        if (!this.select || !this.status) return;
+
+        if (!lookup) {
+            this.options = [];
+            this.currentQueryKey = "";
+            this.loadMessage = "";
+            this.loadToken += 1;
+            this.render(context, this.strings[STRINGS.bindLookup], true, false);
+            return;
+        }
+
+        if (!readable) {
+            this.options = [];
+            this.currentQueryKey = "";
+            this.loadMessage = "";
+            this.loadToken += 1;
+            this.render(context, this.strings[STRINGS.permission], true, true);
+            return;
+        }
+
+        if (this.selected && !matchesConfiguredTarget(context, this.selected)) {
+            this.options = [this.selected];
+            this.currentQueryKey = "";
+            this.loadMessage = "";
+            this.loadToken += 1;
+            this.render(context, this.strings[STRINGS.targetMismatch], true, false);
+            return;
+        }
+
+        const queryKey = lookupQueryKey(context);
+        if (queryKey === this.currentQueryKey) {
+            this.options = mergeSelected(this.options, this.selected);
+            this.render(context, this.loadMessage, !editable, false);
+            return;
+        }
+        this.currentQueryKey = queryKey;
+        this.loadMessage = this.strings[STRINGS.loading];
+        const token = ++this.loadToken;
+        this.render(context, this.loadMessage, !editable, false);
+        void this.refreshOptions(context, token);
+    }
+
+    private async refreshOptions(
+        context: ComponentFramework.Context<IInputs>,
+        token: number,
+    ): Promise<void> {
+        try {
+            const result = await loadLookupOptions(context);
+            if (token !== this.loadToken) return;
+            this.options = mergeSelected(result.options, this.selected);
+            const message = result.moreRowsExist
+                ? this.strings[STRINGS.moreRows]
+                : this.options.length ? "" : this.strings[STRINGS.noOptions];
+            this.loadMessage = message;
+            this.renderLatest(message, false);
+        } catch {
+            if (token !== this.loadToken) return;
+            this.options = mergeSelected([], this.selected);
+            this.loadMessage = this.strings[STRINGS.unavailable];
+            this.renderLatest(this.strings[STRINGS.unavailable], false);
+        }
+
+    }
+
+    private renderLatest(message: string, hidden: boolean): void {
+        const context = this.latestContext;
+        if (!context) return;
+        const editable = context.parameters.lookupValue?.security?.editable ?? true;
+        this.render(context, message, !editable, hidden);
+    }
+
+    public getOutputs(): IOutputs {
+        return {
+            lookupValue: this.selected ? [this.selected] : undefined,
+        };
+    }
+
+    public destroy(): void {
+        this.loadToken += 1;
+        this.select?.removeEventListener("change", this.onChange);
+        this.root?.remove();
+        this.root = null;
+        this.select = null;
+        this.status = null;
+        this.notifyOutputChanged = null;
+        this.latestContext = null;
+    }
+
+    private render(context: ComponentFramework.Context<IInputs>, message: string, readOnly: boolean, hidden: boolean): void {
+        if (!this.select || !this.status) return;
+
+        this.select.replaceChildren(emptyOption(this.strings[STRINGS.emptyOption]), ...this.options.map(optionElement));
+        this.select.value = this.selected?.id ?? "";
+        this.select.disabled = context.mode.isControlDisabled || readOnly;
+        this.select.hidden = hidden;
+
+        this.status.textContent = message;
+        this.status.hidden = !message;
+    }
+}
+
+function lookupQueryKey(context: ComponentFramework.Context<IInputs>): string {
+    const target = typeof context.parameters.targetTable?.raw === "string" ? context.parameters.targetTable.raw.trim().toLowerCase() : "";
+    const filter = typeof context.parameters.selectableFilter?.raw === "string" ? context.parameters.selectableFilter.raw.trim() : "";
+    return `${target}\n${filter}`;
+}
+
+function stringResource(context: ComponentFramework.Context<IInputs>, key: string, fallback: string): string {
+    if (typeof context.resources?.getString !== "function") return fallback;
+    const value = context.resources.getString(key);
+    return value || fallback;
+}
+
+function normalizeLookupValue(value: ComponentFramework.LookupValue[] | null | undefined): LookupOption | undefined {
+    const first = Array.isArray(value) ? value[0] : undefined;
+    if (!first?.id || !first.entityType) return undefined;
+    return {
+        id: first.id,
+        name: first.name || first.id,
+        entityType: first.entityType,
+    };
+}
+
+function mergeSelected(rows: LookupOption[], selected: LookupOption | undefined): LookupOption[] {
+    if (!selected || rows.some((row) => sameId(row.id, selected.id))) return rows;
+    return [selected, ...rows];
+}
+
+function emptyOption(label: string): HTMLOptionElement {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = label;
+    return option;
+}
+
+function optionElement(option: LookupOption): HTMLOptionElement {
+    const item = document.createElement("option");
+    item.value = option.id;
+    item.textContent = option.name || option.id;
+    return item;
+}
+
+function lookupKey(option: LookupOption | undefined): string {
+    return option ? `${option.entityType}:${option.id}`.toLowerCase() : "";
+}
+
+function sameId(left: string, right: string): boolean {
+    return stripBraces(left).toLowerCase() === stripBraces(right).toLowerCase();
+}
+
+function stripBraces(value: string): string {
+    return value.replace(/^\{|\}$/g, "");
+}
+
+function matchesConfiguredTarget(context: ComponentFramework.Context<IInputs>, selected: LookupOption): boolean {
+    const configured = typeof context.parameters.targetTable?.raw === "string" ? context.parameters.targetTable.raw.trim() : "";
+    return configured.toLowerCase() === selected.entityType.toLowerCase();
+}

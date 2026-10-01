@@ -1,0 +1,80 @@
+#!/usr/bin/env node
+'use strict';
+
+const path = require('node:path');
+const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
+const { runUpgrade } = require('./lib/pcf-upgrade.js');
+
+const USAGE = `Usage:
+  node scripts/pcf-upgrade.js [--project <dir>] [--hosts model,pages] [--apply] [--steps <id,...>] [--allow-dirty] [--no-install] [--npm-cli <path>]`;
+
+const KNOWN = ['project', 'hosts', 'apply', 'steps', 'allow-dirty', 'no-install', 'npm-cli'];
+const NEED_VALUE = ['project', 'hosts', 'steps', 'npm-cli'];
+const KNOWN_HOSTS = ['model', 'pages'];
+
+function usageError(message) {
+  process.stderr.write(`${USAGE}\n${message}\n`);
+  process.exit(1);
+}
+
+function splitList(value, fallback) {
+  if (!value) return fallback;
+  return String(value).split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+function main(argv = process.argv.slice(2)) {
+  try {
+    return runMain(argv);
+  } catch (err) {
+    if (err && err.exitCode !== undefined) throw err;
+    return emitResult(false, err);
+  }
+}
+
+function runMain(argv = process.argv.slice(2)) {
+  const parsed = parseArgs(argv);
+  const flagError = validateFlags(argv, {
+    known: KNOWN,
+    needValue: NEED_VALUE,
+    hints: {
+      hosts: 'comma-separated values: model,pages',
+      'npm-cli': 'path to npm-cli.js',
+    },
+  });
+  if (flagError) usageError(flagError);
+
+  const flags = parsed.flags;
+  for (const booleanFlag of ['apply', 'allow-dirty', 'no-install']) {
+    if (flags[booleanFlag] !== undefined && flags[booleanFlag] !== true) usageError(`--${booleanFlag} does not take a value`);
+  }
+  const hosts = splitList(flags.hosts, ['model']);
+  validateHosts(hosts, flags.hosts !== undefined);
+  const steps = splitList(flags.steps, []);
+  if (flags.steps !== undefined && steps.length === 0) usageError('--steps must include at least one step id');
+  const result = runUpgrade({
+    project: flags.project ? path.resolve(String(flags.project)) : process.cwd(),
+    hosts,
+    apply: Boolean(flags.apply),
+    steps,
+    allowDirty: Boolean(flags['allow-dirty']),
+    noInstall: Boolean(flags['no-install']),
+    npmCli: flags['npm-cli'] ? String(flags['npm-cli']) : undefined,
+  });
+  return emitResult(result.ok, result);
+}
+
+function validateHosts(hosts, explicit) {
+  if (explicit && hosts.length === 0) usageError(`--hosts must include at least one value (${KNOWN_HOSTS.join(',')})`);
+  const unknown = hosts.find((host) => !KNOWN_HOSTS.includes(host));
+  if (unknown) usageError(`--hosts contains unknown value '${unknown}' (expected ${KNOWN_HOSTS.join(',')})`);
+}
+
+if (require.main === module) {
+  try {
+    main(process.argv.slice(2));
+  } catch (err) {
+    emitResult(false, err);
+  }
+}
+
+module.exports = { main };

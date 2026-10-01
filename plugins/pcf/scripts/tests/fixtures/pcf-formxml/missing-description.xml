@@ -1,0 +1,5 @@
+<form>
+  <tabs><tab><columns><column><sections><section><rows><row>
+    <cell><control id="new_rating" classid="{F9A8A302-114E-466A-B582-6771B2AE0D92}" datafieldname="new_rating" uniqueid="{33333333-3333-4333-8333-333333333333}" /></cell>
+  </row></rows></section></sections></column></columns></tab></tabs>
+</form>

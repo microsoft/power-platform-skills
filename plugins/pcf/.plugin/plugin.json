@@ -1,0 +1,23 @@
+{
+  "name": "pcf",
+  "version": "1.0.0",
+  "description": "Preview. Build, test, diagnose, upgrade, deploy, verify and inventory Power Apps component framework (PCF) code components for model-driven apps and Power Pages, from Microsoft-maintained templates and recipes pinned to a tested version matrix. Requires Node.js 20+; PAC CLI and the .NET SDK to deploy; Azure CLI (az) to verify and inventory.",
+  "author": {
+    "name": "Microsoft",
+    "url": "https://www.microsoft.com"
+  },
+  "homepage": "https://github.com/microsoft/power-platform-skills/",
+  "repository": "https://github.com/microsoft/power-platform-skills/",
+  "license": "MIT",
+  "keywords": [
+    "pcf",
+    "code-components",
+    "power-apps-component-framework",
+    "model-driven",
+    "power-pages",
+    "dataverse",
+    "pac-cli",
+    "react",
+    "fluent-ui"
+  ]
+}

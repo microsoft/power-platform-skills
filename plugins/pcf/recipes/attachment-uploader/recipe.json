@@ -1,0 +1,71 @@
+{
+  "id": "attachment-uploader",
+  "title": "Attachment uploader",
+  "summary": "Uploads one small file as a Dataverse note on the current saved record.",
+  "template": "field-standard",
+  "hosts": ["model"],
+  "status": "available",
+  "certified": { "model": {}, "pages": {} },
+  "whyWanted": "Makers frequently ask for a lightweight file/document field experience that stores uploads as timeline notes.",
+  "properties": [
+    {
+      "name": "value",
+      "displayNameKey": "Value_Display_Key",
+      "descriptionKey": "Value_Desc_Key",
+      "ofType": "SingleLine.Text",
+      "usage": "bound",
+      "required": true
+    },
+    {
+      "name": "entityId",
+      "displayNameKey": "EntityId_Display_Key",
+      "descriptionKey": "EntityId_Desc_Key",
+      "ofType": "SingleLine.Text",
+      "usage": "input",
+      "required": true
+    },
+    {
+      "name": "entityName",
+      "displayNameKey": "EntityName_Display_Key",
+      "descriptionKey": "EntityName_Desc_Key",
+      "ofType": "SingleLine.Text",
+      "usage": "input",
+      "required": true
+    },
+    {
+      "name": "parentEntitySetName",
+      "displayNameKey": "ParentEntitySetName_Display_Key",
+      "descriptionKey": "ParentEntitySetName_Desc_Key",
+      "ofType": "SingleLine.Text",
+      "usage": "input",
+      "required": true
+    },
+    {
+      "name": "parentNavigationProperty",
+      "displayNameKey": "ParentNavigationProperty_Display_Key",
+      "descriptionKey": "ParentNavigationProperty_Desc_Key",
+      "ofType": "SingleLine.Text",
+      "usage": "input",
+      "required": true
+    },
+    {
+      "name": "maxFileSizeKb",
+      "displayNameKey": "MaxFileSizeKb_Display_Key",
+      "descriptionKey": "MaxFileSizeKb_Desc_Key",
+      "ofType": "Whole.None",
+      "usage": "input",
+      "required": false,
+      "defaultValue": "1024"
+    },
+    {
+      "name": "acceptedMimeTypes",
+      "displayNameKey": "AcceptedMimeTypes_Display_Key",
+      "descriptionKey": "AcceptedMimeTypes_Desc_Key",
+      "ofType": "SingleLine.Text",
+      "usage": "input",
+      "required": false
+    }
+  ],
+  "features": [{ "name": "WebAPI", "required": true }],
+  "configuration": "Bind value to any text column used to host the field control, bind entityId to the table primary key column, set entityName to the table logical name, set parentEntitySetName to the table entity set name, set parentNavigationProperty to the annotation relationship navigation property, and optionally set maxFileSizeKb and acceptedMimeTypes."
+}

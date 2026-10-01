@@ -307,6 +307,12 @@ async function preflightAuth(envUrl, deps = {}) {
  */
 function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHeaders = false, timeout = 60000 }) {
   return new Promise((resolve) => {
+    let settled = false;
+    const settle = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
     const https = require('https');
     const http = require('http');
     const u = new URL(url);
@@ -322,19 +328,28 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
       },
       (res) => {
         const chunks = [];
+        let ended = false;
         res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
         res.on('end', () => {
+          ended = true;
           const data = Buffer.concat(chunks).toString('utf8');
           const result = { statusCode: res.statusCode, body: data };
           if (includeHeaders) result.headers = res.headers;
-          resolve(result);
+          settle(result);
+        });
+        // A severed response never emits end. Its aborted/error/close events can overlap, so settle
+        // once and report a transport error rather than hang or hand callers a partial JSON body.
+        res.on('error', (e) => settle({ error: e.message }));
+        res.on('aborted', () => settle({ error: 'Response aborted before the body completed' }));
+        res.on('close', () => {
+          if (!ended) settle({ error: 'Response closed before the body completed' });
         });
       }
     );
-    req.on('error', (e) => resolve({ error: e.message }));
+    req.on('error', (e) => settle({ error: e.message }));
     req.on('timeout', () => {
       req.destroy();
-      resolve({ error: 'Request timed out' });
+      settle({ error: 'Request timed out' });
     });
     if (body) req.write(body);
     req.end();

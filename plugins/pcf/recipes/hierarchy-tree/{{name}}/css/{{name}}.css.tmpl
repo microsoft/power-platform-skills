@@ -1,0 +1,99 @@
+.{{cssClass}} {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  height: 100%;
+  min-height: 8rem;
+  font-family: "Segoe UI", Arial, sans-serif;
+  color: #323130;
+}
+
+.{{nameLower}}-tree-host {
+  min-height: 3rem;
+  overflow: auto;
+}
+
+.{{nameLower}}-tree,
+.{{nameLower}}-tree ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.{{nameLower}}-tree ul {
+  margin-left: 1.5rem;
+}
+
+.{{nameLower}}-tree-item {
+  margin: 0.125rem 0;
+  outline: none;
+}
+
+.{{nameLower}}-tree-item:focus > .{{nameLower}}-node-row {
+  outline: 2px solid #605e5c;
+  outline-offset: 2px;
+}
+
+.{{nameLower}}-node-row {
+  align-items: center;
+  border-radius: 0.25rem;
+  display: flex;
+  gap: 0.375rem;
+  min-height: 2rem;
+  padding: 0.125rem 0.25rem;
+}
+
+.{{nameLower}}-toggle,
+.{{nameLower}}-toggle-spacer {
+  flex: 0 0 1.25rem;
+  height: 1.25rem;
+  width: 1.25rem;
+}
+
+.{{nameLower}}-toggle {
+  border: 1px solid #8a8886;
+  border-radius: 50%;
+  background: #ffffff;
+  cursor: pointer;
+  position: relative;
+}
+
+.{{nameLower}}-toggle::before {
+  border-bottom: 0.25rem solid transparent;
+  border-left: 0.375rem solid #323130;
+  border-top: 0.25rem solid transparent;
+  content: "";
+  display: block;
+  margin: 0.25rem 0 0 0.375rem;
+}
+
+[aria-expanded="true"] > .{{nameLower}}-node-row > .{{nameLower}}-toggle::before {
+  border-left: 0.25rem solid transparent;
+  border-right: 0.25rem solid transparent;
+  border-top: 0.375rem solid #323130;
+  margin: 0.4375rem 0 0 0.25rem;
+}
+
+.{{nameLower}}-node-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.{{nameLower}}-open {
+  min-height: 1.75rem;
+}
+
+.{{nameLower}}-pager {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.{{nameLower}}-pager button {
+  min-height: 2rem;
+}
+
+.{{cssMessageClass}} {
+  color: #605e5c;
+  font-size: 0.875rem;
+}

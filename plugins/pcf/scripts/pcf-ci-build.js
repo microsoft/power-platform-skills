@@ -1,0 +1,677 @@
+#!/usr/bin/env node
+'use strict';
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const zlib = require('node:zlib');
+const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
+const { spawnResultSync } = require('./lib/process-runner.js');
+const { listTemplates, listRecipes, planScaffold, writeScaffold } = require('./lib/pcf-scaffold.js');
+const { loadMatrix, dependencySet } = require('./lib/pcf-matrix.js');
+const { buildControl } = require('./lib/pcf-build.js');
+const { runNodeScript, runNpm } = require('./lib/node-tool.js');
+const { runPac } = require('./lib/pac-exec.js');
+const { validateControlName, validatePublisherPrefix } = require('./lib/pcf-names.js');
+const { parseXml, findAll, attr } = require('./lib/xml-lite.js');
+
+const USAGE = `Usage:
+  node scripts/pcf-ci-build.js [--all | --templates | --template <id> | --recipe <id>] [--latest] [--keep] [--package] [--npm-cli <path>]
+
+  --templates builds every template and no recipes; --all adds every available recipe, which only
+  layers control code on top of its template.
+
+  Progress lines go to stderr as each step starts and ends; stdout carries only the JSON result.`;
+
+const KNOWN = ['all', 'templates', 'template', 'recipe', 'latest', 'keep', 'package', 'npm-cli'];
+const BOOLEAN_FLAGS = ['all', 'templates', 'latest', 'keep', 'package'];
+const NEED_VALUE = ['template', 'recipe', 'npm-cli'];
+const SCRIPT_DIR = __dirname;
+const DEFAULT_ROOT = path.join(SCRIPT_DIR, '..');
+const PACKAGE_VERSION = '1.0.0';
+const PACKAGE_PUBLISHER_NAME = 'Contoso';
+const PACKAGE_PUBLISHER_PREFIX = 'contoso';
+const PAC_TIMEOUT_MS = 120000;
+const ZIP64_UNSUPPORTED = 'ZIP64 solution packages are not supported by this smoke reader.';
+const EXPECTED_GATE_IDS = ['manifest', 'code', 'lint', 'test', 'build'];
+const DIAGNOSTIC_LIMIT = 2000;
+
+function usageError(message) {
+  process.stderr.write(`${USAGE}\n${message}\n`);
+  process.exit(1);
+}
+
+function runCiBuild(options = {}, deps = {}) {
+  const fsDep = deps.fs || fs;
+  const osDep = deps.os || os;
+  const pathDep = deps.path || path;
+  const root = deps.root || DEFAULT_ROOT;
+  const createdRoot = pathDep.join(osDep.tmpdir(), `pcf-ci-${crypto.randomBytes(6).toString('hex')}`);
+  const started = Date.now();
+  const targets = options.package ? packageSmokeTargets(deps) : selectTargets(options, deps);
+  const results = [];
+  const skipped = [];
+  try {
+    fsDep.mkdirSync(createdRoot, { recursive: true });
+    if (options.all) {
+      for (const recipe of recipes(deps).filter((item) => item.status === 'planned')) {
+        skipped.push({ id: recipe.id, kind: 'recipe', reason: 'planned' });
+      }
+    }
+
+    for (const [index, target] of targets.entries()) {
+      const targetStarted = Date.now();
+      const projectDir = pathDep.join(createdRoot, target.id);
+      const label = `[${index + 1}/${targets.length}] ${target.id} (${target.kind})`;
+      const result = runTarget(target, projectDir, options, { ...deps, root }, label);
+      const durationMs = Date.now() - targetStarted;
+      reportProgress(deps, `${label} ${result.ok ? 'ok' : 'FAILED'} (${formatSeconds(durationMs)})`);
+      results.push({ id: target.id, kind: target.kind, ok: result.ok, gates: result.gates || [], durationMs, ...result.extra });
+    }
+  } finally {
+    if (!options.keep) fsDep.rmSync(createdRoot, { recursive: true, force: true });
+  }
+
+  const ok = results.every((item) => item.ok);
+  return { ok, results, skipped, durationMs: Date.now() - started };
+}
+
+function selectTargets(options, deps = {}) {
+  const allTemplates = templates(deps);
+  const allRecipes = recipes(deps);
+  if (options.template) return [templateTarget(String(options.template), allTemplates)];
+  if (options.recipe) return [recipeTarget(String(options.recipe), allRecipes, allTemplates)];
+  if (options.templates) return allTemplates.map((template) => targetFromTemplate(template)).sort((a, b) => a.id.localeCompare(b.id));
+  if (!options.all) throw new Error('Choose --all, --templates, --template <id>, --recipe <id>, or --package.');
+  return [
+    ...allTemplates.map((template) => targetFromTemplate(template)),
+    ...allRecipes.filter((recipe) => recipe.status !== 'planned').map((recipe) => targetFromRecipe(recipe, allTemplates)),
+  ].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function packageSmokeTargets(deps = {}) {
+  const allTemplates = templates(deps);
+  const allRecipes = recipes(deps);
+  const targets = [
+    targetFromTemplate(allTemplates.find((item) => item.id === 'field-virtual')),
+    targetFromRecipe(allRecipes.find((item) => item.id === 'grid-customizer'), allTemplates),
+    targetFromRecipe(allRecipes.find((item) => item.id === 'star-rating'), allTemplates),
+  ].filter(Boolean);
+  return targets.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function templates(deps) {
+  return (deps.listTemplates || listTemplates)(deps);
+}
+
+function recipes(deps) {
+  return (deps.listRecipes || listRecipes)(deps);
+}
+
+function templateTarget(id, allTemplates) {
+  const template = allTemplates.find((item) => item.id === id);
+  if (!template) throw new Error(`Unknown PCF template: ${id}`);
+  return targetFromTemplate(template);
+}
+
+function recipeTarget(id, allRecipes, allTemplates) {
+  const recipe = allRecipes.find((item) => item.id === id);
+  if (!recipe) throw new Error(`Unknown PCF recipe: ${id}`);
+  if (recipe.status === 'planned') throw new Error(`Recipe ${id} is planned, not available in this release.`);
+  return targetFromRecipe(recipe, allTemplates);
+}
+
+function targetFromTemplate(template) {
+  if (!template) return null;
+  return {
+    id: template.id,
+    kind: 'template',
+    template: template.id,
+    dependencySet: template.dependencySet || template.controlType,
+    hosts: [...template.hosts],
+  };
+}
+
+function targetFromRecipe(recipe, allTemplates) {
+  if (!recipe) return null;
+  const template = allTemplates.find((item) => item.id === recipe.template);
+  if (!template) throw new Error(`Recipe ${recipe.id} references unknown template ${recipe.template}.`);
+  return {
+    id: recipe.id,
+    kind: 'recipe',
+    recipe: recipe.id,
+    template: recipe.template,
+    dependencySet: template.dependencySet || template.controlType,
+    hosts: [...recipe.hosts],
+  };
+}
+
+function runTarget(target, projectDir, options, deps, label = target.id) {
+  const plan = (deps.planScaffold || planScaffold)({
+    template: target.template,
+    recipe: target.recipe,
+    namespace: 'Contoso.PcfCi',
+    name: controlName(target.id),
+    displayName: displayName(target.id),
+    description: `${displayName(target.id)} PCF CI smoke control.`,
+    hosts: target.hosts,
+  }, deps);
+  (deps.writeScaffold || writeScaffold)(plan, projectDir, deps);
+
+  // Install per scaffold instead of sharing a dependency-set install cache: pcf-gates resolves
+  // pcf-scripts and Jest from the project-local node_modules, and the package smoke lets MSBuild
+  // restore the referenced PCF project in place. Reusing one install would need link/copy logic
+  // across Windows and Linux that is more fragile than the registry work this workflow isolates.
+  const npmResult = timedStep(deps, `${label}: npm ci`, () => (deps.runNpm || runNpm)(['ci'], { cwd: projectDir, npmCli: options.npmCli }), succeeded);
+  if (!succeeded(npmResult)) {
+    return failure(`npm ci failed: ${toolDetail(npmResult)}`, { gates: [] });
+  }
+
+  let latest = [];
+  if (options.latest) {
+    try {
+      latest = timedStep(deps, `${label}: npm install @latest`, () => probeLatestDependencies(target, projectDir, options, deps));
+    } catch (err) {
+      return failure(`npm install latest failed for ${target.id}: ${toolDetail(err)}`, { gates: [], latest });
+    }
+  }
+
+  if (options.package) {
+    const packaged = timedStep(deps, `${label}: package smoke`, () => (deps.runPackageSmoke || runPackageSmoke)(target, projectDir, { ...options, latest }, deps), (item) => Boolean(item && item.ok));
+    return { ok: Boolean(packaged.ok), gates: [], extra: { latest, package: packaged } };
+  }
+
+  const gates = timedStep(deps, `${label}: gates`, () => runGates(projectDir, target.hosts, deps), (item) => item.ok);
+  if (!gates.ok) return failure(gates.error || 'pcf-gates failed.', { gates: gates.gates || [], latest });
+  return { ok: gates.ok, gates: gates.gates, extra: { latest } };
+}
+
+// Every tool this runner starts (npm, pcf-gates, PAC, dotnet) runs with captured output, and CI runs
+// the whole build as one step, so without these lines a slow or hung install prints nothing until the
+// job timeout cancels it, and the log cannot say which project or step was running. A line is written
+// when each step starts and again when it ends, with its duration. They go to stderr because stdout is
+// reserved for the single JSON result.
+function reportProgress(deps, line) {
+  const write = deps.progress || ((text) => process.stderr.write(`${text}\n`));
+  write(`[pcf-ci-build] ${line}`);
+}
+
+function timedStep(deps, label, run, isOk = () => true) {
+  const started = Date.now();
+  reportProgress(deps, `${label} ...`);
+  let outcome = 'failed';
+  try {
+    const result = run();
+    if (isOk(result)) outcome = 'ok';
+    return result;
+  } finally {
+    // Also reached when run() throws, so a step that crashes still gets its closing line.
+    reportProgress(deps, `${label} ${outcome} (${formatSeconds(Date.now() - started)})`);
+  }
+}
+
+function formatSeconds(ms) {
+  return `${Math.round(ms / 1000)}s`;
+}
+
+function probeLatestDependencies(target, projectDir, options, deps) {
+  const matrix = (deps.loadMatrix || loadMatrix)(deps);
+  const set = (deps.dependencySet || dependencySet)(matrix, target.dependencySet, deps);
+  const names = [...Object.keys(set.dependencies || {}).sort(), ...Object.keys(set.devDependencies || {}).sort()];
+  const packages = { ...set.dependencies, ...set.devDependencies };
+  const specs = names.map((name) => `${name}@latest`);
+  if (specs.length) {
+    const installed = (deps.runNpm || runNpm)(['install', ...specs], { cwd: projectDir, npmCli: options.npmCli });
+    if (!succeeded(installed)) throw new Error(toolDetail(installed));
+  }
+  return names.map((name) => ({
+    name,
+    matrixVersion: String(packages[name]).replace(/^[~^]/, ''),
+    resolvedVersion: readPackageVersion(projectDir, name, deps) || null,
+  }));
+}
+
+function runGates(projectDir, hosts, deps = {}) {
+  const runner = deps.runGates;
+  const result = runner
+    ? runner(projectDir, hosts)
+    : runNodeScript(path.join(SCRIPT_DIR, 'pcf-gates.js'), ['--project', projectDir, '--hosts', hosts.join(',')], { cwd: path.join(SCRIPT_DIR, '..') });
+  const stdout = result.stdout || '';
+  const stderr = result.stderr || '';
+  const diagnostic = gateDiagnostic(stdout, stderr);
+  if (!succeeded(result)) {
+    return { ok: false, error: `pcf-gates failed: ${toolDetail(result)}\n${diagnostic}`, gates: [], stdout, stderr };
+  }
+  const lines = jsonResultLines(stdout);
+  // pcf-gates prints one JSON object. A second object can be a failed retry or a log line that
+  // happens to be JSON; accepting the first hides that the child did not have a single result.
+  if (lines.length !== 1) {
+    return { ok: false, error: `pcf-gates did not emit valid JSON success output: expected exactly one JSON result line.\n${diagnostic}`, gates: [], stdout, stderr };
+  }
+  const parsed = parseJsonLine(lines[0]);
+  if (!parsed || parsed.ok !== true) {
+    return { ok: false, error: `pcf-gates did not emit valid JSON success output.\n${diagnostic}`, gates: [], stdout, stderr };
+  }
+  if (!Array.isArray(parsed.gates) || parsed.gates.length === 0) {
+    return { ok: false, error: `pcf-gates did not report any gate records.\n${diagnostic}`, gates: [], stdout, stderr };
+  }
+  const ids = parsed.gates.map((gate) => gate && gate.id);
+  const exactIds = ids.length === EXPECTED_GATE_IDS.length && EXPECTED_GATE_IDS.every((id, index) => ids[index] === id);
+  const allPassing = parsed.gates.every((gate) => gate && gate.ok === true);
+  if (!exactIds || !allPassing) {
+    return {
+      ok: false,
+      error: `pcf-gates did not report exactly the five passing gates (manifest, code, lint, test, build).\n${diagnostic}`,
+      gates: parsed.gates,
+      stdout,
+      stderr,
+    };
+  }
+  return { ok: true, gates: parsed.gates, stdout, stderr };
+}
+
+function jsonResultLines(text) {
+  return String(text || '').split(/\r?\n/).map((line) => line.trim()).filter((line) => line.startsWith('{'));
+}
+
+function gateDiagnostic(stdout, stderr) {
+  return `stdout: ${truncateDiagnostic(stdout)}\nstderr: ${truncateDiagnostic(stderr)}`;
+}
+
+function truncateDiagnostic(text) {
+  const value = String(text || '');
+  if (value.length <= DIAGNOSTIC_LIMIT) return value;
+  return `${value.slice(0, DIAGNOSTIC_LIMIT)}...[truncated]`;
+}
+
+function runPackageSmoke(target, projectDir, options = {}, deps = {}) {
+  const fsDep = deps.fs || fs;
+  const pathDep = deps.path || path;
+  const runNode = deps.runNodeScript || runNodeScript;
+  const pac = deps.runPac || runPac;
+  const runCommand = deps.spawnResultSync || spawnResultSync;
+  const solutionDir = pathDep.join(projectDir, '_solution');
+  const checks = [];
+  validatePackagePublisher();
+  setManifestVersion(projectDir, PACKAGE_VERSION, deps);
+
+  // Snapshot immediately into a run-owned temp dir. Both builds write the same output paths, and
+  // dotnet build runs later, so reading the files at inspect time lets a later step swap development
+  // bytes in as "production". The buffers are copied before the temp dir is removed.
+  const osDep = deps.os || os;
+  const snapshotRoot = fsDep.mkdtempSync(pathDep.join(osDep.tmpdir(), 'pcf-ci-bundles-'));
+  const snapDeps = { ...deps, bundleSnapshotDir: snapshotRoot };
+  try {
+    const devBuild = runPcfBuild(projectDir, 'development', { ...deps, runNodeScript: runNode });
+    if (!devBuild.ok) return { ok: false, error: `development build failed: ${devBuild.error || toolDetail(devBuild)}`, checks };
+    const developmentBundles = snapshotBundles(devBuild, 'development', snapDeps);
+    const prodBuild = runPcfBuild(projectDir, 'production', { ...deps, runNodeScript: runNode });
+    if (!prodBuild.ok) return { ok: false, error: `production build failed: ${prodBuild.error || toolDetail(prodBuild)}`, checks };
+    const productionBundles = snapshotBundles(prodBuild, 'production', snapDeps);
+
+    const pacInit = pac(['solution', 'init', '--publisher-name', PACKAGE_PUBLISHER_NAME, '--publisher-prefix', PACKAGE_PUBLISHER_PREFIX], {
+      cwd: ensureDir(solutionDir, fsDep),
+      timeoutMs: PAC_TIMEOUT_MS,
+    });
+    if (!succeeded(pacInit)) return { ok: false, error: `pac solution init failed: ${toolDetail(pacInit)}`, checks };
+    setSolutionVersion(solutionDir, PACKAGE_VERSION, deps);
+
+    const pacAdd = pac(['solution', 'add-reference', '--path', projectDir], {
+      cwd: solutionDir,
+      timeoutMs: PAC_TIMEOUT_MS,
+    });
+    if (!succeeded(pacAdd)) return { ok: false, error: `pac solution add-reference failed: ${toolDetail(pacAdd)}`, checks };
+
+    const build = runCommand('dotnet', ['build', '-c', 'Release', '-p:SolutionPackageType=Managed'], {
+      cwd: solutionDir,
+      encoding: 'utf8',
+    });
+    if (!succeeded(build)) return { ok: false, error: `dotnet build failed: ${toolDetail(build)}`, checks };
+
+    const zip = newestZip(pathDep.join(solutionDir, 'bin', 'Release'), deps);
+    if (!zip) return { ok: false, error: 'dotnet build did not produce a managed solution ZIP.', checks };
+    const inspected = inspectSolutionZip(zip, PACKAGE_VERSION, {
+      productionBytes: bundleBytes(prodBuild),
+      developmentBytes: bundleBytes(devBuild),
+      productionBundles,
+      developmentBundles,
+    }, deps);
+    return { ok: inspected.ok, zip, checks: inspected.checks };
+  } finally {
+    fsDep.rmSync(snapshotRoot, { recursive: true, force: true });
+  }
+}
+
+function validatePackagePublisher() {
+  const nameError = validateControlName(PACKAGE_PUBLISHER_NAME, '');
+  if (nameError) throw new Error(`Invalid package-smoke publisher name: ${nameError}`);
+  const prefixError = validatePublisherPrefix(PACKAGE_PUBLISHER_PREFIX);
+  if (prefixError) throw new Error(`Invalid package-smoke publisher prefix: ${prefixError}`);
+}
+
+function runPcfBuild(projectDir, mode, deps) {
+  if (deps.runPcfBuild) return deps.runPcfBuild(projectDir, mode);
+  return buildControl({ projectDir, mode, clean: true }, deps);
+}
+
+function inspectSolutionZip(zipPath, manifestVersion, sizes = {}, deps = {}) {
+  const entries = readZipEntries(zipPath, deps);
+  const solutionXml = textEntry(entries, /(^|\/)solution\.xml$/i);
+  const customizationsXml = textEntry(entries, /(^|\/)customizations\.xml$/i);
+  const manifest = entry(entries, /ControlManifest\.xml$/i);
+  const manifestXml = manifest ? manifest.content.toString('utf8') : '';
+  const checks = [
+    { id: 'managed', ok: /<Managed>1<\/Managed>/.test(solutionXml), detail: 'solution.xml Managed=1' },
+    { id: 'root-component-66', ok: /<RootComponent\b[^>]*type="66"/i.test(solutionXml), detail: 'solution.xml RootComponent type 66' },
+    { id: 'custom-controls', ok: /<CustomControls\b/i.test(customizationsXml), detail: 'customizations.xml CustomControls' },
+    { id: 'manifest-version', ok: new RegExp(`\\bversion=["']${escapeRegExp(manifestVersion)}["']`).test(manifestXml), detail: 'embedded ControlManifest.xml version' },
+    { id: 'production-bundle-smaller', ok: Number(sizes.productionBytes) > 0 && Number(sizes.developmentBytes) > 0 && Number(sizes.productionBytes) < Number(sizes.developmentBytes), detail: 'production bundle smaller than development bundle' },
+  ];
+  const bundleCheck = embeddedBundleCheck(entries, manifest, sizes);
+  if (bundleCheck) checks.push(bundleCheck);
+  return { ok: checks.every((check) => check.ok), checks };
+}
+
+function readZipEntries(zipPath, deps = {}) {
+  const fsDep = deps.fs || fs;
+  const buffer = fsDep.readFileSync(zipPath);
+  const eocd = findEocd(buffer);
+  // Minimal ZIP reader for PAC/dotnet solution packages. ZIP stores file metadata twice:
+  //   [local header 0x04034b50][file bytes] ... [central header 0x02014b50] ... [EOCD 0x06054b50]
+  // The central directory gives each local-header offset plus compressed/uncompressed sizes. PAC's
+  // packages use either method 0 (stored) or method 8 (raw DEFLATE); encrypted, data-descriptor-only
+  // and ZIP64 packages are intentionally rejected because silently skipping an entry would let a
+  // package smoke pass without proving the embedded PCF bundle.
+  const count = buffer.readUInt16LE(eocd + 10);
+  const centralSize = buffer.readUInt32LE(eocd + 12);
+  let offset = buffer.readUInt32LE(eocd + 16);
+  if (count === 0xffff || centralSize === 0xffffffff || offset === 0xffffffff) {
+    throw new Error(ZIP64_UNSUPPORTED);
+  }
+  const entries = new Map();
+  for (let i = 0; i < count; i += 1) {
+    if (buffer.readUInt32LE(offset) !== 0x02014b50) throw new Error('Invalid ZIP central directory header.');
+    const method = buffer.readUInt16LE(offset + 10);
+    const compressedSize = buffer.readUInt32LE(offset + 20);
+    const uncompressedSize = buffer.readUInt32LE(offset + 24);
+    const nameLength = buffer.readUInt16LE(offset + 28);
+    const extraLength = buffer.readUInt16LE(offset + 30);
+    const commentLength = buffer.readUInt16LE(offset + 32);
+    const localOffset = buffer.readUInt32LE(offset + 42);
+    if (compressedSize === 0xffffffff || uncompressedSize === 0xffffffff || localOffset === 0xffffffff) {
+      throw new Error(ZIP64_UNSUPPORTED);
+    }
+    const name = buffer.slice(offset + 46, offset + 46 + nameLength).toString('utf8');
+    const localNameLength = buffer.readUInt16LE(localOffset + 26);
+    const localExtraLength = buffer.readUInt16LE(localOffset + 28);
+    const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+    const compressed = buffer.slice(dataStart, dataStart + compressedSize);
+    let content;
+    if (method === 0) content = compressed;
+    else if (method === 8) content = zlib.inflateRawSync(compressed);
+    else throw new Error(`Unsupported ZIP compression method ${method} for ${name}.`);
+    if (content.length !== uncompressedSize) throw new Error(`ZIP entry ${name} size mismatch.`);
+    entries.set(name.replace(/\\/g, '/'), content);
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+  return entries;
+}
+
+function findEocd(buffer) {
+  const min = Math.max(0, buffer.length - 65557);
+  for (let i = buffer.length - 22; i >= min; i -= 1) {
+    if (buffer.readUInt32LE(i) === 0x06054b50) return i;
+  }
+  throw new Error('ZIP end-of-central-directory record not found.');
+}
+
+function textEntry(entries, pattern) {
+  const found = entry(entries, pattern);
+  return found ? found.content.toString('utf8') : '';
+}
+
+function entry(entries, pattern) {
+  for (const [name, content] of entries) {
+    if (pattern.test(name)) return { name, content };
+  }
+  return null;
+}
+
+function embeddedBundleCheck(entries, manifest, sizes = {}) {
+  if (!manifest) return { id: 'embedded-bundle-resources', ok: false, detail: 'ControlManifest.xml was not embedded in the package.' };
+  const resources = codeResources(manifest.content.toString('utf8'));
+  if (resources.length === 0) {
+    return { id: 'embedded-bundle-resources', ok: false, detail: 'ControlManifest.xml does not declare any packaged code resources.' };
+  }
+  const expected = (sizes.productionBundles || []).filter((item) => item && Buffer.isBuffer(item.content));
+  const devHashes = new Set((sizes.developmentBundles || []).filter((item) => item && Buffer.isBuffer(item.content)).map((item) => sha256(item.content)));
+  if (expected.length === 0) {
+    return { id: 'embedded-bundle-resources', ok: false, detail: 'The production build did not expose any JavaScript bundle bytes to compare against the package.' };
+  }
+  const manifestDir = path.posix.dirname(manifest.name.replace(/\\/g, '/'));
+  const expectedByPath = new Map(expected.map((item) => [normalizeZipPath(item.path), item]));
+  const expectedByBase = new Map(expected.map((item) => [path.posix.basename(normalizeZipPath(item.path)), item]));
+  for (const resourcePath of resources) {
+    const zipName = normalizeZipPath(path.posix.join(manifestDir === '.' ? '' : manifestDir, resourcePath));
+    const packaged = entries.get(zipName);
+    if (!packaged) return { id: 'embedded-bundle-resources', ok: false, detail: `Manifest code resource '${resourcePath}' is missing from the package.` };
+    const expectedBundle = expectedByPath.get(normalizeZipPath(resourcePath)) || expectedByBase.get(path.posix.basename(normalizeZipPath(resourcePath)));
+    if (!expectedBundle) return { id: 'embedded-bundle-resources', ok: false, detail: `No production build bundle was found for manifest code resource '${resourcePath}'.` };
+    const packagedHash = sha256(packaged);
+    if (packagedHash !== sha256(expectedBundle.content)) {
+      return { id: 'embedded-bundle-resources', ok: false, detail: `Packaged code resource '${resourcePath}' does not match the production build bundle.` };
+    }
+    if (devHashes.has(packagedHash)) {
+      return { id: 'embedded-bundle-resources', ok: false, detail: `Packaged code resource '${resourcePath}' matches a development bundle instead of the production bundle.` };
+    }
+  }
+  return { id: 'embedded-bundle-resources', ok: true, detail: `${resources.length} embedded code resource(s) match the production build.` };
+}
+
+function codeResources(manifestXml) {
+  // Processed PCF manifests list package code artifacts as XML elements. Attribute order and
+  // quoting vary, including whitespace around '=':
+  //   <code path="bundle.js" order="1" />
+  //   <code order="1" path = 'bundle.js' />
+  // A regex stopped at the first '>' and missed `path = 'bundle.js'`, so an XML-only package passed.
+  let root;
+  try {
+    root = parseXml(String(manifestXml || ''));
+  } catch {
+    return [];
+  }
+  const resources = [];
+  for (const el of findAll(root, (node) => node.type === 'element' && String(node.name).toLowerCase() === 'code')) {
+    const resourcePath = String(attr(el, 'path', { caseInsensitive: true }) || '').trim();
+    if (resourcePath && /\.(?:js|jsx|ts|tsx)$/i.test(resourcePath)) resources.push(resourcePath);
+  }
+  return resources;
+}
+
+function snapshotBundles(result, label, deps = {}) {
+  const fsDep = deps.fs || fs;
+  const pathDep = deps.path || path;
+  const osDep = deps.os || os;
+  const root = deps.bundleSnapshotDir || fsDep.mkdtempSync(pathDep.join(osDep.tmpdir(), 'pcf-ci-bundles-'));
+  const dir = pathDep.join(root, label);
+  fsDep.mkdirSync(dir, { recursive: true });
+  return buildBundles(result, deps).map((bundle, index) => {
+    const dest = pathDep.join(dir, `${index}.bin`);
+    fsDep.writeFileSync(dest, bundle.content);
+    return { path: bundle.path, content: fsDep.readFileSync(dest) };
+  });
+}
+
+function buildBundles(result, deps = {}) {
+  const fsDep = deps.fs || fs;
+  const pathDep = deps.path || path;
+  const bundles = [];
+  for (const control of (result && result.controls) || []) {
+    for (const rel of control.referenced || []) {
+      if (!/\.(?:js|jsx|ts|tsx)$/i.test(rel)) continue;
+      const file = control.controlDir ? pathDep.join(control.controlDir, rel) : null;
+      if (!file || !fsDep.existsSync(file)) continue;
+      bundles.push({ path: rel, content: fsDep.readFileSync(file) });
+    }
+  }
+  return bundles;
+}
+
+function normalizeZipPath(value) {
+  return String(value || '').replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
+function sha256(buffer) {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+function setManifestVersion(projectDir, version, deps = {}) {
+  const fsDep = deps.fs || fs;
+  const manifest = walkFiles(projectDir, deps).find((file) => path.basename(file) === 'ControlManifest.Input.xml');
+  if (!manifest) throw new Error('Cannot set package-smoke manifest version because ControlManifest.Input.xml was not found.');
+  const text = fsDep.readFileSync(manifest, 'utf8');
+  fsDep.writeFileSync(manifest, text.replace(/(<control\b[^>]*\bversion=)(["']).*?\2/i, `$1$2${version}$2`));
+}
+
+function setSolutionVersion(solutionDir, version, deps = {}) {
+  const fsDep = deps.fs || fs;
+  const solutionXml = path.join(solutionDir, 'Other', 'Solution.xml');
+  if (!fsDep.existsSync(solutionXml)) return;
+  const text = fsDep.readFileSync(solutionXml, 'utf8');
+  fsDep.writeFileSync(solutionXml, text.replace(/<Version>.*?<\/Version>/i, `<Version>${version}</Version>`));
+}
+
+function bundleBytes(result) {
+  return ((result && result.controls) || []).reduce((sum, control) => sum + Number(control.bundleBytes || 0), 0);
+}
+
+function newestZip(dir, deps = {}) {
+  const fsDep = deps.fs || fs;
+  const files = walkFiles(dir, deps).filter((file) => file.toLowerCase().endsWith('.zip'));
+  files.sort((a, b) => fsDep.statSync(b).mtimeMs - fsDep.statSync(a).mtimeMs);
+  return files[0] || null;
+}
+
+function walkFiles(dir, deps = {}) {
+  const fsDep = deps.fs || fs;
+  const files = [];
+  const walk = (current) => {
+    let entries;
+    try {
+      entries = fsDep.readdirSync(current, { withFileTypes: true });
+    } catch (err) {
+      if (err && err.code === 'ENOENT') return;
+      throw err;
+    }
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile()) files.push(full);
+    }
+  };
+  walk(dir);
+  return files;
+}
+
+function readPackageVersion(projectDir, pkgName, deps = {}) {
+  const fsDep = deps.fs || fs;
+  const file = path.join(projectDir, 'node_modules', ...String(pkgName).split('/'), 'package.json');
+  try {
+    return JSON.parse(fsDep.readFileSync(file, 'utf8')).version;
+  } catch {
+    return null;
+  }
+}
+
+function ensureDir(dir, fsDep) {
+  fsDep.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function controlName(id) {
+  return String(id).split(/[^A-Za-z0-9]+/).filter(Boolean).map((part) => `${part[0].toUpperCase()}${part.slice(1)}`).join('') || 'Control';
+}
+
+function displayName(id) {
+  return controlName(id).replace(/([a-z0-9])([A-Z])/g, '$1 $2');
+}
+
+function succeeded(result) {
+  return result && (result.status === 0 || result.status === undefined || result.status === null) && !result.error;
+}
+
+function failure(error, extra = {}) {
+  return { ok: false, error, extra: { ...extra, error } };
+}
+
+function parseJsonLine(text) {
+  const line = String(text || '').split(/\r?\n/).find((item) => item.trim().startsWith('{'));
+  if (!line) return null;
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
+  }
+}
+
+function toolDetail(result) {
+  if (result instanceof Error) return result.message;
+  if (result && result.error) return String(result.error.message || result.error);
+  return [result && result.stderr, result && result.stdout].filter(Boolean).join('\n').trim() || 'tool exited with a non-zero status';
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function main(argv = process.argv.slice(2)) {
+  const parsed = parseArgs(argv);
+  const flagError = validateFlags(argv, {
+    known: KNOWN,
+    needValue: NEED_VALUE,
+    hints: {
+      template: 'template id, for example field-standard',
+      recipe: 'recipe id, for example star-rating',
+      'npm-cli': 'path to npm-cli.js',
+    },
+  });
+  if (flagError) usageError(flagError);
+  const flags = parsed.flags;
+  // parseArgs accepts `--flag=value` on any flag, so a boolean flag given a value would otherwise
+  // read as true (`--templates=field-standard` would silently build every template).
+  for (const booleanFlag of BOOLEAN_FLAGS) {
+    if (flags[booleanFlag] !== undefined && flags[booleanFlag] !== true) usageError(`--${booleanFlag} does not take a value`);
+  }
+  const selectors = [Boolean(flags.all), Boolean(flags.templates), Boolean(flags.template), Boolean(flags.recipe), Boolean(flags.package)].filter(Boolean).length;
+  if (selectors !== 1) usageError('Choose exactly one of --all, --templates, --template <id>, --recipe <id>, or --package.');
+  const result = runCiBuild({
+    all: Boolean(flags.all),
+    templates: Boolean(flags.templates),
+    template: flags.template ? String(flags.template) : undefined,
+    recipe: flags.recipe ? String(flags.recipe) : undefined,
+    latest: Boolean(flags.latest),
+    keep: Boolean(flags.keep),
+    package: Boolean(flags.package),
+    npmCli: flags['npm-cli'] ? String(flags['npm-cli']) : undefined,
+  });
+  emitResult(result.ok, result);
+}
+
+if (require.main === module) {
+  try {
+    main(process.argv.slice(2));
+  } catch (err) {
+    emitResult(false, { ok: false, error: String(err && err.message ? err.message : err), results: [], skipped: [] });
+  }
+}
+
+module.exports = {
+  main,
+  runCiBuild,
+  selectTargets,
+  packageSmokeTargets,
+  runPackageSmoke,
+  inspectSolutionZip,
+  readZipEntries,
+};

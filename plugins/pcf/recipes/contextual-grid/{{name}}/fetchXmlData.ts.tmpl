@@ -1,0 +1,79 @@
+import { IInputs } from "./generated/ManifestTypes";
+
+export type GridRow = Record<string, unknown>;
+
+export interface FetchPage {
+    rows: GridRow[];
+    nextOptions?: string;
+}
+
+export interface GridRequest {
+    entityName: string;
+    fetchXmlTemplate: string;
+    recordId: string;
+    pageSize: number;
+    nextOptions?: string;
+}
+
+const RECORD_ID_TOKEN = "{recordId}";
+const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/;
+const ENTITY_NAME_RE = /<entity\s+[^>]*name\s*=\s*(["'])([^"']+)\1/i;
+
+export async function loadGridPage(
+    context: ComponentFramework.Context<IInputs>,
+    request: GridRequest,
+): Promise<FetchPage> {
+    const options = request.nextOptions ?? buildFetchXmlOptions(request.fetchXmlTemplate, request.recordId);
+    const response = await context.webAPI.retrieveMultipleRecords(resolveFetchEntity(request.fetchXmlTemplate, request.entityName), options, request.pageSize);
+    return {
+        rows: response.entities ?? [],
+        nextOptions: nextLinkOptions(response.nextLink),
+    };
+}
+
+export function buildFetchXmlOptions(fetchXmlTemplate: string, recordId: string): string {
+    const id = normalizeGuid(recordId);
+    if (!id) throw new Error("invalid-record-id");
+    if (!fetchXmlTemplate.includes(RECORD_ID_TOKEN)) throw new Error("missing-record-token");
+
+    // Learn documents FetchXML as the `fetchXml` query option for retrieveMultipleRecords. The
+    // record id is substituted into XML first, then the complete FetchXML document is URL-encoded so
+    // delimiters such as `<`, `"`, spaces and paging cookies cannot change the Web API query string.
+    // See: https://learn.microsoft.com/power-apps/developer/component-framework/reference/webapi/retrievemultiplerecords
+    return `?fetchXml=${encodeURIComponent(fetchXmlTemplate.split(RECORD_ID_TOKEN).join(escapeXml(id)))}`;
+}
+
+export function normalizeGuid(value: string | null | undefined): string | null {
+    const text = String(value ?? "").trim();
+    const hasOpeningBrace = text.startsWith("{");
+    const hasClosingBrace = text.endsWith("}");
+    if (hasOpeningBrace !== hasClosingBrace) return null;
+    const unbraced = hasOpeningBrace ? text.slice(1, -1) : text;
+    if (!GUID_RE.test(unbraced)) return null;
+    return unbraced.toLowerCase();
+}
+function resolveFetchEntity(fetchXmlTemplate: string, configuredEntityName: string): string {
+    const match = ENTITY_NAME_RE.exec(fetchXmlTemplate);
+    const fetchEntity = match?.[2]?.trim();
+    return fetchEntity || configuredEntityName.trim();
+}
+
+function escapeXml(value: string): string {
+    return value
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&apos;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+}
+
+function nextLinkOptions(nextLink: string | undefined): string | undefined {
+    if (!nextLink) return undefined;
+    if (nextLink.startsWith("?")) return nextLink;
+    try {
+        const parsed = new URL(nextLink);
+        return `${parsed.search}${parsed.hash}`;
+    } catch {
+        return nextLink;
+    }
+}

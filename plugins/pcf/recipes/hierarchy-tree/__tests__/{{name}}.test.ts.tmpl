@@ -1,0 +1,287 @@
+import { {{name}} } from "../{{name}}";
+import { IInputs } from "../{{name}}/generated/ManifestTypes";
+import { mockContext, mockDataSet } from "../test/pcf-context";
+
+beforeEach(() => {
+    document.body.replaceChildren();
+});
+
+function hierarchyDataSet(options = {}) {
+    return mockDataSet({
+        root: { primaryName: "Root", parentRecord: null },
+        child: { primaryName: "Child", parentRecord: { id: "root", name: "Root", entityType: "account" } as unknown as string },
+    }, [
+        { name: "primaryName", displayName: "Name" },
+        { name: "parentRecord", displayName: "Parent" },
+    ], options) as IInputs["sampleDataSet"];
+}
+
+function deepHierarchyDataSet(options = {}) {
+    return mockDataSet({
+        root: { primaryName: "Root", parentRecord: null },
+        child: { primaryName: "Child", parentRecord: { id: "root", name: "Root", entityType: "account" } as unknown as string },
+        grandchild: { primaryName: "Grandchild", parentRecord: { id: "child", name: "Child", entityType: "account" } as unknown as string },
+    }, [
+        { name: "primaryName", displayName: "Name" },
+        { name: "parentRecord", displayName: "Parent" },
+    ], options) as IInputs["sampleDataSet"];
+}
+
+function mount(dataSet?: IInputs["sampleDataSet"] | null) {
+    const control = new {{name}}();
+    const container = document.createElement("div");
+    document.body.append(container);
+    const context = mockContext<IInputs>({});
+    if (dataSet !== undefined) Reflect.set(context.parameters, "sampleDataSet", dataSet);
+    control.init(context, jest.fn(), {}, container);
+    return { control, container, context, dataSet };
+}
+
+function mountRtl(dataSet?: IInputs["sampleDataSet"]) {
+    const control = new {{name}}();
+    const container = document.createElement("div");
+    document.body.append(container);
+    const context = mockContext<IInputs>(dataSet ? { sampleDataSet: dataSet } : {}, { rtl: true });
+    control.init(context, jest.fn(), {}, container);
+    return { control, container, dataSet };
+}
+
+test("renders an accessible tree from sorted dataset records", () => {
+    const { container } = mount(hierarchyDataSet());
+
+    expect(container.querySelector('[role="tree"]')).not.toBeNull();
+    expect(Array.from(container.querySelectorAll('[role="treeitem"]')).map((item) => ({
+        text: item.textContent,
+        level: item.getAttribute("aria-level"),
+        expanded: item.getAttribute("aria-expanded"),
+    }))).toEqual([
+        { text: "RootOpenChildOpen", level: "1", expanded: "true" },
+        { text: "ChildOpen", level: "2", expanded: null },
+    ]);
+});
+
+test("shows parent not loaded instead of treating cross-page children as roots", () => {
+    const dataSet = mockDataSet({
+        child: { primaryName: "Child", parentRecord: { id: "missing-parent", name: "Parent", entityType: "account" } as unknown as string },
+    }, [{ name: "primaryName" }, { name: "parentRecord" }], { hasNextPage: true }) as IInputs["sampleDataSet"];
+
+    const { container } = mount(dataSet);
+
+    expect(container.textContent).toContain("Parent not loaded");
+    expect(container.textContent).toContain("Partial tree");
+});
+
+test("detects cycles and breaks the parent link with a warning", () => {
+    const dataSet = mockDataSet({
+        first: { primaryName: "First", parentRecord: { id: "second", name: "Second", entityType: "account" } as unknown as string },
+        second: { primaryName: "Second", parentRecord: { id: "first", name: "First", entityType: "account" } as unknown as string },
+    }, [{ name: "primaryName" }, { name: "parentRecord" }]) as IInputs["sampleDataSet"];
+
+    const { container } = mount(dataSet);
+
+    expect(container.textContent).toContain("Cycle detected");
+    expect(Array.from(container.querySelectorAll('[role="treeitem"]')).map((item) => item.getAttribute("aria-level"))).toEqual(["1", "1"]);
+});
+
+test("expand and collapse are keyboard accessible", () => {
+    const { container } = mount(hierarchyDataSet());
+    const root = container.querySelector('[role="treeitem"]') as HTMLElement;
+
+    root.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    const collapsedRoot = container.querySelector('[role="treeitem"]') as HTMLElement;
+    expect(collapsedRoot.getAttribute("aria-expanded")).toBe("false");
+    expect(container.textContent).not.toContain("ChildOpen");
+
+    collapsedRoot.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect((container.querySelector('[role="treeitem"]') as HTMLElement).getAttribute("aria-expanded")).toBe("true");
+    expect(container.textContent).toContain("ChildOpen");
+});
+
+test("opens records through the dataset navigation adapter", () => {
+    const dataSet = hierarchyDataSet();
+    const { container } = mount(dataSet);
+
+    (Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Open") as HTMLButtonElement).click();
+
+    expect(dataSet.openDatasetItem).toHaveBeenCalledWith(expect.objectContaining({ id: "root" }));
+});
+
+test("missing dataset parameter renders a setup message", () => {
+    const { container } = mount();
+
+    expect(container.textContent).toContain("No dataset parameter was provided");
+    expect(mount(null).container.textContent).toContain("No dataset parameter was provided");
+});
+
+test("loading, empty and dataset error states are explicit", () => {
+    expect(mount(hierarchyDataSet({ loading: true })).container.textContent).toContain("Loading records");
+    expect(mount(mockDataSet({}, [{ name: "primaryName" }]) as IInputs["sampleDataSet"]).container.textContent).toContain("No records");
+    expect(mount(hierarchyDataSet({ error: true, errorMessage: "Access denied" })).container.textContent).toContain("Access denied");
+});
+
+test("paging requests stay locked until the framework completes loading and never refresh from updateView", async () => {
+    const dataSet = hierarchyDataSet({ hasNextPage: true, hasPreviousPage: true });
+    const { container, control } = mount(dataSet);
+    const next = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Next") as HTMLButtonElement;
+    const previous = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Previous") as HTMLButtonElement;
+
+    next.click();
+    await Promise.resolve();
+
+    expect(next.disabled).toBe(true);
+    expect(previous.disabled).toBe(true);
+
+    previous.click();
+    next.click();
+    control.updateView(mockContext<IInputs>({ sampleDataSet: dataSet }));
+
+    expect(dataSet.paging.loadNextPage).toHaveBeenCalledTimes(1);
+    expect(dataSet.paging.loadNextPage).toHaveReturnedWith(undefined);
+    expect(dataSet.paging.loadPreviousPage).not.toHaveBeenCalled();
+    expect(dataSet.refresh).not.toHaveBeenCalled();
+    dataSet.loading = true;
+    control.updateView(mockContext<IInputs>({ sampleDataSet: dataSet }));
+    expect(next.disabled).toBe(true);
+    expect(previous.disabled).toBe(true);
+
+    dataSet.loading = false;
+    control.updateView(mockContext<IInputs>({ sampleDataSet: dataSet }));
+    expect(next.disabled).toBe(false);
+    expect(previous.disabled).toBe(false);
+});
+
+test.each(["Next", "Previous"])("completion-only update releases a %s paging request", (label) => {
+    const dataSet = hierarchyDataSet({ hasNextPage: true, hasPreviousPage: true });
+    const { container, control, context } = mount(dataSet);
+    const button = Array.from(container.querySelectorAll("button")).find((item) => item.textContent === label) as HTMLButtonElement;
+    const loadPage = label === "Next" ? dataSet.paging.loadNextPage : dataSet.paging.loadPreviousPage;
+
+    button.click();
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(loadPage).toHaveBeenCalledTimes(1);
+    expect(loadPage).toHaveReturnedWith(undefined);
+    expect(button.disabled).toBe(true);
+
+    dataSet.sortedRecordIds = ["root"];
+    control.updateView(context);
+
+    expect(container.textContent).not.toContain("ChildOpen");
+    expect(button.disabled).toBe(false);
+    button.click();
+    expect(loadPage).toHaveBeenCalledTimes(2);
+});
+
+test("dataset errors release pending paging without requiring a loading update", () => {
+    const dataSet = hierarchyDataSet({ hasNextPage: true, hasPreviousPage: true });
+    const { container, control, context } = mount(dataSet);
+    const next = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Next") as HTMLButtonElement;
+    next.click();
+
+    dataSet.error = true;
+    dataSet.errorMessage = "Access denied";
+    control.updateView(context);
+    expect(container.textContent).toContain("Access denied");
+    expect(next.disabled).toBe(false);
+
+    next.click();
+    expect(dataSet.paging.loadNextPage).toHaveBeenCalledTimes(2);
+});
+
+test("two control instances keep independent expansion state", () => {
+    const first = mount(hierarchyDataSet());
+    const second = mount(hierarchyDataSet());
+
+    (first.container.querySelector('[role="treeitem"]') as HTMLElement).dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+
+    expect((first.container.querySelector('[role="treeitem"]') as HTMLElement).getAttribute("aria-expanded")).toBe("false");
+    expect((second.container.querySelector('[role="treeitem"]') as HTMLElement).getAttribute("aria-expanded")).toBe("true");
+});
+
+test("tree uses one roving tab stop and arrow navigation skips collapsed children", () => {
+    const { container } = mount(hierarchyDataSet());
+    const visibleTreeItems = () => Array.from(container.querySelectorAll('[role="treeitem"]')) as HTMLElement[];
+
+    expect(visibleTreeItems().map((item) => item.tabIndex)).toEqual([0, -1]);
+
+    visibleTreeItems()[0].focus();
+    visibleTreeItems()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    expect(document.activeElement?.textContent).toBe("ChildOpen");
+    expect(visibleTreeItems().map((item) => item.tabIndex)).toEqual([-1, 0]);
+
+    (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+    expect(document.activeElement).toBe(visibleTreeItems()[0]);
+
+    (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    expect(visibleTreeItems().map((item) => item.textContent)).toEqual(["RootOpen"]);
+    expect(visibleTreeItems().map((item) => item.tabIndex)).toEqual([0]);
+});
+
+test("home and end move to first and last visible tree item", () => {
+    const { container } = mount(hierarchyDataSet());
+    const visibleTreeItems = () => Array.from(container.querySelectorAll('[role="treeitem"]')) as HTMLElement[];
+
+    visibleTreeItems()[0].focus();
+    visibleTreeItems()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    expect(document.activeElement?.textContent).toBe("ChildOpen");
+
+    (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+    expect(document.activeElement).toBe(visibleTreeItems()[0]);
+});
+
+test("right and left expand collapse and move through the tree hierarchy", () => {
+    const { container } = mount(hierarchyDataSet());
+    const visibleTreeItems = () => Array.from(container.querySelectorAll('[role="treeitem"]')) as HTMLElement[];
+
+    visibleTreeItems()[0].focus();
+    visibleTreeItems()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect(document.activeElement?.textContent).toBe("ChildOpen");
+
+    (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    expect(document.activeElement).toBe(visibleTreeItems()[0]);
+
+    (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    expect((container.querySelector('[role="treeitem"]') as HTMLElement).getAttribute("aria-expanded")).toBe("false");
+});
+
+test("right and left expand collapse behavior reverses in RTL", () => {
+    const { container } = mountRtl(hierarchyDataSet());
+    const visibleTreeItems = () => Array.from(container.querySelectorAll('[role="treeitem"]')) as HTMLElement[];
+
+    visibleTreeItems()[0].focus();
+    visibleTreeItems()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect((container.querySelector('[role="treeitem"]') as HTMLElement).getAttribute("aria-expanded")).toBe("false");
+
+    visibleTreeItems()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    expect((container.querySelector('[role="treeitem"]') as HTMLElement).getAttribute("aria-expanded")).toBe("true");
+});
+
+test("enter opens record nodes but not the synthetic parent-not-loaded group", () => {
+    const dataSet = mockDataSet({
+        child: { primaryName: "Child", parentRecord: { id: "missing-parent", name: "Parent", entityType: "account" } as unknown as string },
+    }, [{ name: "primaryName" }, { name: "parentRecord" }], { hasNextPage: true }) as IInputs["sampleDataSet"];
+    const { container } = mount(dataSet);
+    const visibleTreeItems = () => Array.from(container.querySelectorAll('[role="treeitem"]')) as HTMLElement[];
+
+    visibleTreeItems()[0].focus();
+    visibleTreeItems()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(dataSet.openDatasetItem).not.toHaveBeenCalled();
+
+    visibleTreeItems()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    (document.activeElement as HTMLElement).dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(dataSet.openDatasetItem).toHaveBeenCalledWith(expect.objectContaining({ id: "child" }));
+});
+
+test("nested tree item keyboard handling does not bubble to ancestors", () => {
+    const dataSet = deepHierarchyDataSet();
+    const { container } = mount(dataSet);
+    const visibleTreeItems = () => Array.from(container.querySelectorAll('[role="treeitem"]')) as HTMLElement[];
+
+    visibleTreeItems()[1].focus();
+    visibleTreeItems()[1].dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(dataSet.openDatasetItem).toHaveBeenCalledTimes(1);
+    expect(dataSet.openDatasetItem).toHaveBeenCalledWith(expect.objectContaining({ id: "child" }));
+
+    visibleTreeItems()[1].focus();
+    visibleTreeItems()[1].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    expect(document.activeElement?.textContent).toBe("GrandchildOpen");
+});

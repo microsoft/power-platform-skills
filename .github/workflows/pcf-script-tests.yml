@@ -1,0 +1,77 @@
+# PCF script tests are separate from model-apps so each plugin stays path-filtered to the
+# files it ships. The model-apps source files below are listed because pcf carries bundled copies
+# guarded by scripts/tests/model-apps-copies.test.js.
+name: pcf-script-tests
+
+on:
+    pull_request:
+        branches:
+            - main
+        paths:
+            - "plugins/pcf/**"
+            - "evals/pcf/**"
+            - "shared/skills/**"
+            - "scripts/validate-plugin-copies.js"
+            - "plugins/model-apps/scripts/lib/process-runner.js"
+            - "plugins/model-apps/scripts/lib/sdk-http-client.js"
+            - "plugins/model-apps/scripts/lib/odata.js"
+            - "plugins/model-apps/scripts/lib/source-literals.js"
+            - "plugins/model-apps/scripts/lib/interaction-mode.js"
+            - "plugins/model-apps/scripts/lib/nearest-name.js"
+            - "plugins/model-apps/scripts/lib/utf8-stream.js"
+            - "plugins/model-apps/scripts/lib/cli-failure.js"
+            - "plugins/model-apps/scripts/lib/dataverse-auth.js"
+            - "plugins/model-apps/scripts/check-auth.js"
+            - "plugins/model-apps/scripts/resolve-interaction-mode.js"
+            - "plugins/model-apps/scripts/vendor/cds-maker-sdk.cjs"
+            - "plugins/model-apps/scripts/vendor/PROVENANCE.json"
+            - "plugins/model-apps/scripts/vendor/.gitattributes"
+            - ".github/workflows/pcf-script-tests.yml"
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    test-pcf-scripts:
+        name: test-pcf-scripts (${{ matrix.os }}, node ${{ matrix.node }})
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 20
+        strategy:
+            fail-fast: false
+            matrix:
+                os: [ubuntu-latest, windows-latest, macos-latest]
+                node: [20, 22]
+        defaults:
+            run:
+                working-directory: plugins/pcf
+        steps:
+            - name: checkout
+              uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+            - name: setup-node
+              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+              with:
+                  node-version: ${{ matrix.node }}
+            - name: run-pcf-script-tests
+              shell: bash
+              run: node scripts/run-tests.js
+    test-pcf-evals:
+        name: test-pcf-evals
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        steps:
+            - name: checkout
+              uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+            - name: setup-node
+              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+              with:
+                  node-version: 20
+            - name: run-pcf-eval-tests
+              shell: bash
+              run: node --test evals/pcf/tests/*.test.js
+            - name: run-pcf-full-evals
+              shell: bash
+              run: node evals/pcf/run-pcf.js --tier full
