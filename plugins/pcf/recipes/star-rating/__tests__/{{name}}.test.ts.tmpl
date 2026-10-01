@@ -42,8 +42,8 @@ function clickRadio(container: HTMLElement, index: number): void {
     radios(container)[index].dispatchEvent(new MouseEvent("click", { bubbles: true }));
 }
 
-function pressRadio(container: HTMLElement, index: number, key: string): void {
-    radios(container)[index].dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+function pressRadio(container: HTMLElement, index: number, key: string, code = ""): void {
+    radios(container)[index].dispatchEvent(new KeyboardEvent("keydown", { key, code, bubbles: true }));
 }
 
 test("null raw value renders an unselected localized radiogroup", () => {
@@ -85,7 +85,7 @@ test("arrow keys, Space, Home and End move or select the roving radio", () => {
     const { control, container, notify } = mount({ value: mockProperty(3) as IInputs["value"] });
 
     pressRadio(container, 2, "ArrowRight");
-    pressRadio(container, 0, "Space");
+    pressRadio(container, 0, " ", "Space");
     pressRadio(container, 3, "Home");
     pressRadio(container, 0, "End");
     pressRadio(container, 4, "ArrowLeft");
@@ -95,11 +95,14 @@ test("arrow keys, Space, Home and End move or select the roving radio", () => {
     expect(radios(container).map((item) => item.tabIndex)).toEqual([-1, -1, -1, 0, -1]);
 });
 
-test("Space checks the focused radio", () => {
+test.each([" ", "Spacebar"])("Space key %j checks the focused radio", (key) => {
     const { control, container, notify } = mount({ value: mockProperty(3) as IInputs["value"] });
+    const keys: Array<{ key: string; code: string }> = [];
+    container.addEventListener("keydown", (event) => keys.push({ key: event.key, code: event.code }));
 
-    pressRadio(container, 0, "Space");
+    pressRadio(container, 0, key, "Space");
 
+    expect(keys).toEqual([{ key, code: "Space" }]);
     expect(notify).toHaveBeenCalledTimes(1);
     expect(control.getOutputs()).toEqual({ value: 1 });
 });

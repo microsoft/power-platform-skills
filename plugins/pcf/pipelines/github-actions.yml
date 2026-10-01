@@ -15,8 +15,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SOLUTION_NAME: ContosoPcfControls
-      SOLUTION_PROJECT: build/ContosoPcfControls
-      SOLUTION_ZIP: build/ContosoPcfControls/bin/Release/ContosoPcfControls_managed.zip
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,6 +46,10 @@ jobs:
       - name: Pack managed solution
         shell: bash
         run: |
+          SOLUTION_PROJECT="build/$SOLUTION_NAME"
+          SOLUTION_ZIP="$SOLUTION_PROJECT/bin/Release/${SOLUTION_NAME}_managed.zip"
+          echo "SOLUTION_PROJECT=$SOLUTION_PROJECT" >> "$GITHUB_ENV"
+          echo "SOLUTION_ZIP=$SOLUTION_ZIP" >> "$GITHUB_ENV"
           mkdir -p "$(dirname "$SOLUTION_PROJECT")"
           pac solution init --publisher-name Contoso --publisher-prefix contoso --outputDirectory "$SOLUTION_PROJECT"
           cd "$SOLUTION_PROJECT"
