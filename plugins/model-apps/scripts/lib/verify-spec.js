@@ -6,7 +6,7 @@
 
 const { odataLit } = require('./odata.js');
 const { matchContainer, isEngineOwnedSection, isEngineHostSection, claimedByAuthoredName } = require('./form-container-match.js');
-const { authoredSectionNames } = require('./app-spec.js');
+const { authoredSectionNames, authoredTabNames } = require('./app-spec.js');
 const { decodeXmlEntities } = require('./sitemap-pages.js');
 const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf } = require('./app-spec.js');
 const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef, dashboardsInSolution, findDashboardsByName, findPinnedDashboard } = require('./sdk-build.js');
@@ -19,7 +19,7 @@ const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges
 const { resolveSurfaces } = require('./surface-resolver.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
 const { isVisualizationUnsupported } = require('./entity-provision.js');
-const { sectionGridWidth, mergeFieldOptions, fieldOptionsMap, normalizeFieldEntry } = require('./artifact-intent.js');
+const { sectionGridWidth, mergeFieldOptions, fieldOptionsMap, normalizeFieldEntry, compileFormIntent, isNonFieldControl } = require('./artifact-intent.js');
 const { rowOccupancy } = require('./form-occupancy.js');
 const { isMainForm, selectDefaultForm, plannedMainFormSequence, displayConditionsOrder, compareServedOrder } = require('./form-order.js');
 
@@ -441,12 +441,20 @@ async function verifySpec(spec, read, opts = {}) {
   const canReadTopology = typeof read.formTopology === 'function';
   {
     for (const f of spec.forms || []) {
-      if (!Array.isArray(f.tabs) || !f.tabs.length) continue;
+      const explicit = Array.isArray(f.tabs) && f.tabs.length > 0;
       const entity = String(f.entity || '').toLowerCase();
       const name = f.name || `${f.entity} form`;
       const formFieldOptions = fieldOptionsMap(f);
+      // An AUTO layout declares no shape, so it has no topology to prove — but its `fieldOptions` can
+      // still make a field read-only or hidden, which the build asserts on every apply. Those flags are
+      // proven on their own (`form-field-state`); without this an auto-layout form's declared state was
+      // never checked at all.
+      const autoFlagged = explicit ? [] : Object.keys(formFieldOptions)
+        .filter((k) => formFieldOptions[k].readOnly === true || formFieldOptions[k].hidden === true);
+      if (!explicit && !autoFlagged.length) continue;
+      const kind = explicit ? 'form-topology' : 'form-field-state';
       if (!canReadTopology) {
-        add('form-topology', `${entity}.${name}`, false,
+        add(kind, `${entity}.${name}`, false,
           'this reader exposes no deployed-layout source, so the layout is UNVERIFIED — not proven correct');
         continue;
       }
@@ -461,7 +469,7 @@ async function verifySpec(spec, read, opts = {}) {
         // and correct, and silently skipping the layout check let a transient read failure pass as a
         // verified layout.
         if (idError) {
-          add('form-topology', `${entity}.${name}`, false,
+          add(kind, `${entity}.${name}`, false,
             `could not resolve the deployed form id (${idError}) — the layout is unverified, not proven correct`);
         }
         continue;
@@ -471,12 +479,49 @@ async function verifySpec(spec, read, opts = {}) {
       let readError = null;
       try { xml = await read.formTopology(entity, id); } catch (e) { readError = (e && e.message) || String(e); }
       if (!xml) {
-        add('form-topology', `${entity}.${name}`, false,
+        add(kind, `${entity}.${name}`, false,
           `could not read the deployed form layout${readError ? `: ${readError}` : ''} — the layout is unverified, not proven correct`);
         continue;
       }
 
       const deployed = parseFormTopology(xml);
+      const problems = [];
+      // A declared flag against the deployed attribute, where an absent attribute is what the form
+      // renders without one: shown, expanded, labelled, editable. Reported in the spec's own terms
+      // (`specClause`), which for `hidden` is the inverse of the attribute it sets.
+      const flagProblem = (what, xmlAttr, deployedValue, wantAttr, renderedDefault, specClause) => {
+        const got = deployedValue === undefined ? renderedDefault : deployedValue;
+        if (got !== wantAttr) {
+          problems.push(`${what} is deployed with ${xmlAttr}="${got}"${deployedValue === undefined ? ' (absent, the default)' : ''}, the spec declares ${specClause}`);
+        }
+      };
+      const stateFlag = (what, specKey, xmlAttr, deployedValue, want) => flagProblem(what, xmlAttr, deployedValue, want, true, `${specKey}: ${want}`);
+      // The state the build asserts for a field: only the ENABLED flags are ever written (a rebuild never
+      // clears a lock or a hide applied in the designer), so only `true` is proven.
+      const fieldStateProblems = (fl, eff, dc) => {
+        if (eff.hidden === true) flagProblem(`field '${fl}'`, 'visible', dc.visible, false, true, 'hidden: true');
+        if (eff.readOnly === true) flagProblem(`field '${fl}'`, 'disabled', (dc.control || {}).disabled, true, false, 'readOnly: true');
+      };
+      if (!explicit) {
+        // The FIRST cell binding the field — the one the build's cell lookup patches. A flagged field the
+        // form does not carry is not reported here: an auto layout's placement is not verified either.
+        const cellOf = (fl) => deployed.flatMap((t) => (t.columns || []).flatMap((c) => (c.sections || []).flatMap((s) => (s.rows || []).flatMap((r) => r.cells || []))))
+          .find((c) => c.control && c.control.fieldName === fl && !isNonFieldControl(c.control));
+        for (const fl of autoFlagged) {
+          const dc = cellOf(fl);
+          if (dc) fieldStateProblems(fl, formFieldOptions[fl], dc);
+        }
+        add(kind, `${entity}.${name}`, problems.length === 0,
+          problems.length ? `deployed field state does not match the authored one — ${problems.slice(0, 6).join('; ')}${problems.length > 6 ? `; +${problems.length - 6} more` : ''}` : '');
+        continue;
+      }
+      // What the COMPILER emitted for this layout — tab state, form-column widths, section state — taken
+      // from the compiler itself rather than re-derived, so verify expects exactly what the build was asked
+      // to converge (an undeclared width is the equal split, an undeclared flag is `true`). Its tabs, their
+      // form-columns and their sections line up index for index with the spec's; the compiler only APPENDS
+      // (the notes section, after the first tab's authored sections). The build compiled this same layout,
+      // so it compiles here too.
+      const compiledTabs = compileFormIntent(spec, f).tabs || [];
       // Where the DEPLOYED form actually placed each bound field, as the IDENTITY of the section
       // holding it — not merely its name.
       //
@@ -493,16 +538,31 @@ async function verifySpec(spec, read, opts = {}) {
         for (const fl of sec.fields || []) if (!placedIn.has(fl)) placedIn.set(fl, sec);
       }
 
-      const problems = [];
+      // ORDER. The authored containers must deploy in the layout's order — the build moves them into it
+      // (planOrderMoves). Only their RELATIVE order is compared: a tab or section the layout does not
+      // mention (a maker's own, an engine host) has no place in it. `matched` holds the deployed index of
+      // each container matched, in layout order.
+      const orderProblem = (matched, what) => {
+        if (matched.every((m, i) => i === 0 || matched[i - 1].index < m.index)) return;
+        const deployedOrder = matched.slice().sort((a, b) => a.index - b.index).map((m) => m.name);
+        problems.push(`${what} are deployed in the order ${deployedOrder.join(', ')}; the spec orders them ${matched.map((m) => m.name).join(', ')}`);
+      };
+      const sameWidth = (got, want) => {
+        const pct = (w) => { const m = /^\s*(\d+(?:\.\d+)?)\s*%\s*$/.exec(String(w === undefined ? '' : w)); return m ? Number(m[1]) : null; };
+        return pct(got) !== null && pct(got) === pct(want);
+      };
       // Match containers the way the BUILD does — name, then label, then position — using the same
       // function it uses. A label- or position-matched container deliberately KEEPS its deployed
       // name (form scripts and business rules reference section names), so looking one up by the
       // AUTHORED name reported a perfectly good auto-to-explicit migration as "section absent" and
       // failed a build that had done exactly what was asked. Live-reproduced.
       const claimedTabs = new Set();
+      const tabOrder = [];
       // The section names the author declared — the same set the build's compiler records — so the
       // label and position passes skip a section another want owns by name, exactly as the build does.
+      // Tabs follow the same rule, from the same kind of set.
       const authoredNames = authoredSectionNames(f);
+      const tabSkip = claimedByAuthoredName(authoredTabNames(f));
       f.tabs.forEach((t, ti) => {
         if (!t || typeof t !== 'object') return;
         const tabName = String(t.name || generatedTabName(ti)).toLowerCase();
@@ -510,18 +570,29 @@ async function verifySpec(spec, read, opts = {}) {
         // a tab to 'General' and a section to 'Details', so the deployed container carries the
         // default — comparing against `undefined` would skip the label pass and fall through to
         // position, picking a different container than the build did.
-        const tabHit = matchContainer(deployed, { name: tabName, label: t.label || 'General' }, ti, { claimed: claimedTabs });
+        const tabHit = matchContainer(deployed, { name: tabName, label: t.label || 'General' }, ti, { claimed: claimedTabs, skip: tabSkip });
         if (!tabHit) { problems.push(`tab '${tabName}' is absent`); return; }
         claimedTabs.add(tabHit.index);
+        tabOrder.push({ name: tabName, index: tabHit.index });
         const got = tabHit.item;
+        const compiledTab = compiledTabs[ti] || {};
+        stateFlag(`tab '${tabName}'`, 'expanded', 'expanded', got.expanded, compiledTab.expanded !== false);
+        stateFlag(`tab '${tabName}'`, 'visible', 'visible', got.visible, compiledTab.visible !== false);
         const authoredColumns = formColumnsOf(t);
         if ((got.columns || []).length < authoredColumns.length) {
           problems.push(`tab '${tabName}' has ${(got.columns || []).length} form-column(s), the spec declares ${authoredColumns.length}`);
         }
         authoredColumns.forEach((col, ci) => {
           const sections = (col && Array.isArray(col.sections)) ? col.sections : [];
-          const deployedSections = ((got.columns || [])[ci] || {}).sections || [];
+          const deployedColumn = (got.columns || [])[ci];
+          const deployedSections = (deployedColumn || {}).sections || [];
+          const compiledColumn = (compiledTab.columns || [])[ci] || {};
+          // The width the build writes on every apply — the authored one, or the compiler's equal split.
+          if (deployedColumn && compiledColumn.width !== undefined && !sameWidth(deployedColumn.width, compiledColumn.width)) {
+            problems.push(`tab '${tabName}' form-column ${ci + 1} is deployed ${deployedColumn.width === undefined ? 'with no width' : `${deployedColumn.width} wide`}, the spec declares ${compiledColumn.width}`);
+          }
           const claimedSections = new Set();
+          const sectionOrder = [];
           sections.forEach((sec, si) => {
             if (!sec || typeof sec !== 'object') return;
             const secName = String(sec.name || generatedSectionName(ti, ci, si)).toLowerCase();
@@ -536,6 +607,10 @@ async function verifySpec(spec, read, opts = {}) {
               return;
             }
             claimedSections.add(secHit.index);
+            sectionOrder.push({ name: secName, index: secHit.index });
+            const compiledSection = (compiledColumn.sections || [])[si] || {};
+            stateFlag(`section '${secName}'`, 'visible', 'visible', secHit.item.visible, compiledSection.visible !== false);
+            stateFlag(`section '${secName}'`, 'showLabel', 'showlabel', secHit.item.showLabel, compiledSection.showLabel !== false);
             // The grid width the COMPILER emits for this authored section — taken from the same
             // function the compiler uses, never re-derived here. Reading the raw `columns` instead
             // failed forms that deployed exactly as compiled: an omitted `columns` compiles to 1,
@@ -579,7 +654,7 @@ async function verifySpec(spec, read, opts = {}) {
             // every `fieldOptions` span unverified — including one the build had to skip.
             const deployedCellOf = (logical) => (secHit.item.rows || [])
               .flatMap((r2) => r2.cells || [])
-              .find((c) => c.control && c.control.fieldName === logical);
+              .find((c) => c.control && c.control.fieldName === logical && !isNonFieldControl(c.control));
             for (const entry of (sec.fields || [])) {
               const inline = normalizeFieldEntry(entry);
               const fl = inline.name;
@@ -587,6 +662,7 @@ async function verifySpec(spec, read, opts = {}) {
               const eff = mergeFieldOptions(formFieldOptions[fl], inline, fl);
               const dc = deployedCellOf(fl);
               if (!dc) continue; // placement is reported separately below
+              fieldStateProblems(fl, eff, dc);
               for (const key of ['colspan', 'rowspan']) {
                 const declared = Number(eff[key]);
                 if (!Number.isFinite(declared) || declared < 1) continue; // not declared
@@ -624,8 +700,10 @@ async function verifySpec(spec, read, opts = {}) {
               }
             }
           });
+          orderProblem(sectionOrder, `the sections of tab '${tabName}' form-column ${ci + 1}`);
         });
       });
+      orderProblem(tabOrder, 'the tabs');
 
       add('form-topology', `${entity}.${name}`, problems.length === 0,
         problems.length ? `deployed layout does not match the authored one — ${problems.slice(0, 6).join('; ')}${problems.length > 6 ? `; +${problems.length - 6} more` : ''}` : '');
@@ -1582,6 +1660,15 @@ function parseFormTopology(xml) {
     const m = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i').exec(raw || '');
     return m ? (m[1] != null ? m[1] : m[2]) : undefined;
   };
+  // The display flags verify compares — tab `expanded`/`visible`, section `visible`/`showlabel`, cell
+  // `visible`, control `disabled` — are `xs:boolean`, so "true"/"false" or "1"/"0", and the schema gives
+  // none of them a default. An absent (or unreadable) one stays undefined; the comparison applies what
+  // the form renders without it.
+  // See: https://learn.microsoft.com/en-us/power-apps/developer/model-driven-apps/form-xml-schema
+  const flag = (raw, name) => {
+    const v = String(attr(raw, name) === undefined ? '' : attr(raw, name)).trim().toLowerCase();
+    return v === 'true' || v === '1' ? true : (v === 'false' || v === '0' ? false : undefined);
+  };
   let m;
   while ((m = re.exec(s)) !== null) {
     const closing = m[1] === '/';
@@ -1596,14 +1683,14 @@ function parseFormTopology(xml) {
       else if (tag === 'cell') { inCell = false; cell = null; }
       continue;
     }
-    if (tag === 'tab') { tab = { name: attr(raw, 'name'), label: undefined, columns: [] }; tabs.push(tab); if (selfClosing) tab = null; }
+    if (tag === 'tab') { tab = { name: attr(raw, 'name'), label: undefined, expanded: flag(raw, 'expanded'), visible: flag(raw, 'visible'), columns: [] }; tabs.push(tab); if (selfClosing) tab = null; }
     else if (tag === 'column' && tab) { column = { width: attr(raw, 'width'), sections: [] }; tab.columns.push(column); if (selfClosing) column = null; }
     else if (tag === 'section' && column) {
       const ratio = attr(raw, 'columns');
       // `columns` is a width RATIO string, not a count: "11" is two equal columns, "1111" is four.
       // ABSENT means the width is UNKNOWN — left undefined so the occupancy check skips rather than
       // assuming a 1-column grid and inventing an overflow that is not there.
-      section = { name: attr(raw, 'name'), label: undefined, columns: ratio ? String(ratio).length : undefined, rows: [], fields: [] };
+      section = { name: attr(raw, 'name'), label: undefined, columns: ratio ? String(ratio).length : undefined, visible: flag(raw, 'visible'), showLabel: flag(raw, 'showlabel'), rows: [], fields: [] };
       column.sections.push(section);
       if (selfClosing) section = null;
     }
@@ -1612,7 +1699,7 @@ function parseFormTopology(xml) {
       inCell = !selfClosing;
       // A cell with no <control> child stays control-less, which is what keeps a SPACER from
       // reading as engine-owned.
-      cell = { colspan: Number(attr(raw, 'colspan')) || 1, rowspan: Number(attr(raw, 'rowspan')) || 1 };
+      cell = { colspan: Number(attr(raw, 'colspan')) || 1, rowspan: Number(attr(raw, 'rowspan')) || 1, visible: flag(raw, 'visible') };
       if (row) row.cells.push(cell);
       if (selfClosing) cell = null;
     }
@@ -1635,8 +1722,12 @@ function parseFormTopology(xml) {
       // marks a timeline or sub-grid host a maker added a field to (isEngineHostSection).
       const f = attr(raw, 'datafieldname');
       const classId = attr(raw, 'classid');
-      if (f) section.fields.push(String(f).toLowerCase());
-      if (cell) cell.control = Object.assign(f ? { fieldName: String(f).toLowerCase() } : {}, classId ? { classId } : {});
+      const disabled = flag(raw, 'disabled');
+      // A quick view binds a LOOKUP's datafieldname too, but it is not that field: counted as one, it placed
+      // the lookup wherever the quick view sat and lent the field its visibility and state. The build skips it
+      // the same way (isNonFieldControl) when it picks the cell to place or patch.
+      if (f && !isNonFieldControl({ classId })) section.fields.push(String(f).toLowerCase());
+      if (cell) cell.control = Object.assign(f ? { fieldName: String(f).toLowerCase() } : {}, classId ? { classId } : {}, disabled === undefined ? {} : { disabled });
     }
   }
   return tabs;

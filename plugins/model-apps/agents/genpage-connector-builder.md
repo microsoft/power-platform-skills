@@ -120,6 +120,11 @@ is actually bound to that connection (its `connectionId` matches) — prefer tho
 Offer ready-to-bind choices first in a `needs_input` request, showing the
 connectionreference logical name, connector id, and connection display name.
 
+If the script fails (`ok: false`), discovery did not happen — it refuses PAC output
+it cannot read rather than report it as "no connections". Do **not** treat that as
+"no suitable connection exists" below, and never create a connection on it: return
+`needs_input` with the script's error.
+
 After selecting any existing connection — before branching into tabular versus
 REST/action discovery — derive `connectorName` from the final path segment of
 its full `connectorId`. PAC metadata commands use `connectorName`; binding files

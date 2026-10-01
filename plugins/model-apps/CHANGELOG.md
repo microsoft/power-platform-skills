@@ -5,7 +5,53 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [Unreleased] — 2.11.0
+## [Unreleased] — 2.12.0
+
+Fixes from a retest of 2.11.0: an existing form converges to its layout's order and `--verify` checks
+more of it, a generative page keeps its name and model on update, and several readers refuse output
+they cannot read instead of guessing.
+
+### Added
+
+- **`pages[].model`** — the model id a generative page was generated with. A download writes it and
+  the build sends it with every upload.
+- **`POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS`** — how long an Azure CLI call may take (default 60 s).
+
+### Fixed
+
+- **A field moved into a narrower section fits it.** Moved without a `colspan`, a two-column field
+  kept its width in a one-column section, and the build wrote a layout `--verify` then failed. It
+  keeps its width only where it fits, and is narrowed — and reported — where it does not.
+- **Tabs and sections are put in the layout's order** on an existing form, with the fewest moves. A
+  build used to create and move them but never reorder them, and a new tab placed between existing
+  ones took over the next one, which then came back as a duplicate.
+- **`--verify` checks more of a form**: tab expanded and visible state, form-column widths, section
+  visibility and label display, fields' `hidden` and `readOnly`, and the order of tabs and sections.
+  A form that differed in any of these passed. It also reads a field's state, span and section from
+  the field itself, never from a quick view bound to the same lookup.
+- **A generative page keeps its name and model on update.** An update without a name renamed the
+  page to its navigation title, and one without `--model` stored the model empty. `genpage-upload`
+  now reads both from the deployed page and sends them again (a name a `pac.cmd` shim cannot receive
+  is left out, with a warning), and a download → rebuild keeps the model. A name with a straight
+  double quote is refused — pac stores each one as `\"`, in the navigation title too — and
+  `/app-builder` lints one in `pages[].name`. A download no longer copies pac's backslashes into
+  `pages[].name`, where each rebuild added another.
+- **Generative-page navigation parsing** is linear — a 2.5 KB page of nested template literals took
+  1.4 s, and a long comment inside one navigation call seconds more — and no longer rewrites a name
+  that only resembles a navigation call, misses an optional call (`?.`), misreads a property override
+  or a Unicode line terminator, or reads a word in a comment as a property.
+- **Adding pages to a solution checks every id first.** A malformed page id was refused only after
+  the app had been added; nothing is added now until the app and page ids are valid, and a repeated
+  id is sent once.
+- **Connector discovery refuses output it cannot read** — a warning, a changed format — instead of
+  reporting no connections, rejects malformed identifiers, and no longer reads a table's dashed
+  separator as a connection. The connector agent never creates a connection after a failed discovery.
+- **A slow Azure CLI is reported as slow.** A token request that ran out of time was reported as
+  `az` missing or signed out; it is now `az_timeout` (or `pac_timeout`), with the time it was given.
+- **Lint no longer warns about a view, chart or form name used on two tables** — only a repeat on
+  one table collides.
+
+## [2.11.0]
 
 AI features are written with each setting's own values, rebuilding an existing app no longer
 rewrites its navigation, a table opens with the form the spec makes its default, and the vendored

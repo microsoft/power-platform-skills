@@ -3,6 +3,7 @@
 // to author/deploy generative pages. Page CONTENT only: uploads run WITHOUT --add-to-sitemap because
 // the SDK owns the sitemap (it writes the GenPage subareas). Real impl spawns pac; tests inject `run`.
 const { invocation, spawnProcess } = require('./process-runner.js');
+const { dataverseRequest } = require('./dataverse-auth.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -93,6 +94,15 @@ function runPac(args) {
 // means the token continues. Returning null is the safe outcome: the caller treats a zero exit with
 // no parsable id as an UNCERTAIN create and reconciles by env-wide id diff.
 const GUID_RE = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
+// A value that IS a GUID and nothing else — what may go into a Dataverse key segment, `uxagentprojects(<id>)`.
+const GUID_ONLY_RE = new RegExp(`^${GUID_RE.source}$`);
+// pac stores every ASCII `"` in a page name as `\"` — in the page's row and in a navigation title it writes (live-measured:
+// `Say "hi" now` became `Say \"hi\" now` in both) — and changes nothing else. This is the inverse: the name pac was given.
+// Sent back as the name, it makes pac store the same value again; a name read back and re-sent as it is would gain a
+// backslash on every upload.
+function unescapePacName(name) {
+  return String(name).replace(/\\"/g, '"');
+}
 // The end of a GUID token, for a RegExp built with the 'u' flag. Shared by both parsers below.
 const GUID_END = '(?![\\p{L}\\p{N}\\p{M}_-])';
 function parsePageId(out) {
@@ -541,6 +551,31 @@ function makeGenpageCli(env, deps = {}) {
       if (r.status !== 0) throw new Error(`pac genpage download failed: ${pacDiagnostic(r)}`);
       return true;
     },
+    // The page's current display name, from its Dataverse row (`uxagentproject.name`). An update without
+    // `--name` renames the page to its navigation title, so a caller that wants to keep the name must read
+    // it and send it. pac's app-scoped listing shows the navigation title instead, and its env-wide listing
+    // prints the name trimmed, in a fixed-width table — so the row itself is read, through Dataverse (the
+    // az token). The row cannot be written there: a PATCH of `name` answers 204 and changes nothing
+    // (live-measured), so pac's `--name` is the only way to set it.
+    async pageName(pageId) {
+      if (!GUID_ONLY_RE.test(String(pageId || ''))) throw new Error(`'${pageId}' is not a page id`);
+      const request = deps.request || dataverseRequest;
+      const res = await request(env, 'GET', `uxagentprojects(${pageId})?$select=name`);
+      if (!res || res.status < 200 || res.status >= 300) throw new Error(`reading page ${pageId}'s name returned HTTP ${res && res.status}`);
+      return res.data && typeof res.data.name === 'string' ? res.data.name : null;
+    },
+    // Why pac, as installed here, cannot be handed `value` as an argument — null when it can. A `pac.cmd` shim
+    // (Windows) cannot receive a double quote or `%` unchanged, and the runner refuses such a value rather than
+    // let cmd.exe rewrite it. Checked without starting anything, so a caller can decide BEFORE an upload
+    // whether a value it chose on the user's behalf — a page's current name — can be sent at all.
+    argumentRefusal(value) {
+      try {
+        buildPacInvocation(['--name', value], deps.pacInvocation);
+        return null;
+      } catch (e) {
+        return e && e.code === 'EARGUMENT' ? e.message : null;
+      }
+    },
   };
 }
 
@@ -551,4 +586,4 @@ function makeGenpageCli(env, deps = {}) {
 function suppliedButBlank(value) {
   return value !== undefined && value !== null && !String(value).trim();
 }
-module.exports = { makeGenpageCli, suppliedButBlank, parsePageId, parseList, parseListCount, classifyListOutput, buildPacInvocation, runPac };
+module.exports = { makeGenpageCli, suppliedButBlank, unescapePacName, parsePageId, parseList, parseListCount, classifyListOutput, buildPacInvocation, runPac };

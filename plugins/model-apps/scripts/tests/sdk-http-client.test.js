@@ -88,6 +88,16 @@ test('refreshes token with a fresh acquire on 401, bypassing any process memo', 
   assert.deepStrictEqual(calls.map((c) => c.headers.Authorization), ['Bearer OLD', 'Bearer NEW']);
 });
 
+// The refresh after a 401 can fail too. That stops the request with the token failure — worded like every other one —
+// and nothing is re-sent with the rejected token.
+test('a 401 whose token refresh fails stops with the token failure and re-sends nothing', async () => {
+  const { request, calls } = fakeTransport({ statusCode: 401, headers: {}, body: '' });
+  let acquired = 0;
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => (++acquired === 1 ? 'OLD' : null), request });
+  await assert.rejects(http.get('https://org.crm.dynamics.com/x'), /Failed to refresh Azure CLI token for https:\/\/org\.crm\.dynamics\.com\. Run 'az login' first\./);
+  assert.deepStrictEqual([calls.length, acquired], [1, 2]);
+});
+
 test('retries a transient 500 (SQL deadlock) with backoff, then succeeds', async () => {
   const { request, calls } = fakeTransport(() =>
     calls.length <= 2 ? { statusCode: 500, headers: {}, body: 'deadlock 1205' } : { statusCode: 200, headers: {}, body: '{"ok":true}' }

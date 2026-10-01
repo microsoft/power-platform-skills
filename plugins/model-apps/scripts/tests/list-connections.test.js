@@ -199,13 +199,39 @@ test('extractConnectorId returns the api path, or empty string when there is non
   assert.equal(extractConnectorId('garbage'), '');
 });
 
-test('unparseable output yields no rows rather than throwing', () => {
-  // The caller reports "no connections found"; a throw here would abort a /genpage run that could
-  // still proceed with mock data.
-  assert.deepEqual(parsePacConnectionList('no table here'), []);
-  assert.deepEqual(parsePacConnectionList(''), []);
-  assert.equal(parseJsonConnections('{not json'), null, 'invalid JSON defers to the table parsers');
-  assert.equal(parseJsonConnections('"a string"'), null, 'non-array JSON defers too');
+// Output no parser recognises is REFUSED, never read as "no connections". That answer sends the connector
+// agent on to CREATE a connection (genpage-connector-builder.md, "No suitable connection exists"), so an
+// unreadable listing — a warning printed on a zero exit, JSON cut short, a changed format — would make a
+// duplicate of a connection the maker already has.
+test('unreadable output is refused, never read as "no connections"', () => {
+  for (const raw of ['Warning: failed to retrieve connections.', 'not JSON', '[{"Id":', '{"unexpected":true}', 'no table here', '', 'Connected as maker@contoso.onmicrosoft.com\r\n', 'null',
+    // Prose that only MENTIONS a connector or an id column is not a table header — nor is prose over a run of dashes.
+    'Warning: failed to retrieve connector metadata.', 'Connection Id could not be read.',
+    'Status of connector refresh\n------  -------\n', 'Connector  Status\nshared_sql  Connected\n']) {
+    assert.throws(() => parsePacConnectionList(raw), /could not read[\s\S]*not reported as "no connections"/, JSON.stringify(raw));
+  }
+  assert.throws(() => parsePacConnectionList('Warning: failed to retrieve connections.'), /first line: "Warning: failed to retrieve connections\."/);
+  // The helper itself still answers "not JSON" with null, for the caller to judge.
+  assert.equal(parseJsonConnections('{not json'), null);
+  assert.equal(parseJsonConnections('"a string"'), null);
+});
+
+test('an empty listing is one PAC itself reports as empty', () => {
+  for (const raw of ['[]', '{"value":[]}', 'No connections found.', 'Connected as maker@contoso.onmicrosoft.com\r\nNo connections found.\r\n',
+    'Connected as maker@contoso.onmicrosoft.com\r\nId                               Name       API Id                                                      Status\r\n',
+    'Connection Name    Connector Id    Connection Id\n---------------    ------------    -------------\n']) {
+    assert.deepEqual(parsePacConnectionList(raw), [], JSON.stringify(raw));
+  }
+});
+
+// An identifier is a non-empty string. Whitespace, a number, an object or an array in an id column made a
+// row with "both ids" that nothing could ever bind — offered to the maker as a real connection.
+test('identifiers must be non-empty strings, trimmed', () => {
+  for (const [Id, ConnectorId] of [['   ', '\t'], [42, 27], [{ nested: 'x' }, { nested: 'y' }], [['a'], ['b']]]) {
+    assert.throws(() => parsePacConnectionList(JSON.stringify([{ Id, ConnectorId }])), /no usable connection rows/, JSON.stringify({ Id, ConnectorId }));
+  }
+  assert.deepEqual(parsePacConnectionList(JSON.stringify([{ Id: '  connection-a ', ConnectorId: ` ${SP_API}\t` }])),
+    [{ connectorId: SP_API, connectionId: 'connection-a', displayName: SP_API }]);
 });
 
 test('rows with no identifying field at all are dropped', () => {

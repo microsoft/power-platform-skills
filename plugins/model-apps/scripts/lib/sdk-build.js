@@ -89,7 +89,7 @@ const {
   rowsFromCells,
 } = require('./artifact-intent.js');
 const { makeGenpageCli, suppliedButBlank } = require('./genpage-cli.js');
-const { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsControlOf, claimedByAuthoredName } = require('./form-container-match.js');
+const { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsControlOf, claimedByAuthoredName, planOrderMoves } = require('./form-container-match.js');
 const { rowOccupancy, fitsGrid, strandedRows } = require('./form-occupancy.js');
 const { manifestResourceName, buildManifest, serializeManifest, parseManifestBase64, reconcilePageIds } = require('./page-manifest.js');
 // MEMBERSHIP authority (the app's live sitemap) + the cross-app shared-page scan. fetchSitemap is
@@ -2214,53 +2214,85 @@ async function runSdkBuild(spec, opts = {}) {
     const claimedTabs = new Set();
     const claimedSections = new Map(); // column pointer -> Set(index)
     const claimedIn = (key) => { if (!claimedSections.has(key)) claimedSections.set(key, new Set()); return claimedSections.get(key); };
+    const warn = (message) => { if (typeof opts.warn === 'function') opts.warn(message); };
+    // Every tab is matched — or created — before any section is touched, so that the tabs can be put in
+    // the layout's order first: the section pass records section pointers under their tab's index, and
+    // ordering the tabs after it would shift those.
+    const tabIndexOf = []; // want index -> deployed tab index (a hole when the tab could not be placed)
+    // A tab another tab of the layout claims by NAME is matched only by that name (claimedByAuthoredName)
+    // — the rule sections follow, and verify's rule.
+    const tabSkip = claimedByAuthoredName(new Set(def.__authoredTabNames || []));
     for (let ti = 0; ti < wantTabs.length; ti++) {
       const wantTab = wantTabs[ti];
       // Re-read before every mutation: addElement appends and shifts sibling indices, so a pointer
       // computed against an earlier snapshot can address the wrong container.
-      let form = await provision.getArtifact('form', formId) || {};
-      let tabMatch = matchContainer(form.tabs, wantTab, ti, { claimed: claimedTabs });
+      const form = await provision.getArtifact('form', formId) || {};
+      let tabMatch = matchContainer(form.tabs, wantTab, ti, { claimed: claimedTabs, skip: tabSkip });
       if (!tabMatch) {
         // A new tab is added with EMPTY form-columns, and its sections then go through the same
         // per-section pass as an existing tab's: a section the deployed form already carries elsewhere
         // is MOVED in, and only a genuinely new one is created. Adding the tab with its sections created
         // a same-named DUPLICATE of any section it relocated — the field pass then emptied the original,
         // which the vacated-section sweep spared for its claimed name.
+        //
+        // It goes where the layout places it — right after the furthest tab already matched, the rule a
+        // new section follows — rather than last, where a tab declared mid-layout used to land for good.
+        // Every tab matched so far sits before that index, so inserting there shifts none of them.
+        const at = Math.min((form.tabs || []).length, claimedTabs.size ? Math.max(...claimedTabs) + 1 : 0);
         await provision.addElement('form', formId, '/tabs', Object.assign({}, wantTab, {
           columns: (wantTab.columns || []).map((c) => Object.assign({}, c, { sections: [] })),
-        }));
-        form = await provision.getArtifact('form', formId) || {};
-        tabMatch = matchContainer(form.tabs, wantTab, (form.tabs || []).length - 1, { claimed: claimedTabs });
+        }), { position: { index: at } });
+        const added = await provision.getArtifact('form', formId) || {};
+        tabMatch = matchContainer(added.tabs, wantTab, at, { claimed: claimedTabs, skip: tabSkip });
         if (!tabMatch) continue; // defensive: the added tab could not be found again
       }
       claimedTabs.add(tabMatch.index);
-      const tabPointer = '/tabs/' + tabMatch.index;
+      tabIndexOf[ti] = tabMatch.index;
       const tabPatch = diffPatch(tabMatch.item, wantTab, ['label', 'expanded', 'visible']);
-      if (Object.keys(tabPatch).length) await provision.updateElement('form', formId, tabPointer, tabPatch);
+      if (Object.keys(tabPatch).length) await provision.updateElement('form', formId, '/tabs/' + tabMatch.index, tabPatch);
+    }
+    // The tabs in the layout's order. The build used to leave every existing tab where it was, so a
+    // reordered layout deployed in the old order, and verify — which checked no order — passed it.
+    // Like a section's width or label, the spec wins over a tab a maker dragged: reported, never silent.
+    const placedTabs = wantTabs.map((_, ti) => ti).filter((ti) => Number.isInteger(tabIndexOf[ti]));
+    const tabPlan = planOrderMoves(placedTabs.map((ti) => tabIndexOf[ti]));
+    if (tabPlan.moves.length) {
+      for (const m of tabPlan.moves) await provision.moveElement('form', formId, '/tabs/' + m.from, '/tabs', { index: m.to });
+      placedTabs.forEach((ti, k) => { tabIndexOf[ti] = tabPlan.positions[k]; });
+      const ordered = await provision.getArtifact('form', formId) || {};
+      const names = placedTabs.map((ti) => (((ordered.tabs || [])[tabIndexOf[ti]]) || {}).name || `#${tabIndexOf[ti] + 1}`);
+      warn(`form ${def.name}: moved ${tabPlan.moves.length} tab(s) to put the tabs in the layout's order: ${names.join(', ')}.`);
+    }
+    for (let ti = 0; ti < wantTabs.length; ti++) {
+      if (!Number.isInteger(tabIndexOf[ti])) continue;
+      const wantTab = wantTabs[ti];
+      const tabIndex = tabIndexOf[ti];
+      const tabPointer = '/tabs/' + tabIndex;
+      let form;
 
       const wantColumns = wantTab.columns || [];
       for (let ci = 0; ci < wantColumns.length; ci++) {
         form = await provision.getArtifact('form', formId) || {};
-        let liveTab = (form.tabs || [])[tabMatch.index];
+        let liveTab = (form.tabs || [])[tabIndex];
         if (!liveTab) break; // defensive: the tab vanished mid-reconcile
         if (ci >= (liveTab.columns || []).length) {
           // A tab that gained a form-column — e.g. a single-column form widened into two. Added EMPTY,
           // for the same reason as a new tab: its sections go through the per-section pass below.
           await provision.addElement('form', formId, tabPointer + '/columns', Object.assign({}, wantColumns[ci], { sections: [] }));
           form = await provision.getArtifact('form', formId) || {};
-          liveTab = (form.tabs || [])[tabMatch.index];
+          liveTab = (form.tabs || [])[tabIndex];
           if (!liveTab || ci >= (liveTab.columns || []).length) break; // defensive: the add did not land
         }
         const liveColumns = liveTab.columns || [];
         if (wantColumns[ci].width && liveColumns[ci].width !== wantColumns[ci].width) {
           await provision.updateElement('form', formId, tabPointer + '/columns/' + ci, { width: wantColumns[ci].width });
         }
+        const columnPointer = tabPointer + '/columns/' + ci;
         const wantSections = wantColumns[ci].sections || [];
         for (let si = 0; si < wantSections.length; si++) {
           const wantSection = wantSections[si];
           form = await provision.getArtifact('form', formId) || {};
-          const columnPointer = tabPointer + '/columns/' + ci;
-          const liveSections = (((form.tabs || [])[tabMatch.index] || {}).columns || [])[ci];
+          const liveSections = (((form.tabs || [])[tabIndex] || {}).columns || [])[ci];
           const claimedHere = claimedIn(columnPointer);
           // A section may have been dragged to a different tab in Maker, or the spec may now place it
           // somewhere else; either way it is still THAT section, so a form-wide name hit outranks a
@@ -2318,10 +2350,10 @@ async function runSdkBuild(spec, opts = {}) {
             // for a section's columns and label — so it is reported, never silent.
             if (typeof opts.warn === 'function') {
               opts.warn(`form ${def.name}: moved section '${wantSection.name}' from tab '${fromTab}' (form-column ${fromColumn}) `
-                + `to tab '${liveTab.name || `#${tabMatch.index + 1}`}' (form-column ${ci + 1}), where the layout places it.`);
+                + `to tab '${liveTab.name || `#${tabIndex + 1}`}' (form-column ${ci + 1}), where the layout places it.`);
             }
             form = await provision.getArtifact('form', formId) || {};
-            const moved = ((((form.tabs || [])[tabMatch.index] || {}).columns || [])[ci] || {}).sections || [];
+            const moved = ((((form.tabs || [])[tabIndex] || {}).columns || [])[ci] || {}).sections || [];
             global = { pointer: columnPointer + '/sections/' + index, section: moved[index] || global.section };
           }
           // An ENGINE want has no label or position to go on: its evidence is its name and its own control,
@@ -2334,13 +2366,12 @@ async function runSdkBuild(spec, opts = {}) {
             // An authored section is created where the layout places it: right after the furthest section this
             // column has already matched, the index the move above uses. Appended, it landed after every
             // section still to come — a new one declared mid-column, or a generated one recreated after a
-            // drag in Maker — and the build never reorders what exists, so the wrong order was permanent (and
-            // verify does not check order). Nothing recorded sits at or after that index, so no recorded
-            // pointer shifts. An ENGINE want is still appended: the compiler puts the notes section last.
+            // drag in Maker. Nothing recorded sits at or after that index, so no recorded pointer shifts.
+            // An ENGINE want is still appended: the compiler puts the notes section last.
             const at = authoredWant ? Math.min(liveList.length, claimedHere.size ? Math.max(...claimedHere) + 1 : 0) : null;
             await provision.addElement('form', formId, columnPointer + '/sections', stripRows(wantSection), ...(at === null ? [] : [{ position: { index: at } }]));
             form = await provision.getArtifact('form', formId) || {};
-            const addedList = ((((form.tabs || [])[tabMatch.index] || {}).columns || [])[ci] || {}).sections || [];
+            const addedList = ((((form.tabs || [])[tabIndex] || {}).columns || [])[ci] || {}).sections || [];
             const addedIdx = at === null ? addedList.length - 1 : at;
             claimedHere.add(addedIdx);
             if (authoredWant) sectionTargets[wantSection.name] = { pointer: columnPointer + '/sections/' + addedIdx, name: (addedList[addedIdx] || {}).name };
@@ -2387,6 +2418,22 @@ async function runSdkBuild(spec, opts = {}) {
           }
           if (Object.keys(patch).length) await provision.updateElement('form', formId, pointer, patch);
           if (reflow) await repackSectionRows(formId, pointer, Number(patch.columns));
+        }
+        // The authored sections of this form-column in the layout's order. Moves and creations above land
+        // after the sections already matched, but a section that was ALREADY here in a different order
+        // stayed there: a reordered layout deployed in the old order, and verify checked no order, so it
+        // passed. Ordered once the column's sections are all matched and before any later column can take
+        // a section from this one; only this column's recorded targets live in this array, so theirs are
+        // the only pointers the moves shift. An ENGINE section is not the author's and keeps its place.
+        const sectionListPointer = columnPointer + '/sections';
+        const orderedWants = wantSections.filter((s) => !isEngineOwnedSection(s) && sectionTargets[s.name]
+          && String(sectionTargets[s.name].pointer || '').startsWith(sectionListPointer + '/'));
+        const sectionPlan = planOrderMoves(orderedWants.map((s) => Number(sectionTargets[s.name].pointer.slice(sectionListPointer.length + 1))));
+        if (sectionPlan.moves.length) {
+          for (const m of sectionPlan.moves) await provision.moveElement('form', formId, sectionListPointer + '/' + m.from, sectionListPointer, { index: m.to });
+          orderedWants.forEach((s, k) => { sectionTargets[s.name].pointer = sectionListPointer + '/' + sectionPlan.positions[k]; });
+          warn(`form ${def.name}: moved ${sectionPlan.moves.length} section(s) in tab '${liveTab.name || `#${tabIndex + 1}`}' (form-column ${ci + 1}) `
+            + `to put them in the layout's order: ${orderedWants.map((s) => sectionTargets[s.name].name || s.name).join(', ')}.`);
         }
       }
     }
@@ -2689,19 +2736,22 @@ async function runSdkBuild(spec, opts = {}) {
     const section = sectionAt(form, sectionPointer) || {};
     const rows = section.rows || [];
     const rowIndex = firstAppendRowThatFits(rows, wantCell, section.columns);
-    while ((section.rows || []).length < rowIndex) {
-      await provision.addElement('form', formId, sectionPointer + '/rows', { cells: [] });
-      section.rows = [...(section.rows || []), { cells: [] }];
-    }
-    if (rowIndex < rows.length) {
+    // Counted before any add, and locally: `rows` may alias the stored artifact (then every add grows
+    // it) or be a copy (then none does), so neither its length nor a re-assigned `section.rows` can say
+    // how many rows exist — re-assigning them added a phantom row wherever they alias.
+    const priorRowCount = rows.length;
+    if (rowIndex < priorRowCount) {
       await provision.updateElement('form', formId, sectionPointer + '/rows/' + rowIndex,
         { cells: [...(rows[rowIndex].cells || []), wantCell] });
       return;
     }
+    for (let rowCount = priorRowCount; rowCount < rowIndex; rowCount += 1) {
+      await provision.addElement('form', formId, sectionPointer + '/rows', { cells: [] });
+    }
     await provision.addElement('form', formId, sectionPointer + '/rows', { cells: [wantCell] });
   };
 
-  const placeFieldInSection = async (formId, logical, wantCell, target, vacated, rawSpan) => {
+  const placeFieldInSection = async (formId, logical, wantCell, target, vacated, rawSpan, formName) => {
     let form = await provision.getArtifact('form', formId) || {};
     const targetPointer = resolveSectionPointer(form, target);
     const existing = findFieldCellLocation(form, logical);
@@ -2762,13 +2812,22 @@ async function runSdkBuild(spec, opts = {}) {
     // reading `.length` afterwards would yield the POST-add count and target a row one past the end,
     // which silently skips the move (the `if (!row) return` guard below).
     const priorRowCount = targetRows.length;
-    let rowIndex = firstAppendRowThatFits(targetRows, wantCell, targetSection.columns);
-    while (rowIndex >= priorRowCount && ((targetSection.rows || []).length <= rowIndex)) {
-      // Either the section this run just created has no row yet, or all existing rows whose carried
-      // row-span reservations leave enough capacity are behind us. The SDK accepts a row with an
-      // empty cells array and serializes it correctly, so seed rows until the chosen target exists.
+    // The row is sized for the cell being MOVED, as it will be in the destination — not for the
+    // compiled one. A span the author did not declare is kept from the live cell, so the compiled cell
+    // (no span: "no opinion") under-states it: a maker's colspan-2 field moved into a one-column
+    // section was placed as if it were one column wide and then kept its colspan 2, overflowing that
+    // section on every apply. A kept colspan wider than the destination grid is clamped to the grid —
+    // a cell cannot be wider than the grid it sits in, and it is the clamp a grid narrowing applies
+    // (`rowsFromCells`).
+    const landing = landingSpans(cellAt(form, existing) || {}, wantCell, rawSpan, targetSection);
+    let rowIndex = firstAppendRowThatFits(targetRows, { ...wantCell, colspan: landing.colspan, rowspan: landing.rowspan }, targetSection.columns);
+    // Either the section this run just created has no row yet, or all existing rows whose carried
+    // row-span reservations leave enough capacity are behind us. The SDK accepts a row with an empty
+    // cells array and serializes it correctly, so seed rows until the chosen target exists. Counted
+    // locally: whether `targetSection` aliases the stored artifact is the SDK's business, and
+    // re-assigning its `rows` to track the count added a phantom row wherever it does.
+    for (let rowCount = priorRowCount; rowCount <= rowIndex; rowCount += 1) {
       await provision.addElement('form', formId, targetPointer + '/rows', { cells: [] });
-      targetSection.rows = [...(targetSection.rows || []), { cells: [] }];
     }
     form = await provision.getArtifact('form', formId) || {};
     const from = findFieldCellLocation(form, logical);
@@ -2787,7 +2846,40 @@ async function runSdkBuild(spec, opts = {}) {
     // possible stranded-row removal) invalidated every pointer computed above.
     const settledForm = await provision.getArtifact('form', formId) || {};
     const settled = findFieldCellLocation(settledForm, logical);
-    if (settled) await convergeCellSpans(formId, settledForm, settled, wantCell, rawSpan);
+    if (!settled) return;
+    if (landing.narrowed) {
+      // Written through the span-convergence path as if declared, so it is applied exactly like an
+      // authored narrowing (a narrowing never overflows its row). Reported: the build changed the
+      // width of a cell whose width the spec leaves to the maker.
+      await convergeCellSpans(formId, settledForm, settled, { ...wantCell, colspan: landing.colspan }, { ...(rawSpan || {}), colspan: landing.colspan });
+      if (typeof opts.warn === 'function') {
+        const destination = (sectionAt(settledForm, settled.sectionPointer) || {}).name || settled.sectionPointer;
+        opts.warn(`form ${formName}: '${logical}' spanned ${landing.liveColspan} columns, wider than the ${landing.gridWidth}-column `
+          + `section '${destination}' the layout moves it to, so it now spans ${landing.colspan}. Declare its colspan to choose the width.`);
+      }
+      return;
+    }
+    await convergeCellSpans(formId, settledForm, settled, wantCell, rawSpan);
+  };
+
+  // The spans a cell MOVING into `section` will have there: a span the author declared (clamped to
+  // the section's grid, as spanForLiveSection clamps it), otherwise the one the live cell already
+  // carries — with an undeclared colspan wider than the grid clamped to it. `narrowed` says the clamp
+  // changed a width the spec did not declare, which the caller writes and reports.
+  const landingSpans = (liveCell, wantCell, rawSpan, section) => {
+    const gridWidth = Math.max(1, Math.min(4, Number(section && section.columns) || 1));
+    const liveColspan = Math.max(1, Number(liveCell && liveCell.colspan) || 1);
+    const liveRowspan = Math.max(1, Number(liveCell && liveCell.rowspan) || 1);
+    const declaredColspan = spanForLiveSection('colspan', wantCell, rawSpan, section);
+    const declaredRowspan = spanForLiveSection('rowspan', wantCell, rawSpan, section);
+    const colspan = declaredColspan !== undefined ? declaredColspan : Math.min(liveColspan, gridWidth);
+    return {
+      colspan,
+      rowspan: declaredRowspan !== undefined ? declaredRowspan : liveRowspan,
+      liveColspan,
+      gridWidth,
+      narrowed: declaredColspan === undefined && colspan < liveColspan,
+    };
   };
 
   const reconcileForm = async (formId, def) => {
@@ -2824,7 +2916,7 @@ async function runSdkBuild(spec, opts = {}) {
     // stand-in that reconcile never deploys.
     const rawSpans = def.__fieldSpans || {};
     for (const logical of want) {
-      await placeFieldInSection(formId, logical, wantCellByLogical[logical], sectionTargets[declaredSection[logical]], vacatedSections, rawSpans[logical]);
+      await placeFieldInSection(formId, logical, wantCellByLogical[logical], sectionTargets[declaredSection[logical]], vacatedSections, rawSpans[logical], def.name);
     }
     await addSubgrids(formId, def.__subgrids);
     // Re-assert per-control attributes (read-only / hidden) on fields that were ALREADY on the form.
@@ -4396,7 +4488,7 @@ async function runSdkBuild(spec, opts = {}) {
           for (const p of implemented) {
             const key = keyOf(p);
             if (keyToId.has(key) || !navTargets.has(key)) continue; // only ABSENT targets need pre-minting
-            const up = await genpageCli.upload({ appId: result.created.app, codeFile: canonicalPath(p), name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources });
+            const up = await genpageCli.upload({ appId: result.created.app, codeFile: canonicalPath(p), name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources, model: p.model });
             keyToId.set(key, up.pageId);
             result.created.pages[key] = up.pageId;
             mintedKeys.add(key);
@@ -4434,7 +4526,9 @@ async function runSdkBuild(spec, opts = {}) {
           // canonical file content.
           const deployedBytes = isNav ? deployment.get(key) : fs.readFileSync(canonicalPath(p), 'utf8');
           const codeFile = isNav ? writeStagingFile(stagingDir, key, deployment.get(key)) : canonicalPath(p);
-          const up = await genpageCli.upload({ appId: result.created.app, pageId: requestedId, codeFile, name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources });
+          // `model` rides along because pac stores whatever `--model` an upload sends: re-uploading without it
+          // wiped a deployed page's model id to "". A downloaded spec carries it (pages[].model).
+          const up = await genpageCli.upload({ appId: result.created.app, pageId: requestedId, codeFile, name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources, model: p.model });
           // I7: an UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at
           // a stale target. Case-insensitive (Dataverse may echo a differently-cased GUID).
           if (requestedId && String(up.pageId).toLowerCase() !== String(requestedId).toLowerCase()) throw new BuildHalt(`page "${p.name}" UPDATE returned a different id (${up.pageId} != ${requestedId}) — refusing to finalize with an inconsistent target`, { phase: 'pages', code: 'pages-update-identity-mismatch', recoverable: false });

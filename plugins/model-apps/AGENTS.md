@@ -711,7 +711,7 @@ scripts/
   launch-playwright-mcp.js     ← Playwright MCP server launcher (fullscreen; uses lib/detect-browser.js)
   playwright-mcp-fullscreen.config.json ← Fullscreen browser config for the launcher
   regenerate-verified-icons.js ← Regenerates references/verified-icons.txt from npm
-  check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match (pac overlaps the az probes)
+  check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match (pac overlaps the az probes); a CLI too slow to answer is `az_timeout`/`pac_timeout`
   check-version.js             ← Skill-start update notice: compares the plugin clone with its origin/main (git runs in the plugin, never the user's repo)
   resolve-interaction-mode.js  ← Reports whether a human can answer in this run (unattended defaults)
   lint-app-spec.js             ← Validate + lint an App Spec without touching an environment
@@ -735,7 +735,7 @@ scripts/
   run-tests.js                 ← one-command plugin + SDK regression runner
   smoke-eval.js                ← scripted live smoke eval (build → assert → teardown)
   generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
-  genpage-upload.js            ← /genpage: deploy one page via the shared wrapper (prompt passed BY FILE, never on a command line; an update must name the app the page is placed in)
+  genpage-upload.js            ← /genpage: deploy one page via the shared wrapper (prompt passed BY FILE, never on a command line; an update must name the app the page is placed in, and keeps the page's name, model and bindings unless given)
   genpage-plan-provenance.js   ← /genpage: quarantine a stale plan before the planner writes, then verify the written plan targets the pages the approval named
   check-page-files.js          ← /genpage: pre-dispatch gate — the page file names of the plan's one ## Pages table are safe write targets (lib/page-file-targets.js)
   genpage-worker-output.js     ← /genpage: accept a parallel worker's page only if complete (default export, balanced, no elided code)
@@ -745,6 +745,7 @@ scripts/
     provision-input.js         ← Input validation for entity provisioning
     dataverse-auth.js          ← Shared auth + HTTP helpers (`az account get-access-token`, memoized per process and replaced on a 401; responses decoded as UTF-8 once; an environment URL is used only as a Dataverse https origin, `dataverseOrigin`), plus the CLI arg contract (parseArgs/validateFlags)
     process-runner.js          ← how every script starts az/pac/npm/npx/git: the executable is resolved to an absolute path on PATH, never the project folder, and started without a shell (a Windows batch shim runs through cmd.exe with its arguments checked)
+    cli-failure.js             ← how a CLI child failed (timeout / missing / failed) and the Azure CLI budget (60 s, `POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS`), so a slow `az` is never reported as missing or signed out
     nearest-name.js            ← pure single-edit "did you mean" matcher for closed vocabularies (CLI flags, FetchXML operators)
     supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
     feature-flags.js           ← Default-OFF feature flag probe + Custom API script backstop
@@ -754,7 +755,7 @@ scripts/
     artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)
     form-occupancy.js          ← pure row occupancy (own cells + columns reserved by row-spanning cells above), shared by build and verify
     form-order.js              ← the Main Form Set order: which Main form a table opens with, and which forms the build orders (shared by the spec gate, build and verify)
-    form-container-match.js    ← how an authored tab/section is matched to a deployed one (shared by build and verify)
+    form-container-match.js    ← how an authored tab/section is matched to a deployed one, and the moves that put them in the layout's order (shared by build and verify)
     ai-app-settings.js         ← single source of truth for the per-app AI feature contract
     interaction-mode.js        ← whether a human is reachable in this run (shared by both skills)
     page-plan.js               ← pure App Spec → plan-document projection used by write-page-plan.js
@@ -769,7 +770,7 @@ scripts/
     role-privileges.js         ← pure: declared persona privileges + subset comparison against a deployed role
                                   (also the oracle for `roleGrants[]`, which is additive rather than converged)
     odata.js                   ← OData literal escaping helpers
-    genpage-cli.js             ← pac model genpage upload/list/download wrapper
+    genpage-cli.js             ← pac model genpage upload/list/download wrapper, plus a page's own name read from its row (pac stores `"` as `\"`; `unescapePacName`)
     hydrate-spec.js            ← reconstruct an App Spec from a deployed app (edit flow)
     verify-spec.js             ← spec-vs-deployed reconciliation core
     build-journal.js           ← durable JSONL build journal (resume diagnostics)
@@ -962,7 +963,11 @@ elided?" rule the page gate and the Layer 2 eval share (a `FIXME` comment, a `TO
 a colon, a comment opening with `...`, "omitted for brevity", or a bare `...` line; the same words
 as UI copy — "Loading…", a `'TODO'` status value — are not elision). A template's `${…}` body is
 code and is read by the same lexer (`lexInto`), JSX and comments included, never by a lighter
-scanner. Whether a `/` or `<` starts a regex or JSX is judged by the code before it: never by a
+scanner. It is **one pass** over the file with an explicit stack of code and template frames, so
+its time is linear in the file's length however deeply templates nest — a lexer that re-scanned
+each `${…}` body per level of nesting took over a second on a 2.5 KB page. Keep it one pass; the
+`performance:` tests and the 50,000-deep nesting test in `genpage-lexer-hardening.test.js` guard it.
+Whether a `/` or `<` starts a regex or JSX is judged by the code before it: never by a
 comment's last word; a keyword read back as a property name (`counts.new / total`) or a postfix
 `!` / `++` ends an operand; and a `)` ends one too, unless it closes an `if` / `for` / `while`
 head, after which a statement starts. Each of those rules was once broken, and each break refused
@@ -1184,7 +1189,9 @@ NODE20_BIN=/path/to/node20/bin node scripts/run-tests.js --with-sdk /path/to/pow
 - The SDK's Jest suite needs **Node 20** (its `canvas` native module is built for the Node-20 ABI).
   Set `NODE20_BIN` to a Node-20 bin dir; without it the SDK suite is skipped (plugin suite still runs).
 - genpage evals: `node --test evals/model-apps/genpage/tests/*.test.js`, plus the Layer 1/2 runners
-  (`node evals/model-apps/genpage/run-layer-{1,2}.js --tier smoke`). See `## Eval Suite` below.
+  (`node evals/model-apps/genpage/run-layer-{1,2}.js --tier smoke`). See `## Eval Suite` below. CI's
+  `test-model-apps-evals` job runs the eval tests AND all three runners (genpage Layer 1/2, app-builder)
+  over every committed fixture — offline, no org — so a fixture that falls out of step fails the PR.
 
 **The vendored SDK lives in a separate repo.** The Dataverse mechanics are in
 `power-platform-ux` (Azure DevOps `msazure/OneAgile`), package `packages/cds-maker-sdk`. This plugin

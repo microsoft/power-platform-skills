@@ -21,6 +21,42 @@ test('a clean spec passes with no errors', () => {
   assert.strictEqual(r.errors.length, 0);
 });
 
+// Views, charts and forms belong to a table, and the build finds each by table and name (a form also by
+// type). The same name on two tables is the supported shape — two tables' "By Status" charts — and used
+// to be warned about as a duplicate; only a repeat on ONE table collides.
+test('a view, chart or form name repeated on another table is not a duplicate; on the same table it is', () => {
+  const s = base();
+  s.views = [{ entity: 'new_customer', name: 'Active', columns: ['new_name'] }, { entity: 'new_ticket', name: 'active', columns: ['new_name'] }];
+  s.charts = [{ entity: 'new_customer', name: 'By Status', chartType: 'Pie', groupBy: 'new_name', measure: 'count' },
+    { entity: 'new_ticket', name: 'By Status', chartType: 'Pie', groupBy: 'new_priority', measure: 'count' }];
+  s.forms = [{ entity: 'new_customer', name: 'Main' }, { entity: 'new_ticket', name: 'Main' }, { entity: 'new_ticket', name: 'Main', formType: 'QuickCreate' }];
+  assert.deepStrictEqual(lintAppSpec(s).warnings.filter((w) => /Duplicate/.test(w)), []);
+
+  s.views.push({ entity: 'NEW_TICKET', name: 'Active', columns: ['new_name'] });
+  s.charts.push({ entity: 'new_ticket', name: 'by status', chartType: 'Bar', groupBy: 'new_priority', measure: 'count' });
+  s.forms.push({ entity: 'new_ticket', name: 'main', formType: 'Main' });
+  assert.deepStrictEqual(lintAppSpec(s).warnings.filter((w) => /Duplicate/.test(w)), [
+    'Duplicate view name on NEW_TICKET: Active',
+    'Duplicate chart name on new_ticket: by status',
+    'Duplicate form name on new_ticket: main',
+  ]);
+});
+
+// pac stores each ASCII `"` in a page's name as `\"` on the page's own record (live-measured) and changes nothing else.
+// A warning: the navigation shows the subarea title, which the build writes as given.
+test('a page name with an ASCII double quote is warned about; the characters pac keeps are not', () => {
+  const s = base();
+  s.pages = [
+    { key: 'a', name: 'Say "hi" now', source: { kind: 'tsx', file: 'pages/a.tsx' } },
+    { key: 'b', name: 'Back\\slash “curly” \'single\' 東京', source: { kind: 'tsx', file: 'pages/b.tsx' } },
+  ];
+  const r = lintAppSpec(s);
+  assert.deepStrictEqual(r.warnings.filter((w) => /double quote/.test(w)), [
+    'Page \'Say "hi" now\': pac stores each ASCII double quote (") in a page\'s name as \\" on the page\'s own record — use typographic quotes (“ ”) or an apostrophe instead',
+  ]);
+  assert.strictEqual(r.errors.length, 0, 'a warning, never an error');
+});
+
 test('malformed top-level collections return lint errors instead of throwing', () => {
   for (const spec of [
     null,

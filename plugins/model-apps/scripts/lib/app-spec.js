@@ -26,6 +26,9 @@ const FORM_TYPE_CODE = { Main: 2, QuickView: 6, QuickCreate: 7, Card: 11 };
 // A canonical GUID (used to validate an author-pinned forms[].formId, which is interpolated UNQUOTED into
 // an Edm.Guid OData filter). Anchored so it can neither over-match nor be an injection seam.
 const FORM_GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// A page's model id (`pages[].model`), e.g. `gpt-4.1` or `claude-3-5-sonnet@20240620`: a short token, because the
+// build hands it to pac as one command-line value. Shared with download, which carries only a model the spec can hold.
+const PAGE_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,99}$/;
 
 // Security-authoring enums (personas[]). These mirror the vendored SDK's security surface
 // (cds-maker-sdk src/types/security.ts) EXACTLY — the app-spec validator is a lint-time echo of the
@@ -1305,6 +1308,18 @@ function authoredSectionNames(formSpec, { named = false } = {}) {
       if (sec && typeof sec === 'object' && (!named || sec.name)) names.add(String(sec.name || generatedSectionName(ti, ci, si)).toLowerCase());
     });
   }));
+  return names;
+}
+
+// Every tab name an explicit layout declares, under the name the compiler gives it, lower-cased — the
+// tabs' counterpart of authoredSectionNames, for the same reason: a deployed tab another tab of the
+// layout claims by name is not handed to a different one by label or position. Without it, a tab
+// declared mid-layout took the next existing tab by POSITION, and that tab's own want — its name now
+// taken — created a second tab of the same name.
+function authoredTabNames(formSpec) {
+  const names = new Set();
+  const tabs = formSpec && Array.isArray(formSpec.tabs) ? formSpec.tabs : [];
+  tabs.forEach((t, ti) => { if (t && typeof t === 'object') names.add(String(t.name || generatedTabName(ti)).toLowerCase()); });
   return names;
 }
 
@@ -2785,6 +2800,11 @@ function validateAppSpec(spec, opts = {}) {
     if (p.pageId !== undefined && !PAGE_ID_GUID.test(String(p.pageId))) {
       errors.push(`page '${p.key || p.name}': pageId must be a 36-char GUID`);
     }
+    // The id of the model that generated the page — what `pac model genpage upload --model` records, and
+    // what a download writes back. A short token (e.g. `gpt-4.1`); it travels as a command-line value.
+    if (p.model !== undefined && (typeof p.model !== 'string' || !PAGE_MODEL_RE.test(p.model))) {
+      errors.push(`page '${p.key || p.name}': model must be a model id such as 'gpt-4.1' (letters, digits and . _ : / @ + -, at most 100 characters)`);
+    }
     const src = normalizePageSource(p);
     // Track whether a structural source error was emitted so the profile check below doesn't
     // double-report (e.g. source:{kind:'tsx'} with no codeFile should get ONE error, not two).
@@ -3722,6 +3742,7 @@ module.exports = {
   generatedSectionName,
   formColumnsOf,
   authoredSectionNames,
+  authoredTabNames,
   validateAppSpec,
   validateSampleDataRows,
   normalizePageSource,
@@ -3739,6 +3760,7 @@ module.exports = {
   webResourceNameFromRef,
   FORM_TYPE_CODE,
   FORM_GUID_RE,
+  PAGE_MODEL_RE,
   ACCESS_LEVELS,
   PRIVILEGE_SCOPES,
   ROLE_GRANT_KEYS,

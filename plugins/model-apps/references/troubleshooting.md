@@ -48,7 +48,8 @@ Both skills can create one:
 
 - Verify app-id: run `pac model list` to get the correct GUID
 - Ensure the page's display name is provided for new pages — written to a file and passed with `--name-file`, so a shell never reads it
-- A page display name with a straight double quote (`"`) is stored with a backslash before each one (`\"Q3\"`). The name reaches pac intact, and the extra backslash is added inside pac. Until pac is fixed, use typographic quotes (`“Q3”`) in page names
+- A page display name with a straight double quote (`"`) is refused before anything is uploaded: pac stores each one with a backslash before it (`\"Q3\"`), in the page and in the navigation title it writes. Use typographic quotes (`“Q3”`) or an apostrophe, which are stored exactly
+- An update result with a `warnings` entry about the page's name or model: the script could not read the deployed value — or, for a name, could not send it through a `pac.cmd` shim, which cannot receive `%` or `"` — so pac may have renamed the page to its navigation title or stored an empty model. Re-run the update with `--name-file` or `--model`
 - `--prompt-file …/prompt.txt is a symbolic link or junction, not a file written in place` (or `is a hard link`,
   for any input file): something other than the skill left a link at that name, and writing it may have changed
   the file it points to. Check that file, delete the link, and re-run; the skill then writes a plain file there

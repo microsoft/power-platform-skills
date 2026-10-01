@@ -77,6 +77,19 @@ test('buildPacInvocation starts pac.exe directly with every argument unchanged, 
   assert.strictEqual(inv.options.shell, false);
 });
 
+// An update sends a page's CURRENT name on the user's behalf. Whether pac can be handed it is decided without
+// starting anything, so an update can leave out a name a pac.cmd shim would refuse instead of failing on it.
+test('argumentRefusal says why a pac.cmd shim cannot receive a value, and is null when pac can', () => {
+  const shim = makeGenpageCli('https://contoso.crm.dynamics.com', { pacInvocation: PAC_CMD });
+  for (const value of ['Revenue 100%', 'Say "hi"']) assert.match(shim.argumentRefusal(value), /cannot pass .* to pac\.cmd/, value);
+  assert.strictEqual(shim.argumentRefusal('Plain name — “curly” it\'s 東京'), null);
+  const exe = makeGenpageCli('https://contoso.crm.dynamics.com', { pacInvocation: PAC_EXE });
+  for (const value of ['Revenue 100%', 'Say "hi"']) assert.strictEqual(exe.argumentRefusal(value), null, value);
+  // pac not installed at all is the upload's own error to report, not a refusal of the value.
+  const none = makeGenpageCli('https://contoso.crm.dynamics.com', { pacInvocation: { ...PAC_EXE, exists: () => false } });
+  assert.strictEqual(none.argumentRefusal('Revenue 100%'), null);
+});
+
 test('buildPacInvocation runs a pac.cmd shim through cmd.exe and refuses what cmd.exe would reinterpret', () => {
   const inv = buildPacInvocation(['model', 'genpage', 'list', '--name', 'Order Detail'], PAC_CMD);
   assert.strictEqual(inv.file, 'C:\\Windows\\System32\\cmd.exe');

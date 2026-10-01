@@ -371,38 +371,33 @@ function appFacts(spec) {
 // `formTopology`, and verify now (correctly) reports an explicit layout as UNVERIFIED — a gap in
 // the fixture, not a finding about the spec.
 //
-// Cells are packed by WIDTH exactly as the compiler packs them, because the oracle checks that no
-// row carries more columns of content than its section declares. `columns` is emitted as the width
-// RATIO string FormXML actually uses ("11" = two equal columns), not as a count.
-function formXmlForAuthoredLayout(form) {
+// Rendered from the COMPILER's own output (compileFormIntent) rather than re-derived, because every
+// attribute below is one verify compares: tab and section display flags, the form-column widths the
+// compiler fills in (an equal split where the author gave none), its row packing, and each cell's spans
+// and read-only / hidden state. A second derivation here drifted from it — an undeclared width rendered
+// as 100% in every form-column, and no display flag at all. `columns` is emitted as the width RATIO
+// string FormXML actually uses ("11" = two equal columns), not as a count.
+function formXmlForAuthoredLayout(spec, form) {
   const esc = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   const labels = (text) => `<labels><label description="${esc(text)}" languagecode="1033"/></labels>`;
-  const tabsXml = (form.tabs || []).map((t, ti) => {
-    const cols = Array.isArray(t.columns) ? t.columns : [{ width: '100%', sections: t.sections || [] }];
-    const colsXml = cols.map((col, ci) => {
-      const secsXml = ((col && col.sections) || []).map((sec, si) => {
+  const cellXml = (cell) => {
+    const control = cell.control || {};
+    const classId = control.classId && control.classId !== 'undefined' ? String(control.classId).replace(/[{}]/g, '') : '';
+    return `<cell colspan="${cell.colspan || 1}" rowspan="${cell.rowspan || 1}"${cell.visible === false ? ' visible="false"' : ''}>`
+      + `<control${control.fieldName ? ` datafieldname="${esc(control.fieldName)}"` : ''}${classId ? ` classid="{${esc(classId)}}"` : ''}`
+      + `${control.isReadOnly ? ' disabled="true"' : ''} /></cell>`;
+  };
+  const tabsXml = (compileFormIntent(spec, form).tabs || []).map((t) => {
+    const colsXml = (t.columns || []).map((col) => {
+      const secsXml = (col.sections || []).map((sec) => {
         const width = Math.max(1, Math.min(4, Number(sec.columns) || 1));
-        const entries = (sec.fields || []).map((f) => (typeof f === 'string' ? { name: f } : (f || {})));
-        const rows = [];
-        let cur = [];
-        let used = 0;
-        for (const e of entries) {
-          const span = Math.min(width, Math.max(1, Number(e.colspan) || 1));
-          if (used + span > width && cur.length) { rows.push(cur); cur = []; used = 0; }
-          cur.push({ name: String(e.name || '').toLowerCase(), colspan: span, rowspan: Math.max(1, Number(e.rowspan) || 1) });
-          used += span;
-        }
-        if (cur.length) rows.push(cur);
-        const rowsXml = rows.map((r) => `<row>${r.map((c) => `<cell colspan="${c.colspan}" rowspan="${c.rowspan}">`
-          + `<control datafieldname="${esc(c.name)}" /></cell>`).join('')}</row>`).join('');
-        const name = sec.name || `section_${ti}_${ci}_${si}`;
-        return `<section name="${esc(name)}" columns="${'1'.repeat(width)}">${labels(sec.label || 'Details')}`
-          + `<rows>${rowsXml}</rows></section>`;
+        const rowsXml = (sec.rows || []).map((r) => `<row>${(r.cells || []).map(cellXml).join('')}</row>`).join('');
+        return `<section name="${esc(sec.name)}" columns="${'1'.repeat(width)}" visible="${sec.visible !== false}" showlabel="${sec.showLabel !== false}">`
+          + `${labels(sec.label)}<rows>${rowsXml}</rows></section>`;
       }).join('');
-      return `<column width="${esc((col && col.width) || '100%')}"><sections>${secsXml}</sections></column>`;
+      return `<column width="${esc(col.width)}"><sections>${secsXml}</sections></column>`;
     }).join('');
-    const tabName = t.name || `tab_${ti}`;
-    return `<tab name="${esc(tabName)}">${labels(t.label || 'General')}<columns>${colsXml}</columns></tab>`;
+    return `<tab name="${esc(t.name)}" expanded="${t.expanded !== false}" visible="${t.visible !== false}">${labels(t.label)}<columns>${colsXml}</columns></tab>`;
   }).join('');
   return `<form><tabs>${tabsXml}</tabs></form>`;
 }
@@ -504,7 +499,7 @@ function makeAllPresentReader(spec) {
         ? (spec.forms || []).find((f) => isMainForm(f) && lc(f.entity) === lc(entityLogical) && mainFormName(f) === named[1])
         : (spec.forms || []).find((f) => lc(f.entity) === lc(entityLogical) && Array.isArray(f.tabs) && f.tabs.length);
       if (!form) return null;
-      const layout = Array.isArray(form.tabs) && form.tabs.length ? formXmlForAuthoredLayout(form) : '<form><tabs></tabs></form>';
+      const layout = Array.isArray(form.tabs) && form.tabs.length ? formXmlForAuthoredLayout(spec, form) : '<form><tabs></tabs></form>';
       return isMainForm(form) ? withOrder(layout, lc(entityLogical), form) : layout;
     },
   };

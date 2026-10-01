@@ -1333,6 +1333,101 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
   }
 });
 
+// pac stores each ASCII `"` in a page name as `\"` — in the row name the env-wide listing shows, and in a navigation
+// title it writes (live-measured). The spec's name is what a rebuild sends to pac, which would escape it again, so a
+// download must write the name pac was given: kept as read, every round trip added a backslash.
+test('download writes page names without pac\'s \\" escaping, from the env-wide listing and from a title fallback', async () => {
+  const GP_A = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
+  const GP_B = '5c0a4889-45fd-46ea-91a8-ff876914d644';
+  const APP_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
+  const SM_XML = `<SiteMap><Area><Group><SubArea GenPageId="${GP_A}" Title="Plain A"/>`
+    + `<SubArea GenPageId="${GP_B}" Title="Title \\&quot;B\\&quot; \\\\path"/></Group></Area></SiteMap>`;
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-esc-'));
+  try {
+    const sdk = {
+      fetchArtifact: async () => ({
+        name: 'Test App', description: '',
+        siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [
+          { type: 'GenPage', genPageId: GP_A, title: 'Plain A' },
+          { type: 'GenPage', genPageId: GP_B, title: 'Title \\"B\\" \\\\path' },
+          { type: 'Entity', entity: 'contoso_item' },
+        ] }] }] },
+      }),
+      queryRecords: async (logical, opts) => {
+        const filter = (opts && opts.filter) || '';
+        if (logical === 'appmodule') {
+          const m = filter.match(/uniquename eq '([^']+)'/);
+          if (m) return m[1] === 'test_roundtrip' ? [{ appmoduleid: APP_ID, appmoduleidunique: 'c0ffee00-0000-4000-8000-00000000dddd' }] : [];
+          return [{ appmoduleid: APP_ID, appmoduleidunique: 'c0ffee00-0000-4000-8000-00000000dddd', uniquename: 'test_roundtrip' }];
+        }
+        if (logical === 'appmodulecomponent') return [{ objectid: '5111e0f2-0000-4000-8000-0000000000aa', componenttype: 62 }];
+        if (logical === 'sitemap') return [{ sitemapxml: SM_XML }];
+        return [];
+      },
+      fetchEntityMetadata: async (logical) => ({ schemaName: logical, displayName: 'Item', primaryNameAttribute: `${String(logical).split('_')[0]}_name` }),
+    };
+    const genpageCli = {
+      // Page B is missing from the env-wide listing, so its name falls back to the (pac-written) navigation title.
+      enumerateEnv: async () => ({ ok: true, ids: [GP_A.toLowerCase()], pages: [{ pageId: GP_A, name: 'Say \\"hi\\" now' }] }),
+      download: async ({ outputDir, pageIds }) => {
+        for (const pid of (pageIds || [])) {
+          fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
+          fs.writeFileSync(path.join(outputDir, pid, 'page.tsx'), 'export default function P() { return null; }');
+          // A's model is one the spec can hold; B's is not, so it is left out — and said so.
+          fs.writeFileSync(path.join(outputDir, pid, 'config.json'), '\uFEFF' + JSON.stringify({ dataSources: [], model: pid === GP_A ? 'gpt-4.1' : 'has space' }));
+        }
+        return true;
+      },
+    };
+    const warned = [];
+    const write = process.stderr.write;
+    process.stderr.write = (chunk, ...rest) => { warned.push(String(chunk)); return true; };
+    let result;
+    try {
+      result = await runDownload({ sdk, genpageCli, outDir: out, appId: APP_ID, appUnique: 'test_roundtrip' });
+    } finally {
+      process.stderr.write = write;
+    }
+    assert.ok(result.ok, JSON.stringify(result));
+    const nameOf = (id) => result.spec.pages.find((p) => p.pageId === id).name;
+    assert.strictEqual(nameOf(GP_A), 'Say "hi" now', 'the env-wide (row) name, unescaped');
+    assert.strictEqual(nameOf(GP_B), 'Title "B" \\\\path', 'the title fallback, unescaped — a backslash pac did not add is kept');
+    const modelOf = (id) => result.spec.pages.find((p) => p.pageId === id).model;
+    assert.deepStrictEqual([modelOf(GP_A), modelOf(GP_B)], ['gpt-4.1', undefined]);
+    assert.ok(warned.some((w) => /WARNING: 1 page model id\(s\) the App Spec cannot hold were left out/.test(w) && w.includes(GP_B) && w.includes('"has space"')), warned.join(''));
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+// A download carries each page's model from config.json, so a rebuild sends it back — pac stored "" for an upload
+// without one. An id the App Spec cannot hold would make the downloaded spec fail its own validation, so it is left
+// out and reported; a page with no model gets none.
+test('parseDownloadedPages carries a page model the spec can hold, and reports one it cannot', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-model-'));
+  try {
+    const page = (id, config) => {
+      fs.mkdirSync(path.join(root, id), { recursive: true });
+      fs.writeFileSync(path.join(root, id, 'page.tsx'), 'export default () => null;', 'utf8');
+      fs.writeFileSync(path.join(root, id, 'config.json'), '\uFEFF' + JSON.stringify(config), 'utf8');
+    };
+    const [KEPT, SPACED, NONE, EMPTY] = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222',
+      '33333333-3333-4333-8333-333333333333', '44444444-4444-4444-8444-444444444444'];
+    page(KEPT, { dataSources: [], model: ' claude-3-5-sonnet@20240620 ' });
+    page(SPACED, { dataSources: [], model: 'has space' });
+    page(NONE, { dataSources: [] });
+    page(EMPTY, { dataSources: [], model: '' });
+    const unkept = [];
+    const pages = parseDownloadedPages(root, root, null, [], unkept);
+    const pageOf = (id) => pages.find((p) => p.pageId === id);
+    assert.strictEqual(pageOf(KEPT).model, 'claude-3-5-sonnet@20240620');
+    for (const id of [SPACED, NONE, EMPTY]) assert.ok(!('model' in pageOf(id)), id);
+    assert.deepStrictEqual(unkept, [{ pageId: SPACED, model: 'has space' }], 'only a recorded id the spec cannot hold is reported');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // ── recoverAppSolution: recover an app's REAL unmanaged solution (fixes the download→teardown
 // round-trip). An app module is a solutioncomponent of EVERY solution it belongs to — the built-in
 // system solutions (Active/Default/Basic) AND the real one it was created in. The old code took

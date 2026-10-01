@@ -2030,6 +2030,176 @@ test('verify PASSES when the field really is in the requested tab', async () => 
   assert.strictEqual(chk.present, true, `a real relocation must verify; got ${chk && chk.detail}`);
 });
 
+// --- Verify proves the ORDER, form-column WIDTHS and display STATE a layout declares ------------------
+//
+// Each of these deployed wrong and verified PASS: a form-column's width, a tab's or section's visibility,
+// expansion or label display, a field's hidden or read-only state, and the order of tabs and of the
+// sections in a form-column. The build converges every one of them, so each is now proven — against what
+// the COMPILER emits, so an undeclared width is the equal split and an undeclared flag is `true`.
+const attrsOf = (o) => Object.entries(o || {}).map(([k, v]) => ` ${k}="${v}"`).join('');
+const layoutXml = (tabs) => '<form><tabs>' + tabs.map((t) => `<tab name="${t.name}"${attrsOf(t.attrs)}><columns>`
+  + t.columns.map((c) => `<column width="${c.width}"><sections>`
+    + c.sections.map((s) => `<section name="${s.name}" columns="1"${attrsOf(s.attrs)}><rows>`
+      + (s.cells || []).map((cell) => `<row><cell${attrsOf(cell.attrs)}><control datafieldname="${cell.field}"${attrsOf(cell.control)} /></cell></row>`).join('')
+      + '</rows></section>').join('')
+    + '</sections></column>').join('')
+  + '</columns></tab>').join('') + '</tabs></form>';
+// TOPO_SPEC's form as deployed — tab_overview at 60%/40%, sec_left holding new_name, sec_right new_notes —
+// with every display flag absent unless a test sets it.
+const overview = (over = {}) => ({ name: 'tab_overview', attrs: over.tab, columns: [
+  { width: over.leftWidth || '60%', sections: [{ name: 'sec_left', attrs: over.left, cells: [{ field: 'new_name', attrs: over.nameCell, control: over.nameControl }] }] },
+  { width: over.rightWidth || '40%', sections: [{ name: 'sec_right', attrs: over.right, cells: [{ field: 'new_notes' }] }] },
+] });
+
+test('verify FAILS a form-column deployed at a width the spec does not declare', async () => {
+  const chk = await topoCheck(layoutXml([overview({ leftWidth: '10%', rightWidth: '90%' })]));
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /tab_overview' form-column 1 is deployed 10% wide, the spec declares 60%/);
+  assert.match(chk.detail, /tab_overview' form-column 2 is deployed 90% wide, the spec declares 40%/);
+  const same = await topoCheck(layoutXml([overview()]));
+  assert.strictEqual(same.present, true, same.detail);
+});
+
+test('verify expects the compiler\'s equal split for a width the spec leaves out', async () => {
+  const undeclared = (spec) => { for (const c of spec.forms[0].tabs[0].columns) delete c.width; };
+  const split = await topoCheck(layoutXml([overview({ leftWidth: '50%', rightWidth: '50%' })]), undeclared);
+  assert.strictEqual(split.present, true, split.detail);
+  const chk = await topoCheck(layoutXml([overview()]), undeclared);
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /form-column 1 is deployed 60% wide, the spec declares 50%/);
+});
+
+test('verify FAILS a tab or section whose display state differs from the spec', async () => {
+  const hideAll = (spec) => {
+    const t = spec.forms[0].tabs[0];
+    Object.assign(t, { visible: false, expanded: false });
+    Object.assign(t.columns[0].sections[0], { visible: false, showLabel: false });
+  };
+  // Every flag absent — the attributes a form nobody set them on carries — reads as the rendered default.
+  const chk = await topoCheck(layoutXml([overview()]), hideAll);
+  assert.strictEqual(chk.present, false);
+  for (const re of [
+    /tab 'tab_overview' is deployed with expanded="true" \(absent, the default\), the spec declares expanded: false/,
+    /tab 'tab_overview' is deployed with visible="true" \(absent, the default\), the spec declares visible: false/,
+    /section 'sec_left' is deployed with visible="true" \(absent, the default\), the spec declares visible: false/,
+    /section 'sec_left' is deployed with showlabel="true" \(absent, the default\), the spec declares showLabel: false/,
+  ]) assert.match(chk.detail, re);
+  const applied = await topoCheck(layoutXml([overview({ tab: { expanded: 'false', visible: 'false' }, left: { visible: 'false', showlabel: 'false' } })]), hideAll);
+  assert.strictEqual(applied.present, true, applied.detail);
+  // …and a spec that declares none of them expects a shown, expanded, labelled layout (xs:boolean "0" too).
+  const hidden = await topoCheck(layoutXml([overview({ tab: { visible: 'false' }, right: { showlabel: '0' } })]));
+  assert.strictEqual(hidden.present, false);
+  assert.match(hidden.detail, /tab 'tab_overview' is deployed with visible="false", the spec declares visible: true/);
+  assert.match(hidden.detail, /section 'sec_right' is deployed with showlabel="false", the spec declares showLabel: true/);
+});
+
+// FormXML booleans are xs:boolean — "1" and "0" are as valid as "true" and "false", and Dataverse writes either.
+test('verify reads xs:boolean "1" and "0" in a control\'s disabled state', async () => {
+  const readOnly = (spec) => { spec.forms[0].fieldOptions = { new_name: { readOnly: true } }; };
+  const one = await topoCheck(layoutXml([overview({ nameControl: { disabled: '1' } })]), readOnly);
+  assert.strictEqual(one.present, true, one.detail);
+  const zero = await topoCheck(layoutXml([overview({ nameControl: { disabled: '0' } })]), readOnly);
+  assert.strictEqual(zero.present, false);
+  assert.match(zero.detail, /field 'new_name' is deployed with disabled="false", the spec declares readOnly: true/);
+});
+
+// A quick view binds a lookup's datafieldname too, but it is not that field. Read as the field, it lent the field its
+// state and its section: a quick view placed FIRST made a correctly deployed form fail, and the opposite flags would
+// have passed a wrong one. Verify skips it, as the build does when it picks the cell to patch.
+test('verify reads a field\'s state and placement from the field, never from a quick view bound to it', async () => {
+  const QV = '{5C5600E0-1D6E-4205-A272-BE80DA87FD42}';
+  const form = (realName) => layoutXml([{ name: 'tab_overview', columns: [
+    { width: '60%', sections: [{ name: 'sec_left', cells: [
+      { field: 'new_notes', control: { classid: QV } },
+      { field: 'new_name', control: { classid: QV } },
+      { field: 'new_name', control: realName },
+    ] }] },
+    { width: '40%', sections: [{ name: 'sec_right', cells: [{ field: 'new_notes' }] }] },
+  ] }]);
+  const readOnly = (spec) => { spec.forms[0].tabs[0].columns[0].sections[0].fields = [{ name: 'new_name', readOnly: true }]; };
+  const ok = await topoCheck(form({ disabled: 'true' }), readOnly);
+  assert.strictEqual(ok.present, true, ok.detail);
+  // CONTROL — the real field still decides: editable, it fails, whatever the quick view says.
+  const bad = await topoCheck(form({ disabled: 'false' }), readOnly);
+  assert.strictEqual(bad.present, false);
+  assert.match(bad.detail, /field 'new_name' is deployed with disabled="false", the spec declares readOnly: true/);
+  assert.doesNotMatch(bad.detail, /new_notes/, 'the quick view bound to new_notes does not place new_notes in sec_left');
+  // An auto layout's field state is read the same way.
+  const auto = TOPO_SPEC();
+  auto.forms = [{ entity: 'new_ticket', name: 'Ticket Main', fieldOptions: { new_name: { readOnly: true } } }];
+  const state = async (xml) => ((await verifySpec(auto, topoRead(xml))).checks || []).find((c) => c.kind === 'form-field-state');
+  assert.strictEqual((await state(form({ disabled: 'true' }))).present, true);
+  assert.strictEqual((await state(form({ disabled: 'false' }))).present, false);
+});
+
+test('verify FAILS a field the spec declares hidden and read-only that deployed shown and editable', async () => {
+  const flagged = (spec) => { spec.forms[0].tabs[0].columns[0].sections[0].fields = [{ name: 'new_name', hidden: true, readOnly: true }]; };
+  const chk = await topoCheck(layoutXml([overview()]), flagged);
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /field 'new_name' is deployed with visible="true" \(absent, the default\), the spec declares hidden: true/);
+  assert.match(chk.detail, /field 'new_name' is deployed with disabled="false" \(absent, the default\), the spec declares readOnly: true/);
+  const applied = await topoCheck(layoutXml([overview({ nameCell: { visible: 'false' }, nameControl: { disabled: 'true' } })]), flagged);
+  assert.strictEqual(applied.present, true, applied.detail);
+});
+
+test('verify proves a read-only flag declared through form-level fieldOptions on a plain entry', async () => {
+  const viaOptions = (spec) => { spec.forms[0].fieldOptions = { new_name: { readOnly: true } }; };
+  const chk = await topoCheck(layoutXml([overview()]), viaOptions);
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /field 'new_name' .*readOnly: true/);
+  const applied = await topoCheck(layoutXml([overview({ nameControl: { disabled: 'true' } })]), viaOptions);
+  assert.strictEqual(applied.present, true, applied.detail);
+});
+
+test('verify FAILS tabs, or the sections of a form-column, deployed out of the layout\'s order', async () => {
+  const twoTabs = (spec) => { spec.forms[0].tabs.push({ name: 'tab_more', label: 'More', sections: [{ name: 'sec_more', label: 'M', fields: [] }] }); };
+  const more = { name: 'tab_more', columns: [{ width: '100%', sections: [{ name: 'sec_more' }] }] };
+  const chk = await topoCheck(layoutXml([more, overview()]), twoTabs);
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /the tabs are deployed in the order tab_more, tab_overview; the spec orders them tab_overview, tab_more/);
+  const maker = { name: 'tab_maker', columns: [{ width: '100%', sections: [{ name: 'sec_maker' }] }] };
+  const inOrder = await topoCheck(layoutXml([overview(), maker, more]), twoTabs);
+  assert.strictEqual(inOrder.present, true, `a maker's own tab between them is not disorder; got ${inOrder.detail}`);
+
+  const twoSections = (spec) => { spec.forms[0].tabs[0].columns[0].sections.push({ name: 'sec_left2', label: 'L2', fields: [] }); };
+  const swapped = overview();
+  swapped.columns[0].sections.unshift({ name: 'sec_left2' });
+  const secChk = await topoCheck(layoutXml([swapped]), twoSections);
+  assert.strictEqual(secChk.present, false);
+  assert.match(secChk.detail, /the sections of tab 'tab_overview' form-column 1 are deployed in the order sec_left2, sec_left; the spec orders them sec_left, sec_left2/);
+  const ordered = overview();
+  ordered.columns[0].sections.push({ name: 'sec_left2' });
+  const secOrdered = await topoCheck(layoutXml([ordered]), twoSections);
+  assert.strictEqual(secOrdered.present, true, secOrdered.detail);
+});
+
+// An AUTO layout has no shape to prove, but its fieldOptions flags are asserted by the build on every
+// apply — so they are proven on their own, and an unreadable form is not proven.
+test('verify proves the read-only and hidden flags an AUTO layout declares in fieldOptions', async () => {
+  const autoForm = (flags) => (spec) => { spec.forms = [{ entity: 'new_ticket', name: 'Ticket Main', fieldOptions: flags }]; };
+  const checks = async (xml, mutate, over) => {
+    const spec = TOPO_SPEC();
+    mutate(spec);
+    const res = await verifySpec(spec, topoRead(xml, over));
+    return { state: (res.checks || []).filter((c) => c.kind === 'form-field-state'), topo: (res.checks || []).filter((c) => c.kind === 'form-topology') };
+  };
+  const flags = autoForm({ new_name: { readOnly: true }, new_notes: { hidden: true } });
+  const bare = await checks(layoutXml([overview()]), flags);
+  assert.strictEqual(bare.topo.length, 0, 'an auto layout still has no topology to prove');
+  assert.strictEqual(bare.state.length, 1);
+  assert.strictEqual(bare.state[0].present, false);
+  assert.match(bare.state[0].detail, /field 'new_name' .*readOnly: true/);
+  assert.match(bare.state[0].detail, /field 'new_notes' .*hidden: true/);
+  const appliedXml = layoutXml([overview({ nameControl: { disabled: 'true' } })])
+    .replace('<cell><control datafieldname="new_notes"', '<cell visible="false"><control datafieldname="new_notes"');
+  const applied = await checks(appliedXml, flags);
+  assert.strictEqual(applied.state[0].present, true, applied.state[0].detail);
+  assert.strictEqual((await checks(layoutXml([overview()]), autoForm({ new_name: { after: 'new_notes' } }))).state.length, 0, 'nothing to prove without a flag');
+  const unreadable = await checks(null, flags, { formTopology: async () => { throw new Error('boom'); } });
+  assert.strictEqual(unreadable.state[0].present, false);
+  assert.match(unreadable.state[0].detail, /could not read/);
+});
+
 // --- #586 item 3: a deployed dashboard must be internally consistent, not merely present ----------
 // A chart tile names a table, a view and a chart. The platform accepts and publishes a tile whose
 // chart belongs to another table — and a same-named chart elsewhere made the build produce exactly

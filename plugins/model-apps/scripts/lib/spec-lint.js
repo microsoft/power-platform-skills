@@ -346,6 +346,12 @@ function lintAppSpec(spec) {
     for (const ds of p.dataSources || []) {
       if (!entityLowerSet.has(lc(ds))) W(`Page '${p.name}' data source '${ds}' isn't a declared entity — ok if it's a standard table, otherwise a likely typo`);
     }
+    // pac stores each ASCII `"` in a page's name as `\"` on the page's own record, and changes nothing else
+    // (live-measured). A warning, not an error: the navigation shows the subarea's `title`, which the build
+    // writes as given. (The standalone genpage upload refuses such a name — there pac writes the title too.)
+    if (typeof p.name === 'string' && p.name.includes('"')) {
+      W(`Page '${p.name}': pac stores each ASCII double quote (") in a page's name as \\" on the page's own record — use typographic quotes (“ ”) or an apostrophe instead`);
+    }
   }
   // The sitemap `VectorIcon` attribute must be an SVG path (e.g. /_imgs/TableIconsFluentV9/x.svg) or
   // a $webresource:<name>.svg reference — NOT a bare Fluent token, which breaks the modern
@@ -510,9 +516,14 @@ function lintAppSpec(spec) {
     }
   }
 
-  dupWarn((spec.views || []).map((v) => v.name), 'view', W);
-  dupWarn((spec.charts || []).map((c) => c.name), 'chart', W);
-  dupWarn((spec.forms || []).map((f) => f.name).filter(Boolean), 'form', W);
+  // Views, charts and forms belong to a TABLE, and the build finds each by its table and name (a form also
+  // by its type) — so one name on two tables is two artifacts, not a duplicate; a dashboard tile that
+  // could mean either is refused by validation until it names its table. Only a repeat on ONE table
+  // collides. Warning on the name alone flagged the supported same-named-charts-on-two-tables shape.
+  const forms = (spec.forms || []).filter((f) => f && f.name);
+  dupWarn(spec.views || [], 'view', W, (v) => `${lc(v.entity)}|${lc(v.name)}`);
+  dupWarn(spec.charts || [], 'chart', W, (c) => `${lc(c.entity)}|${lc(c.name)}`);
+  dupWarn(forms, 'form', W, (f) => `${lc(f.entity)}|${lc(f.formType || 'Main')}|${lc(f.name)}`);
 
   // Design-completeness warnings. These are WARNINGS, never errors: a spec without personas or pages
   // is still buildable, and the author may have good reason. They exist because all three were steps
@@ -558,11 +569,12 @@ function lintAppSpec(spec) {
   return { ok: errors.length === 0, errors, warnings };
 }
 
-function dupWarn(names, kind, W) {
+function dupWarn(items, kind, W, keyOf) {
   const seen = new Set();
-  for (const n of names) {
-    const k = String(n || '').toLowerCase();
-    if (k && seen.has(k)) W(`Duplicate ${kind} name: ${n}`);
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || !item.name) continue;
+    const k = keyOf(item);
+    if (seen.has(k)) W(`Duplicate ${kind} name on ${item.entity || '?'}: ${item.name}`);
     seen.add(k);
   }
 }

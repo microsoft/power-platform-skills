@@ -920,3 +920,27 @@ test('every committed .tsx the repo ships is accepted (false-positive corpus)', 
   });
   assert.deepEqual(rejected, [], 'these real pages would have been rejected');
 });
+
+test('ECMAScript line terminators end // comments without hiding executable navigation', () => {
+  for (const term of ['\r', '\n', '\r\n', '\u2028', '\u2029']) {
+    const code = `// inert${term}navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})`;
+    assert.deepStrictEqual(navReferencedKeys(code), ['detail'], JSON.stringify(term));
+  }
+});
+
+test('page structure accepts default exports after every ECMAScript line terminator', () => {
+  const { pageStructureProblems } = require('../lib/page-structure.js');
+  for (const term of ['\r', '\n', '\r\n', '\u2028', '\u2029']) {
+    const code = `// header${term}export default function Page() { return null; }\n`;
+    assert.deepStrictEqual(pageStructureProblems(code), [], JSON.stringify(term));
+  }
+});
+
+test('string and regex literal line-terminator rules follow ECMAScript', () => {
+  const ls = 'const s = "a\u2028b";\nexport default function Page() { return null; }\n';
+  const ps = 'const s = "a\u2029b";\nexport default function Page() { return null; }\n';
+  assert.equal(hasDefaultExport(ls), true, 'LS is legal inside string literals since ES2019');
+  assert.equal(hasDefaultExport(ps), true, 'PS is legal inside string literals since ES2019');
+  assert.equal(hasDefaultExport('const s = "a\rb";\nexport default function Page() { return null; }\n'), true, 'CR ends the broken string so later code remains visible');
+  assert.deepStrictEqual(navReferencedKeys('const r = /a\u2028/;\nnavigateTo({pageType:"generative",pageId:"PAGEREF_detail"})'), ['detail'], 'raw LS terminates a regex literal scan');
+});

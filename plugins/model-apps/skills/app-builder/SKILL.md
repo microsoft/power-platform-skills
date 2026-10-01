@@ -546,10 +546,10 @@ matches more than one app is refused, listing the candidate unique names rather 
 This reconstructs the app into `<working-dir>/app-spec.json`. **Round-trip scope — be precise, it is
 not everything:**
 - **Round-trips:** the sitemap → `appShell` (all subareas + icons), **every** generative page (via
-  `pac model genpage download`; names come from the sitemap's `GenPage` subarea titles, so
-  Maker-added pages are included) into `pages[]` + their `.tsx`, the referenced entities (minimal —
-  the build reuses existing tables), **classic dashboards** (id-passthrough tiles carrying the
-  deployed view/chart ids), the icon web resources, and the solution.
+  `pac model genpage download`; the pages are the sitemap's `GenPage` subareas, so Maker-added pages
+  are included, and each keeps its own name and model) into `pages[]` + their `.tsx`, the referenced
+  entities (minimal — the build reuses existing tables), **classic dashboards** (id-passthrough tiles
+  carrying the deployed view/chart ids), the icon web resources, and the solution.
 - **Does NOT round-trip:** `forms[]`, `views[]`, `charts[]`, `commands[]` — they come back empty.
   All four **survive on the live app** (a rebuild preserves them by discovery), so a plain edit is
   safe; they just aren't editable through the downloaded spec. Change them in Maker or a fresh spec.

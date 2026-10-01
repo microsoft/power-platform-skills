@@ -450,3 +450,21 @@ test('every committed sample page passes the icon hook', () => {
     assert.equal(status, 0, `samples/${name} is blocked by the hook:\n${stderr}`);
   }
 });
+
+test('line comments ending with CR, LS or PS do not hide or forge icon imports', () => {
+  for (const term of ['\r', '\u2028', '\u2029']) {
+    const commented = `// import { TotallyMadeUpIconRegular } from '@fluentui/react-icons';${term}${GENPAGE_HEADER}`;
+    let fp = writeTemp(tmp, 'commented.tsx', commented);
+    assert.equal(runHook(payloadFor(fp, commented)).status, 0, `commented ${JSON.stringify(term)}`);
+
+    const bad = `import { TotallyMadeUpIconRegular } from '@fluentui/react-icons';${term}${GENPAGE_HEADER}`;
+    fp = writeTemp(tmp, 'bad.tsx', bad);
+    assert.equal(runHook(payloadFor(fp, bad)).status, 2, `real ${JSON.stringify(term)}`);
+  }
+});
+
+test('block comments preserve LS and PS offsets while icon imports are matched', () => {
+  const content = `/* note\u2028import { TotallyMadeUpIconRegular } from '@fluentui/react-icons';\u2029 */\nimport { AddRegular } from '@fluentui/react-icons';\n${GENPAGE_HEADER}`;
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  assert.equal(runHook(payloadFor(fp, content)).status, 0);
+});

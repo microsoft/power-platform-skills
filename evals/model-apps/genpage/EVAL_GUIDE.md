@@ -533,13 +533,12 @@ In all cases, the fixture must have a **`README.md` inside the fixture directory
 - Whether the failures are runner false-positives (would be fixed) or real-but-pre-spec drift (would be replaced)
 - When the fixture should be replaced
 
-Currently red:
+Currently red: **none**. Every fixture — synthetic and real capture alike — is green under both
+runners, and CI runs both runners on every PR that touches `evals/model-apps/**`
+(`.github/workflows/model-apps-script-tests.yml`, job `test-model-apps-evals`).
 
-| Fixture | Why | Action |
-|---------|-----|--------|
-| `2-mock-dashboard-real/` | Pre-v2.2-spec workflow-log compactness + `void props;` instead of `pageInput` destructure | Re-capture under v2.2 spec to replace |
-| `5-kanban-task-board/` | Pre-v2.2-spec workflow-log compactness (Layer 2 is fully green; only Layer 1 affected) | Re-capture under v2.2 spec to replace |
-
-Both will go green when their `/genpage` sessions are re-run after the v2.2 planner-spec tightening propagates. See each fixture's README for the specific failing assertions and remediation path.
-
-**Aggregate state for CI gating:** A passing build is one where every **synthetic** fixture is green. Real captures may be red while documented; their failures count as known-signal, not regressions. (You can adjust this policy if you want CI to gate on real captures too — see the runner's `--eval` filter for narrowing.)
+**Aggregate state for CI gating:** a passing build is one where every fixture is green. A change that
+turns a fixture red — a new required plan section the committed plans lack, say — fails the build in
+the same PR rather than surfacing on the next manual run. A fixture that must stay red has to be
+documented as above **and** left out of the CI run in the same change (the runners' `--eval` filter
+narrows a run).

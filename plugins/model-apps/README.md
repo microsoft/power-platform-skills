@@ -29,6 +29,11 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
 
 After installing `az`, run `az login` with the same identity as your active `pac auth list` profile. Without `az`, the `/genpage` skill still works for pages over existing entities or mock data — it only fails when entity creation is needed.
 
+Each Azure CLI call (a token, `az account show`) may take up to **60 seconds** — a busy machine can
+take most of that just to start `az`. A call that runs out of time is reported as a timeout (the
+pre-flight's `az_timeout`), never as a missing or signed-out CLI. To allow longer, set
+`POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS` in milliseconds (1000–900000), for example `120000`.
+
 ## Feature flags (experimental & in-progress)
 
 Some capabilities ship **OFF by default** while their cross-repo dependencies roll
