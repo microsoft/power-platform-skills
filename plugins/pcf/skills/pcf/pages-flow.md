@@ -4,6 +4,8 @@ Use this flow when a standard field PCF control must run in Power Pages. This re
 
 ## Common gates
 
+Set `pages.journeys` in `pcf-intent.json` to `["form-field"]`, `["liquid"]`, or both. Omitted journeys default to `form-field`. Render the intent with `write-pcf-plan.js --intent @pcf-intent.json` and resolve blocking findings before proceeding; list/sub-grid/dataset journeys fail schema validation, and a dataset control targeting `pages` is blocked even with an allowed journey.
+
 1. Confirm the control is a standard field control, not virtual and not a dataset control.
 2. Check unsupported property types and single-field Pages limits in `pcf-hosts.md`.
 3. Run `lint-pcf.js --project <dir> --hosts pages` and `pcf-gates.js --project <dir> --hosts pages`.
@@ -32,9 +34,9 @@ Prerequisites are in the matrix table under `liquid`.
 Steps:
 
 1. Register a standard field control.
-2. Add a Liquid `{% codecomponent %}` tag with explicit property values.
-3. Save, sync and preview the page.
-4. Verify browser console/network and user-visible behavior.
+2. Add `{% codecomponent name:<registered control name> <property>:'<value>' %}` to the page source, using the registered Dataverse control name (or control ID) and explicit property values as documented on [Microsoft Learn](https://learn.microsoft.com/en-us/power-pages/configure/liquid/component-framework-liquid). Repeat the property/value pair for each required property; do not infer the registered name from the authoring namespace.
+3. Save the page source, select **Sync** in design studio, then select **Preview**.
+4. Confirm the control renders, then verify browser console/network and user-visible behavior.
 
 ## Web API, permissions and security
 

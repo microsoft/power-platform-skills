@@ -28,7 +28,7 @@ Read `scripts/lib/pcf-intent.js` as the contract. Minimal valid example:
     "template": "field-standard",
     "recipe": "star-rating"
   },
-  "hosts": ["model"],
+  "hosts": ["model", "pages"],
   "connectivity": "online",
   "properties": [
     { "name": "value", "usage": "bound", "type": "Whole.None", "required": true }
@@ -44,11 +44,14 @@ Read `scripts/lib/pcf-intent.js` as the contract. Minimal valid example:
       "target": { "column": "new_rating" },
       "parameters": { "value": { "column": "new_rating" } }
     }
-  ]
+  ],
+  "pages": { "journeys": ["form-field", "liquid"] }
 }
 ```
 
 Defaults: binding `clients` means clients that must use this control; omitted means web. FormXML factors are still all three, as described in `bind-flow.md`.
+
+`pages.journeys` accepts only `form-field` and `liquid`; when omitted, the plan defaults to `form-field`. Reject `list`, form sub-grid and dataset journeys rather than guiding their setup: dataset templates rely on paging and `openDatasetItem`, documented for model-driven and canvas apps only. A standalone Liquid intent supplies explicit property values in the page tag and may leave `bindings` empty; it does not require a model-driven form binding. A dataset control cannot target `pages`, even with an allowed field journey.
 
 `connectivity` describes the host's connection mode, not whether the control calls the network. This release accepts only `"online"`: offline (mobile offline) hosts are not supported in this release. A control that makes no network calls still uses "online".
 

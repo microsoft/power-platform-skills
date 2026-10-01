@@ -135,6 +135,23 @@ test('validateIntent accepts the v1 shape with canonical binding targets', () =>
   assert.deepEqual(validateIntent(exampleIntent()), []);
 });
 
+test('validateIntent accepts standalone Liquid and combined field Pages journeys', () => {
+  for (const journeys of [['liquid'], ['form-field', 'liquid']]) {
+    assert.deepEqual(validateIntent(exampleIntent({ hosts: ['pages'], bindings: [], pages: { journeys } })), []);
+  }
+});
+
+test('validateIntent rejects Pages list and dataset journeys with the documented host boundary', () => {
+  for (const journey of ['list', 'sub-grid', 'form-sub-grid', 'dataset', 'dataset-subgrid', 'dataset-list']) {
+    const errors = validateIntent(exampleIntent({ pages: { journeys: [journey] } }));
+    assert.ok(errors.some((error) => /pages\.journeys\[0\]/.test(error)
+      && /form-field, liquid/.test(error)
+      && /dataset journeys on Power Pages \(form sub-grid, list\) are not supported in this release/i.test(error)
+      && /paging and openDatasetItem/.test(error)
+      && /model-driven and canvas apps only/.test(error)), `${journey}: ${errors.join('\n')}`);
+  }
+});
+
 test('validateIntent reports schema, name, enum, template, recipe, and binding shape fixes', () => {
   const errors = validateIntent(exampleIntent({
     schemaVersion: 2,
@@ -381,6 +398,38 @@ test('lintBindingIntent does not reuse PCF_INTENT_PAGES_VIRTUAL for field-type p
   assert.ok(!findings.some((finding) => finding.code === 'PCF_INTENT_PAGES_VIRTUAL'));
 });
 
+test('lintBindingIntent blocks Pages dataset templates without a manifest or bindings', () => {
+  for (const template of ['dataset-standard', 'dataset-virtual']) {
+    const intent = exampleIntent({
+      control: { ...exampleIntent().control, template },
+      hosts: ['pages'],
+      bindings: [],
+    });
+    assertFinding(lintBindingIntent(intent), 'PCF_INTENT_PAGES_DATASET', 'error');
+    assert.ok(!codes(lintBindingIntent({ ...intent, hosts: ['model'] })).includes('PCF_INTENT_PAGES_DATASET'));
+  }
+});
+
+test('lintBindingIntent blocks Pages datasets declared by the manifest even for a field intent', () => {
+  const findings = lintBindingIntent(exampleIntent({ bindings: [] }), {
+    manifestModel: manifestModel({ dataSets: [{ name: 'records', propertySets: [] }] }),
+  });
+  assertFinding(findings, 'PCF_INTENT_PAGES_DATASET', 'error');
+  const dataset = findings.find((item) => item.code === 'PCF_INTENT_PAGES_DATASET');
+  assert.match(dataset.message, /paging and openDatasetItem/);
+  assert.match(dataset.message, /model-driven and canvas apps only/);
+});
+
+test('lintBindingIntent blocks Pages dataset bindings and dataset parameters', () => {
+  const field = exampleIntent().bindings[0];
+  for (const binding of [
+    { ...field, kind: 'dataset-subgrid' },
+    { ...field, parameters: { records: { dataset: { name: 'records', propertySets: [] } } } },
+  ]) {
+    assertFinding(lintBindingIntent(exampleIntent({ bindings: [binding] })), 'PCF_INTENT_PAGES_DATASET', 'error');
+  }
+});
+
 test('lintBindingIntent reports PCF_INTENT_PARAM_UNKNOWN', () => {
   const findings = lintBindingIntent(exampleIntent({
     bindings: [{
@@ -436,12 +485,11 @@ test('lintBindingIntent reports PCF_INTENT_BOUND_NOT_MAPPED but exempts grid Eve
   assert.ok(!codes(grid).includes('PCF_INTENT_BOUND_NOT_MAPPED'));
 });
 
-test('lintBindingIntent reports PCF_INTENT_LIST_NEEDS_VIEW_CONFIG', () => {
-  const findings = lintBindingIntent(exampleIntent({
-    pages: { journeys: ['list'] },
-  }), { manifestModel: manifestModel(), matrix: matrix() });
-
-  assertFinding(findings, 'PCF_INTENT_LIST_NEEDS_VIEW_CONFIG', 'warning');
+test('lintBindingIntent no longer guides unsupported Pages list setup', () => {
+  const intent = exampleIntent({ pages: { journeys: ['list'] } });
+  const findings = lintBindingIntent(intent, { manifestModel: manifestModel(), matrix: matrix() });
+  assert.ok(!codes(findings).includes('PCF_INTENT_LIST_NEEDS_VIEW_CONFIG'));
+  assert.doesNotMatch(renderPlanMarkdown(intent, { lint: findings }), /List: configure|verify the rendered dataset/);
 });
 
 test('renderPlanMarkdown matches the reviewed golden output', () => {
@@ -449,6 +497,16 @@ test('renderPlanMarkdown matches the reviewed golden output', () => {
   const lint = lintBindingIntent(intent, { manifestModel: manifestModel() });
 
   assertGolden('pcf-plan-example.md', renderPlanMarkdown(intent, { lint }));
+});
+
+test('renderPlanMarkdown renders the documented standalone Liquid steps and golden plan', () => {
+  const intent = exampleIntent({ hosts: ['pages'], bindings: [], pages: { journeys: ['liquid'] } });
+  const markdown = renderPlanMarkdown(intent, { lint: lintBindingIntent(intent) });
+  assert.ok(markdown.includes("{% codecomponent name:<registered control name> <property>:'<value>' %}"));
+  assert.match(markdown, /page source/);
+  assert.match(markdown, /save.*Sync.*Preview.*confirm the control renders/i);
+  assert.doesNotMatch(markdown, /List: configure|verify the rendered dataset/);
+  assertGolden('pcf-plan-liquid.md', markdown);
 });
 
 test('renderPlanMarkdown escapes markdown headings and table cells', () => {
@@ -485,6 +543,66 @@ test('write-pcf-plan writes markdown, emits JSON, and exits 1 when lint has erro
     assert.equal(payload.out, outPath);
     assert.ok(payload.findings.some((finding) => finding.code === 'PCF_INTENT_PAGES_NEEDS_WEB'));
     assert.match(fs.readFileSync(outPath, 'utf8'), /PCF_INTENT_PAGES_NEEDS_WEB/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('write-pcf-plan accepts Liquid, writes its instructions, and preserves the success JSON shape', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-plan-liquid-'));
+  try {
+    const intentPath = path.join(dir, 'pcf-intent.json');
+    const outPath = path.join(dir, 'pcf-plan.md');
+    fs.writeFileSync(intentPath, JSON.stringify(exampleIntent({
+      hosts: ['pages'], bindings: [], pages: { journeys: ['liquid'] },
+    })));
+    const cli = await runCli(['--intent', `@${intentPath}`, '--out', outPath]);
+    assert.equal(cli.exitCode, 0);
+    assert.deepEqual(JSON.parse(cli.stdoutText()), { ok: true, out: outPath, findings: [] });
+    assert.ok(fs.readFileSync(outPath, 'utf8').includes("{% codecomponent name:<registered control name> <property>:'<value>' %}"));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('write-pcf-plan rejects a Pages list journey before writing a plan with schema JSON', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-plan-list-'));
+  try {
+    const intentPath = path.join(dir, 'pcf-intent.json');
+    const outPath = path.join(dir, 'pcf-plan.md');
+    fs.writeFileSync(intentPath, JSON.stringify(exampleIntent({ pages: { journeys: ['list'] } })));
+    const cli = await runCli(['--intent', `@${intentPath}`, '--out', outPath]);
+    assert.equal(cli.exitCode, 1);
+    const payload = JSON.parse(cli.stdoutText());
+    assert.equal(payload.ok, false);
+    assert.equal(payload.out, null);
+    assert.match(payload.error, /intent schema is invalid/i);
+    assert.ok(payload.findings.some((item) => item.code === 'PCF_INTENT_SCHEMA' && item.severity === 'error'));
+    assert.match(payload.findings[0].message, /dataset journeys on Power Pages/i);
+    assert.equal(fs.existsSync(outPath), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('write-pcf-plan blocks a Pages dataset while preserving the blocking-plan JSON shape', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-plan-dataset-'));
+  try {
+    const intentPath = path.join(dir, 'pcf-intent.json');
+    const outPath = path.join(dir, 'pcf-plan.md');
+    fs.writeFileSync(intentPath, JSON.stringify(exampleIntent({
+      control: { ...exampleIntent().control, template: 'dataset-standard' },
+      hosts: ['pages'],
+      bindings: [],
+    })));
+    const cli = await runCli(['--intent', `@${intentPath}`, '--out', outPath]);
+    assert.equal(cli.exitCode, 1);
+    const payload = JSON.parse(cli.stdoutText());
+    assert.deepEqual(Object.keys(payload).sort(), ['findings', 'ok', 'out']);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.out, outPath);
+    assertFinding(payload.findings, 'PCF_INTENT_PAGES_DATASET', 'error');
+    assert.match(fs.readFileSync(outPath, 'utf8'), /PCF_INTENT_PAGES_DATASET/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

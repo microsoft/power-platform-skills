@@ -9,8 +9,10 @@ const PROPERTY_USAGES = new Set(['bound', 'input', 'output']);
 const BINDING_KINDS = new Set(['field', 'dataset-subgrid', 'grid-customizer']);
 const CLIENTS = new Set(['web', 'phone', 'tablet']);
 const FORM_TYPES = new Set(['main', 'quick-create', 'card', 'other']);
-const JOURNEYS = new Set(['form-field', 'list']);
+const JOURNEYS = new Set(['form-field', 'liquid']);
 const GRID_CUSTOMIZER_EVENT_PROPERTY = 'EventName';
+const PAGES_DATASET_BOUNDARY = 'Dataset journeys on Power Pages (form sub-grid, list) are not supported in this release because dataset templates rely on paging and openDatasetItem, which Microsoft Learn documents for model-driven and canvas apps only.'
+  + ' See https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/paging and https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/dataset/opendatasetitem.';
 
 function finding(code, severity, message, fix) {
   return { code, severity, message, fix };
@@ -244,7 +246,11 @@ function validatePages(pages, errors) {
   if (pages === undefined) return;
   const p = asObject(pages, 'pages', errors);
   if (!p) return;
-  if (p.journeys !== undefined) validateStringArray(p.journeys, 'pages.journeys', JOURNEYS, errors);
+  if (p.journeys !== undefined) {
+    const journeyErrors = [];
+    validateStringArray(p.journeys, 'pages.journeys', JOURNEYS, journeyErrors);
+    for (const error of journeyErrors) errors.push(`${error} ${PAGES_DATASET_BOUNDARY}`);
+  }
 }
 
 function lintBindingIntent(intent, options = {}) {
@@ -338,6 +344,17 @@ function lintBindingIntent(intent, options = {}) {
     }
   }
 
+  // A valid field journey does not turn a dataset template, manifest or binding into a field
+  // control. Check all intent surfaces, including standalone plans without a manifest/binding.
+  if (targetsPages && isDatasetControlIntent(intent, manifestModel, bindings)) {
+    findings.push(finding(
+      'PCF_INTENT_PAGES_DATASET',
+      'error',
+      PAGES_DATASET_BOUNDARY,
+      'Use a standard field control with the form-field or liquid journey, or remove pages from hosts for this dataset control.',
+    ));
+  }
+
   if (targetsPages && isVirtualControlIntent(intent, manifestModel)) {
     findings.push(finding(
       'PCF_INTENT_PAGES_VIRTUAL',
@@ -347,23 +364,24 @@ function lintBindingIntent(intent, options = {}) {
     ));
   }
 
-  if (targetsPages && intent.pages && Array.isArray(intent.pages.journeys) && intent.pages.journeys.includes('list')) {
-    findings.push(finding(
-      'PCF_INTENT_LIST_NEEDS_VIEW_CONFIG',
-      'warning',
-      'The Power Pages list journey needs a view/table-level configuration that this release guides but does not automate.',
-      'Add the matching Power Pages list/view configuration during site setup and verify it before approval.',
-    ));
-  }
-
   return findings;
 }
 
 function isVirtualControlIntent(intent, manifestModel) {
   if (manifestModel && manifestModel.control && manifestModel.control.controlType === 'virtual') return true;
+  return intentTemplate(intent)?.controlType === 'virtual';
+}
+
+function isDatasetControlIntent(intent, manifestModel, bindings) {
+  if (manifestModel && Array.isArray(manifestModel.dataSets) && manifestModel.dataSets.length) return true;
+  if (intentTemplate(intent)?.kind === 'dataset') return true;
+  return bindings.some((binding) => binding.kind === 'dataset-subgrid'
+    || Object.values(binding.parameters || {}).some((parameter) => parameter && parameter.dataset));
+}
+
+function intentTemplate(intent) {
   const templateId = intent && intent.control && intent.control.template;
-  if (!templateId) return false;
-  return safeListTemplates().some((template) => template.id === templateId && template.controlType === 'virtual');
+  return templateId ? safeListTemplates().find((template) => template.id === templateId) : undefined;
 }
 
 function manifestProperties(intent, manifestModel) {
@@ -533,7 +551,7 @@ function renderParameterValue(value) {
 
 function renderJourney(journey) {
   if (journey === 'form-field') return 'Form field: add the PCF control to the matching Power Pages basic/advanced form field.';
-  if (journey === 'list') return 'List: configure the site list/table view to use this control and verify the rendered dataset.';
+  if (journey === 'liquid') return 'Standalone Liquid: add `{% codecomponent name:<registered control name> <property>:\'<value>\' %}` to the page source with explicit property values; save, select **Sync**, then **Preview**, and confirm the control renders.';
   return journey;
 }
 

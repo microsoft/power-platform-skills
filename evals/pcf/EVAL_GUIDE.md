@@ -30,7 +30,7 @@ Fixture directories use the app-builder-compatible numeric loader shape `^(\d+)(
 | 1 | intent | smoke | `001-intent-field-clean` | Clean field-standard intent for model + Pages; plan sections render. |
 | 2 | intent | smoke | `002-intent-pages-multi-field` | Pages multi-field binding is blocked. |
 | 3 | intent | full | `003-intent-quickcreate-subgrid` | Quick-create dataset sub-grid binding is blocked. |
-| 4 | intent | full | `004-intent-pages-virtual-list` | Virtual Pages target is blocked and list journey warns. |
+| 4 | intent | full | `004-intent-pages-virtual-list` | Virtual Pages target is blocked; list, form sub-grid and dataset journey values are schema-invalid without obsolete list warnings. |
 | 5 | manifest | smoke | `005-manifest-field-clean` | Clean standard field manifest for model + Pages. |
 | 6 | manifest | full | `006-manifest-pages-virtual` | Virtual control and platform-library policy for Pages. |
 | 7 | manifest | full | `007-manifest-feature-policy` | Duplicate and required feature declarations. |
@@ -54,6 +54,9 @@ Fixture directories use the app-builder-compatible numeric loader shape `^(\d+)(
 | 25 | generated | full | `025-generated-good` | Synthetic good generated project passes. |
 | 26 | generated | full | `026-generated-xrm-webapi` | Synthetic project with `Xrm.` + undeclared WebAPI fails. |
 | 27 | generated | full | `027-generated-pages-virtual` | Synthetic virtual control targeting Pages fails. |
+| 28 | intent | full | `028-intent-pages-liquid` | Standalone standard field Liquid intent is accepted without a model-driven form binding. |
+| 29 | intent | full | `029-intent-pages-dataset` | Dataset control targeting Pages is blocked even with the allowed form-field journey and no binding. |
+| 30 | intent | full | `030-intent-pages-list` | List journey is rejected by schema validation, not guided as an advisory configuration step. |
 
 **Smoke subset:** 1, 2, 5, 10, 13, 17, 21, 24.
 
@@ -106,4 +109,3 @@ ok 1 - 001-001-intent-field-clean
 # skip  0
 # fixtures 8 (pass 8, fail 0)
 ```
-

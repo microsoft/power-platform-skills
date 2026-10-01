@@ -60,7 +60,9 @@
   ],
   "pages": {
     "journeys": [
-      "list"
+      "list",
+      "form-sub-grid",
+      "dataset"
     ]
   }
 }

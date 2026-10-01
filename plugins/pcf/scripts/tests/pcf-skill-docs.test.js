@@ -567,6 +567,25 @@ test('Power Pages guidance is standard field controls only', () => {
   }
 });
 
+test('create flow shows the allowed Pages intent journeys and documents their field-only boundary', () => {
+  const text = readPluginFile('skills/pcf/create-flow.md');
+  const example = JSON.parse(/```json\n([\s\S]*?)\n```/.exec(text)[1]);
+  assert.ok(example.hosts.includes('pages'));
+  assert.deepEqual(example.pages?.journeys, ['form-field', 'liquid']);
+  assert.match(text, /`pages\.journeys`/);
+  assert.match(text, /`form-field`.*`liquid`/);
+  assert.match(text, /standalone Liquid.*bindings.*empty/i);
+});
+
+test('Pages flow and reference show the documented registered-name Liquid tag and rendering check', () => {
+  for (const relativePath of ['skills/pcf/pages-flow.md', 'references/pcf-power-pages.md']) {
+    const text = readPluginFile(relativePath);
+    assert.ok(text.includes("{% codecomponent name:<registered control name> <property>:'<value>' %}"), relativePath);
+    assert.match(text, /registered (?:Dataverse )?control name/i, relativePath);
+    assert.match(text, /confirm (?:that )?the control renders/i, relativePath);
+  }
+});
+
 test('documented CLI invocations include required flags', () => {
   const files = [];
   const walk = (dir) => {

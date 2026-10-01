@@ -19,7 +19,9 @@ Primary Learn sources: [Use code components in Power Pages](https://learn.micros
 | Form field | Registered control, model-driven field binding with Web client, Pages-compatible manifest/property type | Enable custom component in design studio field settings, or Basic Form Metadata `Type: Attribute` with `Control Style: Code Component` | Renders, save → reload round-trips |
 | Form sub-grid | Not supported in this release | Do not configure a Pages sub-grid for a dataset control | Not supported in this release |
 | List | Not supported in this release | Do not configure a Pages list for a dataset control | Not supported in this release |
-| Standalone Liquid | Registered standard field control and property values | `{% codecomponent name:<control> prop:'json string' %}` in page source, then save/sync/preview | Control renders on page |
+| Standalone Liquid | Registered standard field control and property values | `{% codecomponent name:<registered control name> <property>:'<value>' %}` in page source, then save/sync/preview | Control renders on page |
+
+`pcf-intent.json` accepts only `form-field` and `liquid` in `pages.journeys`; omitting journeys defaults the plan to `form-field`. Dataset controls are blocked for the `pages` host regardless of journey. For Liquid, use the registered Dataverse control name (or ID) and explicit property/value pairs, save the page source, select **Sync**, then **Preview**, and confirm the control renders. A standalone Liquid journey does not require a model-driven form binding.
 
 Minimum site/package versions are owned by the matrix-rendered table in `pcf-hosts.md`. Do not duplicate them here.
 

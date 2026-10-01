@@ -27,6 +27,38 @@ test('facts: clean intent fixture validates, lints cleanly, and renders plan sec
   assert.ok(facts.planSections.includes('What will be verified'));
 });
 
+test('facts: standalone Pages Liquid intent validates and lints without a form binding', async () => {
+  const facts = await computeFacts({ family: 'intent', fixture: fixture('028-intent-pages-liquid') });
+  assert.equal(facts.valid, true, JSON.stringify(facts.validationErrors));
+  assert.equal(facts.ok, true);
+  assert.deepEqual(codes(facts.findings), []);
+  assert.ok(facts.planSections.includes('Power Pages steps'));
+});
+
+test('facts: Pages dataset intent is schema-valid but blocked by host lint', async () => {
+  const facts = await computeFacts({ family: 'intent', fixture: fixture('029-intent-pages-dataset') });
+  assert.equal(facts.valid, true, JSON.stringify(facts.validationErrors));
+  assert.equal(facts.ok, false);
+  assert.deepEqual(codes(facts.findings), ['PCF_INTENT_PAGES_DATASET']);
+});
+
+test('facts: Pages list intent is rejected rather than receiving guided list instructions', async () => {
+  const facts = await computeFacts({ family: 'intent', fixture: fixture('030-intent-pages-list') });
+  assert.equal(facts.valid, false);
+  assert.equal(facts.ok, false);
+  assert.ok(facts.validationErrors.some((error) => /dataset journeys on Power Pages/i.test(error)
+    && /paging and openDatasetItem/.test(error) && /model-driven and canvas apps only/.test(error)));
+  assert.ok(!codes(facts.findings).includes('PCF_INTENT_LIST_NEEDS_VIEW_CONFIG'));
+});
+
+test('facts: virtual Pages list and dataset journey fixture rejects each journey without list warnings', async () => {
+  const facts = await computeFacts({ family: 'intent', fixture: fixture('004-intent-pages-virtual-list') });
+  assert.equal(facts.valid, false);
+  assert.equal(facts.validationErrors.length, 3);
+  assert.ok(facts.validationErrors.every((error) => /dataset journeys on Power Pages/i.test(error)));
+  assert.deepEqual(codes(facts.findings), ['PCF_INTENT_PAGES_VIRTUAL']);
+});
+
 test('facts: generated source fixture reports source and feature gate findings', async () => {
   const facts = await computeFacts({ family: 'generated', fixture: fixture('026-generated-xrm-webapi'), hosts: ['model'] });
   assert.equal(facts.family, 'generated');

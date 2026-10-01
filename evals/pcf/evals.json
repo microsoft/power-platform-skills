@@ -82,11 +82,11 @@
       "expect": {
         "ok": false,
         "presentCodes": [
-          "PCF_INTENT_PAGES_VIRTUAL",
-          "PCF_INTENT_LIST_NEEDS_VIEW_CONFIG"
+          "PCF_INTENT_PAGES_VIRTUAL"
         ],
         "absentCodes": [
-          "PCF_INTENT_PARAM_UNKNOWN"
+          "PCF_INTENT_PARAM_UNKNOWN",
+          "PCF_INTENT_LIST_NEEDS_VIEW_CONFIG"
         ]
       },
       "assertions": [
@@ -673,6 +673,71 @@
       ],
       "hosts": [
         "pages"
+      ]
+    },
+    {
+      "id": 28,
+      "tier": "full",
+      "family": "intent",
+      "fixture": "028-intent-pages-liquid",
+      "expect": {
+        "ok": true,
+        "presentCodes": [],
+        "absentCodes": [
+          "PCF_INTENT_PAGES_DATASET",
+          "PCF_INTENT_LIST_NEEDS_VIEW_CONFIG"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ]
+    },
+    {
+      "id": 29,
+      "tier": "full",
+      "family": "intent",
+      "fixture": "029-intent-pages-dataset",
+      "expect": {
+        "ok": false,
+        "presentCodes": [
+          "PCF_INTENT_PAGES_DATASET"
+        ],
+        "absentCodes": [
+          "PCF_INTENT_PAGES_VIRTUAL",
+          "PCF_INTENT_LIST_NEEDS_VIEW_CONFIG"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
+      ]
+    },
+    {
+      "id": 30,
+      "tier": "full",
+      "family": "intent",
+      "fixture": "030-intent-pages-list",
+      "expect": {
+        "ok": false,
+        "presentCodes": [],
+        "absentCodes": [
+          "PCF_INTENT_PAGES_DATASET",
+          "PCF_INTENT_LIST_NEEDS_VIEW_CONFIG"
+        ]
+      },
+      "assertions": [
+        "contract: every expected code is present",
+        "contract: every forbidden code is absent",
+        "contract: expected ok/status fields match",
+        "contract: expected upgrade step ids are present",
+        "contract: expected manual step ids are present"
       ]
     }
   ]
