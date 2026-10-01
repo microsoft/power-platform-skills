@@ -486,9 +486,11 @@ It returns a single JSON object:
   blocker (run `az login`, etc.).
 - **`blocker: "usage"`** is the one exception: the `check-auth.js` command line itself was wrong (a
   mistyped flag or a missing value). Fix the invocation and run it again instead of stopping.
-- **`blocker: "az_timeout"` / `"pac_timeout"`** means that CLI was too slow to answer, not that it is
-  missing or signed out. Retry once; if it recurs on a busy machine, set
-  `POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS` (milliseconds, default 60000) for the Azure CLI budget.
+- **`blocker: "az_timeout"`** means the Azure CLI was too slow to answer, not that it is missing or
+  signed out. Retry once; if it recurs on a busy machine, set `POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS`
+  (milliseconds, default 60000) for the Azure CLI budget.
+- **`blocker: "pac_timeout"`** means `pac org who` did not answer within its fixed 60 s, so the PAC
+  login is unknown, not missing. Retry once. The Azure CLI setting above does not change this budget.
 
 Capture `envUrl` from the result — Phase 2b passes it to the entity-builder.
 

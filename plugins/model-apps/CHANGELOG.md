@@ -64,9 +64,10 @@ vendored SDK.
 - **Connector discovery refuses output it cannot read** — a warning, a changed format — instead of
   reporting no connections, rejects malformed identifiers, and no longer reads a table's dashed
   separator as a connection. The connector agent never creates a connection after a failed discovery.
-- **A slow Azure CLI is reported as slow.** A token request that ran out of time was reported as
-  `az` missing or signed out; it is now `az_timeout` (or `pac_timeout`), with the time it was given
-  and a longer budget to try — never more than the 15-minute maximum.
+- **A slow Azure CLI or PAC is reported as slow.** A token request that ran out of time was reported
+  as `az` missing or signed out; it is now `az_timeout`, with the time it was given and a longer budget
+  to try — never more than the 15-minute maximum. A `pac org who` slower than its fixed 60 s is
+  `pac_timeout`, to retry, not `pac_not_logged_in`.
 - **Lint no longer warns about a view, chart or form name used on two tables** — only a repeat on
   one table collides.
 - **A re-run of a failed teardown finds the generative pages it left.** When teardown could not delete
