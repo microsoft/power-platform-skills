@@ -736,6 +736,27 @@ function declaredColumnLogicals(spec, entitySchemaName) {
   return cols;
 }
 
+// Does the spec itself create column `attributeLogical` on table `tableLogical`? Counts the table's primary
+// name column, its declared columns, and the lookup a 1:N relationship places on its referencing side.
+//
+// Both names compare case-insensitively, because the caller holds what DATAVERSE reported — logical, so
+// lower-case ('new_customerid') — while the spec carries schema names ('new_CustomerId'). That is also why
+// this is not `declaredColumnLogicals`: that one matches the entity schemaName EXACTLY, the contract the
+// business-rule and BPF validators were written against, and loosening it would change what they accept.
+function specDeclaresAttribute(spec, tableLogical, attributeLogical) {
+  const table = String(tableLogical || '').toLowerCase();
+  const attribute = String(attributeLogical || '').toLowerCase();
+  if (!spec || !table || !attribute) return false;
+  const lc = (v) => String(v || '').toLowerCase();
+  for (const ent of spec.entities || []) {
+    if (!ent || lc(ent.schemaName) !== table) continue;
+    if (ent.primaryAttribute && lc(ent.primaryAttribute.schemaName) === attribute) return true;
+    if ((ent.columns || []).some((c) => c && lc(c.schemaName) === attribute)) return true;
+  }
+  return (spec.relationships || []).some((rel) => rel && rel.type === 'OneToMany'
+    && lc(rel.referencing) === table && rel.lookup && lc(rel.lookup.schemaName) === attribute);
+}
+
 // Normalize a Dataverse language identifier (LCID) to a positive integer, or null if it is not one.
 //
 // This is the SINGLE definition used by all three entry points an LCID can arrive from, so they can
@@ -3804,6 +3825,7 @@ module.exports = {
   prefixedRelationshipName,
   manyToManyFor,
   manyToManySchemaName,
+  specDeclaresAttribute,
   isSafeHttpUrl,
   CHART_TYPES,
 };

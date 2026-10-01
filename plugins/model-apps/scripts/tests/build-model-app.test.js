@@ -294,6 +294,56 @@ test('isTransientHalt classifies lock/timeout/429/503 as transient, others not',
   assert.ok(!isTransientHalt({ transient: false, cause: { statusCode: 503 } }));
 });
 
+// Live-captured shape, renamed onto the support-desk sample: a view pushed moments after the build created the
+// relationship whose lookup the view names. `new_CustomerId` is declared with mixed case; Dataverse reports the
+// logical (lower-case) name.
+const LAG_MESSAGE = "HTTP 400 from https://contoso.crm.dynamics.com/api/data/v9.0/savedqueries?$select=savedqueryid: The column, fetchxml, has invalid fetch.  Error : 'new_ticket' entity doesn't contain attribute with Name = 'new_customerid' and NameMapping = 'Logical' (look up";
+
+test('isTransientHalt: a missing-attribute fetch error is transient only for a column the spec creates', () => {
+  const spec = desk;
+  const err = (message) => ({ message, cause: { statusCode: 400 } });
+  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE), { spec }), true, 'a relationship lookup the spec declares (case differs)');
+  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE)), false, 'without the spec nothing proves the column is ours');
+  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("'new_customerid'", "'new_typo'")), { spec }), false, 'an undeclared column is an authoring error');
+  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("'new_ticket'", "'new_comment'")), { spec }), false, 'declared on another table only');
+  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("'new_customerid'", "'new_priority'")), { spec }), true, 'a declared column');
+  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("'new_customerid'", "'new_name'")), { spec }), true, 'the primary name column');
+  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("doesn't", 'doesn\u2019t')), { spec }), true, 'a typographic apostrophe');
+  assert.strictEqual(isTransientHalt({ message: 'view "Tickets" failed', cause: { statusCode: 400, message: LAG_MESSAGE } }, { spec }), true, 'the Dataverse text in the cause');
+  assert.strictEqual(isTransientHalt({ transient: false, message: LAG_MESSAGE }, { spec }), false, 'an explicit non-transient still wins');
+  assert.strictEqual(isTransientHalt(err('The column, fetchxml, has invalid fetch.'), { spec }), false, 'another fetch error');
+});
+
+test('transient auto-retry: a view rejected for a lookup the build just created is retried, then succeeds', async () => {
+  const { sdk, calls } = mockSdk();
+  let failed = 0;
+  const push = sdk.pushArtifact;
+  sdk.pushArtifact = async (type, ...rest) => {
+    if (type === 'view' && failed === 0) { failed += 1; const e = new Error(LAG_MESSAGE); e.statusCode = 400; throw e; }
+    return push(type, ...rest);
+  };
+  const events = [];
+  const journal = { path: 'x', record: (e) => events.push(e), close: () => {} };
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, journal });
+  assert.strictEqual(failed, 1, 'the view push failed once');
+  assert.strictEqual(r.ok, true, 'the retry completed the build');
+  assert.ok(events.some((e) => e.status === 'retry'), 'the retry was journaled');
+  assert.ok(calls.some((c) => c[0] === 'createSolution'), 'the build ran');
+});
+
+test('transient auto-retry: a view rejected for a column the spec never declared halts at once', async () => {
+  const { sdk } = mockSdk();
+  const push = sdk.pushArtifact;
+  sdk.pushArtifact = async (type, ...rest) => {
+    if (type === 'view') { const e = new Error(LAG_MESSAGE.replace("'new_customerid'", "'new_typo'")); e.statusCode = 400; throw e; }
+    return push(type, ...rest);
+  };
+  const events = [];
+  const journal = { path: 'x', record: (e) => events.push(e), close: () => {} };
+  await assert.rejects(buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, journal }));
+  assert.ok(!events.some((e) => e.status === 'retry'), 'no retry for a column nobody declared');
+});
+
 test('transient auto-retry: a transient halt is retried and then succeeds', async () => {
   const { sdk, calls } = mockSdk();
   let firstTable = true;

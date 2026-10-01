@@ -15,7 +15,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { sha256 } = require('./lib/hash.js');
-const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageCode } = require('./lib/app-spec.js');
+const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageCode, specDeclaresAttribute } = require('./lib/app-spec.js');
 const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId, normalizeFormId, settleOwedPublishes } = require('./lib/sdk-build.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // #455: resolves the authoring LCID over the transport hatch, BEFORE constructing the SDK that
@@ -615,7 +615,7 @@ async function buildModelApp(spec, opts, deps) {
     } catch (err) {
       if (err && err.owedPaid) owedAcrossAttempts.clear();
       for (const target of (err && Array.isArray(err.owedPublishes) ? err.owedPublishes : [])) owedAcrossAttempts.set(`${target[0]}:${target[1]}`, target);
-      if (attempt <= maxRetries && isTransientHalt(err)) {
+      if (attempt <= maxRetries && isTransientHalt(err, { spec })) {
         const delay = opts.retryDelayMs != null ? opts.retryDelayMs : backoffMs(attempt);
         if (journal) journal.record({ phase: err && err.phase, status: 'retry', label: `transient error (attempt ${attempt}/${maxRetries}) — retrying in ${delay}ms`, detail: String((err && err.message) || err) });
         log(`\n⟳ transient error in ${err && err.phase} — retrying (attempt ${attempt}/${maxRetries}) after ${delay}ms…`);
@@ -770,7 +770,11 @@ async function buildModelApp(spec, opts, deps) {
 // status is 429/503, or the message names a known transient server condition (customization lock,
 // concurrent-op guard, SQL timeout, "try again later"). NOTE: the engine's `recoverable` flag means
 // "re-runnable phase", NOT "transient error", so it is deliberately NOT used here.
-function isTransientHalt(err) {
+//
+// `spec` (optional) enables the one clause that depends on what the build itself creates — see
+// MISSING_DECLARED_ATTRIBUTE below. Without it that clause never fires, so a caller that passes no spec gets
+// exactly the classification it always had.
+function isTransientHalt(err, { spec } = {}) {
   if (!err) return false;
   // An error that says it must not be retried wins over any status or text it carries. A dashboard
   // the build could neither add to its solution nor remove again is one (sdk-build.js): its message
@@ -780,15 +784,29 @@ function isTransientHalt(err) {
   if (err.transient === false || (err.cause && err.cause.transient === false)) return false;
   const status = (err.cause && err.cause.statusCode) || err.statusCode;
   const msg = String((err.message || '') + ' ' + ((err.cause && err.cause.message) || ''));
+  const missing = spec ? MISSING_DECLARED_ATTRIBUTE.exec(msg) : null;
   return (
     status === 429 ||
     status === 503 ||
     /CustomizationLockException|another solution (install|removal)|try again later|SQL timeout|concurrent [dD]elete/i.test(msg) ||
     // A SQL deadlock victim was rolled back, so the idempotent build can simply run again — the same
     // footing as the "SQL timeout" above, with a less ambiguous outcome (see SQL_DEADLOCK_VICTIM).
-    SQL_DEADLOCK_VICTIM.test(msg)
+    SQL_DEADLOCK_VICTIM.test(msg) ||
+    Boolean(missing && specDeclaresAttribute(spec, missing[1], missing[2]))
   );
 }
+
+// Dataverse rejects a view (or other fetch) naming a column it cannot see yet. Live-captured, from a view
+// pushed moments after this build created the relationship that adds the lookup:
+//   HTTP 400 from https://<org>/api/data/v9.0/savedqueries?$select=savedqueryid: The column, fetchxml, has
+//   invalid fetch.  Error : 'contoso_task' entity doesn't contain attribute with Name = 'contoso_projectid'
+//   and NameMapping = 'Logical' (look up …
+// The metadata change had not yet reached the server validating the fetch, and re-running the same build
+// succeeded — so for a column the SPEC creates this is the same lag a retry rides out. Only for that column:
+// the lag explanation cannot apply to a column nobody declared, which is an authoring error and must halt at
+// once instead of spending three backoffs first. Group 1 is the table, group 2 the column (both logical).
+// `doesn.t` also accepts a typographic apostrophe, so a localized or reformatted rendering still matches.
+const MISSING_DECLARED_ATTRIBUTE = /'([^']+)' entity doesn.t contain attribute with Name\s*=\s*'([^']+)'/i;
 
 // Exponential backoff with jitter: ~3s, 6s, 12s (capped at 30s).
 function backoffMs(attempt) {
