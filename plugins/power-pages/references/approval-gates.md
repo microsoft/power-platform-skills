@@ -730,6 +730,22 @@ Reviews traditional and SPA sites for deprecated Web API wildcard fields setting
 | `migrate-webapi-selectall:7.smoke-test` | gate | progress | 7 | Approves the listed read-path smoke test against the deployed site. Write, file, and image paths are never issued. | deployed migration unverified |
 
 ---
+
+### 6.33 `audit-accessibility` (7 calls / 6 gates + 1 not-a-gate)
+
+New standalone skill (crawls a deployed or local site, audits pages and interaction states with axe-core plus extended checks, and writes a triaged report). It reads the site only; the single local write path is the optional fix plan in Phase 7.
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `audit-accessibility:1.4.site-url` | not-a-gate | — | 1.4 | Free-text site URL when neither `$ARGUMENTS` nor activation status provides one — data-gathering | — |
+| `audit-accessibility:2.install-deps` | gate | consent | 2.2 | *"Install the pinned audit packages?"* — downloads `playwright-core` and `axe-core` into a per-user cache. No project files change. | nothing |
+| `audit-accessibility:3.scope` | gate | plan | 3.2 | *"Full / Quick / Include signed-in / Change"* — approves routes, page limit, viewports, and checks before the crawl starts. | nothing |
+| `audit-accessibility:3.sign-in` | gate | pause | 3.3 | Waits while the user signs in through a visible browser window; the session is stored in a private temp folder and removed in Phase 8. | nothing |
+| `audit-accessibility:4.states` | gate | plan | 4.3 | Approves the interaction states (menus, dialogs, tabs, validation) the audit replays. | nothing |
+| `audit-accessibility:4.form-submit` | gate | consent | 4.4 | Asked only when an approved state submits a form — allows `--allow-form-submit`, which can create Dataverse records or send email. | nothing |
+| `audit-accessibility:7.fix-offer` | gate | plan | 7.2 | Approves the source changes proposed for the findings before any file is edited. The report and marker from Phase 6 stay. | nothing |
+
+---
 ### Cross-plugin shared skills — out of catalog scope
 
 `report-issue` — Its prompts are cross-plugin, not power-pages-specific, so they are not catalogued here. If the shared workflow is ever governed by per-plugin approval-gate linting, add a `report-issue:*` section to this catalog.

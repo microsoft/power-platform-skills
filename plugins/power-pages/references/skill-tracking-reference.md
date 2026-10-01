@@ -58,6 +58,7 @@ If the tracking script creates or updates site setting YAML files, include those
 | force-link-environment | ForceLinkEnvironment | Site/AI/Skills/ForceLinkEnvironment |
 | migrate-bootstrap | MigrateBootstrap | Site/AI/Skills/MigrateBootstrap |
 | migrate-webapi-selectall | MigrateWebapiSelectall | Site/AI/Skills/MigrateWebapiSelectall |
+| audit-accessibility | AuditAccessibility | Site/AI/Skills/AuditAccessibility |
 
 ## YAML Format
 
