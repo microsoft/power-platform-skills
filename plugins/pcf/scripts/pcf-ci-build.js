@@ -14,6 +14,7 @@ const { buildControl } = require('./lib/pcf-build.js');
 const { runNodeScript, runNpm } = require('./lib/node-tool.js');
 const { runPac } = require('./lib/pac-exec.js');
 const { validateControlName, validatePublisherPrefix } = require('./lib/pcf-names.js');
+const { parseXml, findAll, attr } = require('./lib/xml-lite.js');
 
 const USAGE = `Usage:
   node scripts/pcf-ci-build.js [--all | --templates | --template <id> | --recipe <id>] [--latest] [--keep] [--package] [--npm-cli <path>]
@@ -33,6 +34,8 @@ const PACKAGE_PUBLISHER_NAME = 'Contoso';
 const PACKAGE_PUBLISHER_PREFIX = 'contoso';
 const PAC_TIMEOUT_MS = 120000;
 const ZIP64_UNSUPPORTED = 'ZIP64 solution packages are not supported by this smoke reader.';
+const EXPECTED_GATE_IDS = ['manifest', 'code', 'lint', 'test', 'build'];
+const DIAGNOSTIC_LIMIT = 2000;
 
 function usageError(message) {
   process.stderr.write(`${USAGE}\n${message}\n`);
@@ -180,7 +183,7 @@ function runTarget(target, projectDir, options, deps, label = target.id) {
   }
 
   const gates = timedStep(deps, `${label}: gates`, () => runGates(projectDir, target.hosts, deps), (item) => item.ok);
-  if (!gates.ok) return failure(gates.error || 'pcf-gates failed.', { gates: gates.gates || [] });
+  if (!gates.ok) return failure(gates.error || 'pcf-gates failed.', { gates: gates.gates || [], latest });
   return { ok: gates.ok, gates: gates.gates, extra: { latest } };
 }
 
@@ -234,22 +237,52 @@ function runGates(projectDir, hosts, deps = {}) {
   const result = runner
     ? runner(projectDir, hosts)
     : runNodeScript(path.join(SCRIPT_DIR, 'pcf-gates.js'), ['--project', projectDir, '--hosts', hosts.join(',')], { cwd: path.join(SCRIPT_DIR, '..') });
-  const parsed = parseJsonLine(result.stdout);
+  const stdout = result.stdout || '';
+  const stderr = result.stderr || '';
+  const diagnostic = gateDiagnostic(stdout, stderr);
   if (!succeeded(result)) {
-    return { ok: false, error: `pcf-gates failed: ${toolDetail(result)}`, gates: [], stdout: result.stdout || '', stderr: result.stderr || '' };
+    return { ok: false, error: `pcf-gates failed: ${toolDetail(result)}\n${diagnostic}`, gates: [], stdout, stderr };
   }
+  const lines = jsonResultLines(stdout);
+  // pcf-gates prints one JSON object. A second object can be a failed retry or a log line that
+  // happens to be JSON; accepting the first hides that the child did not have a single result.
+  if (lines.length !== 1) {
+    return { ok: false, error: `pcf-gates did not emit valid JSON success output: expected exactly one JSON result line.\n${diagnostic}`, gates: [], stdout, stderr };
+  }
+  const parsed = parseJsonLine(lines[0]);
   if (!parsed || parsed.ok !== true) {
-    return { ok: false, error: `pcf-gates did not emit valid JSON success output: ${toolDetail(result)}`, gates: [], stdout: result.stdout || '', stderr: result.stderr || '' };
+    return { ok: false, error: `pcf-gates did not emit valid JSON success output.\n${diagnostic}`, gates: [], stdout, stderr };
   }
   if (!Array.isArray(parsed.gates) || parsed.gates.length === 0) {
-    return { ok: false, error: 'pcf-gates did not report any gate records.', gates: [], stdout: result.stdout || '', stderr: result.stderr || '' };
+    return { ok: false, error: `pcf-gates did not report any gate records.\n${diagnostic}`, gates: [], stdout, stderr };
   }
-  return {
-    ok: true,
-    gates: parsed.gates,
-    stdout: result.stdout || '',
-    stderr: result.stderr || '',
-  };
+  const ids = parsed.gates.map((gate) => gate && gate.id);
+  const exactIds = ids.length === EXPECTED_GATE_IDS.length && EXPECTED_GATE_IDS.every((id, index) => ids[index] === id);
+  const allPassing = parsed.gates.every((gate) => gate && gate.ok === true);
+  if (!exactIds || !allPassing) {
+    return {
+      ok: false,
+      error: `pcf-gates did not report exactly the five passing gates (manifest, code, lint, test, build).\n${diagnostic}`,
+      gates: parsed.gates,
+      stdout,
+      stderr,
+    };
+  }
+  return { ok: true, gates: parsed.gates, stdout, stderr };
+}
+
+function jsonResultLines(text) {
+  return String(text || '').split(/\r?\n/).map((line) => line.trim()).filter((line) => line.startsWith('{'));
+}
+
+function gateDiagnostic(stdout, stderr) {
+  return `stdout: ${truncateDiagnostic(stdout)}\nstderr: ${truncateDiagnostic(stderr)}`;
+}
+
+function truncateDiagnostic(text) {
+  const value = String(text || '');
+  if (value.length <= DIAGNOSTIC_LIMIT) return value;
+  return `${value.slice(0, DIAGNOSTIC_LIMIT)}...[truncated]`;
 }
 
 function runPackageSmoke(target, projectDir, options = {}, deps = {}) {
@@ -263,39 +296,51 @@ function runPackageSmoke(target, projectDir, options = {}, deps = {}) {
   validatePackagePublisher();
   setManifestVersion(projectDir, PACKAGE_VERSION, deps);
 
-  const devBuild = runPcfBuild(projectDir, 'development', { ...deps, runNodeScript: runNode });
-  if (!devBuild.ok) return { ok: false, error: `development build failed: ${devBuild.error || toolDetail(devBuild)}`, checks };
-  const prodBuild = runPcfBuild(projectDir, 'production', { ...deps, runNodeScript: runNode });
-  if (!prodBuild.ok) return { ok: false, error: `production build failed: ${prodBuild.error || toolDetail(prodBuild)}`, checks };
+  // Snapshot immediately into a run-owned temp dir. Both builds write the same output paths, and
+  // dotnet build runs later, so reading the files at inspect time lets a later step swap development
+  // bytes in as "production". The buffers are copied before the temp dir is removed.
+  const osDep = deps.os || os;
+  const snapshotRoot = fsDep.mkdtempSync(pathDep.join(osDep.tmpdir(), 'pcf-ci-bundles-'));
+  const snapDeps = { ...deps, bundleSnapshotDir: snapshotRoot };
+  try {
+    const devBuild = runPcfBuild(projectDir, 'development', { ...deps, runNodeScript: runNode });
+    if (!devBuild.ok) return { ok: false, error: `development build failed: ${devBuild.error || toolDetail(devBuild)}`, checks };
+    const developmentBundles = snapshotBundles(devBuild, 'development', snapDeps);
+    const prodBuild = runPcfBuild(projectDir, 'production', { ...deps, runNodeScript: runNode });
+    if (!prodBuild.ok) return { ok: false, error: `production build failed: ${prodBuild.error || toolDetail(prodBuild)}`, checks };
+    const productionBundles = snapshotBundles(prodBuild, 'production', snapDeps);
 
-  const pacInit = pac(['solution', 'init', '--publisher-name', PACKAGE_PUBLISHER_NAME, '--publisher-prefix', PACKAGE_PUBLISHER_PREFIX], {
-    cwd: ensureDir(solutionDir, fsDep),
-    timeoutMs: PAC_TIMEOUT_MS,
-  });
-  if (!succeeded(pacInit)) return { ok: false, error: `pac solution init failed: ${toolDetail(pacInit)}`, checks };
-  setSolutionVersion(solutionDir, PACKAGE_VERSION, deps);
+    const pacInit = pac(['solution', 'init', '--publisher-name', PACKAGE_PUBLISHER_NAME, '--publisher-prefix', PACKAGE_PUBLISHER_PREFIX], {
+      cwd: ensureDir(solutionDir, fsDep),
+      timeoutMs: PAC_TIMEOUT_MS,
+    });
+    if (!succeeded(pacInit)) return { ok: false, error: `pac solution init failed: ${toolDetail(pacInit)}`, checks };
+    setSolutionVersion(solutionDir, PACKAGE_VERSION, deps);
 
-  const pacAdd = pac(['solution', 'add-reference', '--path', projectDir], {
-    cwd: solutionDir,
-    timeoutMs: PAC_TIMEOUT_MS,
-  });
-  if (!succeeded(pacAdd)) return { ok: false, error: `pac solution add-reference failed: ${toolDetail(pacAdd)}`, checks };
+    const pacAdd = pac(['solution', 'add-reference', '--path', projectDir], {
+      cwd: solutionDir,
+      timeoutMs: PAC_TIMEOUT_MS,
+    });
+    if (!succeeded(pacAdd)) return { ok: false, error: `pac solution add-reference failed: ${toolDetail(pacAdd)}`, checks };
 
-  const build = runCommand('dotnet', ['build', '-c', 'Release', '-p:SolutionPackageType=Managed'], {
-    cwd: solutionDir,
-    encoding: 'utf8',
-  });
-  if (!succeeded(build)) return { ok: false, error: `dotnet build failed: ${toolDetail(build)}`, checks };
+    const build = runCommand('dotnet', ['build', '-c', 'Release', '-p:SolutionPackageType=Managed'], {
+      cwd: solutionDir,
+      encoding: 'utf8',
+    });
+    if (!succeeded(build)) return { ok: false, error: `dotnet build failed: ${toolDetail(build)}`, checks };
 
-  const zip = newestZip(pathDep.join(solutionDir, 'bin', 'Release'), deps);
-  if (!zip) return { ok: false, error: 'dotnet build did not produce a managed solution ZIP.', checks };
-  const inspected = inspectSolutionZip(zip, PACKAGE_VERSION, {
-    productionBytes: bundleBytes(prodBuild),
-    developmentBytes: bundleBytes(devBuild),
-    productionBundles: buildBundles(prodBuild, deps),
-    developmentBundles: buildBundles(devBuild, deps),
-  }, deps);
-  return { ok: inspected.ok, zip, checks: inspected.checks };
+    const zip = newestZip(pathDep.join(solutionDir, 'bin', 'Release'), deps);
+    if (!zip) return { ok: false, error: 'dotnet build did not produce a managed solution ZIP.', checks };
+    const inspected = inspectSolutionZip(zip, PACKAGE_VERSION, {
+      productionBytes: bundleBytes(prodBuild),
+      developmentBytes: bundleBytes(devBuild),
+      productionBundles,
+      developmentBundles,
+    }, deps);
+    return { ok: inspected.ok, zip, checks: inspected.checks };
+  } finally {
+    fsDep.rmSync(snapshotRoot, { recursive: true, force: true });
+  }
 }
 
 function validatePackagePublisher() {
@@ -396,9 +441,11 @@ function entry(entries, pattern) {
 function embeddedBundleCheck(entries, manifest, sizes = {}) {
   if (!manifest) return { id: 'embedded-bundle-resources', ok: false, detail: 'ControlManifest.xml was not embedded in the package.' };
   const resources = codeResources(manifest.content.toString('utf8'));
+  if (resources.length === 0) {
+    return { id: 'embedded-bundle-resources', ok: false, detail: 'ControlManifest.xml does not declare any packaged code resources.' };
+  }
   const expected = (sizes.productionBundles || []).filter((item) => item && Buffer.isBuffer(item.content));
   const devHashes = new Set((sizes.developmentBundles || []).filter((item) => item && Buffer.isBuffer(item.content)).map((item) => sha256(item.content)));
-  if (resources.length === 0 && expected.length === 0) return null;
   if (expected.length === 0) {
     return { id: 'embedded-bundle-resources', ok: false, detail: 'The production build did not expose any JavaScript bundle bytes to compare against the package.' };
   }
@@ -415,7 +462,7 @@ function embeddedBundleCheck(entries, manifest, sizes = {}) {
     if (packagedHash !== sha256(expectedBundle.content)) {
       return { id: 'embedded-bundle-resources', ok: false, detail: `Packaged code resource '${resourcePath}' does not match the production build bundle.` };
     }
-    if (devHashes.has(packagedHash) && packagedHash !== sha256(expectedBundle.content)) {
+    if (devHashes.has(packagedHash)) {
       return { id: 'embedded-bundle-resources', ok: false, detail: `Packaged code resource '${resourcePath}' matches a development bundle instead of the production bundle.` };
     }
   }
@@ -423,18 +470,37 @@ function embeddedBundleCheck(entries, manifest, sizes = {}) {
 }
 
 function codeResources(manifestXml) {
-  const resources = [];
-  // Processed PCF manifests list package code artifacts as XML elements like:
+  // Processed PCF manifests list package code artifacts as XML elements. Attribute order and
+  // quoting vary, including whitespace around '=':
   //   <code path="bundle.js" order="1" />
-  // Attribute order can vary, and the source manifest can reference TypeScript (`index.ts`) before
-  // pcf-scripts rewrites it to JavaScript, so this smoke accepts any JS/TS code resource and then
-  // checks that the package carries bytes identical to the production build output.
-  const re = /<code\b[^>]*\bpath=(["'])(.*?)\1[^>]*>/gi;
-  for (const match of manifestXml.matchAll(re)) {
-    const resourcePath = String(match[2] || '').trim();
+  //   <code order="1" path = 'bundle.js' />
+  // A regex stopped at the first '>' and missed `path = 'bundle.js'`, so an XML-only package passed.
+  let root;
+  try {
+    root = parseXml(String(manifestXml || ''));
+  } catch {
+    return [];
+  }
+  const resources = [];
+  for (const el of findAll(root, (node) => node.type === 'element' && String(node.name).toLowerCase() === 'code')) {
+    const resourcePath = String(attr(el, 'path', { caseInsensitive: true }) || '').trim();
     if (resourcePath && /\.(?:js|jsx|ts|tsx)$/i.test(resourcePath)) resources.push(resourcePath);
   }
   return resources;
+}
+
+function snapshotBundles(result, label, deps = {}) {
+  const fsDep = deps.fs || fs;
+  const pathDep = deps.path || path;
+  const osDep = deps.os || os;
+  const root = deps.bundleSnapshotDir || fsDep.mkdtempSync(pathDep.join(osDep.tmpdir(), 'pcf-ci-bundles-'));
+  const dir = pathDep.join(root, label);
+  fsDep.mkdirSync(dir, { recursive: true });
+  return buildBundles(result, deps).map((bundle, index) => {
+    const dest = pathDep.join(dir, `${index}.bin`);
+    fsDep.writeFileSync(dest, bundle.content);
+    return { path: bundle.path, content: fsDep.readFileSync(dest) };
+  });
 }
 
 function buildBundles(result, deps = {}) {

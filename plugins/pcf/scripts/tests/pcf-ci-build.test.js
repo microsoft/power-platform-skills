@@ -82,7 +82,7 @@ function deps(overrides = {}) {
     },
     runGates: (projectDir, hosts) => {
       calls.push(['gates', path.basename(projectDir), hosts]);
-      return { status: 0, stdout: JSON.stringify({ ok: true, gates: [{ id: 'build', ok: true }] }), stderr: '' };
+      return { status: 0, stdout: JSON.stringify({ ok: true, gates: ['manifest', 'code', 'lint', 'test', 'build'].map((id) => ({ id, ok: true })) }), stderr: '' };
     },
     ...overrides,
   };
@@ -202,6 +202,39 @@ test('gates fail when pcf-gates emits no parseable JSON result', () => {
   }
 });
 
+function passingGateRecords() {
+  return ['manifest', 'code', 'lint', 'test', 'build'].map((id) => ({ id, ok: true }));
+}
+
+test('gates accept only one JSON result with the five passing gate records', () => {
+  const valid = JSON.stringify({ ok: true, gates: passingGateRecords() });
+  const longDiagnostic = `diagnostic ${'x'.repeat(4000)}`;
+  const cases = [
+    ['missing gates', JSON.stringify({ ok: true, gates: [{ id: 'manifest', ok: true }] }), 'missing gates diagnostic'],
+    ['empty records', JSON.stringify({ ok: true, gates: [{}, {}, {}, {}, {}] }), 'empty records diagnostic'],
+    ['failed records', JSON.stringify({ ok: true, gates: passingGateRecords().map((gate) => ({ ...gate, ok: gate.id !== 'lint' })) }), 'failed records diagnostic'],
+    ['multiple JSON results', `${valid}\n${JSON.stringify({ ok: true, gates: passingGateRecords() })}`, 'multiple JSON results diagnostic'],
+  ];
+
+  for (const [label, stdout, stderr] of cases) {
+    const d = deps({ runGates: () => ({ status: 0, stdout, stderr }) });
+    const result = runCiBuild({ template: 'field-standard' }, d);
+    assert.equal(result.ok, false, label);
+    assert.match(result.results[0].error, /manifest, code, lint, test, build|exactly one JSON/i, label);
+    assert.match(result.results[0].error, /diagnostic/i, label);
+  }
+
+  const truncated = deps({ runGates: () => ({ status: 0, stdout: '{"ok":true', stderr: longDiagnostic }) });
+  const truncatedResult = runCiBuild({ template: 'field-standard' }, truncated);
+  assert.equal(truncatedResult.ok, false);
+  assert.equal(truncatedResult.results[0].error.includes(longDiagnostic), false);
+
+  const good = deps({ runGates: () => ({ status: 0, stdout: `${valid}\n`, stderr: '' }) });
+  const passed = runCiBuild({ template: 'field-standard' }, good);
+  assert.equal(passed.ok, true);
+  assert.deepEqual(passed.results[0].gates.map((gate) => [gate.id, gate.ok]), passingGateRecords().map((gate) => [gate.id, gate.ok]));
+});
+
 test('gates fail when pcf-gates omits expected gate records', () => {
   const d = deps({ runGates: () => ({ status: 0, stdout: JSON.stringify({ ok: true, gates: [] }), stderr: '' }) });
 
@@ -240,6 +273,20 @@ test('--latest installs every matrix package at latest and reports resolved vers
     ['ci'],
     ['install', 'react@latest', 'pcf-scripts@latest'],
   ]);
+  assert.deepEqual(result.results[0].latest.map((item) => [item.name, item.matrixVersion, item.resolvedVersion]), [
+    ['react', '16.14.0', '99.0.0'],
+    ['pcf-scripts', '1.51.1', '99.0.0'],
+  ]);
+});
+
+test('failed gates keep --latest resolved versions', () => {
+  const d = deps({
+    runGates: () => ({ status: 1, stdout: JSON.stringify({ ok: false, gates: [{ id: 'build', ok: false }] }), stderr: 'build failed' }),
+  });
+
+  const result = runCiBuild({ template: 'field-virtual', latest: true }, d);
+
+  assert.equal(result.ok, false);
   assert.deepEqual(result.results[0].latest.map((item) => [item.name, item.matrixVersion, item.resolvedVersion]), [
     ['react', '16.14.0', '99.0.0'],
     ['pcf-scripts', '1.51.1', '99.0.0'],
@@ -320,13 +367,25 @@ test('--package uses the package smoke target set and verifies package contents'
 
 test('package smoke runs pac solution init, add-reference, then managed dotnet build', () => {
   const projectDir = tmpRoot();
+  const controlDir = path.join(projectDir, 'Control');
+  const productionBundle = Buffer.from('production-bytes');
+  const developmentBundle = Buffer.from('development-bytes-longer');
   fs.writeFileSync(path.join(projectDir, 'package.json'), '{"name":"x"}\n');
-  fs.mkdirSync(path.join(projectDir, 'Control'), { recursive: true });
-  fs.writeFileSync(path.join(projectDir, 'Control', 'ControlManifest.Input.xml'), '<manifest><control version="0.0.1" /></manifest>');
+  fs.mkdirSync(controlDir, { recursive: true });
+  fs.writeFileSync(path.join(controlDir, 'ControlManifest.Input.xml'), '<manifest><control version="0.0.1" /></manifest>');
+  fs.writeFileSync(path.join(controlDir, 'bundle.js'), productionBundle);
   const calls = [];
 
   const result = runPackageSmoke({ id: 'star-rating' }, projectDir, {}, {
-    runPcfBuild: (_dir, mode) => ({ ok: true, mode, controls: [{ bundleBytes: mode === 'production' ? 10 : 20 }] }),
+    runPcfBuild: (_dir, mode) => {
+      const content = mode === 'production' ? productionBundle : developmentBundle;
+      fs.writeFileSync(path.join(controlDir, 'bundle.js'), content);
+      return {
+        ok: true,
+        mode,
+        controls: [{ bundleBytes: content.length, controlDir, referenced: ['bundle.js'] }],
+      };
+    },
     runPac: (args, opts) => {
       calls.push(['pac', args, path.basename(opts.cwd), opts.timeoutMs]);
       if (args.join(' ') === 'solution init --publisher-name Contoso --publisher-prefix contoso') {
@@ -341,7 +400,8 @@ test('package smoke runs pac solution init, add-reference, then managed dotnet b
       writeZip(path.join(opts.cwd, 'bin', 'Release', 'solution.zip'), {
         'solution.xml': '<ImportExportXml><SolutionManifest><Managed>1</Managed><RootComponents><RootComponent type="66" /></RootComponents></SolutionManifest></ImportExportXml>',
         'customizations.xml': '<ImportExportXml><CustomControls /></ImportExportXml>',
-        'Controls/ControlManifest.xml': '<control version="1.0.0" />',
+        'Controls/ControlManifest.xml': '<control version="1.0.0"><resources><code path="bundle.js" order="1" /></resources></control>',
+        'Controls/bundle.js': productionBundle,
       });
       return { status: 0, stdout: '', stderr: '' };
     },
@@ -353,6 +413,83 @@ test('package smoke runs pac solution init, add-reference, then managed dotnet b
     ['pac', ['solution', 'add-reference', '--path', projectDir], '_solution', 120000],
     ['dotnet', ['build', '-c', 'Release', '-p:SolutionPackageType=Managed'], '_solution', 'utf8'],
   ]);
+});
+
+test('inspectSolutionZip rejects an XML-only package', () => {
+  const result = inspectSolutionZip(writeSmokeZip(), '1.0.0', {
+    productionBytes: 10,
+    developmentBytes: 20,
+  });
+
+  assert.equal(result.ok, false);
+  const check = result.checks.find((item) => item.id === 'embedded-bundle-resources');
+  assert.ok(check);
+  assert.equal(check.ok, false);
+});
+
+test('inspectSolutionZip parses a spaced single-quoted code path and requires the resource', () => {
+  const missing = inspectSolutionZip(writeSmokeZip({
+    'Controls/ControlManifest.xml': '<control version="1.0.0"><resources><code path = \'bundle.js\' order="1" /></resources></control>',
+  }), '1.0.0', {
+    productionBytes: 10,
+    developmentBytes: 20,
+    productionBundles: [{ path: 'bundle.js', content: Buffer.from('production') }],
+    developmentBundles: [{ path: 'bundle.js', content: Buffer.from('development-longer') }],
+  });
+
+  assert.equal(missing.ok, false);
+  assert.match(missing.checks.find((check) => check.id === 'embedded-bundle-resources').detail, /bundle\.js/);
+
+  const productionBundle = Buffer.from('production-bytes');
+  const developmentBundle = Buffer.from('development-bytes-longer');
+  const accepted = inspectSolutionZip(writeSmokeZip({
+    'Controls/ControlManifest.xml': '<control version="1.0.0"><resources><code path = \'bundle.js\' order="1" /></resources></control>',
+    'Controls/bundle.js': productionBundle,
+  }), '1.0.0', {
+    productionBytes: productionBundle.length,
+    developmentBytes: developmentBundle.length,
+    productionBundles: [{ path: 'bundle.js', content: productionBundle }],
+    developmentBundles: [{ path: 'bundle.js', content: developmentBundle }],
+  });
+
+  assert.equal(accepted.ok, true, JSON.stringify(accepted.checks));
+});
+
+test('package smoke snapshots bundle bytes before a later step can swap them', () => {
+  const projectDir = tmpRoot();
+  const controlDir = path.join(projectDir, 'Control');
+  fs.mkdirSync(controlDir, { recursive: true });
+  fs.writeFileSync(path.join(controlDir, 'ControlManifest.Input.xml'), '<manifest><control version="0.0.1" /></manifest>');
+  const bundlePath = path.join(controlDir, 'bundle.js');
+  const devBytes = Buffer.from('development-bytes-unique');
+  const prodBytes = Buffer.from('production-bytes');
+
+  const run = (zipBytes) => runPackageSmoke({ id: 'star-rating' }, projectDir, {}, {
+    runPcfBuild: (_dir, mode) => {
+      const content = mode === 'development' ? devBytes : prodBytes;
+      fs.writeFileSync(bundlePath, content);
+      return { ok: true, controls: [{ bundleBytes: content.length, controlDir, referenced: ['bundle.js'] }] };
+    },
+    runPac: () => ({ status: 0, stdout: '', stderr: '' }),
+    spawnResultSync: (_command, _args, opts) => {
+      fs.writeFileSync(bundlePath, devBytes);
+      fs.mkdirSync(path.join(opts.cwd, 'bin', 'Release'), { recursive: true });
+      writeZip(path.join(opts.cwd, 'bin', 'Release', 'solution.zip'), {
+        'solution.xml': '<ImportExportXml><SolutionManifest><Managed>1</Managed><RootComponents><RootComponent type="66" /></RootComponents></SolutionManifest></ImportExportXml>',
+        'customizations.xml': '<ImportExportXml><CustomControls /></ImportExportXml>',
+        'Controls/ControlManifest.xml': '<control version="1.0.0"><resources><code path="bundle.js" order="1" /></resources></control>',
+        'Controls/bundle.js': zipBytes,
+      });
+      return { status: 0, stdout: '', stderr: '' };
+    },
+  });
+
+  const swapped = run(devBytes);
+  assert.equal(swapped.ok, false);
+  assert.match(swapped.checks.find((check) => check.id === 'embedded-bundle-resources').detail, /development|does not match the production/i);
+
+  const good = run(prodBytes);
+  assert.equal(good.ok, true, JSON.stringify(good.checks));
 });
 
 test('inspectSolutionZip accepts a valid managed PCF solution package', () => {
