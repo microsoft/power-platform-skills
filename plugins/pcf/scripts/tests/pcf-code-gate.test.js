@@ -348,6 +348,14 @@ test('scanSource warns on hard-coded element ids and allows derived ids', () => 
   assert.equal(gated.warnings.some((finding) => finding.code === 'PCF_CODE_FIXED_ELEMENT_ID'), true);
 });
 
+test('scanSource does not loop on TypeScript generics while scanning element ids', () => {
+  const source = 'const row: Record<string, number> = { id: 1 };\nconst list: Array<string> = [];\n'.repeat(200);
+  const started = Date.now();
+  const findings = scan(source).filter((finding) => finding.code === 'PCF_CODE_FIXED_ELEMENT_ID');
+  assert.deepEqual(findings, []);
+  assert.ok(Date.now() - started < 2000);
+});
+
 test('gateSources partitions errors and warnings and labels code-gate output as heuristic diagnostics', () => {
   const result = gateSources({
     manifestModel: manifest(),

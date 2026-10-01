@@ -138,7 +138,12 @@ function scanJsxTagAttributes(findings, file, src, tagStart, tagEnd) {
     while (i < tagEnd && /[\w:-]/.test(src[i])) i += 1;
     const name = src.slice(nameStart, i);
     while (i < tagEnd && /\s/.test(src[i])) i += 1;
-    if (src[i] !== '=') continue;
+    // A '<' that is a TypeScript generic, such as Record<string, number>, is not a JSX tag.
+    // Leaving i unchanged here loops forever on the comma.
+    if (src[i] !== '=') {
+      if (i === nameStart) i += 1;
+      continue;
+    }
     i += 1;
     while (i < tagEnd && /\s/.test(src[i])) i += 1;
     const value = readJsxAttributeValue(src, i);
