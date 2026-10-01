@@ -751,6 +751,27 @@ test('the plan carries the same AI disclaimer as every other plan page', () => {
   assert.match(template, /\.rail\{[^}]*calc\(100vh - 65px - var\(--footer-h\)\)/);
 });
 
+test('the carousel says the mockups are not the built app, and only while they are shown', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-note-'));
+  const state = initState(root, { appName: 'Note', dataPlatform: 'dataverse' });
+
+  // Building: nothing to caveat yet.
+  save(root, state);
+  assert.equal(runPage(outputPath(root)).elements.get('railNote').hidden, true);
+
+  // Screens: the user is looking at approximations rendered from the specs.
+  setPhone(state, { stage: 'screens', screens: [{ name: 'Today', html: '<div>Today</div>' }] });
+  save(root, state);
+  const shown = runPage(outputPath(root)).elements.get('railNote');
+  assert.equal(shown.hidden, false);
+  assert.match(shown.textContent, /mockups[\s\S]*differ/i);
+
+  // QR: the phone now shows a real code, so the caveat would be wrong.
+  setPhone(state, { stage: 'qr', qrImage: 'data:image/png;base64,iVBORw0KGgo=' });
+  save(root, state);
+  assert.equal(runPage(outputPath(root)).elements.get('railNote').hidden, true);
+});
+
 test('every function the page defines is defined exactly once', () => {
   // `showSource` was defined twice, the second copy silently replacing the first. Duplicates are
   // invisible at runtime, so the only way to see one is to count the definitions.

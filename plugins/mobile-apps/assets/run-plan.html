@@ -175,6 +175,9 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .store-text{display:flex;flex-direction:column;}
 .store-kicker{font-size:8.5px;letter-spacing:.03em;opacity:.9;}
 .store-name{font-size:14px;font-weight:600;letter-spacing:-.01em;}
+.rail-note{font-size:11.5px;color:var(--text-dim);text-align:center;max-width:300px;line-height:1.45;
+  padding:6px 10px;border-radius:8px;background:var(--surface2);}
+.rail-note[hidden]{display:none;}
 .rail-link{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--accent);
   text-decoration:none;padding:6px 12px;border-radius:999px;border:1px solid transparent;}
 .rail-link:hover{border-color:var(--accent-border);background:var(--accent-bg);}
@@ -446,6 +449,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     <div class="device-screen" id="deviceScreen"></div>
   </div>
   <div class="rail-caption" id="railCaption"></div>
+  <div class="rail-note" id="railNote" hidden></div>
   <div id="railPreviewLink"></div>
 </aside>
 </div>
@@ -679,6 +683,18 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   ];
 
   function railPreviewLink() {
+    // The carousel shows HTML mockups rendered from the screen specs, not the built Tamagui
+    // screens. They are close enough to approve a layout on and not close enough to be held to,
+    // so say which one the user is looking at - but only while they are looking at it.
+    var note = document.getElementById('railNote');
+    if (note) {
+      var showing = phone.stage === 'screens' && phone.screens && phone.screens.length;
+      note.textContent = showing
+        ? 'Plan-time mockups. The built app will differ in places from what is shown here.'
+        : '';
+      note.hidden = !showing;
+    }
+
     var container = document.getElementById('railPreviewLink');
     if (!container) return;
     container.textContent = '';
