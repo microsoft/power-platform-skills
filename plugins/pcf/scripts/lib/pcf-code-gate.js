@@ -7,6 +7,15 @@ const FEATURE_USAGE = 'https://learn.microsoft.com/power-apps/developer/componen
 const RECORD_ID_FAQ = 'https://learn.microsoft.com/power-apps/developer/component-framework/faq#how-can-i-access-the-record-id-or-table-name';
 const GRID_CUSTOMIZER = 'https://learn.microsoft.com/power-apps/developer/component-framework/customize-editable-grid-control';
 
+const IDENTIFIER = /[$_\p{ID_Start}][$_\u200c\u200d\p{ID_Continue}]*/uy;
+const IDENTIFIER_CONTINUE = /[$_\u200c\u200d\p{ID_Continue}]/u;
+const IDENTIFIER_ESCAPE = /\\u(?:[0-9a-fA-F]{4}|\{[0-9a-fA-F]+\})/y;
+const SOURCE_OPERATOR = /(?:>>>=|\*\*=|&&=|\|\|=|\?\?=|<<=|>>=|===|!==|=>|\?\.|\.\.\.|\+\+|--|==|!=|<=|>=|&&|\|\||\?\?|\*\*|[+\-*/%&|^]=)/y;
+const ASSIGNMENT_OPERATORS = new Set(['=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^=', '&&=', '||=', '??=']);
+const HEAD_MODIFIERS = new Set(['async', 'get', 'set', 'static', 'public', 'private', 'protected', 'readonly', 'abstract', 'override']);
+const READ_FOLLOWERS = new Set(['(', ')', ']', '}', ',', ';', '?', ':', '!', '++', '--', '+', '-', '*', '/', '%', '**', '&', '|', '^', '<', '>', '<=', '>=', '==', '!=', '===', '!==', '&&', '||', '??', ...ASSIGNMENT_OPERATORS]);
+const READ_PREFIX_WORDS = ['return', 'throw', 'yield', 'await', 'typeof', 'void', 'new', 'delete', 'case', 'else', 'in', 'instanceof', 'as', 'satisfies', 'let', 'const', 'var', 'function', 'class'];
+
 const WARNING_CODES = new Set([
   'PCF_CODE_HOST_DOM',
   'PCF_CODE_INNERHTML',
@@ -72,6 +81,7 @@ function scanSource(file, text, { controlType, lex = blankNonCodePreservingTempl
   const lexed = lexSource(file, src, lex);
   if (lexed.finding) return [lexed.finding];
   const mask = lexed.mask;
+  const index = indexSource(src, mask);
   const findings = [];
 
   for (const rule of SOURCE_RULES) {
@@ -87,7 +97,7 @@ function scanSource(file, text, { controlType, lex = blankNonCodePreservingTempl
   }
 
   addDirectApiFindings(findings, file, src, mask);
-  addRefreshInUpdateViewFindings(findings, file, src, mask);
+  addRefreshInUpdateViewFindings(findings, file, src, mask, index);
   addFixedElementIdFindings(findings, file, src, mask);
   return findings;
 }
@@ -379,12 +389,12 @@ function addDirectApiFindings(findings, file, src, mask) {
   }
 }
 
-function addRefreshInUpdateViewFindings(findings, file, src, mask) {
+function addRefreshInUpdateViewFindings(findings, file, src, mask, index) {
   const updateView = /\bupdateView\s*\([^)]*\)\s*(?::\s*[^{]+)?\{/g;
   let match;
   while ((match = updateView.exec(mask)) !== null) {
     const open = mask.indexOf('{', match.index);
-    const close = findMatchingBrace(mask, open);
+    const close = index.delimiters.get(open) ?? -1;
     const bodyEnd = close === -1 ? mask.length : close;
     const body = mask.slice(open + 1, bodyEnd);
     const refresh = /\.refresh\s*\(/g;
@@ -416,12 +426,12 @@ function featureCoherence(manifestModel, sources, hosts = [], { lex = blankNonCo
       continue;
     }
     const mask = lexed.mask;
-    const memberMask = normalizeFeatureMembers(text, mask);
+    const index = indexSource(text, mask);
 
-    collectNamespaceUse({ findings, declared, used, file, text, mask: memberMask, namespace: 'webAPI', feature: 'WebAPI' });
-    collectNamespaceUse({ findings, declared, used, file, text, mask: memberMask, namespace: 'utils', feature: 'Utility' });
-    collectDeviceUse({ findings, declared, used, file, text, mask: memberMask });
-    if (pages) addPagesApiFindings(findings, file, text, mask, memberMask);
+    collectNamespaceUse({ findings, declared, used, file, text, index, namespace: 'webAPI', feature: 'WebAPI' });
+    collectNamespaceUse({ findings, declared, used, file, text, index, namespace: 'utils', feature: 'Utility' });
+    collectDeviceUse({ findings, declared, used, file, text, index });
+    if (pages) addPagesApiFindings(findings, file, text, index);
   }
 
   for (const feature of declared) {
@@ -438,75 +448,48 @@ function featureCoherence(manifestModel, sources, hosts = [], { lex = blankNonCo
   return findings;
 }
 
-function normalizeFeatureMembers(text, mask) {
-  // Match context?.["device"] . captureImage?.() as context.device.captureImage().
-  // Only literal identifier keys are restored from raw text; comments/strings stay masked.
-  // Padding keeps call offsets in the original source. This view is ONLY for detection:
-  // optional calls still require the same explicit guard, and its optional-link proof uses
-  // the untouched mask rather than assuming unsupported Pages methods are always absent.
-  const raw = withoutComments(text);
-  const members = /\bcontext(?:\s*(?:\?\.|\.)\s*[A-Za-z_$][\w$]*|\s*(?:\?\.\s*)?\[\s*(?:"[A-Za-z_$][\w$]*"|'[A-Za-z_$][\w$]*')\s*\])+(?:\s*\?\.(?=\s*\())?/g;
-  let normalized = '';
-  let end = 0;
-  let match;
-  while ((match = members.exec(raw)) !== null) {
-    if (mask[match.index] !== 'c') continue;
-    const path = match[0]
-      .replace(/\s*(?:\?\.\s*)?\[\s*(['"])([A-Za-z_$][\w$]*)\1\s*\]/g, '.$2')
-      .replace(/\?\./g, '.')
-      .replace(/\s/g, '')
-      .replace(/\.$/, '');
-    normalized += mask.slice(end, match.index) + path.padEnd(match[0].length);
-    end = match.index + match[0].length;
-  }
-  return normalized + mask.slice(end);
-}
-
-function collectNamespaceUse({ findings, declared, used, file, text, mask, namespace, feature }) {
-  const re = new RegExp(`\\bcontext\\.${namespace}\\b`, 'g');
-  let match;
-  while ((match = re.exec(mask)) !== null) {
+function collectNamespaceUse({ findings, declared, used, file, text, index, namespace, feature }) {
+  for (const member of index.members) {
+    if (member.namespace !== namespace) continue;
     used.add(feature);
     if (!declared.has(feature)) {
       findings.push(makeFinding(
         'PCF_FEATURE_UNDECLARED',
-        `Heuristic diagnostic: source uses context.${namespace}, but the manifest does not declare '${feature}'; declare the feature or remove the API call. See ${FEATURE_USAGE}`,
+        `Heuristic diagnostic: source uses ${member.namespacePath}, but the manifest does not declare '${feature}'; declare the feature or remove the API call. See ${FEATURE_USAGE}`,
         file,
-        lineOf(text, match.index),
+        lineOf(text, member.start),
       ));
     }
   }
 }
 
-function collectDeviceUse({ findings, declared, used, file, text, mask }) {
-  const re = /\bcontext\.device\.([A-Za-z_$][\w$]*)\b/g;
-  let match;
-  while ((match = re.exec(mask)) !== null) {
-    const feature = `Device.${match[1]}`;
+function collectDeviceUse({ findings, declared, used, file, text, index }) {
+  for (const member of index.members) {
+    if (member.namespace !== 'device' || !member.method) continue;
+    const feature = `Device.${member.method}`;
     used.add(feature);
     if (!declared.has(feature)) {
       findings.push(makeFinding(
         'PCF_FEATURE_UNDECLARED',
-        `Heuristic diagnostic: source uses context.device.${match[1]}, but the manifest does not declare '${feature}'; declare the method feature or remove the API call. See ${FEATURE_USAGE}`,
+        `Heuristic diagnostic: source uses ${member.methodPath}, but the manifest does not declare '${feature}'; declare the method feature or remove the API call. See ${FEATURE_USAGE}`,
         file,
-        lineOf(text, match.index),
+        lineOf(text, member.start),
       ));
     }
   }
 }
 
-function addPagesApiFindings(findings, file, text, mask, memberMask) {
-  const calls = /\bcontext\.(device|utils)\.([A-Za-z_$][\w$]*)\s*\(/g;
-  let match;
-  while ((match = calls.exec(memberMask)) !== null) {
-    const namespace = match[1];
-    const method = match[2];
-    if (hasMethodGuard(text, mask, namespace, method, match.index, memberMask)) continue;
+function addPagesApiFindings(findings, file, text, index) {
+  for (const member of index.members) {
+    const { namespace, method } = member;
+    if (!member.call || !method || !['device', 'utils'].includes(namespace)) continue;
+    if (hasMethodGuard(index, member)) continue;
+    const guardPath = member.names.slice(0, 2).join('.') + member.names.slice(2).map((name) => `?.${name}`).join('');
     findings.push(makeFinding(
       'PCF_PAGES_API',
-      `Heuristic diagnostic: Pages may not provide context.${namespace}.${method}; guard the method with typeof context.${namespace}?.${method} === 'function' before calling it, or avoid the API for Pages hosts. See ${FEATURE_USAGE}`,
+      `Heuristic diagnostic: Pages may not provide ${member.methodPath}; guard the method with typeof ${guardPath} === 'function' before calling it, or avoid the API for Pages hosts. See ${FEATURE_USAGE}`,
       file,
-      lineOf(text, match.index),
+      lineOf(text, member.start),
     ));
   }
 }
@@ -621,213 +604,763 @@ function hasGridCustomizerMarker(file, text) {
     .some(([start, end]) => text.slice(start, end).includes('pcf-extension-pattern: grid-customizer'));
 }
 
-function hasMethodGuard(text, mask, namespace, method, callIndex, memberMask) {
-  const start = Math.max(0, callIndex - 500);
-  const ifHead = /\bif\s*\(/g;
-  ifHead.lastIndex = start;
-  let match;
-  while ((match = ifHead.exec(mask)) !== null && match.index < callIndex) {
-    if (!isGuardKeyword(mask, match.index, 'if')) continue;
-    const openParen = mask.indexOf('(', match.index);
-    const closeParen = findMatchingParen(mask, openParen);
-    if (closeParen === -1 || closeParen >= callIndex) continue;
-    let openBrace = closeParen + 1;
-    while (openBrace < mask.length && /\s/.test(mask[openBrace])) openBrace += 1;
-    if (mask[openBrace] !== '{' || openBrace >= callIndex) continue;
-    const closeBrace = findMatchingBrace(mask, openBrace);
-    if (closeBrace === -1 || closeBrace <= callIndex) continue;
-
-    const rawCondition = withoutComments(text.slice(openParen + 1, closeParen));
-    const maskCondition = mask.slice(openParen + 1, closeParen);
-    if (provePositiveCondition(rawCondition, maskCondition, namespace, method)
-      && !guardProofChanged(mask, memberMask, openBrace, closeBrace, callIndex, ['context', namespace, method])) return true;
-  }
-  return false;
+function identifierAt(text, start) {
+  // ECMAScript names are not \w words: $context, context2 and pi-prefixed if are
+  // whole names, including astral letters and the permitted join controls.
+  // https://tc39.es/ecma262/#sec-names-and-keywords
+  let before = start - 1;
+  if (before > 0 && /[\udc00-\udfff]/.test(text[before])) before -= 1;
+  if (before >= 0 && IDENTIFIER_CONTINUE.test(String.fromCodePoint(text.codePointAt(before)))) return null;
+  IDENTIFIER.lastIndex = start;
+  const match = IDENTIFIER.exec(text);
+  return match ? { value: match[0], start, end: IDENTIFIER.lastIndex } : null;
 }
 
-function isGuardKeyword(mask, index, word) {
-  // obj.if(...), obj?.if(...) and $if(...) are calls, not statement guards.
-  // Comments are already blanked, so inspect the previous significant token too.
-  return mask.slice(index, index + word.length) === word
-    && !/[A-Za-z0-9_$]/.test(mask[index - 1] || '')
-    && !/[A-Za-z0-9_$]/.test(mask[index + word.length] || '')
-    && previousNonSpace(mask, index) !== '.';
-}
-
-function guardProofChanged(mask, memberMask, open, close, callIndex, methodPath) {
-  // A capability is static across a captured handler, not across a different binding:
-  //   button.onclick = () => context.device.captureImage()          same context
-  //   contexts.forEach(({ context }) => context.device.captureImage())  new context
-  // Inspect the whole lexical scope for hoisted var / let/const shadowing, but only
-  // preceding writes for reassignment. Balanced blocks keep an unrelated nested block
-  // or destructured event parameter from ending the outer guard prematurely.
-  const functions = guardFunctionScopes(mask, open + 1, close);
-  const shadows = functions
-    .filter((scope) => guardBindingsContain(scope.parameters, methodPath[0]))
-    .map((scope) => ({ start: scope.start, end: scope.end }));
-  const declarations = /\b(let|const|var)\s+/g;
-  declarations.lastIndex = open + 1;
-  let match;
-  while ((match = declarations.exec(mask)) !== null && match.index < close) {
-    const start = match.index + match[0].length;
-    const end = guardExpressionEnd(mask, start, close, false);
-    const declaration = mask.slice(start, end).replace(/\s+(?:of|in)\s+[\s\S]*$/, '');
-    if (!guardBindingsContain(declaration, methodPath[0])) continue;
-    if (match[1] === 'var') {
-      const owner = functions.filter((scope) => scope.body < match.index && match.index < scope.end)
-        .sort((a, b) => b.body - a.body)[0];
-      // A var in the guarded block itself reuses its function's existing root; only
-      // a nested function's var creates a new binding, including before its declaration.
-      if (owner) shadows.push({ start: owner.body, end: owner.end });
+function tokenizeSource(mask) {
+  const tokens = [];
+  const delimiters = new Map();
+  const stack = [];
+  const closing = { ')': '(', ']': '[', '}': '{' };
+  for (let start = 0; start < mask.length;) {
+    if (/\s/.test(mask[start])) { start += 1; continue; }
+    const identifier = identifierAt(mask, start);
+    let end = start + 1;
+    let kind = 'punctuation';
+    if (identifier) {
+      end = identifier.end;
+      kind = 'identifier';
+      if (mask[end] === '\\') { end = unrecognizedIdentifierEnd(mask, end); kind = 'unknown-identifier'; }
+    } else if (mask[start] === '\\') {
+      end = unrecognizedIdentifierEnd(mask, start);
+      kind = 'unknown-identifier';
+    } else if (mask[start] === '"' || mask[start] === "'") {
+      const literal = readQuotedLiteral(mask, start);
+      end = literal ? literal.end : mask.length;
+      kind = 'string';
+    } else if (/\d/.test(mask[start])) {
+      while (end < mask.length && /[\d.]/.test(mask[end])) end += 1;
+      kind = 'number';
     } else {
-      shadows.push(enclosingGuardBlock(mask, open, close, match.index));
+      SOURCE_OPERATOR.lastIndex = start;
+      const operator = SOURCE_OPERATOR.exec(mask);
+      if (operator) end = SOURCE_OPERATOR.lastIndex;
     }
+    const token = { value: mask.slice(start, end), start, end, kind, parent: stack.at(-1) ?? -1, match: -1 };
+    const i = tokens.length;
+    tokens.push(token);
+    if (['(', '[', '{'].includes(token.value)) stack.push(i);
+    else if (closing[token.value] && tokens[stack.at(-1)]?.value === closing[token.value]) {
+      const open = stack.pop();
+      token.match = open;
+      tokens[open].match = i;
+      delimiters.set(tokens[open].start, token.start);
+      delimiters.set(token.start, tokens[open].start);
+    }
+    start = end;
   }
-  if (shadows.some((range) => callIndex >= range.start && callIndex < range.end)) return true;
-
-  // Destructuring writes such as ({ context } = next) and [context] = next replace
-  // the same root as context = next. Property keys ({ context: item }) do not.
-  for (let i = open + 1; i < callIndex; i += 1) {
-    if (mask[i] !== '{' && mask[i] !== '[') continue;
-    const end = guardMatchingDelimiter(mask, i, mask[i], mask[i] === '{' ? '}' : ']', 1);
-    if (end === -1 || !/^\s*=(?![=>])/.test(mask.slice(end + 1, callIndex))) continue;
-    if (guardPatternContains(memberMask.slice(i, end + 1), (target) => {
-      const path = parseGuardPath(target);
-      return path && path.names.length <= methodPath.length && path.names.every((name, index) => name === methodPath[index]);
-    })
-      && !shadows.some((range) => i >= range.start && i < range.end)) return true;
-  }
-  const writes = /\b(delete\s+)?(context(?:\.[A-Za-z_$][\w$]*)*)(?:\s*((?:\*\*|>>>|<<|>>|&&|\|\||\?\?|[+\-*/%&|^])?=(?![=>])))?/g;
-  writes.lastIndex = open + 1;
-  while ((match = writes.exec(memberMask)) !== null && match.index < callIndex) {
-    if (!match[1] && !match[3]) continue;
-    if (previousNonSpace(memberMask, match.index + (match[1] || '').length) === '.') continue;
-    const path = match[2].split('.');
-    if (path.length > methodPath.length || !path.every((name, index) => name === methodPath[index])) continue;
-    // Writes to a callback's own context do not mutate the root captured by a sibling.
-    if (shadows.some((range) => match.index >= range.start && match.index < range.end)) continue;
-    return true;
-  }
-  return false;
+  return { tokens, delimiters };
 }
 
-function guardFunctionScopes(mask, start, end) {
-  const scopes = [];
-  const heads = /\b([A-Za-z_$][\w$]*)\s*\(/g;
-  heads.lastIndex = start;
-  let match;
-  while ((match = heads.exec(mask)) !== null && match.index < end) {
-    if (['if', 'else', 'for', 'while', 'switch', 'catch', 'with'].includes(match[1])
-      && isGuardKeyword(mask, match.index, match[1])) continue;
-    const open = mask.indexOf('(', match.index);
-    const close = findMatchingParen(mask, open);
-    if (close === -1 || close >= end) continue;
-    const bodyHead = /^\s*(?::\s*[^={;]+)?\s*\{/.exec(mask.slice(close + 1, end));
-    if (!bodyHead) continue;
-    const body = close + 1 + bodyHead[0].lastIndexOf('{');
-    const bodyEnd = findMatchingBrace(mask, body);
-    if (bodyEnd !== -1 && bodyEnd <= end) scopes.push({ start: open, parameters: mask.slice(open + 1, close), body, end: bodyEnd });
-  }
-
-  const arrows = /=>/g;
-  arrows.lastIndex = start;
-  while ((match = arrows.exec(mask)) !== null && match.index < end) {
-    let last = match.index - 1;
-    while (last >= start && /\s/.test(mask[last])) last -= 1;
-    // A TS return annotation puts : void / : Promise<void> between ')' and '=>'.
-    // Step over that type only; an unparenthesized arrow parameter stays a name.
-    if (mask[last] !== ')') {
-      const returnType = /\)\s*:\s*[A-Za-z_$][\w$.[\]<>, |&?]*$/.exec(mask.slice(start, last + 1));
-      if (returnType) last = start + returnType.index;
-    }
-    let parameters;
-    let parameterStart;
-    if (mask[last] === ')') {
-      const open = guardMatchingDelimiter(mask, last, ')', '(', -1);
-      if (open < start) continue;
-      parameters = mask.slice(open + 1, last);
-      parameterStart = open;
+function unrecognizedIdentifierEnd(mask, start) {
+  // "\u0063ontext" and "cont\u0065xt" can name context. Keep each escaped
+  // identifier whole, but do not pretend the raw-name helper has recognized it.
+  // These tokens become opaque binding/write sites, not guessed safe other names.
+  let end = start;
+  while (end < mask.length) {
+    if (mask[end] === '\\') {
+      IDENTIFIER_ESCAPE.lastIndex = end;
+      if (!IDENTIFIER_ESCAPE.exec(mask)) return end + 1;
+      end = IDENTIFIER_ESCAPE.lastIndex;
     } else {
-      const parameter = /[A-Za-z_$][\w$]*$/.exec(mask.slice(start, last + 1));
-      if (!parameter) continue;
-      parameters = parameter[0];
-      parameterStart = start + parameter.index;
+      const point = String.fromCodePoint(mask.codePointAt(end));
+      if (!IDENTIFIER_CONTINUE.test(point)) break;
+      end += point.length;
     }
-    let body = match.index + 2;
-    while (body < end && /\s/.test(mask[body])) body += 1;
-    const bodyEnd = mask[body] === '{' ? findMatchingBrace(mask, body) : guardExpressionEnd(mask, body, end, true);
-    if (bodyEnd !== -1 && bodyEnd <= end) scopes.push({ start: parameterStart, parameters, body, end: bodyEnd });
-  }
-  return scopes;
-}
-
-function guardBindingsContain(mask, root) {
-  return splitTopLevel(mask, ',').some((range) => guardBindingContains(mask.slice(range.start, range.end), root));
-}
-
-function guardBindingContains(mask, root) {
-  return guardPatternContains(mask, (binding) => {
-    binding = binding.replace(/^(?:(?:public|private|protected|readonly)\s+)+/, '');
-    const identifier = /^([A-Za-z_$][\w$]*)(?:\s*\?)?(?:\s*:[\s\S]+)?\s*$/.exec(binding);
-    return Boolean(identifier && identifier[1] === root);
-  });
-}
-
-function guardPatternContains(mask, matchesTarget) {
-  // Binding patterns differ from references: { context: item } binds item, whereas
-  // { current: context }, [context] and ...context bind context. A default's RHS
-  // (item = context) is a reference, and a simple parameter's :Type is not a binding.
-  let binding = mask.slice(0, splitTopLevel(mask, '=')[0].end).trim().replace(/^\.\.\.\s*/, '');
-  if (binding[0] === '{' || binding[0] === '[') {
-    const close = guardMatchingDelimiter(binding, 0, binding[0], binding[0] === '{' ? '}' : ']', 1);
-    if (close === -1) return false;
-    const body = binding.slice(1, close);
-    return splitTopLevel(body, ',').some((range) => {
-      let entry = body.slice(range.start, range.end);
-      const parts = splitTopLevel(entry, ':');
-      if (binding[0] === '{' && parts.length > 1) entry = entry.slice(parts[1].start);
-      return guardPatternContains(entry, matchesTarget);
-    });
-  }
-  return matchesTarget(binding);
-}
-
-function enclosingGuardBlock(mask, open, close, index) {
-  let range = { start: open, end: close };
-  for (let i = open + 1; i < index; i += 1) {
-    if (mask[i] !== '{') continue;
-    const end = findMatchingBrace(mask, i);
-    if (end > index) range = { start: i, end };
-  }
-  return range;
-}
-
-function guardExpressionEnd(mask, start, end, stopAtComma) {
-  let depth = 0;
-  for (let i = start; i < end; i += 1) {
-    const ch = mask[i];
-    if ('([{'.includes(ch)) depth += 1;
-    else if (')]}'.includes(ch)) {
-      if (depth === 0) return i;
-      depth -= 1;
-    } else if (depth === 0 && (ch === ';' || (stopAtComma && ch === ','))) return i;
   }
   return end;
 }
 
-function guardMatchingDelimiter(mask, start, opening, closing, direction) {
+function tokenKeyword(tokens, i, word) {
+  // The tokenizer uses the same identifier boundary for roots, members and keywords.
+  // A member named if (obj . /* comment */ if) is never a statement head.
+  return tokens[i]?.kind === 'identifier' && tokens[i].value === word
+    && !['.', '?.'].includes(tokens[i - 1]?.value);
+}
+
+function decodeStaticKey(raw) {
+  if (!['"', "'"].includes(raw[0]) || raw.at(-1) !== raw[0]) return null;
+  let value = '';
+  const simple = { b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v', '0': '\0' };
+  for (let i = 1; i < raw.length - 1; i += 1) {
+    let ch = raw[i];
+    if (ch === '\\') {
+      ch = raw[++i];
+      if (ch === '\r' || ch === '\n' || ch === '\u2028' || ch === '\u2029') {
+        if (ch === '\r' && raw[i + 1] === '\n') i += 1;
+        continue;
+      }
+      // Raw keys include "capture\u0049mage", "\x64evice" and a backslash followed
+      // by a newline. Decode string escapes only; never evaluate source or templates.
+      // https://tc39.es/ecma262/#sec-literals-string-literals
+      if (ch === 'u' || ch === 'x') {
+        const braced = ch === 'u' && raw[i + 1] === '{';
+        const length = ch === 'u' ? 4 : 2;
+        const end = braced ? raw.indexOf('}', i + 2) : i + 1 + length;
+        const digits = raw.slice(i + (braced ? 2 : 1), end);
+        if (end < 0 || !/^[0-9a-f]+$/i.test(digits) || (!braced && digits.length !== length)) return null;
+        const point = Number.parseInt(digits, 16);
+        if (point > 0x10ffff || end > raw.length - 1) return null;
+        value += String.fromCodePoint(point);
+        i = braced ? end : end - 1;
+        continue;
+      }
+      if (!ch || (/\d/.test(ch) && (ch !== '0' || /\d/.test(raw[i + 1])))) return null;
+      value += Object.hasOwn(simple, ch) ? simple[ch] : ch;
+    } else {
+      if (/[\n\r\u2028\u2029]/.test(ch)) return null;
+      value += ch;
+    }
+  }
+  const identifier = identifierAt(value, 0);
+  return identifier && identifier.end === value.length ? value : null;
+}
+
+function indexedPath(index, start) {
+  if (index.paths.has(start)) return index.paths.get(start);
+  const { tokens, text } = index;
+  const names = [tokens[start].value];
+  let end = start + 1;
+  let unknown = false;
+  while (end < tokens.length) {
+    // Postfix ! is erased ONLY in this detection view. != / !== are whole operator
+    // tokens; a prefix ! is outside the path. The guard grammar still sees the raw !.
+    if (tokens[end].value === '!' && ['.', '?.', '[', '('].includes(tokens[end + 1]?.value)) end += 1;
+    let member = end;
+    if (['.', '?.'].includes(tokens[member]?.value)) member += 1;
+    else if (tokens[member]?.value !== '[') break;
+    if (tokens[member]?.kind === 'identifier' && member !== end) {
+      names.push(tokens[member].value);
+      end = member + 1;
+      continue;
+    }
+    if (tokens[member]?.value === '[' && tokens[member].match >= 0) {
+      const close = tokens[member].match;
+      const key = close === member + 2 && tokens[member + 1].kind === 'string'
+        ? decodeStaticKey(text.slice(tokens[member + 1].start, tokens[member + 1].end)) : null;
+      end = close + 1;
+      if (!key) { unknown = true; break; }
+      names.push(key);
+      continue;
+    }
+    break;
+  }
+  const call = tokens[end]?.value === '(' || (tokens[end]?.value === '?.' && tokens[end + 1]?.value === '(');
+  const path = { names, end, unknown, call, token: start, start: tokens[start].start };
+  index.paths.set(start, path);
+  return path;
+}
+
+function angleBoundary(tokens, start, direction) {
   let depth = 0;
-  for (let i = start; i >= 0 && i < mask.length; i += direction) {
-    if (mask[i] === opening) depth += 1;
-    else if (mask[i] === closing) {
+  for (let i = start; i >= 0 && i < tokens.length; i += direction) {
+    const value = tokens[i].value;
+    if (value === (direction === 1 ? '<' : '>')) depth += 1;
+    else if (value === (direction === 1 ? '>' : '<')) {
       depth -= 1;
       if (depth === 0) return i;
-    }
+    } else if (tokens[i].match >= 0 && (direction === 1 ? ['(', '[', '{'] : [')', ']', '}']).includes(value)) {
+      i = tokens[i].match;
+    } else if (value === ';') return -1;
   }
   return -1;
 }
 
-function provePositiveCondition(raw, mask, namespace, method) {
+function typedHeadBody(tokens, close) {
+  let i = close + 1;
+  if (tokens[i]?.value !== ':') return tokens[i]?.value === '{' ? i : -1;
+  let needsType = true;
+  for (i += 1; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token.value === '{' && !needsType) return i;
+    if (['(', '[', '{', '<'].includes(token.value)) {
+      const end = token.value === '<' ? angleBoundary(tokens, i, 1) : token.match;
+      if (end < 0) return -1;
+      i = end;
+      needsType = false;
+    } else if (['identifier', 'string', 'number'].includes(token.kind)) needsType = false;
+    else if (['.', '|', '&', '?', ':'].includes(token.value)) needsType = true;
+    else return -1;
+  }
+  return -1;
+}
+
+function arrowHead(tokens, arrow) {
+  const beforeExpression = (i) => i < 0 || ['=', '(', '[', '{', ',', ':', ';', '=>'].includes(tokens[i].value)
+    || ['return', 'yield', 'default'].some((word) => tokenKeyword(tokens, i, word));
+  let start = arrow - 1;
+  if (tokens[start]?.kind === 'identifier'
+    && !(tokens[start - 1]?.value === ':' && tokens[start - 2]?.value === ')')
+    && (beforeExpression(start - 1) || tokenKeyword(tokens, start - 1, 'async'))) {
+    if (tokenKeyword(tokens, start - 1, 'async')) start -= 1;
+    return beforeExpression(start - 1) ? start : -1;
+  }
+  for (let i = arrow - 1; i >= 0; i -= 1) {
+    const token = tokens[i];
+    if (token.value === ')' && token.match >= 0) {
+      if (i === arrow - 1 || tokens[i + 1]?.value === ':') { start = token.match; break; }
+      i = token.match;
+    } else if (['}', ']'].includes(token.value) && token.match >= 0) i = token.match;
+    else if (token.value === '>') {
+      i = angleBoundary(tokens, i, -1);
+      if (i < 0) return -1;
+    } else if ([';', '=', '=>', ','].includes(token.value)) return -1;
+    start = -1;
+  }
+  if (start < 0) return -1;
+  if (tokens[start - 1]?.value === '>') {
+    start = angleBoundary(tokens, start - 1, -1);
+    if (start < 0) return -1;
+  }
+  if (tokenKeyword(tokens, start - 1, 'async')) start -= 1;
+  return beforeExpression(start - 1) ? start : -1;
+}
+
+function canEndOperand(index, i) {
+  const token = index.tokens[i];
+  if (!token) return false;
+  if (token.kind === 'identifier') {
+    return !['return', 'throw', 'yield', 'await', 'delete', 'typeof', 'void', 'new', 'else', 'do', 'case', 'in', 'of']
+      .some((word) => tokenKeyword(index.tokens, i, word));
+  }
+  if (token.value === ')') return !index.controlCloses.has(i);
+  if (token.value === '}') return index.containers.has(token.match);
+  return ['string', 'number'].includes(token.kind) || token.value === ']' || token.value === '!';
+}
+
+function indexedExpressionEnd(index, start, stopAtComma = true) {
+  const { tokens, mask } = index;
+  for (let i = start; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if ([';', ')', ']', '}'].includes(token.value) || (stopAtComma && token.value === ',')) return i;
+    if (i > start && /[\n\r]/.test(mask.slice(tokens[i - 1].end, token.start)) && canEndOperand(index, i - 1)
+      && ((token.kind === 'identifier' && !['as', 'satisfies', 'in', 'instanceof'].some((word) => tokenKeyword(tokens, i, word)))
+        || ['string', 'number'].includes(token.kind) || ['++', '--', '!', '~'].includes(token.value))) return i;
+    if (['(', '[', '{'].includes(token.value) && token.match >= 0) i = token.match;
+    else if (token.value === '<' && canEndOperand(index, i - 1)) {
+      const close = angleBoundary(tokens, i, 1);
+      if (close >= 0 && tokens[close + 1]?.value === '(') i = close;
+    }
+  }
+  return tokens.length;
+}
+
+function indexedStatementEnd(index, start) {
+  if (index.statements.has(start)) return index.statements.get(start);
+  const { tokens } = index;
+  let end;
+  if (tokens[start]?.value === '{' && tokens[start].match >= 0) end = tokens[start].match + 1;
+  else if (['if', 'for', 'while', 'with'].some((word) => tokenKeyword(tokens, start, word))
+    && tokens[start + 1]?.value === '(' && tokens[start + 1].match >= 0) {
+    end = indexedStatementEnd(index, tokens[start + 1].match + 1);
+    if (tokenKeyword(tokens, start, 'if') && tokenKeyword(tokens, end, 'else')) end = indexedStatementEnd(index, end + 1);
+  } else {
+    end = indexedExpressionEnd(index, start, false);
+    if (tokens[end]?.value === ';') end += 1;
+  }
+  index.statements.set(start, end);
+  return end;
+}
+
+function indexHeads(index) {
+  const { tokens } = index;
+  const heads = [];
+  const bodies = new Map();
+  const headTokens = new Set();
+  const controls = [];
+  const containers = new Set();
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (tokens[i].value === '{' && (['=', '(', '[', ',', ':'].includes(tokens[i - 1]?.value) || tokenKeyword(tokens, i - 1, 'return'))) containers.add(i);
+  }
+  const inContainer = (i) => containers.has(tokens[i]?.parent);
+  const inMethodPosition = (i) => {
+    if (!inContainer(i)) return false;
+    while (tokens[i - 1]?.value === '*' || (tokens[i - 1]?.kind === 'identifier' && HEAD_MODIFIERS.has(tokens[i - 1].value))) i -= 1;
+    return ['{', '}', ',', ';'].includes(tokens[i - 1]?.value);
+  };
+  const addHead = (head) => {
+    if (head.body < 0 || bodies.has(head.body)) return;
+    heads.push(head);
+    bodies.set(head.body, head);
+    head.roots = new Set();
+    for (let i = head.start; i < head.body; i += 1) {
+      headTokens.add(i);
+      if (['context', 'this'].includes(tokens[i].value) && tokens[i].kind === 'identifier') head.roots.add(tokens[i].value);
+      if (tokens[i].kind === 'unknown-identifier') {
+        head.roots.add('context');
+        head.roots.add('this');
+        head.unknownBinding = true;
+      }
+    }
+  };
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (tokenKeyword(tokens, i, 'function') && !inMethodPosition(i)) {
+      let next = i + 1;
+      if (tokens[next]?.value === '*') next += 1;
+      const name = ['identifier', 'unknown-identifier'].includes(tokens[next]?.kind) ? next++ : -1;
+      if (tokens[next]?.value === '<') {
+        next = angleBoundary(tokens, next, 1);
+        if (next < 0) continue;
+        next += 1;
+      }
+      if (tokens[next]?.value !== '(' || tokens[next].match < 0) continue;
+      const body = typedHeadBody(tokens, tokens[next].match);
+      addHead({ kind: 'function', arrow: false, start: tokenKeyword(tokens, i - 1, 'async') ? i - 1 : i, keyword: i, name, body });
+    } else if (tokenKeyword(tokens, i, 'class') && !inMethodPosition(i)) {
+      let body = i + 1;
+      const name = ['identifier', 'unknown-identifier'].includes(tokens[body]?.kind) ? body++ : -1;
+      for (; body < tokens.length && tokens[body].value !== '{'; body += 1) {
+        if ([';', '=', '=>'].includes(tokens[body].value)) { body = -1; break; }
+        if (['(', '['].includes(tokens[body].value) && tokens[body].match >= 0) body = tokens[body].match;
+        else if (tokens[body].value === '<') {
+          body = angleBoundary(tokens, body, 1);
+          if (body < 0) break;
+        }
+      }
+      if (body >= 0 && tokens[body]?.value === '{') {
+        containers.add(body);
+        addHead({ kind: 'class', arrow: false, start: i, keyword: i, name, body });
+      }
+    }
+  }
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (tokens[i].value === '=>') {
+      const start = arrowHead(tokens, i);
+      const body = i + 1;
+      if (tokens[body]) addHead({ kind: start < 0 ? 'opaque' : 'function', arrow: true, start: start < 0 ? i : start, body });
+    } else if (!inMethodPosition(i) && ['if', 'for', 'while', 'switch', 'with', 'catch'].some((word) => tokenKeyword(tokens, i, word))) {
+      const open = i + 1;
+      const close = tokens[open]?.value === '(' ? tokens[open].match : -1;
+      const body = close < 0 ? open : close + 1;
+      if (tokenKeyword(tokens, i, 'catch') && tokens[body]?.value === '{') addHead({ kind: 'catch', arrow: false, start: i, body });
+      else if (close >= 0) {
+        let targetEnd = -1;
+        if (tokenKeyword(tokens, i, 'for')) {
+          for (let j = open + 1; j < close; j += 1) {
+            if (tokens[j].parent === open && ['of', 'in'].some((word) => tokenKeyword(tokens, j, word))) { targetEnd = j; break; }
+          }
+        }
+        controls.push({ keyword: i, open, close, body, kind: tokens[i].value, targetEnd });
+      }
+    }
+  }
+  for (let open = 0; open < tokens.length; open += 1) {
+    if (tokens[open].value !== '(' || tokens[open].match < 0 || headTokens.has(open) || !inContainer(open)) continue;
+    const body = typedHeadBody(tokens, tokens[open].match);
+    if (body < 0 || bodies.has(body)) continue;
+    let name = open - 1;
+    if (tokens[name]?.value === '>') {
+      name = angleBoundary(tokens, name, -1) - 1;
+      if (name < 0) continue;
+    }
+    let start = name;
+    if (tokens[name]?.value === ']' && tokens[name].match >= 0) start = tokens[name].match;
+    else if (!['identifier', 'string', 'number'].includes(tokens[name]?.kind)) continue;
+    while (tokens[start - 1]?.value === '*' || (tokens[start - 1]?.kind === 'identifier' && HEAD_MODIFIERS.has(tokens[start - 1].value))) start -= 1;
+    if (!['{', '}', ',', ';'].includes(tokens[start - 1]?.value)) continue;
+    addHead({ kind: 'function', arrow: false, start, body });
+  }
+  return { heads, bodies, headTokens, controls, containers, controlCloses: new Set(controls.map((control) => control.close)) };
+}
+
+function indexScopes(index) {
+  const { tokens, heads, bodies, headTokens, controls, containers } = index;
+  const scopes = [{ kind: 'program', start: 0, body: 0, end: index.mask.length, roots: new Set() }];
+  const blockScopes = new Map();
+  const controlBodies = new Set(controls.map((control) => control.body));
+  const makeScope = (head, body, end) => ({
+    kind: head.kind, start: tokens[head.start].start, body: tokens[body].start, end,
+    roots: head.roots, arrow: head.arrow, head,
+  });
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (tokens[i].value !== '{' || (headTokens.has(i) && !bodies.has(i))) continue;
+    const head = bodies.get(i);
+    const end = tokens[i].match < 0 ? index.mask.length : tokens[tokens[i].match].end;
+    const knownBlock = controlBodies.has(i) || ['{', '}', ';'].includes(tokens[i - 1]?.value)
+      || ['else', 'try', 'finally', 'do'].some((word) => tokenKeyword(tokens, i - 1, word)) || i === 0;
+    const scope = head ? makeScope(head, i, end) : {
+      kind: containers.has(i) ? 'object' : knownBlock ? 'block' : 'opaque',
+      start: tokens[i].start, body: tokens[i].start, end, roots: new Set(),
+    };
+    if (tokens[i].match < 0) scope.kind = 'opaque';
+    scopes.push(scope);
+    blockScopes.set(i, scope);
+    if (head) head.scope = scope;
+  }
+  for (const head of heads) {
+    if (tokens[head.body]?.value === '{') continue;
+    const end = indexedExpressionEnd(index, head.body);
+    const scope = makeScope(head, head.body, tokens[end]?.start ?? index.mask.length);
+    scopes.push(scope);
+    head.scope = scope;
+  }
+  for (const control of controls) {
+    if (control.kind !== 'for') continue;
+    const end = indexedStatementEnd(index, control.body);
+    const scope = { kind: 'loop', start: tokens[control.keyword].start, body: tokens[control.body]?.start ?? index.mask.length,
+      end: tokens[end]?.start ?? index.mask.length, roots: new Set(), control };
+    scopes.push(scope);
+    control.scope = scope;
+    for (let i = control.open + 1; i < control.close; i += 1) tokens[i].loop = control;
+  }
+  scopes.sort((a, b) => a.start - b.start || b.end - a.end);
+  // A comment-only or JSX-text-only mask has no token events, but still needs the
+  // program binding table. It must scan cleanly rather than throw during indexing.
+  Object.assign(scopes[0], { id: 0, parent: null, declarations: new Map(), writes: new Map() });
+  scopes[0].function = scopes[0];
+  const active = [];
+  let next = 0;
+  for (const token of tokens) {
+    while (active.length && active.at(-1).end <= token.start) active.pop();
+    while (next < scopes.length && scopes[next].start <= token.start) {
+      const scope = scopes[next++];
+      while (active.length && active.at(-1).end <= scope.start) active.pop();
+      scope.id = next - 1;
+      scope.parent = active.at(-1) || null;
+      scope.declarations = new Map();
+      scope.writes = new Map();
+      scope.function = ['program', 'function', 'opaque'].includes(scope.kind) ? scope : scope.parent?.function;
+      scope.parentFunction = scope.parent?.function;
+      active.push(scope);
+    }
+    token.scope = active.at(-1) || scopes[0];
+  }
+  index.scopes = scopes;
+  index.blockScopes = blockScopes;
+}
+
+function topLevelTokenRanges(tokens, start, end, separator) {
+  const ranges = [];
+  let from = start;
+  for (let i = start; i < end; i += 1) {
+    if (tokens[i].value === separator) { ranges.push([from, i]); from = i + 1; }
+    else if (['(', '[', '{'].includes(tokens[i].value) && tokens[i].match >= 0) i = tokens[i].match;
+  }
+  ranges.push([from, end]);
+  return ranges;
+}
+
+function patternTargets(index, start, end) {
+  // { context: item } binds item, but { current: context }, [context] and ...context
+  // bind context. Defaults' RHS values are reads. This one classifier serves both
+  // declarations and destructuring writes; function heads instead reject ANY root mention.
+  const { tokens } = index;
+  const pending = [[start, end]];
+  const targets = [];
+  while (pending.length) {
+    let [from, to] = pending.pop();
+    if (tokens[from]?.value === '...') from += 1;
+    to = topLevelTokenRanges(tokens, from, to, '=')[0][1];
+    const token = tokens[from];
+    if (!token || from >= to) continue;
+    if (['{', '['].includes(token.value) && token.match >= 0 && token.match < to) {
+      for (const [entry, entryEnd] of topLevelTokenRanges(tokens, from + 1, token.match, ',')) {
+        const colon = token.value === '{' ? topLevelTokenRanges(tokens, entry, entryEnd, ':')[0][1] : entryEnd;
+        if (colon < entryEnd) {
+          for (let i = entry; i < colon; i += 1) index.patternKeys.add(i);
+          pending.push([colon + 1, entryEnd]);
+        } else pending.push([entry, entryEnd]);
+      }
+    } else if (['identifier', 'unknown-identifier'].includes(token.kind)) targets.push(from);
+  }
+  return targets;
+}
+
+function addDeclaration(scope, root, position) {
+  if (root !== 'context' || !scope) return;
+  if (!scope.declarations.has(root)) scope.declarations.set(root, []);
+  scope.declarations.get(root).push(position);
+}
+
+function indexRootRoles(index) {
+  const { tokens, mask } = index;
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (!['context', 'this'].some((root) => tokenKeyword(tokens, i, root))) continue;
+    if (index.headTokens.has(i) || index.patternKeys.has(i)) continue;
+    const token = tokens[i];
+    const path = indexedPath(index, i);
+    const next = tokens[path.end];
+    const previous = tokens[i - 1];
+    const classSlot = token.scope.kind === 'class' && (['{', '}', ';'].includes(previous?.value)
+      || ['public', 'private', 'protected', 'static', 'readonly', 'declare', 'abstract', 'override', 'accessor'].some((word) => tokenKeyword(tokens, i - 1, word)));
+    const memberName = path.names.length === 1 && ((token.scope.kind === 'object' && next?.value === ':')
+      || (classSlot && ['=', ':', ';', '?', '!'].includes(next?.value)));
+    if (memberName) { index.rootRoles.set(i, 'member'); continue; }
+    const unknownPrefix = previous?.kind === 'identifier'
+      && !/[\n\r]/.test(mask.slice(previous.end, token.start))
+      && !READ_PREFIX_WORDS.some((word) => tokenKeyword(tokens, i - 1, word))
+      && !(token.loop && tokenKeyword(tokens, i - 1, 'of'));
+    const knownSuffix = !next || READ_FOLLOWERS.has(next.value)
+      || ['as', 'satisfies', 'in', 'instanceof'].some((word) => tokenKeyword(tokens, path.end, word))
+      || (token.loop && tokenKeyword(tokens, path.end, 'of'))
+      || (next.value === '?.' && tokens[path.end + 1]?.value === '(')
+      || /[\n\r]/.test(mask.slice(tokens[path.end - 1].end, next.start));
+    // Reads are positively classified, not the default. "await using context = x"
+    // is an unfamiliar binding head, so conservatively shadow its entire block,
+    // including calls before that declaration; an unknown operator expires later proofs.
+    if (unknownPrefix && token.value === 'context') addDeclaration(token.scope, 'context', token.start);
+    index.rootRoles.set(i, unknownPrefix || !knownSuffix ? 'unknown' : 'read');
+  }
+}
+
+function indexDeclarations(index) {
+  const { tokens } = index;
+  const namedHeads = new Map(index.heads.filter((head) => head.keyword !== undefined).map((head) => [head.keyword, head]));
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (!['class', 'function'].some((word) => tokenKeyword(tokens, i, word))) continue;
+    let name = i + 1;
+    if (tokens[name]?.value === '*') name += 1;
+    if (!['identifier', 'unknown-identifier'].includes(tokens[name]?.kind)) continue;
+    const head = namedHeads.get(i);
+    const unknownName = tokens[name].kind === 'unknown-identifier' || (tokens[i].value === 'class' && head?.unknownBinding);
+    if (tokens[name].value !== 'context' && !unknownName) continue;
+    const previous = tokens[(head?.start ?? i) - 1]?.value;
+    // Only a recognized expression position makes a named function/class private to
+    // that expression. An unfamiliar declaration head (decorators, overloads, etc.)
+    // must not hide a hoisted or lexical root binding from an earlier call.
+    const previousIndex = (head?.start ?? i) - 1;
+    const declaration = !['=', '(', '[', ',', ':', '?', '=>', '||', '&&', '??'].includes(previous)
+      && !['return', 'yield', 'new'].some((word) => tokenKeyword(tokens, previousIndex, word));
+    const owner = declaration
+      ? tokens[i].value === 'function' ? head?.scope?.parentFunction || tokens[i].scope.function : head?.scope?.parent || tokens[i].scope
+      : head?.scope;
+    if (owner) addDeclaration(owner, 'context', tokens[i].start);
+    else addDeclaration(tokens[i].scope, 'context', tokens[i].start);
+  }
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (index.headTokens.has(i) || !['let', 'const', 'var'].some((word) => tokenKeyword(tokens, i, word))) continue;
+    const owner = tokens[i].value === 'var' ? tokens[i].scope.function : tokens[i].loop?.scope || tokens[i].scope;
+    let from = i + 1;
+    while (from < tokens.length) {
+      const pattern = tokens[from];
+      if (!pattern || (!['{', '['].includes(pattern.value) && !['identifier', 'unknown-identifier'].includes(pattern.kind))) break;
+      const end = ['{', '['].includes(pattern.value) ? pattern.match + 1 : from + 1;
+      if (end <= from) break;
+      for (const target of patternTargets(index, from, end)) {
+        addDeclaration(owner, tokens[target].kind === 'unknown-identifier' ? 'context' : tokens[target].value, tokens[i].start);
+      }
+      let next = end;
+      // A type annotation and an initializer belong to this declarator, not to the next
+      // statement. Balanced groups are skipped, and ASI "let context\ncontext.device..."
+      // needs no semicolon to establish the binding.
+      if (tokens[next]?.value === ':') {
+        for (next += 1; next < tokens.length; next += 1) {
+          if (['=', ',', ';', ')', '}'].includes(tokens[next].value)) break;
+          if (['(', '[', '{', '<'].includes(tokens[next].value)) {
+            const close = tokens[next].value === '<' ? angleBoundary(tokens, next, 1) : tokens[next].match;
+            if (close < 0) break;
+            next = close;
+          }
+        }
+      }
+      if (tokens[next]?.value === '=') next = indexedExpressionEnd(index, next + 1);
+      if (tokens[next]?.value !== ',') break;
+      from = next + 1;
+    }
+  }
+  indexRootRoles(index);
+  for (const scope of index.scopes) {
+    scope.bindings = scope.parent ? { ...scope.parent.bindings } : { context: scope.id, this: scope.id };
+    for (const root of ['context', 'this']) {
+      if (scope.roots.has(root) || scope.declarations.has(root) || scope.kind === 'opaque'
+        || (root === 'this' && (scope.kind === 'class' || (scope.kind === 'function' && !scope.arrow)))) scope.bindings[root] = scope.id;
+    }
+    for (const positions of scope.declarations.values()) positions.sort((a, b) => a - b);
+  }
+}
+
+function addIndexedWrite(index, tokenIndex, path, uncertain = false) {
+  const token = index.tokens[tokenIndex];
+  if (index.headTokens.has(tokenIndex) || index.patternKeys.has(tokenIndex) || index.rootRoles.get(tokenIndex) === 'member') return;
+  const root = path.names[0];
+  const key = `${token.scope.bindings[root]}:${uncertain ? root : path.names.join('.')}`;
+  const writes = token.scope.function.writes;
+  if (!writes.has(key)) writes.set(key, []);
+  writes.get(key).push(token.start);
+}
+
+function addOpaqueTargetWrite(index, tokenIndex) {
+  for (const root of ['context', 'this']) addIndexedWrite(index, tokenIndex, { names: [root] }, true);
+}
+
+function indexedOperandStart(index, end) {
+  const { tokens } = index;
+  let start = end;
+  while (start >= 0) {
+    if (tokens[start].value === '!') { start -= 1; continue; }
+    if ([')', ']', '}'].includes(tokens[start].value) && tokens[start].match >= 0) start = tokens[start].match;
+    if (['.', '?.'].includes(tokens[start - 1]?.value)) { start -= 2; continue; }
+    if (['(', '['].includes(tokens[start]?.value) && canEndOperand(index, start - 1)) { start -= 1; continue; }
+    break;
+  }
+  return Math.max(0, start);
+}
+
+function indexedOperandEnd(index, start) {
+  const { tokens } = index;
+  if (['(', '[', '{'].includes(tokens[start]?.value)) return tokens[start].match < 0 ? start + 1 : tokens[start].match + 1;
+  if (tokens[start]?.kind !== 'identifier') return start + 1;
+  let end = indexedPath(index, start).end;
+  while (tokens[end]?.value === '!') end += 1;
+  return end;
+}
+
+function indexWriteTarget(index, start, end) {
+  const { tokens } = index;
+  if (start >= end) return;
+  if (['let', 'const', 'var'].some((word) => tokenKeyword(tokens, start, word))) start += 1;
+  while (tokens[start]?.value === '(' && tokens[start].match === end - 1) { start += 1; end -= 1; }
+  while (tokens[end - 1]?.value === '!') end -= 1;
+  if (['{', '['].includes(tokens[start]?.value) && tokens[start].match === end - 1) {
+    for (const target of patternTargets(index, start, end)) {
+      if (tokens[target].kind === 'unknown-identifier') addOpaqueTargetWrite(index, target);
+      else if (['context', 'this'].some((root) => tokenKeyword(tokens, target, root))) {
+        const path = indexedPath(index, target);
+        addIndexedWrite(index, target, path, path.unknown);
+      }
+    }
+    return;
+  }
+  if (tokens[start]?.kind === 'identifier') {
+    const path = indexedPath(index, start);
+    if (path.end === end && !path.unknown) {
+      if (['context', 'this'].some((root) => tokenKeyword(tokens, start, root))) addIndexedWrite(index, start, path);
+      return;
+    }
+  }
+  // A whole recognized reference is a precise write. Casts and other unfamiliar
+  // targets, e.g. (context as Context) = next, instead expire the root's entire proof.
+  // No unclassified target is assumed to be a read.
+  for (let i = start; i < end; i += 1) {
+    if (tokens[i].kind === 'unknown-identifier') addOpaqueTargetWrite(index, i);
+    else if (['context', 'this'].some((root) => tokenKeyword(tokens, i, root))) addIndexedWrite(index, i, indexedPath(index, i), true);
+  }
+}
+
+function indexWrites(index) {
+  const { tokens } = index;
+  for (const control of index.controls) {
+    if (control.kind === 'for' && control.targetEnd >= 0) indexWriteTarget(index, control.open + 1, control.targetEnd);
+  }
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (ASSIGNMENT_OPERATORS.has(token.value) && i > 0) indexWriteTarget(index, indexedOperandStart(index, i - 1), i);
+    else if (tokenKeyword(tokens, i, 'delete')) indexWriteTarget(index, i + 1, indexedOperandEnd(index, i + 1));
+    else if (['++', '--'].includes(token.value)) {
+      const postfix = canEndOperand(index, i - 1) && !/[\n\r]/.test(index.mask.slice(tokens[i - 1].end, token.start));
+      if (postfix) indexWriteTarget(index, indexedOperandStart(index, i - 1), i);
+      else indexWriteTarget(index, i + 1, indexedOperandEnd(index, i + 1));
+    }
+  }
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (!['context', 'this'].some((root) => tokenKeyword(tokens, i, root)) || index.patternKeys.has(i) || index.headTokens.has(i)) continue;
+    const path = indexedPath(index, i);
+    if (index.rootRoles.get(i) === 'unknown') addIndexedWrite(index, i, path, true);
+  }
+  for (const scope of index.scopes) {
+    for (const positions of scope.writes.values()) positions.sort((a, b) => a - b);
+  }
+}
+
+function indexSource(text, mask) {
+  // One offset-preserving token/delimiter pass feeds every scope, binding and write
+  // lookup. In particular, 2500 nested run(() => { ... }) blocks are not rebalanced
+  // for each Pages call. This is a conservative index, not a JavaScript parser:
+  // only recognized heads keep a binding; an opaque body creates a proof barrier.
+  const index = { ...tokenizeSource(mask), text, mask, paths: new Map(), patternKeys: new Set(), rootRoles: new Map(), statements: new Map() };
+  Object.assign(index, indexHeads(index));
+  indexScopes(index);
+  indexDeclarations(index);
+  indexWrites(index);
+  index.members = [];
+  for (let i = 0; i < index.tokens.length; i += 1) {
+    if (!['context', 'this'].some((root) => tokenKeyword(index.tokens, i, root)) || index.rootRoles.get(i) === 'member') continue;
+    const path = indexedPath(index, i);
+    const namespaceIndex = path.names[0] === 'context' ? 1 : path.names.findIndex((name, j) => j > 0 && ['device', 'utils', 'webAPI'].includes(name));
+    const namespace = path.names[namespaceIndex];
+    if (!['device', 'utils', 'webAPI'].includes(namespace)) continue;
+    index.members.push({ ...path, namespace, method: path.names[namespaceIndex + 1],
+      namespacePath: path.names.slice(0, namespaceIndex + 1).join('.'),
+      methodPath: path.names.slice(0, namespaceIndex + 2).join('.'),
+      call: path.call && !path.unknown && path.names.length === namespaceIndex + 2 });
+  }
+  const methods = new Map(index.members.filter((member) => member.call && ['device', 'utils'].includes(member.namespace))
+    .map((member) => [member.names.join('.'), member.names]));
+  for (const control of index.controls) {
+    if (control.kind !== 'if' || index.tokens[control.body]?.value !== '{' || index.tokens[control.body].match < 0) continue;
+    const scope = index.blockScopes.get(control.body);
+    const start = index.tokens[control.open].end;
+    const end = index.tokens[control.close].start;
+    const raw = withoutComments(text.slice(start, end));
+    const proofs = new Set();
+    const candidates = new Set();
+    for (let i = control.open + 1; i < control.close; i += 1) {
+      const path = index.paths.get(i);
+      if (path && methods.has(path.names.join('.'))) candidates.add(path.names.join('.'));
+    }
+    for (const key of candidates) if (provePositiveCondition(raw, mask.slice(start, end), methods.get(key))) proofs.add(key);
+    const owner = index.tokens[control.keyword].scope;
+    scope.guard = { start: index.tokens[control.keyword].start, proofs, owner };
+  }
+  return index;
+}
+
+function firstAtOrAfter(positions, start) {
+  let lo = 0;
+  let hi = positions.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (positions[mid] < start) lo = mid + 1;
+    else hi = mid;
+  }
+  return positions[lo];
+}
+
+function indexedProofChanged(index, guard, member) {
+  const root = member.names[0];
+  const callScope = index.tokens[member.token].scope;
+  const binding = guard.owner.bindings[root];
+  if (callScope.bindings[root] !== binding) return true;
+  const declarations = index.scopes[binding].declarations.get(root) || [];
+  if (firstAtOrAfter(declarations, guard.start) !== undefined) return true;
+  let end = member.start;
+  let owner = callScope.function;
+  while (owner) {
+    const start = owner === guard.owner.function ? guard.start : owner.body;
+    for (let length = 1; length <= member.names.length; length += 1) {
+      const key = `${binding}:${member.names.slice(0, length).join('.')}`;
+      const positions = owner.writes.get(key);
+      if (positions && firstAtOrAfter(positions, start) < end) return true;
+    }
+    if (owner === guard.owner.function) return false;
+    // A write before a callback's definition expires the captured proof; a write in
+    // a sibling callback does not become a write in this function.
+    end = owner.start;
+    owner = owner.parentFunction;
+  }
+  return true;
+}
+
+function hasMethodGuard(index, member) {
+  const key = member.names.join('.');
+  for (let scope = index.tokens[member.token].scope; scope; scope = scope.parent) {
+    if (scope.guard?.proofs.has(key) && !indexedProofChanged(index, scope.guard, member)) return true;
+  }
+  return false;
+}
+
+function provePositiveCondition(raw, mask, methodPath) {
   // Only a whole positive conjunction proves the method. Raw examples:
   //   context.device && typeof context.device.captureImage === "function"
   //   !!context.device?.captureImage && !busy
@@ -838,7 +1371,7 @@ function provePositiveCondition(raw, mask, namespace, method) {
   if (mask.includes('=>') || assignment.test(mask) || /\?(?!\.)|!\s*\(/.test(mask)
     || mask.includes('||') || mask.includes('??')) return false;
   const state = { proven: new Set(), methodSafe: false };
-  return proveGuardConjunction(raw, blankLiterals(raw), ['context', namespace, method], state) && state.methodSafe;
+  return proveGuardConjunction(raw, blankLiterals(raw), methodPath, state) && state.methodSafe;
 }
 
 function proveGuardConjunction(raw, mask, methodPath, state) {
@@ -884,12 +1417,22 @@ function proveGuardConjunction(raw, mask, methodPath, state) {
 }
 
 function parseGuardPath(raw) {
-  if (!/^[A-Za-z_$][\w$]*(?:\s*(?:\?\.|\.)\s*[A-Za-z_$][\w$]*)*$/.test(raw.trim())) return null;
-  const parts = raw.trim().split(/\s*(\?\.|\.)\s*/);
-  return {
-    names: parts.filter((_, index) => index % 2 === 0),
-    optional: parts.filter((_, index) => index % 2 !== 0).map((link) => link === '?.'),
-  };
+  const text = raw.trim();
+  const names = [];
+  const optional = [];
+  for (let start = 0; start < text.length;) {
+    const identifier = identifierAt(text, start);
+    if (!identifier) return null;
+    names.push(identifier.value);
+    start = identifier.end;
+    while (/\s/.test(text[start] || '') && start < text.length) start += 1;
+    if (start === text.length) return { names, optional };
+    if (text.startsWith('?.', start)) { optional.push(true); start += 2; }
+    else if (text[start] === '.') { optional.push(false); start += 1; }
+    else return null;
+    while (/\s/.test(text[start] || '') && start < text.length) start += 1;
+  }
+  return null;
 }
 
 function isGuardPrefix(path, methodPath) {

@@ -48,7 +48,7 @@ Do not delete deployed-only code merely to satisfy harness limitations.
 
 Run deployed smoke when behavior depends on Dataverse, model-driven forms, published metadata, Pages, Web API, security or dataset paging.
 
-The Pages guard check is a conservative static heuristic over source text, not a JavaScript parser: calls it cannot prove guarded are reported, but computed member names, aliasing such as `const d = context.device; d.captureImage()`, and dynamic dispatch may evade it, so runtime verification on the target Power Pages site stays required.
+The Pages guard check is a conservative static heuristic over source text, not a JavaScript parser. A guard proves calls in its block and in nested callbacks that do not rebind the guarded name. Rebinding, shadowing or writing the guarded name or a protected prefix ends the proof; calls it cannot prove guarded and unrecognized forms are reported rather than assumed safe (fail closed). Dynamic computed member names or template-literal member names, aliasing such as `const d = context.device; d.captureImage()`, dynamic dispatch (`.call`/`.apply`/`Reflect.apply`) and parenthesized receivers may evade it, so runtime verification on the target Power Pages site stays required.
 
 Recommended smoke assertions:
 
