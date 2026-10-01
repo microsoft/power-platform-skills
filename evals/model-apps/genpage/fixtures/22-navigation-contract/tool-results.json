@@ -1,0 +1,27 @@
+[
+  {
+    "id": "overview-create",
+    "command": "node scripts\\genpage-upload.js --env https://contoso.crm.dynamics.com --app-id 11111111-1111-4111-8111-111111111111 --code-file before\\overview.tsx --name-file names\\overview.txt --prompt-file prompt.txt --agent-message-file agent-message.txt --model gpt-4.1 --add-to-sitemap",
+    "result": { "ok": true, "pageId": "22222222-2222-4222-8222-222222222222", "appId": "11111111-1111-4111-8111-111111111111", "updated": false }
+  },
+  {
+    "id": "pet-create",
+    "command": "node scripts\\genpage-upload.js --env https://contoso.crm.dynamics.com --app-id 11111111-1111-4111-8111-111111111111 --code-file before\\pet.tsx --name-file names\\pet.txt --prompt-file prompt.txt --agent-message-file agent-message.txt --model gpt-4.1 --add-to-sitemap",
+    "result": { "ok": true, "pageId": "33333333-3333-4333-8333-333333333333", "appId": "11111111-1111-4111-8111-111111111111", "updated": false }
+  },
+  {
+    "id": "gallery-create",
+    "command": "node scripts\\genpage-upload.js --env https://contoso.crm.dynamics.com --app-id 11111111-1111-4111-8111-111111111111 --code-file before\\pet-gallery.tsx --name-file names\\pet-gallery.txt --prompt-file prompt.txt --agent-message-file agent-message.txt --model gpt-4.1 --add-to-sitemap",
+    "result": { "ok": true, "pageId": "44444444-4444-4444-8444-444444444444", "appId": "11111111-1111-4111-8111-111111111111", "updated": false }
+  },
+  {
+    "id": "overview-fixup",
+    "command": "node scripts\\genpage-upload.js --env https://contoso.crm.dynamics.com --app-id 11111111-1111-4111-8111-111111111111 --page-id 22222222-2222-4222-8222-222222222222 --code-file overview.tsx --prompt-file fixup-prompt.txt --agent-message-file fixup-message.txt --model gpt-4.1",
+    "result": { "ok": true, "pageId": "22222222-2222-4222-8222-222222222222", "appId": "11111111-1111-4111-8111-111111111111", "updated": true }
+  },
+  {
+    "id": "pet-fixup",
+    "command": "node scripts\\genpage-upload.js --env https://contoso.crm.dynamics.com --app-id 11111111-1111-4111-8111-111111111111 --page-id 33333333-3333-4333-8333-333333333333 --code-file pet.tsx --prompt-file fixup-prompt.txt --agent-message-file fixup-message.txt --model gpt-4.1",
+    "result": { "ok": true, "pageId": "33333333-3333-4333-8333-333333333333", "appId": "11111111-1111-4111-8111-111111111111", "updated": true }
+  }
+]

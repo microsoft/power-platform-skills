@@ -234,6 +234,12 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   default; `--apply` writes, `--sample-data` / `--publish` opt-in (`--publish` gates the final *bulk*
   publish; edit/finalize paths — reconciling an existing form/view, form events, quick-views,
   existing-app sitemap, page finalize — still publish their one artifact so the change takes effect).
+  The bulk publish is ONE `PublishXml` envelope (`publishArtifacts`) for every table and the app, and
+  with `--publish` the default-view enrichment defers its own publish to it. A build that halts before
+  it hands what is still owed to the CLI, which keeps each attempt's debt across transient retries until
+  a publish phase pays it, and settles the rest per target once no retry follows (`settleOwedPublishes`)
+  — so a halted build leaves those views live, as it did before the batching. A default-view push
+  refused by a concurrent edit fails the enrichment step, as any refused push does.
   **The modern ("new look") shell is opt-in via `app.newLook`.** It is a per-app SETTING
   (`NewLookAlwaysOn`, written through the SDK's `saveSettingValue` scoped to app + solution), NOT an
   app-module column — `navigationtype` is Single/Multi *session* and unrelated, which is the reason
@@ -242,11 +248,13 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   a silent success.
   **`app.aiDescription` (the routing description) is written only when the spec sets it** — at create,
   and on an existing app when it differs from the fetched draft, riding that run's app push. The
-  platform may author this text itself, so an omitted field is never written or blanked. A 412 on the
-  appmodule row over an UNPUBLISHED header change (componentstate 1, proven by a draft read) halts with
+  platform may author this text itself, so an omitted field is never written or blanked. A
+  never-published app refuses the write (`APP_DRAFT_HEADER_NOT_WRITABLE`), which halts with
   `app-header-unpublished` — publish, then re-run — after resetting the workspace copy, which a plain
-  re-fetch would otherwise refuse to replace (`LOCAL_EDITS_WOULD_BE_LOST`). A 412 on the sitemap is a
-  concurrent edit even then (the push writes the header first, so its own write left that layer). Any
+  re-fetch would otherwise refuse to replace (`LOCAL_EDITS_WOULD_BE_LOST`). An app with an UNPUBLISHED
+  header change takes it: the vendored SDK conditions the header write on the appmodule's row token, so
+  the push saves and keeps that change (live-verified). A 412 is a concurrent edit, on the appmodule
+  row as on the sitemap, and is never re-explained as "publish first". Any
   other failed push that carried the change resets the copy too — except a concurrent edit
   (`VERSION_CONFLICT` / a code-less 412), where the unrecorded copy is what stops a blind re-run — and
   without the pages phase the change is applied only after the live-page gate, so a gate halt leaves
@@ -402,7 +410,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   **icon** web resource is referenced by the table itself, so Dataverse refuses to delete it until the table
   is gone (form JS, referenced by its already-deleted form, is safe either way). Teardown also removes the
   build's **generated default app icon** (`<appUnique>_icon`, created in-solution when the spec sets no
-  `app.icon`) so it doesn't leak as an orphan. **An app is TWO rows** — an `appmodule` AND a `sitemaps`
+  `app.icon`) so it doesn't leak as an orphan. It keeps the **page manifest** while the generative-pages
+  step fails (a failed manifest or page read fails that step too), so a re-run still finds the pages the
+  app authored. **An app is TWO rows** — an `appmodule` AND a `sitemaps`
   row, with no lookup between them and no server-side cascade; the only link is
   `sitemap.sitemapnameunique === appmodule.uniquename`. Deleting only the appmodule strands the sitemap
   forever and, because `sitemapnameunique` is unique-constrained, permanently **burns that unique name**:
@@ -711,7 +721,7 @@ scripts/
   launch-playwright-mcp.js     ← Playwright MCP server launcher (fullscreen; uses lib/detect-browser.js)
   playwright-mcp-fullscreen.config.json ← Fullscreen browser config for the launcher
   regenerate-verified-icons.js ← Regenerates references/verified-icons.txt from npm
-  check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match (pac overlaps the az probes)
+  check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match (pac overlaps the az probes); a CLI too slow to answer is `az_timeout`/`pac_timeout`
   check-version.js             ← Skill-start update notice: compares the plugin clone with its origin/main (git runs in the plugin, never the user's repo)
   resolve-interaction-mode.js  ← Reports whether a human can answer in this run (unattended defaults)
   lint-app-spec.js             ← Validate + lint an App Spec without touching an environment
@@ -735,7 +745,7 @@ scripts/
   run-tests.js                 ← one-command plugin + SDK regression runner
   smoke-eval.js                ← scripted live smoke eval (build → assert → teardown)
   generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
-  genpage-upload.js            ← /genpage: deploy one page via the shared wrapper (prompt passed BY FILE, never on a command line; an update must name the app the page is placed in)
+  genpage-upload.js            ← /genpage: deploy one page via the shared wrapper (prompt passed BY FILE, never on a command line; an update must name the app the page is placed in, and keeps the page's name, model and bindings unless given)
   genpage-plan-provenance.js   ← /genpage: quarantine a stale plan before the planner writes, then verify the written plan targets the pages the approval named
   check-page-files.js          ← /genpage: pre-dispatch gate — the page file names of the plan's one ## Pages table are safe write targets (lib/page-file-targets.js)
   genpage-worker-output.js     ← /genpage: accept a parallel worker's page only if complete (default export, balanced, no elided code)
@@ -745,6 +755,7 @@ scripts/
     provision-input.js         ← Input validation for entity provisioning
     dataverse-auth.js          ← Shared auth + HTTP helpers (`az account get-access-token`, memoized per process and replaced on a 401; responses decoded as UTF-8 once; an environment URL is used only as a Dataverse https origin, `dataverseOrigin`), plus the CLI arg contract (parseArgs/validateFlags)
     process-runner.js          ← how every script starts az/pac/npm/npx/git: the executable is resolved to an absolute path on PATH, never the project folder, and started without a shell (a Windows batch shim runs through cmd.exe with its arguments checked)
+    cli-failure.js             ← how a CLI child failed (timeout / missing / failed) and the Azure CLI budget (60 s, `POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS`), so a slow `az` is never reported as missing or signed out
     nearest-name.js            ← pure single-edit "did you mean" matcher for closed vocabularies (CLI flags, FetchXML operators)
     supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
     feature-flags.js           ← Default-OFF feature flag probe + Custom API script backstop
@@ -754,7 +765,7 @@ scripts/
     artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)
     form-occupancy.js          ← pure row occupancy (own cells + columns reserved by row-spanning cells above), shared by build and verify
     form-order.js              ← the Main Form Set order: which Main form a table opens with, and which forms the build orders (shared by the spec gate, build and verify)
-    form-container-match.js    ← how an authored tab/section is matched to a deployed one (shared by build and verify)
+    form-container-match.js    ← how an authored tab/section is matched to a deployed one, and the moves that put them in the layout's order (shared by build and verify)
     ai-app-settings.js         ← single source of truth for the per-app AI feature contract
     interaction-mode.js        ← whether a human is reachable in this run (shared by both skills)
     page-plan.js               ← pure App Spec → plan-document projection used by write-page-plan.js
@@ -769,7 +780,7 @@ scripts/
     role-privileges.js         ← pure: declared persona privileges + subset comparison against a deployed role
                                   (also the oracle for `roleGrants[]`, which is additive rather than converged)
     odata.js                   ← OData literal escaping helpers
-    genpage-cli.js             ← pac model genpage upload/list/download wrapper
+    genpage-cli.js             ← pac model genpage upload/list/download wrapper, plus a page's own name read from its row (pac stores `"` as `\"`; `unescapePacName`)
     hydrate-spec.js            ← reconstruct an App Spec from a deployed app (edit flow)
     verify-spec.js             ← spec-vs-deployed reconciliation core
     build-journal.js           ← durable JSONL build journal (resume diagnostics)
@@ -962,7 +973,11 @@ elided?" rule the page gate and the Layer 2 eval share (a `FIXME` comment, a `TO
 a colon, a comment opening with `...`, "omitted for brevity", or a bare `...` line; the same words
 as UI copy — "Loading…", a `'TODO'` status value — are not elision). A template's `${…}` body is
 code and is read by the same lexer (`lexInto`), JSX and comments included, never by a lighter
-scanner. Whether a `/` or `<` starts a regex or JSX is judged by the code before it: never by a
+scanner. It is **one pass** over the file with an explicit stack of code and template frames, so
+its time is linear in the file's length however deeply templates nest — a lexer that re-scanned
+each `${…}` body per level of nesting took over a second on a 2.5 KB page. Keep it one pass; the
+`performance:` tests and the 50,000-deep nesting test in `genpage-lexer-hardening.test.js` guard it.
+Whether a `/` or `<` starts a regex or JSX is judged by the code before it: never by a
 comment's last word; a keyword read back as a property name (`counts.new / total`) or a postfix
 `!` / `++` ends an operand; and a `)` ends one too, unless it closes an `if` / `for` / `while`
 head, after which a statement starts. Each of those rules was once broken, and each break refused
@@ -1183,8 +1198,12 @@ NODE20_BIN=/path/to/node20/bin node scripts/run-tests.js --with-sdk /path/to/pow
   telemetry-emitting hook or script.
 - The SDK's Jest suite needs **Node 20** (its `canvas` native module is built for the Node-20 ABI).
   Set `NODE20_BIN` to a Node-20 bin dir; without it the SDK suite is skipped (plugin suite still runs).
-- genpage evals: `node --test evals/model-apps/genpage/tests/*.test.js`, plus the Layer 1/2 runners
-  (`node evals/model-apps/genpage/run-layer-{1,2}.js --tier smoke`). See `## Eval Suite` below.
+- Evals: `node --test evals/model-apps/tests/*.test.js evals/model-apps/app-builder/tests/*.test.js
+  evals/model-apps/genpage/tests/*.test.js` (the first directory holds the cross-runner coverage
+  contract), plus the runners (`node evals/model-apps/genpage/run-layer-{1,2}.js --tier smoke`,
+  `node evals/model-apps/app-builder/run-app-builder.js`). See `## Eval Suite` below. CI's
+  `test-model-apps-evals` job runs the eval tests AND all three runners (genpage Layer 1/2, app-builder)
+  over every committed fixture — offline, no org — so a fixture that falls out of step fails the PR.
 
 **The vendored SDK lives in a separate repo.** The Dataverse mechanics are in
 `power-platform-ux` (Azure DevOps `msazure/OneAgile`), package `packages/cds-maker-sdk`. This plugin
@@ -1353,12 +1372,17 @@ layers are automated (TAP v13 runners); Layer 3 is manual.
   we evaluate, the 3 layers, tiers (smoke/full/stress), fixture types
   (synthetic vs real captures), runner output, capture flow, cadence,
   diagnosing failures, adding evals and assertions.
-- **Eval definitions:** `evals/model-apps/genpage/evals.json` — 18 evals
-  with prompts, answers, and expectations.
+- **Eval definitions:** `evals/model-apps/genpage/evals.json` — prompts,
+  answers, and expectations.
 - **Fixtures:** `evals/model-apps/genpage/fixtures/<eval-id>-<slug>/` —
   one folder per captured or synthetic run. Each contains the `.tsx`,
   `workflow-log.md`, `genpage-plan.md`, and (when applicable)
-  `entity-creation-log.md` and `RuntimeTypes.ts`.
+  `genpage-entity-creation-log.md` (older captures: `entity-creation-log.md`)
+  and `RuntimeTypes.ts`.
+- **Coverage contract:** `evals/model-apps/tests/eval-coverage-contract.test.js`
+  fails when a prompt has no fixture, an expectation has no check, or a check
+  skips on every fixture, unless `eval-coverage-baseline.json` beside it records
+  the gap and why; it also pins the guides' counts to the registries.
 
 Run on every PR that touches the skill, agents, rules, or evals:
 
@@ -1381,7 +1405,9 @@ snapshots — using the plugin's own pure primitives. No live env required.
 
 Per-stage oracles: `author` (validate + lint), `plan` (`planFor`), `data`
 (`schema-facts.js` normalized tables/columns/relationships), `ui` (view/chart/form
-intent facts), `app` (sitemap facts + nav graph), `verify` (`verifySpec` reconcile).
+intent facts), `app` (sitemap facts + nav graph), `security`, `verify` (`verifySpec`
+reconcile, fail-closed), `process`, `generate-pages`, `teardown`, `round-trip` and
+`changed-only` — see the guide's stage → oracle table for what each grades.
 
 ```bash
 # From repo root:

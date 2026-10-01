@@ -210,6 +210,26 @@ test('hydrateSpec emits the v2 shape when pages carry keys (schemaVersion 2, sou
   assert.strictEqual(spec.appShell.areas[0].groups[0].subAreas[0].page, 'overview', 'GenPage subarea resolved by KEY');
 });
 
+// A page's model rides the spec from download to rebuild, in either page shape; a page without one gets no key.
+test('hydrateSpec carries each page\'s model, in the v2 and the legacy shape', async () => {
+  const siteMap = { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [
+    { type: 'GenPage', genPageId: 'gp-o', title: 'Overview' }, { type: 'GenPage', genPageId: 'gp-d', title: 'Detail' }] }] }] };
+  const base = { app: async () => ({ name: 'A', description: '', siteMap }), entities: async () => [], webResources: async () => [],
+    solution: async () => ({ uniqueName: 'S', publisherPrefix: 'new' }) };
+  const v2 = await hydrateSpec({ ...base, pages: async () => [
+    { pageId: 'gp-o', key: 'overview', name: 'Overview', model: 'gpt-4.1', dataSources: [], codeFile: 'overview.tsx' },
+    { pageId: 'gp-d', key: 'detail', name: 'Detail', dataSources: [], codeFile: 'detail.tsx' }] });
+  assert.strictEqual(v2.schemaVersion, 2);
+  assert.deepStrictEqual(v2.pages.map((p) => [p.key, p.model]), [['overview', 'gpt-4.1'], ['detail', undefined]]);
+  assert.ok(!('model' in v2.pages[1]));
+  const legacy = await hydrateSpec({ ...base, pages: async () => [
+    { pageId: 'gp-o', name: 'Overview', model: 'gpt-4.1', dataSources: [], codeFile: 'overview.tsx' },
+    { pageId: 'gp-d', name: 'Detail', dataSources: [], codeFile: 'detail.tsx' }] });
+  assert.strictEqual(legacy.schemaVersion, undefined);
+  assert.deepStrictEqual(legacy.pages.map((p) => [p.name, p.model]), [['Overview', 'gpt-4.1'], ['Detail', undefined]]);
+  assert.ok(!('model' in legacy.pages[1]));
+});
+
 test('hydrateSpec keeps the legacy name-based shape when pages carry no key (back-compat)', async () => {
   const read = {
     app: async () => ({ name: 'A', description: '', siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'GenPage', genPageId: 'gp-o', title: 'Overview' }] }] }] } }),

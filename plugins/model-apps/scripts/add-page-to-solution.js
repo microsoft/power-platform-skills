@@ -27,6 +27,7 @@ const {
   emitResult,
 } = require('./lib/dataverse-auth');
 const { odataLit } = require('./lib/odata');
+const { FORM_GUID_RE } = require('./lib/app-spec');
 const APPMODULE_COMPONENT_TYPE = 80;
 const UXAGENTPROJECT_LOGICAL_NAME = 'uxagentproject';
 const CONNECTION_REFERENCE_LOGICAL_NAME = 'connectionreference';
@@ -90,15 +91,36 @@ async function main() {
   const added = [];
 
   // Parsed BEFORE the first mutation so lookup failures refuse the whole run rather
-  // than leaving a half-packaged solution (app + pages added, refs missing).
-  const refs = (flags['connection-refs'] || '')
+  // than leaving a half-packaged solution (app + pages added, refs missing). A repeated
+  // entry (in any letter case) is dropped: adding the same component twice is a wasted write.
+  const unique = (list) => {
+    const seen = new Set();
+    return list.filter((v) => {
+      const key = v.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+  const refs = unique((flags['connection-refs'] || '')
     .split(',')
     .map((s) => s.trim())
-    .filter(Boolean);
-  const pageIds = (flags['page-ids'] || '')
+    .filter(Boolean));
+  const pageIds = unique((flags['page-ids'] || '')
     .split(',')
     .map((s) => s.trim())
-    .filter(Boolean);
+    .filter(Boolean));
+  // Every id must be a GUID before anything is read or written. A malformed page id used to reach
+  // Dataverse only at its own AddSolutionComponent — after the app had been added — so the run failed
+  // with the solution holding the app but not its page.
+  const malformed = [
+    ...(FORM_GUID_RE.test(appId) ? [] : [`app id '${appId}'`]),
+    ...pageIds.filter((id) => !FORM_GUID_RE.test(id)).map((id) => `page id '${id}'`),
+  ];
+  if (malformed.length) {
+    emitResult(false, new Error(`Not a GUID: ${malformed.join(', ')}. Nothing was added to ${solutionUniqueName}.`));
+    return;
+  }
   try {
     // ObjectTypeCode for custom tables is allocated per environment. Resolve both
     // types before the first AddSolutionComponent so a metadata failure leaves the

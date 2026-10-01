@@ -1716,16 +1716,20 @@ test('genpage resolve ignores live pages the manifest does not claim', async () 
   assert.deepStrictEqual(items.map((i) => i.id), [PAGE_1]);
 });
 
-test('genpage deletes nothing when the live-existence query fails (cannot prove what is ours)', async () => {
+test('genpage deletes nothing when the live-existence query fails, and FAILS the step (cannot prove what is ours)', async () => {
   const sdk = {
     async queryRecords(entity) {
       if (entity === 'webresource') return [{ content: Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: PAGE_1 }] }), 'utf8').toString('base64') }];
       throw new Error('uxagentproject query failed');
     },
-    async deleteRecord() {},
+    async deleteRecord() { throw new Error('nothing may be deleted'); },
   };
-  const items = await KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' });
-  assert.deepStrictEqual(items, []);
+  // Not an empty resolution: "none of them" would let the same run delete the manifest naming them.
+  await assert.rejects(() => KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' }), (err) => {
+    assert.match(err.message, /could not check which of the 1 page\(s\) in 'new_app_pagemanifest' still exist \(uxagentproject query failed\) — no page is deleted/);
+    assert.strictEqual(err.failClosed, true, 'a "not found" in the read error must not read as "no pages"');
+    return true;
+  });
 });
 
 test('genpage skips a page the manifest claims but that no longer exists', async () => {
@@ -1737,10 +1741,142 @@ test('genpage skips a page the manifest claims but that no longer exists', async
   assert.deepStrictEqual(items, []);
 });
 
-test('genpage deletes nothing when the manifest is absent or unreadable', async () => {
-  const sdk = { async queryRecords() { throw new Error('no manifest'); }, async deleteRecord() {} };
+test('genpage deletes nothing when the manifest is absent (the app never recorded a page)', async () => {
+  const queried = [];
+  const sdk = { async queryRecords(entity) { queried.push(entity); return []; }, async deleteRecord() {} };
   const items = await KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' });
   assert.deepStrictEqual(items, []);
+  assert.deepStrictEqual(queried, ['webresource'], 'no manifest means no page query at all');
+});
+
+test('genpage deletes nothing when the manifest cannot be read, and FAILS the step', async () => {
+  const sdk = { async queryRecords() { throw new Error('HTTP 404 Not Found from a proxy'); }, async deleteRecord() {} };
+  await assert.rejects(() => KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' }), (err) => {
+    assert.match(err.message, /could not read the page manifest 'new_app_pagemanifest' \(HTTP 404 Not Found from a proxy\) — no page is deleted; re-run the teardown/);
+    assert.strictEqual(err.failClosed, true);
+    return true;
+  });
+});
+
+// The manifest is the ONLY record of which pages this app authored, and the web-resources phase deletes
+// it well after the pages step. Deleting it after a failed pages step left the retry nothing to find
+// the pages by: it resolved none, reported ok, and the pages stayed behind for good.
+function pageTeardownRun({ pageDelete, manifestRead, liveQuery, declareManifest = false } = {}) {
+  const spec = { solution: { uniqueName: 'PgSln', publisherPrefix: 'new' }, app: { name: 'Pages App' } };
+  const manifestName = `${appUniqueName(spec)}_pagemanifest`;
+  if (declareManifest) spec.webResources = [{ name: manifestName.toUpperCase(), type: 'Data' }];
+  const state = {
+    app: true,
+    pages: new Set([PAGE_1]),
+    resources: new Map([[manifestName.toLowerCase(), 'wr-manifest'], [`${appUniqueName(spec)}_icon`.toLowerCase(), 'wr-icon']]),
+    solution: true,
+    deletes: [],
+  };
+  const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: PAGE_1 }] }), 'utf8').toString('base64');
+  const sdk = {
+    resolveArtifact: async (kind, identity) => {
+      if (kind === 'app') return state.app ? [{ id: 'app-1', name: 'Pages App', appModuleIdUnique: 'app-u-1' }] : [];
+      if (kind === 'webResource') {
+        const id = state.resources.get(String(identity.name).toLowerCase());
+        return id ? [{ id, name: identity.name }] : [];
+      }
+      if (kind === 'solution') return state.solution ? [{ id: 'sol-1', name: 'PgSln' }] : [];
+      return [];
+    },
+    deleteAppCascade: async () => { state.deletes.push('app'); state.app = false; return { success: true, deleted: [], failures: [] }; },
+    queryRecords: async (entity) => {
+      if (entity === 'webresource') {
+        if (manifestRead) manifestRead();
+        return state.resources.has(manifestName.toLowerCase()) ? [{ content: manifest }] : [];
+      }
+      if (entity === 'uxagentproject') {
+        if (liveQuery) liveQuery();
+        return [...state.pages].map((id) => ({ uxagentprojectid: id }));
+      }
+      return [];
+    },
+    deleteRecord: async (entity, id) => {
+      assert.strictEqual(entity, 'uxagentproject');
+      if (pageDelete) pageDelete();
+      state.deletes.push(`page:${id}`);
+      state.pages.delete(id);
+    },
+    deleteWebResource: async (id) => {
+      state.deletes.push(id);
+      for (const [name, rid] of state.resources) if (rid === id) state.resources.delete(name);
+    },
+    deleteSolution: async () => { state.deletes.push('solution'); state.solution = false; },
+  };
+  return { spec, sdk, state, manifestName };
+}
+
+for (const [label, fault] of [
+  ['the page delete fails', { pageDelete: () => { throw new Error('HTTP 503 Service Unavailable'); } }],
+  ['the manifest read fails', { manifestRead: () => { const e = new Error('Resource not found (proxy)'); e.statusCode = 404; throw e; } }],
+  ['the live-page read fails', { liveQuery: () => { throw new Error('HTTP 429 Too Many Requests'); } }],
+  ['the live-page read answers a gateway 404', { liveQuery: () => { throw new Error('HTTP 404 Not Found (gateway)'); } }],
+]) {
+  test(`teardown keeps the page manifest (and the solution) when ${label}, and a clean re-run deletes the page`, async () => {
+    const faults = { ...fault };
+    const run = pageTeardownRun({
+      pageDelete: () => faults.pageDelete && faults.pageDelete(),
+      manifestRead: () => faults.manifestRead && faults.manifestRead(),
+      liveQuery: () => faults.liveQuery && faults.liveQuery(),
+    });
+    const events = [];
+    const failed = await runTeardown(run.spec, { apply: true }, { sdk: run.sdk, emit: (e) => events.push(e) });
+    assert.strictEqual(failed.ok, false);
+    assert.deepStrictEqual(failed.errors.map((e) => e.step), ['generative pages authored by this app']);
+    assert.ok(run.state.pages.has(PAGE_1), 'the page is still there');
+    assert.ok(run.state.resources.has(run.manifestName.toLowerCase()), 'the manifest naming the page survives for the re-run');
+    assert.ok(!run.state.resources.has(`${appUniqueName(run.spec)}_icon`.toLowerCase()), 'other app-owned web resources are still cleaned up');
+    assert.ok(run.state.solution, 'the solution is kept while a step failed');
+    const kept = events.find((e) => e.status === 'skip' && e.skip === 'kept' && e.label.includes('(page manifest)'));
+    assert.ok(kept, 'the kept manifest is reported as kept on purpose, not as not-found');
+    assert.match(kept.label, /kept — the generative pages step failed, and a re-run needs this manifest/);
+    assert.ok(failed.skipped.some((s) => s === kept.label));
+
+    for (const k of Object.keys(faults)) faults[k] = null;
+    run.state.deletes.length = 0;
+    const retry = await runTeardown(run.spec, { apply: true }, { sdk: run.sdk, emit: () => {} });
+    assert.strictEqual(retry.ok, true, JSON.stringify(retry.errors));
+    assert.deepStrictEqual(retry.deleted.genpage, [PAGE_1]);
+    assert.strictEqual(run.state.pages.size, 0, 'the retry finds the page through the kept manifest and deletes it');
+    assert.deepStrictEqual(run.state.deletes, [`page:${PAGE_1}`, 'wr-manifest', 'solution'], 'then the manifest, then the solution');
+  });
+}
+
+test('teardown deletes the page manifest when the pages step succeeds or a page is only still referenced', async () => {
+  const run = pageTeardownRun({ pageDelete: () => { throw new Error('The uxagentproject(x) component cannot be deleted because it is referenced by 1 other components.'); } });
+  const r = await runTeardown(run.spec, { apply: true }, { sdk: run.sdk, emit: () => {} });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  assert.ok(run.state.pages.has(PAGE_1), 'a page another consumer holds is left to it');
+  assert.ok(!run.state.resources.has(run.manifestName.toLowerCase()), 'a skip is not a failure: the manifest goes');
+  assert.ok(!run.state.solution);
+});
+
+test('teardown keeps a DECLARED web resource that carries the page manifest name (any case) when the pages step fails', async () => {
+  const run = pageTeardownRun({ declareManifest: true, pageDelete: () => { throw new Error('HTTP 500'); } });
+  const plan = planTeardown(run.spec);
+  assert.strictEqual(plan.filter((s) => s.kind === 'webResource' && s.target.name.toLowerCase() === run.manifestName.toLowerCase()).length, 1,
+    'the declared entry replaces the derived manifest step');
+  const r = await runTeardown(run.spec, { apply: true }, { sdk: run.sdk, emit: () => {} });
+  assert.strictEqual(r.ok, false);
+  assert.ok(run.state.resources.has(run.manifestName.toLowerCase()), 'the declared manifest-named resource is kept');
+});
+
+test('a failure in a step OTHER than the pages step still deletes the page manifest', async () => {
+  const run = pageTeardownRun();
+  const originalDelete = run.sdk.deleteWebResource;
+  run.sdk.deleteWebResource = async (id) => {
+    if (id === 'wr-icon') throw new Error('HTTP 500 icon delete failed');
+    return originalDelete(id);
+  };
+  const r = await runTeardown(run.spec, { apply: true }, { sdk: run.sdk, emit: () => {} });
+  assert.strictEqual(r.ok, false);
+  assert.deepStrictEqual(r.errors.map((e) => e.step), [`web resource ${appUniqueName(run.spec)}_icon (generated app icon)`]);
+  assert.strictEqual(run.state.pages.size, 0);
+  assert.ok(!run.state.resources.has(run.manifestName.toLowerCase()), 'the pages were handled, so the manifest has nothing left to find');
 });
 
 // --- command teardown: delete order must respect the real hierarchy depth -----------------------

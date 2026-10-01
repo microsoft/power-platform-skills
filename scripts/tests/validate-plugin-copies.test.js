@@ -24,21 +24,10 @@ function writeText(root, relPath, content) {
 
 function makeTempRepo() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-copies-'));
-  const exports = [
-    'dataverseOrigin',
-    'requireDataverseOrigin',
-    'getAuthToken',
-    'getAuthTokenAsync',
-    'azIdentity',
-    'preflightAuth',
-    'makeRequest',
-    'dataverseRequest',
-    'ensureOk',
-    'parseArgs',
-    'validateFlags',
-    'readAliasedFlag',
-    'readJsonArg',
-  ];
+  // Follow the validator's own subset config so a newly required export does not need a second,
+  // easily forgotten edit here. emitResult is the one export the copy intentionally rewrites.
+  const { requiredExports, exceptExport } = COPY_SETS[0].subset;
+  const exports = requiredExports.filter((name) => name !== exceptExport);
   const modelAuth = `
 const DATAVERSE_HOST = /^https:\\/\\/contoso\\.crm\\.dynamics\\.com$/;
 let authTokenMemo = null;

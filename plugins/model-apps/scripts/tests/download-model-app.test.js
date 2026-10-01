@@ -1190,6 +1190,89 @@ test('ROUND-TRIP: manifest → download → reverse → hydrate → validate →
 
 // ── Task 6: sitemap-membership + download-by-id + keep pageId + env-wide names + injectable seam ─
 
+test('lexical navigation variants survive deploy-download-rebuild', async () => {
+  const overviewId = 'aaaaaaaa-0000-4000-8000-000000000001';
+  const detailId = 'bbbbbbbb-0000-4000-8000-000000000002';
+  const appId = 'cccccccc-0000-4000-8000-000000000003';
+  const appUniqueId = 'cccccccc-0000-4000-8000-000000000004';
+  const sitemapId = 'cccccccc-0000-4000-8000-000000000005';
+  const appUnique = 'contoso_lexical';
+  const manifest = buildManifest({ pages: [
+    { key: 'overview', name: 'Overview', navigatesTo: [{ targetKey: 'detail' }] },
+    { key: 'detail', name: 'Detail' },
+  ] }, new Map([['overview', overviewId], ['detail', detailId]]));
+  const manifestB64 = Buffer.from(JSON.stringify(manifest), 'utf8').toString('base64');
+  // Only the target arguments depend on this parameter; comments, escapes and Unicode are the oracle.
+  const overviewCode = (target) => [
+    'export default function Overview() {',
+    `  const idText = "${detailId}"; const token = "PAGEREF_detail";`,
+    '  const text = "left\u2028middle\u2029right";',
+    `  // navigateTo({pageType:"generative",pageId:"${detailId}"})\u2028  Xrm.Navigation.navigateTo?.(/* pageType and pageId */{pageType:"generative",pageId:"${target}"});`,
+    `  // another inert pageId\u2029  Xrm.Navigation.navigateTo?.({pageType:"generative",pageId:"${target}"});`,
+    String.raw`  Xrm?.Navigation?.navigateTo({"page\u0054ype":"generative","page\u{49}d":"` + target + '"});',
+    `  Xrm.Navigation.navigateTo({pageType:"generative",pageId:"${target}",// keep pageId\u2029data:{}});`,
+    String.raw`  Xrm.Navigation.navigate\u0054o?.({"pageType":"generative",'page\x49d':"` + target + '"});',
+    `  Xrm.Navigation.navigateTo({pageType:"entityrecord",entityName:"contoso_item",entityId:"${detailId}"});`,
+    '  return null;',
+    '}',
+    '',
+  ].join('\r\n');
+  const deployed = overviewCode(detailId);
+  const canonical = overviewCode('PAGEREF_detail');
+  const detailCode = 'export default function Detail() { const text = "left\u2028right\u2029"; return null; }\r\n';
+  const xml = `<SiteMap><Area><Group><SubArea GenPageId="${overviewId}" Title="Navigation A"/><SubArea GenPageId="${detailId}" Title="Navigation B"/></Group></Area></SiteMap>`;
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'download-lexical-'));
+  try {
+    const sdk = {
+      fetchArtifact: async () => ({
+        name: 'Lexical App', description: '',
+        siteMap: { areas: [{ title: 'Main', groups: [{ title: 'Pages', subAreas: [
+          { type: 'GenPage', genPageId: overviewId, title: 'Navigation A' },
+          { type: 'GenPage', genPageId: detailId, title: 'Navigation B' },
+          { type: 'Entity', entity: 'contoso_item' },
+        ] }] }] },
+      }),
+      queryRecords: async (logical, opts = {}) => {
+        if (logical === 'appmodule') return [{ appmoduleid: appId, appmoduleidunique: appUniqueId, uniquename: appUnique }];
+        if (logical === 'appmodulecomponent') return [{ objectid: sitemapId, componenttype: 62 }];
+        if (logical === 'sitemap') return [{ sitemapxml: xml }];
+        if (logical === 'webresource') return /_pagemanifest'/.test(opts.filter || '') ? [{ content: manifestB64 }] : [];
+        return [];
+      },
+      fetchEntityMetadata: async (logical) => ({ schemaName: logical, displayName: 'Item', primaryNameAttribute: 'contoso_name', attributes: [], relationships: [] }),
+      dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
+    };
+    const genpageCli = {
+      enumerateEnv: async () => ({ ok: true, ids: [overviewId, detailId], pages: [{ pageId: overviewId, name: 'Overview' }, { pageId: detailId, name: 'Detail' }] }),
+      download: async ({ outputDir, pageIds }) => {
+        assert.deepStrictEqual([...pageIds].sort(), [overviewId, detailId].sort());
+        for (const id of pageIds) {
+          const dir = path.join(outputDir, id);
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(path.join(dir, 'page.tsx'), id === overviewId ? deployed : detailCode, 'utf8');
+          fs.writeFileSync(path.join(dir, 'config.json'), '\uFEFF{"dataSources":["contoso_item"]}', 'utf8');
+        }
+        return true;
+      },
+    };
+    const downloaded = await runDownload({ sdk, genpageCli, outDir: out, appId, appUnique });
+    assert.ok(downloaded.ok, JSON.stringify(downloaded));
+    const validation = validateAppSpec(downloaded.spec);
+    assert.ok(validation.ok, validation.errors.join('; '));
+    const overview = downloaded.spec.pages.find((p) => p.key === 'overview');
+    const detail = downloaded.spec.pages.find((p) => p.key === 'detail');
+    const downloadedOverview = fs.readFileSync(path.join(out, overview.source.codeFile));
+    assert.deepStrictEqual(downloadedOverview, Buffer.from(canonical, 'utf8'), 'reverse normalization changes only effective target literals');
+    assert.deepStrictEqual(fs.readFileSync(path.join(out, detail.source.codeFile)), Buffer.from(detailCode, 'utf8'), 'a page without navigation is byte-identical');
+    assert.deepStrictEqual(overview.navigatesTo, [{ targetKey: 'detail' }]);
+    assert.deepStrictEqual(overview.dataSources, ['contoso_item']);
+    const { deployment, unresolved } = resolvePageRefs(new Map([['overview', { code: downloadedOverview.toString('utf8') }]]),
+      new Map(downloaded.spec.pages.map((p) => [p.key, p.pageId])));
+    assert.deepStrictEqual(unresolved, []);
+    assert.strictEqual(deployment.get('overview'), deployed, 're-resolution reproduces every deployed byte, including inert IDs and LS/PS');
+  } finally { fs.rmSync(out, { recursive: true, force: true }); }
+});
+
 test('Task-6: Maker-added page (sitemap, not in manifest) gets a minted key, keeps pageId (C3)', () => {
   const GP_O = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
   const GP_MAKER = '9f2b1a3c-77de-4a10-8b6e-2c4d5e6f7a8b';
@@ -1330,6 +1413,101 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
     assert.ok(!('prefixResolved' in spec.solution), 'the transient prefixResolved flag is stripped from the persisted spec');
   } finally {
     fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+// pac stores each ASCII `"` in a page name as `\"` — in the row name the env-wide listing shows, and in a navigation
+// title it writes (live-measured). The spec's name is what a rebuild sends to pac, which would escape it again, so a
+// download must write the name pac was given: kept as read, every round trip added a backslash.
+test('download writes page names without pac\'s \\" escaping, from the env-wide listing and from a title fallback', async () => {
+  const GP_A = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
+  const GP_B = '5c0a4889-45fd-46ea-91a8-ff876914d644';
+  const APP_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
+  const SM_XML = `<SiteMap><Area><Group><SubArea GenPageId="${GP_A}" Title="Plain A"/>`
+    + `<SubArea GenPageId="${GP_B}" Title="Title \\&quot;B\\&quot; \\\\path"/></Group></Area></SiteMap>`;
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-esc-'));
+  try {
+    const sdk = {
+      fetchArtifact: async () => ({
+        name: 'Test App', description: '',
+        siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [
+          { type: 'GenPage', genPageId: GP_A, title: 'Plain A' },
+          { type: 'GenPage', genPageId: GP_B, title: 'Title \\"B\\" \\\\path' },
+          { type: 'Entity', entity: 'contoso_item' },
+        ] }] }] },
+      }),
+      queryRecords: async (logical, opts) => {
+        const filter = (opts && opts.filter) || '';
+        if (logical === 'appmodule') {
+          const m = filter.match(/uniquename eq '([^']+)'/);
+          if (m) return m[1] === 'test_roundtrip' ? [{ appmoduleid: APP_ID, appmoduleidunique: 'c0ffee00-0000-4000-8000-00000000dddd' }] : [];
+          return [{ appmoduleid: APP_ID, appmoduleidunique: 'c0ffee00-0000-4000-8000-00000000dddd', uniquename: 'test_roundtrip' }];
+        }
+        if (logical === 'appmodulecomponent') return [{ objectid: '5111e0f2-0000-4000-8000-0000000000aa', componenttype: 62 }];
+        if (logical === 'sitemap') return [{ sitemapxml: SM_XML }];
+        return [];
+      },
+      fetchEntityMetadata: async (logical) => ({ schemaName: logical, displayName: 'Item', primaryNameAttribute: `${String(logical).split('_')[0]}_name` }),
+    };
+    const genpageCli = {
+      // Page B is missing from the env-wide listing, so its name falls back to the (pac-written) navigation title.
+      enumerateEnv: async () => ({ ok: true, ids: [GP_A.toLowerCase()], pages: [{ pageId: GP_A, name: 'Say \\"hi\\" now' }] }),
+      download: async ({ outputDir, pageIds }) => {
+        for (const pid of (pageIds || [])) {
+          fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
+          fs.writeFileSync(path.join(outputDir, pid, 'page.tsx'), 'export default function P() { return null; }');
+          // A's model is one the spec can hold; B's is not, so it is left out — and said so.
+          fs.writeFileSync(path.join(outputDir, pid, 'config.json'), '\uFEFF' + JSON.stringify({ dataSources: [], model: pid === GP_A ? 'gpt-4.1' : 'has space' }));
+        }
+        return true;
+      },
+    };
+    const warned = [];
+    const write = process.stderr.write;
+    process.stderr.write = (chunk, ...rest) => { warned.push(String(chunk)); return true; };
+    let result;
+    try {
+      result = await runDownload({ sdk, genpageCli, outDir: out, appId: APP_ID, appUnique: 'test_roundtrip' });
+    } finally {
+      process.stderr.write = write;
+    }
+    assert.ok(result.ok, JSON.stringify(result));
+    const nameOf = (id) => result.spec.pages.find((p) => p.pageId === id).name;
+    assert.strictEqual(nameOf(GP_A), 'Say "hi" now', 'the env-wide (row) name, unescaped');
+    assert.strictEqual(nameOf(GP_B), 'Title "B" \\\\path', 'the title fallback, unescaped — a backslash pac did not add is kept');
+    const modelOf = (id) => result.spec.pages.find((p) => p.pageId === id).model;
+    assert.deepStrictEqual([modelOf(GP_A), modelOf(GP_B)], ['gpt-4.1', undefined]);
+    assert.ok(warned.some((w) => /WARNING: 1 page model id\(s\) the App Spec cannot hold were left out/.test(w) && w.includes(GP_B) && w.includes('"has space"')), warned.join(''));
+  } finally {
+    fs.rmSync(out, { recursive: true, force: true });
+  }
+});
+
+// A download carries each page's model from config.json, so a rebuild sends it back — pac stored "" for an upload
+// without one. An id the App Spec cannot hold would make the downloaded spec fail its own validation, so it is left
+// out and reported; a page with no model gets none.
+test('parseDownloadedPages carries a page model the spec can hold, and reports one it cannot', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-model-'));
+  try {
+    const page = (id, config) => {
+      fs.mkdirSync(path.join(root, id), { recursive: true });
+      fs.writeFileSync(path.join(root, id, 'page.tsx'), 'export default () => null;', 'utf8');
+      fs.writeFileSync(path.join(root, id, 'config.json'), '\uFEFF' + JSON.stringify(config), 'utf8');
+    };
+    const [KEPT, SPACED, NONE, EMPTY] = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222',
+      '33333333-3333-4333-8333-333333333333', '44444444-4444-4444-8444-444444444444'];
+    page(KEPT, { dataSources: [], model: ' claude-3-5-sonnet@20240620 ' });
+    page(SPACED, { dataSources: [], model: 'has space' });
+    page(NONE, { dataSources: [] });
+    page(EMPTY, { dataSources: [], model: '' });
+    const unkept = [];
+    const pages = parseDownloadedPages(root, root, null, [], unkept);
+    const pageOf = (id) => pages.find((p) => p.pageId === id);
+    assert.strictEqual(pageOf(KEPT).model, 'claude-3-5-sonnet@20240620');
+    for (const id of [SPACED, NONE, EMPTY]) assert.ok(!('model' in pageOf(id)), id);
+    assert.deepStrictEqual(unkept, [{ pageId: SPACED, model: 'has space' }], 'only a recorded id the spec cannot hold is reported');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

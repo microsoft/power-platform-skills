@@ -14,7 +14,7 @@
 // Output (stdout JSON, exit 0 even on auth failure — failures are in the fields):
 //   {
 //     "ok": true|false,
-//     "blocker": null | "az_missing" | "az_not_logged_in" | "pac_not_logged_in"
+//     "blocker": null | "az_missing" | "az_not_logged_in" | "az_timeout" | "pac_not_logged_in" | "pac_timeout"
 //                     | "no_env_url" | "whoami_403" | "whoami_401" | "whoami_error",
 //     "message": "human-readable next step",
 //     "warnings": ["..."],
@@ -33,7 +33,12 @@
 // Exit code 0 always (so callers can parse stdout). Use `ok` field to gate.
 
 const { execFileAsync } = require('./lib/process-runner.js');
-const { dataverseRequest, getAuthTokenAsync, parseArgs, validateFlags } = require('./lib/dataverse-auth');
+const { dataverseRequest, getAuthTokenAsync, parseArgs, validateFlags, tokenFailureKind, tokenFailureMessage } = require('./lib/dataverse-auth');
+const { azTimeoutMs, azTimeoutAdvice, cliFailureKind } = require('./lib/cli-failure.js');
+
+// `pac org who` cold-starts the PAC CLI's .NET runtime (~7 s measured on Windows), and longer on a busy
+// machine; a probe that runs out of time is reported as that, never as "not logged in".
+const PAC_PROBE_TIMEOUT_MS = 60000;
 
 // Read the env URL from either `--env <url>` (the flag the build/verify/teardown scripts use) or
 // the first positional arg, so a caller can copy the `--env` form here without silently passing
@@ -55,27 +60,28 @@ function parseEnvUrl(argv) {
   return positional || null;
 }
 
-// Trimmed stdout, or null on any failure. The child runs in the background so the event loop stays
-// free to drain other CLI stdout and service their timeout timers while Azure CLI and PAC cold-start.
-function runQuietAsync(cmd, args) {
+// `{ out, failure }`: the trimmed stdout, or null with the failure's kind — 'timeout' | 'missing' |
+// 'failed' (cli-failure.js). The child runs in the background so the event loop stays free to drain
+// other CLI stdout and service their timeout timers while Azure CLI and PAC cold-start.
+function runQuietAsync(cmd, args, timeoutMs) {
   let child = null;
   let settled = false;
   const promise = new Promise((resolve) => {
     try {
       child = execFileAsync(cmd, args, {
         encoding: 'utf8',
-        timeout: 15000,
+        timeout: timeoutMs,
         windowsHide: true,
       }, (error, stdout) => {
         settled = true;
-        resolve(error ? null : String(stdout || '').trim());
+        resolve(error ? { out: null, failure: cliFailureKind(error) } : { out: String(stdout || '').trim(), failure: null });
       });
       // execFile always opens a stdin pipe; close it (the effect of stdio 'ignore'), so a CLI that
       // checks stdin can never wait on it.
       if (child && child.stdin) child.stdin.end();
-    } catch {
+    } catch (e) {
       settled = true;
-      resolve(null);
+      resolve({ out: null, failure: cliFailureKind(e) });
     }
   });
   return {
@@ -135,13 +141,25 @@ async function main() {
   // call ~3-5 s. Run one after another (az --version, az account show, pac, then az again for the
   // WhoAmI token), the preflight cost ~19 s at the start of every /genpage and /app-builder run.
   // pac needs nothing from az, so it is started FIRST and runs while the az probes run.
-  const pacOrgProbe = runQuietAsync('pac', ['org', 'who']);
+  const pacOrgProbe = runQuietAsync('pac', ['org', 'who'], PAC_PROBE_TIMEOUT_MS);
+  const azBudget = azTimeoutMs();
+  // A slow Azure CLI is reported as slow — neither "not installed" nor "not logged in" is true of it,
+  // and sending the user to reinstall or `az login` fixes nothing.
+  const azTimedOut = (command, partial = {}) => {
+    pacOrgProbe.cancel();
+    return emit(buildResult(Object.assign({ blocker: 'az_timeout', message: azTimeoutAdvice(command, azBudget) }, partial)));
+  };
 
   // 1) az login. `az account show` answers "installed?" and "logged in?" together on the happy path,
-  //    so `az --version` runs only to tell those two failures apart.
-  const azUser = await runQuietAsync('az', ['account', 'show', '--query', 'user.name', '-o', 'tsv']).promise;
+  //    so `az --version` runs only to tell those two failures apart — and not at all when the runner
+  //    already found no `az` on PATH.
+  const account = await runQuietAsync('az', ['account', 'show', '--query', 'user.name', '-o', 'tsv'], azBudget).promise;
+  const azUser = account.out;
   if (!azUser) {
-    if (await runQuietAsync('az', ['--version']).promise == null) {
+    if (account.failure === 'timeout') return azTimedOut('az account show');
+    const version = account.failure === 'missing' ? account : await runQuietAsync('az', ['--version'], azBudget).promise;
+    if (version.failure === 'timeout') return azTimedOut('az --version');
+    if (version.out == null) {
       // This branch returns before the pac probe is awaited. Kill the child explicitly so a
       // non-detached PAC process cannot outlive the preflight after its parent exits.
       pacOrgProbe.cancel();
@@ -165,13 +183,20 @@ async function main() {
 
   // Acquire the WhoAmI token while pac is still running. getAuthToken memoizes per process, so the
   // dataverseRequest below reuses it instead of paying another az cold start after pac returns. A
-  // failure here is not reported: WhoAmI acquires again and reports it with the right blocker.
+  // failure here is not reported: WhoAmI acquires again and reports it with the right blocker — except
+  // a TIMEOUT, which WhoAmI's own attempt would only repeat, doubling the wait before saying so.
   if (envUrl) {
-    try { await getAuthTokenAsync(envUrl); } catch { /* reported by WhoAmI */ }
+    let warmed = null;
+    try { warmed = await getAuthTokenAsync(envUrl); } catch { /* reported by WhoAmI */ }
+    if (!warmed && tokenFailureKind(envUrl) === 'timeout') {
+      return azTimedOut('az account get-access-token', { azUser, envUrl, warnings, message: tokenFailureMessage(envUrl, '') });
+    }
   }
 
   // 2) pac user + env URL (best-effort — pac is NOT required for the Dataverse build path)
-  const pacOrg = await pacOrgProbe.promise;
+  const pacProbe = await pacOrgProbe.promise;
+  const pacOrg = pacProbe.out;
+  const pacSlow = pacProbe.failure === 'timeout';
   let pacUser = null;
   if (pacOrg) {
     const m = pacOrg.match(/Connected as\s+([^\s\r\n]+)/i);
@@ -182,6 +207,7 @@ async function main() {
     }
   }
   if (!pacUser) {
+    const slowPac = `\`pac org who\` did not answer within ${PAC_PROBE_TIMEOUT_MS / 1000} s — the PAC CLI can be that slow to start on a busy machine, so its login is unknown, not missing`;
     if (requirePac) {
       // Genpage caller (--require-pac): pac is genuinely required to upload pages, so keep the hard block.
       return emit(
@@ -189,17 +215,17 @@ async function main() {
           azUser,
           envUrl,
           warnings,
-          blocker: 'pac_not_logged_in',
-          message: 'PAC CLI is not logged in. Run `pac auth create --environment <url>` to authenticate.',
+          blocker: pacSlow ? 'pac_timeout' : 'pac_not_logged_in',
+          message: pacSlow ? `${slowPac}. Retry.` : 'PAC CLI is not logged in. Run `pac auth create --environment <url>` to authenticate.',
         })
       );
     }
     // App-builder path: not a blocker — the build/verify/teardown flow uses the az token, not pac.
     // Only the genpage `pages` phase shells out to `pac model genpage`. Warn so a genpage run isn't surprised.
-    warnings.push(
-      'PAC CLI is not logged in. This is only required for the genpage `pages` phase (`pac model genpage ...`); ' +
-        'table/column/form/view/app builds authenticate with the az token. Run `pac auth create --environment <url>` if you need genpage.'
-    );
+    warnings.push(pacSlow
+      ? `${slowPac}. This is only required for the genpage \`pages\` phase (\`pac model genpage ...\`); table/column/form/view/app builds authenticate with the az token.`
+      : 'PAC CLI is not logged in. This is only required for the genpage `pages` phase (`pac model genpage ...`); ' +
+        'table/column/form/view/app builds authenticate with the az token. Run `pac auth create --environment <url>` if you need genpage.');
   }
   if (!envUrl) {
     return emit(
@@ -221,6 +247,9 @@ async function main() {
   try {
     whoRes = await dataverseRequest(envUrl, 'GET', 'WhoAmI', null, { timeout: 30000 });
   } catch (e) {
+    // The token for WhoAmI is read here when the env URL came from pac (nothing was warmed above); a
+    // read that ran out of time is the Azure CLI being slow, not WhoAmI failing.
+    const slow = tokenFailureKind(envUrl) === 'timeout';
     return emit(
       buildResult({
         azUser,
@@ -228,8 +257,8 @@ async function main() {
         envUrl,
         identitiesMatch,
         warnings,
-        blocker: 'whoami_error',
-        message: `WhoAmI probe failed: ${e.message}`,
+        blocker: slow ? 'az_timeout' : 'whoami_error',
+        message: slow ? e.message : `WhoAmI probe failed: ${e.message}`,
       })
     );
   }
@@ -281,8 +310,12 @@ async function main() {
     );
   }
 
+  // A pac probe that ran out of time says THAT here too — its warning already does, and "not logged in" beside
+  // it contradicted it: a slow PAC CLI's login is unknown, not missing.
   const readyMessage = !pacUser
-    ? `Ready (az signed in as ${azUser}, env ${envUrl}). PAC is not logged in — only needed for the genpage pages phase.`
+    ? (pacSlow
+      ? `Ready (az signed in as ${azUser}, env ${envUrl}). PAC's login is unknown — \`pac org who\` did not answer in time; it is only needed for the genpage pages phase.`
+      : `Ready (az signed in as ${azUser}, env ${envUrl}). PAC is not logged in — only needed for the genpage pages phase.`)
     : identitiesMatch
       ? `Ready (az + pac both signed in as ${azUser}, env ${envUrl}).`
       : `Ready, but az ("${azUser}") and pac ("${pacUser}") use different identities. WhoAmI passed so this works for now — but if entity creation later returns 403, run \`az login --username ${pacUser}\` to align them.`;

@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
+const { loadCli } = require('./helpers/cli-harness.js');
 
 const scriptPath = path.join(__dirname, '..', 'list-connections.js');
 const scriptSrc = fs.readFileSync(scriptPath, 'utf8');
@@ -199,13 +200,39 @@ test('extractConnectorId returns the api path, or empty string when there is non
   assert.equal(extractConnectorId('garbage'), '');
 });
 
-test('unparseable output yields no rows rather than throwing', () => {
-  // The caller reports "no connections found"; a throw here would abort a /genpage run that could
-  // still proceed with mock data.
-  assert.deepEqual(parsePacConnectionList('no table here'), []);
-  assert.deepEqual(parsePacConnectionList(''), []);
-  assert.equal(parseJsonConnections('{not json'), null, 'invalid JSON defers to the table parsers');
-  assert.equal(parseJsonConnections('"a string"'), null, 'non-array JSON defers too');
+// Output no parser recognises is REFUSED, never read as "no connections". That answer sends the connector
+// agent on to CREATE a connection (genpage-connector-builder.md, "No suitable connection exists"), so an
+// unreadable listing — a warning printed on a zero exit, JSON cut short, a changed format — would make a
+// duplicate of a connection the maker already has.
+test('unreadable output is refused, never read as "no connections"', () => {
+  for (const raw of ['Warning: failed to retrieve connections.', 'not JSON', '[{"Id":', '{"unexpected":true}', 'no table here', '', 'Connected as maker@contoso.onmicrosoft.com\r\n', 'null',
+    // Prose that only MENTIONS a connector or an id column is not a table header — nor is prose over a run of dashes.
+    'Warning: failed to retrieve connector metadata.', 'Connection Id could not be read.',
+    'Status of connector refresh\n------  -------\n', 'Connector  Status\nshared_sql  Connected\n']) {
+    assert.throws(() => parsePacConnectionList(raw), /could not read[\s\S]*not reported as "no connections"/, JSON.stringify(raw));
+  }
+  assert.throws(() => parsePacConnectionList('Warning: failed to retrieve connections.'), /first line: "Warning: failed to retrieve connections\."/);
+  // The helper itself still answers "not JSON" with null, for the caller to judge.
+  assert.equal(parseJsonConnections('{not json'), null);
+  assert.equal(parseJsonConnections('"a string"'), null);
+});
+
+test('an empty listing is one PAC itself reports as empty', () => {
+  for (const raw of ['[]', '{"value":[]}', 'No connections found.', 'Connected as maker@contoso.onmicrosoft.com\r\nNo connections found.\r\n',
+    'Connected as maker@contoso.onmicrosoft.com\r\nId                               Name       API Id                                                      Status\r\n',
+    'Connection Name    Connector Id    Connection Id\n---------------    ------------    -------------\n']) {
+    assert.deepEqual(parsePacConnectionList(raw), [], JSON.stringify(raw));
+  }
+});
+
+// An identifier is a non-empty string. Whitespace, a number, an object or an array in an id column made a
+// row with "both ids" that nothing could ever bind — offered to the maker as a real connection.
+test('identifiers must be non-empty strings, trimmed', () => {
+  for (const [Id, ConnectorId] of [['   ', '\t'], [42, 27], [{ nested: 'x' }, { nested: 'y' }], [['a'], ['b']]]) {
+    assert.throws(() => parsePacConnectionList(JSON.stringify([{ Id, ConnectorId }])), /no usable connection rows/, JSON.stringify({ Id, ConnectorId }));
+  }
+  assert.deepEqual(parsePacConnectionList(JSON.stringify([{ Id: '  connection-a ', ConnectorId: ` ${SP_API}\t` }])),
+    [{ connectorId: SP_API, connectionId: 'connection-a', displayName: SP_API }]);
 });
 
 test('rows with no identifying field at all are dropped', () => {
@@ -240,4 +267,147 @@ test('a row without both ids is dropped beside usable rows, never offered as a p
     '(wrapped name tail)',
   ].join('\n');
   assert.deepEqual(parsePacConnectionList(table).map((r) => r.connectionId), [SP_CONN]);
+});
+
+// main() is the only place a PAC result becomes a connection-reference query and then a structured
+// result. Parser unit tests never see a zero exit with a warning turned into `{ ok: true, connections: [] }`,
+// which is the answer that sends connection setup on to create a duplicate.
+const ENV_URL = 'https://contoso.crm.dynamics.com';
+const SQL_API = '/providers/Microsoft.PowerApps/apis/shared_sql';
+const SQL_CONN = '/providers/Microsoft.PowerApps/apis/shared_sql/connections/sql1';
+
+function driveDiscovery({ pac, refs, refsError }) {
+  const spawned = [];
+  const queries = [];
+  const emitted = [];
+  const real = require('../lib/dataverse-auth.js');
+  const cli = loadCli(scriptPath, {
+    argv: [ENV_URL],
+    requires: {
+      './lib/process-runner.js': {
+        spawnResultSync: (cmd, args, opts) => {
+          spawned.push({ cmd, args, opts });
+          return pac;
+        },
+      },
+      // Required without the `.js` suffix. emitResult sits inside main's try, so a throwing stand-in
+      // would be caught and re-reported as a discovery failure — hiding the payload under test.
+      // The real printer exits instead of throwing, which is what this recording stands in for.
+      './lib/dataverse-auth': {
+        parseArgs: real.parseArgs,
+        validateFlags: real.validateFlags,
+        ensureOk: real.ensureOk,
+        dataverseRequest: async (envUrl, method, apiPath) => {
+          queries.push({ envUrl, method, apiPath });
+          if (refsError) throw refsError;
+          return refs;
+        },
+        emitResult: (ok, payload) => { emitted.push({ ok, payload }); },
+      },
+    },
+  });
+  return cli.main().then(() => ({ spawned, queries, emitted }));
+}
+
+test('CLI discovery failure is not an empty success', async () => {
+  const warning = 'Warning: failed to retrieve connections.';
+  const warningMessage = 'pac connection list printed output this script could not read — no connection table, JSON list or "no connections found" message '
+    + `(first line: "${warning}"). It is not reported as "no connections", which would lead connection setup to create a duplicate; run \`pac connection list\` to see what it printed.`;
+  const malformed = '[{"Id":';
+  const malformedMessage = 'pac connection list printed output this script could not read — it starts like JSON but is not a connection list '
+    + `(first line: "${malformed}"). It is not reported as "no connections", which would lead connection setup to create a duplicate; run \`pac connection list\` to see what it printed.`;
+
+  const refused = await driveDiscovery({ pac: { status: 0, stdout: warning, stderr: '' } });
+  assert.deepEqual(refused.spawned.map((s) => [s.cmd, s.args]), [['pac', ['connection', 'list']]]);
+  assert.deepEqual(refused.queries, [], 'a warning on exit 0 must not query connection references');
+  assert.equal(refused.emitted.length, 1);
+  assert.equal(refused.emitted[0].ok, false);
+  assert.equal(refused.emitted[0].payload.message, warningMessage);
+
+  const badTable = await driveDiscovery({ pac: { status: 0, stdout: malformed, stderr: '' } });
+  assert.deepEqual(badTable.queries, []);
+  assert.equal(badTable.emitted[0].ok, false);
+  assert.equal(badTable.emitted[0].payload.message, malformedMessage);
+
+  const nonzero = await driveDiscovery({ pac: { status: 2, stdout: '', stderr: 'Access denied' } });
+  assert.deepEqual(nonzero.queries, []);
+  assert.equal(nonzero.emitted[0].ok, false);
+  assert.equal(nonzero.emitted[0].payload.message, 'pac connection list failed (exit 2): Access denied');
+
+  const missing = await driveDiscovery({ pac: { error: new Error('spawn pac ENOENT'), status: null, stdout: '', stderr: '' } });
+  assert.deepEqual(missing.queries, []);
+  assert.equal(missing.emitted[0].ok, false);
+  assert.equal(
+    missing.emitted[0].payload.message,
+    'pac connection list could not run: spawn pac ENOENT. Ensure the PAC CLI is installed and on PATH (dotnet tool install -g Microsoft.PowerApps.CLI.Tool).'
+  );
+
+  const empty = await driveDiscovery({
+    pac: { status: 0, stdout: 'No connections found.', stderr: '' },
+    refs: { status: 200, data: { value: [] } },
+  });
+  assert.deepEqual(empty.queries, [{
+    envUrl: ENV_URL,
+    method: 'GET',
+    apiPath: 'connectionreferences?$select=connectionreferencelogicalname,connectorid,connectionid',
+  }]);
+  assert.deepEqual(empty.emitted, [{
+    ok: true,
+    payload: { ok: true, connections: [], connectionReferences: [] },
+  }]);
+
+  const listed = await driveDiscovery({
+    pac: {
+      status: 0,
+      stdout: JSON.stringify([
+        { 'Connection Name': 'Zulu SQL', 'Connector Id': SQL_API, 'Connection Id': SQL_CONN },
+        { 'Connection Name': 'Alpha SharePoint', 'Connector Id': SP_API, 'Connection Id': SP_CONN },
+      ]),
+      stderr: '',
+    },
+    refs: {
+      status: 200,
+      data: {
+        value: [
+          { connectionreferencelogicalname: 'new_sql_unbound', connectorid: SQL_API, connectionid: null },
+          { connectionreferencelogicalname: 'new_sp_bound', connectorid: SP_API, connectionid: SP_CONN },
+        ],
+      },
+    },
+  });
+  assert.equal(listed.queries[0].envUrl, ENV_URL);
+  assert.deepEqual(listed.emitted, [{
+    ok: true,
+    payload: {
+      ok: true,
+      connections: [
+        {
+          connectorId: SP_API,
+          connectionId: SP_CONN,
+          displayName: 'Alpha SharePoint',
+          readyToBind: true,
+          connectionReferences: ['new_sp_bound'],
+        },
+        {
+          connectorId: SQL_API,
+          connectionId: SQL_CONN,
+          displayName: 'Zulu SQL',
+          readyToBind: false,
+          connectionReferences: ['new_sql_unbound'],
+        },
+      ],
+      connectionReferences: [
+        { logicalName: 'new_sp_bound', connectorId: SP_API, connectionId: SP_CONN },
+        { logicalName: 'new_sql_unbound', connectorId: SQL_API, connectionId: null },
+      ],
+    },
+  }]);
+
+  const refsDown = await driveDiscovery({
+    pac: { status: 0, stdout: 'No connections found.', stderr: '' },
+    refs: { status: 500, data: { error: { message: 'refs unavailable' } } },
+  });
+  assert.equal(refsDown.queries.length, 1, 'the reference read is attempted only after a readable listing');
+  assert.equal(refsDown.emitted[0].ok, false);
+  assert.equal(refsDown.emitted[0].payload.message, 'List connection references failed: HTTP 500 — refs unavailable');
 });

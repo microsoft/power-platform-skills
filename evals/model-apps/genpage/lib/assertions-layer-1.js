@@ -15,6 +15,14 @@
 
 const path = require('node:path');
 const { pageFileProblems } = require('../../../../plugins/model-apps/scripts/lib/page-file-targets.js');
+const { currentContract, workflowCalls, isAuth, isDiscovery, authGateProblems, discoveryProblems, refusalProblems } = require('./workflow-evidence.js');
+const { gradeEvidence } = require('./evidence-utils.js');
+const { navigationProblems } = require('./navigation-contract.js');
+const { workerProblems } = require('./worker-contract.js');
+const { uploadProblems, uploadPreservationProblems } = require('./upload-contract.js');
+const { planSection, findMarkdownTable, parseMarkdownRows } = require('./plan-evidence.js');
+const { customApiProblems, customApiGateProblems } = require('./custom-api-contract.js');
+const { packagingProblems, isPackaging } = require('./packaging-contract.js');
 
 function fail(reason) { return { status: 'fail', reason }; }
 function pass() { return { status: 'pass', reason: '' }; }
@@ -55,6 +63,14 @@ function isEditFlowFixture(fixture) {
   return Boolean(fixture && fixture.genpageEditPlan && !fixture.genpagePlan);
 }
 
+function beforePlanningRefusal(fixture) {
+  return fixture.manifest?.expectedOutcome === 'refused' && fixture.manifest.refusal?.stage === 'discovery';
+}
+
+function checkProblems(problems) {
+  return problems.length ? fail(problems[0]) : pass();
+}
+
 function logHas(log, pattern) {
   return Boolean(log) && new RegExp(pattern, 'mi').test(log);
 }
@@ -87,25 +103,6 @@ function isUnattendedLog(log) {
     // the first alternative already matches. Matching the documented marker is decidable; matching
     // English is not. Re-adding a prose alternative re-opens the negation problem.
   );
-}
-
-function planSection(plan, heading) {
-  // Returns text under "## <heading>" up to the next "## " heading or end-of-file.
-  // Implemented as line scan to avoid JS regex \Z limitation.
-  if (!plan) return null;
-  const lines = plan.split('\n');
-  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const startRe = new RegExp(`^##\\s+${escaped}\\s*$`, 'i');
-  let i = 0;
-  while (i < lines.length && !startRe.test(lines[i])) i++;
-  if (i >= lines.length) return null;
-  i++; // skip the heading line
-  const out = [];
-  while (i < lines.length && !/^##\s/.test(lines[i])) {
-    out.push(lines[i]);
-    i++;
-  }
-  return out.join('\n').trim();
 }
 
 function entitiesNeedCreating(plan) {
@@ -203,37 +200,6 @@ function parsePlanSections(plan) {
   return sections;
 }
 
-function findMarkdownTable(sectionText, requiredColumns) {
-  const lines = sectionText.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    if (!/^\s*\|.*\|\s*$/.test(lines[i])) continue;
-    const headers = lines[i]
-      .split('|')
-      .slice(1, -1)
-      .map((header) => header.trim().toLowerCase());
-    const hasRequired = requiredColumns.every((column) => headers.includes(column.toLowerCase()));
-    if (hasRequired) return { lineIndex: i, headers, lines: lines.slice(i) };
-  }
-  return null;
-}
-
-function parseMarkdownRows(sectionText, requiredColumns) {
-  const table = findMarkdownTable(sectionText, requiredColumns);
-  if (!table) return [];
-  const rows = [];
-  for (const line of table.lines.slice(2)) {
-    if (!/^\s*\|.*\|\s*$/.test(line)) break;
-    const cells = line.split('|').slice(1, -1).map((cell) => cell.trim());
-    if (cells.length === 0 || cells.every((cell) => cell === '')) continue;
-    const row = {};
-    for (let i = 0; i < table.headers.length; i++) {
-      row[table.headers[i]] = cells[i] || '';
-    }
-    rows.push(row);
-  }
-  return rows;
-}
-
 function workingDirectoryOf(plan) {
   const section = planSection(plan, 'Working Directory');
   return section ? section.split(/\r?\n/)[0].trim() : '';
@@ -271,12 +237,20 @@ function parsePerPageBlocks(sectionText) {
   return blocks;
 }
 
-function hasBulletField(lines, field) {
+function bulletFieldValues(lines, field) {
   const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // Some fixture plans use the required field as a parent bullet whose details
   // are nested on following lines. The schema contract requires the field to be
   // present; it does not require single-line prose after the colon.
-  return lines.some((line) => new RegExp(`^\\s*[-*]\\s+\\*\\*${escaped}:\\*\\*`, 'i').test(line));
+  const pattern = new RegExp(`^\\s*[-*]\\s+\\*\\*${escaped}:\\*\\*\\s*(.*?)\\s*$`, 'i');
+  return lines.flatMap((line) => {
+    const match = pattern.exec(line);
+    return match ? [match[1]] : [];
+  });
+}
+
+function hasBulletField(lines, field) {
+  return bulletFieldValues(lines, field).length > 0;
 }
 
 function validateEnvironment(sectionText, errors) {
@@ -415,6 +389,14 @@ function validateGenpagePlanSchema(plan) {
           errors.push(schemaError('missing-per-page-field', `page "${pageName}" missing required per-page field "${field}"`, { section: 'Per-Page Specifications', page: pageName, field }));
         }
       }
+      // Dispatch reads the Pages table, while the builder reads its per-page File. A disagreement
+      // can overwrite a sibling or leave the declared target unwritten even though both names are safe.
+      const files = bulletFieldValues(block.lines, 'File');
+      if (files.length && (files.length !== 1 || files[0] !== row.file)) {
+        errors.push(schemaError('page-file-mismatch', `page "${pageName}" must have exactly one File matching ## Pages: expected "${row.file}", got ${JSON.stringify(files)}`, {
+          section: 'Per-Page Specifications', page: pageName, expectedFile: row.file, files,
+        }));
+      }
     }
 
     for (const pageName of blocks.keys()) {
@@ -530,6 +512,7 @@ WORKFLOW_ASSERTIONS.set(
   'Phase 1 (Planner): genpage-plan.md ALWAYS contains \'Solution:\' and \'Publisher Prefix:\' lines in ## Environment; default fallback is \'Solution: Default\' + \'Publisher Prefix: new\' for code-only flows',
   ({ fixture }) => {
     const plan = fixture.genpagePlan;
+    if (beforePlanningRefusal(fixture)) return skip('discovery refused before a create plan was authored');
     if (isEditFlowFixture(fixture)) return skip('edit flow — no genpage-plan.md is produced');
     if (!plan) return fail('genpage-plan.md not present in fixture');
     const env = planSection(plan, 'Environment');
@@ -547,6 +530,7 @@ WORKFLOW_ASSERTIONS.set(
     const log = fixture.workflowLog;
     const plan = fixture.genpagePlan;
     if (!log) return fail('no workflow-log.md');
+    if (beforePlanningRefusal(fixture)) return skip('discovery refused before solution selection');
     if (isEditFlowFixture(fixture)) return skip('edit flow — the solution question belongs to the create flow');
     if (!plan) return fail('no genpage-plan.md');
     const needsMetadata = entitiesNeedCreating(plan) || newAppNeeded(plan);
@@ -587,6 +571,7 @@ WORKFLOW_ASSERTIONS.set(
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
+    if (beforePlanningRefusal(fixture)) return skip('discovery refused before plan approval');
     if (isEditFlowFixture(fixture)) return skip('edit flow — approval is presented from genpage-edit-plan.md');
     if (isUnattendedLog(log)) {
       if (/EnterPlanMode called|ExitPlanMode called|AskUserQuestion:/i.test(log)) {
@@ -609,6 +594,7 @@ WORKFLOW_ASSERTIONS.set(
 WORKFLOW_ASSERTIONS.set(
   'Phase 1 (Planner): genpage-plan.md is written to the working directory, conforming to references/plan-schema.md',
   ({ fixture }) => {
+    if (beforePlanningRefusal(fixture)) return skip('discovery refused before a create plan was authored');
     if (isEditFlowFixture(fixture)) return skip('edit flow — no genpage-plan.md is produced');
     if (!fixture.genpagePlan) return fail('genpage-plan.md not present in fixture');
     const errors = validateGenpagePlanSchema(fixture.genpagePlan);
@@ -628,22 +614,11 @@ WORKFLOW_ASSERTIONS.set(
     const log = fixture.workflowLog;
     const plan = fixture.genpagePlan;
     if (!log) return fail('no workflow-log.md');
+    if (beforePlanningRefusal(fixture)) return skip('discovery refused before entity planning');
     if (isEditFlowFixture(fixture)) return skip('edit flow — entity creation belongs to the create flow');
     if (!plan) return fail('no genpage-plan.md');
     if (!entitiesNeedCreating(plan)) return skip('no entity creation required');
-    if (!/check-auth\.js/.test(log)) return fail('check-auth.js not invoked');
-    // Order against the FIRST actual entity-creation script invocation, not
-    // against a meta-list mention of the entity-builder agent name. Meta-lists
-    // like "## Agents Invoked" can name the agent before the actual commands.
-    const idxCheck = log.search(/check-auth\.js/);
-    const idxFirstScript = log.search(/\b(provision-entities\.js|create-table\.js|add-column\.js|create-relationship\.js|create-record\.js)\b/);
-    if (idxFirstScript !== -1 && idxFirstScript < idxCheck) {
-      return fail('entity creation script invoked before check-auth.js');
-    }
-    if (!/(?:^|\s|"|,|{)ok\s*[:=]\s*"?true"?/i.test(log)) {
-      return fail('check-auth.js did not return ok:true (or not logged)');
-    }
-    return pass();
+    return checkProblems(authGateProblems(fixture, { required: true }));
   }
 );
 
@@ -652,6 +627,10 @@ WORKFLOW_ASSERTIONS.set(
   ({ fixture }) => {
     const log = fixture.workflowLog;
     if (!log) return fail('no workflow-log.md');
+    if (fixture.manifest?.expectedOutcome === 'refused') {
+      return checkProblems(refusalProblems(fixture));
+    }
+    if (currentContract(fixture)) return gradeEvidence(uploadProblems, fixture);
     if (!UPLOAD_CMD.test(log)) return fail('no upload invocation recorded');
     // `--prompt` also matches `--prompt-file`, which is the intent: what is asserted is that a
     // prompt was recorded and scoped, not which flag carried it.
@@ -664,6 +643,7 @@ WORKFLOW_ASSERTIONS.set(
   'Prefix discipline — plan format: Every name in `## Entity Creation Required` (table headings, column Suffix values, choice column suffixes, relationship Lookup Suffix values) is a bare suffix matching `^[a-z][a-z0-9]+$`. No value contains an underscore or a prefix. The prefix lives only in `## Environment` → `Publisher Prefix:`.',
   ({ fixture }) => {
     const plan = fixture.genpagePlan;
+    if (beforePlanningRefusal(fixture)) return skip('discovery refused before entity planning');
     if (isEditFlowFixture(fixture)) return skip('edit flow — no ## Entity Creation Required section exists');
     if (!plan) return fail('no genpage-plan.md');
     const section = planSection(plan, 'Entity Creation Required');
@@ -685,12 +665,12 @@ WORKFLOW_ASSERTIONS.set(
 );
 
 WORKFLOW_ASSERTIONS.set(
-  'Prefix discipline — resolved names: For every operation in `entity-creation-log.md`, the Resolved Full Name starts with the `Publisher Prefix:` value from the plan\'s `## Environment` followed by `_` and the bare suffix from the plan (e.g., Publisher Prefix `crb2b` + suffix `playername` → `crb2b_playername`).',
+  'Prefix discipline — resolved names: For every operation in `genpage-entity-creation-log.md`, the Resolved Full Name starts with the `Publisher Prefix:` value from the plan\'s `## Environment` followed by `_` and the bare suffix from the plan (e.g., Publisher Prefix `crb2b` + suffix `playername` → `crb2b_playername`).',
   ({ fixture }) => {
     const plan = fixture.genpagePlan;
     const log = fixture.entityCreationLog;
     if (!plan) return skip('no genpage-plan.md');
-    if (!log) return skip('no entity-creation-log.md');
+    if (!log) return skip('no genpage-entity-creation-log.md (or its legacy entity-creation-log.md alias)');
     const env = planSection(plan, 'Environment');
     if (!env) return fail('plan has no ## Environment section');
     // Allow optional list markers (`- Publisher Prefix: new` or `* Publisher Prefix: new`).
@@ -725,6 +705,74 @@ WORKFLOW_ASSERTIONS.set(
 );
 
 const PHASE_EXPECTATIONS = new Map();
+
+const PACKAGING_ASSERTION = 'Phase 6.7: Packaging uses every deployed page id, the approved solution and discovered component types; invalid identities refuse before writes and results agree with read-back';
+PHASE_EXPECTATIONS.set(PACKAGING_ASSERTION, ({ fixture }) => gradeEvidence(packagingProblems, fixture));
+WORKFLOW_ASSERTIONS.set(PACKAGING_ASSERTION, ({ fixture }) => {
+  const section = planSection(fixture.genpagePlan, 'Solution Packaging');
+  if (!fixture.manifest?.packaging && !/Package into solution:\s*true\b/i.test(section || '') && !workflowCalls(fixture).some((call) => isPackaging(call.command))) {
+    return skip('solution packaging was not requested or attempted');
+  }
+  return gradeEvidence(packagingProblems, fixture);
+});
+
+WORKFLOW_ASSERTIONS.set(
+  'Phase 4.6: A populated Custom API plan never discovers, generates or uploads after a disabled or unreadable feature gate',
+  ({ fixture }) => {
+    const body = planSection(fixture.genpagePlan, 'Custom API Bindings');
+    if (!fixture.manifest?.customApi && (!body || body === 'No custom API bindings.')) return skip('no Custom API lifecycle in this workflow');
+    return gradeEvidence(customApiGateProblems, fixture);
+  }
+);
+
+PHASE_EXPECTATIONS.set(
+  'Phase 5: Custom API discovery, gate, bare bindings, runtime calls and update preservation or explicit clear agree',
+  ({ fixture }) => gradeEvidence(customApiProblems, fixture)
+);
+
+PHASE_EXPECTATIONS.set(
+  'Phase 6: Create uploads use name-file and preserve the exact approved name prompt and agent-message text',
+  ({ fixture }) => gradeEvidence((f) => uploadPreservationProblems(f, 'create'), fixture)
+);
+
+PHASE_EXPECTATIONS.set(
+  'Edit Phase 6: Updates preserve omitted name model data sources and untouched connector and action bindings',
+  ({ fixture }) => gradeEvidence((f) => uploadPreservationProblems(f, 'update'), fixture)
+);
+
+PHASE_EXPECTATIONS.set(
+  'Phase 6.5: Every effective navigation target resolves against the deployed page map; exact substitutions preserve non-navigation bytes and only affected pages reupload',
+  ({ fixture }) => gradeEvidence(navigationProblems, fixture)
+);
+
+PHASE_EXPECTATIONS.set(
+  'Phase 5: A rejected worker artifact prevents upload until a stamped, complete regeneration passes the production gate',
+  ({ fixture }) => gradeEvidence(workerProblems, fixture)
+);
+
+PHASE_EXPECTATIONS.set(
+  'Phase 2a: Auth timeout retries once then halts before provisioning or upload',
+  ({ fixture }) => checkProblems(refusalProblems(fixture))
+);
+
+PHASE_EXPECTATIONS.set(
+  'Phase 1: Discovery refusal preserves the error and halts before connection setup or generation',
+  ({ fixture }) => checkProblems(refusalProblems(fixture))
+);
+
+WORKFLOW_ASSERTIONS.set(
+  'Phase 2a: Every applicable auth result is associated with its command; only the latest successful gate authorizes mutations, and final failures halt with bounded retry and advice',
+  ({ fixture }) => workflowCalls(fixture).some((call) => isAuth(call.command))
+    ? checkProblems(authGateProblems(fixture))
+    : skip('no applicable check-auth call')
+);
+
+WORKFLOW_ASSERTIONS.set(
+  'Phase 1: Failed connector discovery returns needs_input and never creates a connection or reference',
+  ({ fixture }) => workflowCalls(fixture).some((call) => isDiscovery(call.command))
+    ? checkProblems(discoveryProblems(fixture))
+    : skip('no connector discovery in this workflow')
+);
 
 PHASE_EXPECTATIONS.set(
   'Phase 1 (Planner): pac model list-tables --search \'account\' is run and results are filtered by exact logical-name match',
@@ -1007,11 +1055,7 @@ PHASE_EXPECTATIONS.set(
 PHASE_EXPECTATIONS.set(
   'Phase 2a: Orchestrator runs scripts/check-auth.js; ok:true gate before invoking entity-builder',
   ({ fixture }) => {
-    const log = fixture.workflowLog;
-    if (!log) return fail('no workflow-log.md');
-    if (!/check-auth\.js/.test(log)) return fail('check-auth.js not invoked');
-    if (!/ok:\s*true|"ok":\s*true/.test(log)) return fail('check-auth.js did not return ok:true');
-    return pass();
+    return checkProblems(authGateProblems(fixture, { required: true }));
   }
 );
 
@@ -1019,7 +1063,7 @@ PHASE_EXPECTATIONS.set(
   'Phase 2b (Entity Builder): Every create-table.js / add-column.js / create-relationship.js call passes --solution <name> (always — \'Default\' is a valid value, never omitted); provision-entities.js flow specifies solution via input JSON, verified through ## Environment → Solution: declaration',
   ({ fixture }) => {
     const log = fixture.entityCreationLog || fixture.workflowLog;
-    if (!log) return fail('no entity-creation-log.md or workflow-log.md');
+    if (!log) return fail('no genpage-entity-creation-log.md (or legacy alias) or workflow-log.md');
 
     // Check legacy flow: old-script calls must have --solution
     const legacyMatches = allMatches(/(create-table\.js|add-column\.js|create-relationship\.js)([^\n]*)/g, log);
@@ -1083,9 +1127,8 @@ PHASE_EXPECTATIONS.set(
     const idxCheck = log.search(/check-auth\.js/);
     const idxBuilder = log.search(/genpage-entity-builder\s+invoked|entity-builder\s+invoked/i);
     if (idxBuilder === -1) return skip('entity-builder not invoked');
-    if (idxCheck === -1) return fail('entity-builder invoked but check-auth.js never ran');
-    if (idxBuilder < idxCheck) return fail('entity-builder invoked before check-auth.js');
-    return pass();
+    if (idxCheck === -1 || idxBuilder < idxCheck) return fail('entity-builder invoked before check-auth.js');
+    return checkProblems(authGateProblems(fixture, { required: true }));
   }
 );
 
@@ -1102,7 +1145,6 @@ PHASE_EXPECTATIONS.set(
     const plan = fixture.genpagePlan;
     if (!log) return fail('no workflow-log.md');
     if (!plan) return fail('no genpage-plan.md');
-
     // (a) list-connections.js must NOT be invoked — a `node ... list-connections.js`
     //     command must be absent. A narrative mention like "list-connections.js NOT
     //     run" in a comment is acceptable and does not count as an invocation.
@@ -1136,6 +1178,8 @@ PHASE_EXPECTATIONS.set(
     const plan = fixture.genpagePlan;
     if (!log) return fail('no workflow-log.md');
     if (!plan) return fail('no genpage-plan.md');
+    const discovery = discoveryProblems(fixture, { required: true, needsBinding: true });
+    if (discovery.length) return checkProblems(discovery);
 
     // (a) A `node ... list-connections.js` invocation must appear in the log —
     //     discovery must run for a connector-backed data source.
@@ -1207,6 +1251,8 @@ PHASE_EXPECTATIONS.set(
     if (!/\bnode\b[^\n]*list-connections\.js/.test(log)) {
       return fail('list-connections.js not invoked on the edit path');
     }
+    const discovery = discoveryProblems(fixture, { required: true, needsBinding: true });
+    if (discovery.length) return checkProblems(discovery);
 
     // (c) Same bare-array shape as the create path — `pac` wraps it into config.json itself.
     //     Asserted POSITIVELY (the recorded content opens with `[{`) rather than by banning the

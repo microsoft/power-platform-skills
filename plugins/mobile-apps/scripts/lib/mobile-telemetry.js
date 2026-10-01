@@ -10,10 +10,12 @@ const PLACEHOLDER_IKEY = 'PLACEHOLDER_REPLACE_BEFORE_SHIPPING';
 
 const agentInfo = require('./telemetry/lib/agent-info');
 const events = require('./telemetry/lib/events');
-const { fireAndForget } = require('./mobile-telemetry-dispatcher');
+const { lifecycle } = require('./mobile-lifecycle');
+const { fireAndForget, sanitizeData } = require('./mobile-telemetry-dispatcher');
 const { loadResolver } = require('./telemetry/lib/resolver-loader');
 const session = require('./telemetry/lib/session');
 const { ensureAppInstanceId } = require('./app-identity');
+const { readProjectTelemetryContext } = require('./mobile-telemetry-context');
 const { resolveProcessSessionId } = require('./mobile-telemetry-session');
 
 function readPluginVersion() {
@@ -262,6 +264,19 @@ function commonFields(context, invocation, opts = {}) {
     // Identity persistence must never block a skill invocation.
   }
   eventInfo.appInstanceId = appInstanceId;
+  const projectContext = opts.cwd
+    ? readProjectTelemetryContext(opts.cwd, {
+      lifecycle,
+      configDir: context.configDir,
+      runId: opts.runId,
+      spanId: opts.spanId,
+    })
+    : {};
+  if (projectContext.tenantId) fields.tenantId = projectContext.tenantId;
+  if (projectContext.orgId) fields.orgId = projectContext.orgId;
+  for (const name of ['environmentId']) {
+    if (projectContext[name]) eventInfo[name] = projectContext[name];
+  }
   if (Object.keys(eventInfo).length) fields.eventInfo = eventInfo;
 
   if (ai.aiAgentName) fields.aiAgentName = ai.aiAgentName;
@@ -332,9 +347,58 @@ function emitCheckpoint(context, invocation, opts = {}) {
   return event;
 }
 
+function emitLifecycle(context, span, opts = {}) {
+  const fields = commonFields(
+    { ...context, sessionId: span.sessionId },
+    {
+      skillName: span.skillName,
+      source: 'checkpoint',
+      additionalInfo: span.additionalInfo,
+    },
+    {
+      ...opts,
+      correlationId: span.eventId,
+      runId: span.runId,
+      spanId: span.spanId,
+    },
+  );
+  fields.eventInfo = {
+    ...fields.eventInfo,
+    schemaVersion: 2,
+    runId: span.runId,
+    spanId: span.spanId,
+    parentSpanId: span.parentSpanId,
+    spanType: span.spanType,
+    state: span.state,
+    attempt: span.attempt,
+    timingStatus: span.timingStatus,
+  };
+  if (span.durationMs !== undefined) fields.durationMs = span.durationMs;
+  if (span.errorClass) fields.errorClass = span.errorClass;
+  if (span.state === 'completed') fields.outcome = 'success';
+  if (span.state === 'failed') fields.outcome = 'failure';
+
+  const event = span.state === 'started'
+    ? events.buildSkillStarted(context.eventStreamName, fields)
+    : events.buildSkillCompleted(context.eventStreamName, fields);
+  event.data.eventName = `${span.spanType === 'skill' ? 'skill' : span.checkpointName}_${span.state}`;
+  event.data.severity = ['failed', 'blocked'].includes(span.state) ? 'Error' : 'Info';
+  event.data = sanitizeData(event.data, {
+    projectRoot: opts.cwd,
+    configDir: context.configDir,
+  });
+  if (!event.data.pluginName) return null;
+  event.time = span.time;
+  dispatch(context, event, opts);
+  return event;
+}
+
 module.exports = {
   createTelemetryContext,
   emitAppInsightsSelection,
   emitCheckpoint,
+  emitLifecycle,
   emitSkillStarted,
+  getTelemetryConfigDir: configDir,
+  lifecycle,
 };

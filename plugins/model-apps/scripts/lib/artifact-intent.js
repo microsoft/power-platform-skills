@@ -11,7 +11,7 @@
 // the SDK's generic mutation surface without hardcoding form-model logic everywhere.
 
 const { entityByLogical } = require('./_graph.js');
-const { lookupColumnsFor, generatedTabName, generatedSectionName, formColumnsOf, authoredSectionNames } = require('./app-spec.js');
+const { lookupColumnsFor, generatedTabName, generatedSectionName, formColumnsOf, authoredSectionNames, authoredTabNames } = require('./app-spec.js');
 const { SDK_COLUMN_TYPE } = require('./entity-provision.js');
 
 // Arrange field cells into `columns` cells-per-row.
@@ -697,6 +697,8 @@ function compileFormIntent(spec, formSpec, opts) {
     // The section names the author declared (see `authoredSectionNames`), so the engine's reconcile
     // skips the same containers verify skips. An array, because the compiled def is plain data.
     __authoredSectionNames: [...authoredSectionNames(formSpec)],
+    // …the tab names, for the same reason (see `authoredTabNames`)…
+    __authoredTabNames: [...authoredTabNames(formSpec)],
     // …and the subset the author NAMED, which the engine's sweep reads to word its report.
     __namedSectionNames: [...authoredSectionNames(formSpec, { named: true })],
     // Ordering anchors: { <logical>: <anchorLogical> }. Consumed by the engine's reconcile, which

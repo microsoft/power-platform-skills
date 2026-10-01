@@ -10,7 +10,7 @@
 // (ensureToken) or when the underlying transport itself fails — a network/timeout error (res.error)
 // after exhausting retries, or at once for a write that must not be re-sent (see `call`). We never
 // throw purely on a non-2xx HTTP status.
-const { dataverseOrigin, getAuthToken, makeRequest } = require('./dataverse-auth.js');
+const { dataverseOrigin, getAuthToken, makeRequest, tokenFailureMessage } = require('./dataverse-auth.js');
 
 // How Dataverse reports that SQL Server chose a request's transaction as a deadlock VICTIM and rolled
 // it back. Two live captures, both HTTP 500 (a process-flow delete during a teardown, and PublishXml):
@@ -268,7 +268,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
     if (!token) {
       token = getToken(clean, options);
       if (!token) {
-        throw new Error(`Failed to get Azure CLI token for ${clean}. Run 'az login' first.`);
+        throw new Error(tokenFailureMessage(clean, `Failed to get Azure CLI token for ${clean}. Run 'az login' first.`));
       }
     }
     return token;
@@ -356,7 +356,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
         // rejected bearer value and convert a refresh path into a guaranteed second 401.
         token = getToken(clean, { fresh: true });
         if (!token) {
-          throw new Error(`Failed to refresh Azure CLI token for ${clean}. Run 'az login' first.`);
+          throw new Error(tokenFailureMessage(clean, `Failed to refresh Azure CLI token for ${clean}. Run 'az login' first.`));
         }
         continue;
       }

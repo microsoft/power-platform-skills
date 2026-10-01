@@ -182,7 +182,7 @@ Carry the resolved mode through subprocesses: when it is unattended, append
 pre-build, recovery rerun, and full apply). Do not append `--allow-destructive`
 unless destructive authority was supplied independently.
 
-1. **Prereqs** — `node --version`, `pac help` (≥ 2.7.0).
+1. **Prereqs** — `node --version`, `pac help` (> 2.10.0, the plugin's minimum).
 2. **Environment (PAC)** — `pac auth list`. If exactly one / an active profile, **confirm it
    (FYI), don't ask**. If several and none active, **ask** which to use. If none, ask the user
    to `pac auth create`. Capture the org URL (`pac org who`).
@@ -444,7 +444,8 @@ choices** — a download sets it on every one it recovers, so tearing down a dow
 a lookup column from a retained table or deletes a shared option set. Dashboards are found by name, so
 teardown deletes only those the app's solution holds, never another app's namesake — and none when the spec
 has no real solution to ask (the `Default` a download may leave); it keeps the solution itself while any step
-failed, so a re-run can still tell. **Dry-run by default**; add `--apply
+failed, so a re-run can still tell, and keeps the page manifest while the generative-pages step failed, so a
+re-run still finds the pages the app authored. **Dry-run by default**; add `--apply
 --allow-destructive` to actually delete (`--clear-workspace` also prunes `.maker-workspace/`).
 **`--allow-destructive` is required for `teardown --apply`** — without it teardown refuses and
 touches nothing.
@@ -546,10 +547,10 @@ matches more than one app is refused, listing the candidate unique names rather 
 This reconstructs the app into `<working-dir>/app-spec.json`. **Round-trip scope — be precise, it is
 not everything:**
 - **Round-trips:** the sitemap → `appShell` (all subareas + icons), **every** generative page (via
-  `pac model genpage download`; names come from the sitemap's `GenPage` subarea titles, so
-  Maker-added pages are included) into `pages[]` + their `.tsx`, the referenced entities (minimal —
-  the build reuses existing tables), **classic dashboards** (id-passthrough tiles carrying the
-  deployed view/chart ids), the icon web resources, and the solution.
+  `pac model genpage download`; the pages are the sitemap's `GenPage` subareas, so Maker-added pages
+  are included, and each keeps its own name and model) into `pages[]` + their `.tsx`, the referenced
+  entities (minimal — the build reuses existing tables), **classic dashboards** (id-passthrough tiles
+  carrying the deployed view/chart ids), the icon web resources, and the solution.
 - **Does NOT round-trip:** `forms[]`, `views[]`, `charts[]`, `commands[]` — they come back empty.
   All four **survive on the live app** (a rebuild preserves them by discovery), so a plain edit is
   safe; they just aren't editable through the downloaded spec. Change them in Maker or a fresh spec.
@@ -610,7 +611,8 @@ child view id. Each step emits `[n/total]`.
   designer-grade FormXML/FetchXML/sitemap by reusing the designer's own serializers, and writes via
   the Web API using an `az`-token HttpClient. No relay, no designer tab.
 - **Dedicated unmanaged solution per app** (review / teardown). **`--publish` gates the final
-  *bulk* publish** of the app's entity + app customizations (a `PublishXml` per entity + the app). It
+  *bulk* publish** of the app's entity + app customizations (one `PublishXml` for every entity and the
+  app, which also carries the default-view enrichment's publish, deferred to it). It
   does **not** suppress the small **targeted** publishes that edit/finalize paths must run so the change
   takes effect — reconciling an existing form or view, wiring form events, placing quick-views,
   re-syncing an existing app's sitemap, and finalizing the sitemap after generative pages each publish

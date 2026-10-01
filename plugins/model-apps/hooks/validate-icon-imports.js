@@ -30,7 +30,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { blankNonCodePreservingTemplateExpressions, commentRanges } = require('../scripts/lib/source-literals.js');
+const { blankNonCodePreservingTemplateExpressions, commentRanges, isLineTerminator } = require('../scripts/lib/source-literals.js');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..');
 const VERIFIED_ICONS_PATH = path.join(PLUGIN_ROOT, 'references', 'verified-icons.txt');
@@ -109,7 +109,7 @@ function loadVerifiedIcons() {
   try {
     const raw = fs.readFileSync(VERIFIED_ICONS_PATH, 'utf8');
     const set = new Set();
-    for (const line of raw.split(/\r?\n/)) {
+    for (const line of raw.split(/[\r\n\u2028\u2029]+/)) {
       const name = line.trim();
       if (!name || name.startsWith('#')) continue; // skip header/comment/blank lines
       set.add(name);
@@ -180,7 +180,7 @@ function extractIconImports(content) {
 function stripCommentsForImports(content) {
   return content
     .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/(?<!:)\/\/[^\n]*/g, '');
+    .replace(/(?<!:)\/\/[^\r\n\u2028\u2029]*/g, '');
 }
 
 // `content` with each comment the lexer finds turned into spaces, newlines kept, so every offset is
@@ -188,7 +188,7 @@ function stripCommentsForImports(content) {
 function blankComments(content) {
   const out = content.split('');
   for (const { start, end } of commentRanges(content)) {
-    for (let k = start; k < end; k += 1) if (out[k] !== '\n') out[k] = ' ';
+    for (let k = start; k < end; k += 1) if (!isLineTerminator(out[k])) out[k] = ' ';
   }
   return out.join('');
 }

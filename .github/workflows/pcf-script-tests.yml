@@ -19,6 +19,7 @@ on:
             - "plugins/model-apps/scripts/lib/interaction-mode.js"
             - "plugins/model-apps/scripts/lib/nearest-name.js"
             - "plugins/model-apps/scripts/lib/utf8-stream.js"
+            - "plugins/model-apps/scripts/lib/cli-failure.js"
             - "plugins/model-apps/scripts/lib/dataverse-auth.js"
             - "plugins/model-apps/scripts/check-auth.js"
             - "plugins/model-apps/scripts/resolve-interaction-mode.js"

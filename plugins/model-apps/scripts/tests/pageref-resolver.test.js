@@ -446,3 +446,113 @@ test('DECOY end-to-end: declared "detail" but the real nav points at "wrong" —
   const code = `const decoy = "PAGEREF_detail";\n${NAV('"PAGEREF_wrong"')}`;
   assert.deepStrictEqual(navTargetParity(['detail'], navReferencedKeys(code)), { declaredNotReferenced: ['detail'], referencedNotDeclared: ['wrong'] });
 });
+
+test('extractNavTargets respects JavaScript identifier boundaries and optional-call syntax', () => {
+  const negatives = [
+    'notnavigateTo({pageType:"generative",pageId:"PAGEREF_detail"})',
+    '$navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})',
+    'αnavigateTo({pageType:"generative",pageId:"PAGEREF_detail"})',
+    '_navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})',
+    'navigateTox({pageType:"generative",pageId:"PAGEREF_detail"})',
+    'x\\u0041navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})',
+    'x\\u{41}navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})',
+    'x\u200CnavigateTo({pageType:"generative",pageId:"PAGEREF_detail"})',
+    'x\u200DnavigateTo({pageType:"generative",pageId:"PAGEREF_detail"})',
+  ];
+  for (const code of negatives) assert.deepStrictEqual(navReferencedKeys(code), [], code);
+
+  const positives = [
+    'navigateTo?.({pageType:"generative",pageId:"PAGEREF_detail"})',
+    'navigateTo /* comment */ ?. /* comment */ ({pageType:"generative",pageId:"PAGEREF_detail"})',
+    'Xrm.Navigation.navigateTo?.({pageType:"generative",pageId:"PAGEREF_detail"})',
+    'Xrm?.Navigation?.navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})',
+    'navigate\\u0054o({pageType:"generative",pageId:"PAGEREF_detail"})',
+  ];
+  for (const code of positives) assert.deepStrictEqual(navReferencedKeys(code), ['detail'], code);
+});
+
+test('extractNavTargets follows object-literal last-write wins for runtime pageId and pageType overrides', () => {
+  const dynamicPageId = [
+    'pageId(){return "runtime";}',
+    'get pageId(){return "runtime";}',
+    'set pageId(v){}',
+    'async pageId(){return "runtime";}',
+    '*pageId(){yield "runtime";}',
+    'async *pageId(){yield "runtime";}',
+    '"pageId"(){return "runtime";}',
+    "get 'pageId'(){return 'runtime';}",
+    'pageId',
+    'page\\u0049d(){return "runtime";}',
+  ];
+  for (const override of dynamicPageId) {
+    const code = `const pageId = "runtime"; navigateTo({pageType:"generative",pageId:"PAGEREF_detail",${override}})`;
+    const [target] = extractNavTargets(code);
+    assert.strictEqual(target && target.kind, 'dynamic', override);
+  }
+
+  const dynamicPageType = [
+    'pageType(){return "entityrecord";}',
+    'get pageType(){return "entityrecord";}',
+    'set pageType(v){}',
+    'async pageType(){return "entityrecord";}',
+    '*pageType(){yield "entityrecord";}',
+    'async *pageType(){yield "entityrecord";}',
+    '"pageType"(){return "entityrecord";}',
+    "get 'pageType'(){return 'entityrecord';}",
+    'pageType',
+    'page\\u0054ype(){return "entityrecord";}',
+  ];
+  for (const override of dynamicPageType) {
+    const code = `const pageType = "entityrecord"; navigateTo({pageType:"generative",pageId:"PAGEREF_detail",${override}})`;
+    const [target] = extractNavTargets(code);
+    assert.strictEqual(target && target.kind, 'dynamic', override);
+  }
+
+  assert.deepStrictEqual(navReferencedKeys('navigateTo({pageType:"generative",pageId(){return "runtime";},pageId:"PAGEREF_detail"})'), ['detail']);
+  assert.deepStrictEqual(navReferencedKeys('navigateTo({pageType(){return "entityrecord";},pageType:"generative",pageId:"PAGEREF_detail"})'), ['detail']);
+  assert.deepStrictEqual(navReferencedKeys('navigateTo({pageType:"generative",data:{pageId(){return "nested";}},pageId:"PAGEREF_detail"})'), ['detail']);
+});
+
+test('resolvePageRefs changes only real navigation pageId spans', () => {
+  const code = [
+    'notnavigateTo({pageType:"generative",pageId:"PAGEREF_detail"});',
+    '$navigateTo({pageType:"generative",pageId:"PAGEREF_detail"});',
+    'Xrm.Navigation.navigateTo?.({pageType:"generative",pageId:"PAGEREF_detail"});',
+  ].join('\n');
+  const { deployment, unresolved } = resolvePageRefs(new Map([['overview', { code }]]), new Map([['detail', 'gp-detail']]));
+  assert.deepStrictEqual(unresolved, []);
+  assert.strictEqual(deployment.get('overview'), code.replace('Xrm.Navigation.navigateTo?.({pageType:"generative",pageId:"PAGEREF_detail"});', 'Xrm.Navigation.navigateTo?.({pageType:"generative",pageId:"gp-detail"});'));
+});
+
+test('extractNavTargets treats modifier-computed keys as runtime overrides', () => {
+  const cases = [
+    'get ["pageId"](){return "runtime";}',
+    'set [k](v){}',
+    'async [k](){return "runtime";}',
+    '*[k](){yield "runtime";}',
+    'async *[k](){yield "runtime";}',
+  ];
+  for (const override of cases) {
+    const code = `const k = "pageId"; navigateTo({pageType:"generative",pageId:"PAGEREF_a",${override}})`;
+    assert.strictEqual(extractNavTargets(code)[0].kind, 'dynamic', override);
+  }
+});
+
+test('extractNavTargets keeps astral and private identifiers out of navigateTo matches', () => {
+  assert.deepStrictEqual(navReferencedKeys('𝑥navigateTo({pageType:"generative",pageId:"PAGEREF_a"})'), []);
+  assert.deepStrictEqual(navReferencedKeys('this.#navigateTo({pageType:"generative",pageId:"PAGEREF_a"})'), []);
+});
+
+test('quoted property names decode escapes without executing source text', () => {
+  assert.deepStrictEqual(navReferencedKeys('navigateTo({pageType:"generative",page\\u0049d:"PAGEREF_a"})'), ['a']);
+  assert.deepStrictEqual(navReferencedKeys('navigateTo({pageType:"generative",\'pageI\\x64\':"PAGEREF_b"})'), ['b']);
+});
+
+test('lexer and resolver source do not evaluate page source while scanning', () => {
+  const fs = require('node:fs');
+  const resolver = fs.readFileSync(path.join(__dirname, '..', 'lib', 'pageref-resolver.js'), 'utf8');
+  const lexer = fs.readFileSync(path.join(__dirname, '..', 'lib', 'source-literals.js'), 'utf8');
+  for (const [file, text] of [['pageref-resolver.js', resolver], ['source-literals.js', lexer]]) {
+    assert.doesNotMatch(text, /\bFunction\s*\(|\beval\s*\(|new\s+Function\b|\bvm\./, file);
+  }
+});

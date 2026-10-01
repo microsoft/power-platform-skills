@@ -186,7 +186,7 @@ shared/telemetry/
 │  ├─ prompt-detector.js     # parses `/plugin:skill` slash commands from prompt text
 │  ├─ scrubber.js            # legacy text-scrubbing helper (unused by default — kept for callers that need it)
 │  └─ local-log.js           # appends every emitted event to ~/.power-platform-skills/telemetry/<plugin>/sessions/<sessionId>/events.jsonl (irrespective of iKey), with 14-day session retention and a 10 MB per-session rollover
-└─ tests/                    # node:test coverage for every module above
+└─ tests/                    # node:test coverage for every module above; CI: .github/workflows/shared-telemetry-tests.yml
 ```
 
 ---

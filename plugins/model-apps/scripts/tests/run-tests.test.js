@@ -89,6 +89,7 @@ const PCF_COPY_SYNC_PATHS = new Set([
   'plugins/pcf/scripts/lib/interaction-mode.js',
   'plugins/pcf/scripts/lib/nearest-name.js',
   'plugins/pcf/scripts/lib/utf8-stream.js',
+  'plugins/pcf/scripts/lib/cli-failure.js',
   'plugins/pcf/scripts/lib/dataverse-auth.js',
   'plugins/pcf/scripts/check-auth.js',
   'plugins/pcf/scripts/resolve-interaction-mode.js',

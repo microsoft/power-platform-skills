@@ -92,9 +92,10 @@ No root-level build, lint, or test commands exist. Build/test tooling lives insi
 **Only two workflows run on every PR** — `validate-keyword-case` and `validate-repository-metadata`.
 Both are repo-wide and enforce metadata/marketplace rules, not behavior.
 
-**Every test workflow is path-filtered to a single plugin** (`power-pages` → `plugins/power-pages/**`;
+**Every test workflow is path-filtered** — to a single plugin (`power-pages` → `plugins/power-pages/**`;
 `model-apps` → `plugins/model-apps/**` + `evals/model-apps/**` + the `shared/` sources it bundles;
-`pcf` → `plugins/pcf/**` + `evals/pcf/**` + the model-apps/shared sources it bundles).
+`pcf` → `plugins/pcf/**` + `evals/pcf/**` + the model-apps/shared sources it bundles), or,
+for code no plugin owns, to that code (`shared-telemetry-tests` → `shared/telemetry/**`).
 This is deliberate — a PR should not spend CI on a plugin it never touched — but it has a corollary:
 *a green PR does not mean the repo is green*, only that the paths you touched are. A plugin that ships
 copies of `shared/` sources may list those sources too, so a change to one runs that plugin's drift
@@ -150,7 +151,7 @@ Edit `shared/telemetry/` first, then refresh every adopting plugin's copied `scr
 
 This invariant is CI-enforced: `node scripts/validate-telemetry-ikeys.js` (wired into the `validate-repository-metadata` workflow) scans every `plugins/*/**/ikey.json`, ignores placeholder/empty values, and fails if the same instrumentation key or `event_stream_name` appears under two different plugins. A single plugin reusing one key across regions is allowed; only cross-plugin reuse fails. Run it locally after touching any plugin's `ikey.json`.
 
-Per-plugin iKey/collector routing is pluggable via a `resolver.js` placed next to the plugin's `ikey.json` (implementing the `resolve`/`isProvisioned` contract); the shared library ships only that contract plus a static-key fallback, not any routing logic. A per-plugin opt-out env var `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` (derived as the uppercased plugin name with non-alphanumerics collapsed to `_`, suffixed `_OPTOUT`) disables transmission for automation when set to `1`/`true` (dotnet `*_TELEMETRY_OPTOUT` convention); it has the **highest precedence**, overriding both the persisted `config.json` choice and `/<plugin>:telemetry on`.
+Per-plugin iKey/collector routing is pluggable via a `resolver.js` placed next to the plugin's `ikey.json` (implementing the `resolve`/`isProvisioned` contract); the shared library ships only that contract plus a static-key fallback, not any routing logic. A per-plugin opt-out env var `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` (derived as the uppercased plugin name with non-alphanumerics collapsed to `_`, suffixed `_OPTOUT`; the name is the manifest's `name`, not the directory — `plugins/mobile-apps` is `mobile-app`, so its variable ends `_MOBILE_APP_OPTOUT`) disables transmission for automation when set to `1`/`true` (dotnet `*_TELEMETRY_OPTOUT` convention); it has the **highest precedence**, overriding both the persisted `config.json` choice and `/<plugin>:telemetry on`.
 
 ### CI must opt out of telemetry transmission
 
@@ -169,7 +170,7 @@ jobs:
 
 This opt-out suppresses **transmission only** (the local diagnostic mirror is still written), so it is safe and has no effect on what the job actually tests. Tests that need to assert that emission *happens* clear the var in their own spawned-process env and route the event to a local `POWER_PLATFORM_SKILLS_FAKE_HTTPS` probe instead of the real collector — so the job-level opt-out never breaks them. Existing reference: `.github/workflows/power-pages-script-tests.yml`. When you add a new such workflow (or a new emitting step to an existing one), add this env var in the same change; treat a CI job that runs the tests without it as a production-telemetry leak.
 
-Current adopters: `power-pages` and `mobile-apps` (transmitting), and `model-apps` (bundled, with its committed `ikey.json` still `disabled: true`). Others adopt on demand. power-pages and model-apps each keep a `scripts/tests/telemetry-lib-copy.test.js` that fails when the bundled copy differs from `shared/telemetry/lib`. model-apps also lists `shared/telemetry/**` in its test workflow's path filter, so an edit to the source alone still runs that test.
+Current adopters: `power-pages` and `mobile-apps` (transmitting), and `model-apps` (bundled, with its committed `ikey.json` still `disabled: true`). Others adopt on demand. The library's own tests (`shared/telemetry/tests`) run in `.github/workflows/shared-telemetry-tests.yml` on a change to the source or to any bundled copy, and its `bundled-copies.test.js` fails when any adopter's `plugins/<plugin>/scripts/lib/telemetry/lib` differs from `shared/telemetry/lib`. The workflow sets every adopter's opt-out — add a new adopter's variable there too. power-pages and model-apps also keep a `scripts/tests/telemetry-lib-copy.test.js` that runs the same comparison in their own suites (model-apps also checks its shared skill copies, and lists `shared/telemetry/**` in its workflow's path filter so a source edit runs it too).
 
 ## Legacy Marketplace Compatibility
 
