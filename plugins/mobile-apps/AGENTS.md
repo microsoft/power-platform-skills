@@ -58,7 +58,7 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
    Dataverse modeling; later gates approve the applicable data model and screen
    plan.
 7. **Persisted plan** — Write `native-app-plan.md` (Mermaid ER + per-screen specs + native capabilities matrix) as the source of truth that sub-skills `Read`.
-8. **CLI compatibility** — Use `npx power-apps ...` for code-app lifecycle and data-source commands. Use `scripts/resolve-environment.js` plus `az` tokens for Dataverse environment URL/tenant discovery and Azure/Entra operations. `scripts/list-environments.js` parses `pac env list` into JSON so environment selection can be a pick list with the PAC-connected environment pre-selected, instead of demanding a GUID; it returns the BAP environment id `npx power-apps init --environment-id` expects. PAC remains **optional** — that script exits 0 with `[]` when PAC is missing or unauthenticated and the skill falls back to asking for an id, so creation never depends on it. It is a physical port of the power-pages helper (marketplace installs copy one plugin directory, so cross-plugin `require` is impossible); keep the two parsers in step. See [`shared/shared-instructions.md`](./shared/shared-instructions.md).
+8. **CLI compatibility** — Use `npx power-apps ...` for code-app lifecycle and data-source commands. Use `scripts/resolve-environment.js` plus `az` tokens for Dataverse environment URL/tenant discovery and Azure/Entra operations. See [`shared/shared-instructions.md`](./shared/shared-instructions.md).
 9. **Agent invocation namespace** — All `Task` invocations of agents in this plugin MUST use the fully-qualified `mobile-app:<agent-name>` form (e.g. `mobile-app:native-app-planner`, `mobile-app:screen-builder`). Bare names like `native-app-planner` return `Agent type 'native-app-planner' not found` because Claude Code namespaces all plugin agents by plugin name.
 10. **Plugin isolation** — `hooks/hooks.json` is limited to fail-open telemetry start hooks. They never validate, mutate, or block tool calls. Do not add write/validation hooks: mutating skills follow the changed-file gate in `shared/shared-instructions.md`, and final-artifact agents invoke `scripts/validate-mobile-files.js` directly.
 11. **Invocation metadata** — Public entry skills use `user-invocable: true` and remain model-invocable. Bundled implementation helpers use both `user-invocable: false` and `disable-model-invocation: true`; their owner reads `SKILL.md` directly. Hidden standalone workflows such as `assign-offline-profile` and `preview-offline-scope` use `user-invocable: false` without disabling model invocation because no owner reads them directly. Agents use `user-invocable: false` without `disable-model-invocation` so qualified `Task` delegation remains available.
@@ -83,31 +83,6 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
 15. **First-party native package defects are reported, not patched in customer projects** — a `node_modules/@microsoft/power-apps-native-*` frame alone is not proof of package ownership; first rule out invalid app usage against the package's public contract. Once a defect is confirmed inside one of these packages, do not edit `node_modules/`, generate `patch-package` or postinstall rewrites, vendor or fork the package, replace it with a git/tarball/local dependency, or shadow it through resolver aliases. Capture sanitized reproduction evidence and route to `/report-issue`.
 16. **Custom events are Application Insights-specific and opt-in** — Each generated app targets one customer-owned, workspace-based Application Insights resource. `app.json` → `expo.extra.appInsightsConfig` defaults to disabled and stores its connection string, matching the Power Apps canvas-app model. Treat the value as sensitive project configuration: do not print it, write it to `memory-bank.md`, or include it in summaries. Keep `includeUserId` false unless explicitly approved.
 17. **Plugin update notification** — Immediately after the frontmatter of every `user-invocable: true` skill except `/check-updates`, run `node "${PLUGIN_ROOT}/scripts/check-version.js"` and show any output before proceeding. The check is best-effort and must never block the requested workflow. `/check-updates` owns its explicit plugin-version check in Step 1 and must not run a duplicate startup check.
-
-## Template lock file
-
-`template/package-lock.json` is committed so every generated app starts from the same tree, CI tests
-the tree users actually get (`npm ci`), and installs skip full resolution.
-
-**Regenerate it whenever `template/package.json` changes**, from `plugins/mobile-apps/template`:
-
-```bash
-npm_config_omit_lockfile_registry_resolved=true npm install --package-lock-only --no-audit --no-fund
-```
-
-The env var is load-bearing. npm reads a per-project `.npmrc` from the directory that **owns**
-`package.json` and does not walk up, so the repo-root `.npmrc` that normally strips `resolved` does
-not reach the template - and the template deliberately ships no `.npmrc` of its own, because that
-file would be copied into every user project and force our lockfile policy onto their app. Without
-the env var, a contributor installing through an internal Azure Artifacts feed rewrites every
-`resolved` to an internal URL and leaks it into this public repo.
-
-`scripts/tests/template-lockfile.test.js` enforces the result: no `resolved` field anywhere, an
-`integrity` hash on every independently fetched package, the full cross-platform optional set (a
-single-OS regeneration silently drops the binaries other CI runners need), and lock/`package.json`
-agreement so `npm ci` cannot drift. The resolved tree was verified byte-identical on Node 20 and
-Node 22, so the generating Node version does not change the lock; regenerate on the template's
-Node 22+ floor anyway so engine warnings surface.
 
 ## Telemetry
 

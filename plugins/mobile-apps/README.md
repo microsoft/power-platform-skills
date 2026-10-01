@@ -65,10 +65,8 @@ capabilities, and connector wiring.
     /create-mobile-app --working-dir ./my-mobile-app
     ```
 
-    The folder does not need to exist, and you do not need to put anything in it.
-    The skill creates it and fills it from the template bundled in the plugin.
-    An empty folder works too, as does one you already materialized yourself with
-    `npx degit microsoft/power-platform-skills/plugins/mobile-apps/template#main` — but that is an option, not a step you have to run first.
+    It must be empty, or already hold a template you materialized yourself with
+    `npx degit microsoft/power-platform-skills/plugins/mobile-apps/template#main`.
     The skill never writes over content that is already there.
 
     When prompted to sign in, use credentials for the tenant where the Dataverse

@@ -12,13 +12,14 @@
   --pass:#107c10; --pass-bg:#107c100a; --pass-border:#107c1020;
   --purple:#8764b8; --purple-bg:#8764b80a; --purple-border:#8764b820;
   --warn:#ca5010; --warn-bg:#ca50100a; --warn-border:#ca501020;
+  --footer-h:38px;
   --fail:#a4262c; --fail-bg:#a4262c0a; --fail-border:#a4262c20;
   --mono:'Cascadia Code','Consolas',monospace; --sans:'Segoe UI','Segoe UI Web (West European)',-apple-system,system-ui,sans-serif;
   --radius:8px; --radius-sm:4px; --shadow-4:0 1.6px 3.6px 0 rgba(0,0,0,0.132),0 0.3px 0.9px 0 rgba(0,0,0,0.108);
 }
 *{margin:0;padding:0;box-sizing:border-box;}
 html{scroll-behavior:smooth;}
-body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6;padding-bottom:var(--footer-h);}
 .topbar{z-index:100;background:var(--surface);box-shadow:var(--shadow-4);padding:14px 28px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;position:sticky;top:0;}
 .topbar-left{display:flex;align-items:center;gap:14px;}
 .logo{width:36px;height:36px;object-fit:contain;display:block;flex-shrink:0;}
@@ -32,7 +33,7 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 .pill-live{background:var(--pass-bg);color:var(--pass);border-color:var(--pass-border);}
 .shell{display:flex;align-items:flex-start;}
 .layout{display:flex;min-height:calc(100vh - 65px);flex:1;min-width:0;}
-.rail{width:430px;flex-shrink:0;position:sticky;top:65px;height:calc(100vh - 65px);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px 20px;border-left:1px solid var(--border);background:var(--surface);}
+.rail{width:430px;flex-shrink:0;position:sticky;top:65px;height:calc(100vh - 65px - var(--footer-h));display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px 20px;border-left:1px solid var(--border);background:var(--surface);}
 .rail-title{font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;}
 .device{width:300px;height:620px;border-radius:40px;background:#1f1f1f;border:9px solid #2e2e2e;box-shadow:var(--shadow-4),0 18px 46px rgba(0,0,0,0.22);position:relative;overflow:hidden;flex-shrink:0;}
 .device-notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:118px;height:22px;background:#2e2e2e;border-radius:0 0 14px 14px;z-index:5;}
@@ -149,6 +150,8 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .boundary{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;box-shadow:var(--shadow-4);}
 .boundary h4{margin:0 0 10px;font-size:13.5px;color:var(--text-bright);}
 .boundary .bullets{font-size:13px;color:var(--text-dim);}
+.ai-footer{position:fixed;bottom:0;left:0;right:0;text-align:center;padding:10px;font-size:12px;
+  color:var(--text-dim);border-top:1px solid var(--border);background:var(--surface);z-index:100;}
 .input-banner{position:fixed;top:78px;right:24px;z-index:100;display:flex;align-items:center;gap:12px;
   background:var(--warn-bg);border:1px solid var(--warn-border);color:var(--warn);padding:12px 14px 12px 18px;
   border-radius:999px;font-size:13.5px;max-width:min(380px,calc(100vw - 48px));
@@ -1608,5 +1611,6 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   }
 })();
 </script>
+<footer class="ai-footer">AI-generated content may be incorrect</footer>
 </body>
 </html>

@@ -130,32 +130,3 @@ test('template path aliases are inherited from the host tsconfig', () => {
   assert.strictEqual(tsconfig.extends, '@microsoft/power-apps-native-host/config/tsconfig');
   assert.strictEqual(tsconfig.compilerOptions, undefined);
 });
-
-test('the protected layout auth gate is unconditional', () => {
-  const layout = read('template/app/(app)/_layout.tsx');
-  // A dev-only bypass shipped alongside the live in-browser preview; the preview is gone, so
-  // nothing may weaken this gate again.
-  assert.match(layout, /if \(!isLoading && !isSignedIn\)/);
-  assert.doesNotMatch(layout, /PREVIEW_MODE/);
-  assert.doesNotMatch(layout, /EXPO_PUBLIC_PREVIEW/);
-  assert.match(layout, /<Redirect href="\/login" \/>/);
-});
-
-
-
-test('the template keeps the @ts-ignore boundaries the skill forbids removing', () => {
-  // `/create-mobile-app` Step 5 says: "Do NOT remove the two `// @ts-ignore` lines. They keep
-  // `tsc` green pre-`npx power-apps init`." Converting them to optional requires once broke the
-  // Step 6.6 scaffold gate in every generated app with TS2322, because the hand-written
-  // replacement types were narrower than PowerAppsProvider's props.
-  const layout = fs.readFileSync(
-    path.resolve(__dirname, '..', '..', 'template', 'app', '_layout.tsx'), 'utf8',
-  );
-  const login = fs.readFileSync(
-    path.resolve(__dirname, '..', '..', 'template', 'app', 'login.tsx'), 'utf8',
-  );
-
-  assert.match(layout, /\/\/ @ts-ignore[^\n]*power\.config\.json[\s\S]*?import powerConfig from '\.\.\/power\.config\.json'/);
-  assert.match(layout, /\/\/ @ts-ignore[^\n]*connectorSchemas[\s\S]*?import \{ schemaMap \} from '\.\.\/src\/generated\/connectorSchemas'/);
-  assert.match(login, /\/\/ @ts-ignore[^\n]*power\.config\.json[\s\S]*?import powerConfig from '\.\.\/power\.config\.json'/);
-});

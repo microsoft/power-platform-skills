@@ -14,27 +14,6 @@ Run at the start of every skill execution (at most once per day). Notifies the u
 
 ---
 
-## `${PLUGIN_ROOT}` is already resolved — never go looking for it
-
-`${PLUGIN_ROOT}` is substituted with the installed plugin's absolute path at runtime. Use it
-directly in `Bash`, `Read`, and `Glob` paths.
-
-**Do NOT search the filesystem for the plugin directory.** No `find` over the home directory, no
-`Glob` for `**/mobile-apps/scripts/*.js`, no walking up from the working directory. The user's app
-folder is usually nowhere near the plugin, so those searches scan unrelated trees, cost seconds to
-minutes, and can surface a stale checkout instead of the running plugin.
-
-If a host does not substitute the variable, export it once from the path the skill was loaded from
-and reuse it for the rest of the run:
-
-```bash
-PLUGIN_ROOT="<absolute path this plugin was loaded from>"
-```
-
-Then ask the user if that path is not known. Guessing by searching is slower and less reliable than
-one question.
-
----
 
 ## Workflow Checkpoints
 

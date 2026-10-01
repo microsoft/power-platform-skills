@@ -738,6 +738,19 @@ test('the skill points at the plan instead of opening the QR in a window', () =>
   assert.match(skill, /do \*\*not\*\* open the PNG/);
 });
 
+test('the plan carries the same AI disclaimer as every other plan page', () => {
+  const template = fs.readFileSync(path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8');
+
+  // Worded exactly as the power-pages artifacts word it, so a reader meets one sentence across
+  // the plugins rather than a different hedge in each.
+  assert.match(template, /<footer class="ai-footer">AI-generated content may be incorrect<\/footer>/);
+
+  // It is fixed to the viewport, so the page and the sticky device rail must both stop short of
+  // it; otherwise their last line sits underneath it.
+  assert.match(template, /body\{[^}]*padding-bottom:var\(--footer-h\)/);
+  assert.match(template, /\.rail\{[^}]*calc\(100vh - 65px - var\(--footer-h\)\)/);
+});
+
 test('every function the page defines is defined exactly once', () => {
   // `showSource` was defined twice, the second copy silently replacing the first. Duplicates are
   // invisible at runtime, so the only way to see one is to count the definitions.

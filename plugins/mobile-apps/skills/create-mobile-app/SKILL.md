@@ -223,58 +223,22 @@ Registry rule: Step 2a runs `npm install` for the user, but this skill still doe
 
 Capture target Power Platform environment for the remaining flow.
 
-**Offer a choice; never demand a GUID.** Nobody knows their environment ID by heart. Resolve the selection in this order and only fall back to typing an ID when PAC cannot help.
+**Source of truth for env selection: the generated `power.config.json` first, explicit environment ID second.** In the normal template-folder flow, `npx power-apps init` runs first and writes the selected environment ID into `power.config.json`; read that ID and pass it to `scripts/resolve-environment.js` to resolve the Dataverse URL and tenant. If `power.config.json` is missing or has an empty placeholder `environmentId`, ask for an environment ID. A Dataverse URL is useful as a resolver fallback for existing apps, but it is not enough for `npx power-apps init` because init needs `--environment-id`.
 
-| Order | Source | User is asked |
+| Step | Source | When user is asked |
 |---|---|---|
-| 0. `power.config.json` has `environmentId` | Use it directly | Never — automatic on a resume |
-| 1. `$ARGUMENTS` carries an environment ID | Use it directly | Never |
-| 2. PAC environment pick list | `scripts/list-environments.js` | One question, current environment pre-selected |
-| 3. PAC unavailable or the user wants another | Ask for an environment ID | Only when 0-2 produced nothing |
-
-**Ask for the current environment first — one row, not the whole tenant:**
-
-```bash
-node "${PLUGIN_ROOT}/scripts/list-environments.js" --active
-```
-
-**Never call this script bare.** A real tenant returns 224 environments: 47 KB, roughly 12k tokens of environment names, URLs and GUIDs on a single line, none of which you will show the user. Always pass `--active`, `--filter`, or `--limit`.
-
-One line of JSON; `active: true` marks the environment PAC is currently connected to (`pac env select`):
-
-```json
-[{"displayName":"Contoso Dev","environmentId":"<guid>","environmentUrl":"https://contosodev.crm.dynamics.com","uniqueName":"unq…","active":true}]
-```
-
-| `--active` result | Action |
-|---|---|
-| One row | `AskUserQuestion`: that environment **first and recommended**, then `Pick a different environment`, then `Enter an environment ID`. |
-| `[]` because nothing is active | Offer a short sample with `--limit 4`, plus `Pick a different environment` and `Enter an environment ID`. |
-| `[]` because PAC is unavailable | Say nothing about PAC; just ask for an environment ID. |
-
-Both empty cases look identical, so do not try to tell them apart — running `--limit 4` answers it: rows mean PAC works and nothing is selected, `[]` means PAC cannot help.
-
-**On `Pick a different environment`, search; never list.** Ask for a name fragment and narrow server-side:
-
-```bash
-node "${PLUGIN_ROOT}/scripts/list-environments.js" --filter "<user's search text>" --limit 10
-```
-
-Show up to 4 matches. If 10 rows come back the search was too broad — ask for a longer fragment rather than paging through a tenant.
-
-Pass the search text as a single argument exactly as typed; the script uses an argv array so it is never shell-interpreted.
-
-`environmentId` here is the **BAP environment GUID**, which is what `npx power-apps init --environment-id` wants — not the Dataverse organization id. Feed the chosen id into the capture block below; `resolve-environment.js` still owns resolving the URL and tenant, and Step 6 still owns `npx power-apps init`.
-
-**PAC is not a prerequisite.** `list-environments.js` exits 0 with `[]` whenever PAC is absent or unauthenticated. Do not install PAC, do not run `pac auth create`, and do not block app creation on it.
-
+| 0. `power.config.json` has `environmentId` | `scripts/resolve-environment.js <environment-id>` | Never — automatic after `npx power-apps init` |
+| 1. User supplies env ID | `scripts/resolve-environment.js <environment-id>` | Ask only if `power.config.json` is missing/empty or user wants a different env |
+| 2. User wants a different account | Follow shared-instructions standalone CLI auth handling | Only if resolution/token acquisition fails or user asks |
+| 3. User wants different env | Ask for another env ID and re-run resolver | Only if user selects "use a different environment" at Step 2 |
+| 4. `npx power-apps init -t MobileApp --display-name "$DISPLAY_NAME" --environment-id $ACTIVE_ENV_ID --non-interactive` | Persists choice into `power.config.json` | Only when this skill owns the initial init path |
 
 ```bash
 TARGET_ENV="<environment-id-or-empty>"
 if [ -z "$TARGET_ENV" ] && [ -f power.config.json ]; then
   TARGET_ENV=$(node -e "try { const id=require('./power.config.json').environmentId || ''; console.log(id); } catch { console.log(''); }")
 fi
-test -n "$TARGET_ENV" || { echo "✗ Environment missing. Offer the pick list above, or ask for an environment ID."; exit 2; }
+test -n "$TARGET_ENV" || { echo "✗ Environment missing. Provide an environment ID."; exit 2; }
 ENV_JSON=$(node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$TARGET_ENV")
 printf '%s\n' "$ENV_JSON" > .resolved-environment.json
 ACTIVE_ENV_ID=$(node -e "const j=JSON.parse(process.argv[1]); console.log(j.environmentId || '')" "$ENV_JSON")
@@ -287,7 +251,7 @@ echo "✓ Target env URL: $ACTIVE_ENV_URL"
 echo "✓ Target tenant: ${ACTIVE_TENANT_ID:-unknown}"
 ```
 
-**Orchestrator handling for `exit 2`:** run the pick list above and let the user choose, or ask for an environment ID directly when it returns `[]`. Then re-run the capture block. Do not run `npx power-apps init` here; Step 6 owns initialization after the user confirms the target environment.
+**Orchestrator handling for `exit 2`:** ask the user for their environment ID directly, then re-run the capture block above. Do not run `npx power-apps init` here; Step 6 owns initialization after the user confirms the target environment.
 
 Stash `$ACTIVE_ENV_ID`, `$ACTIVE_ENV_NAME`, `$ACTIVE_ENV_URL`, and `$ACTIVE_TENANT_ID` for Step 2 (env confirmation), Step 6 (`npx power-apps init`), and Step 7 (`auth.config.json` tenant/environment cache). If parsing fails, ask for an environment ID again.
 
@@ -357,7 +321,7 @@ downstream planning must retain platform-specific behavior for each.
 
 **App slug is auto-derived** from the display name (`slugify(displayName)` — kebab-case, ASCII-only, strip non-alphanumerics). Do NOT ask the user; the derived slug is correct >95% of the time. Show the resolved slug as part of Step 2c's plan preview so the user can override via `edit` if needed.
 
-**Environment override branch:** If the user picks "use a different environment", reuse the Step 1 pick list (`scripts/list-environments.js`, narrowing with `--filter` when the tenant has many) rather than asking for a GUID; only ask for an environment ID when it returns `[]`. Then run `scripts/resolve-environment.js` again and refresh `$ACTIVE_ENV_ID` / `$ACTIVE_ENV_URL` / `$ACTIVE_TENANT_ID`. Do not persist the selection before Step 2c approval.
+**Environment override branch:** If the user picks "use a different environment", ask for the Power Platform environment ID via `AskUserQuestion`, then run `scripts/resolve-environment.js <id> --no-cache` again and refresh `$ACTIVE_ENV_ID` / `$ACTIVE_ENV_URL` / `$ACTIVE_TENANT_ID`. Do not persist the selection before Step 2c approval.
 
 **App-name collision pre-flight.** Once `<displayName>` is fixed, check the chosen env for a name collision:
 

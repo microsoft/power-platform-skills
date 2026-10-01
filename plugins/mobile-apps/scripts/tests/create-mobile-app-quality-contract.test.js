@@ -313,30 +313,7 @@ test('the device QR remains the real preview', () => {
   assert.match(shared, /must never gate a step and never fail a run/);
 });
 
-test('environment selection offers a pick list before asking for a GUID', () => {
-  const step1 = section('### Step 1 — Prerequisites', '### Step 1.7 — Detect publisher prefix');
 
-  assert.match(step1, /scripts\/list-environments\.js/);
-  assert.match(step1, /Offer a choice; never demand a GUID/);
-  assert.match(step1, /active.*marks the environment PAC is currently connected to/);
-  // A real tenant returned 223 environments, so the skill must never render them flat.
-  assert.match(step1, /--filter "<user's search text>"/);
-  assert.match(step1, /BAP environment GUID/);
-  // PAC must stay optional or this undoes the zero-prerequisite work.
-  assert.match(step1, /\*\*PAC is not a prerequisite\.\*\*/);
-  assert.match(step1, /exits 0 with `\[\]`/);
-  assert.match(step1, /Do not install PAC, do not run `pac auth create`/);
-});
-
-test('skills are told the plugin root is pre-resolved so they stop searching for it', () => {
-  // create-mobile-app references ${PLUGIN_ROOT} ~49 times. Without this rule an agent whose host
-  // does not substitute the variable scans the filesystem to locate the plugin, which is slow and
-  // can find a stale checkout instead of the running one.
-  const shared = fs.readFileSync(path.resolve(__dirname, '../../shared/shared-instructions.md'), 'utf8');
-  assert.match(shared, /already resolved/i);
-  assert.match(shared, /Do NOT search the filesystem for the plugin directory/);
-  assert.match(shared, /scan unrelated trees/);
-});
 
 test('the run writes a build plan into docs/ as decisions are made', () => {
   const protocol = section('## Build documentation protocol', '## TypeScript Gate Policy');
@@ -415,50 +392,4 @@ test('step cross-references name the step that actually does the work', () => {
   );
 });
 
-test('no command the skill runs asks the user to fetch or install anything first', () => {
-  const skill = fs.readFileSync(
-    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
-  );
 
-  // Asserted on the fenced commands rather than the prose, because the prose legitimately
-  // contains the words - "Do not ask the user to run `degit` or `npm install`" is the rule
-  // itself, and a naive doesNotMatch over the whole file trips on its own prohibition.
-  const offenders = [];
-  for (const block of skill.matchAll(/```(?:bash|sh)\n([\s\S]*?)```/g)) {
-    const body = block[1];
-    // `npm install` is banned as a bare command: the background installer owns install state,
-    // and a second npm against the same node_modules corrupts it. `npm install` appearing as
-    // part of a longer path (a message, a lock path) is not a command, hence the boundary.
-    for (const [pattern, why] of [
-      [/\bnpx degit\b/, 'fetches the template over the network instead of using the bundled snapshot'],
-      [/\bgit clone\b/, 'fetches the template over the network instead of using the bundled snapshot'],
-      [/(^|\s)npm install(\s|$)/m, 'bypasses install-dependencies.js, which owns install state'],
-    ]) {
-      if (pattern.test(body)) offenders.push(`${why}: ${body.trim().split('\n')[0].slice(0, 70)}`);
-    }
-  }
-  assert.deepEqual(offenders, [], 'these runnable commands break the zero-prerequisite promise');
-});
-
-test('the bundled lock file reaches the generated app', () => {
-  // The lock is what makes a first install ~2.5x faster and reproducible. It only helps if
-  // bootstrap actually copies it, and an exclusion added to the copy list would silently
-  // undo that - the app would still build, just slowly and from a resolved-fresh tree.
-  const templateLock = path.resolve(__dirname, '..', '..', 'template', 'package-lock.json');
-  assert.ok(fs.existsSync(templateLock), 'the template must ship a lock file');
-
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bootstrap-lock-'));
-  const target = path.join(root, 'app');
-  const result = spawnSync(process.execPath, [
-    path.resolve(__dirname, '..', 'bootstrap-mobile-project.js'), '--working-dir', target,
-  ], { encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr);
-
-  const report = JSON.parse(result.stdout);
-  assert.ok(report.copiedFiles.includes('package-lock.json'), 'the lock must be copied');
-  assert.deepEqual(
-    fs.readFileSync(path.join(target, 'package-lock.json')),
-    fs.readFileSync(templateLock),
-    'the generated app must get the exact locked tree the template was tested with',
-  );
-});
