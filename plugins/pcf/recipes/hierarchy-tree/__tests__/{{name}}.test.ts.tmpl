@@ -27,13 +27,14 @@ function deepHierarchyDataSet(options = {}) {
     ], options) as IInputs["sampleDataSet"];
 }
 
-function mount(dataSet?: IInputs["sampleDataSet"]) {
+function mount(dataSet?: IInputs["sampleDataSet"] | null) {
     const control = new {{name}}();
     const container = document.createElement("div");
     document.body.append(container);
-    const context = mockContext<IInputs>(dataSet ? { sampleDataSet: dataSet } : {});
+    const context = mockContext<IInputs>({});
+    if (dataSet !== undefined) Reflect.set(context.parameters, "sampleDataSet", dataSet);
     control.init(context, jest.fn(), {}, container);
-    return { control, container, dataSet };
+    return { control, container, context, dataSet };
 }
 
 function mountRtl(dataSet?: IInputs["sampleDataSet"]) {
@@ -109,6 +110,7 @@ test("missing dataset parameter renders a setup message", () => {
     const { container } = mount();
 
     expect(container.textContent).toContain("No dataset parameter was provided");
+    expect(mount(null).container.textContent).toContain("No dataset parameter was provided");
 });
 
 test("loading, empty and dataset error states are explicit", () => {
@@ -134,6 +136,7 @@ test("paging requests stay locked until the framework completes loading and neve
     control.updateView(mockContext<IInputs>({ sampleDataSet: dataSet }));
 
     expect(dataSet.paging.loadNextPage).toHaveBeenCalledTimes(1);
+    expect(dataSet.paging.loadNextPage).toHaveReturnedWith(undefined);
     expect(dataSet.paging.loadPreviousPage).not.toHaveBeenCalled();
     expect(dataSet.refresh).not.toHaveBeenCalled();
     dataSet.loading = true;
@@ -145,6 +148,43 @@ test("paging requests stay locked until the framework completes loading and neve
     control.updateView(mockContext<IInputs>({ sampleDataSet: dataSet }));
     expect(next.disabled).toBe(false);
     expect(previous.disabled).toBe(false);
+});
+
+test.each(["Next", "Previous"])("completion-only update releases a %s paging request", (label) => {
+    const dataSet = hierarchyDataSet({ hasNextPage: true, hasPreviousPage: true });
+    const { container, control, context } = mount(dataSet);
+    const button = Array.from(container.querySelectorAll("button")).find((item) => item.textContent === label) as HTMLButtonElement;
+    const loadPage = label === "Next" ? dataSet.paging.loadNextPage : dataSet.paging.loadPreviousPage;
+
+    button.click();
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(loadPage).toHaveBeenCalledTimes(1);
+    expect(loadPage).toHaveReturnedWith(undefined);
+    expect(button.disabled).toBe(true);
+
+    dataSet.sortedRecordIds = ["root"];
+    control.updateView(context);
+
+    expect(container.textContent).not.toContain("ChildOpen");
+    expect(button.disabled).toBe(false);
+    button.click();
+    expect(loadPage).toHaveBeenCalledTimes(2);
+});
+
+test("dataset errors release pending paging without requiring a loading update", () => {
+    const dataSet = hierarchyDataSet({ hasNextPage: true, hasPreviousPage: true });
+    const { container, control, context } = mount(dataSet);
+    const next = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Next") as HTMLButtonElement;
+    next.click();
+
+    dataSet.error = true;
+    dataSet.errorMessage = "Access denied";
+    control.updateView(context);
+    expect(container.textContent).toContain("Access denied");
+    expect(next.disabled).toBe(false);
+
+    next.click();
+    expect(dataSet.paging.loadNextPage).toHaveBeenCalledTimes(2);
 });
 
 test("two control instances keep independent expansion state", () => {

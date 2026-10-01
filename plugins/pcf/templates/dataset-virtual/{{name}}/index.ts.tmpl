@@ -9,7 +9,7 @@ export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutpu
     private context: ComponentFramework.Context<IInputs> | null = null;
     private dataSet: ComponentFramework.PropertyTypes.DataSet | null = null;
     private pagingRequestPending = false;
-    private pagingRequestObservedLoading = false;
+    private pagingCompletionVersion = 0;
 
     public init(): void {
         // Virtual controls render by returning React elements from updateView; the host owns the root.
@@ -17,16 +17,18 @@ export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutpu
 
     public updateView(context: ComponentFramework.Context<IInputs>): React.ReactElement {
         this.context = context;
-        this.dataSet = context.parameters.sampleDataSet;
-        if (this.pagingRequestPending) {
-            if (this.dataSet?.loading) this.pagingRequestObservedLoading = true;
-            else if (this.pagingRequestObservedLoading) this.clearPagingRequest();
+        this.dataSet = context.parameters.sampleDataSet || null;
+        // Paging guarantees a completion update, not an intermediate loading update.
+        // See: https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/paging
+        if (this.pagingRequestPending && (this.dataSet?.loading !== true || this.dataSet?.error === true)) {
+            this.clearPagingRequest();
         }
         return React.createElement({{name}}View, {
             cssClass: "{{cssClass}}",
             messageClass: "{{cssMessageClass}}",
             dataSet: this.dataSet,
-            busy: this.pagingRequestPending || this.dataSet.loading,
+            busy: this.pagingRequestPending || this.dataSet?.loading === true,
+            pagingCompletionVersion: this.pagingCompletionVersion,
             actionHeader: this.stringResource("Action_Header_Key", "Actions"),
             openRecordLabel: this.stringResource("Open_Record_Label_Key", "Open {0}"),
             onNextPage: this.loadNextPage,
@@ -43,7 +45,7 @@ export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutpu
         this.context = null;
         this.dataSet = null;
         this.pagingRequestPending = false;
-        this.pagingRequestObservedLoading = false;
+        this.pagingCompletionVersion = 0;
     }
 
     private readonly loadNextPage = (): void => {
@@ -55,16 +57,15 @@ export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutpu
     };
 
     private requestPage(direction: "next" | "previous"): void {
-        if (!this.dataSet || this.pagingRequestPending) return;
+        if (!this.dataSet || this.pagingRequestPending || this.dataSet.loading === true) return;
         const paging = this.dataSet.paging;
         const canLoad = direction === "next" ? paging.hasNextPage : paging.hasPreviousPage;
         if (!canLoad) return;
 
         // Paging methods return void; completion is delivered by a later updateView after the
         // framework finishes loading the page, so the lock cannot be released on a microtask.
-        // See: https://learn.microsoft.com/power-apps/developer/component-framework/reference/paging
+        // See: https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/paging
         this.pagingRequestPending = true;
-        this.pagingRequestObservedLoading = false;
         try {
             if (direction === "next") paging.loadNextPage();
             else paging.loadPreviousPage();
@@ -76,7 +77,7 @@ export class {{name}} implements ComponentFramework.ReactControl<IInputs, IOutpu
 
     private clearPagingRequest(): void {
         this.pagingRequestPending = false;
-        this.pagingRequestObservedLoading = false;
+        this.pagingCompletionVersion += 1;
     }
 
     private readonly openRecord = (record: DataSetRecord): void => {

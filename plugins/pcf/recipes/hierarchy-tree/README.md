@@ -39,6 +39,7 @@ PCF datasets expose the records on the current loaded page through `sortedRecord
 - Cycles in loaded parent links are detected; cycle edges are broken and a warning is shown.
 - The control renders up to 500 loaded records per page and shows a partial-tree notice when the loaded page exceeds that limit.
 - Dataset paging buttons call only one paging request at a time because Learn states dataset paging methods do not support parallel execution.
+- Both buttons disable immediately after a request and stay disabled while the dataset is loading. The first non-loading `updateView` or an error releases the request, even if the host did not send an intermediate loading update.
 
 ## Accessibility and localization
 

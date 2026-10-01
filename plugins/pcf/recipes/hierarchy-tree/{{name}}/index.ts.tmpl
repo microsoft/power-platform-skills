@@ -46,7 +46,6 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     private context: ComponentFramework.Context<IInputs> | null = null;
     private dataSet: DataSet | null = null;
     private pagingRequestPending = false;
-    private pagingRequestObservedLoading = false;
     private expanded = new Set<string>();
     private initializedExpansion = new Set<string>();
     private visibleItems: VisibleTreeItem[] = [];
@@ -91,9 +90,10 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     public updateView(context: ComponentFramework.Context<IInputs>): void {
         this.context = context;
         this.dataSet = context.parameters[DATA_SET_NAME] as DataSet | undefined || null;
-        if (this.pagingRequestPending) {
-            if (this.dataSet?.loading) this.pagingRequestObservedLoading = true;
-            else if (this.pagingRequestObservedLoading) this.clearPagingRequest();
+        // Paging guarantees a completion update, not an intermediate loading update.
+        // See: https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/paging
+        if (this.pagingRequestPending && (this.dataSet?.loading !== true || this.dataSet?.error === true)) {
+            this.clearPagingRequest();
         }
         this.render();
     }
@@ -114,7 +114,6 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
         this.context = null;
         this.dataSet = null;
         this.pagingRequestPending = false;
-        this.pagingRequestObservedLoading = false;
         this.expanded.clear();
         this.initializedExpansion.clear();
     }
@@ -128,16 +127,15 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     };
 
     private requestPage(direction: "next" | "previous"): void {
-        if (!this.dataSet || this.pagingRequestPending) return;
+        if (!this.dataSet || this.pagingRequestPending || this.dataSet.loading === true) return;
         const paging = this.dataSet.paging;
         const canLoad = direction === "next" ? paging.hasNextPage : paging.hasPreviousPage;
         if (!canLoad) return;
 
         // Paging methods return void; completion is delivered by a later updateView after the
         // framework finishes loading the page, so the lock cannot be released on a microtask.
-        // See: https://learn.microsoft.com/power-apps/developer/component-framework/reference/paging
+        // See: https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/paging
         this.pagingRequestPending = true;
-        this.pagingRequestObservedLoading = false;
         try {
             if (direction === "next") paging.loadNextPage();
             else paging.loadPreviousPage();
@@ -150,7 +148,6 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
 
     private clearPagingRequest(): void {
         this.pagingRequestPending = false;
-        this.pagingRequestObservedLoading = false;
     }
 
     private render(): void {
@@ -493,7 +490,7 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     }
 
     private updatePaging(dataSet: DataSet | null): void {
-        const busy = this.pagingRequestPending || Boolean(dataSet?.loading);
+        const busy = this.pagingRequestPending || dataSet?.loading === true;
         if (this.previousButton) this.previousButton.disabled = busy || !dataSet?.paging.hasPreviousPage;
         if (this.nextButton) this.nextButton.disabled = busy || !dataSet?.paging.hasNextPage;
     }

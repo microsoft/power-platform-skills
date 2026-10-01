@@ -7,6 +7,7 @@ export interface {{name}}ViewProps {
     messageClass: string;
     dataSet: ComponentFramework.PropertyTypes.DataSet | null;
     busy: boolean;
+    pagingCompletionVersion: number;
     actionHeader: string;
     openRecordLabel: string;
     onNextPage: () => void;
@@ -16,13 +17,37 @@ export interface {{name}}ViewProps {
 
 export function {{name}}View(props: {{name}}ViewProps): React.ReactElement {
     const dataSet = props.dataSet;
-    if (!dataSet) return message(props, "No dataset parameter was provided.");
-    if (dataSet.loading) return message(props, "Loading records...", dataSet);
-    if (dataSet.error) return message(props, dataSet.errorMessage || "The dataset could not be loaded.", dataSet);
+    const [pagingPending, setPagingPending] = React.useState(false);
+    // A completion-only update can leave busy=false in both host renders. Its version
+    // clears the local click latch even when the host never rendered a loading state.
+    React.useLayoutEffect(() => {
+        setPagingPending(false);
+    }, [props.pagingCompletionVersion]);
+
+    const requestPage = (loadPage: () => void): void => {
+        if (pagingPending || props.busy || dataSet?.loading === true) return;
+        setPagingPending(true);
+        try {
+            loadPage();
+        } catch (error) {
+            setPagingPending(false);
+            throw error;
+        }
+    };
+    const pagingProps: {{name}}ViewProps = {
+        ...props,
+        busy: props.busy || pagingPending,
+        onNextPage: () => requestPage(props.onNextPage),
+        onPreviousPage: () => requestPage(props.onPreviousPage),
+    };
+
+    if (!dataSet) return message(pagingProps, "No dataset parameter was provided.");
+    if (dataSet.loading) return message(pagingProps, "Loading records...", dataSet);
+    if (dataSet.error) return message(pagingProps, dataSet.errorMessage || "The dataset could not be loaded.", dataSet);
     if (dataSet.sortedRecordIds.length === 0) {
         return React.createElement("div", { className: props.cssClass },
             React.createElement("div", { className: props.messageClass }, "No records to show."),
-            pager(props, dataSet),
+            pager(pagingProps, dataSet),
         );
     }
 
@@ -36,7 +61,7 @@ export function {{name}}View(props: {{name}}ViewProps): React.ReactElement {
             ),
             React.createElement("tbody", null, dataSet.sortedRecordIds.map((id) => row(dataSet, id, props))),
         ),
-        pager(props, dataSet),
+        pager(pagingProps, dataSet),
     );
 }
 
@@ -79,7 +104,7 @@ function pager(
     props: {{name}}ViewProps,
     dataSet: ComponentFramework.PropertyTypes.DataSet,
 ): React.ReactElement {
-    const busy = props.busy || dataSet.loading;
+    const busy = props.busy || dataSet.loading === true;
     return React.createElement("div", { className: "{{nameLower}}-pager" },
         React.createElement("button", {
             type: "button",

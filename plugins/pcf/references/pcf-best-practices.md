@@ -32,6 +32,7 @@ Use this reference when designing or reviewing Power Apps component framework (P
 ## Dataset controls
 
 - Dataset paging APIs are serial. Learn states `loadExactPage`, `loadNextPage` and `loadPreviousPage` do not support parallel execution: [Paging](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/paging).
+- Latch before each void-returning paging call and disable both paging buttons immediately. Release the latch on the first subsequent `updateView` where `dataset.loading !== true`, or on an error; do not require an intermediate loading update. Keep buttons disabled while latched or while the dataset is loading: [Paging](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/paging), [loading](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/dataset#loading).
 - `dataset.refresh()` reloads data and resets paging to page 1; do not call it unguarded from `updateView`: [refresh](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/dataset/refresh).
 - Preserve user context. If sorting, filtering or search changes, reset intentionally and announce it in UI; otherwise keep the current page where the API allows it.
 - Use `openDatasetItem` only for hosts where Learn marks it available, and treat it as model-driven/canvas behavior, not a Power Pages navigation promise: [openDatasetItem](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/dataset/opendatasetitem).

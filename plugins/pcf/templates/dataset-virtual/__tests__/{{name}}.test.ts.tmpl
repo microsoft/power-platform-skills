@@ -13,17 +13,24 @@ interface DatasetElementProps {
     onOpenRecord: (record: DataSetRecord) => void;
 }
 
-function render(dataSet: IInputs["sampleDataSet"]) {
+function render(dataSet?: IInputs["sampleDataSet"] | null) {
     const control = new {{name}}();
-    const context = mockContext<IInputs>({ sampleDataSet: dataSet });
+    const context = mockContext<IInputs>({});
+    if (dataSet !== undefined) Reflect.set(context.parameters, "sampleDataSet", dataSet);
     const container = document.createElement("div");
     control.init();
-    ReactDOM.render(control.updateView(context), container);
+    TestUtils.act(() => {
+        ReactDOM.render(control.updateView(context), container);
+    });
 
     return {
         control,
         container,
+        context,
         dataSet,
+        update: () => TestUtils.act(() => {
+            ReactDOM.render(control.updateView(context), container);
+        }),
         element: control.updateView(context) as React.ReactElement<DatasetElementProps>,
         buttons: () => Array.from(container.querySelectorAll("button")) as HTMLButtonElement[],
         pagerButtons: () => Array.from(container.querySelectorAll("button"))
@@ -44,9 +51,10 @@ function dataSet(options = {}) {
 }
 
 test("loading state renders a message", () => {
-    const { container } = render(dataSet({ loading: true }));
+    const { container, pagerButtons } = render(dataSet({ loading: true, hasNextPage: true, hasPreviousPage: true }));
 
     expect(container.textContent).toContain("Loading records");
+    expect(pagerButtons().map((button) => button.disabled)).toEqual([true, true]);
 });
 
 test("empty state renders a message", () => {
@@ -90,6 +98,7 @@ test("next and previous paging stay locked until the framework completes loading
     element.props.onNextPage();
 
     expect(ds.paging.loadNextPage).toHaveBeenCalledTimes(1);
+    expect(ds.paging.loadNextPage).toHaveReturnedWith(undefined);
     expect(ds.paging.loadPreviousPage).not.toHaveBeenCalled();
 
     ds.loading = true;
@@ -102,6 +111,71 @@ test("next and previous paging stay locked until the framework completes loading
     ReactDOM.render(control.updateView(mockContext<IInputs>({ sampleDataSet: ds })), container);
 
     expect(pagerButtons().map((button) => button.disabled)).toEqual([false, false]);
+});
+
+test("paging buttons disable immediately before any host update", () => {
+    const ds = dataSet({ hasNextPage: true, hasPreviousPage: true });
+    const { pagerButtons } = render(ds);
+    const next = pagerButtons().find((button) => button.textContent === "Next") as HTMLButtonElement;
+
+    TestUtils.act(() => TestUtils.Simulate.click(next));
+
+    expect(ds.paging.loadNextPage).toHaveReturnedWith(undefined);
+    expect(pagerButtons().map((button) => button.disabled)).toEqual([true, true]);
+});
+
+test.each(["Next", "Previous"])("completion-only update releases a %s paging request and local busy state", (label) => {
+    const ds = dataSet({ hasNextPage: true, hasPreviousPage: true });
+    const { pagerButtons, element, update, rows } = render(ds);
+    const button = pagerButtons().find((item) => item.textContent === label) as HTMLButtonElement;
+    const loadPage = label === "Next" ? ds.paging.loadNextPage : ds.paging.loadPreviousPage;
+
+    TestUtils.act(() => TestUtils.Simulate.click(button));
+    element.props.onNextPage();
+    element.props.onPreviousPage();
+    expect(loadPage).toHaveBeenCalledTimes(1);
+    expect(loadPage).toHaveReturnedWith(undefined);
+
+    ds.sortedRecordIds = ["second", "first"];
+    update();
+
+    expect(rows().map((row) => row.textContent)).toEqual(["SecondOpen", "FirstOpen"]);
+    expect(pagerButtons().map((item) => item.disabled)).toEqual([false, false]);
+    TestUtils.act(() => TestUtils.Simulate.click(button));
+    expect(loadPage).toHaveBeenCalledTimes(2);
+});
+
+test.each([undefined, null])("missing dataset %p renders safely and releases pending paging", (missing) => {
+    expect(render(missing).container.textContent).toContain("No dataset parameter was provided");
+
+    const ds = dataSet({ hasNextPage: true, hasPreviousPage: true });
+    const { pagerButtons, update, context, container } = render(ds);
+    const next = pagerButtons().find((button) => button.textContent === "Next") as HTMLButtonElement;
+    TestUtils.act(() => TestUtils.Simulate.click(next));
+
+    Reflect.set(context.parameters, "sampleDataSet", missing);
+    expect(update).not.toThrow();
+    expect(container.textContent).toContain("No dataset parameter was provided");
+
+    context.parameters.sampleDataSet = ds;
+    update();
+    expect(pagerButtons().map((button) => button.disabled)).toEqual([false, false]);
+});
+
+test("dataset errors release pending paging without requiring a loading update", () => {
+    const ds = dataSet({ hasNextPage: true, hasPreviousPage: true });
+    const { pagerButtons, update, container } = render(ds);
+    const next = pagerButtons().find((button) => button.textContent === "Next") as HTMLButtonElement;
+    TestUtils.act(() => TestUtils.Simulate.click(next));
+
+    ds.error = true;
+    ds.errorMessage = "Access denied";
+    update();
+    expect(container.textContent).toContain("Access denied");
+    expect(pagerButtons().map((button) => button.disabled)).toEqual([false, false]);
+
+    TestUtils.act(() => TestUtils.Simulate.click(next));
+    expect(ds.paging.loadNextPage).toHaveBeenCalledTimes(2);
 });
 
 test("updateView does not refresh the dataset", () => {

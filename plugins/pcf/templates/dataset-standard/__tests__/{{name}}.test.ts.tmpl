@@ -2,16 +2,18 @@ import { {{name}} } from "../{{name}}";
 import { IInputs } from "../{{name}}/generated/ManifestTypes";
 import { mockContext, mockDataSet } from "../test/pcf-context";
 
-function mount(dataSet: IInputs["sampleDataSet"]) {
+function mount(dataSet?: IInputs["sampleDataSet"] | null) {
     const control = new {{name}}();
     const container = document.createElement("div");
-    const context = mockContext<IInputs>({ sampleDataSet: dataSet });
+    const context = mockContext<IInputs>({});
+    if (dataSet !== undefined) Reflect.set(context.parameters, "sampleDataSet", dataSet);
 
     control.init(context, jest.fn(), {}, container);
 
     return {
         control,
         container,
+        context,
         dataSet,
         buttons: () => Array.from(container.querySelectorAll("button")) as HTMLButtonElement[],
         headers: () => Array.from(container.querySelectorAll("th")).map((header) => ({
@@ -30,9 +32,10 @@ function dataSet(options = {}) {
 }
 
 test("loading state renders a message", () => {
-    const { container } = mount(dataSet({ loading: true }));
+    const { container, buttons } = mount(dataSet({ loading: true, hasNextPage: true, hasPreviousPage: true }));
 
     expect(container.textContent).toContain("Loading records");
+    expect(buttons().map((button) => button.disabled)).toEqual([true, true]);
 });
 
 test("empty state renders a message", () => {
@@ -82,6 +85,7 @@ test("next and previous paging stay locked until the framework completes loading
     nextButton.click();
 
     expect(ds.paging.loadNextPage).toHaveBeenCalledTimes(1);
+    expect(ds.paging.loadNextPage).toHaveReturnedWith(undefined);
     expect(ds.paging.loadPreviousPage).not.toHaveBeenCalled();
 
     ds.loading = true;
@@ -94,6 +98,64 @@ test("next and previous paging stay locked until the framework completes loading
 
     expect(nextButton.disabled).toBe(false);
     expect(previousButton.disabled).toBe(false);
+});
+
+test.each(["Next", "Previous"])("completion-only update releases a %s paging request", (label) => {
+    const ds = dataSet({ hasNextPage: true, hasPreviousPage: true });
+    const { buttons, control, context, rows } = mount(ds);
+    const button = buttons().find((item) => item.textContent === label) as HTMLButtonElement;
+    const loadPage = label === "Next" ? ds.paging.loadNextPage : ds.paging.loadPreviousPage;
+
+    button.click();
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(loadPage).toHaveBeenCalledTimes(1);
+    expect(loadPage).toHaveReturnedWith(undefined);
+    expect(buttons().filter((item) => item.textContent !== "Open").every((item) => item.disabled)).toBe(true);
+
+    ds.sortedRecordIds = ["second", "first"];
+    control.updateView(context);
+
+    expect(rows().map((row) => row.textContent)).toEqual(["SecondOpen", "FirstOpen"]);
+    expect(button.disabled).toBe(false);
+    button.click();
+    expect(loadPage).toHaveBeenCalledTimes(2);
+});
+
+test.each([undefined, null])("missing dataset %p renders safely and releases pending paging", (missing) => {
+    expect(mount(missing).container.textContent).toContain("No dataset parameter was provided");
+
+    const ds = dataSet({ hasNextPage: true, hasPreviousPage: true });
+    const { buttons, control, context, container } = mount(ds);
+    const next = buttons().find((button) => button.textContent === "Next") as HTMLButtonElement;
+    next.click();
+
+    Reflect.set(context.parameters, "sampleDataSet", missing);
+    expect(() => control.updateView(context)).not.toThrow();
+    expect(container.textContent).toContain("No dataset parameter was provided");
+    expect(buttons().every((button) => button.disabled)).toBe(true);
+
+    context.parameters.sampleDataSet = ds;
+    control.updateView(context);
+    expect(next.disabled).toBe(false);
+});
+
+test("dataset errors release pending paging without requiring a loading update", () => {
+    const ds = dataSet({ hasNextPage: true, hasPreviousPage: true });
+    const { buttons, control, context, container } = mount(ds);
+    const next = buttons().find((button) => button.textContent === "Next") as HTMLButtonElement;
+    next.click();
+
+    ds.error = true;
+    ds.errorMessage = "Access denied";
+    control.updateView(context);
+    expect(container.textContent).toContain("Access denied");
+
+    ds.error = false;
+    control.updateView(context);
+    expect(next.disabled).toBe(false);
+    next.click();
+    expect(ds.paging.loadNextPage).toHaveBeenCalledTimes(2);
 });
 
 test("updateView does not refresh the dataset", () => {
