@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { loadCli } = require('./helpers/cli-harness.js');
+const dataverse = require('../lib/pcf-dataverse.js');
 
 const scriptPath = path.join(__dirname, '..', 'verify-pcf.js');
 const fixtureRoot = path.join(__dirname, 'fixtures', 'pcf-verify');
@@ -28,6 +29,97 @@ async function run(argv, stubs) {
   }
   return cli;
 }
+
+function typedFormStubs(forms) {
+  const queries = [];
+  const stubs = {
+    './lib/pcf-dataverse': {
+      ...dataverse,
+      makePcfSdk: async () => ({
+        queryRecords: async (table, options) => {
+          assert.equal(table, 'systemform');
+          queries.push(options);
+          // Match the real reader's equality chain, e.g. "(type eq 2 or type eq 7)", so dropping
+          // the intent's type changes which same-named Dataverse rows this boundary returns.
+          const types = [...options.filter.matchAll(/\btype eq (\d+)/g)].map((match) => Number(match[1]));
+          return forms.filter((form) => types.length === 0 || types.includes(form.type));
+        },
+      }),
+      findCustomControl: async (_sdk, name) => ({ name, version: '1.0.0', componentState: 0 }),
+      readFormXml: async () => '<form />',
+    },
+    './lib/pcf-binding-verify': {
+      verifyBinding: () => ({ ok: true, status: 'bound', issues: [], cells: [] }),
+    },
+  };
+  return { queries, stubs };
+}
+
+test('verify-pcf refuses a main intent when only a same-named quick-create form exists', async () => {
+  const { queries, stubs } = typedFormStubs([{
+    formid: '22222222-2222-4222-8222-222222222222', name: 'Account', type: 7,
+  }]);
+  const cli = await run([
+    '--env', 'https://contoso.crm.dynamics.com',
+    '--control', 'new_Contoso.Controls.StarRating',
+    '--intent', `@${path.join(fixtureRoot, '001-intent-field-clean', 'pcf-intent.json')}`,
+  ], stubs);
+
+  assert.equal(cli.exitCode, 1, 'a quick-create binding does not satisfy a main-form intent');
+  const payload = JSON.parse(cli.stdoutText());
+  assert.equal(payload.ok, false);
+  assert.match(payload.error, /No form matched/);
+  assert.deepEqual(payload.bindings, []);
+  assert.match(queries[0].filter, /\(type eq 2\)/);
+  assert.doesNotMatch(queries[0].filter, /type eq 7/);
+});
+
+for (const [formType, type] of [['main', 2], ['quick-create', 7], ['quick-view', 6], ['card', 11], ['other', 100]]) {
+  test(`verify-pcf selects only the explicit ${formType} type among same-named forms`, async () => {
+    const forms = [2, 7, 6, 11, 100].map((code) => ({
+      formid: `00000000-0000-4000-8000-${String(code).padStart(12, '0')}`,
+      name: 'Shared',
+      type: code,
+    }));
+    const { queries, stubs } = typedFormStubs(forms);
+    const intent = { bindings: [{
+      table: 'account', form: 'Shared', formType, target: { column: 'new_rating' }, clients: ['web'],
+    }] };
+    const cli = await run([
+      '--env', 'https://contoso.crm.dynamics.com',
+      '--control', 'new_Contoso.Controls.StarRating',
+      '--intent', JSON.stringify(intent),
+    ], stubs);
+
+    assert.equal(cli.exitCode, 0, cli.stdoutText());
+    const payload = JSON.parse(cli.stdoutText());
+    assert.equal(payload.ok, true);
+    assert.equal(payload.bindings[0].form.id, forms.find((form) => form.type === type).formid);
+    assert.match(queries[0].filter, new RegExp(`\\(type eq ${type}\\)`));
+    assert.doesNotMatch(queries[0].filter, /\bor\b/);
+  });
+}
+
+test('verify-pcf rejects an unknown explicit intent form type before creating an SDK', async () => {
+  let madeSdk = false;
+  const cli = await run([
+    '--env', 'https://contoso.crm.dynamics.com',
+    '--control', 'new_Contoso.Controls.StarRating',
+    '--intent', JSON.stringify({ bindings: [{
+      table: 'account', form: 'Shared', formType: 'side-pane', target: { column: 'new_rating' },
+    }] }),
+  ], {
+    './lib/pcf-dataverse': {
+      makePcfSdk: async () => { madeSdk = true; throw new Error('SDK must not be created'); },
+    },
+  });
+
+  assert.equal(madeSdk, false);
+  assert.equal(cli.exitCode, 1);
+  assert.equal(cli.stdoutText(), '');
+  assert.match(cli.stderrText(), /Usage:/);
+  assert.match(cli.stderrText(), /formType.*side-pane/);
+});
 
 test('verify-pcf reports a registered control separately from draft-only binding evidence', async () => {
   const calls = [];
@@ -252,7 +344,7 @@ test('verify-pcf reads canonical intent target.column bindings and reaches FormX
   ], stubs);
 
   assert.equal(cli.exitCode, 0);
-  assert.deepEqual(calls.find((call) => call[0] === 'findForm')[1], { table: 'account', form: 'Account' });
+  assert.deepEqual(calls.find((call) => call[0] === 'findForm')[1], { table: 'account', form: 'Account', types: [2] });
   assert.equal(calls.find((call) => call[0] === 'verifyBinding')[2].column, 'new_rating');
   assert.deepEqual(JSON.parse(cli.stdoutText()).bindings[0].target, { column: 'new_rating' });
 });
@@ -284,6 +376,7 @@ test('verify-pcf reads canonical intent target.controlId dataset-subgrid binding
   ], stubs);
 
   assert.equal(cli.exitCode, 0);
+  assert.deepEqual(calls.find((call) => call[0] === 'findForm')[1].types, [7]);
   const verifyExpected = calls.find((call) => call[0] === 'verifyBinding')[2];
   assert.equal(verifyExpected.kind, 'dataset-subgrid');
   assert.equal(verifyExpected.controlId, 'Contacts');

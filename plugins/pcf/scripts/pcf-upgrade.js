@@ -49,11 +49,13 @@ function runMain(argv = process.argv.slice(2)) {
   }
   const hosts = splitList(flags.hosts, ['model']);
   validateHosts(hosts, flags.hosts !== undefined);
+  const steps = splitList(flags.steps, []);
+  if (flags.steps !== undefined && steps.length === 0) usageError('--steps must include at least one step id');
   const result = runUpgrade({
     project: flags.project ? path.resolve(String(flags.project)) : process.cwd(),
     hosts,
     apply: Boolean(flags.apply),
-    steps: splitList(flags.steps, []),
+    steps,
     allowDirty: Boolean(flags['allow-dirty']),
     noInstall: Boolean(flags['no-install']),
     npmCli: flags['npm-cli'] ? String(flags['npm-cli']) : undefined,

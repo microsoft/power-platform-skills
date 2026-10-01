@@ -38,6 +38,9 @@ const KNOWN = [
 const NEED_VALUE = ['env', 'control', 'version', 'table', 'form', 'column', 'control-id', 'clients', 'param', 'intent', 'workspace'];
 const ALLOWED_CLIENTS = Object.freeze(new Set(['web', 'phone', 'tablet']));
 const CLIENTS_HINT = 'allowed values: web,phone,tablet';
+// systemform rows carry numeric type values, not the intent's semantic formType names.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/systemform#type
+const FORM_TYPE_CODES = Object.freeze({ main: 2, 'quick-create': 7, 'quick-view': 6, card: 11, other: 100 });
 
 function usageError(message) {
   process.stderr.write(`${USAGE}\n${message}\n`);
@@ -85,7 +88,11 @@ async function main(argv = process.argv.slice(2)) {
     registered = await registrationResult(sdk, String(flags.control), flags.version ? String(flags.version) : undefined);
 
     for (const binding of bindings) {
-      const form = await findForm(sdk, { table: binding.table, form: binding.form });
+      const form = await findForm(sdk, {
+        table: binding.table,
+        form: binding.form,
+        ...(binding.formType !== undefined ? { types: [FORM_TYPE_CODES[binding.formType]] } : {}),
+      });
       const expected = {
         kind: binding.kind || 'field',
         controlName: String(flags.control),
@@ -160,10 +167,14 @@ function readBindings(flags) {
 
 function normalizeBinding(binding) {
   const target = normalizeBindingTarget(binding);
+  if (binding.formType !== undefined && (typeof binding.formType !== 'string' || !Object.hasOwn(FORM_TYPE_CODES, binding.formType))) {
+    usageError(`intent binding formType '${binding.formType}' must be one of: ${Object.keys(FORM_TYPE_CODES).join(', ')}`);
+  }
   return {
     kind: binding.kind || 'field',
     table: binding.table,
     form: binding.form,
+    formType: binding.formType,
     target,
     clients: Array.isArray(binding.clients) ? parseIntentClients(binding.clients) : parseClients(binding.clients),
     parameters: binding.parameters,

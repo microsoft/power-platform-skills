@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { loadCli } = require('./helpers/cli-harness.js');
 const { loadMatrix, dependencySet } = require('../lib/pcf-matrix.js');
 const { planScaffold, writeScaffold } = require('../lib/pcf-scaffold.js');
@@ -379,6 +380,34 @@ test('CLI rejects unknown and empty --hosts before runUpgrade', async () => {
     assert.equal(cli.exitCode, 1, argv.join(' '));
     assert.match(cli.stderrText(), pattern, argv.join(' '));
     assert.equal(cli.stdoutText(), '', argv.join(' '));
+  }
+});
+
+test('CLI rejects explicit empty --steps selections without changing any project file', () => {
+  for (const value of [',', '', ' , , ']) {
+    const { tmp, projectDir } = driftedProject('pcf-upgrade-empty-steps-');
+    try {
+      const files = [
+        path.join(projectDir, 'package.json'),
+        path.join(projectDir, 'package-lock.json'),
+        path.join(projectDir, 'StarRating.pcfproj'),
+        path.join(projectDir, 'StarRating', 'ControlManifest.Input.xml'),
+      ];
+      const before = files.map((file) => fs.readFileSync(file));
+      const result = spawnSync(process.execPath, [
+        cliPath, '--project', projectDir, '--apply', '--allow-dirty', '--no-install', '--steps', value,
+      ], { encoding: 'utf8', shell: false });
+
+      for (const [index, file] of files.entries()) {
+        assert.deepEqual(fs.readFileSync(file), before[index], `--steps ${JSON.stringify(value)} must not change ${path.basename(file)}`);
+      }
+      assert.equal(result.status, 1, result.stdout || result.stderr);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, /Usage:/);
+      assert.match(result.stderr, /--steps (?:must include at least one step id|requires a value)/);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   }
 });
 
