@@ -91,9 +91,7 @@ function scanSource(file, text, { controlType, lex = blankNonCodePreservingTempl
   let index;
   const warn = () => {
     if (!findings.some((finding) => finding.code === 'PCF_CODE_UNPARSEABLE')) {
-      findings.push(makeFinding('PCF_CODE_UNPARSEABLE',
-        `Heuristic diagnostic: the PCF source gate could not finish analyzing this file; checks needing the analysis were skipped, and Pages API calls in the file are treated as unguarded. Use valid TypeScript/TSX or simplify the syntax. See ${BEST_PRACTICES}`,
-        file, 1));
+      findings.push(unparseableFinding(file));
     }
   };
   // An index failure must not suppress independent Xrm, direct-URL or element-id
@@ -442,11 +440,8 @@ function featureCoherence(manifestModel, sources, hosts = [], { lex = blankNonCo
     const file = source.file || '<source>';
     const text = String(source.text || '');
     const lexed = lexSource(file, text, lex);
-    if (lexed.finding) {
-      findings.push(lexed.finding);
-      continue;
-    }
-    const mask = lexed.mask;
+    if (lexed.finding) findings.push(lexed.finding);
+    const mask = lexed.finding ? text : lexed.mask;
     const fileUsed = new Set();
     const start = findings.length;
     const analyze = (index) => {
@@ -455,14 +450,20 @@ function featureCoherence(manifestModel, sources, hosts = [], { lex = blankNonCo
       collectDeviceUse({ findings, declared, used: fileUsed, file, text, index });
       if (pages) addPagesApiFindings(findings, file, text, index);
     };
+    const fallback = () => analyze({ members: fallbackMembers(text, mask), failed: true });
     try {
-      analyze(indexer(text, mask));
+      if (lexed.finding) {
+        // A lexer failure leaves no blanked mask. Raw "// context.device.captureImage()"
+        // or a string containing that call may be reported: conservative false positives
+        // are preferable to silently authorizing an unparsed file's Pages API use.
+        fallback();
+      } else analyze(indexer(text, mask));
     } catch {
-      // Keep only regex/token reference detection over the blanked mask: no scopes
-      // or proof guesses survive a failed analysis. scanSource owns the one warning.
+      // Keep only independent reference detection: no scopes or proof guesses
+      // survive a failed analysis. scanSource owns the index-failure warning.
       findings.length = start;
       fileUsed.clear();
-      analyze({ members: fallbackMembers(text, mask), failed: true });
+      fallback();
     }
     for (const feature of fileUsed) used.add(feature);
   }
@@ -552,7 +553,16 @@ function gateSources({ manifestModel, sources, hosts = [] }, options = {}) {
   }
   for (const finding of featureCoherence(manifestModel || { features: [] }, sources || [], hosts, sharedOptions)) all.push(finding);
   const errors = all.filter((finding) => finding.severity === 'error');
-  const warnings = all.filter((finding) => finding.severity === 'warning');
+  // Standalone featureCoherence still reports lexer failures. The combined gate
+  // presents only one analyzer warning per file without dropping any API findings.
+  const unparseableFiles = new Set();
+  const warnings = all.filter((finding) => {
+    if (finding.severity !== 'warning') return false;
+    if (finding.code !== 'PCF_CODE_UNPARSEABLE') return true;
+    if (unparseableFiles.has(finding.file)) return false;
+    unparseableFiles.add(finding.file);
+    return true;
+  });
   return { ok: errors.length === 0, errors, warnings };
 }
 
@@ -603,18 +613,19 @@ function findMatchingBrace(mask, open) {
   return -1;
 }
 
+function unparseableFinding(file) {
+  return makeFinding('PCF_CODE_UNPARSEABLE',
+    `Heuristic diagnostic: the PCF source gate could not finish analyzing this file; checks needing the analysis were skipped, and Pages API calls in the file are treated as unguarded. Use valid TypeScript/TSX or simplify the syntax. See ${BEST_PRACTICES}`,
+    file, 1);
+}
+
 function lexSource(file, text, lex, opts) {
   try {
     return { mask: lex(text, opts), finding: null };
   } catch (err) {
     return {
       mask: '',
-      finding: makeFinding(
-        'PCF_CODE_UNPARSEABLE',
-        `Heuristic diagnostic: source could not be parsed by the PCF source gate, which is an unsupported source shape for this check; use valid TypeScript/TSX or simplify the syntax so the gate can scan it. See ${BEST_PRACTICES}`,
-        file,
-        1,
-      ),
+      finding: unparseableFinding(file),
     };
   }
 }
@@ -1192,7 +1203,7 @@ function topLevelTokenRanges(tokens, start, end, separator) {
   return ranges;
 }
 
-function patternTargets(index, start, end) {
+function patternTargetRanges(index, start, end) {
   // { context: item } binds item, but { current: context }, [context] and ...context
   // bind context. Defaults' RHS values are reads. This one classifier serves both
   // declarations and destructuring writes; function heads instead reject ANY root mention.
@@ -1218,9 +1229,15 @@ function patternTargets(index, start, end) {
           pending.push([colon + 1, entryEnd]);
         } else pending.push([entry, entryEnd]);
       }
-    } else if (['identifier', 'unknown-identifier'].includes(token.kind)) targets.push(from);
+    } else targets.push([from, to]);
   }
   return targets;
+}
+
+function patternTargets(index, start, end) {
+  return patternTargetRanges(index, start, end)
+    .filter(([from]) => ['identifier', 'unknown-identifier'].includes(index.tokens[from].kind))
+    .map(([from]) => from);
 }
 
 function indexPatterns(index) {
@@ -1356,30 +1373,43 @@ function indexDeclarations(index) {
   }
   indexRootRoles(index);
   for (const scope of index.scopes) {
-    scope.bindings = scope.parent ? { ...scope.parent.bindings } : Object.fromEntries([...index.roots].map((root) => [root, scope.id]));
-    for (const root of index.roots) {
-      if (scope.declarations.has(root) || scope.kind === 'opaque'
-        || (root === 'this' && (scope.kind === 'class' || (scope.kind === 'function' && !scope.arrow)))) scope.bindings[root] = scope.id;
-    }
+    scope.bindings = new Map();
     for (const positions of scope.declarations.values()) positions.sort((a, b) => a - b);
   }
+}
+
+function bindingFor(scope, root) {
+  // function f0(p0) {...} function f1(p1) {...} introduces many unrelated roots.
+  // Copying all roots into every scope is quadratic. Resolve only actual proof/write
+  // uses, memoizing each visited scope so deep callback chains are walked once per root.
+  const pending = [];
+  let binding;
+  for (let owner = scope; owner; owner = owner.parent) {
+    if (owner.bindings.has(root)) { binding = owner.bindings.get(root); break; }
+    pending.push(owner);
+    if (!owner.parent || owner.declarations.has(root) || owner.kind === 'opaque'
+      || (root === 'this' && (owner.kind === 'class' || (owner.kind === 'function' && !owner.arrow)))) {
+      binding = owner.id;
+      break;
+    }
+  }
+  for (const owner of pending) owner.bindings.set(root, binding);
+  return binding;
 }
 
 function addIndexedWrite(index, tokenIndex, path, uncertain = false) {
   const token = index.tokens[tokenIndex];
   if (index.patternKeys.has(tokenIndex) || index.rootRoles.get(tokenIndex) === 'member') return;
   const root = path.names[0];
-  const key = `${token.scope.bindings[root]}:${uncertain ? root : path.names.join('.')}`;
+  // context.device[key] may replace any child, but captureImage[key] does not
+  // replace captureImage itself. Keep child-only expiry distinct from a prefix write.
+  const key = `${bindingFor(token.scope, root)}:${uncertain ? root : path.names.join('.')}${path.computed && !uncertain ? '.*' : ''}`;
   // Writes are lexical and keyed by the actual binding, not the callback that
   // contains them: () => { context = next } expires later outer/sibling calls too,
   // while (context) => { context = next } writes only its shadowing parameter.
   const writes = index.writes;
   if (!writes.has(key)) writes.set(key, []);
   writes.get(key).push(token.start);
-}
-
-function addOpaqueTargetWrite(index, tokenIndex) {
-  for (const root of index.roots) addIndexedWrite(index, tokenIndex, { names: [root] }, true);
 }
 
 function indexedOperandStart(index, end) {
@@ -1396,43 +1426,66 @@ function indexedOperandStart(index, end) {
 }
 
 function indexedOperandEnd(index, start) {
+  return indexedWritePath(index, start).end;
+}
+
+function indexedWritePath(index, start) {
+  // cache[context.device].get(context).pending writes cache, not the key/argument
+  // reads. Only leading dot members identify a protected path; computed members
+  // can replace any child, and a call result is opaque rather than the root itself.
+  // Jump indexed groups so their internal expressions are classified separately.
   const { tokens } = index;
-  if (['(', '[', '{'].includes(tokens[start]?.value)) return tokens[start].match < 0 ? start + 1 : tokens[start].match + 1;
-  if (tokens[start]?.kind !== 'identifier') return start + 1;
-  let end = indexedPath(index, start).end;
-  while (tokens[end]?.value === '!') end += 1;
-  return end;
+  const token = tokens[start];
+  const names = token?.name ? [token.name] : [];
+  let recognized = token?.kind === 'identifier';
+  let end = start + 1;
+  let computed = false;
+  let call = false;
+  let lastCall = false;
+  if (['(', '[', '{'].includes(token?.value) && token.match >= 0) end = token.match + 1;
+  while (end < tokens.length) {
+    if (tokens[end].value === '!') { end += 1; continue; }
+    const access = tokens[end].value;
+    let member = end;
+    if (['.', '?.'].includes(access)) member += 1;
+    if (member !== end && ['identifier', 'unknown-identifier'].includes(tokens[member]?.kind)) {
+      if (tokens[member].kind !== 'identifier') recognized = false;
+      if (!computed && !call) names.push(tokens[member].name || tokens[member].value);
+      end = member + 1;
+      lastCall = false;
+    } else if (access !== '.' && ['[', '('].includes(tokens[member]?.value)) {
+      const group = tokens[member];
+      if (group.match < 0) { recognized = false; end = member + 1; break; }
+      if (group.value === '[') computed = true;
+      else call = true;
+      lastCall = group.value === '(';
+      end = group.match + 1;
+    } else {
+      if (member !== end) { recognized = false; end = member; }
+      break;
+    }
+  }
+  return { names, end, computed, call, recognized: recognized && !lastCall };
 }
 
 function indexWriteTarget(index, start, end) {
   const { tokens } = index;
   if (start >= end) return;
   if (['let', 'const', 'var'].some((word) => tokenKeyword(tokens, start, word))) start += 1;
-  while (tokens[start]?.value === '(' && tokens[start].match === end - 1) { start += 1; end -= 1; }
-  while (tokens[end - 1]?.value === '!') end -= 1;
-  if (['{', '['].includes(tokens[start]?.value) && tokens[start].match === end - 1) {
-    for (const target of patternTargets(index, start, end)) {
-      if (tokens[target].kind === 'unknown-identifier') addOpaqueTargetWrite(index, target);
-      else if (trackedRoot(index, target)) {
-        const path = indexedPath(index, target);
-        addIndexedWrite(index, target, path, path.unknown);
-      }
+  const targets = ['{', '['].includes(tokens[start]?.value) && tokens[start].match === end - 1
+    ? patternTargetRanges(index, start, end) : [[start, end]];
+  for (const [from, to] of targets) {
+    const path = indexedWritePath(index, from);
+    if (path.end === to && path.recognized) {
+      if (!path.call && trackedRoot(index, from)) addIndexedWrite(index, from, path);
+      continue;
     }
-    return;
-  }
-  if (tokens[start]?.kind === 'identifier') {
-    const path = indexedPath(index, start);
-    if (path.end === end && !path.unknown) {
-      if (trackedRoot(index, start)) addIndexedWrite(index, start, path);
-      return;
+    // (context).device and (a, context).device are unfamiliar targets. Expire only
+    // tracked roots actually inside them, not unrelated guards elsewhere in the file.
+    for (let i = from; i < to; i += 1) {
+      const root = trackedRoot(index, i);
+      if (root) addIndexedWrite(index, i, { names: [root] }, true);
     }
-  }
-  // A whole recognized reference is a precise write. Casts and other unfamiliar
-  // targets, e.g. (context as Context) = next, instead expire the root's entire proof.
-  // No unclassified target is assumed to be a read.
-  for (let i = start; i < end; i += 1) {
-    if (tokens[i].kind === 'unknown-identifier') addOpaqueTargetWrite(index, i);
-    else if (trackedRoot(index, i)) addIndexedWrite(index, i, indexedPath(index, i), true);
   }
 }
 
@@ -1591,8 +1644,8 @@ function firstAtOrAfter(positions, start) {
 function indexedProofChanged(index, guard, member) {
   const root = member.names[0];
   const callScope = index.tokens[member.token].scope;
-  const binding = guard.owner.bindings[root];
-  if (callScope.bindings[root] !== binding) return true;
+  const binding = bindingFor(guard.owner, root);
+  if (bindingFor(callScope, root) !== binding) return true;
   // A root mentioned anywhere in a nested function head still blocks an inherited
   // proof, but is not itself a new binding: function f(x = (context = next)) writes
   // the outer context. Separate that proof barrier from real parameter shadowing.
@@ -1605,6 +1658,8 @@ function indexedProofChanged(index, guard, member) {
     const key = `${binding}:${member.names.slice(0, length).join('.')}`;
     const positions = index.writes.get(key);
     if (positions && firstAtOrAfter(positions, guard.start) < member.start) return true;
+    const children = length < member.names.length && index.writes.get(`${key}.*`);
+    if (children && firstAtOrAfter(children, guard.start) < member.start) return true;
   }
   return false;
 }

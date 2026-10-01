@@ -1012,3 +1012,200 @@ for (const [name, text, feature] of [
     assert.deepEqual(findings, []);
   });
 }
+
+for (const [name, text] of [
+  ['locale-cache callback', `if (${PROOF}) {
+    button.onclick = () => { cache[context.userSettings.languageId] = "Ready"; };
+    ${CALL};
+  }`],
+  ['cache-get callback', `if (${PROOF}) {
+    button.onclick = () => { cache.get(context).pending = true; };
+    ${CALL};
+  }`],
+  ['class locale-cache callback', `class Control {
+    render(text) {
+      if (typeof this._context.device?.captureImage === "function") {
+        button.onclick = () => { this._labels[this._context.userSettings.languageId] = text; };
+        this._context.device.captureImage();
+      }
+    }
+  }`],
+]) {
+  test(`Pages proof keeps correctly guarded ${name} clean`, () => {
+    assert.deepEqual(scanSource(FILE, text), []);
+    assert.deepEqual(findingsFor(text), []);
+    assert.deepEqual(gateSources({
+      manifestModel: { features: [{ name: 'Device.captureImage' }] },
+      sources: [{ file: FILE, text }], hosts: ['pages'],
+    }), { ok: true, errors: [], warnings: [] });
+  });
+}
+
+const targetWriteForms = [
+  ...['=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^=', '&&=', '||=', '??=']
+    .map((operator) => [`assignment ${operator}`, (target) => `${target} ${operator} next;`]),
+  ['postfix increment', (target) => `${target}++;`],
+  ['postfix decrement', (target) => `${target}--;`],
+  ['prefix increment', (target) => `++${target};`],
+  ['prefix decrement', (target) => `--${target};`],
+  ['deletion', (target) => `delete ${target};`],
+  ['for-of head', (target) => `for (${target} of items) {}`],
+  ['for-in head', (target) => `for (${target} in items) {}`],
+  ['object-pattern leaf', (target) => `({ a: ${target} } = next);`],
+  ['array-pattern leaf', (target) => `[${target}] = next;`],
+  ['nested-pattern leaf', (target) => `({ a: [${target}] } = next);`],
+  ['rest-pattern leaf', (target) => `({ ...${target} } = next);`],
+];
+
+for (const [name, write] of targetWriteForms) {
+  test(`Pages write targets distinguish key and argument reads for ${name}`, () => {
+    for (const target of [
+      'cache[context.userSettings.languageId]',
+      'cache.get(context).pending',
+      'cache[context.device].get(context).pending',
+    ]) {
+      assert.deepEqual(codesFor(withinGuard(`${write(target)} ${CALL};`)), [], target);
+    }
+    for (const target of ['context[key]', 'context.device[key]']) {
+      assert.deepEqual(codesFor(withinGuard(`${write(target)} ${CALL};`)), ['PCF_PAGES_API'], target);
+    }
+  });
+}
+
+for (const [name, target] of [
+  ['context read as a computed key', 'cache[context.device]'],
+  ['unrelated context member with a computed key', 'context.labels[key]'],
+  ['method child rather than the method', 'context.device.captureImage[key]'],
+  ['multiple computed members', 'cache[context].items[context.device]'],
+  ['optional member segments', 'cache?.items?.[context.device]?.pending'],
+  ['opaque tracked-root call result', 'context.get(context).pending'],
+  ['opaque protected-method call result', 'context.device.captureImage().pending'],
+  ['opaque result after a computed member', 'context[key](context).pending'],
+  ['opaque optional call result', 'context.get?.(context)?.pending'],
+]) {
+  test(`Pages proof classifies ${name} by its leftmost static write path`, () => {
+    assert.deepEqual(codesFor(withinGuard(`${target} = next; ${CALL};`)), []);
+  });
+}
+
+for (const [name, body] of [
+  ['computed protected-root assignment', `context[key] = next; ${CALL};`],
+  ['computed protected-namespace assignment', `context.device[key] = next; ${CALL};`],
+  ['parenthesized protected root', `(context).device = next; ${CALL};`],
+  ['comma-expression target', `(a, context).device = next; ${CALL};`],
+  ['protected destructuring leaf', `({ a: context.device } = next); ${CALL};`],
+  ['parenthesized destructuring leaf', `({ a: (context).device } = next); ${CALL};`],
+  ['computed destructuring leaf', `({ a: context.device[key] } = next); ${CALL};`],
+  ['computed-key nested assignment', `cache[(context.device = next)] = 1; ${CALL};`],
+  ['call-argument nested assignment', `cache.get((context.device = next)).pending = true; ${CALL};`],
+  ['unknown target containing a tracked-root read', `(cache[context]).pending = next; ${CALL};`],
+]) {
+  test(`Pages proof expires for ${name}`, () => {
+    assert.deepEqual(codesFor(withinGuard(body)), ['PCF_PAGES_API']);
+  });
+}
+
+test('Pages computed writes expire a protected class receiver but not another this member', () => {
+  const guard = 'typeof this._context.device?.captureImage === "function"';
+  const call = 'this._context.device.captureImage()';
+  for (const [name, write] of targetWriteForms) {
+    assert.deepEqual(codesFor(`if (${guard}) { ${write('this._context.device[key]')} ${call}; }`), ['PCF_PAGES_API'], name);
+    assert.deepEqual(codesFor(`if (${guard}) { ${write('this._labels[this._context.userSettings.languageId]')} ${call}; }`), [], name);
+  }
+});
+
+test('Pages unknown write targets expire only tracked roots inside the target', () => {
+  const propsProof = 'typeof props.context.device?.captureImage === "function"';
+  const propsCall = 'props.context.device.captureImage()';
+  for (const target of ['(context).other', '(a, context).device', '(cache[context]).pending']) {
+    const body = `${target} = next; ${propsCall};`;
+    assert.deepEqual(codesFor(withinGuard(`if (${propsProof}) { ${body} }`)), [], target);
+    assert.deepEqual(codesFor(withinGuard(`if (${propsProof}) { ${body} ${CALL}; }`)), ['PCF_PAGES_API'], target);
+  }
+  for (const write of ['(cache).pending = next;', String.raw`oth\u0065r = next;`]) {
+    assert.deepEqual(codesFor(withinGuard(`${write} ${CALL};`)), [], write);
+  }
+});
+
+for (const [name, receiver] of [['distinct receiver names', (i) => `p${i}`], ['one shared receiver name', () => 'p']]) {
+  test(`Source binding analysis bounds 2000 functions with ${name}`, (t) => {
+    const text = Array.from({ length: 2000 }, (_, i) =>
+      `function f${i}(${receiver(i)}) { ${receiver(i)}.context.webAPI.retrieveRecord(); }`).join('\n');
+    const started = performance.now();
+    const findings = [...scanSource(FILE, text), ...findingsFor(text, 'WebAPI', ['model'])];
+    const elapsed = performance.now() - started;
+    t.diagnostic(`${name} timing: ${elapsed.toFixed(3)} ms; ${Buffer.byteLength(text)} bytes`);
+    assert.ok(elapsed < PATHOLOGICAL_SCAN_LIMIT_MS, `${elapsed.toFixed(3)} ms exceeds ${PATHOLOGICAL_SCAN_LIMIT_MS} ms`);
+    assert.deepEqual(findings, []);
+  });
+}
+
+const LEXER_FAILURE_PREFIX = '!'.repeat(20000) + '/x/.test(value);';
+
+test('Real lexer failures retain used features and fail closed for Pages calls', () => {
+  const text = '!'.repeat(20000) + '/x/.test(value); context.device.captureImage();';
+  const findings = findingsFor(text);
+  assert.deepEqual(findings.map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE', 'PCF_PAGES_API']);
+  assert.equal(findings[0].severity, 'warning');
+  assert.equal(findings[0].file, FILE);
+  assert.match(findings[0].message, /could not finish analyzing/i);
+  assert.match(findings[1].message, /guard could not be analyzed/i);
+  const gated = gateSources({
+    manifestModel: { features: [{ name: 'Device.captureImage' }] },
+    sources: [{ file: FILE, text }], hosts: ['pages'],
+  });
+  assert.equal(gated.ok, false);
+  assert.deepEqual(gated.warnings.map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE']);
+  assert.deepEqual(gated.errors.map((finding) => finding.code), ['PCF_PAGES_API']);
+});
+
+test('API-free lexer failures emit one combined warning and no Pages finding', () => {
+  const text = LEXER_FAILURE_PREFIX;
+  assert.deepEqual(findingsFor(text, null).map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE']);
+  const gated = gateSources({ manifestModel: EMPTY_MANIFEST, sources: [{ file: FILE, text }], hosts: ['pages'] });
+  assert.equal(gated.ok, true);
+  assert.deepEqual(gated.errors, []);
+  assert.deepEqual(gated.warnings.map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE']);
+});
+
+test('Lexer-failure fallback is conservatively allowed to detect comments and strings', () => {
+  for (const inert of [`// ${CALL};`, `const note = "${CALL};";`]) {
+    const text = `${LEXER_FAILURE_PREFIX}\n${inert}`;
+    assert.deepEqual(findingsFor(text).map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE', 'PCF_PAGES_API']);
+    assert.equal(findingsFor(text)[1].line, 2);
+  }
+});
+
+test('Lexer-failure fallback retains each namespace feature and warning file identity', () => {
+  const manifestModel = { features: ['Device.captureImage', 'Utility', 'WebAPI'].map((name) => ({ name })) };
+  const text = `${LEXER_FAILURE_PREFIX}\nprops.context.device.captureImage(); this._ctx.utils.lookupObjects(); ctx.webAPI.retrieveRecord();`;
+  const sources = [{ file: FILE, text }, { file: 'src/helper.ts', text: LEXER_FAILURE_PREFIX }];
+  assert.deepEqual(featureCoherence(manifestModel, sources, ['model']).map((finding) => finding.code),
+    ['PCF_CODE_UNPARSEABLE', 'PCF_CODE_UNPARSEABLE']);
+  const gated = gateSources({ manifestModel, sources, hosts: ['pages'] });
+  assert.equal(gated.ok, false);
+  assert.deepEqual(gated.errors.map((finding) => finding.code), ['PCF_PAGES_API', 'PCF_PAGES_API']);
+  assert.deepEqual(gated.warnings.map((finding) => [finding.code, finding.file]),
+    [['PCF_CODE_UNPARSEABLE', FILE], ['PCF_CODE_UNPARSEABLE', 'src/helper.ts']]);
+});
+
+for (const relative of [
+  'AGENTS.md', path.join('references', 'pcf-testing.md'), path.join('references', 'pcf-best-practices.md'),
+]) {
+  test(`Pages documentation qualifies recognized writes and lexer fallback: ${relative}`, () => {
+    const text = fs.readFileSync(path.resolve(__dirname, '..', '..', relative), 'utf8');
+    assert.match(text, /writ(?:e|ing)[^.\n]*analyzer recognizes[^.\n]*ends the proof/i);
+    assert.match(text, /heuristic[^.\n]*miss unusual write forms/i);
+    assert.match(text, /analyzer or lexer cannot finish a file[^.\n]*PCF_CODE_UNPARSEABLE[^.\n]*warning/i);
+    assert.match(text, /Pages API calls[^.\n]*unguarded/i);
+    assert.match(text, /lexer failure[^.\n]*comments?[^.\n]*strings?[^.\n]*report/i);
+    if (relative === 'AGENTS.md') {
+      assert.match(text, /later release[^.\n]*parameter-default writes[^.\n]*body declarations/i);
+      assert.match(text, /computed class member keys/i);
+      assert.match(text, /U\+2028\/U\+2029[^.\n]*comments/i);
+      assert.match(text, /copied lexer's recursion limit[^.\n]*unguarded reporting/i);
+    } else {
+      assert.doesNotMatch(text, /parameter-default writes|computed class member keys|U\+2028\/U\+2029|copied lexer's recursion limit/i);
+    }
+  });
+}
