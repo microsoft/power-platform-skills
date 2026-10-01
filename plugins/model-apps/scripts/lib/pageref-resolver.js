@@ -63,40 +63,44 @@ function objectArgAt(code, open) {
 // whole string literal (escape-aware); an unquoted value (or a quoted string followed by '+', which
 // indicates a concat expression) runs to the next top-level ',' or the closing '}'. The char-before
 // check rejects a false hit inside a longer identifier (e.g. `myPageId`).
-function topLevelValue(objText, key) {
+function topLevelValue(objText, key, sourceObjText = objText) {
   let depth = 0;
   let inStr = null;
   // `key` is always a code-controlled literal ('pageType' or 'pageId'), never user-supplied,
   // so no regex-escape is needed before interpolating into the pattern.
   const keyRe = new RegExp('^' + key + '\\s*:');
-  for (let i = 0; i < objText.length; i += 1) {
-    const c = objText[i];
-    if (inStr) { if (c === '\\') { i += 1; continue; } if (c === inStr) inStr = null; continue; }
-    // inStr handles quoted values (delimiters kept, bodies blanked by the mask) so a value is never
-    // misread as key or bracket content when scanning for the target key.
-    if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
-    if (c === '{' || c === '[' || c === '(') { depth += 1; continue; }
-    if (c === '}' || c === ']' || c === ')') { depth -= 1; continue; }
-    if (depth !== 1 || c !== key[0]) continue;
-    if (!keyRe.test(objText.slice(i))) continue;
-    // Reject a false hit inside a longer identifier (e.g. the "p" of "myPageId" — c is 'p'
-    // but the character before the match in objText must be a key-boundary: '{', ',', or whitespace).
-    const before = objText[i - 1];
-    if (before !== undefined && !/[{,\s]/.test(before)) continue;
-    let j = i + keyRe.exec(objText.slice(i))[0].length;
+  const scanStringEnd = (from) => {
+    const q = objText[from];
+    for (let k = from + 1; k < objText.length; k += 1) {
+      if (objText[k] === '\\') { k += 1; continue; }
+      if (objText[k] === q) return k + 1;
+    }
+    return null;
+  };
+  const followsPropertyBoundary = (from) => {
+    // Object keys begin immediately after `{` or `,` once whitespace is skipped. The mask blanks
+    // comments to same-length whitespace, so this deliberately walks the mask rather than the source:
+    //   { /* note */ "pageId": "..." }  -> previous non-space is `{`
+    //   c ? "pageId" : "..."          -> previous non-space is `?`, not a key boundary
+    // An identifier character before the match (`myPageId`) therefore still fails.
+    let p = from - 1;
+    while (p >= 0 && /\s/.test(objText[p])) p -= 1;
+    return p < 0 || objText[p] === '{' || objText[p] === ',';
+  };
+  const readValue = (colonEnd) => {
+    let j = colonEnd;
     while (j < objText.length && /\s/.test(objText[j])) j += 1;
     const q = objText[j];
     if (q === '"' || q === "'" || q === '`') {
       // Quoted value: scan to the matching closing quote, respecting escape sequences.
-      let k = j + 1;
-      for (; k < objText.length; k += 1) { if (objText[k] === '\\') { k += 1; continue; } if (objText[k] === q) { k += 1; break; } }
+      const end = scanStringEnd(j) || objText.length;
       // If the quoted string is followed (after optional whitespace) by '+', it is a concat
       // expression — fall through to unquoted scanning to capture the full span, so the
       // tightened QUOTED regex correctly classifies it as `dynamic` rather than `literal`.
-      let kk = k;
+      let kk = end;
       while (kk < objText.length && /\s/.test(objText[kk])) kk++;
       if (!(kk < objText.length && objText[kk] === '+')) {
-        return { raw: objText.slice(j, k), valueStart: j, valueEnd: k };
+        return { raw: objText.slice(j, end), valueStart: j, valueEnd: end };
       }
       // Falls through to the unquoted scanning below.
     }
@@ -111,8 +115,56 @@ function topLevelValue(objText, key) {
       else if (cc === ',' && d2 === 0) break;
     }
     return { raw: objText.slice(j, k).trim(), valueStart: j, valueEnd: k };
+  };
+  let lastMatch = null;
+  const markRuntimeOverride = () => {
+    if (lastMatch) lastMatch.hasRuntimeOverrideAfter = true;
+  };
+  for (let i = 0; i < objText.length; i += 1) {
+    const c = objText[i];
+    if (inStr) { if (c === '\\') { i += 1; continue; } if (c === inStr) inStr = null; continue; }
+    if (depth === 1 && followsPropertyBoundary(i) && c === '.' && objText[i + 1] === '.' && objText[i + 2] === '.') {
+      markRuntimeOverride();
+      i += 2;
+      continue;
+    }
+    if (depth === 1 && followsPropertyBoundary(i) && c === '[') {
+      // A later computed property can be `["pageId"]` or `["pageType"]` at runtime. Without
+      // evaluating arbitrary JavaScript, the only safe answer is to treat any explicit key before it
+      // as possibly overridden; an explicit key after it still wins by normal object-literal order.
+      markRuntimeOverride();
+    }
+    if ((c === '"' || c === "'") && depth === 1) {
+      const keyEnd = scanStringEnd(i);
+      if (keyEnd !== null) {
+        let colon = keyEnd;
+        while (colon < objText.length && /\s/.test(objText[colon])) colon += 1;
+        // The lexer mask blanks string bodies but preserves delimiters, so quoted property names are
+        // validated against the original source at the same offsets. Only literal "pageId"/'pageId'
+        // keys are in scope; computed keys (["pageId"]) and template-literal keys are deliberately
+        // left unmatched because supporting them would require evaluating property expressions.
+        const rawKey = sourceObjText.slice(i, keyEnd);
+        if (objText[colon] === ':' && followsPropertyBoundary(i) && (rawKey === `"${key}"` || rawKey === `'${key}'`)) {
+          lastMatch = readValue(colon + 1);
+        }
+        i = keyEnd - 1;
+        continue;
+      }
+    }
+    // inStr handles quoted values (delimiters kept, bodies blanked by the mask) so a value is never
+    // misread as key or bracket content when scanning for the target key. Template-literal keys are
+    // out of scope for the same reason as computed keys above.
+    if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
+    if (c === '{' || c === '[' || c === '(') { depth += 1; continue; }
+    if (c === '}' || c === ']' || c === ')') { depth -= 1; continue; }
+    if (depth !== 1 || c !== key[0]) continue;
+    if (!keyRe.test(objText.slice(i))) continue;
+    // Reject false hits inside longer identifiers or value expressions; after skipping whitespace,
+    // a real top-level key must follow the object's `{` or the previous property's `,`.
+    if (!followsPropertyBoundary(i)) continue;
+    lastMatch = readValue(i + keyRe.exec(objText.slice(i))[0].length);
   }
-  return null;
+  return lastMatch;
 }
 
 // Parse every generative navigateTo(...) call site into a classified pageId descriptor (see the module
@@ -137,16 +189,21 @@ function extractNavTargets(code) {
     // pv.valueStart / pv.valueEnd are relative to obj.text, which starts at `open`; adding `open`
     // makes them absolute offsets into the mask and, equally, into the original source.
     const valueAt = (v) => src.slice(open + v.valueStart, open + v.valueEnd).trim();
-    const pt = topLevelValue(obj.text, 'pageType');
+    const sourceObjText = src.slice(open, obj.end);
+    const pt = topLevelValue(obj.text, 'pageType', sourceObjText);
     const ptQ = pt && QUOTED.exec(valueAt(pt));
     if (!ptQ || ptQ[2] !== 'generative') continue;
-    const pv = topLevelValue(obj.text, 'pageId');
+    const pv = topLevelValue(obj.text, 'pageId', sourceObjText);
     if (!pv) continue;
     const valueStart = open + pv.valueStart;
     const valueEnd = open + pv.valueEnd;
     // Classify from the ORIGINAL source span: the mask blanks every string body, so a backtick-quoted
     // `PAGEREF_x` is found (and classified as pageref-malformed) only in `src`.
     const rawOrig = valueAt(pv);
+    if (pt.hasRuntimeOverrideAfter || pv.hasRuntimeOverrideAfter) {
+      out.push({ kind: 'dynamic', raw: rawOrig, valueStart, valueEnd });
+      continue;
+    }
     const canon = CANON.exec(rawOrig);
     if (canon) { out.push({ kind: 'pageref', key: canon[1], valueStart, valueEnd }); continue; }
     // A PAGEREF token in any non-canonical form is malformed (single/back-tick quoted, concatenated)

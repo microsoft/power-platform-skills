@@ -71,25 +71,31 @@ test('the orchestrator emits the exact token the page-builder triggers on', () =
   }
 });
 
-test('the connectors rollback gate is documented where the scripts enforce it', () => {
-  // connectors is GA and ships ON, but the gate was kept for one release as a rollback switch.
-  // The scripts fail closed with exit 3 when it is off, so the prose has to tell an agent that
-  // path exists — otherwise a run that hits exit 3 looks like a crash rather than a switch.
-  //
-  // This assertion is the inverse of the one that stood here while the flag was being retired.
-  // When the follow-up change removes the gate, invert it again: assert NO prose references the
-  // flag, because a probe of a removed flag prints `disabled` (unknown flags are fail-closed) and
-  // would silently turn connector authoring back off.
-  const builder = readDoc(path.join(PLUGIN, 'agents', 'genpage-connector-builder.md'));
-  const skill = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'));
-  const probe = /feature-flags\.js"?\s+connectors\b/;
-  assert.match(builder, probe, 'the connector-builder owns the gate and must probe it');
-  assert.match(skill, probe, 'Phase 4.5 must re-probe the gate before deploying bindings');
-  // Both must describe the OFF outcome, or an agent has no defined behaviour for it.
-  assert.match(builder, /\bdisabled\b/, 'connector-builder must define the disabled path');
-  assert.match(skill, /\bdisabled\b/, 'Phase 4.5 must define the disabled path');
+test('connector docs do not probe the retired feature flag', () => {
+  const docs = [
+    path.join(PLUGIN, 'agents', 'genpage-connector-builder.md'),
+    path.join(PLUGIN, 'agents', 'genpage-planner.md'),
+    path.join(PLUGIN, 'agents', 'genpage-edit-planner.md'),
+    path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'),
+    path.join(PLUGIN, 'skills', 'genpage', 'edit-flow.md'),
+    path.join(PLUGIN, 'references', 'connectors.md'),
+  ];
+  for (const doc of docs) {
+    const text = readDoc(doc);
+    assert.doesNotMatch(text, /feature-flags\.js"?\s+connectors\b/, `${rel(doc)} must not probe the retired connectors flag`);
+    assert.doesNotMatch(text, /GENPAGE_ENABLE_CONNECTORS/, `${rel(doc)} must not document the retired connectors env var`);
+    // Prose that still describes a connectors "rollback gate" tells an agent to probe for it, and the
+    // retired flag now always reports disabled, which would silently drop the page's connectors.
+    // Matched in any word order: "the builder owns the rollback gate" slipped past a pattern that
+    // required "connectors" before it.
+    assert.doesNotMatch(text, /rollback\s+gate|connector\s+discovery\s+and\s+its\s+rollback\s+gate|probes\s+first,\s+writes\s+`No connector bindings/i,
+      `${rel(doc)} must not describe a connectors rollback gate`);
+    // Nor may it describe a connectors-off mode, or a connector builder that gates on a flag.
+    assert.doesNotMatch(text, /connectors\s+(?:are|is)\s+(?:off|disabled)/i, `${rel(doc)} must not describe connectors being off`);
+    assert.doesNotMatch(text, /genpage-connector-builder`?[\s\S]{0,40}?gated\s+on\s+the\s+flag/i,
+      `${rel(doc)} must not say the connector builder gates on a flag`);
+  }
 });
-
 test('connector metadata discovery uses the PAC connector name, not the full API resource path', () => {
   const builder = readDoc(path.join(PLUGIN, 'agents', 'genpage-connector-builder.md'));
   assert.match(

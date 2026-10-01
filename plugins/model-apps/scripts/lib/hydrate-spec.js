@@ -1,5 +1,5 @@
 'use strict';
-const { isSafeHttpUrl, webResourceNameFromRef } = require('./app-spec.js');
+const { isSafeHttpUrl, webResourceNameFromRef, FORM_GUID_RE } = require('./app-spec.js');
 // Reconstruct a COMPLETE app-spec from a DEPLOYED app (the edit flow's "pull everything" step). Pure
 // + testable: `read` supplies the deployed state — the app (sitemap JSON, via the SDK's app read
 // path which surfaces entity/genPage/icon subareas), its generative pages (via pac list+download),
@@ -250,7 +250,15 @@ async function hydrateSpec(read) {
     // Dashboards are reconstructed with id-passthrough tiles (each tile carries the deployed
     // view/chart ids), so a rebuild recreates the dashboard against the EXISTING views/charts
     // without needing views[]/charts[] declared (which would else duplicate them or fail validation).
-    dashboards: dashboards.map((d) => ({ name: d.name, ...(d.description ? { description: d.description } : {}), tiles: d.tiles })),
+    // Each also carries its deployed id (`dashboardId`, edit-snapshot only, like pages[].pageId): a
+    // rebuild binds to that dashboard even after it is renamed in the designer, where finding it by
+    // the spec's now-stale name would create a second one under the old name (AB#6726727).
+    dashboards: dashboards.map((d) => {
+      const pin = String(d.id === undefined || d.id === null ? '' : d.id).replace(/[{}]/g, '').toLowerCase();
+      // Only a real GUID is pinned: validation rejects anything else, and a download must never write
+      // a spec its own validator refuses.
+      return { name: d.name, ...(FORM_GUID_RE.test(pin) ? { dashboardId: pin } : {}), ...(d.description ? { description: d.description } : {}), tiles: d.tiles };
+    }),
     pages: pages.map((p) => (hasKeys
       // v2 shape: key + name + optional semantics + source discriminant (kind:'tsx', codeFile)
       ? {
@@ -267,7 +275,7 @@ async function hydrateSpec(read) {
           ...(p.navigatesTo ? { navigatesTo: p.navigatesTo } : {}),
           ...(p.pageInput !== undefined ? { pageInput: p.pageInput } : {}),
           ...directEntryOf(p),
-          ...(p.prompt ? { prompt: p.prompt } : {}),
+          ...(p.prompt !== undefined ? { prompt: p.prompt } : {}),
           source: { kind: 'tsx', codeFile: p.codeFile },
         }
       // Legacy shape: name + optional fields + top-level codeFile (back-compat with hydrate callers
@@ -275,7 +283,7 @@ async function hydrateSpec(read) {
       : {
           name: p.name,
           ...(p.dataSources && p.dataSources.length ? { dataSources: p.dataSources } : {}),
-          ...(p.prompt ? { prompt: p.prompt } : {}),
+          ...(p.prompt !== undefined ? { prompt: p.prompt } : {}),
           codeFile: p.codeFile,
         })),
     appShell,

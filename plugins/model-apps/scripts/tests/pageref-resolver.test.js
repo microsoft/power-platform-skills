@@ -52,6 +52,108 @@ test('extractNavTargets handles pageId BEFORE pageType and a nested data:{} obje
   assert.strictEqual(t[0].key, 'detail', 'the top-level pageId is the target — a PAGEREF-looking string inside data:{} is NOT');
 });
 
+
+test('extractNavTargets supports quoted property keys and preserves value offsets', () => {
+  const calls = [
+    'Xrm.Navigation.navigateTo({"pageType":"generative","pageId":"PAGEREF_detail"});',
+    "Xrm.Navigation.navigateTo({ 'pageType': 'generative', 'pageId': \"PAGEREF_gallery\" });",
+  ];
+  const code = calls.join('\n');
+  const t = extractNavTargets(code);
+  assert.deepStrictEqual(t.map((target) => [target.kind, target.key]), [['pageref', 'detail'], ['pageref', 'gallery']]);
+  for (const target of t) {
+    const literal = `\"PAGEREF_${target.key}\"`;
+    assert.strictEqual(code.slice(target.valueStart, target.valueEnd), literal, `${target.key} value span maps to the original source`);
+  }
+});
+
+test('extractNavTargets ignores quoted value text named like a key', () => {
+  const code = 'Xrm.Navigation.navigateTo({ "pageType": "generative", label: "pageId", "pageId": "PAGEREF_detail" });';
+  const t = extractNavTargets(code);
+  assert.strictEqual(t.length, 1);
+  assert.strictEqual(t[0].key, 'detail');
+  assert.strictEqual(code.slice(t[0].valueStart, t[0].valueEnd), '"PAGEREF_detail"');
+});
+
+test('extractNavTargets keeps quoted-key offsets exact after a leading emoji comment', () => {
+  const code = '// 🔎 inspect navigation\nXrm.Navigation.navigateTo({"pageType":"generative","pageId":"PAGEREF_detail"});';
+  const [target] = extractNavTargets(code);
+  assert.strictEqual(target.key, 'detail');
+  assert.strictEqual(target.valueStart, code.indexOf('"PAGEREF_detail"'));
+  assert.strictEqual(target.valueEnd, target.valueStart + '"PAGEREF_detail"'.length);
+});
+
+test('extractNavTargets supports mixed quoted and bare keys', () => {
+  const code = 'Xrm.Navigation.navigateTo({ "pageType": "generative", pageId: "PAGEREF_detail" });';
+  assert.deepStrictEqual(navReferencedKeys(code), ['detail']);
+});
+
+test('extractNavTargets ignores quoted pageId text in a ternary value and uses the real key', () => {
+  const code = 'Xrm.Navigation.navigateTo({ pageType: "generative", foo: c ? "pageId" : "PAGEREF_wrong", pageId: "PAGEREF_detail" });';
+  const [target] = extractNavTargets(code);
+  assert.strictEqual(target.key, 'detail');
+  assert.strictEqual(code.slice(target.valueStart, target.valueEnd), '"PAGEREF_detail"');
+});
+
+test('extractNavTargets ignores bare pageId identifiers in a ternary value and uses the real key', () => {
+  const code = 'Xrm.Navigation.navigateTo({ pageType: "generative", foo: c ? pageId : other, pageId: "PAGEREF_detail" });';
+  const [target] = extractNavTargets(code);
+  assert.strictEqual(target.key, 'detail');
+  assert.strictEqual(code.slice(target.valueStart, target.valueEnd), '"PAGEREF_detail"');
+});
+
+test('a ternary decoy AFTER the real key is not read as a later, overriding key', () => {
+  // The last occurrence of a key takes effect, so a decoy that followed the real key and was taken for
+  // a key would silently win. Only a boundary rule keeps it out: a key must follow `{` or `,`.
+  for (const decoy of ['c ? "pageId" : "PAGEREF_wrong"', 'c ? pageId : other']) {
+    const code = `Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_detail", label: ${decoy} });`;
+    const [target] = extractNavTargets(code);
+    assert.strictEqual(target.key, 'detail', decoy);
+    assert.strictEqual(code.slice(target.valueStart, target.valueEnd), '"PAGEREF_detail"', decoy);
+  }
+});
+
+test('extractNavTargets matches keys after comments, newlines, and spreads', () => {
+  const cases = [
+    '{ /* note */ "pageId": "PAGEREF_detail", pageType: "generative" }',
+    '{\n  "pageId": "PAGEREF_detail", pageType: "generative" }',
+    '{ ...base, "pageId": "PAGEREF_detail", pageType: "generative" }',
+  ];
+  for (const obj of cases) {
+    const code = `Xrm.Navigation.navigateTo(${obj});`;
+    const [target] = extractNavTargets(code);
+    assert.strictEqual(target.key, 'detail', obj);
+    assert.strictEqual(code.slice(target.valueStart, target.valueEnd), '"PAGEREF_detail"', obj);
+  }
+});
+
+test('extractNavTargets does not match pageId inside a longer bare identifier', () => {
+  const code = 'Xrm.Navigation.navigateTo({ pageType: "generative", myPageId: "PAGEREF_wrong", pageId: "PAGEREF_detail" });';
+  const [target] = extractNavTargets(code);
+  assert.strictEqual(target.key, 'detail');
+  assert.strictEqual(code.slice(target.valueStart, target.valueEnd), '"PAGEREF_detail"');
+});
+
+test('extractNavTargets treats later runtime pageId overrides as dynamic', () => {
+  const cases = [
+    'Xrm.Navigation.navigateTo({ pageType: "generative", "pageId": "PAGEREF_detail", ...options });',
+    'Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_detail", ...options });',
+    'Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_detail", [name]: other });',
+  ];
+  for (const code of cases) {
+    const [target] = extractNavTargets(code);
+    assert.strictEqual(target.kind, 'dynamic', code);
+    assert.strictEqual(code.slice(target.valueStart, target.valueEnd), '"PAGEREF_detail"', code);
+  }
+});
+
+test('extractNavTargets treats a later runtime pageType override as dynamic', () => {
+  const code = 'Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_detail", ...options });';
+  const [target] = extractNavTargets(code);
+  assert.strictEqual(target.kind, 'dynamic');
+  assert.strictEqual(code.slice(target.valueStart, target.valueEnd), '"PAGEREF_detail"');
+});
+
 // ─── Comment and template-literal stripping ──────────────────────────────────
 //
 // A navigateTo inside a comment or template literal is NOT a real call site.  The
@@ -241,6 +343,53 @@ test('resolvePageRefs replaces each canonical nav pageId with the quoted genPage
   assert.deepStrictEqual(unresolved, []);
 });
 
+
+test('resolvePageRefs rewrites only the PAGEREF literal inside a quoted-key call', () => {
+  const code = [
+    'const decoy = "PAGEREF_detail";',
+    'Xrm.Navigation.navigateTo({"pageType":"generative","pageId":"PAGEREF_detail", data: { label: "pageId" }});',
+  ].join('\n');
+  const expected = [
+    'const decoy = "PAGEREF_detail";',
+    'Xrm.Navigation.navigateTo({"pageType":"generative","pageId":"gp-detail", data: { label: "pageId" }});',
+  ].join('\n');
+  const { deployment, unresolved } = resolvePageRefs(new Map([['overview', { code }]]), new Map([['detail', 'gp-detail']]));
+  assert.deepStrictEqual(unresolved, []);
+  assert.strictEqual(deployment.get('overview'), expected);
+});
+
+test('resolvePageRefs rewrites the real quoted-key pageId after a ternary decoy', () => {
+  const code = 'Xrm.Navigation.navigateTo({"pageType":"generative", foo: c ? "pageId" : "PAGEREF_wrong", "pageId":"PAGEREF_detail"});';
+  const expected = 'Xrm.Navigation.navigateTo({"pageType":"generative", foo: c ? "pageId" : "PAGEREF_wrong", "pageId":"gp-detail"});';
+  const { deployment, unresolved } = resolvePageRefs(new Map([['overview', { code }]]), new Map([['detail', 'gp-detail'], ['wrong', 'gp-wrong']]));
+  assert.deepStrictEqual(unresolved, []);
+  assert.strictEqual(deployment.get('overview'), expected);
+});
+
+test('resolvePageRefs rewrites a key after an earlier spread but not before a later spread', () => {
+  const safe = 'Xrm.Navigation.navigateTo({ ...base, pageType: "generative", "pageId": "PAGEREF_detail" });';
+  const unsafe = 'Xrm.Navigation.navigateTo({ pageType: "generative", "pageId": "PAGEREF_detail", ...base });';
+  const { deployment, unresolved } = resolvePageRefs(new Map([['safe', { code: safe }], ['unsafe', { code: unsafe }]]), new Map([['detail', 'gp-detail']]));
+  assert.deepStrictEqual(unresolved, []);
+  assert.strictEqual(deployment.get('safe'), 'Xrm.Navigation.navigateTo({ ...base, pageType: "generative", "pageId": "gp-detail" });');
+  assert.strictEqual(deployment.get('unsafe'), unsafe);
+});
+
+test('resolvePageRefs rewrites the last duplicate pageId key only', () => {
+  const code = 'Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_a", pageId: "PAGEREF_b" });';
+  const expected = 'Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_a", pageId: "gp-b" });';
+  const { deployment, unresolved } = resolvePageRefs(new Map([['overview', { code }]]), new Map([['a', 'gp-a'], ['b', 'gp-b']]));
+  assert.deepStrictEqual(unresolved, []);
+  assert.strictEqual(deployment.get('overview'), expected);
+});
+
+test('resolvePageRefs leaves navigateTo text inside a string inert and unchanged', () => {
+  const code = 'const help = \'navigateTo({"pageType":"generative","pageId":"PAGEREF_detail"})\';';
+  const { deployment, unresolved } = resolvePageRefs(new Map([['help', { code }]]), new Map([['detail', 'gp-detail']]));
+  assert.deepStrictEqual(unresolved, []);
+  assert.strictEqual(deployment.get('help'), code);
+});
+
 test('resolvePageRefs collects dangling targets (sorted, unique) and leaves them verbatim', () => {
   const sources = new Map([
     ['a', { code: `${NAV('"PAGEREF_missing"')}\n${NAV('"PAGEREF_gone"')}` }],
@@ -264,6 +413,19 @@ test('reverseResolveNavIds rewrites ONLY the nav pageId literal back to "PAGEREF
   const out = reverseResolveNavIds(code, idToKey);
   assert.ok(out.includes('pageId: "PAGEREF_detail"'), 'nav pageId reversed');
   assert.ok(out.includes('recordId: "5d29d8ce-1111-2222-3333-444455556666"'), 'the SAME guid used as a recordId is NOT reversed (scoped to nav pageId)');
+});
+
+
+test('reverseResolveNavIds maps a quoted-key literal id back to a PAGEREF token', () => {
+  const code = 'Xrm.Navigation.navigateTo({"pageType":"generative","pageId":"gp-detail"});';
+  const out = reverseResolveNavIds(code, new Map([['gp-detail', 'detail']]));
+  assert.strictEqual(out, 'Xrm.Navigation.navigateTo({"pageType":"generative","pageId":"PAGEREF_detail"});');
+});
+
+test('reverseResolveNavIds rewrites only the last duplicate pageId key', () => {
+  const code = 'Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "gp-a", pageId: "gp-b" });';
+  const out = reverseResolveNavIds(code, new Map([['gp-a', 'a'], ['gp-b', 'b']]));
+  assert.strictEqual(out, 'Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "gp-a", pageId: "PAGEREF_b" });');
 });
 
 test('resolve then reverse round-trips the navigation literal', () => {

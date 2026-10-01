@@ -93,9 +93,11 @@ No root-level build, lint, or test commands exist. Build/test tooling lives insi
 Both are repo-wide and enforce metadata/marketplace rules, not behavior.
 
 **Every test workflow is path-filtered to a single plugin** (`power-pages` → `plugins/power-pages/**`;
-`model-apps` → `plugins/model-apps/**` + `evals/model-apps/**`). This is deliberate — a PR should not
-spend CI on a plugin it never touched — but it has a corollary: *a green PR does not mean the repo is
-green*, only that the paths you touched are.
+`model-apps` → `plugins/model-apps/**` + `evals/model-apps/**` + the `shared/` sources it bundles).
+This is deliberate — a PR should not spend CI on a plugin it never touched — but it has a corollary:
+*a green PR does not mean the repo is green*, only that the paths you touched are. A plugin that ships
+copies of `shared/` sources may list those sources too, so a change to one runs that plugin's drift
+test in the PR that made it rather than in the plugin's next, unrelated PR.
 
 **A test suite with no workflow silently never runs.** When you add tests to a plugin, add or extend
 that plugin's own path-filtered workflow in the same PR; do not widen another plugin's filter to
@@ -148,7 +150,7 @@ Per-plugin iKey/collector routing is pluggable via a `resolver.js` placed next t
 
 ### CI must opt out of telemetry transmission
 
-An adopting plugin's committed `ikey.json` ships **enabled** (`disabled: false`) with a real production instrumentation key, so any process that runs a telemetry-emitting hook or script **without isolating emission** will POST a real (but fake-in-content) event to the production collector. CI runs are not real usage, and such events pollute the production telemetry stream.
+A transmitting adopter's committed `ikey.json` ships **enabled** (`disabled: false`) with a real production instrumentation key, so any process that runs a telemetry-emitting hook or script **without isolating emission** will POST a real (but fake-in-content) event to the production collector. CI runs are not real usage, and such events pollute the production telemetry stream. An adopter that still ships `disabled: true` (model-apps today) sets the opt-out too, so enabling it later cannot turn its CI into a leak.
 
 **Therefore: every GitHub Actions job that runs the test suite — or any step that could execute a telemetry-emitting hook/script for an adopting plugin — MUST set the plugin's opt-out env var at the job (or workflow) level.** For `power-pages`:
 
@@ -163,7 +165,7 @@ jobs:
 
 This opt-out suppresses **transmission only** (the local diagnostic mirror is still written), so it is safe and has no effect on what the job actually tests. Tests that need to assert that emission *happens* clear the var in their own spawned-process env and route the event to a local `POWER_PLATFORM_SKILLS_FAKE_HTTPS` probe instead of the real collector — so the job-level opt-out never breaks them. Existing reference: `.github/workflows/power-pages-script-tests.yml`. When you add a new such workflow (or a new emitting step to an existing one), add this env var in the same change; treat a CI job that runs the tests without it as a production-telemetry leak.
 
-Current adopters: `power-pages`. Others adopt on demand.
+Current adopters: `power-pages` and `mobile-apps` (transmitting), and `model-apps` (bundled, with its committed `ikey.json` still `disabled: true`). Others adopt on demand. power-pages and model-apps each keep a `scripts/tests/telemetry-lib-copy.test.js` that fails when the bundled copy differs from `shared/telemetry/lib`. model-apps also lists `shared/telemetry/**` in its test workflow's path filter, so an edit to the source alone still runs that test.
 
 ## Legacy Marketplace Compatibility
 

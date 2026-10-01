@@ -2,57 +2,72 @@
 // Injectable wrapper around `pac model genpage upload/list` — the seam the build's pages phase uses
 // to author/deploy generative pages. Page CONTENT only: uploads run WITHOUT --add-to-sitemap because
 // the SDK owns the sitemap (it writes the GenPage subareas). Real impl spawns pac; tests inject `run`.
-const { spawnSync } = require('node:child_process');
+const { invocation, spawnProcess } = require('./process-runner.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-// Quote an arg for a Windows/POSIX shell command line (needed because pac resolves as pac.cmd on
-// Windows, which requires shell:true — and shell:true does not quote an args array). Embedded
-// newlines terminate the Windows command line (pac then sees a truncated command and dumps its
-// help), so collapse them to spaces first. This is now purely a DEFENSIVE net for whatever args
-// still flow inline — e.g. a page --name; it is NOT how multi-line prompts survive. upload() passes
-// the prompt and agent-message to pac BY FILE (--prompt-file/--agent-message-file) precisely because
-// collapsing THEIR newlines was lossy (a downloaded prompt is a multi-line conversation transcript).
-function quoteArg(a) {
-  const s = String(a).replace(/\r\n|[\r\n]/g, ' ');
-  const q = s.replace(/"/g, '""').replace(/%/g, '"^%"');
-  // cmd.exe expands %VAR% even inside double quotes; break out of the quoted segment and caret-escape
-  // each percent so prompts/names containing environment-variable syntax round-trip literally.
-  if (!/[\s"'&|<>^()%]/.test(s)) return s;
-  // A run of backslashes immediately before the closing quote must be DOUBLED. Windows command-line
-  // parsing treats `\"` as an escaped quote, so a directory argument ending in a separator —
-  //   --output-directory "C:\Users\Power User\download\"
-  // — escaped its own closing quote and swallowed the following flags into the path. MEASURED via a
-  // real cmd.exe parse:
-  //   ["--output-directory", "C:\\Users\\Power User\\download\" --app-id after"]
-  // Only the trailing run matters: an interior `\` is literal to the parser, so escaping those would
-  // corrupt every ordinary Windows path.
-  // See: https://learn.microsoft.com/cpp/cpp/main-function-command-line-args#parsing-c-command-line-arguments
-  const trailingSlashesDoubled = q.replace(/(\\+)$/, (m) => m + m);
-  return `"${trailingSlashesDoubled}"`;
+// Build the spawn call for a `pac` call. `pac` is resolved to an absolute path on PATH, never from
+// the project directory, and started without a shell: `pac.exe` (a dotnet-tool install) directly,
+// with every argument passed as-is, and a `pac.cmd` shim through cmd.exe with each argument checked
+// or refused (lib/process-runner.js explains the rules). Embedded newlines are collapsed to spaces on
+// every arg — a DEFENSIVE net for any arg that still flows inline (e.g. a page --name), since a
+// newline would end a batch shim's command line. It is not relied on for prompts: upload() passes
+// prompt/agent-message via file precisely because collapsing THEIR newlines was lossy for multi-line
+// transcripts.
+// @returns {{file: string, args: string[], options: object}}
+// @throws when pac is not on PATH, or an argument cannot reach a pac.cmd shim unchanged
+const cleanPacArgs = (args) => args.map((a) => String(a).replace(/\r\n|[\r\n]/g, ' '));
+function buildPacInvocation(args, deps = {}) {
+  return invocation('pac', cleanPacArgs(args), deps);
 }
-
-// Build the spawnSync invocation for a `pac` call, per platform. Windows: pac resolves as pac.cmd,
-// which requires a shell; shell:true ignores an args array, so pass a single cmd-quoted command
-// line ("" escapes an embedded quote). POSIX: spawn pac directly with the args array (no shell) so
-// embedded quotes and other shell metacharacters round-trip verbatim instead of being mangled by
-// cmd-style quoting. Embedded newlines are still collapsed to spaces on every arg — a DEFENSIVE net
-// for any arg that still flows inline (e.g. a page --name), since a newline truncates the Windows
-// command line. It is no longer relied on for prompts: upload() passes prompt/agent-message via file
-// precisely because collapsing THEIR newlines was lossy for multi-line transcripts.
-function buildPacInvocation(args, platform = process.platform) {
-  const clean = args.map((a) => String(a).replace(/\r\n|[\r\n]/g, ' '));
-  if (platform === 'win32') {
-    return { command: 'pac ' + clean.map(quoteArg).join(' '), args: undefined, options: { encoding: 'utf8', shell: true } };
-  }
-  return { command: 'pac', args: clean, options: { encoding: 'utf8' } };
-}
-
 function runPac(args) {
-  const inv = buildPacInvocation(args);
-  const r = inv.args ? spawnSync(inv.command, inv.args, inv.options) : spawnSync(inv.command, inv.options);
-  return { status: r.status == null ? 1 : r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
+  // Asynchronous, and it NEVER rejects. It was spawnSync, which froze the whole process for the
+  // length of every pac call — about five seconds for one `pac model genpage list` — so two
+  // independent listings could not overlap even when a caller awaited them together (an update in
+  // genpage-upload.js does). Every caller already awaits `run`, and branches on `status` without a
+  // catch, so a child that cannot be started resolves as a failed result, as spawnSync's did.
+  //
+  // Output is collected as raw Buffers and decoded ONCE, when the child closes. Decoding each chunk
+  // as it arrives corrupts a multibyte UTF-8 character that a pipe read happens to split, and pac
+  // prints page names, which are user text; spawnSync's `encoding: 'utf8'` decoded the whole buffer,
+  // so this keeps that behaviour. It also drops spawnSync's 1 MiB maxBuffer, past which the child
+  // was killed and its output truncated.
+  return new Promise((resolve) => {
+    const out = [];
+    const err = [];
+    let settled = false;
+    const finish = (status, launchError) => {
+      if (settled) return;
+      settled = true;
+      const stderr = Buffer.concat(err).toString('utf8');
+      resolve({
+        status: status == null ? 1 : status,
+        stdout: Buffer.concat(out).toString('utf8'),
+        // POSIX reports a missing pac as a spawn 'error' (ENOENT) with nothing on stderr; carry its
+        // message so the diagnostic says why instead of "pac exited 1 with no output".
+        stderr: stderr || (launchError ? String(launchError.message || launchError) : ''),
+      });
+    };
+    let child;
+    try {
+      // Resolution and argument checks throw here too, and resolve as a failed result like a launch error.
+      child = spawnProcess('pac', cleanPacArgs(args), { stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (e) {
+      finish(1, e);
+      return;
+    }
+    // EMFILE/ENFILE leave the stdio pipes unset, hence the guards.
+    if (child.stdout) child.stdout.on('data', (c) => out.push(c));
+    if (child.stderr) child.stderr.on('data', (c) => err.push(c));
+    // 'error' (the child could not be started) may or may not be followed by 'close'; `finish`
+    // keeps whichever comes first. 'close' rather than 'exit': 'exit' fires as soon as pac itself
+    // ends, while a process it started can still hold the pipes and write. 'close' waits for every
+    // holder to let go, which is also when spawnSync returned (measured: a grandchild writing 1 s
+    // after its parent exited was captured by spawnSync and 'close', and missed by 'exit').
+    child.on('error', (e) => finish(1, e));
+    child.on('close', (code) => finish(code));
+  });
 }
 
 // Extract the "Page ID: <guid>" pac prints on a successful upload.
@@ -72,13 +87,16 @@ function runPac(args) {
 // IDENTIFIER character so a too-long token is REFUSED rather than trimmed. Restricting the boundary
 // to the GUID alphabet was not enough: `6e0c28a2-cdbf-41ec-9186-d10fd5de6e35oops` has a non-hex
 // character next, so the lookahead passed and the id was accepted with the suffix silently dropped.
-// `[\w-]` is the right class — a following `.` or `,` or `)` genuinely ends the token (pac prints the
-// id inside prose), while any letter, digit, underscore or hyphen means the token continues.
-// Returning null is the safe outcome: the caller treats a zero exit with no parsable id as an
-// UNCERTAIN create and reconciles by env-wide id diff.
+// The boundary must be Unicode-aware: a suffix such as `東京` is still a continuing identifier
+// token even though JavaScript `\w` is ASCII-only. A following `.` or `,` or `)` genuinely ends the
+// token (pac prints the id inside prose), while any Unicode letter/number/mark, underscore or hyphen
+// means the token continues. Returning null is the safe outcome: the caller treats a zero exit with
+// no parsable id as an UNCERTAIN create and reconciles by env-wide id diff.
 const GUID_RE = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
+// The end of a GUID token, for a RegExp built with the 'u' flag. Shared by both parsers below.
+const GUID_END = '(?![\\p{L}\\p{N}\\p{M}_-])';
 function parsePageId(out) {
-  const m = new RegExp('Page ID:\\s*(' + GUID_RE.source + ')(?![\\w-])').exec(String(out || ''));
+  const m = new RegExp('Page ID:\\s*(' + GUID_RE.source + ')' + GUID_END, 'u').exec(String(out || ''));
   return m ? m[1] : null;
 }
 
@@ -92,12 +110,17 @@ function parsePageId(out) {
 //   13ecbc57-a3a4-4132-b0a2-a6c6b12691e8 Overview -
 //
 // Column boundaries are derived from the header's "Name"/"Published" offsets so a Name containing spaces
-// (e.g. "Order Detail") is not split on whitespace. A data row is matched by a leading 36-char GUID.
+// (e.g. "Order Detail") is not split on whitespace. A data row is matched by a leading 36-char GUID that
+// ENDS there, by the same Unicode-aware rule as parsePageId: `<guid>東京` or `<guid>_x` is a longer token,
+// not a page id plus a name, so the row is skipped and the count check below fails the listing closed.
+// An ASCII `\b` accepted those, because JavaScript counts `東` as a non-word character.
 // Returns [{ pageId, name }]. NOTE (live-confirmed): pac lists only pages reachable from the app SITEMAP —
 // a headless nav-target page (declared in pages[] but not an appShell subarea) is NOT returned here.
+// With --app-id, `name` is the page's SITEMAP TITLE, not the page record's own name (measured: after an
+// update renamed the page with --name, the app-scoped listing still showed the subarea title), so a
+// listed name is never evidence of what the page itself is called.
 function parseList(out) {
-  const GUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
-  const rowRe = new RegExp(`^\\s*(${GUID})\\b`);
+  const rowRe = new RegExp('^\\s*(' + GUID_RE.source + ')' + GUID_END, 'u');
   const lines = String(out || '').split('\n');
   // Locate the header row to find the Name (and Published) column offsets. pac auto-sizes columns to the
   // longest value, so the offsets must be read from THIS output, not hard-coded.
@@ -181,8 +204,24 @@ function classifyListOutput(stdout) {
   // download. An explicit "Found 0" is trustworthy only when no row was actually parsed (else it is a
   // contradictory/truncated listing → fail-closed 'unrecognized').
   if (count === 0) return pages.length === 0 ? { kind: 'empty', pages: [] } : { kind: 'unrecognized', pages: [] };
-  if (count === null && pages.length === 0 && /\bno\s+(?:generated\s+)?pages?\b/i.test(s)) return { kind: 'empty', pages: [] };
-  // A complete, authoritative listing: at least one page, every page has a name, count matches
+  // Older pac builds have printed a no-pages marker as its own line. Treat only that complete,
+  // trimmed line as authoritative:
+  //   No generated pages found.
+  //   No pages found
+  // A warning such as "no pages could be retrieved" means the service failed to enumerate, not
+  // that the app is empty, so it must fail closed.
+  if (count === null && pages.length === 0 && /^[^\S\r\n]*no[^\S\r\n]+(?:generated[^\S\r\n]+)?pages[^\S\r\n]+found\.?[^\S\r\n]*$/im.test(s)) {
+    return { kind: 'empty', pages: [] };
+  }
+  const seenIds = new Set();
+  const hasDuplicateIds = pages.some((p) => {
+    const key = String(p.pageId || '').toLowerCase();
+    if (seenIds.has(key)) return true;
+    seenIds.add(key);
+    return false;
+  });
+  if (hasDuplicateIds) return { kind: 'unrecognized', pages: [] };
+  // A complete, authoritative listing: at least one DISTINCT page, every page has a name, count matches
   const allNamed = pages.length > 0 && pages.every((p) => p.name && String(p.name).trim());
   if (allNamed && count !== null && count === pages.length) return { kind: 'pages', pages };
   return { kind: 'unrecognized', pages: [] };
@@ -269,10 +308,12 @@ function makeGenpageCli(env, deps = {}) {
   //                                       UNRECOGNIZED/INCOMPLETE output (count mismatch, blank,
   //                                       help banner, unnamed page) — never masquerade as empty.
   // Callers that drive a create decision MUST check ok before trusting pages:[] as "truly empty".
-  async function enumeratePages(appId) {
+  async function enumeratePages(appId, options = {}) {
     let lastErr = '';
     for (let i = 0; i < attempts; i += 1) {
-      const r = await run(['model', 'genpage', 'list', '--environment', env, '--app-id', appId]);
+      const args = ['model', 'genpage', 'list', '--environment', env, '--app-id', appId];
+      if (options && options.includeUnpublished === true) args.push('--include-unpublished');
+      const r = await run(args);
       if (r.status === 0) {
         const c = classifyListOutput(r.stdout);
         if (c.kind !== 'unrecognized') return { ok: true, pages: c.pages, empty: c.kind === 'empty' };
@@ -329,8 +370,8 @@ function makeGenpageCli(env, deps = {}) {
       // (preserving the historical defaults) ONCE, then hand both to pac BY FILE via --prompt-file /
       // --agent-message-file rather than inline --prompt / --agent-message. A downloaded page prompt is
       // a multi-line conversation transcript ("Conversation with N prompts:\r\n1. …\r\n2. …"); passed
-      // inline it hits the newline-collapsing in quoteArg/buildPacInvocation (a defensive guard so a
-      // stray newline can't truncate the Windows command line) and silently loses every line break on
+      // inline it hits the newline-collapsing in buildPacInvocation (a defensive guard so a stray
+      // newline can't truncate a Windows batch shim's command line) and silently loses every line break on
       // an edit-rebuild. A file round-trips the text verbatim. See `pac model genpage upload --help`.
       const promptText = prompt && String(prompt).trim() ? String(prompt) : `Generative page ${name || ''}`.trim();
       // The default applies only when NO agent message was supplied. An explicitly EMPTY one (a
@@ -483,6 +524,9 @@ function makeGenpageCli(env, deps = {}) {
     enumerate({ appId }) {
       return enumeratePages(appId);
     },
+    enumeratePages(appId, options) {
+      return enumeratePages(appId, options);
+    },
     enumerateEnv() {
       return enumerateEnv();
     },
@@ -507,4 +551,4 @@ function makeGenpageCli(env, deps = {}) {
 function suppliedButBlank(value) {
   return value !== undefined && value !== null && !String(value).trim();
 }
-module.exports = { makeGenpageCli, suppliedButBlank, parsePageId, parseList, parseListCount, classifyListOutput, quoteArg, buildPacInvocation, runPac };
+module.exports = { makeGenpageCli, suppliedButBlank, parsePageId, parseList, parseListCount, classifyListOutput, buildPacInvocation, runPac };

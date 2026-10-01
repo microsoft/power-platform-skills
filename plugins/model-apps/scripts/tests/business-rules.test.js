@@ -203,12 +203,18 @@ test('REAL BUNDLE: the mapped rule reaches the wire as WfomJson naming the autho
   assert.match(wfom, /new_ticket/, 'the rule is bound to the authored table');
 });
 
-test('REAL BUNDLE: a valueless operator emits an EMPTY operand list and the IsNull/NotNull opcode', async () => {
+test('REAL BUNDLE: a valueless operator emits a unary condition with the IsNull/NotNull opcode', async () => {
   // A presence operator has nothing to compare against, so the SDK must emit NO right-hand operand
   // and the dedicated opcode — not `Equals` against an empty string, which is a different question
   // and would silently answer false for a populated column.
   //
   // Measured opcodes (WorkflowConditionOperator in the bundle): NotNull "1", IsNull "0".
+  //
+  // The SDK used to emit these as a BinaryExpression with an EMPTY `right` list. The platform's
+  // BinaryExpression rejects a unary operator ("Operator in a binary expression must be a binary
+  // operator"), so the vendored SDK now emits the UnaryExpression the platform's own designer does:
+  //   {"__class":"UnaryExpression:#Microsoft.Crm.Workflow.Expressions","conditionOperatoroperator":"1",
+  //    "operand":{"__class":"EntityAttributeExpression:#...","attributeName":"new_notes",...}}
   const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'br-null-'));
   dirs.push(dir);
@@ -245,8 +251,9 @@ test('REAL BUNDLE: a valueless operator emits an EMPTY operand list and the IsNu
     const expr = wfom.steps.list[0].steps.list[0].conditionExpression;
     assert.strictEqual(expr.conditionOperatoroperator, expectedOpcode,
       `${operator} must emit opcode ${expectedOpcode}, got ${expr.conditionOperatoroperator}`);
-    assert.deepStrictEqual(expr.right, [], `${operator} must carry NO right-hand operand`);
-    assert.strictEqual(expr.left.attributeName, 'new_notes');
+    assert.match(String(expr.__class), /^UnaryExpression:/, `${operator} must be a unary condition`);
+    assert.strictEqual(expr.right, undefined, `${operator} must carry NO right-hand operand`);
+    assert.strictEqual(expr.operand.attributeName, 'new_notes');
   }
 });
 

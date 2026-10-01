@@ -399,3 +399,74 @@ test('CLI rejects prototype-named flags that never become own properties', () =>
     assert.match(out.stderr, /unknown flag\(s\): --(__proto__|constructor)/);
   }
 });
+
+// #631. The key names differ by level — areas and groups take `label`, subAreas take `title` — and a
+// key the build does not read was accepted and dropped, so an area written with `title` deployed
+// untitled while this CLI, the build and --verify all reported success. Reproduced here with the
+// reporter's own shape and command.
+test('#631: `title` on an area or group fails lint and names `label`', () => {
+  const s = good();
+  s.appShell = { areas: [{ title: 'Main', groups: [{ title: 'Smoke', subAreas: [{ entity: 'c_order' }] }] }] };
+  const r = lintSpec(s);
+  assert.strictEqual(r.ok, false, 'must not lint clean');
+  assert.ok(r.errors.some((e) => /sitemap area "Main": unknown key 'title' — did you mean `label`\?/.test(e)), JSON.stringify(r.errors));
+  assert.ok(r.errors.some((e) => /sitemap group "Smoke" in area "Main": unknown key 'title' — did you mean `label`\?/.test(e)), JSON.stringify(r.errors));
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lint631-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'app-spec.json'), JSON.stringify(s));
+    let out;
+    try {
+      out = { code: 0, stdout: execFileSync(process.execPath, [CLI, '--spec', '@app-spec.json', '--profile', 'plan', '--json'], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) };
+    } catch (err) {
+      out = { code: err.status, stdout: String(err.stdout || '') };
+    }
+    assert.notStrictEqual(out.code, 0, 'the CLI must exit non-zero');
+    assert.match(out.stdout, /unknown key 'title'/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('#631: the other likely mix-ups name their fix, and every key the build reads is accepted', () => {
+  const s = good();
+  s.appShell = { areas: [{ label: 'Main', groups: [{ label: 'G', icon: 'x.png', subAreas: [{ label: 'Orders', entity: 'c_order' }] }] }] };
+  const r = lintSpec(s);
+  assert.ok(r.errors.some((e) => /sitemap subArea "Orders" in group "G": unknown key 'label' — did you mean `title`\?/.test(e)), JSON.stringify(r.errors));
+  assert.ok(r.errors.some((e) => /sitemap group "G" in area "Main": unknown key 'icon' — a sitemap group has no icon/.test(e)), JSON.stringify(r.errors));
+
+  const ok = good();
+  ok.appShell = { areas: [{ label: 'Main', icon: '/_imgs/area.png', vectorIcon: '/WebResources/c_/icons/a.svg', iconDescription: 'a stack of papers',
+    groups: [{ label: 'G', iconDescription: 'a folder', subAreas: [
+      { title: 'Orders', entity: 'c_order', icon: '/_imgs/o.png', vectorIcon: '/WebResources/c_/icons/o.svg', iconDescription: 'a receipt' },
+      { title: 'Help', url: 'https://contoso.example/help' },
+    ] }] }] };
+  const clean = lintSpec(ok);
+  assert.ok(!clean.errors.some((e) => /unknown key/.test(e)), JSON.stringify(clean.errors));
+});
+
+// AB#6726727: a downloaded dashboard carries the id it was read from (edit-snapshot, like pages[].pageId).
+// It must be a GUID, and two entries cannot pin one dashboard — both nav entries would bind to it.
+test('dashboards[].dashboardId must be a distinct GUID; a braced one is accepted, a lone brace is not', () => {
+  const withDashboards = (dashboards) => {
+    const s = good();
+    s.views = [{ entity: 'c_order', name: 'All Orders', columns: ['c_name'] }];
+    s.dashboards = dashboards;
+    return lintSpec(s);
+  };
+  const tile = [{ type: 'list', view: 'All Orders' }];
+  const bad = withDashboards([{ name: 'Ops', dashboardId: 'd-1', tiles: tile }]);
+  assert.ok(bad.errors.some((e) => /dashboard 'Ops': dashboardId must be a GUID/.test(e)), JSON.stringify(bad.errors));
+  const dup = withDashboards([
+    { name: 'Ops', dashboardId: 'aaaa1111-2222-3333-4444-555566667777', tiles: tile },
+    { name: 'Other', dashboardId: '{AAAA1111-2222-3333-4444-555566667777}', tiles: tile },
+  ]);
+  assert.ok(dup.errors.some((e) => /dashboard 'Other': has the same dashboardId as dashboard 'Ops'/.test(e)), JSON.stringify(dup.errors));
+  const ok = withDashboards([{ name: 'Ops', dashboardId: '{AAAA1111-2222-3333-4444-555566667777}', tiles: tile }]);
+  assert.ok(!ok.errors.some((e) => /dashboardId/.test(e)), JSON.stringify(ok.errors));
+  // Both braces or none: an id with a lone brace is malformed, not one to bind a dashboard to.
+  for (const lone of ['{aaaa1111-2222-3333-4444-555566667777', 'aaaa1111-2222-3333-4444-555566667777}', '{{aaaa1111-2222-3333-4444-555566667777}}']) {
+    const r = withDashboards([{ name: 'Ops', dashboardId: lone, tiles: tile }]);
+    assert.ok(r.errors.some((e) => /dashboard 'Ops': dashboardId must be a GUID/.test(e)), `${lone}: ${JSON.stringify(r.errors)}`);
+  }
+});

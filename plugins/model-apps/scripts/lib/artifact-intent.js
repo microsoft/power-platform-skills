@@ -32,10 +32,13 @@ function clampedCellSpan(cell, columns) {
 // True when `cell` still fits on the END of `row`. This is the exact complement of the
 // "start a new row" test in rowsFromCells (`used + span > cols && current.length`): an EMPTY row
 // always accepts the cell, because a span wider than the section is clamped to it rather than
-// overflowing into a row of its own.
-function cellFitsInRow(row, cell, columns) {
+// overflowing into a row of its own. `reserved` lets the reconcile path apply the SAME packing rule
+// to rows under a row-spanning cell: those carried columns count as used capacity, so a visually empty
+// row fully reserved by a span above must not accept another cell.
+function cellFitsInRow(row, cell, columns, reserved = 0) {
   const cols = Math.max(1, Math.min(4, columns || 1));
-  const used = ((row && row.cells) || []).reduce((n, c) => n + clampedCellSpan(c, cols), 0);
+  const own = ((row && row.cells) || []).reduce((n, c) => n + clampedCellSpan(c, cols), 0);
+  const used = own + Math.max(0, Number(reserved) || 0);
   return used === 0 || used + clampedCellSpan(cell, cols) <= cols;
 }
 
@@ -912,6 +915,9 @@ module.exports = {
   mergeFieldOptions,
   clampedCellSpan,
   cellFitsInRow,
+  // Shared with projection.js, whose changed-only verifier must skip exactly the controls this
+  // compiler skips; a second copy of the class-id set had to be kept in sync by hand.
+  isNonFieldControl,
   // Exported for the build's in-place repack: a span widened on a DEPLOYED form can overflow its
   // row, and the reconcile must re-pack it with the SAME rule the create path uses, not a second
   // implementation that can drift.

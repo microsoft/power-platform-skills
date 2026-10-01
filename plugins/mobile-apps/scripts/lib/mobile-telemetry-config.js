@@ -11,9 +11,11 @@ const GENERIC_DISCLOSURE =
   '   when PAC is signed in.';
 const MOBILE_DISCLOSURE =
   '\u2139\ufe0f  Usage telemetry records skill, plugin, agent, OS, Node, session, and\n' +
-  '   correlation fields, plus invocation source and a random per-project app\n' +
-  '   instance ID. Mobile Apps does not record PAC CLI version, Dataverse\n' +
-  '   organization or Entra tenant IDs, or an Entra object ID.';
+  '   event/run/span IDs, measured durations, outcomes, and fixed error classes.\n' +
+  '   It can include verified environment, tenant, and Dataverse organization IDs,\n' +
+  '   plus a random app instance ID and invocation source. It does not collect an\n' +
+  '   Entra user/object ID, Dataverse user ID, username, or email address.\n' +
+  '   No business records, file contents, emails, tokens, or raw errors are sent.';
 
 function run(args = process.argv.slice(2), env = process.env) {
   const result = spawnSync(

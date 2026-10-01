@@ -16,6 +16,7 @@ const {
 const {
   emitCheckpoint: emitCheckpointCommand,
   parseCheckpointPayload,
+  runCommand,
 } = require('../emit-telemetry-checkpoint');
 const { ensureAppInstanceId, findAppInstanceId } = require('../lib/app-identity');
 const { TRACKED_SKILL_NAMES } = require('../lib/mobileapp-hook-utils');
@@ -361,6 +362,46 @@ test('checkpoint command emits directly and remains fail-open', () => {
   }), null);
 });
 
+test('tracked checkpoint context skips host process discovery', () => {
+  let contextOptions;
+  const result = emitCheckpointCommand(
+    'create-mobile-app|gather_app_requirements|started',
+    {
+      cwd: '/private-project',
+      runId: '11111111-1111-4111-8111-111111111111',
+      parentSpanId: '22222222-2222-4222-8222-222222222222',
+      createTelemetryContext: (_payload, options) => {
+        contextOptions = options;
+        return null;
+      },
+    },
+  );
+  assert.equal(result, null);
+  assert.equal(contextOptions.cwd, '/private-project');
+  assert.equal(contextOptions.readProcessScope(), '');
+});
+
+test('tracked lifecycle CLI skips host process discovery', () => {
+  let contextOptions;
+  const result = runCommand([
+    'create-mobile-app|gather_app_requirements|started',
+    '--run-id',
+    '11111111-1111-4111-8111-111111111111',
+    '--parent-span-id',
+    '22222222-2222-4222-8222-222222222222',
+    '--project-root',
+    '/private-project',
+  ], {
+    createTelemetryContext: (_payload, options) => {
+      contextOptions = options;
+      return null;
+    },
+  });
+  assert.deepEqual(result, { status: 'disabled' });
+  assert.equal(contextOptions.cwd, '/private-project');
+  assert.equal(contextOptions.readProcessScope(), '');
+});
+
 test('checkpoint event carries only static checkpoint enrichment', (t) => {
   const context = contextFor(provisioned);
   const event = emitCheckpointEvent(context, {
@@ -394,15 +435,31 @@ test('shared instructions own checkpoint execution and lifecycle rules', () => {
   const checkpointSection = shared.match(/## Workflow Checkpoints\r?\n([\s\S]*?)(?=\r?\n---)/)?.[1];
   assert.ok(checkpointSection, 'shared instructions must define the checkpoint policy');
   assert.match(checkpointSection, /frontmatter `name`/);
-  assert.match(checkpointSection, /node "\$\{PLUGIN_ROOT\}\/scripts\/emit-telemetry-checkpoint\.js" "<skill-name>\|<checkpoint-name>\|<state>" \|\| true/);
-  for (const state of ['started', 'completed', 'failed', 'skipped']) {
+  assert.match(checkpointSection, /--begin "<skill-name>"/);
+  assert.match(checkpointSection, /--finish <completed\|failed\|blocked\|cancelled>/);
+  assert.match(checkpointSection, /run-with-telemetry\.sh/);
+  assert.match(checkpointSection, /--execute "<skill-name>\|<checkpoint-name>"/);
+  assert.match(checkpointSection, /Support ID: <runId>/);
+  for (const state of [
+    'started',
+    'completed',
+    'failed',
+    'blocked',
+    'cancelled',
+    'skipped',
+    'needs_context',
+  ]) {
     assert.ok(checkpointSection.includes(`\`${state}\``), `shared policy must explain ${state}`);
   }
-  assert.match(checkpointSection, /only `skipped`, without `started`/);
-  assert.match(checkpointSection, /author-written `snake_case` values of at most 64 characters/);
-  assert.match(checkpointSection, /never include prompts, errors, paths, names, identifiers, URLs, command output, or other runtime data/);
+  assert.match(checkpointSection, /only `skipped` without `started`/);
+  assert.match(
+    checkpointSection,
+    /author-written `snake_case` values of at most\s+64 characters/,
+  );
+  assert.match(checkpointSection, /Never include prompts, raw errors,\s+paths, names, URLs, record contents, command output, or runtime payloads/);
   assert.match(checkpointSection, /fail-open/);
-  assert.match(checkpointSection, /Do not duplicate emissions/);
+  assert.match(checkpointSection, /missing terminal event remains incomplete/);
+  assert.match(checkpointSection, /do not append `\|\| true`/);
 });
 
 test('create-mobile-app uses precise checkpoint names at major workflow boundaries', () => {
@@ -651,8 +708,10 @@ test('Mobile control wrapper updates preference with accurate disclosure', (t) =
   });
   assert.equal(status.status, 0);
   assert.match(status.stdout, /Telemetry \(mobile-app\): ON/);
-  assert.match(status.stdout, /does not record PAC CLI version/);
-  assert.match(status.stdout, /organization or Entra tenant IDs/);
+  assert.match(status.stdout, /event\/run\/span IDs/);
+  assert.match(status.stdout, /verified environment, tenant, and Dataverse organization/);
+  assert.match(status.stdout, /does not collect an\s+Entra user\/object ID, Dataverse user ID, username, or email address/);
+  assert.match(status.stdout, /No business records, file contents, emails, tokens, or raw errors/);
   assert.doesNotMatch(status.stdout, /when PAC is signed in/);
 
   const off = spawnSync(process.execPath, [TELEMETRY_CLI, '--action', 'off'], {

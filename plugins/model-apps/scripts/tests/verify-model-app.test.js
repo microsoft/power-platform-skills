@@ -305,6 +305,8 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
           return { app: { name: 'Support Desk' }, solution: { publisherPrefix: 'new' } };
         },
         emitResult: (ok, payload) => events.push({ type: 'emitResult', ok, payload }),
+        // Pure, so the real one — the CLI uses it to identify the environment's baseline.
+        dataverseOrigin: require('../lib/dataverse-auth.js').dataverseOrigin,
       };
     }
     if (id === './lib/sdk-http-client.js') {

@@ -11,7 +11,7 @@
 // with each runner.
 
 /** Tiers an eval fixture can declare. A typo must be rejected here rather than matching nothing. */
-const TIERS = ['smoke', 'full'];
+const TIERS = ['smoke', 'full', 'stress'];
 
 /**
  * @param {string[]} argv                 - process.argv.slice(2)

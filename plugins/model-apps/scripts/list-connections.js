@@ -11,7 +11,7 @@
 // Output:
 //   { "ok": true, "connections": [...], "connectionReferences": [...] }
 
-const { spawnSync } = require('node:child_process');
+const { spawnResultSync } = require('./lib/process-runner.js');
 const {
   dataverseRequest,
   ensureOk,
@@ -19,7 +19,6 @@ const {
   validateFlags,
   emitResult,
 } = require('./lib/dataverse-auth');
-const { exitIfConnectorsDisabled } = require('./lib/feature-flags');
 
 function normalizeHeader(header) {
   return String(header).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -215,10 +214,6 @@ function pacFailureMessage(pac) {
 }
 
 async function main() {
-  // Rollback gate (fail closed) — see lib/feature-flags.js. connectors is GA and ships ON, so
-  // this normally passes; exit 3 = "feature off" stays distinct from 1 = runtime/usage error.
-  exitIfConnectorsDisabled();
-
   const argv = process.argv.slice(2);
   const { positional } = parseArgs(argv);
   const USAGE = 'Usage: node list-connections.js <envUrl>';
@@ -238,10 +233,9 @@ async function main() {
   const [envUrl] = positional;
 
   try {
-    const pac = spawnSync('pac', ['connection', 'list'], {
+    const pac = spawnResultSync('pac', ['connection', 'list'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
-      shell: process.platform === 'win32',
     });
     if (pac.error || pac.status !== 0) {
       throw new Error(pacFailureMessage(pac));

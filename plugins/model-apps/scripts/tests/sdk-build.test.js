@@ -386,7 +386,9 @@ function mockSdk(opts = {}) {
     },
     setEntityIcon: async (logical, icons) => { calls.push({ name: 'setEntityIcon', args: [logical, icons] }); return { id: logical }; },
     getAiReadiness: async (opts) => { calls.push({ name: 'getAiReadiness', args: [opts] }); return { enabled: true }; },
-    setAppAiFeatures: async (appUnique, flags, opts) => { calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] }); return { applied: Object.keys(flags).filter((k) => flags[k]), skipped: [] }; },
+    // The real SDK writes every requested value (Off included) and lists each one it proves; the
+    // build encodes flags to setting values first, so no feature arrives here as a falsy boolean.
+    setAppAiFeatures: async (appUnique, flags, opts) => { calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] }); return { applied: Object.keys(flags), skipped: [] }; },
     configureRowSummary: async (promptSpec, opts) => { calls.push({ name: 'configureRowSummary', args: [promptSpec, opts] }); return { modelId: 'model-' + promptSpec.entityLogicalName, aiSkillConfigId: 'skill-' + promptSpec.entityLogicalName }; },
     // Security authoring. createPersonaRole echoes a RoleResult; opts.roleConflict simulates the SEC-1
     // fail-closed (a hand-built same-name role) so the security phase's BuildHalt is testable. opts.rolesExist
@@ -626,6 +628,59 @@ const ROUTING = 'Dispatch work: assigning and rescheduling tickets. Prefer My Wo
 const appShellPhases = ['solution', 'data-model', 'app-shell'];
 const appCalls = (calls, name, pred = () => true) => find(calls, name).filter((c) => c.args[0] === 'app' && pred(c));
 
+// AB#6726727: an existing app's sitemap is written ONTO its live nodes. Handing the SDK appDef's bag-less
+// tree rebuilt every live node from scratch (new ids, designer defaults for a NEW node), which is how an
+// unrelated edit turned a designer-made dashboard entry into a placeholder-icon one.
+const LIVE_SITEMAP = () => ({
+  areas: [{ id: 'area_live', title: 'Main', bag: { a: [['Id', 'area_live'], ['ResourceId', 'Contoso.Area']], c: [{ i: 0, node: { n: 'Titles', a: [], c: [{ n: 'Title', a: [['LCID', '1033'], ['Title', 'Main']], c: [] }] } }] },
+    groups: [{ id: 'grp_live', title: 'Records', bag: { a: [['Id', 'grp_live'], ['IsProfile', 'false']], c: [{ i: 0, node: { n: 'Titles', a: [], c: [{ n: 'Title', a: [['LCID', '1033'], ['Title', 'Records']], c: [] }] } }] },
+      subAreas: [{ id: 'cust_live', type: 'Entity', entity: 'new_customer', title: 'Our customers',
+        bag: { a: [['Id', 'cust_live'], ['Entity', 'new_customer'], ['Client', 'All,Web'], ['AvailableOffline', 'false']], c: [{ i: 0, node: { n: 'Titles', a: [], c: [{ n: 'Title', a: [['LCID', '1033'], ['Title', 'Our customers']], c: [] }] } }] } }] }] }],
+});
+const siteMapWrite = (calls) => appCalls(calls, 'updateElement', (c) => c.args[2] === '/siteMap')[0];
+
+test('app-shell: an existing app\u2019s sitemap is written onto its live nodes, not in place of them', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingSitemap: LIVE_SITEMAP() });
+  const warnings = [];
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: appShellPhases, warn: (m) => warnings.push(m) });
+  const written = siteMapWrite(calls).args[3];
+  const [area] = written.areas;
+  const [group] = area.groups;
+  const [sub] = group.subAreas;
+  assert.deepStrictEqual([area.id, group.id, sub.id], ['area_live', 'grp_live', 'cust_live'], 'live ids kept');
+  assert.deepStrictEqual(sub.bag, LIVE_SITEMAP().areas[0].groups[0].subAreas[0].bag, 'everything the spec cannot describe rides along');
+  assert.deepStrictEqual(area.bag, LIVE_SITEMAP().areas[0].bag);
+  assert.strictEqual(sub.title, 'Customers', 'the spec still sets what it describes');
+  // With no baseline the spec wins — and the build says so instead of doing it silently.
+  assert.ok(warnings.some((w) => /nav entry "Our customers": title changes from 'Our customers' to the spec's 'Customers'/.test(w)), JSON.stringify(warnings));
+});
+
+test('app-shell: with a baseline, a nav title renamed in the designer since is kept, and reported', async () => {
+  // The baseline (last applied / downloaded) said 'Customers'; the spec still does; the designer has
+  // since renamed the entry to 'Our customers'. The spec is stale for that field, not asking for a change.
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingSitemap: LIVE_SITEMAP() });
+  const warnings = [];
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: appShellPhases, baselineSpec: makeSpec(), warn: (m) => warnings.push(m) });
+  assert.strictEqual(siteMapWrite(calls).args[3].areas[0].groups[0].subAreas[0].title, 'Our customers');
+  assert.ok(warnings.some((w) => /kept the environment's title 'Our customers'/.test(w)), JSON.stringify(warnings));
+  // A title the SPEC changed since the baseline is applied, without a word.
+  const { sdk: sdk2, calls: calls2 } = mockSdk({ artifactsExist: true, existingSitemap: LIVE_SITEMAP() });
+  const edited = makeSpec();
+  edited.appShell.areas[0].groups[0].subAreas[0].title = 'Clients';
+  const quiet = [];
+  await runSdkBuild(edited, { sdk: sdk2, apply: true, phases: appShellPhases, baselineSpec: makeSpec(), warn: (m) => quiet.push(m) });
+  assert.strictEqual(siteMapWrite(calls2).args[3].areas[0].groups[0].subAreas[0].title, 'Clients');
+  assert.ok(!quiet.some((w) => /nav entry/.test(w)), JSON.stringify(quiet));
+});
+
+test('app-shell: a dashboard entry is written with the designer\u2019s launcher Url', () => {
+  const spec = makeSpec();
+  spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets' }] }];
+  spec.appShell.areas[0].groups[0].subAreas.push({ dashboard: 'Ops', title: 'Operations' });
+  const sub = appDef(spec, { dashboards: { Ops: 'dash-1' } }).siteMap.areas[0].groups[0].subAreas[1];
+  assert.deepStrictEqual(sub, { id: 'sub_0_0_1', title: 'Operations', type: 'DashBoard', dashboardId: 'dash-1', dashboardUrl: '/workplace/home_dashboards.aspx' });
+});
+
 test('#583 appDef carries app.aiDescription only when the spec sets one', () => {
   const built = { forms: {}, views: {}, charts: {}, dashboards: {} };
   assert.ok(!('aiDescription' in appDef(makeSpec(), built)));
@@ -671,7 +726,9 @@ test('#583 an existing app whose routing description already matches is left alo
 test('#583 a spec with no routing description never reads or writes one', async () => {
   const { sdk, calls } = mockSdk({ artifactsExist: true, existingAppAiDescription: 'Written by the platform.' });
   await runSdkBuild(makeSpec(), { sdk, apply: true, phases: appShellPhases });
-  assert.strictEqual(appCalls(calls, 'getArtifact').length, 0, 'not even read');
+  // One read, for the live sitemap the rewrite re-attaches to (AB#6726727) — the routing description
+  // is never looked at: applyAppAiDescription returns before reading when the spec sets none.
+  assert.strictEqual(appCalls(calls, 'getArtifact').length, 1, 'read once, for the sitemap');
   assert.strictEqual(appCalls(calls, 'updateElement', (c) => c.args[2] === '/aiDescription').length, 0);
   assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 0);
 });
@@ -700,6 +757,7 @@ test('#583 the deferred routing-description push refuses a copy holding an earli
   await assert.rejects(runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases }), (e) => {
     assert.strictEqual(e.code, 'app-copy-unpushed-edits', e.message);
     assert.match(e.message, /holds edits an earlier run did not push/);
+    assert.match(e.message, /To reset it, stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json and destructive-approval\.json, and re-run\./, 'the baseline and the approval record are kept');
     return true;
   });
   assert.strictEqual(appCalls(calls, 'addElement', (c) => c.args[2] === '').length, 0, 'nothing applied');
@@ -769,7 +827,7 @@ test('#583 when the workspace copy cannot be reset, the halt names the workspace
   sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } });
   await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
     assert.strictEqual(e.code, 'app-header-unpublished', e.message);
-    assert.match(e.message, /then re-run the build\. First delete the \.maker-workspace directory \(or the --workspace one\)/);
+    assert.match(e.message, /then re-run the build\. First reset the workspace, which still holds this run's unpushed copy of the app \(a re-run would refuse to overwrite it\): stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json and destructive-approval\.json\./);
     return true;
   });
 });
@@ -951,6 +1009,25 @@ test('#583 any other thrown push error propagates unchanged, and resets the copy
   };
   await assert.rejects(runSdkBuild(routingSpec(), { sdk: dropped.sdk, apply: true, phases: appShellPhases }), (e) => /socket hang up/.test(e.message));
   assert.strictEqual(appCalls(dropped.calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1);
+});
+
+// The vendored SDK refuses to push a copy an earlier plugin version projected and an interrupted build
+// left holding unpushed edits (workspace-projection-real-bundle.test.js pins the real refusal). From a real
+// build the halt names the manual reset, which starts by stopping every other run on the workspace: the
+// build does not overwrite the copy itself, because another build on the same workspace may hold newer edits.
+test('a push refused for an earlier version\u2019s workspace copy halts with the manual reset', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  const push = sdk.pushArtifact;
+  sdk.pushArtifact = async (t, id) => {
+    if (t !== 'app') return push(t, id);
+    calls.push({ name: 'pushArtifact', args: [t, id] });
+    throw Object.assign(new Error(`Refusing to push app '${id}': its workspace copy was produced by projection version 3, but this SDK produces version 5.`), { code: 'ARTIFACT_PROJECTION_STALE' });
+  };
+  await assert.rejects(runSdkBuild(makeSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
+    assert.strictEqual(e.code, 'ARTIFACT_PROJECTION_STALE', e.message);
+    assert.match(e.message, /To reset it, stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json and destructive-approval\.json, and re-run/);
+    return true;
+  });
 });
 
 test('#583 a returned push failure resets the copy, but a concurrent edit keeps it as the fence', async () => {
@@ -1599,6 +1676,21 @@ test('dashboards: chart + list tiles resolve the created view/visualization ids'
   assert.ok(find(calls, 'addSolutionComponent').some((c) => c.args[0].componentType === 60));
 });
 
+test('app-shell: a live sitemap target absent from the gate approval halts before the app push', async () => {
+  const spec = makeSpec();
+  const existingSitemap = { areas: [{ groups: [{ subAreas: [
+    { entity: 'new_customer', title: 'Customers' },
+    { entity: 'new_ticket', title: 'Tickets' },
+    { entity: 'new_late', title: 'Late table' },
+  ] }] }] };
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingSitemap });
+  await assert.rejects(
+    runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'app-shell'], authorizedSitemapRemovals: new Set(['entity:new_ticket']) }),
+    (err) => err && /entity:new_late/.test(err.message) && /appeared after the run's approval/.test(err.message)
+  );
+  assert.ok(!find(calls, 'pushArtifact').some((c) => c.args[0] === 'app'), 'the app is not pushed after an unapproved sitemap removal appears');
+});
+
 // Descriptions must survive the BUILD, not just the def builder. A def-builder unit test cannot see
 // a phase that constructs its own createArtifact payload inline and forgets to forward the field —
 // which is exactly what both of these did before they were wired.
@@ -1636,6 +1728,59 @@ test('dashboards: an existing dashboard is reused (no duplicate) and reported in
   // The existing id is still threaded into result.created so downstream references resolve.
   assert.strictEqual(result.created.dashboards.Ops, 'dashboard-existing-Ops');
   assert.ok(find(calls, 'resolveArtifact').some((c) => c.args[0] === 'dashboard' && c.args[1].name === 'Ops'), 'discovered via resolveArtifact');
+});
+
+// AB#6726727: a downloaded dashboard carries the id it was read from (dashboards[].dashboardId), and the
+// build binds it by that id first. Renamed in the designer since, the spec's name finds nothing — and the
+// name path would then create a SECOND dashboard under the old name and point the nav entry at it.
+const PINNED_DASH = '280948ec-7bbb-5279-b106-2bdd09451a3a';
+const answerPinned = (sdk, rows) => {
+  const base = sdk.queryRecords;
+  sdk.queryRecords = async (entity, o) => {
+    const m = entity === 'systemform' && /^formid eq ([0-9a-f-]{36})$/.exec((o && o.filter) || '');
+    if (m) return rows[m[1]] ? [rows[m[1]]] : [];
+    return base(entity, o);
+  };
+  return sdk;
+};
+const pinnedSpec = (pin = PINNED_DASH) => {
+  const spec = makeSpec();
+  spec.dashboards = [{ name: 'Command Center - Event operations', dashboardId: pin, tiles: [{ type: 'list', view: 'Active Tickets', name: 'Recent' }] }];
+  return spec;
+};
+
+test('dashboards: a pinned dashboardId is reused after a rename, and the name difference is reported', async () => {
+  const { sdk, calls } = mockSdk();
+  answerPinned(sdk, { [PINNED_DASH]: { formid: PINNED_DASH, name: 'Event operations', type: 0 } });
+  const warnings = [];
+  const result = await runSdkBuild(pinnedSpec(`{${PINNED_DASH.toUpperCase()}}`), { sdk, apply: true, warn: (m) => warnings.push(m) });
+  assert.strictEqual(result.created.dashboards['Command Center - Event operations'], PINNED_DASH);
+  assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'dashboard'), 'no second, stale-named dashboard');
+  assert.ok(!find(calls, 'resolveArtifact').some((c) => c.args[0] === 'dashboard'), 'bound by id — the name is not looked up');
+  assert.ok(warnings.some((w) => /is now named 'Event operations'.*set the spec's name to 'Event operations'/.test(w)), JSON.stringify(warnings));
+  // Same name: nothing to report.
+  const quiet = [];
+  const { sdk: sdk2 } = mockSdk();
+  answerPinned(sdk2, { [PINNED_DASH]: { formid: PINNED_DASH, name: 'COMMAND CENTER - EVENT OPERATIONS ', type: 0 } });
+  await runSdkBuild(pinnedSpec(), { sdk: sdk2, apply: true, warn: (m) => quiet.push(m) });
+  assert.ok(!quiet.some((w) => /is now named/.test(w)), 'a name Dataverse compares equal is the same name');
+});
+
+test('dashboards: a pin this environment does not have falls back to the name (a spec downloaded elsewhere)', async () => {
+  const spec = pinnedSpec();
+  spec.dashboards[0].name = 'Ops';
+  const { sdk, calls } = mockSdk({ existingDashboards: ['Ops'] });
+  answerPinned(sdk, {});
+  const result = await runSdkBuild(spec, { sdk, apply: true });
+  assert.strictEqual(result.created.dashboards.Ops, 'dashboard-existing-Ops');
+  assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'dashboard'));
+});
+
+test('dashboards: a pin that names a form, not a dashboard, halts instead of wiring the nav entry to it', async () => {
+  const { sdk, calls } = mockSdk();
+  answerPinned(sdk, { [PINNED_DASH]: { formid: PINNED_DASH, name: 'Account', type: 2 } });
+  await assert.rejects(runSdkBuild(pinnedSpec(), { sdk, apply: true }), /dashboardId 280948ec-7bbb-5279-b106-2bdd09451a3a is a type-2 form, not a dashboard/);
+  assert.ok(!find(calls, 'createArtifact').some((c) => c.args[0] === 'dashboard'));
 });
 
 // Names are neither unique nor compared exactly, so the lookup can return several dashboards. Reusing
@@ -2245,7 +2390,8 @@ test('form reconcile: an explicit-layout edit REMOVES a field dropped from the s
   await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
   // Fields are removed via removeElement (retired removeField); pointer encodes field position
   const removals = find(calls, 'removeElement');
-  assert.deepStrictEqual(removals.map((c) => c.args[2]), ['/tabs/0/columns/0/sections/0/rows/2/cells/0'], 'only the cell for new_obsolete (row 2) is removed');
+  // The cell goes, then the row it left holding nothing (a blank <row/> would otherwise stay behind).
+  assert.deepStrictEqual(removals.map((c) => c.args[2]), ['/tabs/0/columns/0/sections/0/rows/2/cells/0', '/tabs/0/columns/0/sections/0/rows/2'], 'only new_obsolete (row 2) and the row it emptied are removed');
 });
 
 test('form reconcile: an AUTO layout is additive — a deployed field not in the spec is NOT pruned (Maker adds survive)', async () => {
@@ -3059,6 +3205,67 @@ test('form reconcile: an explicit layout still prunes BY DEFAULT (prune:false is
   assert.ok(find(calls, 'removeElement').length > 0, 'default explicit-layout pruning regressed');
 });
 
+test('form reconcile: authorized removals prune only fields approved when the run started', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier', 'new_manual'] });
+  const warnings = [];
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], authorizedFormRemovals: new Map([['form-existing', new Set(['new_tier'])]]), warn: (m) => warnings.push(m) });
+  // new_tier's cell, then the row it left empty; new_manual's cell and row stay.
+  assert.deepStrictEqual(find(calls, 'removeElement').map((c) => c.args[2]), ['/tabs/0/columns/0/sections/0/rows/1/cells/0', '/tabs/0/columns/0/sections/0/rows/1']);
+  assert.ok(warnings.some((w) => /new_manual/.test(w) && /not among the removals authorized when this run started/.test(w)), 'the kept field is reported');
+});
+
+test('form reconcile: authorized-removal form ids are normalized before fencing', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier', 'new_manual'] });
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], authorizedFormRemovals: new Map([['{FORM-EXISTING}', new Set(['new_tier'])]]) });
+  assert.deepStrictEqual(find(calls, 'removeElement').map((c) => c.args[2]), ['/tabs/0/columns/0/sections/0/rows/1/cells/0', '/tabs/0/columns/0/sections/0/rows/1']);
+  assert.deepStrictEqual(result.skipped.unauthorizedRemovals, [{ formId: 'form-existing', form: 'Customer', field: 'new_manual' }]);
+});
+
+test('form reconcile: an empty authorized set keeps mid-run fields on a form seen by the gate', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_manual'] });
+  const warnings = [];
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], authorizedFormRemovals: new Map([['form-existing', new Set()]]), warn: (m) => warnings.push(m) });
+  assert.strictEqual(find(calls, 'removeElement').length, 0, 'newly appeared field is fenced off');
+  assert.ok(warnings.some((w) => /new_manual/.test(w)), 'kept field is reported');
+});
+
+test('form reconcile: a supplied authorized-removals map fences forms absent from it', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], authorizedFormRemovals: new Map() });
+  assert.strictEqual(find(calls, 'removeElement').length, 0, 'forms outside a supplied map are fenced with an empty approval set');
+});
+
+test('form reconcile: a supplied map fences a form id absent from the gate snapshot', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_late'] });
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], authorizedFormRemovals: new Map() });
+  assert.strictEqual(find(calls, 'removeElement').length, 0, 'a form absent from the gate-time map is fenced with an empty set');
+  assert.deepStrictEqual(result.skipped.unauthorizedRemovals, [{ formId: 'form-existing', form: 'Customer', field: 'new_late' }]);
+});
+
+test('form reconcile: no authorized-removals map prunes as before', async () => {
+  const spec = makeSpec();
+  spec.forms = [{ entity: 'new_customer', name: 'Customer', layout: 'explicit',
+    tabs: [{ label: 'General', sections: [{ label: 'Details', columns: 1, fields: ['new_name'] }] }] }];
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormFields: ['new_name', 'new_tier'] });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'] });
+  assert.ok(find(calls, 'removeElement').length > 0, 'legacy behavior remains when the gate did not supply a fence');
+});
+
 test('form build: a BigInt column is never added to a form by the auto layout', async () => {
   const spec = makeSpec();
   spec.entities[0].columns.push({ schemaName: 'new_tracking', displayName: 'Tracking', type: 'BigInt' });
@@ -3475,7 +3682,9 @@ test('ai-features phase enables app features and configures summaries for candid
   assert.ok(find(calls, 'configureRowSummary').length >= 1, 'configureRowSummary called for candidate table(s)');
   const featureCall = find(calls, 'setAppAiFeatures')[0];
   assert.ok(featureCall.args[0].includes('support'), 'app unique name derived from spec (contains app name slug)');
-  assert.strictEqual(featureCall.args[1].formFill, true, 'formFill flag merged from spec.ai.appFeatures');
+  // Encoded by the build, not left to the SDK's boolean mapping (AB#6714731): On is '2' for every
+  // feature, and m365 stays at its platform default '0' unless the spec asks.
+  assert.deepStrictEqual(featureCall.args[1], { formFill: '2', nlSearch: '2', nlChart: '2', m365: '0' }, 'formFill flag merged from spec.ai.appFeatures, all encoded');
   assert.ok(result.created.ai && result.created.ai.appFeatures, 'appFeatures populated on result');
   assert.ok(result.created.ai.summaries && Object.keys(result.created.ai.summaries).length >= 1, 'summaries populated on result');
 });
@@ -3786,6 +3995,47 @@ test('ai-features phase: a `skipped` feature the re-issue cannot recover is repo
   assert.ok(warnings.some((e) => /EnableNLGridSearch/.test(e.label)),
     'the SDK reason names the gate, which is the actionable part');
   assert.ok(!r.created.ai.appFeatures.applied.includes('nlSearch'), 'and it is NOT claimed as applied');
+});
+
+test('ai-features phase: both writes hand the SDK each setting\u2019s value, never a boolean (AB#6714731)', async () => {
+  // The vendored SDK maps a boolean through a codec that knows only the form-fill family, so `true`
+  // reached NL grid search and M365 as '1' (Off) and NL charts as '1' (Auto). The build encodes
+  // every flag itself, and the SDK writes an explicit value verbatim — including on the
+  // post-publish re-issue, which is the write that actually lands on a new app.
+  const { sdk, calls } = withAiResults([
+    { applied: ['formFill'], skipped: [], notPersisted: ['nlSearch', 'nlChart', 'm365'], unverified: [], failed: [], outcomes: [] },
+    { applied: ['nlSearch', 'nlChart', 'm365'], skipped: [], notPersisted: [], unverified: [], failed: [], outcomes: [] },
+  ]);
+  const spec = makeSpec({ ai: { appFeatures: { nlSearch: true, nlChart: false, m365: false }, summaries: { default: 'off' } } });
+  await runSdkBuild(spec, { sdk, apply: true, phases: ['app-shell', 'ai-features'] });
+  const writes = find(calls, 'setAppAiFeatures');
+  assert.strictEqual(writes.length, 2);
+  assert.deepStrictEqual(writes[0].args[1], { formFill: '2', nlSearch: '2', nlChart: '0', m365: '1' });
+  assert.deepStrictEqual(writes[1].args[1], { nlSearch: '2', nlChart: '0', m365: '1' }, 'the re-issue is encoded too');
+  // An explicit integer is the caller's own setting value and passes through untouched.
+  const { sdk: sdk2, calls: calls2 } = withAiResults([{ applied: ['formFill', 'nlSearch', 'nlChart', 'm365'], skipped: [], notPersisted: [], unverified: [], failed: [], outcomes: [] }]);
+  await runSdkBuild(makeSpec({ ai: { appFeatures: { nlChart: 1, m365: 2 }, summaries: { default: 'off' } } }), { sdk: sdk2, apply: true, phases: ['app-shell', 'ai-features'] });
+  assert.deepStrictEqual(find(calls2, 'setAppAiFeatures')[0].args[1], { formFill: '2', nlSearch: '2', nlChart: '1', m365: '2' });
+});
+
+test('ai-features phase: an OFF write that did not persist is NOT PERSISTED, not ADMIN GATE OFF', async () => {
+  // The SDK labels any non-zero request as enabling, so grid search Off ('1') with its org gate off
+  // came back `skipped`, and the build told the operator an admin must enable the feature — for a
+  // request to turn it off.
+  const sdkSkip = {
+    applied: [], skipped: ['nlSearch'], notPersisted: [], unverified: [], failed: [],
+    outcomes: [{ feature: 'nlSearch', setting: 'NLGridSearchSetting', requestedValue: '1', status: 'skipped', appOverrideExists: false,
+      reason: "the org readiness gate 'EnableNLGridSearch' reads 'false', so an environment admin must enable it before this app can turn the feature on" }],
+  };
+  const { sdk, calls } = withAiResults([sdkSkip, { applied: [], skipped: [], notPersisted: [], unverified: [], failed: [], outcomes: [] }]);
+  const events = [];
+  const r = await runSdkBuild(makeSpec({ ai: { appFeatures: { nlSearch: false }, summaries: { default: 'off' } } }), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+  assert.strictEqual(find(calls, 'setAppAiFeatures').length, 2, 'still re-issued after publish');
+  const warnings = events.filter((e) => e.phase === 'ai-features' && e.status === 'skip').map((e) => e.label);
+  assert.ok(warnings.some((l) => /NOT PERSISTED: nlSearch/.test(l)), JSON.stringify(warnings));
+  assert.ok(!warnings.some((l) => /ADMIN GATE OFF|must enable/.test(l)), JSON.stringify(warnings));
+  const af = r.created.ai.appFeatures;
+  assert.deepStrictEqual([af.skipped, af.notPersisted], [[], ['nlSearch']], 'the --json result agrees with the report');
 });
 
 test('ai-features phase: passes a raised verify budget so a fresh app module is not falsely reported', async () => {
@@ -5440,7 +5690,7 @@ test('form topology: WIDENING a section grid leaves its existing rows untouched'
 // cannot express that reservation — and the authored-rowspan restriction does not help, because
 // the span belongs to the fetched MAKER form, not to the spec. Refusing is the recoverable
 // outcome; silently rearranging a maker's form is not.
-test('form topology: a narrowing that the rows already fit is applied without moving any cell', async () => {
+test('form topology: a narrowing whose carried spacer would overflow keeps the old grid', async () => {
   const spec = makeSpec();
   spec.entities[0].columns.push(
     { schemaName: 'new_code', displayName: 'Code', type: 'Text' },
@@ -5464,15 +5714,16 @@ test('form topology: a narrowing that the rows already fit is applied without mo
   const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
   const res = await runSdkBuild(spec, { sdk, apply: true, phases: ['solution', 'data-model', 'forms'], warn: (m) => warnings.push(String(m)) });
 
-  const formCall = calls.find((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form');
-  const finalForm = await sdk.getArtifact('form', formCall.args[1]);
+  assert.ok(!calls.some((c) => (c.name === 'updateElement' || c.name === 'addElement') && c.args[0] === 'form'),
+    `no form write may be issued; got ${JSON.stringify(calls.filter((c) => c.args && c.args[0] === 'form').map((c) => c.name))}`);
+  const finalForm = await sdk.getArtifact('form', 'form-existing');
   const sec = finalForm.tabs[0].columns[0].sections[0];
   const shape = (sec.rows || []).map((r) => (r.cells || []).map((c) => (c.control && c.control.fieldName) || '(spacer)'));
   assert.deepStrictEqual(shape,
     [['new_name'], ['(spacer)', 'new_tier'], ['new_code', 'new_note']],
-    `no cell may move — every row already fits the narrower grid; got ${JSON.stringify(shape)}`);
-  assert.strictEqual(Number(sec.columns), 2, 'the narrower grid IS applied: nothing about it needs a reflow');
-  assert.deepStrictEqual(res.skipped.layout, [], 'nothing was refused, so nothing is reported as skipped');
+    `no cell may move when the narrowing is skipped; got ${JSON.stringify(shape)}`);
+  assert.strictEqual(Number(sec.columns), 4, 'the old grid is kept because row 2 needs one reserved plus two own columns');
+  assert.ok(res.skipped.layout.some((m) => /narrowing it/.test(m)), `the refusal must be recorded; got ${JSON.stringify(res.skipped.layout)}`);
 });
 
 // When the rows would NOT fit the narrower grid, the width must not be written either. Writing it

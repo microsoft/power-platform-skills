@@ -1,6 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const http = require('node:http');
 
 const { parseArgs, readJsonArg, label, requiredLevel } = require('../lib/dataverse-auth');
 
@@ -92,6 +93,140 @@ test('requiredLevel: respects argument', () => {
   assert.equal(requiredLevel('ApplicationRequired').Value, 'ApplicationRequired');
 });
 
+test('makeRequest preserves UTF-8 characters split across response chunks', async () => {
+  const { makeRequest } = require('../lib/dataverse-auth.js');
+  const body = JSON.stringify({ city: '東京', emoji: '😀', cafe: 'Café' });
+  const bodyBytes = Buffer.from(body, 'utf8');
+  const server = http.createServer((req, res) => {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    if (req.url === '/split') {
+      for (let i = 0; i < bodyBytes.length; i += 1) {
+        res.write(bodyBytes.subarray(i, i + 1));
+      }
+      res.end();
+      return;
+    }
+    if (req.url === '/whole') {
+      res.end(bodyBytes);
+      return;
+    }
+    res.statusCode = 404;
+    res.end('not found');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const whole = await makeRequest({ url: `http://127.0.0.1:${port}/whole` });
+    const split = await makeRequest({ url: `http://127.0.0.1:${port}/split` });
+    assert.equal(whole.body, body);
+    assert.equal(split.body, body);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('getAuthToken reuses a non-empty token per normalized resource URL', () => {
+  const { getAuthToken } = require('../lib/dataverse-auth.js');
+  const calls = [];
+  const exec = (_file, args) => {
+    calls.push(args[args.indexOf('--resource') + 1]);
+    return 'TOK\n';
+  };
+  const oldPath = process.env.PATH;
+  process.env.PATH = '';
+  try {
+    assert.equal(getAuthToken('https://contoso.crm.dynamics.com/', { exec, fresh: true }), 'TOK');
+    assert.equal(getAuthToken('https://contoso.crm.dynamics.com', { exec }), 'TOK');
+    assert.equal(getAuthToken('https://fabrikam.crm.dynamics.com', { exec, fresh: true }), 'TOK');
+  } finally {
+    process.env.PATH = oldPath;
+  }
+  assert.deepEqual(calls, ['https://contoso.crm.dynamics.com', 'https://fabrikam.crm.dynamics.com']);
+});
+
+test('a fresh acquire bypasses the memo and replaces the token it holds', () => {
+  const { getAuthToken } = require('../lib/dataverse-auth.js');
+  const tokens = ['OLD\n', 'NEW\n'];
+  let calls = 0;
+  const exec = () => tokens[Math.min(calls++, tokens.length - 1)];
+  const url = 'https://fabrikam.crm4.dynamics.com';
+  const oldPath = process.env.PATH;
+  process.env.PATH = '';
+  try {
+    assert.equal(getAuthToken(url, { exec, fresh: true }), 'OLD');
+    assert.equal(getAuthToken(url, { exec }), 'OLD', 'an ordinary repeat is served from the memo');
+    // A 401 refresh must not be handed the token the server just rejected.
+    assert.equal(getAuthToken(url, { exec, fresh: true }), 'NEW');
+    assert.equal(getAuthToken(url, { exec }), 'NEW', 'the refreshed token replaces the memoized one');
+  } finally {
+    process.env.PATH = oldPath;
+  }
+  assert.equal(calls, 2);
+});
+test('getAuthToken does not cache a null token result', () => {
+  const { getAuthToken } = require('../lib/dataverse-auth.js');
+  let calls = 0;
+  const exec = () => {
+    calls += 1;
+    if (calls === 1) return '\n';
+    return 'TOK\n';
+  };
+  const oldPath = process.env.PATH;
+  process.env.PATH = '';
+  try {
+    assert.equal(getAuthToken('https://example.crm.dynamics.com', { exec, fresh: true }), null);
+    assert.equal(getAuthToken('https://example.crm.dynamics.com', { exec }), 'TOK');
+  } finally {
+    process.env.PATH = oldPath;
+  }
+  assert.equal(calls, 2);
+});
+
+test('getAuthTokenAsync is served from a memo that getAuthToken filled', async () => {
+  // The other direction of sharing: check-auth warms the memo asynchronously, but a synchronous caller
+  // may have filled it first, and the async path must then not start the CLI again.
+  const { getAuthToken, getAuthTokenAsync } = require('../lib/dataverse-auth.js');
+  let asyncCalls = 0;
+  const exec = () => 'SYNC\n';
+  const execFile = (_file, _args, _opts, cb) => { asyncCalls += 1; setImmediate(() => cb(null, 'ASYNC\n')); };
+  const url = 'https://fabrikam.crm5.dynamics.com';
+  const oldPath = process.env.PATH;
+  process.env.PATH = '';
+  try {
+    assert.equal(getAuthToken(url, { exec, fresh: true }), 'SYNC');
+    assert.equal(await getAuthTokenAsync(url, { execFile }), 'SYNC');
+  } finally {
+    process.env.PATH = oldPath;
+  }
+  assert.equal(asyncCalls, 0);
+});
+test('getAuthTokenAsync shares the token memo with getAuthToken and honors fresh replacement', async () => {
+  const { getAuthToken, getAuthTokenAsync } = require('../lib/dataverse-auth.js');
+  const calls = [];
+  const exec = (_file, args) => {
+    calls.push(`sync:${args[args.indexOf('--resource') + 1]}`);
+    return 'SYNC\n';
+  };
+  const execFile = (_file, args, _opts, cb) => {
+    calls.push(`async:${args[args.indexOf('--resource') + 1]}`);
+    setImmediate(() => cb(null, calls.length === 1 ? 'ASYNC\n' : 'FRESH\n'));
+  };
+  const oldPath = process.env.PATH;
+  process.env.PATH = '';
+  try {
+    assert.equal(await getAuthTokenAsync('https://contoso.crm.dynamics.com/', { execFile, fresh: true }), 'ASYNC');
+    assert.equal(getAuthToken('https://contoso.crm.dynamics.com', { exec }), 'ASYNC');
+    assert.equal(await getAuthTokenAsync('https://contoso.crm.dynamics.com', { execFile, fresh: true }), 'FRESH');
+    assert.equal(getAuthToken('https://contoso.crm.dynamics.com', { exec }), 'FRESH');
+  } finally {
+    process.env.PATH = oldPath;
+  }
+  assert.deepEqual(calls, [
+    'async:https://contoso.crm.dynamics.com',
+    'async:https://contoso.crm.dynamics.com',
+  ]);
+});
+
 test('emitResult: partial-failure object writes JSON to stdout (not [object Object])', () => {
   // Spawn a tiny script that calls emitResult(false, {errors:[...]}) and
   // verify that stdout contains the JSON payload — not the literal string
@@ -162,6 +297,28 @@ test('dataverseRequest USES a preset token and skips the CLI entirely', async ()
   });
   assert.strictEqual(cliCalls, 1);
   assert.strictEqual(sentAuth, 'Bearer tok-from-cli');
+});
+
+
+test('dataverseRequest bypasses the token memo after a 401 before retrying', async () => {
+  const { dataverseRequest } = require('../lib/dataverse-auth.js');
+  const tokenCalls = [];
+  const sent = [];
+  const res = await dataverseRequest('https://contoso.crm.dynamics.com', 'GET', 'WhoAmI', null, {
+    getToken: (_url, options) => {
+      tokenCalls.push(Boolean(options && options.fresh));
+      return tokenCalls.length === 1 ? 'OLD' : 'NEW';
+    },
+    request: async ({ headers }) => {
+      sent.push(headers.Authorization);
+      return sent.length === 1
+        ? { statusCode: 401, body: '' }
+        : { statusCode: 200, body: '{"ok":true}' };
+    },
+  });
+  assert.strictEqual(res.status, 200);
+  assert.deepStrictEqual(tokenCalls, [false, true]);
+  assert.deepStrictEqual(sent, ['Bearer OLD', 'Bearer NEW']);
 });
 
 test('a path-bearing or query-bearing env is refused, not silently trimmed to its origin', async () => {
@@ -454,5 +611,127 @@ test('AB#6686424: a bodyless error does not print "null" as the server message',
         return true;
       }
     );
+  }
+});
+
+// --- environment URLs: only a Dataverse https origin is ever used -------------------------------
+// The origin is the `--resource` a token is requested for, the base of every request URL, and the
+// only place a token is sent. Anything else is refused before a process starts or a request is sent.
+test('dataverseOrigin accepts a Dataverse origin in any cloud and returns it canonically', () => {
+  const { dataverseOrigin } = require('../lib/dataverse-auth.js');
+  for (const [input, expected] of [
+    ['https://contoso.crm.dynamics.com', 'https://contoso.crm.dynamics.com'],
+    ['https://Contoso.CRM.Dynamics.com/', 'https://contoso.crm.dynamics.com'],
+    ['  https://contoso.crm4.dynamics.com//  ', 'https://contoso.crm4.dynamics.com'],
+    ['HTTPS://contoso.api.crm.dynamics.com', 'https://contoso.api.crm.dynamics.com'],
+    ['https://contoso.crmtest.dynamics.com', 'https://contoso.crmtest.dynamics.com'],
+    ['https://contoso.crm.microsoftdynamics.us', 'https://contoso.crm.microsoftdynamics.us'],
+    ['https://contoso.crm.appsplatform.us', 'https://contoso.crm.appsplatform.us'],
+    ['https://contoso.crm.dynamics.cn', 'https://contoso.crm.dynamics.cn'],
+  ]) {
+    assert.equal(dataverseOrigin(input), expected, input);
+  }
+});
+
+test('dataverseOrigin refuses anything that is not exactly an https Dataverse origin', () => {
+  const { dataverseOrigin } = require('../lib/dataverse-auth.js');
+  for (const input of [
+    'http://contoso.crm.dynamics.com',
+    'https://contoso.crm.dynamics.com/main.aspx',
+    'https://contoso.crm.dynamics.com/?x=1',
+    'https://contoso.crm.dynamics.com/#x',
+    'https://contoso.crm.dynamics.com:443',
+    'https://user@contoso.crm.dynamics.com',
+    'https://contoso.crm.dynamics.com/&whoami',
+    'https://contoso.crm.dynamics.com&whoami',
+    'https://contoso.crm.dynamics.com\\x',
+    'https://contoso.crm.dynamics.com%20',
+    'https://contoso.crm.dynamics.com\nx',
+    'https://contoso.example.com',
+    'https://crm.dynamics.com',
+    'https://contoso.crm.dynamics.com.example.com',
+    '',
+    null,
+    undefined,
+  ]) {
+    assert.equal(dataverseOrigin(input), null, JSON.stringify(input));
+  }
+});
+
+test('a non-origin environment URL starts no Azure CLI process and sends no request', async () => {
+  const { getAuthToken, getAuthTokenAsync, dataverseRequest } = require('../lib/dataverse-auth.js');
+  let started = 0;
+  const exec = () => { started += 1; return 'TOK\n'; };
+  const execFile = (_f, _a, _o, cb) => { started += 1; cb(null, 'TOK\n'); };
+  const bad = 'https://contoso.crm.dynamics.com/&whoami';
+  assert.equal(getAuthToken(bad, { exec, fresh: true }), null);
+  assert.equal(await getAuthTokenAsync(bad, { execFile, fresh: true }), null);
+  let sent = 0;
+  await assert.rejects(
+    dataverseRequest(bad, 'GET', 'WhoAmI', null, { getToken: exec, request: async () => { sent += 1; return { statusCode: 200, body: '{}' }; } }),
+    /is not a Dataverse environment URL/
+  );
+  assert.equal(started, 0);
+  assert.equal(sent, 0);
+});
+
+test('dataverseRequest builds the request on the validated origin and requests the token for it', async () => {
+  const { dataverseRequest } = require('../lib/dataverse-auth.js');
+  let resource;
+  let url;
+  await dataverseRequest('https://Contoso.crm.dynamics.com/', 'GET', 'WhoAmI', null, {
+    getToken: (r) => { resource = r; return 'TOK'; },
+    request: async (o) => { url = o.url; return { statusCode: 200, body: '{}' }; },
+  });
+  assert.equal(resource, 'https://contoso.crm.dynamics.com');
+  assert.equal(url, 'https://contoso.crm.dynamics.com/api/data/v9.2/WhoAmI');
+});
+
+test('createAzHttpClient requests its token for the validated origin, never the text it was given', async () => {
+  const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+  assert.throws(() => createAzHttpClient('https://contoso.crm.dynamics.com/&whoami', { getToken: () => 'TOK' }), /Invalid Dataverse org URL/);
+  let resource;
+  const http = createAzHttpClient('https://CONTOSO.crm.dynamics.com/', {
+    getToken: (r) => { resource = r; return 'TOK'; },
+    request: async () => ({ statusCode: 200, body: '{}' }),
+  });
+  await http.get('https://contoso.crm.dynamics.com/api/data/v9.2/WhoAmI');
+  assert.equal(resource, 'https://contoso.crm.dynamics.com');
+});
+
+test('azIdentity reads the identity through the process runner seam', () => {
+  const { azIdentity } = require('../lib/dataverse-auth.js');
+  const seen = [];
+  const id = azIdentity({ exec: (cmd, args) => { seen.push([cmd, ...args].join(' ')); return '{"user":"maker@contoso.com","tenantId":"t"}'; } });
+  assert.deepEqual(id, { user: 'maker@contoso.com', tenantId: 't' });
+  assert.deepEqual(seen, ['az account show --query {user:user.name,tenantId:tenantId} -o json']);
+});
+
+// End to end on Windows, where the Azure CLI is a batch shim: the entry-point CLIs refuse an
+// environment URL that is not an origin, and nothing but the (fake) Azure CLI ever runs.
+test('the Dataverse entry points refuse a non-origin URL before anything runs (real CLI, Windows)', { skip: process.platform !== 'win32' }, () => {
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const scripts = path.join(__dirname, '..');
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'dv-origin-e2e-'));
+  try {
+    const bin = path.join(work, 'bin');
+    fs.mkdirSync(bin);
+    const azLog = path.join(work, 'az-calls.txt');
+    fs.writeFileSync(path.join(bin, 'az.cmd'), `@echo %*>>"${azLog}"\r\n@exit /b 1\r\n`, 'utf8');
+    const env = { ...process.env, Path: `${bin};${process.env.SystemRoot}\\System32`, PATH: `${bin};${process.env.SystemRoot}\\System32` };
+    const url = 'https://contoso.crm.dynamics.com/&md,MARKER';
+    const runs = [
+      spawnSync(process.execPath, [path.join(scripts, 'dataverse-request.js'), url, 'GET', 'WhoAmI'], { cwd: work, env, encoding: 'utf8', timeout: 60000 }),
+      spawnSync(process.execPath, [path.join(scripts, 'check-auth.js'), '--env', url], { cwd: work, env, encoding: 'utf8', timeout: 60000 }),
+    ];
+    assert.equal(fs.existsSync(path.join(work, 'MARKER')), false, 'no second command ran');
+    assert.match(runs[0].stderr, /is not a Dataverse environment URL/);
+    const logged = fs.existsSync(azLog) ? fs.readFileSync(azLog, 'utf8') : '';
+    assert.doesNotMatch(logged, /MARKER/, `the URL never reached the Azure CLI: ${logged}`);
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
   }
 });

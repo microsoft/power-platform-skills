@@ -1,14 +1,14 @@
 {
-  "commit": "e3483d6951cefa0876ce943501b9980317163856",
-  "subject": "fix(cds-maker-sdk): condition every BPF write on the token the previous write produced",
+  "commit": "dac2cf1e3bed12ff733754e1045b95a1e4b180e2",
+  "subject": "cds-maker-sdk: form-embed follow-ups — per-table tokens, edit after publish, embed conversion, SQL deadlock re-send, read-back adoption",
   "dirtySdkPackage": 0,
-  "libBuiltAt": "2026-09-23T16:22:40.381Z",
-  "newestSrcAt": "2026-09-23T16:18:15.285Z",
+  "libBuiltAt": "2026-09-30T01:00:29.443Z",
+  "newestSrcAt": "2026-09-30T00:27:58.502Z",
   "libIsStale": false,
   "nostub": false,
   "esbuildVersion": "0.28.1",
   "nodeVersion": "v20.20.2",
-  "builtAt": "2026-09-23T16:23:33.084Z",
-  "bundleSha256": "7a64e8b1962d4845f7ea7b1cdb753b8934dbb16a2d2bad510843d32911a3a2b8",
-  "bundleBytes": 723384
+  "builtAt": "2026-09-30T01:01:39.005Z",
+  "bundleSha256": "e3bb276bd822c35609a18f3730d11e0430ca7cf38ea07f341c454f803f576b59",
+  "bundleBytes": 818077
 }

@@ -789,6 +789,45 @@ test('teardown deletes only the dashboards the app\'s solution holds, never anot
   assert.match(unnamed.skip.label, /this spec names no solution, so nothing proves a dashboard named 'Operations' is this app's/);
 });
 
+// AB#6726727: a downloaded spec pins the dashboard it was read from, and the build binds it by that id —
+// so after a rename in the designer the spec's name finds nothing, but the dashboard is still this
+// spec's. Teardown finds it by the pin too, as a CANDIDATE: the solution still decides.
+test('teardown finds a pinned dashboard renamed since the download, and still asks the solution', async () => {
+  const PIN = 'aaaa1111-2222-3333-4444-555566667777';
+  const OTHER = 'bbbb1111-2222-3333-4444-555566667777';
+  const spec = { solution: { uniqueName: 'ContosoSln', publisherPrefix: 'new' }, app: { name: 'A' }, entities: [],
+    dashboards: [{ name: 'Command Center - Event operations', dashboardId: PIN, tiles: [] }] };
+  const run = async ({ inSolution, pinned = { formid: PIN, name: 'Event operations', type: 0 }, failPin = false, byName = [] }) => {
+    const deleted = [];
+    const sdk = {
+      resolveArtifact: async (kind) => (kind === 'solution' ? [{ id: 'sol-1', name: 'ContosoSln' }] : kind === 'dashboard' ? byName : []),
+      deleteRemoteArtifact: async (type, id) => { deleted.push(id); },
+      deleteAppCascade: async () => {},
+      deleteSolution: async () => {},
+      queryRecords: async (set, opts) => {
+        if (set === 'systemform' && opts.filter === `formid eq ${PIN}`) { if (failPin) throw new Error('HTTP 503'); return pinned ? [pinned] : []; }
+        if (set === 'solution') return [{ solutionid: 'sol-1' }];
+        if (set === 'solutioncomponent') return inSolution.filter((id) => opts.filter.includes(`objectid eq ${id}`)).map((objectid) => ({ objectid }));
+        return [];
+      },
+    };
+    const r = await runTeardown(spec, { apply: true }, { sdk, emit: () => {} });
+    return { deleted, r };
+  };
+  assert.deepStrictEqual((await run({ inSolution: [PIN] })).deleted, [PIN], 'found by its pin, deleted because the solution holds it');
+  assert.deepStrictEqual((await run({ inSolution: [] })).deleted, [], 'a pin is not proof of ownership on its own');
+  // A resolving pin is the ONLY candidate: another dashboard that has since been given the old name —
+  // even one in the same solution — is not this spec's, and build and verify would not pick it either.
+  const reused = await run({ inSolution: [PIN, OTHER], byName: [{ id: OTHER, name: 'Command Center - Event operations' }] });
+  assert.deepStrictEqual(reused.deleted, [PIN]);
+  // A pin this environment does not have: the name decides, as it does for the build.
+  assert.deepStrictEqual((await run({ inSolution: [OTHER], pinned: null, byName: [{ id: OTHER, name: 'Command Center - Event operations' }] })).deleted, [OTHER]);
+  assert.deepStrictEqual((await run({ inSolution: [PIN], pinned: null })).deleted, [], 'no pin row and no name match: nothing');
+  const failed = await run({ inSolution: [PIN], failPin: true });
+  assert.deepStrictEqual(failed.deleted, []);
+  assert.ok(failed.r.errors.some((e) => /could not look up the dashboard pinned as 'Command Center - Event operations'/.test(e.message)), JSON.stringify(failed.r.errors));
+});
+
 // The solution is what a re-run asks to tell this app's dashboards from same-named ones. Deleted after
 // a failed step, it left the retry nothing to prove them by: the retry kept them for good, and their
 // tiles then blocked the chart and view deletes on every later run. So a teardown with a failed step

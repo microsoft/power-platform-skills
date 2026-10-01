@@ -358,6 +358,16 @@ test('#537: exotic values become validation errors, not raw crashes', () => {
   assert.ok(r2.errors.some((e) => /could not be inspected/.test(e)), JSON.stringify(r2.errors));
 });
 
+// #631: the appShell key allow-list is guarded the same way — a node whose keys cannot be enumerated
+// is an error naming it, never a crash out of the validator.
+test('#631: an appShell node whose keys cannot be enumerated becomes a validation error, not a crash', () => {
+  const s = base();
+  s.appShell = { areas: [new Proxy({ label: 'Main', groups: [] }, { ownKeys() { throw new Error('trap'); } })] };
+  const r = validateAppSpec(s, { profile: 'plan' });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /could not be inspected: enumerating its keys threw/.test(e)), JSON.stringify(r.errors));
+});
+
 // --- review follow-ups on the #537 entity-key allow-list ----------------------------------------
 
 test('#537 review: an unknown key on an entity with NO schemaName does not say "entity undefined"', () => {

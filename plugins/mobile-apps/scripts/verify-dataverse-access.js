@@ -41,6 +41,12 @@ async function main() {
   }
 
   const data = JSON.parse(res.body);
+  try {
+    require('./emit-telemetry-checkpoint')
+      .captureSuccessfulDataverseRequest(envUrl, token, data);
+  } catch {
+    // Telemetry enrichment cannot change verified Dataverse access.
+  }
   // Extract tenantId from JWT token payload
   let tenantId = null;
   try {

@@ -161,7 +161,13 @@ test('hydrateSpec preserves entity + URL subareas and icons; omits a DashBoard w
 
 test('hydrateSpec round-trips a DashBoard subarea + dashboards[] (id-passthrough tiles) when a dashboards reader is present', async () => {
   const read = deployedRead();
-  read.dashboards = async () => [{ id: 'D-1', name: 'Ops Overview', tiles: [
+  // The sitemap stores the id braced and upper-cased, and the dashboards reader hands it back as read
+  // (lower-cased, braces kept); the pin is written bare and lower-case.
+  const DASH = '280948EC-7BBB-5279-B106-2BDD09451A3A';
+  const app = await read.app();
+  app.siteMap.areas[0].groups[0].subAreas.find((s) => s.type === 'DashBoard').dashboardId = `{${DASH}}`;
+  read.app = async () => app;
+  read.dashboards = async () => [{ id: `{${DASH}}`.toLowerCase(), name: 'Ops Overview', tiles: [
     { type: 'chart', name: 'Orders by Status', entity: 'new_order', viewId: 'v1', visualizationId: 'c1' },
     { type: 'list', name: 'Active Orders', entity: 'new_order', viewId: 'v1' },
   ] }];
@@ -172,6 +178,9 @@ test('hydrateSpec round-trips a DashBoard subarea + dashboards[] (id-passthrough
   // dashboards[] reconstructed with the id-passthrough tiles
   assert.strictEqual(spec.dashboards.length, 1);
   assert.strictEqual(spec.dashboards[0].name, 'Ops Overview');
+  // AB#6726727: pinned to the dashboard it was read from, so a rename in the designer cannot turn a
+  // rebuild into a second, stale-named dashboard.
+  assert.strictEqual(spec.dashboards[0].dashboardId, DASH.toLowerCase());
   assert.deepStrictEqual(spec.dashboards[0].tiles[0], { type: 'chart', name: 'Orders by Status', entity: 'new_order', viewId: 'v1', visualizationId: 'c1' });
   // and the whole spec still validates (id-based tiles need no declared views[]/charts[])
   const r = validateAppSpec(spec);
@@ -313,7 +322,7 @@ test('an UNDECLARED web-resource subarea still validates — it is a live/OOB re
     solution: { uniqueName: 'S', publisherPrefix: 'new' },
     app: { name: 'A' },
     entities: [{ schemaName: 'new_o', displayName: 'O', primaryAttribute: { schemaName: 'new_name', displayName: 'N' }, columns: [] }],
-    appShell: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ title: 'Home', url: '$webresource:new_homepage.html' }] }] }] },
+    appShell: { areas: [{ label: 'M', groups: [{ label: 'G', subAreas: [{ title: 'Home', url: '$webresource:new_homepage.html' }] }] }] },
   };
   const v = validateAppSpec(spec, { profile: 'plan' });
   assert.strictEqual(v.ok, true, 'validation errors: ' + JSON.stringify(v.errors));
@@ -489,4 +498,24 @@ test('#583 hydrateSpec carries app.aiDescription only when the deployed app has 
     const white = { ...read, app: async () => ({ ...app, aiDescription: ws }) };
     assert.ok(!('aiDescription' in (await hydrateSpec(white)).app), `whitespace-only ${JSON.stringify(ws)} is omitted`);
   }
+});
+
+
+test('hydrateSpec preserves a downloaded prompt exactly, and includes an explicitly blank prompt', async () => {
+  const exact = '  Conversation with 1 prompts:\r\n1. Keep me exact.\r\n';
+  const base = {
+    app: async () => ({ name: 'A', description: '', siteMap: { areas: [] } }),
+    entities: async () => [], webResources: async () => [], solution: async () => ({ uniqueName: 'S', publisherPrefix: 'new' }),
+  };
+  const withExact = await hydrateSpec({ ...base, pages: async () => [{ name: 'P', prompt: exact, codeFile: 'p.tsx' }] });
+  assert.strictEqual(withExact.pages[0].prompt, exact);
+  const withEmpty = await hydrateSpec({ ...base, pages: async () => [{ name: 'P', prompt: '', codeFile: 'p.tsx' }] });
+  assert.strictEqual(withEmpty.pages[0].prompt, '', 'a present empty prompt is different from a missing prompt');
+  const missing = await hydrateSpec({ ...base, pages: async () => [{ name: 'P', codeFile: 'p.tsx' }] });
+  assert.ok(!('prompt' in missing.pages[0]), 'missing prompt.txt remains omitted');
+  // The keyed (schemaVersion 2) page shape is built by a separate branch; it must agree.
+  const keyed = await hydrateSpec({ ...base, pages: async () => [{ key: 'p', name: 'P', prompt: '', codeFile: 'p.tsx' }] });
+  assert.strictEqual(keyed.pages[0].prompt, '', 'a keyed page keeps a present empty prompt too');
+  const keyedExact = await hydrateSpec({ ...base, pages: async () => [{ key: 'p', name: 'P', prompt: exact, codeFile: 'p.tsx' }] });
+  assert.strictEqual(keyedExact.pages[0].prompt, exact);
 });

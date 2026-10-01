@@ -21,12 +21,30 @@ on:
             # The eval harness lives at the repo root but is owned by this plugin, so
             # an eval-only change must still trigger the eval job below.
             - "evals/model-apps/**"
+            # The plugin ships physical copies of the shared telemetry library and the shared skill
+            # workflows, and scripts/tests/telemetry-lib-copy.test.js fails when a copy drifts from its
+            # source. That guard is only useful if a change to the SOURCE runs it too.
+            - "shared/telemetry/**"
+            - "shared/skills/**"
             - ".github/workflows/model-apps-script-tests.yml"
+
+# The jobs only read the checkout; the token needs nothing more, whatever the repository default is.
+permissions:
+    contents: read
+
+# A new push to the same PR supersedes the run in flight: without this, all seven jobs of the old run
+# kept going to completion for a result nobody reads.
+concurrency:
+    group: model-apps-script-tests-${{ github.event.pull_request.number || github.ref }}
+    cancel-in-progress: true
 
 jobs:
     test-model-apps-scripts:
         name: test-model-apps-scripts (${{ matrix.os }}, node ${{ matrix.node }})
         runs-on: ${{ matrix.os }}
+        # The suite takes about a minute on every runner. A test that hangs (a child process waiting on
+        # stdin, say) would otherwise hold the job for the six-hour default.
+        timeout-minutes: 20
         # Defense-in-depth: opt this CI job out of telemetry transmission so a test
         # that forgets to isolate emission can never POST to a real collector. The
         # plugin's committed ikey.json currently ships `disabled: true`, but that is
@@ -70,6 +88,7 @@ jobs:
     test-model-apps-evals:
         name: test-model-apps-evals
         runs-on: ubuntu-latest
+        timeout-minutes: 10
         env:
             POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"
         steps:
