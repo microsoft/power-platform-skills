@@ -12,14 +12,19 @@ model: sonnet
 
 # Add Native Capability
 
-Generate a one-file typed wrapper under `src/native/` for a native device capability that the upstream template already ships. Screens import the wrapper instead of touching Expo modules directly, so the discriminated-union result contract stays consistent across the app.
+Generate a typed wrapper under `src/native/` for a native capability in the app's
+[verified release context](../../shared/references/mobile-release-lifecycle.md).
+Screens import the wrapper instead of touching native packages directly.
+Read [native controls](references/native-controls.md) for conditional aggregate
+adoption, legacy imports, permission boundaries, and location ownership.
 
 ## Hard rules — do NOT cross these lines
 
-1. **Never run `npx expo install`, `npm install`, or `yarn add` for a native module.** The set of native modules in `package.json` is fixed by the upstream template. Adding a new one breaks the rewrap pipeline (the customer's binary is built from a pre-built base, not from their `package.json`).
-2. **Never edit `app.config.js`** — plugins, `ios.infoPlist`, `android.permissions`, or anything else. All native config the template ships is intentional and signed off; arbitrary additions cannot be honored at rewrap time.
+1. **Never run `npx expo install`, `npm install`, or `yarn add` for a native module.** Native support is fixed by the app-matched verified release and selected player/base, not the newest bundled template or the customer's manifest.
+2. **Never edit `app.config.js`** — plugins, `ios.infoPlist`, `android.permissions`, or anything else. Native config belongs to the verified fixed-capability base; arbitrary additions cannot be honored at rewrap time.
 3. **Never edit `package.json` `dependencies` for native modules.** Native means the package ships platform source/projects, a podspec, codegen, an Expo module/config plugin, or `react-native.config.js`; a package-name prefix alone is not proof. Pure-JavaScript dependencies are out of scope for `/add-native` and are installed from an approved `JavaScript Dependencies` plan by `/create-mobile-app` or `/edit-app`.
-4. **If the requested module isn't actually present in `package.json` — STOP.** That means the upstream template hasn't shipped it yet; do not work around by installing it.
+4. **If release resolution fails, or package/version/native inventory disagree — STOP before native mutation.** A dependency being present is necessary, not sufficient. Do not install the controls aggregate or newer leaf to repair an older binary.
+5. **Keep inclusion, declarations, grants, and usage separate.** The base owns OS declarations. Dependency/config toggles do not remove unused default Android permissions; different declarations require another verified base. Optional permission wrapping is deferred.
 
 ## Routing — `/add-native` is the public entry point
 
@@ -35,13 +40,31 @@ Current dedicated implementations:
 | `pdf-report`, `pdf-export`, `generate-pdf`, `print-report`, `evidence-packet` | [`add-pdf-report`](add-pdf-report/SKILL.md) internal helper | Generates app-owned local PDFs with `expo-print` and shares them only when `expo-sharing` is present |
 | `pdf-viewer`, `native-pdf-viewer`, `pdf-control`, `open-pdf`, `@microsoft/power-apps-native-pdf-viewer` | [`add-pdf-viewer`](add-pdf-viewer/SKILL.md) internal helper | Enforces `https://` / `file://` viewer inputs and native viewer result handling |
 | `pen-input`, `signature`, `ink`, `draw`, `@microsoft/power-apps-native-pen-input` | [`add-pen-input`](add-pen-input/SKILL.md) internal helper | Captures PNG data URI and documents Dataverse Image/File persistence |
-| `geolocation`, `location-tracking`, `background-location`, `gps-tracking`, `geo-tracking`, `@microsoft/power-apps-native-bglocation` | [`add-geolocation`](add-geolocation/SKILL.md) internal helper | Native background GPS tracking with durable storage and inline Dataverse sync; distinct from one-shot `expo-location` |
+| `location`, `geolocation`, `location-tracking`, `background-location`, `gps-tracking`, `geo-tracking`, `@microsoft/power-apps-native-bglocation` | [`add-geolocation`](add-geolocation/SKILL.md) internal helper | Separate one-shot coordinate reads from continuous tracking and durable Dataverse sync |
 
 For every other capability listed below, this skill writes the wrapper directly.
 
 ## Native capability gate
 
-Before adding any native control or wrapper, apply every gate: classify the intent, resolve the exact package/control from the live `package.json`, confirm it is not runtime-banned, confirm the input/output/storage constraints, then use the matching route below. If any gate fails, the native functionality is not supported for this app version — do not install packages, edit native config, or create fake wrappers.
+Before adding any native control or wrapper, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root "<working_dir>"
+```
+
+Use its sanitized tuple as the shared resolved context for helpers/planners/builders.
+Unknown/missing records block native mutations; the initially empty policy is
+intentional, not permission to assume a release. Classify the intent, resolve
+the exact package and version from this app's inventory, confirm it is not
+runtime-banned, and verify input/output/storage constraints. The newest bundled
+template is never a runtime allowlist. Every “present” requirement below means
+present in both this release context and the installed app, with compatible
+native support; manifest presence alone cannot pass the gate.
+
+For controls, select aggregate subpaths or legacy leaves using the
+[version-conditional import contract](references/native-controls.md).
+`enableNativeControls` is permitted only on a verified supporting host release;
+published host 0.4.0 lacks it. No root barrel or barcode subpath is available.
 
 | User intent | Add/use | Required package or control | Do not use / fallback |
 |---|---|---|---|
@@ -51,12 +74,13 @@ Before adding any native control or wrapper, apply every gate: classify the inte
 | Pick/import/upload a user-selected PDF/document | `/add-native document-picker`, or host `<FilePicker>` for Dataverse File fields | `expo-document-picker` present, or host File control | Do not treat this as `pdf-report` or native PDF viewer |
 | Generate/export/print an app-owned report PDF | `/add-native pdf-report` | `expo-print` present | If `expo-print` is absent, do not add PDF report capability |
 | Share a generated local PDF | `pdfReport.ts` share helper | `expo-sharing` present | If `expo-sharing` is absent, do not render sharing UI |
-| Open/preview an HTTPS or local file PDF | `/add-native pdf-viewer` | `@microsoft/power-apps-native-pdf-viewer` 0.2.9+ present and input is `https://` or `file://` | Do not pass `content://`, `blob:`, or `http://` URIs to the viewer |
-| Capture signature, ink, drawing, or sign-off | `/add-native pen-input` | `@microsoft/power-apps-native-pen-input` present | If persisted, plan Dataverse Image/File/child Evidence target first |
-| Continuous/background GPS tracking with durable Dataverse upload | `/add-native geolocation` | `@microsoft/power-apps-native-bglocation` present | Do not use one-shot `expo-location` for background tracking; do not use the `GeolocationExtension`/HostingSDK path |
+| Open/preview an HTTPS or local file PDF | `/add-native pdf-viewer` | Resolved controls `/pdf` or matching legacy PDF leaf with file URI support (0.2.9+) | Do not pass `content://`, `blob:`, or `http://` URIs to the viewer |
+| Capture signature, ink, drawing, or sign-off | `/add-native pen-input` | Resolved controls `/pen` or matching legacy pen leaf | If persisted, plan Dataverse Image/File/child Evidence target first |
+| One-shot foreground coordinate | `/add-native location` | Resolved controls `/geolocation` or matching background-location leaf; `expo-location` only if independently verified | No `app_id`, data source, target table, or `startTracking` for `BgLocationClient.getCurrentLocation()` |
+| Continuous/background GPS tracking with durable Dataverse upload | `/add-native geolocation` | Resolved controls `/geolocation` or matching legacy background-location leaf | Do not use a one-shot read for tracking; background-location 0.2.3 tracking uses background permissions even with `trackInBackground: false` |
 | Tactile feedback for presses, selections, and operation results | `/add-native haptics` | `expo-haptics` present | Use the typed wrapper and pair every haptic with visible UI feedback |
 | Store generated PDF/signature artifact | Generated Dataverse services after parent row exists | File/Image column or child Evidence/Attachment table exists | Never put File bytes in create/update JSON |
-| Native capability not listed in this table | Resolve from `package.json`, then add an inline wrapper only when the matching package is present and not runtime-banned | Exact relevant package present in `package.json` | If no relevant package exists, or the package is runtime-banned, add a transparency note and stop |
+| Native capability not listed in this table | Resolve from the app-matched native inventory, then add an inline wrapper only when installed and not runtime-banned | Exact relevant package/version in the verified release | If no relevant package exists, or the package is runtime-banned, add a transparency note and stop |
 
 Handle multi-part requests row-by-row. Example: "capture signature and attach signed report PDF" requires `pen-input`, `pdf-report`, Dataverse artifact storage, and possibly `sharing`; do not add only the native capability while leaving storage or screen states undefined. The map is not closed: for new shipped packages, resolve by capability semantics, use the directly matching package when safe, and ask once only if multiple installed packages plausibly match.
 
@@ -125,7 +149,10 @@ Use `/add-native` wrappers only when the workflow is not a Dataverse File/Image 
 
 ## Supported capabilities
 
-Apply the Native capability gate above. This table is a known capability-to-package map, not a guarantee that every listed package exists in every template version.
+Apply the Native capability gate above. This is a capability map, not release
+evidence. Legacy leaf names below are aliases only; use aggregate subpaths when
+the resolved release includes controls, and keep a leaf import only when that
+release includes the matching leaf. Read installed public docs/types first.
 
 | Capability | Module | Wrapper to generate | Notes |
 |---|---|---|---|
@@ -133,16 +160,16 @@ Apply the Native capability gate above. This table is a known capability-to-pack
 | `image-picker`, `gallery`, `expo-image-picker` | `expo-image-picker` | `src/native/imagePicker.ts` | `/add-native` routes internally to `add-camera` |
 | `barcode-scanner`, `qr-scanner`, `scanner`, `barcode`, `qr` | `expo-camera` | `src/native/barcodeScanner.tsx` | `/add-native` routes internally to `add-camera` |
 | `document-picker` | `expo-document-picker` | `src/native/documentPicker.ts` | Picks/imports user-selected files (PDF, docs, etc.) from the device |
-| `pdf-viewer`, `native-pdf-viewer`, `pdf-control`, `open-pdf`, `@microsoft/power-apps-native-pdf-viewer` | `@microsoft/power-apps-native-pdf-viewer` | `src/native/pdfViewer.ts` | `/add-native` routes internally to `add-pdf-viewer`; 0.2.9+ opens HTTPS URLs and file URIs |
+| `pdf-viewer`, `native-pdf-viewer`, `pdf-control`, `open-pdf`, `@microsoft/power-apps-native-pdf-viewer` | Controls `/pdf` or verified legacy PDF leaf | `src/native/pdfViewer.ts` | `/add-native` routes internally to `add-pdf-viewer`; require the resolved contract's HTTPS/file URI support |
 | `pdf-report`, `pdf-export`, `generate-pdf`, `print-report`, `evidence-packet` | `expo-print` (+ optional `expo-sharing`) | `src/native/pdfReport.ts` | `/add-native` routes internally to `add-pdf-report`; generated local files are shared only when `expo-sharing` is present, or uploaded to Dataverse |
-| `pen-input`, `signature`, `ink`, `draw`, `@microsoft/power-apps-native-pen-input` | `@microsoft/power-apps-native-pen-input` | `src/native/penInput.ts` | `/add-native` routes internally to `add-pen-input`; captures PNG data URI |
-| `geolocation`, `location-tracking`, `background-location`, `gps-tracking`, `geo-tracking`, `@microsoft/power-apps-native-bglocation` | `@microsoft/power-apps-native-bglocation` | `src/native/geolocation.ts` | `/add-native` routes internally to `add-geolocation`; native background tracking + durable Dataverse sync. Distinct from one-shot `location` below |
+| `pen-input`, `signature`, `ink`, `draw`, `@microsoft/power-apps-native-pen-input` | Controls `/pen` or verified legacy pen leaf | `src/native/penInput.ts` | `/add-native` routes internally to `add-pen-input`; captures PNG data URI |
+| `geolocation`, `location-tracking`, `background-location`, `gps-tracking`, `geo-tracking`, `@microsoft/power-apps-native-bglocation` | Controls `/geolocation` or verified background-location leaf | `src/native/geolocation.ts` | `/add-native` routes internally to `add-geolocation`; tracking + durable Dataverse sync, distinct from one-shot `location` |
 | `secure-store` | `expo-secure-store` | `src/native/secureStore.ts` | |
 | `file-system` | `expo-file-system` | `src/native/fileSystem.ts` | |
 | `sharing` | `expo-sharing` | `src/native/sharing.ts` | |
-| `location` | `expo-location` | `src/native/location.ts` | One-shot/foreground fix only. For continuous background tracking with Dataverse sync, use `geolocation` (`@microsoft/power-apps-native-bglocation`). Use only when the current template package contains `expo-location` |
-| `biometrics`, `local-authentication` | `expo-local-authentication` | `src/native/biometrics.ts` | Use only when the current template package contains `expo-local-authentication` |
-| `clipboard` | `expo-clipboard` | `src/native/clipboard.ts` | Use only when the current template package contains `expo-clipboard` |
+| `location` | Resolved controls `/geolocation` or matching leaf; independently verified `expo-location` if applicable | `src/native/location.ts` | One-shot only; geolocation helper skips tracking/table setup |
+| `biometrics`, `local-authentication` | `expo-local-authentication` | `src/native/biometrics.ts` | Use only when included in the app's verified release |
+| `clipboard` | `expo-clipboard` | `src/native/clipboard.ts` | Use only when included in the app's verified release |
 | `mail-composer`, `email-draft` | `expo-mail-composer` | `src/native/mailComposer.ts` | Opens native mail compose when the package is present; connectors still own server-side email sends |
 | `audio` | `expo-audio` | `src/native/audio.ts` | Use for audio recording/playback only when package is present |
 | `video` | `expo-video` | `src/native/video.ts` | Use for video playback only when package is present |
@@ -159,9 +186,9 @@ For custom workflows outside Dataverse File/Image form fields, use the `image-pi
 - Do not treat every PDF request as `document-picker`.
 - Use `document-picker` when the user wants to pick, import, or upload a local PDF/document. This remains supported and should still be used for that use case.
 - Use `pdf-report` when the app generates a PDF from records, evidence, inspection data, certificates, receipts, or reports, but only if `expo-print` is present in `package.json`.
-- Use `native-pdf-viewer` / `pdf-control` when the app opens/previews an HTTPS PDF URL or local `file://` URI with `@microsoft/power-apps-native-pdf-viewer` 0.2.9+. `content://`, `blob:`, and `http://` URIs are unsupported.
+- Use `native-pdf-viewer` / `pdf-control` for HTTPS or local `file://` PDFs using the resolved `/pdf` or matching legacy contract (PDF 0.2.9+ file support). `content://`, `blob:`, and `http://` URIs are unsupported.
 - If a request says "view/open PDF" but the Power Apps viewer package is absent, fall back to `pdf-report` only when the app is generating its own report and `expo-print` is present. Do not claim generic PDF viewing support through `expo-print`; it generates local files, it does not view arbitrary PDFs.
-- Use `pen-input` only for signatures, drawn approvals, ink notes, sketches, and handwritten sign-off with `@microsoft/power-apps-native-pen-input`.
+- Use `pen-input` only for signatures, drawn approvals, ink notes, sketches, and handwritten sign-off through the resolved `/pen` or matching legacy contract.
 - For other use cases, use the relevant Expo module or other dependency already present in `package.json`; do not force the Power Apps extensions into unrelated flows.
 - For generated local PDFs from `expo-print`, use native PDF viewer 0.2.9+ for open/preview, `expo-sharing` for sharing, and Dataverse File storage for retention. Do not require `expo-sharing` merely to preview a local PDF.
 - Host `FilePicker` and `ImagePicker` are still correct for user-selected Dataverse File/Image form fields. Generated PDFs and pen captures use native wrappers first, then Dataverse persistence helpers.
@@ -174,11 +201,13 @@ For custom workflows outside Dataverse File/Image form fields, use the `image-pi
 - Never put File column bytes in the create/update JSON body. File bytes are uploaded only after the parent row ID exists.
 - Screens must handle unsupported, cancelled, upload failed, and viewer failed states explicitly. Pen cancellation is a non-error result that screens can ignore.
 
-**Missing or gated packages:** `package.json` plus the runtime gate is authoritative. If the relevant package/control is absent, stop with a transparency note.
+**Missing or gated packages:** the resolved release, installed versions, and
+matching native runtime are authoritative together. If any evidence is missing,
+stop with a transparency note; never claim native readiness from TypeScript alone.
 
 ## Workflow
 
-1. Verify project → 2. Resolve capability → 3. Auto-route to dedicated skill if one exists → 4. Verify module is template-shipped → 5. Write wrapper → 6. Type-check → 7. Summary
+1. Verify project → 2. Resolve release and capability → 3. Auto-route to dedicated skill if one exists → 4. Verify package in resolved release → 5. Write wrapper → 6. Type-check → 7. Summary
 
 ---
 
@@ -196,7 +225,13 @@ If `$ARGUMENTS` includes a capability name, package name, or control name, use i
 
 Normalize the capability name to lowercase, hyphenated form (e.g., `Camera` → `camera`, `ImagePicker` → `image-picker`, `SecureStore` → `secure-store`). Also normalize aliases: `take-photo` / `photo` / `camera-control` / `expo-camera` → `camera`; `gallery` / `pick-image` / `expo-image-picker` → `image-picker`; `scanner` / `barcode` / `qr` → `barcode-scanner`; `open-pdf` / `view-pdf` / `pdf-control` / `pdf-viewer-control` / `@microsoft/power-apps-native-pdf-viewer` → `pdf-viewer`; `native-pdf-viewer` → `pdf-viewer`; `generate-pdf` / `pdf-export` → `pdf-report`; `signature` / `sign-off` / `ink` / `draw` / `pen-control` / `@microsoft/power-apps-native-pen-input` → `pen-input`; `location-tracking` / `background-location` / `gps-tracking` / `geo-tracking` / `track-location` / `power-apps-native-bglocation` / `@microsoft/power-apps-native-bglocation` → `geolocation`; `vibration` / `vibration-feedback` / `impact-feedback` / `selection-feedback` / `notification-feedback` / `expo-haptics` → `haptics`.
 
-When the user asks for "location" or "GPS", disambiguate by intent: continuous/background tracking or durable Dataverse upload → `geolocation` (`@microsoft/power-apps-native-bglocation`); a single foreground coordinate read → `location` (`expo-location`). If the intent is unclear, ask once before routing.
+When the user asks for "location" or "GPS", disambiguate by intent:
+continuous/background tracking or durable Dataverse upload → `geolocation`;
+a single foreground coordinate read → `location`. Both route to the geolocation
+helper with the mode preserved. The one-shot path has no `app_id`, data source,
+table verification, or tracking startup. If the intent is unclear, ask once.
+Normalize `@microsoft/power-apps-native-controls/pdf`, `/pen`, and `/geolocation`
+to their matching capability; resolve location mode separately.
 
 If the user names something not in the supported table, apply the Native capability gate: resolve the relevant package from `package.json`, continue only when present and not runtime-banned, otherwise stop with a transparency note.
 
@@ -204,7 +239,7 @@ If the user names something not in the supported table, apply the Native capabil
 
 **Telemetry checkpoint: `dispatch_native_capability`**
 
-For normalized `camera`, `image-picker`, `barcode-scanner`, `qr-scanner`, `pdf-report`, `pdf-viewer`, `pen-input`, or `geolocation`, do not fall through to the generic wrapper flow and do not tell the user to run another slash command. Read the nested helper and follow its steps inside this `/add-native` invocation:
+For normalized `camera`, `image-picker`, `barcode-scanner`, `qr-scanner`, `pdf-report`, `pdf-viewer`, `pen-input`, `location`, or `geolocation`, do not fall through to the generic wrapper flow and do not tell the user to run another slash command. Read the nested helper and follow its steps inside this `/add-native` invocation:
 
 ```bash
 case "<capability>" in
@@ -212,7 +247,7 @@ case "<capability>" in
   pdf-report) test -f "${PLUGIN_ROOT}/skills/add-native/add-pdf-report/SKILL.md" && echo "INTERNAL_HELPER:add-pdf-report" ;;
   pdf-viewer) test -f "${PLUGIN_ROOT}/skills/add-native/add-pdf-viewer/SKILL.md" && echo "INTERNAL_HELPER:add-pdf-viewer" ;;
   pen-input) test -f "${PLUGIN_ROOT}/skills/add-native/add-pen-input/SKILL.md" && echo "INTERNAL_HELPER:add-pen-input" ;;
-  geolocation) test -f "${PLUGIN_ROOT}/skills/add-native/add-geolocation/SKILL.md" && echo "INTERNAL_HELPER:add-geolocation" ;;
+  location|geolocation) test -f "${PLUGIN_ROOT}/skills/add-native/add-geolocation/SKILL.md" && echo "INTERNAL_HELPER:add-geolocation" ;;
   *) echo "INLINE" ;;
 esac
 ```
@@ -220,12 +255,14 @@ esac
 - **INTERNAL_HELPER:** read the printed helper file, execute its workflow with the same `--working-dir` and forwarded arguments, then STOP. `/add-native` remains the only user-facing command for these controls.
 - **INLINE:** continue to Step 4.
 
-### Step 4 — Verify module is template-shipped
+### Step 4 — Verify module in the resolved release
 
-Confirm the underlying native-capability package is actually present in the project's `package.json` (catches the case where the user hand-removed it or the template version is older than expected):
+Require a successful release resolution before this installed-manifest check.
+Confirm the exact installed version against the resolved inventory and read its
+public docs/types. A matching package name alone does not prove compatibility.
 
 ```bash
-node -e "const p = require('./package.json'); const m = '<expo-module-name>'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m + ' is not in package.json. The template should ship it. Re-scaffold via /create-mobile-app, restore it from upstream, or wait for the template release that adds it — this skill will not install it.'); process.exit(1); }"
+node -e "const p = require('./package.json'); const m = '<resolved-package-name>'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m + '. Stop and reconcile the app with its verified release; do not install native packages or re-scaffold an existing app.'); process.exit(1); }"
 ```
 
 If the check fails, STOP. Do not run `npx expo install`. Print the error verbatim.
@@ -247,7 +284,7 @@ Each wrapper exports:
 **The contract `screen-builder` agents rely on:**
 - All wrappers return a discriminated-union result (`{ ok: true, ... } | { ok: false, reason, message? }`) — **never throw**
 - Unsupported runtime/platform states gracefully degrade or return `{ ok: false, reason: 'unsupported' }` — **never crash**
-- Branch by supported native platform when a capability differs between iOS and Android
+- Native controls guard the native platform before a lazy import inside `try`/`catch`; never eagerly evaluate controls in web. Expo APIs with documented web implementations retain their supported platform behavior.
 - Screens import these wrappers only for non-Dataverse native workflows. Dataverse File/Image fields use `@microsoft/power-apps-native-host` controls from the File/Image Picker Ownership section above.
 
 #### Haptics wrapper
@@ -255,7 +292,6 @@ Each wrapper exports:
 For normalized capability `haptics`, generate `src/native/haptics.ts` with this contract:
 
 ```ts
-import * as Haptics from 'expo-haptics';
 import { Platform } from 'react-native';
 
 export type HapticImpactStyle = 'light' | 'medium' | 'heavy' | 'soft' | 'rigid';
@@ -264,21 +300,9 @@ export type HapticResult =
   | { ok: true }
   | { ok: false; reason: 'unsupported' | 'error'; message: string };
 
-const impactStyles: Record<HapticImpactStyle, Haptics.ImpactFeedbackStyle> = {
-  light: Haptics.ImpactFeedbackStyle.Light,
-  medium: Haptics.ImpactFeedbackStyle.Medium,
-  heavy: Haptics.ImpactFeedbackStyle.Heavy,
-  soft: Haptics.ImpactFeedbackStyle.Soft,
-  rigid: Haptics.ImpactFeedbackStyle.Rigid,
-};
-
-const notificationTypes: Record<HapticNotificationType, Haptics.NotificationFeedbackType> = {
-  success: Haptics.NotificationFeedbackType.Success,
-  warning: Haptics.NotificationFeedbackType.Warning,
-  error: Haptics.NotificationFeedbackType.Error,
-};
-
-async function runHaptic(effect: () => Promise<void>): Promise<HapticResult> {
+async function runHaptic(
+  effect: (haptics: typeof import('expo-haptics')) => Promise<void>,
+): Promise<HapticResult> {
   if (Platform.OS !== 'ios' && Platform.OS !== 'android') {
     return {
       ok: false,
@@ -288,7 +312,8 @@ async function runHaptic(effect: () => Promise<void>): Promise<HapticResult> {
   }
 
   try {
-    await effect();
+    const Haptics = await import('expo-haptics');
+    await effect(Haptics);
     return { ok: true };
   } catch (error) {
     return {
@@ -300,17 +325,33 @@ async function runHaptic(effect: () => Promise<void>): Promise<HapticResult> {
 }
 
 export function triggerImpact(style: HapticImpactStyle = 'medium'): Promise<HapticResult> {
-  return runHaptic(() => Haptics.impactAsync(impactStyles[style]));
+  return runHaptic((Haptics) => {
+    const impactStyles = {
+      light: Haptics.ImpactFeedbackStyle.Light,
+      medium: Haptics.ImpactFeedbackStyle.Medium,
+      heavy: Haptics.ImpactFeedbackStyle.Heavy,
+      soft: Haptics.ImpactFeedbackStyle.Soft,
+      rigid: Haptics.ImpactFeedbackStyle.Rigid,
+    };
+    return Haptics.impactAsync(impactStyles[style]);
+  });
 }
 
 export function triggerNotification(
   type: HapticNotificationType = 'success'
 ): Promise<HapticResult> {
-  return runHaptic(() => Haptics.notificationAsync(notificationTypes[type]));
+  return runHaptic((Haptics) => {
+    const notificationTypes = {
+      success: Haptics.NotificationFeedbackType.Success,
+      warning: Haptics.NotificationFeedbackType.Warning,
+      error: Haptics.NotificationFeedbackType.Error,
+    };
+    return Haptics.notificationAsync(notificationTypes[type]);
+  });
 }
 
 export function triggerSelection(): Promise<HapticResult> {
-  return runHaptic(() => Haptics.selectionAsync());
+  return runHaptic((Haptics) => Haptics.selectionAsync());
 }
 ```
 
@@ -341,7 +382,6 @@ Secure-store canonical skeleton:
 
 ```ts
 // src/native/secureStore.ts
-import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
 export type SecureResult<T> =
@@ -353,6 +393,7 @@ export async function getSecret(key: string): Promise<SecureResult<string>> {
     return { ok: false, reason: 'unsupported', message: 'SecureStore is not available on this platform.' };
   }
   try {
+    const SecureStore = await import('expo-secure-store');
     const value = await SecureStore.getItemAsync(key);
     if (value === null) return { ok: false, reason: 'not-found' };
     return { ok: true, value };
@@ -366,6 +407,7 @@ export async function setSecret(key: string, value: string): Promise<SecureResul
     return { ok: false, reason: 'unsupported', message: 'SecureStore is not available on this platform.' };
   }
   try {
+    const SecureStore = await import('expo-secure-store');
     await SecureStore.setItemAsync(key, value);
     return { ok: true, value: true };
   } catch (e: any) {
@@ -385,14 +427,17 @@ export async function setSecret(key: string, value: string): Promise<SecureResul
 npx --no-install tsc --noEmit
 ```
 
-Fix any wrapper-side errors. Do not run platform-specific native build commands during normal `/add-native` use because the module is already part of the current template binary. When a template/base maintainer first adds `expo-haptics` or changes its version, that release must rebuild the Android and iOS base binaries so Expo autolinking includes the module.
+Fix wrapper-side errors only. Do not run local native builds. A package/version
+change requires a maintainer-verified Android/iOS release, not customer-side
+linking. Type-check success is not a native device validation pass.
 
 ### Step 7 — Summary
 
 ```
 ✅ Native wrapper generated: <capability>
 ─────────────────────────────────────────────
-Module (template-shipped) : <expo-module>@<version-from-package.json>
+Module (release-matched)  : <package>@<resolved-version>
+Release context          : <verified-release-id>
 Wrapper created           : src/native/<capability>.ts
 package.json              : unchanged ✓
 app.config.js             : unchanged ✓
@@ -410,14 +455,16 @@ Sample usage:
     showToast('Camera permission required');
   }
 
-⚠️  No per-app native rebuild required when using a binary produced from the current
-    template. The underlying native module is already linked; wrapper edits are picked
-    up by Metro. Template/base dependency changes require a new native base build.
+⚠️  No local native build performed. Wrapper edits use the matching verified
+    player/base; package changes require a verified release migration.
+    Type-check alone does not prove native execution or permission grants.
 ─────────────────────────────────────────────
 ```
 
 ## Notes
 
 - This skill never modifies `package.json`, `app.config.js`, `src/playerConfig.ts`, `src/generated/`, or any screen file.
-- For capabilities not in the supported table (`expo-notifications`, Bluetooth, NFC, BLE, AR — until the template adds them), tell the user the template doesn't ship them yet — file a request at the upstream template repo. Do NOT attempt to install or configure anything yourself.
+- For unlisted capabilities, resolve against the app's verified native inventory.
+  Missing support requires another verified release, not a new dependency or
+  configuration toggle. Do NOT install or configure native modules yourself.
 - Pure-JavaScript libraries are out of scope for this skill. `/create-mobile-app` or `/edit-app` selects and installs them through [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md); no native wrapper or Android/iOS rebuild is needed. The prohibition above applies only to packages with native source/config.

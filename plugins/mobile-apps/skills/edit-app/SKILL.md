@@ -62,7 +62,7 @@ This is a focused edit workflow, not a lighter quality bar. Reuse `/create-mobil
 | Navigation/routes | Navigation/layout gate, route contract check, final `tsc` |
 | New screen | Shared scaffold gate, skeleton gate, screen-builder wave gate, style-quality sweep, route check, final `tsc` |
 | Existing screen TSX | Screen edit gate, style-quality sweep, route check when navigation changed, final `tsc` |
-| Native capability | Native allowlist gate, wrapper existence gate, final `tsc` |
+| Native capability | App-matched verified release/native inventory gate, wrapper existence gate, final `tsc` (not native validation) |
 | Pure-JavaScript dependency | Approved exact-version dependency table, package-content gate, package validation, final `tsc` |
 | Design/component/density | Design-system gate, affected-screen style sweep, final `tsc`, preview |
 | Application Insights configuration only | Valid `app.json`, provider `appConfig` wiring, final `tsc` only if `app/_layout.tsx` changed |
@@ -80,6 +80,26 @@ This is a focused edit workflow, not a lighter quality bar. Reuse `/create-mobil
 ### Step 0 — Locate app + health/drift probe
 
 **Telemetry checkpoint: `assess_app_health_and_drift`**
+
+Read [release lifecycle](../../shared/references/mobile-release-lifecycle.md).
+Resolve the existing app, not the newest bundled template:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root "<working_dir>"
+```
+
+Keep its sanitized resolved context for every planner/builder handoff and
+native helper. Unknown/missing release records block native mutations, not
+existing pure source/UI planning and editing. For source-only work, inspect
+installed contracts and mark native compatibility unverified. Do not claim
+that preview or TypeScript validates a player/base.
+
+Native/host/Expo upgrades are a separate approved `/check-updates` migration to
+an exact verified release. Do not silently upgrade an existing app, install the
+controls aggregate to fix an older binary, or copy current template config.
+`--plan-only` may describe blocked native work, but does not authorize applying it.
+Preserve `app.json` → `expo.extra.powerappsNative` template/runtime requirements.
+Never backfill unknown state from installed packages or a plugin snapshot.
 
 ```bash
 test -f native-app-plan.md && echo "OK: plan found" || echo "ERROR: no plan"
@@ -237,7 +257,7 @@ Loophole checks before continuing:
 - If the request adds UI that reads or writes data, confirm the generated service exists or add the data source before screen work. Never let screen-builders invent services.
 - If the request is ambiguous about Dataverse vs SharePoint vs another connector, route through `/add-datasource` rather than guessing.
 - If a screen requires a native wrapper, run `/add-native` before screen-builders import `src/native/*`.
-- If a native capability is not shipped by the template, stop with a clear block; do not install native packages or fake support.
+- If a native capability/version is absent from the app's resolved release, stop with a clear block; do not install native packages or fake support.
 - If a screen requires a pure-JavaScript library, add it with an exact version to `## Screens → ### JavaScript Dependencies`, include it in the mutation preview, and install it before screen builders run. Determine JS-only status from shipped contents, not from a package-name prefix.
 - If the request changes navigation, update route layouts and navigation contracts before spawning screen-builders.
 - If the request adds a new screen, generate any needed route folder, generated-service snapshot, shared code, and skeleton before building TSX.
@@ -365,6 +385,7 @@ Prompt:
   Current section content: <verbatim>
   Working directory: <absolute path>
   Plugin root: ${PLUGIN_ROOT}
+  Release context: <sanitized resolved tuple, or explicit unresolved/source-only status>
 
   Mode: edit (preserve existing decisions where the change doesn't affect them).
   Existing generated app must be updated after approval, so include enough detail for builders to mutate code without guessing.
@@ -374,6 +395,26 @@ Prompt:
 Parse the first line of every agent result using the return-status protocol in `AGENTS.md`. `DONE` continues, `DONE_WITH_CONCERNS:` must be surfaced and recorded, `NEEDS_CONTEXT:` gets one clarified retry, `BLOCKED:` stops before any file mutation, and unknown first lines are treated as `BLOCKED: malformed agent return`.
 
 For Native Capabilities (no separate agent), do it inline: read the current capability table, apply the change, regenerate the table. For PDF/pen rows, include storage/output notes in the table or immediately below it:
+
+Read [conditional native controls](../add-native/references/native-controls.md).
+Use `/pdf`, `/pen`, and `/geolocation` only when the resolved release contains
+the aggregate; its root is metadata. Legacy leaves require matching resolved
+inventory. There is no barcode subpath. Controls 0.2.0 uses the Expo 55 /
+React Native 0.83.6 baseline, not Expo 57. Host-owned `enableNativeControls`
+registration requires a verified supporting host release; published host 0.4.0
+lacks it. Never change config to make an unavailable API appear supported.
+
+Keep package inclusion, OS declarations, runtime grants, and actual use
+separate. Removing controls dependencies does not remove unused default Android
+permissions. Different declarations require another verified base; optional
+permission wrapping is deferred.
+
+One-shot location via `new BgLocationClient().getCurrentLocation()` needs no
+`app_id`, data source, table, or `startTracking`. Background-location 0.2.3
+tracking requests background permissions even with `trackInBackground: false`;
+tracking is shared and `stopTracking()` / `isTracking()` have no `app_id`.
+Plan a coordinated owner, not a stop-on-unmount behavior. Read installed
+docs/types; do not use the unrelated `configureSync` / `HttpSyncContract` API.
 
 - `native-pdf-viewer` 0.2.9+ opens HTTPS URLs and local `file://` URIs; it does not support `content://`, `blob:`, or `http://`.
 - `pdf-report` generates a local PDF only when `expo-print` is present; local output may be opened by `native-pdf-viewer` 0.2.9+, shared with `expo-sharing` when present, or uploaded to Dataverse File storage.
@@ -426,12 +467,17 @@ If this is `--plan-only`, update `memory-bank.md` with `plan_only: true`, print 
 
 Apply sections in dependency order so screens always build against the current data/native surface:
 
+Before any native wrapper/control mutation, re-resolve the release if inputs
+changed and require the native inventory gate to pass. Forward the same
+sanitized context to all screen-builder waves. Never replace the gate with a
+package-name presence check; missing/unknown records remain a hard block.
+
 0. **Environment drift gate for data edits** — before Dataverse, SharePoint, connector, or sample-data work, compare `memory-bank.md`, `power.config.json`, and `.resolved-environment.json`. If they disagree, show the values and ask the user which environment is intended. Do not create tables or connections until confirmed.
 1. **Data Model** — read and execute `/add-dataverse --skip-planning` with the approved Data Model section. It must create/extend Dataverse tables, refresh generated services/models, update `.datamodel-manifest.json`, and leave generated services compiling. After it returns, run `npm run generate-schemas` and `npx --no-install tsc --noEmit`; do not continue to screens until clean.
 2. **Sample Data** — if a new Dataverse table was created and any changed screen will show list/detail data from it, read and execute `/add-sample-data` for the project. If seeding fails, record a concern and continue only if the app handles empty states.
 3. **Connector/Data Source** — read and execute `/add-datasource` when ambiguous, or `/add-sharepoint` / `/add-connector` for approved connector changes. Regenerate services and record connection notes in `memory-bank.md`.
 4. **Pure-JavaScript Dependencies** — execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) for new or changed rows in the approved `## Screens → ### JavaScript Dependencies` table. Approval is consent for those exact packages and versions. Install and validate before screen work; if final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and stop with the exact failed criterion.
-5. **Native Capabilities** — read and execute `/add-native <capability>` for every new capability. Do not install missing native packages or fake wrappers. If a capability is unsupported by the current template, stop before rebuilding screens that import it, record the block, and tell the user what upstream template support is missing.
+5. **Native Capabilities** — read and execute `/add-native <capability>` for every new capability, with the same resolved release context. Do not install missing native packages or fake wrappers. If support is absent/unverified for this app's release, stop before rebuilding consuming screens and record the missing release/native evidence.
 6. **Design** — read and execute `/design-system --refresh <dimension>` or `/design-system --reskin` for design edits. Token-only changes usually do not require TSX rewrites; component/density/negative-rule changes may.
 
 After any Data Model, Connector/Data Source, JavaScript Dependency, or Native Capabilities mutation, rerun the generated-service/dependency/native-wrapper probe before screen work. Screen prompts must reflect what exists on disk now, not what the earlier plan expected.
