@@ -41,7 +41,7 @@ Use this reference when designing or reviewing Power Apps component framework (P
 ## Data access and host features
 
 - Prefer `context.webAPI` for Dataverse data in model-driven apps and Power Pages. Learn marks WebAPI available for model-driven apps and portals: [WebAPI](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/webapi).
-- Guard optional host methods at the method level, for example `typeof context.device?.captureImage === 'function'`. A namespace object existing does not prove the method is callable.
+- Guard optional host methods at the method level, for example `typeof context.device?.captureImage === 'function'`. A namespace object existing does not prove the method is callable. Put the call inside the `if` block that performs the check: the source gate doesn't recognize early-return guards or aliases, and reports those calls.
 - Do not use browser storage for business data. Learn says `localStorage` and `sessionStorage` are not secure or reliably available for PCF data: [limitations](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/limitations).
 - External service calls can make the control premium when declared in the manifest. Keep domains explicit and explain the licensing impact: [overview licensing](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/overview#licensing).
 

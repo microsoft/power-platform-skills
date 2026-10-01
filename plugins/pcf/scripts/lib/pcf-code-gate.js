@@ -487,7 +487,7 @@ function addPagesApiFindings(findings, file, text, index) {
     const guardPath = member.names.slice(0, 2).join('.') + member.names.slice(2).map((name) => `?.${name}`).join('');
     findings.push(makeFinding(
       'PCF_PAGES_API',
-      `Heuristic diagnostic: Pages may not provide ${member.methodPath}; guard the method with typeof ${guardPath} === 'function' before calling it, or avoid the API for Pages hosts. See ${FEATURE_USAGE}`,
+      `Heuristic diagnostic: Pages may not provide ${member.methodPath}; guard the call by placing it inside an if (typeof ${guardPath} === 'function') { ... } block (early-return guards and aliases are not recognized), or avoid the API for Pages hosts. See ${FEATURE_USAGE}`,
       file,
       lineOf(text, member.start),
     ));
