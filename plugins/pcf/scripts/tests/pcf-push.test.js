@@ -304,7 +304,9 @@ test('a publish deadlock (SQL 1205) gets a wait-and-retry hint instead of the ge
   assert.equal(payload.stage, 'push');
   assert.equal(payload.hints.length, 1);
   assert.match(payload.hints[0], /deadlock victim \(SQL 1205\)/);
-  assert.match(payload.hints[0], /pcf-inventory\.js --control/);
+  // The inventory check needs --env: pcf-inventory.js rejects a call without it, so a hint that
+  // omits it would hand the user a command that fails.
+  assert.match(payload.hints[0], /pcf-inventory\.js --env <url> --control/);
   assert.match(payload.hints[0], /re-run the same push/);
   assert.doesNotMatch(payload.hints[0], /Review the pac pcf push output/);
 });

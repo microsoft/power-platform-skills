@@ -63,7 +63,7 @@ const HINTS = [
     // re-run rather than to change the project.
     // See: https://learn.microsoft.com/sql/relational-databases/errors-events/mssqlserver-1205-database-engine-error
     match: 'Sql Number: 1205',
-    hint: 'Dataverse chose this publish as a deadlock victim (SQL 1205), usually because another import or publish was running in the same environment. The control may already be imported: check with pcf-inventory.js --control <name>, wait a minute, then re-run the same push.',
+    hint: 'Dataverse chose this publish as a deadlock victim (SQL 1205), usually because another import or publish was running in the same environment. The control may already be imported: check with pcf-inventory.js --env <url> --control <name>, wait a minute, then re-run the same push.',
   },
 ];
 
