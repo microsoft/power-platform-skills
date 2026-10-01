@@ -93,6 +93,7 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" <command
 | `init --app-name "<displayName>" --data-platform <dataverse\|connector-only>` | Once, at Step 2b. Safe to re-run: a resume keeps recorded progress. |
 | `step --id <phase> --status <pending\|active\|done\|skipped\|failed> [--note "<text>"]` | At every phase boundary. Marking a phase `active` closes any previous one. |
 | `set --section <name> --json '<object>'` or `--json-file <path>` | When a decision is made. Merges, so a later step can add to a section. |
+| `step --id <phase> --status failed --note "<what stopped it>"` | Before surfacing any unrecoverable STOP. Best-effort like the rest: if it fails, still stop. |
 | `phone --stage building\|screens\|qr` | Moves the plan's phone through its three stages: the building animation, the screen carousel at Step 6.75, and the Metro QR at Step 12. |
 
 **Open the plan in the user's browser as soon as `init` creates it**, with the host's file opener
@@ -155,8 +156,16 @@ was rejected, since that is what the user is being asked to approve at Gate 2.
 as one shell argument is fragile to quote and easy to truncate.
 
 **Every one of these calls is best-effort.** If `app-docs.js` fails, say nothing and carry on:
-the documentation must never gate, retry, or fail a build. Skip the protocol entirely when
-`--no-preview` is in `$ARGUMENTS`.
+the documentation must never gate, retry, or fail a build.
+
+**Mark the phase `failed` before you stop.** Every STOP in this skill is a terminal state the
+user has to act on, and the plan is probably still open in their browser. Without this the last
+phase stays `active`, so the page keeps reloading and keeps reporting work in progress on a run
+that ended. A failed phase settles the page, so the final thing it shows names what stopped.
+
+**No argument switches this protocol off.** `--no-design` suppresses design previews and
+`--no-preview` does not exist (Step 2c). The plan is how an abandoned or failed run explains
+itself, so it is written on every path.
 
 ---
 

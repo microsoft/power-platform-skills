@@ -350,6 +350,22 @@ test('a section nobody is asked to approve does not raise the waiting banner', (
   assert.match(summarize(state).awaitingInput, /Review the data model/);
 });
 
+test('the skill marks a phase failed before it stops', () => {
+  const skill = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
+  );
+
+  // `failed` settles the page, which stops the self-refresh. Listing the value without ever
+  // issuing it left the last phase `active`, so a terminal STOP produced a plan that reloaded
+  // forever reporting work in progress on a run that had ended.
+  assert.match(skill, /step --id <phase> --status failed/);
+  assert.match(skill, /Mark the phase `failed` before you stop/);
+
+  // And nothing may switch the protocol off: the plan is how an abandoned run explains itself.
+  assert.doesNotMatch(skill, /Skip the protocol entirely when/);
+  assert.match(skill, /No argument switches this protocol off/);
+});
+
 test('phase order matches the order the skill actually runs them', () => {
   const order = PHASES.map((phase) => phase.id);
   const at = (id) => order.indexOf(id);
