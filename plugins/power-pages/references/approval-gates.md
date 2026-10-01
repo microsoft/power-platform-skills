@@ -733,14 +733,14 @@ Reviews traditional and SPA sites for deprecated Web API wildcard fields setting
 
 ### 6.33 `audit-accessibility` (7 calls / 6 gates + 1 not-a-gate)
 
-New standalone skill (crawls a deployed or local site, audits pages and interaction states with axe-core plus extended checks, and writes a triaged report). It reads the site only; the single local write path is the optional fix plan in Phase 7.
+New standalone skill (crawls a deployed or local site, audits pages and interaction states with axe-core plus extended checks, and writes a triaged report). It never writes to the site. Local writes fall into two kinds. Audit artifacts and tracking are written without a gate: the sign-in session in a private temp folder (deleted right after the audit run in Phase 5), the report, `last-audit.json` marker, and reusable `a11y-states.json` under `docs/accessibility/` in Phase 6, and skill-usage tracking in Phase 8. Source-code edits happen only through the optional fix plan approved at `7.fix-offer`.
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `audit-accessibility:1.4.site-url` | not-a-gate | — | 1.4 | Free-text site URL when neither `$ARGUMENTS` nor activation status provides one — data-gathering | — |
 | `audit-accessibility:2.install-deps` | gate | consent | 2.2 | *"Install the pinned audit packages?"* — downloads `playwright-core` and `axe-core` into a per-user cache. No project files change. | nothing |
 | `audit-accessibility:3.scope` | gate | plan | 3.2 | *"Full / Quick / Include signed-in / Change"* — approves routes, page limit, viewports, and checks before the crawl starts. | nothing |
-| `audit-accessibility:3.sign-in` | gate | pause | 3.3 | Waits while the user signs in through a visible browser window; the session is stored in a private temp folder and removed in Phase 8. | nothing |
+| `audit-accessibility:3.sign-in` | gate | pause | 3.3 | Waits while the user signs in through a visible browser window; the session is stored in a private temp folder and deleted right after the audit run in Phase 5 (Phase 8 only confirms it's gone). | nothing |
 | `audit-accessibility:4.states` | gate | plan | 4.3 | Approves the interaction states (menus, dialogs, tabs, validation) the audit replays. | nothing |
 | `audit-accessibility:4.form-submit` | gate | consent | 4.4 | Asked only when an approved state submits a form — marks only the consented states `"allowFormSubmit": true` and passes `--allow-form-submit`, which can create Dataverse records or send email. | nothing |
 | `audit-accessibility:7.fix-offer` | gate | plan | 7.2 | Approves the source changes proposed for the findings before any file is edited. The report and marker from Phase 6 stay. | audit-report-and-marker |

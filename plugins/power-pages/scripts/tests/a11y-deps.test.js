@@ -217,22 +217,73 @@ test('installDeps holds the install lock and reuses an install finished while it
   assert.equal(released, 1, 'the lock is released');
 });
 
-test('acquireInstallLock serializes installs and reclaims a stale lock', () => {
+test('acquireInstallLock serializes installs and never takes a live owner\'s lock', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-a11y-lock-'));
   const depsDir = path.join(dir, 'deps');
   const lockPath = depsDir + INSTALL_LOCK_SUFFIX;
   try {
     const release = acquireInstallLock(depsDir);
-    assert.equal(fs.statSync(lockPath).isDirectory(), true);
-    assert.throws(() => acquireInstallLock(depsDir, { timeoutMs: 0, sleep: () => {} }), /Timed out waiting for another install/);
+    const owner = JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8'));
+    assert.equal(owner.pid, process.pid);
+    // Hours later the owner is still alive (a slow npm ci): a waiter must not reclaim it.
+    const muchLater = Date.now() + 5 * 60 * 60 * 1000;
+    assert.throws(
+      () => acquireInstallLock(depsDir, { now: () => muchLater, timeoutMs: 0, sleep: () => {} }),
+      /Timed out waiting for another install/
+    );
     release();
     assert.equal(fs.existsSync(lockPath), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
+test('acquireInstallLock reclaims a lock whose owner process is gone', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-a11y-lock-'));
+  const depsDir = path.join(dir, 'deps');
+  const lockPath = depsDir + INSTALL_LOCK_SUFFIX;
+  try {
+    acquireInstallLock(depsDir, { pid: 999999, token: 'dead' });
+    const release = acquireInstallLock(depsDir, { isAlive: (pid) => pid !== 999999, sleep: () => {}, token: 'me' });
+    assert.equal(JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8')).token, 'me');
+    assert.deepEqual(fs.readdirSync(dir).filter((n) => n.includes('.stale-')), [], 'the dead lock is removed');
+    release();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('acquireInstallLock does not reclaim another host\'s lock, and reclaims an ownerless one only when old', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-a11y-lock-'));
+  const depsDir = path.join(dir, 'deps');
+  const lockPath = depsDir + INSTALL_LOCK_SUFFIX;
+  const noWait = { timeoutMs: 0, sleep: () => {}, isAlive: () => false };
+  try {
+    acquireInstallLock(depsDir, { host: 'other-machine', token: 'remote' });
+    assert.throws(() => acquireInstallLock(depsDir, noWait), /Timed out/);
+    fs.rmSync(lockPath, { recursive: true });
+
+    // A process that died between mkdir and writing owner.json.
     fs.mkdirSync(lockPath);
+    assert.throws(() => acquireInstallLock(depsDir, noWait), /Timed out/, 'a fresh ownerless lock may be mid-acquire');
     const later = Date.now() + 11 * 60 * 1000;
-    const releaseStale = acquireInstallLock(depsDir, { now: () => later, sleep: () => {} });
-    assert.equal(fs.existsSync(lockPath), true, 'a lock left by a dead process is reclaimed');
-    releaseStale();
+    const release = acquireInstallLock(depsDir, { ...noWait, now: () => later });
+    release();
+    assert.equal(fs.existsSync(lockPath), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an install lock release never removes a lock another process now holds', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-a11y-lock-'));
+  const depsDir = path.join(dir, 'deps');
+  const lockPath = depsDir + INSTALL_LOCK_SUFFIX;
+  try {
+    const release = acquireInstallLock(depsDir, { token: 'first' });
+    fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({ pid: 1, host: 'h', token: 'second' }));
+    release();
+    assert.equal(fs.existsSync(lockPath), true);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

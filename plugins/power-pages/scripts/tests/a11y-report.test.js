@@ -126,3 +126,16 @@ test('addState records whether form submission was allowed for the state', () =>
   b.addState({ label: 'Submit', route: '/', viewport: 'desktop', formSubmitAllowed: true });
   assert.equal(b.build().states[0].formSubmitAllowed, true);
 });
+
+test('ReportBuilder counts pages by full URL, which never reaches the output', () => {
+  const b = builder();
+  for (const id of ['1', '2']) {
+    for (const viewport of ['desktop', 'mobile']) {
+      b.addPage({ route: '/case?id=[redacted]', viewport, url: 'u', key: `https://contoso.example/case?id=${id}`, blockedRequests: { count: 1, requests: [] } });
+    }
+  }
+  const report = b.build();
+  assert.equal(report.summary.pagesAudited, 2, '/case?id=1 and /case?id=2 are two pages');
+  assert.equal(report.summary.blockedRequests, 4, 'page-check blocks count toward the total');
+  assert.ok(!JSON.stringify(report).includes('id=1'), 'the full URL key is not written');
+});

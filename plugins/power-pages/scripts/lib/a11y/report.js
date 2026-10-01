@@ -44,12 +44,17 @@ class ReportBuilder {
   constructor({ baseUrl, viewports, checks, bestPractice, tool }) {
     this.meta = { baseUrl, viewports, checks, bestPractice, tool, startedAt: new Date().toISOString() };
     this.pages = [];
+    // Page identities for counting, kept out of the output: `route` is query-redacted,
+    // so /case?id=1 and /case?id=2 share one route but are two audited pages. The key
+    // is the full URL, which must never be written to the report.
+    this.pageKeys = [];
     this.states = [];
     this.rules = new Map();
   }
 
-  addPage({ route, viewport, state = null, url, title = null, status = null, error = null, checkErrors = [] }) {
-    this.pages.push({ route, viewport, state, url, title, status, error, checkErrors });
+  addPage({ route, viewport, state = null, url, title = null, status = null, error = null, checkErrors = [], blockedRequests = null, key = null }) {
+    this.pages.push({ route, viewport, state, url, title, status, error, checkErrors, blockedRequests });
+    this.pageKeys.push(key || route);
   }
 
   addState({ label, route, viewport, error = null, checkErrors = [], blockedRequests = null, formSubmitAllowed = false }) {
@@ -109,18 +114,19 @@ class ReportBuilder {
     // is what "N pages" means to a reader; pageLayoutsAudited keeps the per-layout
     // count, and pageErrors counts failed loads (one per route and layout).
     const okPages = this.pages.filter((p) => !p.error);
+    const okPageKeys = this.pageKeys.filter((k, i) => !this.pages[i].error);
     const pageErrors = this.pages.length - okPages.length;
     const states = this.states;
     const stateErrors = states.filter((s) => s.error).length;
     const checkErrors = [...this.pages, ...states].reduce((n, p) => n + (p.checkErrors || []).length, 0);
-    const blockedRequests = states.reduce((n, s) => n + (s.blockedRequests ? s.blockedRequests.count : 0), 0);
+    const blockedRequests = [...this.pages, ...states].reduce((n, s) => n + (s.blockedRequests ? s.blockedRequests.count : 0), 0);
 
     return {
       ...this.meta,
       ...extra,
       finishedAt: new Date().toISOString(),
       summary: {
-        pagesAudited: new Set(okPages.map((p) => p.route)).size,
+        pagesAudited: new Set(okPageKeys).size,
         pageLayoutsAudited: okPages.length,
         pageErrors,
         statesAudited: states.length - stateErrors,

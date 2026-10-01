@@ -248,7 +248,7 @@ Discovery explores every layout in scope, so `pages[]` has one entry per page an
 
 Read `<RUN_DIR>/discover.json`. Each page entry has `viewport`, `controls` (role, accessible name, kind), and `stateCandidates` (proposed click steps for popups, disclosures, and tabs). Each candidate also has a `viewport`: use it as the state's `viewport`, because controls such as a mobile menu button exist only on that layout. Read the ARIA snapshots in `<RUN_DIR>/snapshots/` (named `<page>.<viewport>.aria.yml`) when a candidate's purpose isn't clear.
 
-Choose the states worth auditing by following [`references/states-guide.md`](references/states-guide.md). Start from the saved `a11y-states.json` when the user chose to reuse it. Write the proposed states to `<RUN_DIR>/states.json`.
+Choose the states worth auditing by following [`references/states-guide.md`](references/states-guide.md). Start from the saved `a11y-states.json` when the user chose to reuse it. A saved state with a `viewport` that this run doesn't select would never replay, so the audit refuses it (exit 2): drop its `viewport` field, remove the state, or add that viewport to the scope. Write the proposed states to `<RUN_DIR>/states.json`.
 
 #### 4.3 Approve the states
 
@@ -325,7 +325,7 @@ The audit takes roughly 5–15 seconds per page and layout. Keyboard, reflow, 20
 | 3 | Audit incomplete: a page or state failed to load, a check errored, or the script stopped on an unexpected error | Check that `<RUN_DIR>/audit.json` exists and parses as JSON. If it doesn't, no results were written: show the script's stderr and offer to re-run; don't write a report or a `Completed` marker. If it does, continue to Phase 6 and report the gaps from `pages[].error`, `states[].error`, and `checkErrors`; the rest of the report is valid |
 | 4 | Tools or browser missing | Return to Phase 2 |
 
-Exit 3 takes priority over exit 1, so always check `summary.blocking` in the report too. If `summary.blockedRequests` is above 0, mention in the report that some state interactions were stopped before they could write data, so those states may differ on the live site.
+Exit 3 takes priority over exit 1, so always check `summary.blocking` in the report too. If `summary.blockedRequests` is above 0, mention in the report that some page checks or state interactions were stopped before they could write data, so those pages or states may differ on the live site. `pages[].blockedRequests` and `states[].blockedRequests` show where.
 
 #### Session cleanup
 
@@ -360,7 +360,7 @@ Sort findings into these groups:
 
 1. **Must fix**: Blocking findings — `critical` or `serious` WCAG violations that aren't best-practice or heuristic. These match `summary.blocking` and the exit code, so never move one to another group. This includes the extended checks `pp-keyboard-trap` (2.1.2) and `pp-reflow-horizontal-scroll` (1.4.10), which are observed failures, not heuristics.
 2. **Should fix**: `moderate` and `minor` WCAG violations.
-3. **Verify**: findings whose `heuristic` flag is `true` (for example `pp-focus-not-visible`, `pp-focus-offscreen`, `pp-text-clipped-at-200`, `pp-motion-ignores-reduced-motion`, `pp-autoplay-video-no-controls`, and `pp-page-title-duplicate`) and every `needsReview` item, including a `pp-autoplay-video-no-controls` video that has the autoplay attribute but didn't play during the audit. Check the evidence and the ARIA snapshot. Keep the finding when the evidence holds; otherwise list it as a manual check. A `pp-autoplay-video-no-controls` violation was observed playing without native controls: move it to **Must fix** unless the page shows its own pause or stop button for it, or the video is essential to the content.
+3. **Verify**: findings whose `heuristic` flag is `true` (for example `pp-focus-not-visible`, `pp-focus-offscreen`, `pp-text-clipped-at-200`, `pp-motion-ignores-reduced-motion`, `pp-autoplay-video-no-controls`, and `pp-page-title-duplicate`) and every `needsReview` item, including a `pp-autoplay-video-no-controls` video that has the autoplay attribute but didn't play during the audit. Check the evidence and the ARIA snapshot. Keep the finding when the evidence holds; otherwise list it as a manual check. A `pp-autoplay-video-no-controls` violation was observed playing without native controls: when the page shows no pause or stop button of its own for it and the video isn't essential to the content, move it to **Should fix** and name the failed criteria (1.4.2 or 2.2.2). Don't put a heuristic finding in **Must fix**: that group must match `summary.blocking`, which the marker and outcome come from.
 4. **Best practice**: `bestPractice: true` findings. Recommended, but not WCAG failures.
 
 Group repeated issues. When the same rule and element appear on many pages (for example, a shared header), report it once as a shared component issue with its page count. A missing page title is a blocking 2.4.2 failure: axe reports it as `document-title` (or `pp-page-title-missing` when `axe` isn't in `--checks`), and it belongs in **Must fix**. `pp-page-title-duplicate` is heuristic, so it goes in **Verify**: confirm the routes really are different pages, then move it to **Should fix**.
@@ -522,6 +522,6 @@ Before starting Phase 1, create a task list with all phases using `TaskCreate`:
 | Run the audit | Running the accessibility audit | Run axe-core and extended checks on every page and state |
 | Review findings and write the report | Writing the report | Triage findings, map them to source, and write the report and marker |
 | Offer fixes | Applying fixes | Propose, apply, and verify approved source fixes |
-| Clean up and wrap up | Wrapping up | Delete the session, record usage, and suggest next steps |
+| Clean up and wrap up | Wrapping up | Confirm the session is gone, record usage, and suggest next steps |
 
 Mark each task `in_progress` when starting it and `completed` when done via `TaskUpdate`.

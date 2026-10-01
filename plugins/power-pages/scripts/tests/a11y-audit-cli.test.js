@@ -50,6 +50,19 @@ test('an invalid states file is a usage error', () => {
   }
 });
 
+test('a state pinned to an unselected viewport is a usage error, not a silent skip', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-a11y-cli-'));
+  try {
+    const file = path.join(dir, 'states.json');
+    fs.writeFileSync(file, JSON.stringify({ states: [{ route: '/', label: 'Desktop menu', viewport: 'desktop', steps: [{ action: 'wait', ms: 1 }] }] }));
+    const r = runSync(['--url', 'http://localhost:1', '--viewports', 'mobile', '--states', file]);
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /"Desktop menu" \(desktop\)/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('missing dependencies exit 4 with an install hint', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-a11y-nodeps-'));
   try {
@@ -92,6 +105,12 @@ button.nofocus:focus{outline:none}.low{color:#aaa;background:#fff}</style></head
   '/draft': `<!doctype html><html lang="en"><head><title>Draft</title></head><body><main><h1>Draft</h1>
 <button type="button" id="save">Save draft</button><p id="done" hidden><img src="/z.png?sig=SECRET456">Saved</p>
 <script>save.onclick=function(){fetch('/api/save',{method:'POST',body:'x'}).catch(function(){});done.hidden=false}</script>
+</main></body></html>`,
+  // Not linked from "/". Autosaves on blur, which the keyboard walk triggers: the
+  // page-check guard must stop that write even though no state is involved.
+  '/autosave': `<!doctype html><html lang="en"><head><title>Autosave</title></head><body><main><h1>Autosave</h1>
+<label for="n">Name</label> <input id="n"> <a href="/">Home</a>
+<script>n.addEventListener('blur',function(){fetch('/api/autosave',{method:'POST',body:'x'}).catch(function(){})})</script>
 </main></body></html>`,
   // Not linked from "/". The page ships its own window.axe that reports nothing, and a
   // RequireJS-style define() that throws on anonymous modules. The audit must still run
@@ -221,6 +240,24 @@ test('live: state replay blocks script writes, runs keyboard, and sanitizes snip
   } finally {
     server.close();
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('live: page checks are guarded, so a blur handler cannot write', { skip: !LIVE && 'set POWER_PAGES_A11Y_LIVE=1 to run' }, async () => {
+  const server = await startFixture();
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const r = await runAsync(['--url', base, '--routes', '/autosave', '--viewports', 'desktop', '--checks', 'axe,keyboard']);
+    assert.ok([0, 1].includes(r.status), r.stderr);
+    assert.deepEqual(server.posts, [], 'the autosave POST never reached the site');
+    const report = JSON.parse(r.stdout);
+    // The keyboard walk can blur the field more than once (tab past, then shift+tab back).
+    const blocked = report.pages[0].blockedRequests;
+    assert.ok(blocked.count >= 1, 'the autosave POST was blocked and reported');
+    for (const req of blocked.requests) assert.deepEqual(req, { method: 'POST', url: `${base}/api/autosave` });
+    assert.equal(report.summary.blockedRequests, blocked.count);
+  } finally {
+    server.close();
   }
 });
 

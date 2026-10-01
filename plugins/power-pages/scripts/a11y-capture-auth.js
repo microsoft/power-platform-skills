@@ -61,12 +61,16 @@ function parse(argv) {
 
 async function capture(opts, { stderr = process.stderr } = {}) {
   const { chromium } = loadPlaywright(candidateRoots(opts));
-  const browser = await launchBrowser(chromium, { headless: false });
+  // Create the private session file before launching the browser, and launch inside
+  // the try: a failure at either step must not leave a browser process or an orphaned
+  // session file behind.
   const { file, fd } = openAuthStateFile();
+  let browser = null;
   let saved = null;
   let closed = false;
   let completed = false;
   try {
+    browser = await launchBrowser(chromium, { headless: false });
     const context = await browser.newContext({ viewport: null });
     const page = await context.newPage();
     browser.on('disconnected', () => { closed = true; });
@@ -95,7 +99,7 @@ async function capture(opts, { stderr = process.stderr } = {}) {
     completed = true;
   } finally {
     fs.closeSync(fd);
-    await browser.close().catch(() => {});
+    if (browser) await browser.close().catch(() => {});
     if (!completed) {
       try { removeAuthState(file); } catch { /* best effort; the error being thrown matters more */ }
     }

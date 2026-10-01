@@ -203,7 +203,7 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
         const nav = await visit(page, url, { origin, timeoutMs: opts.timeoutMs });
         const checkErrors = [];
         if (nav.error) {
-          builder.addPage({ route, viewport, url: displayUrl(url), title: nav.title || null, status: nav.status || null, error: nav.error });
+          builder.addPage({ route, viewport, url: displayUrl(url), key: url, title: nav.title || null, status: nav.status || null, error: nav.error });
           continue;
         }
         if (vi === 0 && opts.crawl) for (const href of await extractLinks(page)) queue.add(href, page.url());
@@ -220,30 +220,40 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
           }
         }
         if (viewport === primary && checks.has('titles')) titles.push({ route, title: nav.title });
-        // The remaining checks are layout-dependent — mobile navigation has its own
-        // focus order and traps, and text can clip or animate differently at a narrow
-        // width — so they run on every selected viewport. Nodes are grouped per
-        // element, so a barrier shared by both layouts is still reported once with an
-        // occurrence per viewport.
-        // Order matters: each check restores what it changes, and the keyboard walk
-        // runs last because moving focus can open menus that would skew the others.
-        if (checks.has('motion')) {
-          const r = await runCheck('motion', () => runMotionCheck(page), checkErrors);
-          if (r) builder.addFindings(r.findings, ctx);
+        // The checks below synthesize focus, blur, Tab, resize, and media events, and a
+        // page's own handlers can POST on any of them (autosave on blur, analytics that
+        // write a record). Guard them like a state, never allowing form submission:
+        // there's no per-page consent. Installed after axe so the page's own load-time
+        // reads (list-grid POSTs) finish unguarded, as they do for states.
+        const guard = await guardMutations(page, { allowFormSubmit: false, origin });
+        try {
+          // The remaining checks are layout-dependent — mobile navigation has its own
+          // focus order and traps, and text can clip or animate differently at a narrow
+          // width — so they run on every selected viewport. Nodes are grouped per
+          // element, so a barrier shared by both layouts is still reported once with an
+          // occurrence per viewport.
+          // Order matters: each check restores what it changes, and the keyboard walk
+          // runs last because moving focus can open menus that would skew the others.
+          if (checks.has('motion')) {
+            const r = await runCheck('motion', () => runMotionCheck(page), checkErrors);
+            if (r) builder.addFindings(r.findings, ctx);
+          }
+          if (checks.has('zoom')) {
+            const r = await runCheck('zoom', () => runZoomCheck(page), checkErrors);
+            if (r) builder.addFindings(r.findings, ctx);
+          }
+          if (checks.has('reflow')) {
+            const r = await runCheck('reflow', () => runReflowCheck(page), checkErrors);
+            if (r) builder.addFindings(r.findings, ctx);
+          }
+          if (checks.has('keyboard')) {
+            const r = await runCheck('keyboard', () => runKeyboardCheck(page), checkErrors);
+            if (r) builder.addFindings(r.findings, ctx);
+          }
+        } finally {
+          await guard.dispose();
         }
-        if (checks.has('zoom')) {
-          const r = await runCheck('zoom', () => runZoomCheck(page), checkErrors);
-          if (r) builder.addFindings(r.findings, ctx);
-        }
-        if (checks.has('reflow')) {
-          const r = await runCheck('reflow', () => runReflowCheck(page), checkErrors);
-          if (r) builder.addFindings(r.findings, ctx);
-        }
-        if (checks.has('keyboard')) {
-          const r = await runCheck('keyboard', () => runKeyboardCheck(page), checkErrors);
-          if (r) builder.addFindings(r.findings, ctx);
-        }
-        builder.addPage({ route, viewport, url: displayUrl(url), title: nav.title || null, status: nav.status || null, error: pageError, checkErrors });
+        builder.addPage({ route, viewport, url: displayUrl(url), key: url, title: nav.title || null, status: nav.status || null, error: pageError, checkErrors, blockedRequests: guard.blocked });
       }
 
       for (const state of states.filter((s) => (s.viewport || primary) === viewport)) {
@@ -327,6 +337,13 @@ async function main(argv = process.argv.slice(2), { stdout = process.stdout, std
       return EXIT.PASS;
     }
     if (opts.statesFile) states = loadStatesFile(opts.statesFile);
+    // A state pinned to a layout that isn't selected would never replay. Refuse it
+    // rather than finish "successfully" without auditing an approved state (common
+    // when a saved desktop state is reused with --viewports mobile).
+    const unreachable = states.filter((s) => s.viewport && !opts.viewports.includes(s.viewport));
+    if (opts.mode === 'audit' && unreachable.length) {
+      throw new UsageError(`States target a viewport that --viewports doesn't include: ${unreachable.map((s) => `"${s.label}" (${s.viewport})`).join(', ')}. Add the viewport or remove the state.`);
+    }
     // Both consents are required for a state to submit. Say so when only one is
     // present, so a missing flag is not mistaken for a passing submit flow.
     const marked = states.filter((s) => s.allowFormSubmit).map((s) => `"${s.label}"`);

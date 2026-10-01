@@ -21,6 +21,7 @@
 
 const fs = require('node:fs');
 const os = require('node:os');
+const { randomUUID } = require('node:crypto');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
@@ -161,11 +162,22 @@ function assertManagedDepsDir(depsDir, { env = process.env, readdir = fs.readdir
 // deletes node_modules before it installs. Two first-time audits running at once would
 // each wipe the other's half-finished install. A lock directory beside the deps folder
 // serializes them: mkdir is atomic and fails with EEXIST if another process holds it.
-// A lock older than LOCK_STALE_MS is treated as left behind by a killed process
-// (npm ci for two packages takes well under a minute) and is reclaimed.
+//
+// The holder writes owner.json ({ pid, host, token }) into the lock right after
+// creating it. A lock's age alone doesn't prove its owner died (npm ci has no timeout
+// and can be slow on a poor network), so a waiter reclaims a lock only when:
+// - the owner is on this host and its PID no longer exists, or
+// - owner.json never appeared and the lock is older than LOCK_STALE_MS (the process
+//   died between mkdir and the write, which a live holder finishes in milliseconds).
+// A lock from another host (a deps folder on a network share) is never reclaimed; the
+// timeout message tells the user how to clear it. PID reuse after a crash can make a
+// dead owner look alive, which only costs a wait until the timeout.
+// Release removes the lock only while owner.json still carries this holder's token, so
+// a holder can never delete a lock that another process now owns.
 const INSTALL_LOCK_SUFFIX = '.install-lock';
+const LOCK_OWNER_FILE = 'owner.json';
 const LOCK_STALE_MS = 10 * 60 * 1000;
-const LOCK_TIMEOUT_MS = 12 * 60 * 1000;
+const LOCK_TIMEOUT_MS = 30 * 60 * 1000;
 const LOCK_POLL_MS = 500;
 
 // installDeps is synchronous (install-a11y-deps.js is a one-shot CLI), so wait with
@@ -174,24 +186,101 @@ function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+// process.kill(pid, 0) sends no signal; it only checks the process exists. EPERM means
+// it exists but belongs to another user, so it is alive.
+// See: https://nodejs.org/api/process.html#processkillpid-signal
+function isPidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === 'EPERM';
+  }
+}
+
+function readLockOwner(lockPath) {
+  try {
+    const owner = JSON.parse(fs.readFileSync(path.join(lockPath, LOCK_OWNER_FILE), 'utf8'));
+    return owner && typeof owner.token === 'string' ? owner : null;
+  } catch {
+    return null;
+  }
+}
+
+// Returns the owner snapshot the decision was based on, so the reclaim compares against
+// exactly that owner instead of re-reading owner.json (which may have changed since).
+function checkAbandonedLock(lockPath, { now, staleMs, isAlive, host }) {
+  const owner = readLockOwner(lockPath);
+  if (owner) {
+    return { abandoned: owner.host === host && Number.isInteger(owner.pid) && !isAlive(owner.pid), token: owner.token };
+  }
+  return { abandoned: now() - fs.statSync(lockPath).mtimeMs > staleMs, token: undefined };
+}
+
+// Reclaiming is rename-then-check, not a plain delete: two waiters can both decide the
+// same dead lock is abandoned, and the slower one must not delete the lock the faster
+// one has just created. rename is atomic, so only one waiter moves a given lock aside;
+// if what it moved isn't the lock it judged dead, it puts it back.
+// Returns true when the slot is free to retry now (reclaimed, or already gone), and
+// false when the lock turned out not to be the dead one, so the caller waits instead
+// of spinning.
+function reclaimLock(lockPath, deadToken, token) {
+  const aside = `${lockPath}.stale-${token}`;
+  try {
+    fs.renameSync(lockPath, aside);
+  } catch (err) {
+    if (err.code === 'ENOENT') return true;
+    throw err;
+  }
+  // An ownerless lock reads as null, so normalize to undefined to match deadToken.
+  const moved = readLockOwner(aside);
+  if ((moved ? moved.token : undefined) !== deadToken) {
+    try {
+      fs.renameSync(aside, lockPath);
+      return false;
+    } catch {
+      // A new holder took the slot in between; leave the moved lock aside. Its owner's
+      // release only removes lockPath while it carries that owner's token.
+      return false;
+    }
+  }
+  fs.rmSync(aside, { recursive: true, force: true });
+  return true;
+}
+
 function acquireInstallLock(depsDir, {
   now = Date.now, sleep = sleepSync, timeoutMs = LOCK_TIMEOUT_MS, staleMs = LOCK_STALE_MS,
+  isAlive = isPidAlive, host = os.hostname(), pid = process.pid,
+  token = randomUUID(),
 } = {}) {
   const lockPath = `${path.resolve(depsDir)}${INSTALL_LOCK_SUFFIX}`;
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
   const deadline = now() + timeoutMs;
   for (;;) {
+    let created = false;
     try {
       fs.mkdirSync(lockPath);
-      return () => { try { fs.rmdirSync(lockPath); } catch { /* already released */ } };
+      created = true;
     } catch (err) {
       if (err.code !== 'EEXIST') throw err;
     }
-    try {
-      if (now() - fs.statSync(lockPath).mtimeMs > staleMs) {
-        fs.rmdirSync(lockPath);
-        continue;
+    if (created) {
+      try {
+        fs.writeFileSync(path.join(lockPath, LOCK_OWNER_FILE), JSON.stringify({ pid, host, token }));
+      } catch (err) {
+        // A waiter moved the still-ownerless lock aside in the instant before this
+        // write. Start over rather than fail the install.
+        if (err.code === 'ENOENT') continue;
+        throw err;
       }
+      return () => {
+        const owner = readLockOwner(lockPath);
+        if (owner && owner.token === token) fs.rmSync(lockPath, { recursive: true, force: true });
+      };
+    }
+    try {
+      const check = checkAbandonedLock(lockPath, { now, staleMs, isAlive, host });
+      if (check.abandoned && reclaimLock(lockPath, check.token, token)) continue;
     } catch (err) {
       if (err.code === 'ENOENT') continue;
       throw err;

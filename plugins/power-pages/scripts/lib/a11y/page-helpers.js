@@ -34,11 +34,13 @@ function sanitizeHtml(html) {
     if (URL_ATTR.test(name)) {
       const closed = quoted.length > 1 && quoted.endsWith(q);
       const inner = quoted.slice(1, closed ? -1 : undefined);
-      // srcset is a comma-separated list ("a.png?x=1 1x, b.png?x=2 2x"), so stop at
-      // whitespace and commas rather than only at the closing quote.
-      const cleaned = inner
-        .replace(/\?[^\s,#]*/g, '?[redacted]')
-        .replace(/#([^\s,]*)/g, (m, frag) => (/^[A-Za-z][\w:.-]{0,63}$/.test(frag) ? m : '#[redacted]'));
+      const keepAnchor = (m, frag) => (/^[A-Za-z][\w:.-]{0,63}$/.test(frag) ? m : '#[redacted]');
+      // Only srcset is a list ("a.png?x=1 1x, b.png?x=2 2x"), so only there do commas
+      // and spaces end a candidate's query. In every other attribute a comma is part of
+      // the value ("/case?token=abc,SECRET"), so the whole query and fragment go.
+      const cleaned = /^srcset$/i.test(name)
+        ? inner.replace(/\?[^\s,#]*/g, '?[redacted]').replace(/#([^\s,]*)/g, keepAnchor)
+        : inner.replace(/\?[^#]*/, '?[redacted]').replace(/#([\s\S]*)$/, keepAnchor);
       return `${space}${name}${eq}${q}${cleaned}${q}`;
     }
     return match;
