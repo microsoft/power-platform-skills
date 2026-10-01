@@ -2,11 +2,12 @@
 
 This reference supports the `/pcf` Pages mode. It covers what the skill can verify, what the maker must configure in Power Pages, and where Microsoft Learn is explicit or silent.
 
-Primary Learn sources: [Use code components in Power Pages](https://learn.microsoft.com/en-us/power-pages/configure/component-framework), [dataset code components tutorial](https://learn.microsoft.com/en-us/power-pages/configure/tutorial-pcf-code), [Liquid codecomponent tag](https://learn.microsoft.com/en-us/power-pages/configure/liquid/component-framework-liquid), [portal Web API overview](https://learn.microsoft.com/en-us/power-pages/configure/web-api-overview), and [Web API PCF sample](https://learn.microsoft.com/en-us/power-pages/configure/implement-webapi-component).
+Primary Learn sources: [Use code components in Power Pages](https://learn.microsoft.com/en-us/power-pages/configure/component-framework), [dataset code components tutorial](https://learn.microsoft.com/en-us/power-pages/configure/tutorial-pcf-code) (platform context only; not a supported journey in this release), [Liquid codecomponent tag](https://learn.microsoft.com/en-us/power-pages/configure/liquid/component-framework-liquid), [portal Web API overview](https://learn.microsoft.com/en-us/power-pages/configure/web-api-overview), and [Web API PCF sample](https://learn.microsoft.com/en-us/power-pages/configure/implement-webapi-component).
 
 ## Support boundary
 
-- Pages support is for standard controls. Virtual controls and platform libraries are not supported on Power Pages; use model-driven apps for virtual controls: [React controls FAQ](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/react-controls-platform-libraries#faq).
+- This release supports Power Pages only for standard field controls: the form-field journey and the standalone Liquid journey (`{% codecomponent %}`), both guided. Virtual controls and platform libraries are not supported on Power Pages; use model-driven apps for virtual controls: [React controls FAQ](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/react-controls-platform-libraries#faq).
+- Dataset controls on Pages (form sub-grid and list) are not supported in this release. Dataset templates use paging and `openDatasetItem`, which Microsoft Learn documents for model-driven and canvas apps only: [Paging](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/paging) and [openDatasetItem](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/dataset/opendatasetitem).
 - A Pages form field PCF is one field. Multi-field form PCFs are not supported on Power Pages per Learn.
 - Unsupported Pages APIs include `Utility` and listed `Device.*` methods. Optional feature declarations must be guarded and verified: [unsupported code components](https://learn.microsoft.com/en-us/power-pages/configure/component-framework#unsupported-code-components-in-power-pages).
 - Pages configuration is not automated by this release. The skill guides configuration and records evidence levels; it does not write Power Pages configuration tables.
@@ -16,9 +17,9 @@ Primary Learn sources: [Use code components in Power Pages](https://learn.micros
 | Journey | What `/pcf` can verify | Maker/Pages configuration | Evidence target |
 | --- | --- | --- | --- |
 | Form field | Registered control, model-driven field binding with Web client, Pages-compatible manifest/property type | Enable custom component in design studio field settings, or Basic Form Metadata `Type: Attribute` with `Control Style: Code Component` | Renders, save → reload round-trips |
-| Form sub-grid | Registered dataset control and model-driven sub-grid binding | Basic Form Metadata `Type: Subgrid`, correct Subgrid Name, `Control Style: Code component` | Renders, paging and selection work |
-| List | Registered dataset control plus the needed view/table control configuration | Portal Management list with `Use a configured code component = Yes`; Learn documents this toggle in the dataset tutorial | PCF grid renders instead of default grid |
-| Standalone Liquid | Registered standard control and property values | `{% codecomponent name:<control> prop:'json string' %}` in page source, then save/sync/preview | Control renders on page |
+| Form sub-grid | Not supported in this release | Do not configure a Pages sub-grid for a dataset control | Not supported in this release |
+| List | Not supported in this release | Do not configure a Pages list for a dataset control | Not supported in this release |
+| Standalone Liquid | Registered standard field control and property values | `{% codecomponent name:<control> prop:'json string' %}` in page source, then save/sync/preview | Control renders on page |
 
 Minimum site/package versions are owned by the matrix-rendered table in `pcf-hosts.md`. Do not duplicate them here.
 
@@ -63,11 +64,11 @@ A model-driven annotation uploader is not a Pages File-binding control. Pages up
 | Symptom | Likely area to inspect |
 | --- | --- |
 | Field renders in model-driven app but not Pages | Virtual/platform library manifest, unsupported field type, field not enabled as a custom component, site version. |
-| List falls back to default grid | `Use a configured code component`, view/table control configuration, cache propagation. |
+| Dataset sub-grid or list requested on Pages | Not supported in this release. Do not configure the journey or debug it as a cache miss. |
 | Web API 403/401 | Table permissions, web roles, contact identity, column permissions. |
 | Web API 400 for a column | `fields` does not list the column, `UseFieldsFromView` view has not propagated, wrong logical name. |
 | Raw AJAX 404 | EntitySetName vs logical name mismatch. |
 
 ## Evidence language
 
-Use the same evidence vocabulary as `pcf-testing.md`. Do not claim `runtime-verified` for Pages until the target site was opened and the control behavior was observed. If no Pages site is available in the release lane, Pages recipe claims stay `not certified in this release` even when designed for Pages.
+Use the same evidence vocabulary as `pcf-testing.md`. Do not claim `runtime-verified` for Pages until the target site was opened and the control behavior was observed. Do not claim `runtime-verified` for a Pages dataset sub-grid or list; those journeys are not supported in this release. If no Pages site is available in the release lane, Pages recipe claims stay `not certified in this release` even when designed for Pages.

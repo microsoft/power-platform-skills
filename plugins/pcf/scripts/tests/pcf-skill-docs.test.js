@@ -434,7 +434,7 @@ test('troubleshooting covers the required PCF failure modes', () => {
     { title: 'Harness Web API not implemented', body: 'not implemented' },
     { title: 'Dataset refresh loop or page reset', body: 'refresh will reset paging to page 1' },
     { title: 'Pages virtual control does not render', body: 'Power Pages does not support platform-library declarations' },
-    { title: 'Pages list falls back to the default grid', body: 'Use a configured code component' },
+    { title: 'Pages dataset sub-grid or list is not supported', body: 'not supported in this release' },
     { title: 'Bound control cannot be deleted', body: 'The CustomControl({…}) component cannot be deleted because it is referenced' },
     { title: 'Dataverse rejects an OData `in` operator', body: 'The query node In is not supported' },
   ];
@@ -502,10 +502,16 @@ test('unattended guidance keeps session files out of the scaffold output directo
   assert.match(skill, /workflow-log\.md` is not a session marker/);
 });
 
-test('scaffold guidance reports resolvedOutDir when a redirect warning appears', () => {
+test('scaffold guidance reports resolvedOutDir when the redirect info note appears', () => {
   const skill = readPluginFile('skills/pcf/SKILL.md');
-  assert.match(skill, /resolvedOutDir/);
-  assert.match(skill, /PCF_SCAFFOLD_OUT_REDIRECTED/);
+  const create = readPluginFile('skills/pcf/create-flow.md');
+  const note = /If the scaffold JSON includes the `PCF_SCAFFOLD_OUT_REDIRECTED` note, tell the user the files were written to `resolvedOutDir`/;
+
+  for (const text of [skill, create]) {
+    assert.match(text, note);
+    assert.match(text, /`info` finding/);
+    assert.doesNotMatch(text, /PCF_SCAFFOLD_OUT_REDIRECTED` warning/);
+  }
 });
 
 test('create flow reads a recipe README only when a recipe was selected', () => {
@@ -526,6 +532,85 @@ test('upgrade flow documents REINSTALL as selectable and required by DEPS_TO_MAT
   assert.match(text, /REINSTALL is a selectable step when the plan contains it/);
   assert.match(text, /requiresStep/);
   assert.match(text, /Selecting `DEPS_TO_MATRIX` includes that required step/);
+});
+
+test('Power Pages guidance is standard field controls only', () => {
+  const files = [
+    'skills/pcf/SKILL.md',
+    'skills/pcf/pages-flow.md',
+    'skills/pcf/create-flow.md',
+    'references/pcf-power-pages.md',
+    'references/pcf-hosts.md',
+    'references/pcf-testing.md',
+    'references/pcf-best-practices.md',
+    'docs/pcf-design.md',
+    'docs/pcf-capabilities.md',
+    'README.md',
+  ];
+  const boundary = 'This release supports Power Pages only for standard field controls: the form-field journey and the standalone Liquid journey (`{% codecomponent %}`), both guided.';
+  const unsupported = 'Dataset controls on Pages (form sub-grid and list) are not supported in this release.';
+  // Instructional leftovers from the removed sub-grid and list journeys. A fenced
+  // "not supported" mention is allowed; a how-to is not.
+  const supportedJourney = /Journey 2 — form sub-grid|Journey 3 — list|Type: Subgrid|Use a configured code component = Yes|paging and selection work|configured forms\/lists/;
+
+  for (const relativePath of files) {
+    const text = readPluginFile(relativePath);
+    assert.ok(text.includes(boundary), `${relativePath} must state the field-only Pages boundary`);
+    assert.ok(text.includes(unsupported), `${relativePath} must state dataset Pages journeys are not supported`);
+    assert.doesNotMatch(text, supportedJourney, `${relativePath} must not present a sub-grid or list Pages journey as supported`);
+  }
+
+  for (const relativePath of ['skills/pcf/pages-flow.md', 'references/pcf-power-pages.md', 'references/pcf-hosts.md']) {
+    const text = readPluginFile(relativePath);
+    assert.match(text, /openDatasetItem/, `${relativePath} must name openDatasetItem as the reason dataset Pages journeys are out of scope`);
+    assert.match(text, /model-driven and canvas apps only/, `${relativePath} must cite the Learn host limit for paging and openDatasetItem`);
+  }
+});
+
+test('documented CLI invocations include required flags', () => {
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith('.md')) files.push(full);
+    }
+  };
+  for (const relativeDir of ['references', 'skills', 'docs']) walk(path.join(ROOT, relativeDir));
+
+  const rules = [
+    { script: 'pcf-gates.js', required: ['--project'] },
+    { script: 'pcf-build.js', required: ['--project'] },
+    { script: 'lint-pcf.js', requiredAny: [['--manifest', '--project']] },
+    { script: 'pcf-inventory.js', required: ['--env'] },
+    { script: 'pcf-push.js', required: ['--project', '--env'], requiredAny: [['--solution', '--publisher-prefix']] },
+    { script: 'write-pcf-plan.js', required: ['--intent'] },
+    { script: 'verify-pcf.js', required: ['--env', '--control'] },
+  ];
+  const offenders = [];
+
+  for (const file of files) {
+    const relativePath = path.relative(ROOT, file);
+    const lines = readPluginFile(relativePath).split('\n');
+    lines.forEach((line, index) => {
+      for (const rule of rules) {
+        const escaped = rule.script.replace('.', '\\.');
+        const flagged = new RegExp(`${escaped}(?:\`|")?\\s+--`).test(line);
+        const nodeCall = new RegExp(`node\\s+.*${escaped}`).test(line);
+        if (!flagged && !nodeCall) continue;
+        const missing = [];
+        for (const flag of rule.required || []) {
+          if (!line.includes(flag)) missing.push(flag);
+        }
+        for (const group of rule.requiredAny || []) {
+          if (!group.some((flag) => line.includes(flag))) missing.push(group.join(' or '));
+        }
+        if (missing.length) offenders.push(`${relativePath}:${index + 1} missing ${missing.join(', ')}`);
+      }
+    });
+  }
+
+  assert.deepEqual(offenders, []);
 });
 
 test('Microsoft Learn links in PCF references use the en-us canonical prefix', () => {

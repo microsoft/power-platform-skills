@@ -10,7 +10,7 @@ This plugin is in preview; [`pcf-capabilities.md`](pcf-capabilities.md) records 
 
 This release covers:
 
-- Model-driven app and Power Pages host guidance.
+- Model-driven app host guidance, and Power Pages guidance for standard field controls only.
 - Standard and virtual PCF controls.
 - Four scaffold templates: `field-standard`, `dataset-standard`, `field-virtual`, and `dataset-virtual`.
 - Six recipes: `star-rating`, `hierarchy-tree`, `lookup-dropdown`, `contextual-grid`, `grid-customizer`, and `attachment-uploader`.
@@ -31,8 +31,8 @@ intent/request
   -> scripts/pcf-scaffold.js writes a matrix-pinned template/recipe
   -> implementation uses references/pcf-*.md + recipe README
   -> scripts/pcf-gates.js runs manifest/source/lint/test/build gates
-  -> Pages compatibility gate for Pages targets: standard field only + pcf-gates.js --hosts pages
-  -> scripts/pcf-push.js --env <url> runs pac pcf push --environment <url>
+  -> Pages compatibility gate for Pages targets: standard field controls only + pcf-gates.js --project <dir> --hosts pages
+  -> scripts/pcf-push.js --project <dir> --env <url> (--solution <uniqueName> | --publisher-prefix <p>) runs pac pcf push --environment <url>
   -> scripts/verify-pcf.js checks registration and FormXML binding evidence
   -> Pages site configuration guidance and runtime evidence if a target site is reachable
   -> scripts/pcf-inventory.js lists registered controls and where-used dependencies
@@ -81,7 +81,7 @@ Templates are minimal, tested PCF project families:
 | Template | Control kind | React/platform library | Hosts |
 | --- | --- | --- | --- |
 | `field-standard` | Field | Bundled | Model-driven apps, Power Pages |
-| `dataset-standard` | Dataset | Bundled | Model-driven apps, Power Pages guidance |
+| `dataset-standard` | Dataset | Bundled | Model-driven apps |
 | `field-virtual` | Field | Platform libraries | Model-driven apps |
 | `dataset-virtual` | Dataset | Platform libraries | Model-driven apps |
 
@@ -125,13 +125,13 @@ Live-verified binding facts:
 - A designer-shaped FormXML binding with a custom-control cell class id, matching `uniqueid`/`forControl`, a fallback `<customControl id>`, and all three client factors survived draft and published reads after targeted publish.
 - A web-only declaration (`formFactor="2"`) was rejected at form write with `Custom control declaration for form factor(s) 0,1 is missing...`; `PCF_BIND_FACTOR_UNDECLARED` is an error and every binding must declare phone, tablet and web factors.
 - A bound control cannot be deleted until the binding is removed and the artifact is published.
-- Registered where-used dependencies can be read through `RetrieveDependentComponents(ObjectId, ComponentType=66)`, including the bound `SystemForm` dependency row for a form-bound control. `pcf-inventory.js --where-used` reports only these registered rows; it does not search form or Liquid text. Its output warns that registered dependencies are not proof of Liquid or arbitrary text references, and that an empty result is not "safe to delete".
+- Registered where-used dependencies can be read through `RetrieveDependentComponents(ObjectId, ComponentType=66)`, including the bound `SystemForm` dependency row for a form-bound control. `pcf-inventory.js --env <url> --where-used` reports only these registered rows; it does not search form or Liquid text. Its output warns that registered dependencies are not proof of Liquid or arbitrary text references, and that an empty result is not "safe to delete".
 
 ## Power Pages journeys
 
-Power Pages support is guided by [`../references/pcf-power-pages.md`](../references/pcf-power-pages.md) and host rules in [`../references/pcf-hosts.md`](../references/pcf-hosts.md). This release supports standard controls only for Pages guidance. Virtual controls, platform libraries, unsupported property types, required feature declarations and unguarded host APIs fail or warn before deploy.
+Power Pages support is guided by [`../references/pcf-power-pages.md`](../references/pcf-power-pages.md) and host rules in [`../references/pcf-hosts.md`](../references/pcf-hosts.md). This release supports Power Pages only for standard field controls: the form-field journey and the standalone Liquid journey (`{% codecomponent %}`), both guided. Dataset controls on Pages (form sub-grid and list) are not supported in this release. Dataset templates use paging and `openDatasetItem`, which Microsoft Learn documents for model-driven and canvas apps only. Virtual controls, platform libraries, unsupported property types, required feature declarations and unguarded host APIs fail or warn before deploy.
 
-Pages outcomes must state whether the journey was runtime-verified. Recipes and the SKILL label uncertified Pages claims as not certified in this release until runtime evidence is recorded in recipe metadata.
+Pages outcomes for the guided form-field and Liquid journeys must state whether the journey was runtime-verified. Do not claim a Pages dataset journey was verified. Recipes and the SKILL label uncertified Pages claims as not certified in this release until runtime evidence is recorded in recipe metadata.
 
 ## Testing, evals and CI
 

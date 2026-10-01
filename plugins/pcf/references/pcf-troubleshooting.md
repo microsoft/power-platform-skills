@@ -186,7 +186,7 @@ If project lint reports that no `ControlManifest.Input.xml` files were found, pa
 
 **Candidate causes**: SQL Server error 1205 means the server chose this transaction as a deadlock victim ([MSSQLSERVER_1205](https://learn.microsoft.com/en-us/sql/relational-databases/errors-events/mssqlserver-1205-database-engine-error)). On a shared environment this happens when another import or publish is running at the same time. Observed on 2026-09-29 on a shared test environment during a concurrent publish. It is not caused by the project.
 
-**Discriminating checks**: The pac output shows `Importing the temporary solution wrapper into the current org: done.` before the error, so the build and import succeeded. `pcf-inventory.js --control <prefix>_<namespace>.<constructor>` shows whether the control is already registered. HTTP 429 responses from the same environment around the same time point to the same contention.
+**Discriminating checks**: The pac output shows `Importing the temporary solution wrapper into the current org: done.` before the error, so the build and import succeeded. `pcf-inventory.js --env <url> --control <prefix>_<namespace>.<constructor>` shows whether the control is already registered. HTTP 429 responses from the same environment around the same time point to the same contention.
 
 **Fix**: Wait a minute, then re-run the same `pcf-push.js` command. If the environment stays busy, publish from Maker (**Publish all customizations**) once it is quiet, or push to a less contended development environment. Do not change the project to work around it.
 
@@ -268,7 +268,7 @@ If project lint reports that no `ControlManifest.Input.xml` files were found, pa
 
 ### Pages virtual control does not render
 
-**Symptom**: A Power Pages field/list/Liquid PCF area is blank or falls back after deploying a virtual control.
+**Symptom**: A Power Pages field or Liquid PCF area is blank or falls back after deploying a virtual control.
 
 **Candidate causes**: Power Pages does not support React controls and platform libraries. Learn states React controls and platform libraries are not supported with Power Pages, and the plugin emits `Power Pages does not support platform-library declarations`.
 
@@ -278,17 +278,17 @@ If project lint reports that no `ControlManifest.Input.xml` files were found, pa
 
 **Verify**: The Pages lint profile passes and the control renders on the target site.
 
-### Pages list falls back to the default grid
+### Pages dataset sub-grid or list is not supported
 
-**Symptom**: A Power Pages list uses the default grid instead of the PCF control.
+**Symptom**: A maker asks to place a dataset PCF on a Power Pages form sub-grid or list.
 
-**Candidate causes**: The list is not configured with `Use a configured code component`, the model-driven side has only a form sub-grid binding instead of a view/table control configuration, the site/base package prerequisite is not met, or Pages server cache has not refreshed.
+**Candidate causes**: Dataset controls on Pages (form sub-grid and list) are not supported in this release. Dataset templates use paging and `openDatasetItem`, which Microsoft Learn documents for model-driven and canvas apps only.
 
-**Discriminating checks**: In Portal Management, inspect the list record and the view/table control configuration. Confirm the dataset prerequisites in the matrix-rendered table in `pcf-hosts.md`.
+**Discriminating checks**: Confirm the control is a dataset control and the requested host is a Pages sub-grid or list, not a model-driven sub-grid. This release supports Power Pages only for standard field controls: the form-field journey and the standalone Liquid journey (`{% codecomponent %}`), both guided.
 
-**Fix**: Configure the list with `Use a configured code component = Yes` and ensure the view/table has the control configuration. Wait for cache propagation or clear cache when appropriate.
+**Fix**: Do not configure the Pages list or sub-grid journey. Use a standard field control on a Pages form field or a Liquid `{% codecomponent %}` tag, or keep the dataset control on a model-driven app.
 
-**Verify**: Reload the site as a permitted user and confirm the PCF grid renders; test paging and selection.
+**Verify**: The plan records that the Pages dataset journey is not supported in this release, and no list or sub-grid Pages configuration was applied.
 
 ### Pages Web API request fails
 

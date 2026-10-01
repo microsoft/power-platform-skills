@@ -34,7 +34,7 @@ This file records **shipped** behaviour only. Planned and unbuilt work is tracke
 ### Quality gates — 🧪 tested
 - `pcf-gates.js` runs manifest and host lint, source gates, ESLint, unit tests, production build, bundle-size checks and unexpected-output checks.
 - Breaking-change comparison is a separate manifest check: run `lint-pcf.js --manifest <current> --against <previous manifest>` when a previous manifest is available.
-- Host-specific policy covers model-driven apps and Power Pages guidance.
+- Host-specific policy covers model-driven apps and Power Pages standard field controls.
 
 ### Doctor and upgrade — 🧪 tested
 - Doctor reports local toolchain and project-health findings.
@@ -47,15 +47,17 @@ This file records **shipped** behaviour only. Planned and unbuilt work is tracke
 
 ### Binding verification — mixed evidence
 - Field bindings are ✅ verified live for cell placement, control id, web/phone/tablet form factors, parameters, draft FormXML and published FormXML.
-- Dataset/sub-grid and grid-customizer binding are 📋 guided and reported as `configuration-not-verified`.
+- Model-driven dataset/sub-grid and grid-customizer binding are 📋 guided and reported as `configuration-not-verified`. Dataset controls on Pages are not supported in this release.
 
 ### Inventory and where-used — ✅ verified live
 - `pcf-inventory.js` lists registered controls and registered where-used dependencies.
 - Where-used covers registered solution dependencies only. It is not proof of Liquid references, arbitrary text references or safe deletion.
 
 ### Power Pages — 🧪 tested and 📋 guided
+- This release supports Power Pages only for standard field controls: the form-field journey and the standalone Liquid journey (`{% codecomponent %}`), both guided.
+- Dataset controls on Pages (form sub-grid and list) are not supported in this release. See [#656](https://github.com/microsoft/power-platform-skills/issues/656).
 - The pre-deploy compatibility gate is 🧪 tested.
-- Site configuration is 📋 guided.
+- Site configuration for the form-field and Liquid journeys is 📋 guided.
 - No live Power Pages run has been completed in this release.
 
 ### Unattended mode — 🧪 tested
@@ -64,6 +66,7 @@ This file records **shipped** behaviour only. Planned and unbuilt work is tracke
 
 ### Not covered in this release
 - **Canvas apps** — a pushed control is registered for the whole environment, but the skill's host checks accept only `model` and `pages`, so it neither checks canvas limits nor guides canvas setup.
+- **Dataset controls on Power Pages** — form sub-grid and list journeys are not supported in this release. See [#656](https://github.com/microsoft/power-platform-skills/issues/656).
 - **Mobile and offline** — not checked, guided or verified.
 - **Registration without PAC** — registration uses `pac pcf push` in this release.
 

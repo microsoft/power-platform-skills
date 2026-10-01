@@ -56,7 +56,7 @@ Recommended smoke assertions:
 - Save → reload round-trips bound output.
 - A user without field/table permission sees the expected safe state.
 - Two instances on the same form do not interfere.
-- For Pages, permitted and denied web roles behave differently as expected.
+- For Pages, permitted and denied web roles behave differently as expected. This release supports Power Pages only for standard field controls: the form-field journey and the standalone Liquid journey (`{% codecomponent %}`), both guided. Dataset controls on Pages (form sub-grid and list) are not supported in this release. Do not run sub-grid or list paging and selection as a Pages test.
 
 ## Dataset-specific tests
 

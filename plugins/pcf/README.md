@@ -4,6 +4,8 @@ Build, test, diagnose, upgrade, deploy, bind, verify and inventory Power Apps co
 
 > **Preview**: Behaviour, file formats and commands may change between releases, and no recipe is runtime-certified yet. See [`docs/pcf-capabilities.md`](docs/pcf-capabilities.md) for what is proven today and [#656](https://github.com/microsoft/power-platform-skills/issues/656) for pending work.
 
+This release supports Power Pages only for standard field controls: the form-field journey and the standalone Liquid journey (`{% codecomponent %}`), both guided. Dataset controls on Pages (form sub-grid and list) are not supported in this release.
+
 ## Installation
 
 ```bash
@@ -121,4 +123,4 @@ export PCF_DISABLE_HOOKS=1
 
 ## Relation to model-apps
 
-PCF code components ship in this separate plugin because the same component can be used by model-driven apps, canvas apps and Power Pages; this release builds and verifies them for model-driven apps and Power Pages. The model-apps plugin still owns whole-app and generative-page authoring: `/model-apps:app-builder` builds whole apps, and `/model-apps:genpage` builds pages. The plugins connect only at the skill level. With both installed, an agent working in `/model-apps:app-builder` can hand a control off to `/pcf:pcf` by passing it a `pcf-intent.json`; App Builder does not do this on its own. Neither plugin runs the other's scripts, because each installs on its own.
+PCF code components ship in this separate plugin because the same component can be used by model-driven apps, canvas apps and Power Pages; this release builds and verifies them for model-driven apps and, on Power Pages, standard field controls only. The model-apps plugin still owns whole-app and generative-page authoring: `/model-apps:app-builder` builds whole apps, and `/model-apps:genpage` builds pages. The plugins connect only at the skill level. With both installed, an agent working in `/model-apps:app-builder` can hand a control off to `/pcf:pcf` by passing it a `pcf-intent.json`; App Builder does not do this on its own. Neither plugin runs the other's scripts, because each installs on its own.

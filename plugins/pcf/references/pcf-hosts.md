@@ -21,9 +21,9 @@ This document summarizes the host rules the `/pcf` skill applies before build, d
 
 ## Power Pages
 
-Power Pages support is narrower than model-driven apps.
+Power Pages support is narrower than model-driven apps. This release supports Power Pages only for standard field controls: the form-field journey and the standalone Liquid journey (`{% codecomponent %}`), both guided. Dataset controls on Pages (form sub-grid and list) are not supported in this release.
 
-- Power Pages supports model-driven app controls on configured forms/lists and Liquid pages: [Use code components in Power Pages](https://learn.microsoft.com/en-us/power-pages/configure/component-framework) and [Liquid codecomponent tag](https://learn.microsoft.com/en-us/power-pages/configure/liquid/component-framework-liquid).
+- Microsoft Learn describes code components on configured Power Pages forms and Liquid pages: [Use code components in Power Pages](https://learn.microsoft.com/en-us/power-pages/configure/component-framework) and [Liquid codecomponent tag](https://learn.microsoft.com/en-us/power-pages/configure/liquid/component-framework-liquid). This release guides only the standard field form journey and the Liquid journey. The rendered host matrix records Learn site prerequisites, including a dataset row; that row is not a supported journey in this release.
 - Power Pages does not support virtual controls/platform libraries. Learn's React controls FAQ states React controls and platform libraries are currently only supported for canvas and model-driven apps, and Power Pages React controls do not update based on other fields: [FAQ](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/react-controls-platform-libraries#faq).
 - Required `uses-feature` declarations are not allowed for Pages. Optional features must be guarded at the method level and verified on the target site.
 - Multi-field form PCF bindings are not supported in Power Pages. A single field binding can be enabled on a Pages form field.
@@ -51,7 +51,7 @@ The rendered host matrix above lists the manifest property types that are unsupp
 
 - `context.webAPI` is documented for model-driven apps and portals: [WebAPI](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/webapi).
 - Device capture and Utility APIs are not supported in Power Pages according to the Pages PCF article: [unsupported code components](https://learn.microsoft.com/en-us/power-pages/configure/component-framework#unsupported-code-components-in-power-pages).
-- Dataset paging APIs are documented for model-driven and canvas apps: [Paging](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/paging). Power Pages dataset behavior must be verified in the target site.
+- Dataset paging and `openDatasetItem` are documented for model-driven and canvas apps only: [Paging](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/paging) and [openDatasetItem](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/dataset/opendatasetitem). Dataset templates call both, so this release does not support dataset controls on Pages and does not ask the agent to verify paging or selection on a Pages sub-grid or list.
 - `trackContainerResize` is available for model-driven apps, canvas apps and portals, but test-harness width/height values differ from deployed hosts: [trackContainerResize](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/mode/trackcontainerresize).
 
 ## Binding facts from this release

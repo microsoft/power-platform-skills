@@ -39,10 +39,10 @@ Build, repair, upgrade, deploy, bind, verify and inventory Power Apps component 
 - **new**: no PCF project exists or the user asks to create one. Follow [create-flow.md](create-flow.md).
 - **existing project**: one `*.pcfproj` found. Iterate, gates, deploy-only or bind as requested. If several are found, ask which unless unattended supplied a path.
 - **verify**: existing control already registered/bound. Run `verify-pcf.js` or `pcf-inventory.js` as appropriate.
-- **pages**: user targets Power Pages. Run the Pages compatibility gate before deploy or acceptance, then guide site configuration after deploy. Follow [pages-flow.md](pages-flow.md).
+- **pages**: user targets Power Pages. This release supports Power Pages only for standard field controls: the form-field journey and the standalone Liquid journey (`{% codecomponent %}`), both guided. Dataset controls on Pages (form sub-grid and list) are not supported in this release. Run the Pages compatibility gate before deploy or acceptance, then guide site configuration after deploy. Follow [pages-flow.md](pages-flow.md).
 - **doctor**: run `pcf-doctor.js` and stop with fixes unless user asked to apply a repair.
 - **upgrade**: follow [upgrade-flow.md](upgrade-flow.md).
-- **inventory / "is this control still used?"**: run `pcf-inventory.js --where-used`; always include the where-used warning from `pcf-testing.md` because dependency results are registered solution dependencies only, not proof of Liquid or arbitrary text references.
+- **inventory / "is this control still used?"**: run `pcf-inventory.js --env <url> --where-used`; always include the where-used warning from `pcf-testing.md` because dependency results are registered solution dependencies only, not proof of Liquid or arbitrary text references.
 
 ## Phase 0 — preflight
 
@@ -88,7 +88,7 @@ Then scaffold exactly what the approved intent names:
 node "${PLUGIN_ROOT}/scripts/pcf-scaffold.js" --template <id> --namespace <Namespace> --name <ControlName> --out <dir> [--hosts model,pages] [--recipe <id>] [--display-name <text>] [--description <text>] [--install] [--npm-cli <path>]
 ```
 
-If the JSON includes a `PCF_SCAFFOLD_OUT_REDIRECTED` warning, report `resolvedOutDir` to the user. Checks and writes used that physical path; `outDir` is only the path that was requested.
+If the scaffold JSON includes the `PCF_SCAFFOLD_OUT_REDIRECTED` note, tell the user the files were written to `resolvedOutDir`. That note is an `info` finding, not a warning, and appears only when `--out` resolved through a symlink or junction. Checks and writes used that physical path; `outDir` is only the path that was requested.
 
 Do not hand-copy template files. Recipes are routing aids; each current recipe is designed for its listed hosts but **not certified in this release** unless `pcf-recipes.md` shows a certification date.
 
@@ -127,7 +127,7 @@ For controls targeting Power Pages, run the pre-deploy Pages gate before `pcf-pu
 node "${PLUGIN_ROOT}/scripts/pcf-gates.js" --project <dir> --hosts pages
 ```
 
-This release supports Pages only for standard field controls. Reject unsupported control types, unsupported manifest features and source patterns documented in [../../references/pcf-power-pages.md](../../references/pcf-power-pages.md) before deploy. Keep the site-configuration journey for after deployment.
+This release supports Power Pages only for standard field controls: the form-field journey and the standalone Liquid journey (`{% codecomponent %}`), both guided. Dataset controls on Pages (form sub-grid and list) are not supported in this release. Reject dataset Pages targets, unsupported control types, unsupported manifest features and source patterns documented in [../../references/pcf-power-pages.md](../../references/pcf-power-pages.md) before deploy. Keep the field and Liquid site-configuration journeys for after deployment.
 
 ## Phase 6 — deploy
 
@@ -154,7 +154,7 @@ Offer a browser runtime check with Playwright MCP when a reachable app or Pages 
 
 ## Phase 9 — Pages site configuration
 
-After deployment, follow [pages-flow.md](pages-flow.md), [../../references/pcf-power-pages.md](../../references/pcf-power-pages.md), and the host matrix to guide site configuration. Pages configuration is guided in this release; do not claim Pages runtime certification without opening the site and recording behavior.
+After deployment, follow [pages-flow.md](pages-flow.md), [../../references/pcf-power-pages.md](../../references/pcf-power-pages.md), and the host matrix to guide site configuration. This release supports Power Pages only for standard field controls: the form-field journey and the standalone Liquid journey (`{% codecomponent %}`), both guided. Dataset controls on Pages (form sub-grid and list) are not supported in this release. Do not claim Pages runtime certification without opening the site and recording behavior.
 
 ## Upgrade and inventory shortcuts
 
@@ -172,7 +172,7 @@ After deployment, follow [pages-flow.md](pages-flow.md), [../../references/pcf-p
 
 | Level | What you may claim | Script or proof |
 | --- | --- | --- |
-| `built` | Production build completed locally. | `pcf-build.js --mode production` or `pcf-gates.js` build phase. |
+| `built` | Production build completed locally. | `pcf-build.js --project <dir> --mode production` or `pcf-gates.js --project <dir>` build phase. |
 | `gated` | Manifest, host, source, lint, tests and build passed. | `pcf-gates.js` green. |
 | `registered` | Dataverse has the expected control/version. | `pcf-push.js` verification or `verify-pcf.js`. |
 | `bound(draft)` | Draft form/grid metadata uses the control. | `verify-pcf.js` draft read. |

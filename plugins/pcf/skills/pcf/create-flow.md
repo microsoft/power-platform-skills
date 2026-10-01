@@ -6,8 +6,8 @@ Use this flow for a new PCF control. Microsoft Learn defines PCF controls, manif
 
 Ask only what is missing from the request:
 
-1. **Host**: model-driven apps, Power Pages, or both. Power Pages implies a **standard** control because Learn says platform-library React controls are not supported on Power Pages: https://learn.microsoft.com/en-us/power-apps/developer/component-framework/react-controls-platform-libraries#faq.
-2. **Control shape**: field, dataset sub-grid/list, or Power Apps grid customizer.
+1. **Host**: model-driven apps, Power Pages, or both. This release supports Power Pages only for standard field controls: the form-field journey and the standalone Liquid journey (`{% codecomponent %}`), both guided. Dataset controls on Pages (form sub-grid and list) are not supported in this release. Power Pages implies a **standard** field control because Learn says platform-library React controls are not supported on Power Pages: https://learn.microsoft.com/en-us/power-apps/developer/component-framework/react-controls-platform-libraries#faq.
+2. **Control shape**: field, dataset sub-grid/list, or Power Apps grid customizer. Dataset sub-grid/list is model-driven only in this release.
 3. **Template family**: standard vs virtual. Derive it from hosts and requirements; do not offer virtual for Pages.
 4. **Properties**: name, type, usage, required/default. Check Pages property types and single-field limits against `../../references/pcf-hosts.md`.
 5. **Features**: WebAPI, Utility, Device, external service usage. Declare only documented features and guard optional APIs at runtime.
@@ -68,7 +68,7 @@ node "${PLUGIN_ROOT}/scripts/pcf-scaffold.js" --template <id> --namespace <Names
 
 `pcf-intent.json`, `pcf-plan.md` and `workflow-log.md` live in the session working directory. `--out` must be a new, empty subdirectory. Never write those session files into `--out` before scaffold runs — scaffold refuses a non-empty directory. `hooks/validate-write-safety.js` detects a pcf session from `pcf-intent.json` or `pcf-plan.md` at or one level under the cwd; `workflow-log.md` is not a session marker.
 
-Continue only on JSON `ok:true`. If the result includes a `PCF_SCAFFOLD_OUT_REDIRECTED` warning, report `resolvedOutDir` to the user. Do not edit generated lockfiles to chase unrelated versions; versions come from `compatibility-matrix.json` and committed lockfiles.
+Continue only on JSON `ok:true`. If the scaffold JSON includes the `PCF_SCAFFOLD_OUT_REDIRECTED` note, tell the user the files were written to `resolvedOutDir`. That note is an `info` finding, not a warning, and appears only when `--out` resolved through a symlink or junction. Do not edit generated lockfiles to chase unrelated versions; versions come from `compatibility-matrix.json` and committed lockfiles.
 
 ## 5. Implement
 
