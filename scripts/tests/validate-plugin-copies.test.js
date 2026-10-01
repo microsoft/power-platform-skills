@@ -169,6 +169,49 @@ test('subset module-level declaration drift is reported', () => withTempRepo((ro
   assert.ok(result.findings.some((finding) => finding.kind === 'declaration-drift' && finding.source === 'DATAVERSE_HOST'));
 }));
 
+test('removing a closed-over subset declaration is reported', () => {
+  const added = [
+    ['nearestName', 'const nearestName = (value) => value;'],
+    ['execFileAsync', 'const execFileAsync = async () => null;'],
+    ['runSync', 'const runSync = () => null;'],
+    ['helperFlag', 'const helperFlag = true;'],
+  ];
+  for (const [name, declaration] of added) {
+    withTempRepo((root) => {
+      for (const rel of [COPY_SETS[0].subset.source, COPY_SETS[0].subset.copy]) {
+        const full = path.join(root, rel);
+        const text = `${declaration}\n${fs.readFileSync(full, 'utf8')}`
+          .replaceAll('return DATAVERSE_HOST.test', `return ${name} && DATAVERSE_HOST.test`);
+        fs.writeFileSync(full, text);
+      }
+      const copyPath = path.join(root, COPY_SETS[0].subset.copy);
+      fs.writeFileSync(copyPath, fs.readFileSync(copyPath, 'utf8').replace(`${declaration}\n`, ''));
+      const result = runCheck(root);
+      assert.equal(result.ok, false, name);
+      assert.ok(
+        result.findings.some((finding) => finding.kind === 'missing-declaration' && finding.source === name),
+        `${name}: ${result.findings.map((finding) => finding.kind + ':' + finding.source).join(', ')}`,
+      );
+    });
+  }
+
+  for (const [name, pattern] of [
+    ['DATAVERSE_HOST', /^const DATAVERSE_HOST = .*?;\r?\n/m],
+    ['authTokenMemo', /^let authTokenMemo = null;\r?\n/m],
+  ]) {
+    withTempRepo((root) => {
+      const copyPath = path.join(root, COPY_SETS[0].subset.copy);
+      const before = fs.readFileSync(copyPath, 'utf8');
+      const removed = before.replace(pattern, '');
+      assert.notEqual(removed, before, name);
+      fs.writeFileSync(copyPath, removed);
+      const result = runCheck(root);
+      assert.equal(result.ok, false, name);
+      assert.ok(result.findings.some((finding) => finding.kind === 'missing-declaration' && finding.source === name), name);
+    });
+  }
+});
+
 test('removing a required subset module declaration is reported', () => withTempRepo((root) => {
   const copyPath = path.join(root, COPY_SETS[0].subset.copy);
   fs.writeFileSync(

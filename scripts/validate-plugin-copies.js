@@ -162,6 +162,37 @@ function declarationNames(block) {
   return match ? [match[1]] : [];
 }
 
+function identifiersInSource(source) {
+  // Strip comments and quotes before scanning so a name that appears only in prose is not treated
+  // as a binding. Function source looks like:
+  //   function validateFlags() { const near = nearestName(k, knownSet); return near; }
+  // Template text is removed too; a substitution-only reference is rare in this subset and would
+  // still show up in the surrounding expression.
+  const stripped = String(source)
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/.*$/gm, ' ')
+    .replace(/'(?:\\.|[^'\\])*'/g, ' ')
+    .replace(/"(?:\\.|[^"\\])*"/g, ' ')
+    .replace(/`(?:\\.|[^`\\])*`/g, ' ');
+  return stripped.match(/\b[A-Za-z_$][\w$]*\b/g) || [];
+}
+
+function referencedDeclarations(sourcePath, sourceModule, copyModule, subset, sourceDeclarations = topLevelDeclarations(sourcePath)) {
+  const referenced = new Set(subset.requiredDeclarations || []);
+  const names = new Set(subset.requiredExports || []);
+  for (const exportName of Object.keys(copyModule)) {
+    if (exportName !== subset.exceptExport) names.add(exportName);
+  }
+  for (const name of names) {
+    const fn = sourceModule[name];
+    if (typeof fn !== 'function') continue;
+    for (const ident of identifiersInSource(Function.prototype.toString.call(fn))) {
+      if (sourceDeclarations.has(ident)) referenced.add(ident);
+    }
+  }
+  return referenced;
+}
+
 function topLevelDeclarations(file) {
   const source = normalizeText(readText(file));
   const declarations = new Map();
@@ -200,7 +231,12 @@ function checkSubset(repoRoot, setName, subset) {
 
   const sourceDeclarations = topLevelDeclarations(sourcePath);
   const copyDeclarations = topLevelDeclarations(copyPath);
-  for (const name of subset.requiredDeclarations || []) {
+  // A retained function can close over a binding that is not itself exported. Removing
+  // `const { nearestName } = require('./nearest-name.js')` left validateFlags' body identical, so
+  // export comparison passed and the copy then threw ReferenceError at runtime. Require every
+  // top-level declaration those function bodies actually reference, not only the two names listed
+  // in requiredDeclarations.
+  for (const name of referencedDeclarations(sourcePath, sourceModule, copyModule, subset, sourceDeclarations)) {
     if (!copyDeclarations.has(name)) {
       findings.push(finding(setName, 'missing-declaration', name, subset.copy, subsetFix(name)));
     }
@@ -279,6 +315,7 @@ module.exports = {
   checkVerbatimPair,
   checkSubset,
   topLevelDeclarations,
+  referencedDeclarations,
   normalizeDeclaration,
   formatFinding,
 };
