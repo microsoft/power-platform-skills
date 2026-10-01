@@ -3,6 +3,22 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<!--
+  The carousel inserts screen mockups whose text comes from the user's own requirements, so this
+  page treats that markup as untrusted. The sanitizer below strips scripts and handlers; this
+  policy is the backstop that holds even if the sanitizer is wrong.
+
+  - `default-src 'none'` so anything not named here simply cannot load.
+  - `script-src` is the nonce plus the Mermaid CDN. An injected script element carries no nonce
+    and will not run, and inline event-handler attributes are refused because 'unsafe-inline' is
+    absent from script-src.
+  - `style-src 'unsafe-inline'` is required: this page ships a `<style>` block, the mockups carry
+    `style=` attributes, and Mermaid injects stylesheets. Inline CSS cannot execute.
+  - `img-src data:` only - the brand mark and the QR are both inlined, so no image is ever
+    fetched, and an injected `<img src=...>` cannot call out.
+  - No `connect-src`, `frame-src` or `object-src`: the plan never talks to the network.
+-->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-__ATTR_CSP_NONCE__' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'"/>
 <title>__PLAN_TITLE__ - __APP_NAME__</title>
 <script nonce="__ATTR_CSP_NONCE__" src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 <style>
@@ -263,7 +279,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 <body>
 <div class="topbar">
   <div class="topbar-left">
-    <img class="logo" src="./power-apps-icon.svg" alt="Power Apps"/>
+    <img class="logo" id="brandLogo" src="__ATTR_BRAND_ICON__" alt="Power Apps"/>
     <div>
       <div class="topbar-title">__PLAN_TITLE__</div>
       <div class="topbar-sub">
@@ -468,6 +484,8 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   var sections = JSON.parse(document.getElementById('sectionsData').textContent);
   var sectionStates = JSON.parse(document.getElementById('sectionStatesData').textContent);
   var phone = JSON.parse(document.getElementById('phoneData').textContent);
+  // Code-owned, substituted at render time; never plan data.
+  var brandIcon = document.getElementById('brandLogo').getAttribute('src') || '';
   var capabilities = __JSON_CAPABILITIES__;
 
   var STATUS_CLASS = {
@@ -631,7 +649,10 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     }
     try {
       mermaid.render('mmd' + Math.random().toString(36).slice(2), source).then(function (result) {
-        panel.innerHTML = result.svg;
+        // Mermaid's output is built from plan data (table and screen names), so it goes through
+        // the same cleaning as the mockups rather than straight into the document.
+        panel.textContent = '';
+        panel.appendChild(sanitizeMockup(result.svg));
         if (onRendered) onRendered(panel);
       }).catch(function (error) {
         showSource(container, panel, source, error);
@@ -739,6 +760,48 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     container.appendChild(stores);
   }
 
+  // Elements that execute, navigate, or reach the network. `link`/`meta`/`base` are included
+  // because a mockup is a fragment of a document and must not redefine this one's head.
+  var MOCKUP_BANNED_TAGS = ['SCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META', 'BASE', 'FORM'];
+  // `javascript:` executes; `data:text/html` navigates to attacker-controlled markup with this
+  // document's privileges. Images as `data:` are fine and are how the QR is drawn.
+  var MOCKUP_BANNED_URL = /^\s*(javascript:|data:text\/html)/i;
+
+  /**
+   * Make generated mockup markup inert before it enters the document.
+   *
+   * The blocks come from `/design-system`, but their text is the user's own requirements, so a
+   * handler or SVG payload that survived into the mockup would run when the plan is opened. The
+   * page's CSP already refuses unnonced scripts and inline handlers; this is the second line, so
+   * a policy that is ever loosened does not immediately become an execution path.
+   *
+   * Parsed into a `<template>`, whose content is an inert fragment: nothing executes and no
+   * resource is fetched while it is being cleaned.
+   */
+  function sanitizeMockup(markup) {
+    var holder = document.createElement('template');
+    holder.innerHTML = String(markup == null ? '' : markup);
+    var nodes = holder.content.querySelectorAll('*');
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      if (MOCKUP_BANNED_TAGS.indexOf(node.tagName) >= 0) {
+        if (node.parentNode) node.parentNode.removeChild(node);
+        continue;
+      }
+      var attrs = node.attributes;
+      for (var j = attrs.length - 1; j >= 0; j--) {
+        var name = attrs[j].name;
+        var value = attrs[j].value;
+        // Every event handler, however it is spelled.
+        if (/^on/i.test(name)) { node.removeAttribute(name); continue; }
+        if (/^(href|src|xlink:href|action|formaction)$/i.test(name) && MOCKUP_BANNED_URL.test(value)) {
+          node.removeAttribute(name);
+        }
+      }
+    }
+    return holder.content;
+  }
+
   function renderPhone() {
     railPreviewLink();
     var screen = document.getElementById('deviceScreen');
@@ -780,9 +843,10 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       var show = function (i) {
         index = Math.max(0, Math.min(phone.screens.length - 1, i));
         var current = phone.screens[index] || {};
-        // Plugin-authored markup, produced the same way /preview-screens produces its mockups.
-        // It is generated content, not user input, which is why it may be inserted as markup.
-        frame.innerHTML = current.html || '';
+        // Replaced wholesale each time, then refilled from the sanitized fragment. Assigning
+        // innerHTML directly would put unexamined markup into the document.
+        frame.textContent = '';
+        frame.appendChild(sanitizeMockup(current.html));
         caption.textContent = (current.name ? current.name + '  \u00b7  ' : '')
           + (index + 1) + ' of ' + phone.screens.length;
         prev.disabled = index === 0;
@@ -805,7 +869,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     orbit.appendChild(el('div', 'bld-ring'));
     var core = el('div', 'bld-core');
     var logo = document.createElement('img');
-    logo.src = './power-apps-icon.svg';
+    logo.src = brandIcon;
     logo.alt = '';
     core.appendChild(logo);
     orbit.appendChild(core);

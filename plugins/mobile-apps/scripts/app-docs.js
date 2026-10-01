@@ -360,6 +360,7 @@ function render(projectRoot, state) {
       SECTION_STATES: state.sectionStates || {},
       PHONE: state.phone || { stage: 'building', screens: [] },
       CAPABILITIES: capabilityLabels(state),
+      BRAND_ICON: brandIconDataUri(),
     },
   });
 }
@@ -369,21 +370,27 @@ function render(projectRoot, state) {
  * resolves when the file is opened straight from disk. Best-effort, matching the sibling
  * power-pages behaviour: a missing icon must not fail a render.
  */
-function copyBrandIcon(projectRoot) {
+/**
+ * The brand mark as a `data:` URI.
+ *
+ * Inlined rather than copied beside the page for two reasons. The page is opened over `file://`,
+ * where the origin is opaque, so a CSP `img-src 'self'` would not reliably match a sibling file -
+ * and the plan carries a strict CSP precisely so injected mockup markup cannot fetch or execute
+ * anything. It also makes the plan a single shareable file rather than a folder.
+ */
+function brandIconDataUri() {
   const source = path.join(__dirname, '..', 'assets', 'power-apps-icon.svg');
   try {
-    if (fs.existsSync(source)) {
-      fs.copyFileSync(source, path.join(docsDir(projectRoot), 'power-apps-icon.svg'));
-    }
+    return `data:image/svg+xml;base64,${fs.readFileSync(source).toString('base64')}`;
   } catch {
-    // non-fatal
+    // A missing mark must not fail a build; the page renders without it.
+    return '';
   }
 }
 
 function save(projectRoot, state) {
   fs.mkdirSync(docsDir(projectRoot), { recursive: true });
   writeJsonAtomic(statePath(projectRoot), state);
-  copyBrandIcon(projectRoot);
   return render(projectRoot, state);
 }
 
@@ -476,7 +483,6 @@ module.exports = {
   PHASES,
   STATE_FILE,
   applyStep,
-  copyBrandIcon,
   docsDir,
   initState,
   loadState,

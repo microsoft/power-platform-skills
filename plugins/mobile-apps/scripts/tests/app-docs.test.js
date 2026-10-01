@@ -22,13 +22,18 @@ function seeded(root) {
   return save(root, initState(root, { appName: 'Field Inspections', dataPlatform: 'dataverse' }));
 }
 
-test('init creates docs/ with the plan and the brand mark beside it', () => {
+test('init creates docs/ with a plan that carries its own brand mark', () => {
   const root = project('docs-init');
   seeded(root);
-  // The page references ./power-apps-icon.svg, so it has to travel with the HTML.
   assert.ok(fs.existsSync(path.join(root, 'docs', 'create-app-plan.html')));
-  assert.ok(fs.existsSync(path.join(root, 'docs', 'power-apps-icon.svg')));
-  assert.ok(fs.existsSync(path.join(root, 'docs', '.run-plan.json')));
+
+  // The mark is inlined rather than copied beside the page. The plan is opened over file://,
+  // where the origin is opaque, so a CSP `img-src 'self'` would not reliably match a sibling -
+  // and inlining also makes the plan a single shareable file rather than a folder.
+  assert.ok(!fs.existsSync(path.join(root, 'docs', 'power-apps-icon.svg')),
+    'no sibling asset should be written');
+  const html = fs.readFileSync(outputPath(root), 'utf8');
+  assert.match(html, /<img class="logo" id="brandLogo" src="data:image\/svg\+xml;base64,/);
 });
 
 test('a resumed run keeps the progress already recorded', () => {

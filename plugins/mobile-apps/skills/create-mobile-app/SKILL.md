@@ -1641,7 +1641,7 @@ If the user picked path (c) Skip in the cost picker, the skill returns immediate
 
 #### Branch A — `brand/` files exist (user picked path a, b, or d)
 
-`/design-system` owns rendering of `_plan_preview.html` at its Sub-step 6.5 using the locked brand tokens — no re-spawn from the orchestrator is needed, the file is fresh when the skill returns. Gate 4 was a structural-only review (markdown screen-graph, no HTML), so this is where screens first become visual. The user sees them in the build plan's phone carousel, and the rendered file is linked underneath it. `/design-system` also opens its own previews in a browser on this branch — that is its behaviour, not something this step suppresses, so expect a tab. Branch B, which renders the preview itself, does not open one.
+`/design-system` owns rendering of `_plan_preview.html` at its Sub-step 6.5 using the locked brand tokens — no re-spawn from the orchestrator is needed, the file is fresh when the skill returns. Gate 4 was a structural-only review (markdown screen-graph, no HTML), so this is where screens first become visual. The user sees them in the build plan's phone carousel, and the rendered file is linked underneath it. Nothing opens a browser window: `/create-mobile-app` sets `CODE_APPS_NATIVE_ORCHESTRATING=1`, and every opener in `/design-system` and its style picker is gated on that, so the plan stays the single surface the user is watching.
 
 #### Branch B — Skip path preview (user picked path c — no `brand/` files)
 

@@ -306,7 +306,11 @@ Print the file path as a clickable link FIRST (always), then ask before launchin
 >
 > Want me to try opening it in your default browser? (yes / no — default: yes)"
 
-On `yes` (or no answer), try OS-appropriate openers in sequence and fall back to the printed link if all fail:
+On `yes` (or no answer), try OS-appropriate openers in sequence and fall back to the printed link if all fail.
+
+**Skip the opener entirely when `CODE_APPS_NATIVE_ORCHESTRATING=1`** and print the path: a
+`/create-mobile-app` run already has its build plan open in the browser, and a tab appearing over
+it interrupts the user rather than showing them something new.
 
 ```bash
 open "<working_dir>/_design_vibe.html" 2>/dev/null \

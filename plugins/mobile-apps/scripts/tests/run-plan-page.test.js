@@ -77,7 +77,18 @@ function runPage(htmlPath) {
       }
       return elements.get(id);
     },
-    createElement(tag) { const created = node(`<${tag}>`); created.tagName = tag.toUpperCase(); return created; },
+    createElement(tag) {
+      const created = node(`<${tag}>`);
+      created.tagName = tag.toUpperCase();
+      if (created.tagName === 'TEMPLATE') {
+        // Enough of a <template> for the sanitizer to run end to end. The stub cannot parse
+        // HTML, so `content` is an empty inert fragment: this proves the page drives the
+        // sanitizer without throwing. What the sanitizer strips is asserted against the
+        // source separately, in the cleaning test below.
+        created.content = { ...node('#fragment'), querySelectorAll: () => [] };
+      }
+      return created;
+    },
     createTextNode(text) { const created = node('#text'); created.textContent = String(text); return created; },
     querySelector() { return null; },
     querySelectorAll() { return []; },
@@ -770,6 +781,47 @@ test('the carousel says the mockups are not the built app, and only while they a
   setPhone(state, { stage: 'qr', qrImage: 'data:image/png;base64,iVBORw0KGgo=' });
   save(root, state);
   assert.equal(runPage(outputPath(root)).elements.get('railNote').hidden, true);
+});
+
+test('the page carries a policy that makes injected mockup markup inert', () => {
+  const template = fs.readFileSync(path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8');
+
+  const csp = template.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)"/);
+  assert.ok(csp, 'the plan must ship a CSP');
+  const policy = csp[1];
+
+  // Nothing loads unless this policy names it.
+  assert.match(policy, /default-src 'none'/);
+  // A script injected through a mockup carries no nonce, and inline handlers need
+  // 'unsafe-inline', which is deliberately absent from script-src.
+  assert.match(policy, /script-src 'nonce-__ATTR_CSP_NONCE__' https:\/\/cdn\.jsdelivr\.net/);
+  assert.doesNotMatch(policy.match(/script-src[^;]*/)[0], /unsafe-inline|unsafe-eval/);
+  // Every image the plan shows is inlined, so an injected <img src> cannot call out.
+  assert.match(policy, /img-src data:/);
+  assert.doesNotMatch(policy, /connect-src|frame-src/);
+
+  // The nonce the policy names must be the one the page's own scripts carry.
+  assert.ok(template.includes('<script nonce="__ATTR_CSP_NONCE__"'), 'page scripts need the nonce');
+});
+
+test('generated markup is cleaned before it reaches the document', () => {
+  const template = fs.readFileSync(path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8');
+
+  // Parsed into a <template>, whose content is inert: nothing runs and no resource is fetched
+  // while it is being cleaned.
+  assert.match(template, /holder\.content\.querySelectorAll\('\*'\)/);
+  for (const tag of ['SCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'FORM']) {
+    assert.ok(template.includes(`'${tag}'`), `${tag} must be stripped from mockups`);
+  }
+  assert.match(template, /\/\^on\/i\.test\(name\)/, 'every on* handler must be removed');
+  assert.match(template, /javascript:\|data:text\\\/html/, 'executing and navigating URLs must be refused');
+
+  // The two places that take generated markup both go through it.
+  const sanitized = [...template.matchAll(/appendChild\(sanitizeMockup\(/g)];
+  assert.equal(sanitized.length, 2, 'mockups and mermaid output both need cleaning');
+  // And neither assigns it straight in.
+  assert.doesNotMatch(template, /frame\.innerHTML/);
+  assert.doesNotMatch(template, /panel\.innerHTML = result\.svg/);
 });
 
 test('every function the page defines is defined exactly once', () => {
