@@ -267,7 +267,11 @@ function renderRecipesTable(deps = {}) {
 
 function renderCertification(recipe) {
   const parts = [];
-  for (const host of recipe.hosts) {
+  for (const host of KNOWN_HOSTS) {
+    if (!recipe.hosts.includes(host)) {
+      parts.push(`${host}: not supported in this release`);
+      continue;
+    }
     const journeys = recipe.certified && recipe.certified[host] && typeof recipe.certified[host] === 'object'
       ? Object.entries(recipe.certified[host]).sort(([a], [b]) => a.localeCompare(b))
       : [];
@@ -714,8 +718,8 @@ function hasProjectMarkers(dir, deps = {}) {
 function realpathNative(fsDep, target) {
   const realpathSync = fsDep.realpathSync;
   if (typeof realpathSync !== 'function') return target;
-  // Prefer the OS realpath. Node's non-native realpath can rewrite a path that is already
-  // physical, which would hide a genuine junction redirect or invent one.
+  // Checks and writes need the OS physical path, including Windows 8.3-name expansion.
+  // Link diagnostics separately use JS realpath so canonicalization alone is not a redirect.
   const native = realpathSync.native;
   if (typeof native === 'function') return native.call(fsDep, target);
   return realpathSync.call(fsDep, target);
@@ -744,8 +748,13 @@ function resolvePhysicalOutDir(outDir, deps = {}) {
     current = parent;
   }
   let ancestor;
+  let followedLink;
   try {
     ancestor = realpathNative(fsDep, current);
+    // JS realpath follows symlinks/junctions but keeps Windows short names and caller casing.
+    // Compare the existing ancestor, not the native spelling, to distinguish links from 8.3 expansion.
+    const linkResolvedAncestor = typeof fsDep.realpathSync === 'function' ? fsDep.realpathSync(current) : current;
+    followedLink = !sameDirectory(current, linkResolvedAncestor, pathDep);
   } catch (err) {
     throw new Error(`Output directory '${requested}' could not be resolved: ${err && err.message ? err.message : err}`);
   }
@@ -755,14 +764,14 @@ function resolvePhysicalOutDir(outDir, deps = {}) {
   // scaffold into linked folders on purpose, so a link is allowed — but the emptiness check
   // and every write must use this one physical path, or a non-empty target can look new.
   const resolvedOutDir = missing.length === 0 ? ancestor : pathDep.join(ancestor, ...missing.reverse());
-  return { requested, resolvedOutDir };
+  return { requested, resolvedOutDir, followedLink };
 }
 
 function redirectFinding(requested, resolvedOutDir) {
   return {
     code: 'PCF_SCAFFOLD_OUT_REDIRECTED',
-    severity: 'warning',
-    message: `Output directory '${requested}' resolves to '${resolvedOutDir}'. Scaffold checks and writes use the physical path.`,
+    severity: 'info',
+    message: `Output directory '${requested}' resolves through a link to '${resolvedOutDir}'. Scaffold checks and writes use the physical path.`,
   };
 }
 
@@ -774,7 +783,7 @@ function outputDirLabel(requested, resolvedOutDir) {
 function writeScaffold(plan, outDir, deps = {}) {
   const fsDep = deps.fs || fs;
   const pathDep = deps.path || path;
-  const { requested, resolvedOutDir } = resolvePhysicalOutDir(outDir, deps);
+  const { requested, resolvedOutDir, followedLink } = resolvePhysicalOutDir(outDir, deps);
   for (const file of plan.files) {
     assertSafeRelPath(file.relPath, resolvedOutDir, deps);
   }
@@ -798,7 +807,7 @@ function writeScaffold(plan, outDir, deps = {}) {
     // resolvedOutDir is the field that names where the bytes actually landed.
     written.push(pathDep.join(requested, file.relPath));
   }
-  const findings = sameDirectory(requested, resolvedOutDir) ? [] : [redirectFinding(requested, resolvedOutDir)];
+  const findings = followedLink ? [redirectFinding(requested, resolvedOutDir)] : [];
   return { written, resolvedOutDir, findings };
 }
 

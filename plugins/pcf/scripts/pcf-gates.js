@@ -6,7 +6,7 @@ const path = require('node:path');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
 const { resolvePackageBin, runNodeScript } = require('./lib/node-tool.js');
 const { loadMatrix } = require('./lib/pcf-matrix.js');
-const { findControlProject, buildControl, bundleFindings, pcfScriptsFailed } = require('./lib/pcf-build.js');
+const { findControlProject, buildControl, bundleFindings, pcfScriptsFailed, resolveOutRoot } = require('./lib/pcf-build.js');
 const { parseManifest, lintManifest } = require('./lib/pcf-manifest.js');
 const { gateSources } = require('./lib/pcf-code-gate.js');
 
@@ -122,6 +122,18 @@ function runTestGate(projectDir, models) {
   const controlDirs = models.map((item) => path.dirname(item.manifest));
   const missingGeneratedTypes = controlDirs.filter((dir) => !fs.existsSync(path.join(dir, 'generated', 'ManifestTypes.d.ts')));
   if (missingGeneratedTypes.length > 0) {
+    // Generating test types also writes build output, before the production build's own guard runs.
+    // Reuse its lexical and physical containment check even when the build gate is skipped.
+    try {
+      resolveOutRoot(projectDir);
+    } catch (err) {
+      return gateFromFindings('test', [{
+        code: 'PCF_TEST_PREP_FAILED',
+        severity: 'error',
+        message: `test preparation refused: ${err && err.message ? err.message : err}`,
+        fix: 'Set pcfconfig.json outDir to a child folder physically inside the PCF project, then rerun the quality gates.',
+      }]);
+    }
     const pcfBin = resolvePackageBin(projectDir, 'pcf-scripts', 'pcf-scripts');
     if (!pcfBin) {
       return gateFromFindings('test', [{

@@ -131,10 +131,10 @@ test('listRecipes and renderRecipesTable expose recipe status and certification'
     '<!-- pcf-recipes:begin -->',
     '| Recipe | Template | Designed for (hosts) | Certified | Status |',
     '| --- | --- | --- | --- | --- |',
-    '| Dataset overlay (`dataset-overlay`) | `dataset-standard` | model | model dataset: 2026-09-29 | available |',
+    '| Dataset overlay (`dataset-overlay`) | `dataset-standard` | model | model dataset: 2026-09-29; pages: not supported in this release | available |',
     '| Field overlay (`field-overlay`) | `field-standard` | model, pages | model field: 2026-09-29; pages: not certified in this release | available |',
-    '| Planned only (`planned-only`) | `field-standard` | model | model: not certified in this release | planned |',
-    '| Unsafe overlay (`unsafe-overlay`) | `field-standard` | model | model: not certified in this release | available |',
+    '| Planned only (`planned-only`) | `field-standard` | model | model: not certified in this release; pages: not supported in this release | planned |',
+    '| Unsafe overlay (`unsafe-overlay`) | `field-standard` | model | model: not certified in this release; pages: not supported in this release | available |',
     '<!-- pcf-recipes:end -->',
     '',
   ].join('\n'));
@@ -862,9 +862,9 @@ test('CLI scaffolds and threads --npm-cli into --install', () => {
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.ok, true);
     assert.equal(parsed.outDir, outDir);
-    // The fake npm records process.cwd(), which the OS reports as the physical path. On macOS that is
-    // /private/var/... for an os.tmpdir() of /var/..., so compare against the resolved directory.
-    assert.deepEqual(JSON.parse(fs.readFileSync(log, 'utf8')), { argv: ['ci'], cwd: fs.realpathSync(outDir) });
+    // The OS reports process.cwd() with expanded Windows 8.3 names (RUNNER~1 -> runneradmin), and
+    // macOS resolves /var to /private/var. Native realpath matches both; JS realpath keeps 8.3 names.
+    assert.deepEqual(JSON.parse(fs.readFileSync(log, 'utf8')), { argv: ['ci'], cwd: fs.realpathSync.native(outDir) });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -877,7 +877,7 @@ function linkDirectory(target, linkPath) {
   fs.symlinkSync(target, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
 }
 
-test('writeScaffold warns and writes through a directory link to the physical path', () => {
+test('writeScaffold reports info and writes through a directory link to the physical path', () => {
   const { writeScaffold } = loadScaffold();
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-scaffold-redirect-'));
   try {
@@ -897,11 +897,11 @@ test('writeScaffold warns and writes through a directory link to the physical pa
 
     assert.equal(result.resolvedOutDir, physical);
     assert.equal(fs.readFileSync(path.join(physical, 'marker.txt'), 'utf8'), 'ok');
-    const warning = (result.findings || []).find((finding) => finding.code === 'PCF_SCAFFOLD_OUT_REDIRECTED');
-    assert.ok(warning, 'expected PCF_SCAFFOLD_OUT_REDIRECTED');
-    assert.equal(warning.severity, 'warning');
-    assert.match(warning.message, new RegExp(escapeRegExp(path.resolve(requested))));
-    assert.match(warning.message, new RegExp(escapeRegExp(physical)));
+    const finding = (result.findings || []).find((item) => item.code === 'PCF_SCAFFOLD_OUT_REDIRECTED');
+    assert.ok(finding, 'expected PCF_SCAFFOLD_OUT_REDIRECTED');
+    assert.equal(finding.severity, 'info');
+    assert.match(finding.message, new RegExp(escapeRegExp(path.resolve(requested))));
+    assert.match(finding.message, new RegExp(escapeRegExp(physical)));
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -935,7 +935,31 @@ test('writeScaffold refuses a non-empty physical directory reached through a lin
   }
 });
 
-test('writeScaffold does not warn when the output path is already physical', () => {
+test('writeScaffold has no redirect finding for native canonicalization without a link', () => {
+  const { writeScaffold } = loadScaffold();
+  const parent = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-scaffold-canonical-')));
+  const requestedParent = path.join(parent, 'SHORT~1');
+  const physicalParent = path.join(parent, 'expanded-name');
+  fs.mkdirSync(requestedParent);
+  fs.mkdirSync(physicalParent);
+  const realpathSync = (value) => value;
+  realpathSync.native = (value) => value === requestedParent ? physicalParent : fs.realpathSync.native(value);
+  try {
+    const outDir = path.join(requestedParent, 'child');
+    const result = writeScaffold({ files: [{ relPath: 'marker.txt', content: 'ok' }], warnings: [] }, outDir, {
+      fs: { ...fs, realpathSync },
+    });
+
+    assert.deepEqual(result.findings, [], 'expanding an 8.3 spelling is not a link redirect');
+    assert.equal(result.resolvedOutDir, path.join(physicalParent, 'child'));
+    assert.equal(fs.readFileSync(path.join(result.resolvedOutDir, 'marker.txt'), 'utf8'), 'ok');
+    assert.equal(fs.existsSync(path.join(outDir, 'marker.txt')), false, 'writes must still use native realpath');
+  } finally {
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test('writeScaffold has no redirect finding when the output path is already physical', () => {
   const { writeScaffold } = loadScaffold();
   const parent = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-scaffold-plain-')));
   const outDir = path.join(parent, 'child');
@@ -950,7 +974,7 @@ test('writeScaffold does not warn when the output path is already physical', () 
   }
 });
 
-test('CLI reports resolvedOutDir and a redirect warning when --out goes through a link', () => {
+test('CLI reports resolvedOutDir and redirect info when --out goes through a link', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-scaffold-cli-link-'));
   try {
     const physical = path.join(tmp, 'physical');
@@ -979,11 +1003,11 @@ test('CLI reports resolvedOutDir and a redirect warning when --out goes through 
     assert.equal(parsed.ok, true);
     assert.equal(parsed.outDir, path.resolve(outDir));
     assert.equal(parsed.resolvedOutDir, physicalOut);
-    const warning = (parsed.findings || []).find((finding) => finding.code === 'PCF_SCAFFOLD_OUT_REDIRECTED');
-    assert.ok(warning, `expected redirect warning in ${result.stdout}`);
-    assert.equal(warning.severity, 'warning');
-    assert.match(warning.message, new RegExp(escapeRegExp(path.resolve(outDir))));
-    assert.match(warning.message, new RegExp(escapeRegExp(physicalOut)));
+    const finding = (parsed.findings || []).find((item) => item.code === 'PCF_SCAFFOLD_OUT_REDIRECTED');
+    assert.ok(finding, `expected redirect info in ${result.stdout}`);
+    assert.equal(finding.severity, 'info');
+    assert.match(finding.message, new RegExp(escapeRegExp(path.resolve(outDir))));
+    assert.match(finding.message, new RegExp(escapeRegExp(physicalOut)));
     assert.equal(fs.existsSync(path.join(physicalOut, 'StarRating.pcfproj')), true);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

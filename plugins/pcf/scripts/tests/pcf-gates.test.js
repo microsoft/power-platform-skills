@@ -2,8 +2,11 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { loadCli } = require('./helpers/cli-harness.js');
+const { planScaffold, writeScaffold } = require('../lib/pcf-scaffold.js');
 
 const scriptPath = path.join(__dirname, '..', 'pcf-gates.js');
 
@@ -81,6 +84,41 @@ test('pcf-gates rejects usage errors before running gates', async () => {
   assert.match(cli.stderrText(), /Usage:/);
   assert.match(cli.stderrText(), /--project requires a value/);
   assert.equal(cli.stdoutText(), '');
+});
+
+test('pcf-gates refuses an escaping outDir before a test preparation build can run', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-gates-containment-'));
+  const project = path.join(dir, 'project');
+  const outside = path.join(dir, 'sibling');
+  const calls = [];
+  try {
+    writeScaffold(planScaffold({ template: 'field-standard', namespace: 'Contoso.Controls', name: 'Control' }), project);
+    fs.writeFileSync(path.join(project, 'pcfconfig.json'), JSON.stringify({ outDir: '../sibling' }));
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'sentinel.txt'), 'keep');
+
+    const cli = await run(['--project', project, '--skip', 'lint,build'], {
+      './lib/node-tool': {
+        resolvePackageBin: (_project, pkg) => path.join(project, 'node_modules', pkg, 'bin', `${pkg}.js`),
+        runNodeScript: (_script, args) => {
+          calls.push(args);
+          return { status: 0, stdout: 'prepared', stderr: '' };
+        },
+      },
+    });
+
+    assert.deepEqual(calls, [], 'no development build or test runner may run for an escaping output');
+    assert.equal(cli.exitCode, 1);
+    const payload = JSON.parse(cli.stdoutText());
+    assert.equal(payload.ok, false);
+    const gate = payload.gates.find((item) => item.id === 'test');
+    assert.equal(gate.ok, false);
+    assert.match(gate.findings[0].message, /outDir.*inside the PCF project/i);
+    assert.equal(fs.readFileSync(path.join(outside, 'sentinel.txt'), 'utf8'), 'keep');
+    assert.equal(fs.existsSync(path.join(project, 'Control', 'generated', 'ManifestTypes.d.ts')), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('pcf-gates emits JSON on stdout when a non-usage runtime failure is thrown', async () => {

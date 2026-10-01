@@ -6,11 +6,11 @@ The catalog is rendered from recipe metadata. Recipes are starting points, not c
 <!-- pcf-recipes:begin -->
 | Recipe | Template | Designed for (hosts) | Certified | Status |
 | --- | --- | --- | --- | --- |
-| Attachment uploader (`attachment-uploader`) | `field-standard` | model | model: not certified in this release | available |
-| Contextual grid (`contextual-grid`) | `field-standard` | model | model: not certified in this release | available |
-| Grid customizer (`grid-customizer`) | `field-virtual` | model | model: not certified in this release | available |
-| Hierarchy Tree (`hierarchy-tree`) | `dataset-standard` | model | model: not certified in this release | available |
-| Lookup dropdown (`lookup-dropdown`) | `field-standard` | model | model: not certified in this release | available |
+| Attachment uploader (`attachment-uploader`) | `field-standard` | model | model: not certified in this release; pages: not supported in this release | available |
+| Contextual grid (`contextual-grid`) | `field-standard` | model | model: not certified in this release; pages: not supported in this release | available |
+| Grid customizer (`grid-customizer`) | `field-virtual` | model | model: not certified in this release; pages: not supported in this release | available |
+| Hierarchy Tree (`hierarchy-tree`) | `dataset-standard` | model | model: not certified in this release; pages: not supported in this release | available |
+| Lookup dropdown (`lookup-dropdown`) | `field-standard` | model | model: not certified in this release; pages: not supported in this release | available |
 | Star rating (`star-rating`) | `field-standard` | model, pages | model: not certified in this release; pages: not certified in this release | available |
 <!-- pcf-recipes:end -->
 ## Attachment uploader
