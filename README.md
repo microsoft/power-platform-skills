@@ -28,8 +28,20 @@ The installer automatically:
 
 - Installs `pac` CLI if not already installed
 - Detects available tools (GitHub Copilot CLI, Claude Code)
-- Registers the plugin marketplace and installs all listed plugins
+- Registers the plugin marketplace and installs all listed plugins except `dataverse`
 - Enables auto-update so plugins stay current
+
+To also install the [Dataverse](#dataverse-external) plugin, pass `--include-dataverse`:
+
+```powershell
+iwr https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js -OutFile install.js; node install.js --include-dataverse; del install.js
+```
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js | node - --include-dataverse
+```
+
+The `-` tells Node to read the piped script, so the arguments after it reach the installer.
 
 ### Manual Installation
 

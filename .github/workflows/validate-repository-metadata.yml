@@ -26,6 +26,9 @@ jobs:
             - name: test-legacy-compatibility-validator
               run: node --test scripts/tests/validate-legacy-compatibility.test.js
 
+            - name: test-installer-arguments
+              run: node --test scripts/tests/install.test.js
+
             - name: validate-legacy-compatibility
               run: node scripts/validate-legacy-compatibility.js
 
