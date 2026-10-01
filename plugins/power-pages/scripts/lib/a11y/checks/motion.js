@@ -5,7 +5,8 @@
 // Emulates the "reduce motion" OS setting and then asks the browser which animations
 // are still running. A carousel or hero animation that keeps moving forever while the
 // user has asked for reduced motion is the common Power Pages defect here. Videos
-// that autoplay without controls give users no way to pause them at all.
+// that autoplay without native controls may give users no way to pause them; whether
+// the page offers its own pause button can't be verified here, hence heuristic.
 //
 // document.getAnimations() covers CSS animations, CSS transitions and the Web
 // Animations API. It does not see JavaScript-driven requestAnimationFrame loops or
@@ -70,11 +71,16 @@ function analyzeMotion({ running, videos }) {
     // Unmuted autoplay is also a 1.4.2 Audio Control failure: sound that starts on its
     // own drowns out screen reader speech.
     const wcag = playing.some((v) => !v.muted) ? ['1.4.2', '2.2.2'] : ['2.2.2'];
+    // Heuristic, so non-blocking: the check proves the video plays with no native
+    // controls, but not a failure. The page may have its own pause button (a valid
+    // 2.2.2 mechanism), and 2.2.2 applies only when the motion is non-essential and
+    // shown alongside other content. A person confirms those before it's a defect.
     findings.push(makeFinding({
       id: 'pp-autoplay-video-no-controls',
       impact: 'serious',
       wcag,
-      description: 'Video plays automatically and has no controls, so users cannot pause or stop it. Add the controls attribute or a visible pause button.',
+      heuristic: true,
+      description: 'Video plays automatically without native controls. Unless the page provides its own visible pause or stop button, users cannot pause it. Add the controls attribute or a pause button.',
       helpUrl: 'https://www.w3.org/WAI/WCAG22/Understanding/pause-stop-hide.html',
       nodes: playing.map((v) => ({ target: v.target, html: v.html, summary: v.muted ? 'Muted video playing on its own without controls' : 'Video with sound playing on its own without controls' })),
     }));

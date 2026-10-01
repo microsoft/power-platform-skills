@@ -74,7 +74,8 @@ test('analyzeMotion separates animations from autoplay video and adds 1.4.2 for 
   assert.match(motion.nodes[0].summary, /Infinite animation "spin"/);
   assert.equal(video.id, 'pp-autoplay-video-no-controls');
   assert.equal(video.kind, 'violation');
-  assert.equal(video.heuristic, false);
+  // A custom pause button can't be ruled out, so this is reviewed, not blocking.
+  assert.equal(video.heuristic, true);
   assert.deepEqual(video.wcag, ['1.4.2', '2.2.2']);
   const [mutedOnly] = analyzeMotion({ running: [], videos: [{ target: 'video', html: '', muted: true, playing: true }] });
   assert.deepEqual(mutedOnly.wcag, ['2.2.2']);

@@ -81,6 +81,22 @@ function splitList(value) {
   return value.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
+// Routes are resolved against --url with new URL(route, base), so only a plain
+// absolute path stays on the audited site. Two shapes that "start with /" escape it:
+//   '//example.com/x'  protocol-relative: resolves to https://example.com/x
+//   '/\example.com/x'  WHATWG URL parsing treats '\' as '/' in http(s) URLs, so this
+//                      is protocol-relative too
+// Control characters are rejected because the URL parser strips tabs and newlines
+// ('/\t/example.com' becomes '//example.com'). Returns an error message, or null when
+// the route is safe. https://url.spec.whatwg.org/#special-authority-ignore-slashes-state
+function routePathError(route) {
+  if (typeof route !== 'string' || !route.startsWith('/')) return 'must start with "/"';
+  if (route.startsWith('//')) return 'must be a path on the site, not a protocol-relative URL ("//host")';
+  if (route.includes('\\')) return 'must not contain "\\"';
+  if (/[\x00-\x1f\x7f]/.test(route)) return 'must not contain control characters';
+  return null;
+}
+
 function parseBaseUrl(raw) {
   let url;
   try {
@@ -145,7 +161,8 @@ function parseArgs(argv) {
         const routes = splitList(value);
         if (routes.length === 0) throw new UsageError('--routes must list at least one route');
         for (const r of routes) {
-          if (!r.startsWith('/')) throw new UsageError(`Routes must start with "/": ${r}`);
+          const problem = routePathError(r);
+          if (problem) throw new UsageError(`Route ${problem}: ${r}`);
         }
         opts.routes = [...new Set(routes)];
         break;
@@ -214,4 +231,5 @@ module.exports = {
   UsageError,
   VIEWPORTS,
   parseArgs,
+  routePathError,
 };

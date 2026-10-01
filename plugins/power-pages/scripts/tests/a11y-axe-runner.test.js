@@ -1,7 +1,8 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const vm = require('node:vm');
 
-const { axeTags, criteriaFromTags, normalizeAxeResults, runAxe, tagToCriterion } = require('../lib/a11y/axe-runner');
+const { AXE_KEY, axeTags, criteriaFromTags, normalizeAxeResults, runAxe, tagToCriterion, wrapAxeSource } = require('../lib/a11y/axe-runner');
 const { redact, redactHtml, sanitizeHtml } = require('../lib/a11y/page-helpers');
 
 test('tagToCriterion converts axe criterion tags and ignores level tags', () => {
@@ -93,8 +94,8 @@ function fakePage({ axeAfterInject = true }) {
   return {
     calls,
     async evaluate(fn, arg) {
-      const src = fn.toString();
-      if (src.includes('typeof window.axe')) return injected && axeAfterInject;
+      // Readiness checks pass the isolated key as a string; the run passes { key, tags }.
+      if (typeof arg === 'string') return injected && axeAfterInject;
       calls.push({ run: arg });
       return { violations: [], incomplete: [], testEngine: { version: '4.13.0' } };
     },
@@ -105,14 +106,60 @@ function fakePage({ axeAfterInject = true }) {
   };
 }
 
-test('runAxe injects the local source as inline content and runs with WCAG tags', async () => {
+test('runAxe injects the wrapped local source and runs under the isolated key with WCAG tags', async () => {
   const page = fakePage({});
   const result = await runAxe(page, '/* axe */', { bestPractice: false });
   assert.equal(result.axeVersion, '4.13.0');
-  assert.deepEqual(page.calls[0], { inject: '/* axe */' });
-  assert.deepEqual(page.calls[1].run, axeTags({ bestPractice: false }));
+  assert.ok(page.calls[0].inject.includes('/* axe */'));
+  assert.ok(page.calls[0].inject.includes(JSON.stringify(AXE_KEY)));
+  assert.deepEqual(page.calls[1].run, { key: AXE_KEY, tags: axeTags({ bestPractice: false }) });
 });
 
 test('runAxe fails loudly when axe does not initialize', async () => {
   await assert.rejects(runAxe(fakePage({ axeAfterInject: false }), 'x'), /did not initialize/);
+});
+
+// Minimal stand-in for the axe UMD bundle: it calls an AMD define() when one exists and
+// writes window.axe, like the real axe.js does.
+const FAKE_AXE = `(function (window) {
+  if (typeof define === 'function' && define.amd) define(function () {});
+  window.axe = { run: function () {}, version: 'pinned' };
+})(window);`;
+
+function sandbox(setup) {
+  const defineCalls = [];
+  const ctx = {};
+  ctx.window = ctx;
+  ctx.define = function () { defineCalls.push(arguments); };
+  ctx.define.amd = {};
+  if (setup) setup(ctx);
+  vm.createContext(ctx);
+  return { ctx, defineCalls };
+}
+
+test('wrapAxeSource isolates the pinned axe from a page AMD loader and restores window.axe', () => {
+  const pageAxe = { run() {}, version: 'page' };
+  const { ctx, defineCalls } = sandbox((c) => { c.axe = pageAxe; });
+  vm.runInContext(wrapAxeSource(FAKE_AXE, 'k1'), ctx);
+  assert.equal(defineCalls.length, 0);
+  assert.equal(ctx.k1.version, 'pinned');
+  assert.equal(ctx.axe, pageAxe);
+  assert.equal(Object.keys(ctx).includes('k1'), false);
+});
+
+test('wrapAxeSource leaves no window.axe behind when the page had none', () => {
+  const { ctx } = sandbox();
+  vm.runInContext(wrapAxeSource(FAKE_AXE, 'k2'), ctx);
+  assert.equal(ctx.k2.version, 'pinned');
+  assert.equal(Object.prototype.hasOwnProperty.call(ctx, 'axe'), false);
+});
+
+test('wrapAxeSource refuses a page that locks window.axe', () => {
+  const pageAxe = { run() {}, version: 'page' };
+  const { ctx } = sandbox((c) => {
+    Object.defineProperty(c, 'axe', { value: pageAxe, writable: false, configurable: false });
+  });
+  assert.throws(() => vm.runInContext(wrapAxeSource(FAKE_AXE, 'k3'), ctx), /locked/);
+  assert.equal(ctx.k3, undefined);
+  assert.equal(ctx.axe, pageAxe);
 });

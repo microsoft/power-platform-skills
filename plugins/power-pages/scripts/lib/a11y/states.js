@@ -26,7 +26,7 @@
 // backstop that aborts state-changing requests while a state is replayed.
 
 const fs = require('node:fs');
-const { VIEWPORTS } = require('./args');
+const { VIEWPORTS, routePathError } = require('./args');
 const { isSubmitLikeDescriptor } = require('./checks/inventory');
 
 const ACTIONS = Object.freeze(['click', 'hover', 'focus', 'blur', 'press', 'wait']);
@@ -79,7 +79,8 @@ function validateStates(data) {
     const where = `states[${i}]`;
     if (!s || typeof s !== 'object') throw new StatesFileError(`${where}: must be an object`);
     const route = str(s.route, 'route', where);
-    if (!route.startsWith('/')) throw new StatesFileError(`${where}: route must start with "/"`);
+    const routeProblem = routePathError(route);
+    if (routeProblem) throw new StatesFileError(`${where}: route ${routeProblem}`);
     const label = str(s.label, 'label', where);
     if (s.viewport !== undefined && !Object.hasOwn(VIEWPORTS, s.viewport)) {
       throw new StatesFileError(`${where}: viewport must be one of ${Object.keys(VIEWPORTS).join(', ')}`);

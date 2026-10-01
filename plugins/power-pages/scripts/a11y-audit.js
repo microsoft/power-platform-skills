@@ -248,6 +248,12 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
       for (const state of states.filter((s) => (s.viewport || primary) === viewport)) {
         const url = new URL(state.route, opts.url).toString();
         log(`state ${viewport} ${state.route} "${state.label}"`);
+        // validateStates() already rejects off-site route shapes; this second check
+        // keeps a signed-in browser from ever navigating away if that rule regresses.
+        if (new URL(url).origin !== origin) {
+          builder.addState({ label: state.label, route: state.route, viewport, error: 'route resolves outside the audited site' });
+          continue;
+        }
         const nav = await visit(page, url, { origin, timeoutMs: opts.timeoutMs });
         if (nav.error) {
           builder.addState({ label: state.label, route: state.route, viewport, error: nav.error });

@@ -93,6 +93,13 @@ button.nofocus:focus{outline:none}.low{color:#aaa;background:#fff}</style></head
 <button type="button" id="save">Save draft</button><p id="done" hidden><img src="/z.png?sig=SECRET456">Saved</p>
 <script>save.onclick=function(){fetch('/api/save',{method:'POST',body:'x'}).catch(function(){});done.hidden=false}</script>
 </main></body></html>`,
+  // Not linked from "/". The page ships its own window.axe that reports nothing, and a
+  // RequireJS-style define() that throws on anonymous modules. The audit must still run
+  // the pinned axe and find the missing alt text.
+  '/amd': `<!doctype html><html lang="en"><head><title>AMD</title>
+<script>window.axe={run:function(){return Promise.resolve({violations:[],incomplete:[],testEngine:{version:'page'}})}};
+window.define=function(){throw new Error('Mismatched anonymous define() module')};window.define.amd={}</script></head>
+<body><main><h1>AMD</h1><img src="/x.png"></main></body></html>`,
 };
 
 function startFixture() {
@@ -140,6 +147,20 @@ test('live: audits a crawled fixture site end to end', { skip: !LIVE && 'set POW
     }
     assert.ok(report.pages.some((p) => p.route === '/private' && /sign-in page/.test(p.error)));
     assert.ok(report.crawl.excluded.some((e) => e.reason === 'sign-out'));
+    assert.equal(report.tool.axeVersion, '4.13.0');
+  } finally {
+    server.close();
+  }
+});
+
+test('live: the pinned axe runs even when the page has its own window.axe and an AMD loader', { skip: !LIVE && 'set POWER_PAGES_A11Y_LIVE=1 to run' }, async () => {
+  const server = await startFixture();
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const r = await runAsync(['--url', base, '--routes', '/amd', '--checks', 'axe', '--viewports', 'desktop']);
+    assert.equal(r.status, 1, r.stderr);
+    const report = JSON.parse(r.stdout);
+    assert.ok(report.violations.some((v) => v.id === 'image-alt'));
     assert.equal(report.tool.axeVersion, '4.13.0');
   } finally {
     server.close();

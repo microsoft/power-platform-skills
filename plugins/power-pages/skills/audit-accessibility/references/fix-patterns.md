@@ -38,7 +38,7 @@ Use these patterns to propose the smallest change that resolves each finding. Al
 | `pp-reflow-horizontal-scroll` | 1.4.10 | Remove fixed widths; use `max-width: 100%`, flexible grids, and wrapping. Let wide tables scroll inside their own container. |
 | `pp-text-clipped-at-200` | 1.4.4 | Replace fixed heights with `min-height`, avoid `overflow: hidden` on text containers, and size text in `rem`. |
 | `pp-motion-ignores-reduced-motion` | 2.2.2 | Give long-running motion a pause control, and wrap animations and transitions in `@media (prefers-reduced-motion: no-preference)` (or turn them off under `reduce`), which also meets 2.3.3 (AAA). |
-| `pp-autoplay-video-no-controls` | 2.2.2, 1.4.2 | Add `controls`, or a pause button, to autoplaying video. Don't autoplay audio. |
+| `pp-autoplay-video-no-controls` | 2.2.2, 1.4.2 | Add `controls`, or a visible pause button, to autoplaying video. Don't autoplay audio. Heuristic: if the page already has its own pause button, it isn't a defect. |
 | `pp-page-title-missing` | 2.4.2 | Set a `<title>` for the route. In single-page apps, update `document.title` on navigation. |
 | `pp-page-title-duplicate` | 2.4.2 | Make each page's title unique, for example "Contact us – Contoso". |
 

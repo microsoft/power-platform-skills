@@ -29,6 +29,8 @@ for (const [name, data, pattern] of [
   ['non-object', null, /"states" array/],
   ['no states array', { states: {} }, /"states" array/],
   ['route without slash', { states: [{ route: 'x', label: 'a', steps: [{ action: 'wait', ms: 1 }] }] }, /route must start/],
+  ['protocol-relative route', { states: [{ route: '//example.com/x', label: 'a', steps: [{ action: 'wait', ms: 1 }] }] }, /protocol-relative/],
+  ['backslash route', { states: [{ route: '/\\example.com', label: 'a', steps: [{ action: 'wait', ms: 1 }] }] }, /must not contain/],
   ['missing label', { states: [{ route: '/', steps: [{ action: 'wait', ms: 1 }] }] }, /"label"/],
   ['bad viewport', { states: [{ route: '/', label: 'a', viewport: 'tv', steps: [{ action: 'wait', ms: 1 }] }] }, /viewport/],
   ['no steps', { states: [{ route: '/', label: 'a', steps: [] }] }, /steps must be/],
