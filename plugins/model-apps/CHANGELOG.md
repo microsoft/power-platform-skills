@@ -26,9 +26,11 @@ they cannot read instead of guessing.
   build used to create and move them but never reorder them, and a new tab placed between existing
   ones took over the next one, which then came back as a duplicate.
 - **`--verify` checks more of a form**: tab expanded and visible state, form-column widths, section
-  visibility and label display, fields' `hidden` and `readOnly`, and the order of tabs and sections.
-  A form that differed in any of these passed. It also reads a field's state, span and section from
-  the field itself, never from a quick view bound to the same lookup.
+  visibility and label display, fields' `hidden` and `readOnly` (an auto layout's too, failing a
+  flagged field the form no longer carries), and the order of tabs and sections. A form that differed
+  in any of these passed. It also reads a field's state, span and section from the field itself, never
+  from a quick view bound to the same lookup. Lint warns when an auto layout flags a field it does not
+  place, since the build never applies that flag.
 - **A generative page keeps its name and model on update.** An update without a name renamed the
   page to its navigation title, and one without `--model` stored the model empty. `genpage-upload`
   now reads both from the deployed page and sends them again (a name a `pac.cmd` shim cannot receive
@@ -47,7 +49,8 @@ they cannot read instead of guessing.
   reporting no connections, rejects malformed identifiers, and no longer reads a table's dashed
   separator as a connection. The connector agent never creates a connection after a failed discovery.
 - **A slow Azure CLI is reported as slow.** A token request that ran out of time was reported as
-  `az` missing or signed out; it is now `az_timeout` (or `pac_timeout`), with the time it was given.
+  `az` missing or signed out; it is now `az_timeout` (or `pac_timeout`), with the time it was given
+  and a longer budget to try — never more than the 15-minute maximum.
 - **Lint no longer warns about a view, chart or form name used on two tables** — only a repeat on
   one table collides.
 

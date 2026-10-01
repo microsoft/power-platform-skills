@@ -3,6 +3,7 @@
 // gate; warnings teach. Bakes in the modeling lessons hit live — notably the
 // relationship schema-name vs lookup-name collision Dataverse rejects.
 const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens, isPlatformIconRef, labelText } = require('./app-spec.js');
+const { compileFormIntent, formFieldLogicals, NON_FORM_RENDERABLE_TYPES } = require('./artifact-intent.js');
 const { normalizeSpecShape } = require('./spec-shape.js');
 const { resolveSurfaces, unresolvedSurfaceMessage } = require('./surface-resolver.js');
 const { nearestName } = require('./nearest-name.js');
@@ -220,6 +221,31 @@ function lintAppSpec(spec) {
           ? t.columns.flatMap((c) => (c && Array.isArray(c.sections) ? c.sections : []))
           : t.sections;
         if (!Array.isArray(sections) || sections.length === 0) E(`Form ${f.entity} explicit tab '${t.label || t.name || ''}' has no sections — add at least one section with fields`);
+      }
+    }
+    // Under an AUTO layout the build writes a `readOnly` / `hidden` flag only on a field the layout
+    // places — the primary column, the table's declared columns and its parent lookups — so a flag on any
+    // other field (a stock column on an existing form, say) is never applied, and `--verify` does not
+    // prove it. The placed set is the compiler's own, the list the build reconciles.
+    if (!isExplicit && f.fieldOptions && typeof f.fieldOptions === 'object' && !Array.isArray(f.fieldOptions)) {
+      let placed = null;
+      try { placed = new Set(formFieldLogicals(compileFormIntent(spec, f))); } catch { /* a malformed form is the validator's to report */ }
+      for (const [key, opt] of Object.entries(placed ? f.fieldOptions : {})) {
+        const flags = [opt && opt.readOnly === true && 'readOnly', opt && opt.hidden === true && 'hidden'].filter(Boolean);
+        if (!flags.length || placed.has(lc(key))) continue;
+        // Why the field is off the form decides the advice. A DECLARED column the layout still leaves off is
+        // either a type with no form control at all (BigInt — validation explains it) or a type the auto
+        // layout simply does not place (a Customer column, say), which an explicit layout can list.
+        const ent = arrOf(spec.entities).find((e) => e && lc(e.schemaName) === lc(f.entity));
+        const col = ent && arrOf(ent.columns).find((c) => c && lc(c.schemaName) === lc(key));
+        const what = `Form ${f.entity} '${f.name || ''}': fieldOptions['${key}'] sets ${flags.join(' and ')}`;
+        if (col && NON_FORM_RENDERABLE_TYPES.has(col.type)) {
+          W(`${what} on a ${col.type} column, which has no form control, so the auto layout leaves it off the form and the build never applies it.`);
+        } else if (col) {
+          W(`${what} on a ${col.type} column, a type the auto layout does not place, so the build never applies it. List '${key}' in an explicit layout to place it (prune: false keeps the rest of the form).`);
+        } else {
+          W(`${what} on a field the auto layout does not place — it places the primary column, the table's declared columns and its parent lookups — so the build never applies it. Declare '${key}' as a column, or list it in an explicit layout (prune: false keeps the rest of the form).`);
+        }
       }
     }
     for (const sg of f.subgrids || []) {

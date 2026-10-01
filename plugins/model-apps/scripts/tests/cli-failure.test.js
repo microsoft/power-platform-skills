@@ -11,7 +11,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { AZ_TIMEOUT_ENV, azTimeoutMs, cliFailureKind, azTimeoutAdvice } = require('../lib/cli-failure.js');
+const { AZ_TIMEOUT_ENV, MIN_AZ_TIMEOUT_MS, MAX_AZ_TIMEOUT_MS, azTimeoutMs, cliFailureKind, azTimeoutAdvice } = require('../lib/cli-failure.js');
 const runner = require('../lib/process-runner.js');
 const auth = require('../lib/dataverse-auth.js');
 
@@ -61,6 +61,25 @@ test('cliFailureKind reads each shape Node gives a failed child', () => {
   assert.strictEqual(cliFailureKind(Object.assign(new Error('maxBuffer'), { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', killed: true, signal: 'SIGTERM' })), 'failed');
   assert.strictEqual(cliFailureKind(Object.assign(new Error('Command failed: az'), { code: 1 })), 'failed');
   assert.match(azTimeoutAdvice('az account show', 60000), /`az account show` did not answer within 60 s[\s\S]*POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS=120000/);
+});
+
+// The advice names a budget to set. Doubling the 15-minute maximum suggested 1800000, which azTimeoutMs rejects — so
+// following the advice put the budget back to 60 s. Every suggestion must be one the parser accepts and longer than the
+// budget that ran out; at the maximum, the advice must stop suggesting more time.
+test('azTimeoutAdvice suggests only a budget azTimeoutMs accepts, and none once the budget is the maximum', () => {
+  for (const ms of [1000, 60000, 120000, 449999, 450000, 600000, 899999]) {
+    const m = /POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS=(\d+)/.exec(azTimeoutAdvice('az account show', ms));
+    assert.ok(m, `${ms}: a budget is suggested`);
+    const suggested = Number(m[1]);
+    assert.ok(suggested > ms && suggested <= MAX_AZ_TIMEOUT_MS, `${ms} -> ${suggested}`);
+    assert.strictEqual(azTimeoutMs({ [AZ_TIMEOUT_ENV]: m[1] }), suggested, `${ms}: the suggested ${suggested} is accepted, not replaced by the default`);
+  }
+  assert.match(azTimeoutAdvice('az account show', 450000), /=900000\./, 'capped at the maximum');
+  const atMax = azTimeoutAdvice('az account show', MAX_AZ_TIMEOUT_MS);
+  assert.doesNotMatch(atMax, /POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS=\d/, 'no larger budget to suggest');
+  assert.match(atMax, /did not answer within 900 s\. That is already the longest POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS allows \(15 min\)[\s\S]*run `az account show` yourself/);
+  assert.strictEqual(azTimeoutMs({ [AZ_TIMEOUT_ENV]: String(MAX_AZ_TIMEOUT_MS) }), MAX_AZ_TIMEOUT_MS);
+  assert.strictEqual(azTimeoutMs({ [AZ_TIMEOUT_ENV]: String(MIN_AZ_TIMEOUT_MS) }), MIN_AZ_TIMEOUT_MS);
 });
 
 test('a token read that outlives its budget is recorded as a timeout, and the message says so', async () => {

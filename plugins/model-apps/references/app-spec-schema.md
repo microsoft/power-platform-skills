@@ -902,6 +902,12 @@ in the form designer. The corollary is that `readOnly: false` / `hidden: false` 
 back off — they are rejected at author time rather than accepted and ignored. To un-set one, clear it
 in the designer, or drop the field and let the next build re-add it.
 
+**Under an `auto` layout the flags apply to the fields the layout places** — the primary column, the
+table's declared columns and its parent lookups. A `readOnly`/`hidden` on any other field (a stock
+column of an existing table, say) is never written, and lint warns about it; list that field in an
+explicit layout instead (`prune: false` keeps the rest of the form). `--verify` proves every flag the
+build writes, and fails a flagged field the deployed form no longer carries.
+
 - **`prune`** *(optional, default `true`, explicit layouts only)* — an explicit `tabs` layout is
   normally the complete desired state, so a rebuild removes any deployed field it does not list. Set
   `prune: false` to keep those fields, which lets you restyle or reorder a **subset** of a form

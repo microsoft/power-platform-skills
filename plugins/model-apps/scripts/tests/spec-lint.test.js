@@ -57,6 +57,37 @@ test('a page name with an ASCII double quote is warned about; the characters pac
   assert.strictEqual(r.errors.length, 0, 'a warning, never an error');
 });
 
+// Under an auto layout the build writes readOnly/hidden only on the fields the layout places — the primary column, the
+// declared columns and the parent lookups. A flag on any other field is never applied, so the author is told.
+test('an auto layout\'s fieldOptions flag on a field the layout does not place is warned about', () => {
+  const s = base();
+  s.forms = [{ entity: 'new_ticket', name: 'Ticket Main', layout: 'auto', fieldOptions: {
+    ownerid: { readOnly: true }, // not placed: a stock column the spec does not declare
+    createdon: { hidden: true, readOnly: true },
+    new_priority: { readOnly: true }, // a declared column
+    new_name: { hidden: true }, // the primary column
+    new_customerid: { readOnly: true }, // the parent lookup
+    statuscode: { after: 'new_name' }, // no flag: nothing to apply
+  } }];
+  const warned = lintAppSpec(s).warnings.filter((w) => /does not place/.test(w));
+  assert.deepStrictEqual(warned, [
+    "Form new_ticket 'Ticket Main': fieldOptions['ownerid'] sets readOnly on a field the auto layout does not place — it places the primary column, the table's declared columns and its parent lookups — so the build never applies it. Declare 'ownerid' as a column, or list it in an explicit layout (prune: false keeps the rest of the form).",
+    "Form new_ticket 'Ticket Main': fieldOptions['createdon'] sets readOnly and hidden on a field the auto layout does not place — it places the primary column, the table's declared columns and its parent lookups — so the build never applies it. Declare 'createdon' as a column, or list it in an explicit layout (prune: false keeps the rest of the form).",
+  ]);
+  // An explicit layout places what it lists; this rule is about the auto layout alone.
+  s.forms[0] = { entity: 'new_ticket', name: 'Ticket Main', prune: false, tabs: [{ label: 'G', sections: [{ fields: ['new_name'] }] }], fieldOptions: { ownerid: { readOnly: true } } };
+  assert.deepStrictEqual(lintAppSpec(s).warnings.filter((w) => /does not place/.test(w)), []);
+  // A DECLARED column the auto layout leaves off is not told to declare itself: a BigInt has no form control at all;
+  // a Customer column has one, but the auto layout places only scalar columns — an explicit layout can list it.
+  s.entities[1].columns.push({ schemaName: 'new_bigcount', displayName: 'Big Count', type: 'BigInt' },
+    { schemaName: 'new_payer', displayName: 'Payer', type: 'Customer' });
+  s.forms[0] = { entity: 'new_ticket', name: 'Ticket Main', layout: 'auto', fieldOptions: { new_bigcount: { hidden: true }, new_payer: { readOnly: true } } };
+  assert.deepStrictEqual(lintAppSpec(s).warnings.filter((w) => /fieldOptions\['new_(bigcount|payer)'\]/.test(w)), [
+    "Form new_ticket 'Ticket Main': fieldOptions['new_bigcount'] sets hidden on a BigInt column, which has no form control, so the auto layout leaves it off the form and the build never applies it.",
+    "Form new_ticket 'Ticket Main': fieldOptions['new_payer'] sets readOnly on a Customer column, a type the auto layout does not place, so the build never applies it. List 'new_payer' in an explicit layout to place it (prune: false keeps the rest of the form).",
+  ]);
+});
+
 test('malformed top-level collections return lint errors instead of throwing', () => {
   for (const spec of [
     null,

@@ -2176,7 +2176,11 @@ test('verify FAILS tabs, or the sections of a form-column, deployed out of the l
 // An AUTO layout has no shape to prove, but its fieldOptions flags are asserted by the build on every
 // apply — so they are proven on their own, and an unreadable form is not proven.
 test('verify proves the read-only and hidden flags an AUTO layout declares in fieldOptions', async () => {
-  const autoForm = (flags) => (spec) => { spec.forms = [{ entity: 'new_ticket', name: 'Ticket Main', fieldOptions: flags }]; };
+  // new_notes is a declared column, so the auto layout places it — and the build asserts its flag.
+  const autoForm = (flags) => (spec) => {
+    spec.entities[0].columns = [{ schemaName: 'new_notes', displayName: 'Notes', type: 'Text' }];
+    spec.forms = [{ entity: 'new_ticket', name: 'Ticket Main', fieldOptions: flags }];
+  };
   const checks = async (xml, mutate, over) => {
     const spec = TOPO_SPEC();
     mutate(spec);
@@ -2198,6 +2202,42 @@ test('verify proves the read-only and hidden flags an AUTO layout declares in fi
   const unreadable = await checks(null, flags, { formTopology: async () => { throw new Error('boom'); } });
   assert.strictEqual(unreadable.state[0].present, false);
   assert.match(unreadable.state[0].detail, /could not read/);
+});
+
+// The auto layout places every field it flags, so a flagged field the deployed form does not carry is a mismatch —
+// skipping it passed a form whose read-only field a maker had removed. A flag on a field the auto layout never
+// places is never written by the build, so it is not proven: checking it failed a stock field the build never touched.
+test('verify FAILS an auto layout\'s flagged field that is missing, and ignores a flag the build never writes', async () => {
+  const spec = (fieldOptions) => {
+    const s = TOPO_SPEC();
+    s.entities[0].columns = [{ schemaName: 'new_notes', displayName: 'Notes', type: 'Text' }];
+    s.forms = [{ entity: 'new_ticket', name: 'Ticket Main', fieldOptions }];
+    return s;
+  };
+  const stateOf = async (s, xml) => ((await verifySpec(s, topoRead(xml))).checks || []).filter((c) => c.kind === 'form-field-state');
+  // new_notes is flagged and placed by the layout, but the deployed form only carries new_name.
+  const onlyName = layoutXml([{ name: 'tab_overview', columns: [{ width: '100%', sections: [{ name: 'sec_left', cells: [{ field: 'new_name', control: { disabled: 'true' } }] }] }] }]);
+  const missing = await stateOf(spec({ new_name: { readOnly: true }, new_notes: { hidden: true, readOnly: true } }), onlyName);
+  assert.strictEqual(missing.length, 1);
+  assert.strictEqual(missing[0].present, false);
+  assert.match(missing[0].detail, /field 'new_notes' is not on the deployed form, so its readOnly: true and hidden: true is not deployed/);
+  assert.doesNotMatch(missing[0].detail, /new_name/, 'the field that is there and locked passes');
+
+  // ownerid is not a field the auto layout places (not the primary, not a declared column, not a lookup), so the
+  // build never writes its flag: it is not proven — present and editable, or absent — and alone it adds no check.
+  const withOwner = layoutXml([overview({ nameControl: { disabled: 'true' } })]).replace('</rows></section></sections></column></columns>',
+    '<row><cell><control datafieldname="ownerid" /></cell></row></rows></section></sections></column></columns>');
+  const stock = await stateOf(spec({ new_name: { readOnly: true }, ownerid: { readOnly: true } }), withOwner);
+  assert.deepStrictEqual(stock.map((c) => c.present), [true], stock.map((c) => c.detail).join(' | '));
+  assert.deepStrictEqual(await stateOf(spec({ ownerid: { readOnly: true } }), withOwner), [], 'no flag the build writes, no check');
+
+  // A spec validation would refuse (a table with no primary column) cannot say which fields the layout places:
+  // reported as unverified, never a crash and never a pass.
+  const noPrimary = spec({ new_notes: { hidden: true } });
+  delete noPrimary.entities[0].primaryAttribute;
+  const unverified = await stateOf(noPrimary, withOwner);
+  assert.deepStrictEqual(unverified.map((c) => c.present), [false]);
+  assert.match(unverified[0].detail, /could not compile the layout to tell which fields the build places[\s\S]*unverified, not proven correct/);
 });
 
 // --- #586 item 3: a deployed dashboard must be internally consistent, not merely present ----------

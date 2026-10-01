@@ -448,11 +448,24 @@ async function verifySpec(spec, read, opts = {}) {
       // An AUTO layout declares no shape, so it has no topology to prove — but its `fieldOptions` can
       // still make a field read-only or hidden, which the build asserts on every apply. Those flags are
       // proven on their own (`form-field-state`); without this an auto-layout form's declared state was
-      // never checked at all.
-      const autoFlagged = explicit ? [] : Object.keys(formFieldOptions)
-        .filter((k) => formFieldOptions[k].readOnly === true || formFieldOptions[k].hidden === true);
-      if (!explicit && !autoFlagged.length) continue;
+      // never checked at all. Exactly the flags the BUILD writes are proven: those on the fields the
+      // compiled layout places (autoLayoutFieldFlags). A flag on any other field is never applied, so
+      // proving it failed a form the build had never been asked to change.
+      const flagsAny = !explicit && Object.values(formFieldOptions).some((o) => o.readOnly === true || o.hidden === true);
+      let autoFlagged = [];
+      let autoCompileError = null;
+      if (flagsAny) {
+        try { autoFlagged = autoLayoutFieldFlags(spec, f); } catch (e) { autoCompileError = (e && e.message) || String(e); }
+      }
+      if (!explicit && !autoFlagged.length && !autoCompileError) continue;
       const kind = explicit ? 'form-topology' : 'form-field-state';
+      if (autoCompileError) {
+        // Only an unvalidated spec reaches this (validation requires every table's primary column), but a
+        // layout the compiler cannot read cannot say which fields the build places — so nothing is proven.
+        add(kind, `${entity}.${name}`, false,
+          `could not compile the layout to tell which fields the build places (${autoCompileError}) — the field state is unverified, not proven correct`);
+        continue;
+      }
       if (!canReadTopology) {
         add(kind, `${entity}.${name}`, false,
           'this reader exposes no deployed-layout source, so the layout is UNVERIFIED — not proven correct');
@@ -503,13 +516,20 @@ async function verifySpec(spec, read, opts = {}) {
         if (eff.readOnly === true) flagProblem(`field '${fl}'`, 'disabled', (dc.control || {}).disabled, true, false, 'readOnly: true');
       };
       if (!explicit) {
-        // The FIRST cell binding the field — the one the build's cell lookup patches. A flagged field the
-        // form does not carry is not reported here: an auto layout's placement is not verified either.
+        // The FIRST cell binding the field — the one the build's cell lookup patches. Every field here is
+        // one the build places on the form, so a flagged field the deployed form does not carry is a
+        // mismatch: its state cannot be deployed without it. Skipping it passed a form whose read-only
+        // field a maker had removed.
         const cellOf = (fl) => deployed.flatMap((t) => (t.columns || []).flatMap((c) => (c.sections || []).flatMap((s) => (s.rows || []).flatMap((r) => r.cells || []))))
           .find((c) => c.control && c.control.fieldName === fl && !isNonFieldControl(c.control));
-        for (const fl of autoFlagged) {
-          const dc = cellOf(fl);
-          if (dc) fieldStateProblems(fl, formFieldOptions[fl], dc);
+        for (const { field, readOnly, hidden } of autoFlagged) {
+          const dc = cellOf(field);
+          if (!dc) {
+            const declared = [readOnly && 'readOnly: true', hidden && 'hidden: true'].filter(Boolean).join(' and ');
+            problems.push(`field '${field}' is not on the deployed form, so its ${declared} is not deployed`);
+            continue;
+          }
+          fieldStateProblems(field, { readOnly, hidden }, dc);
         }
         add(kind, `${entity}.${name}`, problems.length === 0,
           problems.length ? `deployed field state does not match the authored one — ${problems.slice(0, 6).join('; ')}${problems.length > 6 ? `; +${problems.length - 6} more` : ''}` : '');
@@ -1627,6 +1647,30 @@ function parseFetchXml(xml) {
     });
   }
   return { conditions, orders };
+}
+
+// The read-only / hidden flags the build writes for an AUTO-layout form: one entry per field the compiled
+// layout places — the primary column, the table's declared columns, its parent lookups — whose compiled cell
+// carries a flag, in the cell's own terms (`control.isReadOnly`, `visible: false`). These are exactly the
+// fields the build's reconcile places and re-asserts (`want` → applyFieldControlOptions in sdk-build.js); a
+// `fieldOptions` flag on any other field is never written (spec-lint warns about it).
+function autoLayoutFieldFlags(spec, formSpec) {
+  const out = [];
+  const seen = new Set();
+  const def = compileFormIntent(spec, formSpec);
+  for (const t of def.tabs || []) for (const col of t.columns || []) for (const sec of col.sections || []) {
+    for (const row of sec.rows || []) for (const cell of row.cells || []) {
+      const fn = cell.control && cell.control.fieldName;
+      if (!fn || isNonFieldControl(cell.control)) continue;
+      const field = String(fn).toLowerCase();
+      if (seen.has(field)) continue;
+      seen.add(field);
+      const readOnly = cell.control.isReadOnly === true;
+      const hidden = cell.visible === false;
+      if (readOnly || hidden) out.push({ field, readOnly, hidden });
+    }
+  }
+  return out;
 }
 
 // Parse a deployed form's FormXml into the container tree `--verify` needs to prove a layout.
