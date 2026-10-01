@@ -217,15 +217,33 @@ function applyStep(state, { id, status, note }) {
   return state;
 }
 
+// Sections the user is actually asked to approve. `trust` is deliberately absent: it is written
+// `proposed` at Gate 1 and only finalised at Step 10, but no gate asks the user to answer for it,
+// so including it held the banner up for most of the run with no question to answer.
 const AWAITING_LABEL = {
   architecture: 'the architecture', dataModel: 'the data model', screens: 'the screen plan',
-  design: 'the design system', offline: 'the offline profile', trust: 'the trust report',
+  design: 'the design system', offline: 'the offline profile',
 };
 
 // An active phase announces it is blocked through its note. Both spellings are accepted because
 // a gate writes "Gate 2 - awaiting your approval" while an ordinary question reads more naturally
 // as "Waiting for your answers"; matching only the first missed every prompt that is not a gate.
 const AWAITING_NOTE = /\bawaiting\b|\bwaiting for\b/i;
+
+/**
+ * `init` runs at Step 2b, before the data platform is decided, so the top-level value is
+ * "unknown" and nothing updates it. Gate 1 records the real answer on the architecture section,
+ * so read that once it exists and fall back to whatever `init` was given.
+ */
+function dataPlatformLabel(state) {
+  const approved = ((state.sections || {}).architecture || {}).dataPlatform;
+  return approved || state.dataPlatform;
+}
+
+function failedTitle(state) {
+  const failed = state.phases.find((phase) => phase.status === 'failed');
+  return failed ? failed.title : '';
+}
 
 function awaitingInput(state, active) {
   const states = state.sectionStates || {};
@@ -250,7 +268,9 @@ function summarize(state) {
     failed,
     skipped,
     percent: counted.length === 0 ? 0 : Math.round((done / counted.length) * 100),
-    currentTitle: active ? active.title : (finished ? 'Finished' : 'Waiting to start'),
+    currentTitle: failed > 0
+      ? `Stopped — ${failedTitle(state) || 'a step failed'}`
+      : (active ? active.title : (finished ? 'Finished' : 'Waiting to start')),
     // The page reloads itself to pick up each rewrite; `settled` stops that once there is
     // nothing left to watch, so a finished plan is not reloading every five seconds forever.
     settled: finished || failed > 0,
@@ -258,11 +278,14 @@ function summarize(state) {
     // showing the user something to review while the terminal waits on their answer; an active
     // phase whose note says so covers gates that have no section of their own.
     awaitingInput: awaitingInput(state, active),
-    narrative: active
-      ? `Currently ${active.title.toLowerCase()}. ${active.detail}.`
-      : (finished
-        ? `${state.appName} is built. Every phase completed.`
-        : `Preparing to build ${state.appName}.`),
+    narrative: failed > 0
+      ? `${state.appName} stopped at ${(failedTitle(state) || 'a step').toLowerCase()}. `
+        + 'The run does not continue past a failed phase; check your terminal for the error.'
+      : (active
+        ? `Currently ${active.title.toLowerCase()}. ${active.detail}.`
+        : (finished
+          ? `${state.appName} is built. Every phase completed.`
+          : `Preparing to build ${state.appName}.`)),
   };
 }
 
@@ -330,7 +353,7 @@ function render(projectRoot, state) {
       PLAN_TITLE: 'Mobile app build plan',
       APP_NAME: state.appName,
       GENERATED_AT: new Date().toISOString().replace('T', ' ').slice(0, 16),
-      DATA_PLATFORM: state.dataPlatform,
+      DATA_PLATFORM: dataPlatformLabel(state),
       PHASES: state.phases,
       SUMMARY: summary,
       SECTIONS: state.sections || {},

@@ -100,8 +100,8 @@ or `open` / `xdg-open` / `cmd /c start ""` on the quoted path. A plan the user n
 that only ever existed as terminal text, and terminal text scrolls away during a long run. Opening
 it once is enough: the page reloads itself as each phase lands.
 
-**Phases** (`--id`): `setup`, `requirements`, `architecture`, `data-model`, `screen-plan`,
-`scaffold`, `design`, `dataverse`, `capabilities`, `screens`, `run`.
+**Phases** (`--id`): `requirements`, `architecture`, `data-model`, `screen-plan`, `scaffold`,
+`design`, `dataverse`, `capabilities`, `screens`, `run`. Any other id is rejected by name.
 
 **Write each gated section into the plan *before* asking for approval**, with `--state proposed`,
 then flip it to `--state approved` once the user says yes. The plan is already open in their
@@ -140,7 +140,7 @@ leaves a plan that explains nothing:
 | `screens` | Gates 3 and 4 | `navigation`, `list[]` with `name`, `route`, `purpose`, `data`, `capabilities[]` |
 | `design` | Step 6.75 | `direction`, `headingFont`, `bodyFont`, `darkMode`, `palette[]` (`name`, `value` as `#rrggbb`). Use the real family names from [`typography-and-tone.md`](${PLUGIN_ROOT}/shared/references/typography-and-tone.md) (`Inter`, `JetBrains Mono`, …) — the plan renders each name in the typeface it names, so a label that is not a real family shows as the fallback. |
 | `auth` | Step 7 | `status` |
-| `trust` | Step 10, after capabilities and connectors are wired | `permissions[]` (`name`, `status` as `on-demand`\|`feature-ready`\|`not-requested`, **`detail`: when access is requested and why**), `handles[]`, `notCollected[]`, `battery[]` (`name`, `detail`) |
+| `trust` | Step 10, after capabilities and connectors are wired | `permissions[]` (`name`, `status` as one of the acquisition patterns below, **`detail`: when access is requested and why**), `handles[]`, `notCollected[]`, `battery[]` (`name`, `detail`) |
 
 The ER diagram is **built from `dataModel.tables`**, so populate the structured fields rather
 than only a Mermaid string — that is what makes the diagram, the column tables, and the
@@ -465,13 +465,13 @@ Set tentative defaults (the preview preference applies at Step 6.75):
 **Record the confirmed brief** and close the phase:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" set --section requirements --json '{"brief":"<confirmed brief>","industry":"<industry>","features":["<feature>"]}'
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" set --section requirements --json '{"appName":"<displayName>","slug":"<slug>","platforms":"iOS and Android","aesthetic":"<aesthetic>","industry":"<industry>","brief":"<confirmed brief>","features":["<feature>"]}'
 node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id requirements --status done
 ```
 
 ### Step 2c — Plan preview (rough, always shown)
 
-> **Goal:** Give the user a cheap exit before any mutation happens. This is the **last point** in the flow with zero side effects — no `git clone`, no `npm install`, no `npx power-apps init`, no agent tokens spent on planning. After Step 3 starts, every abort gets more expensive (half-written `native-app-plan.md`, partial `_screens_section.md`, architect tokens already burnt).
+> **Goal:** Give the user a cheap exit before any mutation happens. This is the **last point** before the run touches the app itself — no `npx power-apps init`, no Dataverse writes, no agent tokens spent on planning. The one thing already written is the build plan under `docs/`, which Step 2b created so the user has something to read while answering; an abort here leaves that folder and nothing else. After Step 3 starts, every abort gets more expensive (half-written `native-app-plan.md`, partial `_screens_section.md`, architect tokens already burnt).
 
 **Always runs. There is no `--no-preview` flag in v0** — we need calibration data (~10+ runs with recorded estimate-vs-actual) before we can trust the rough estimates enough to let users skip them. Once the data shows estimates are reliably within ±50%, evaluate adding a skip flag for repeat-user workflows.
 
@@ -1641,7 +1641,7 @@ If the user picked path (c) Skip in the cost picker, the skill returns immediate
 
 #### Branch A — `brand/` files exist (user picked path a, b, or d)
 
-`/design-system` owns rendering of `_plan_preview.html` at its Sub-step 6.5 using the locked brand tokens — no re-spawn from the orchestrator is needed, the file is fresh when the skill returns. Gate 4 was a structural-only review (markdown screen-graph, no HTML), so this is where screens first become visual. The user sees them in the build plan's phone carousel; the rendered file is linked underneath it rather than opened.
+`/design-system` owns rendering of `_plan_preview.html` at its Sub-step 6.5 using the locked brand tokens — no re-spawn from the orchestrator is needed, the file is fresh when the skill returns. Gate 4 was a structural-only review (markdown screen-graph, no HTML), so this is where screens first become visual. The user sees them in the build plan's phone carousel, and the rendered file is linked underneath it. `/design-system` also opens its own previews in a browser on this branch — that is its behaviour, not something this step suppresses, so expect a tab. Branch B, which renders the preview itself, does not open one.
 
 #### Branch B — Skip path preview (user picked path c — no `brand/` files)
 

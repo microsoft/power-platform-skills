@@ -299,6 +299,52 @@ test('the skill flags the run as blocked before its first question', () => {
     'the first prompt must raise the waiting banner');
 });
 
+test('a failed run says so, because that is the last thing the page will ever show', () => {
+  const root = project('docs-failed');
+  const state = initState(root, { appName: 'Field App' });
+  applyStep(state, { id: 'scaffold', status: 'failed' });
+
+  // A failure sets `settled`, which stops the self-refresh - so whatever the page says at that
+  // moment is what the user is left looking at. It used to read "Waiting to start" and
+  // "Preparing to build", hiding the failure exactly when refreshes stopped.
+  const summary = summarize(state);
+  assert.equal(summary.failed, 1);
+  assert.equal(summary.settled, true);
+  assert.match(summary.currentTitle, /^Stopped — /);
+  assert.match(summary.currentTitle, /Bring the app online/);
+  assert.match(summary.narrative, /stopped at bring the app online/i);
+  assert.doesNotMatch(summary.narrative, /Preparing to build/);
+});
+
+test('the topbar shows the approved data platform, not the placeholder init was given', () => {
+  const root = project('docs-platform');
+  let state = initState(root, { appName: 'App', dataPlatform: 'unknown' });
+  // `init` runs at Step 2b, before the platform is chosen, and nothing updates the top-level
+  // value - so the pill read "Data: unknown" for the whole run.
+  save(root, state);
+  let html = fs.readFileSync(outputPath(root), 'utf8');
+  assert.match(html, /Data: unknown/);
+
+  state = setSection(state, 'architecture', { dataPlatform: 'Dataverse + connectors' }, 'approved');
+  save(root, state);
+  html = fs.readFileSync(outputPath(root), 'utf8');
+  assert.match(html, /Data: Dataverse \+ connectors/);
+  assert.doesNotMatch(html, /Data: unknown/);
+});
+
+test('a section nobody is asked to approve does not raise the waiting banner', () => {
+  const root = project('docs-trust-banner');
+  let state = initState(root, { appName: 'App' });
+  // `trust` is written `proposed` at Gate 1 and only finalised at Step 10, but no gate asks the
+  // user to answer for it. Treating it as a gate held the banner up for most of the run.
+  state = setSection(state, 'trust', { permissions: [] }, 'proposed');
+  assert.equal(summarize(state).awaitingInput, '');
+
+  // A section that really is a gate still raises it.
+  state = setSection(state, 'dataModel', { tables: [] }, 'proposed');
+  assert.match(summarize(state).awaitingInput, /Review the data model/);
+});
+
 test('phase order matches the order the skill actually runs them', () => {
   const order = PHASES.map((phase) => phase.id);
   const at = (id) => order.indexOf(id);

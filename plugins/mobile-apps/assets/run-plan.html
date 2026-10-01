@@ -420,8 +420,9 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 
       <h3>Permission behavior</h3>
       <div class="section-desc">
-        Nothing is requested at launch. Each permission is asked for beside the feature that needs
-        it, and can be refused without blocking the rest of the app.
+        How each permission is acquired, and when. The badge names the pattern - a permission asked
+        for beside the feature that needs it reads differently from one taken at launch, even
+        though both end in the same grant.
       </div>
       <div id="permissionList"></div>
 
@@ -433,8 +434,8 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 
       <h3>Battery-conscious behavior</h3>
       <div class="section-desc">
-        Work is tied to visible screens, user actions, and the configured offline runtime - not to
-        app-created background workers or polling loops.
+        What this app does while it is not on screen: polling, sensor subscriptions, sync
+        intervals, and any work that outlives a visible screen.
       </div>
       <div id="batteryList"></div>
     </div>
@@ -768,7 +769,9 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       var frame = el('div', 'car-frame');
       var nav = el('div', 'car-nav');
       var prev = el('button', 'car-btn', '\u2039');
+      prev.setAttribute('aria-label', 'Previous screen');
       var next = el('button', 'car-btn', '\u203a');
+      next.setAttribute('aria-label', 'Next screen');
       var dots = el('div', 'car-dots');
       nav.appendChild(prev); nav.appendChild(dots); nav.appendChild(next);
       car.appendChild(frame); car.appendChild(nav);
@@ -1108,7 +1111,22 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       if (table.displayName) head.appendChild(el('span', 'entity-display', table.displayName));
       head.appendChild(el('span', 'entity-spacer'));
       head.appendChild(el('span', 'status-pill status-' + status, status === 'modified' ? 'extended' : status));
-      head.addEventListener('click', function () { entity.classList.toggle('open'); });
+      // A real button, not a clickable div: the row is a disclosure control, and a div cannot
+      // be focused or activated from the keyboard.
+      head.setAttribute('role', 'button');
+      head.setAttribute('tabindex', '0');
+      head.setAttribute('aria-expanded', 'false');
+      var toggle = function () {
+        var open = entity.classList.toggle('open');
+        head.setAttribute('aria-expanded', open ? 'true' : 'false');
+      };
+      head.addEventListener('click', toggle);
+      head.addEventListener('keydown', function (event) {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        // Space scrolls the page by default, which is not what a disclosure control should do.
+        event.preventDefault();
+        toggle();
+      });
       entity.appendChild(head);
 
       // Visible without expanding: what the table holds, and why it is being created, reused or
