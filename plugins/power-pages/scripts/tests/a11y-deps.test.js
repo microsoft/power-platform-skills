@@ -238,22 +238,44 @@ test('acquireInstallLock serializes installs and never takes a live owner\'s loc
   }
 });
 
-test('acquireInstallLock reclaims a lock whose owner process is gone', () => {
+test('acquireInstallLock takes over a dead owner\'s lock in place, without ever removing it', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-a11y-lock-'));
   const depsDir = path.join(dir, 'deps');
   const lockPath = depsDir + INSTALL_LOCK_SUFFIX;
+  const isAlive = (pid) => pid !== 999999;
   try {
     acquireInstallLock(depsDir, { pid: 999999, token: 'dead' });
-    const release = acquireInstallLock(depsDir, { isAlive: (pid) => pid !== 999999, sleep: () => {}, token: 'me' });
+    // A file in the lock survives the takeover only if the lock is never deleted or renamed.
+    fs.writeFileSync(path.join(lockPath, 'sentinel'), '');
+    const release = acquireInstallLock(depsDir, { isAlive, sleep: () => {}, token: 'me' });
     assert.equal(JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8')).token, 'me');
-    assert.deepEqual(fs.readdirSync(dir).filter((n) => n.includes('.stale-')), [], 'the dead lock is removed');
+    assert.equal(fs.existsSync(path.join(lockPath, 'sentinel')), true, 'the lock was taken over in place');
+    assert.deepEqual(fs.readdirSync(dir), ['deps.install-lock'], 'nothing was moved aside');
+    // A second waiter that also judged 'dead' abandoned loses the exclusive marker and waits.
+    assert.throws(() => acquireInstallLock(depsDir, { isAlive, timeoutMs: 0, sleep: () => {} }), /Timed out/, 'a live new owner is never taken over');
     release();
+    assert.equal(fs.existsSync(lockPath), false);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('acquireInstallLock does not reclaim another host\'s lock, and reclaims an ownerless one only when old', () => {
+test('only one waiter can claim a given dead owner', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-a11y-lock-'));
+  const depsDir = path.join(dir, 'deps');
+  const lockPath = depsDir + INSTALL_LOCK_SUFFIX;
+  try {
+    acquireInstallLock(depsDir, { pid: 999999, token: 'dead' });
+    // Another waiter won the race for this dead ownership but hasn't written owner.json yet.
+    fs.mkdirSync(path.join(lockPath, 'takeover-dead'));
+    assert.throws(() => acquireInstallLock(depsDir, { isAlive: () => false, timeoutMs: 0, sleep: () => {} }), /Timed out/);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8')).token, 'dead');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('acquireInstallLock does not take over another host\'s lock, and takes over an ownerless one only when old', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-a11y-lock-'));
   const depsDir = path.join(dir, 'deps');
   const lockPath = depsDir + INSTALL_LOCK_SUFFIX;
@@ -267,7 +289,13 @@ test('acquireInstallLock does not reclaim another host\'s lock, and reclaims an 
     fs.mkdirSync(lockPath);
     assert.throws(() => acquireInstallLock(depsDir, noWait), /Timed out/, 'a fresh ownerless lock may be mid-acquire');
     const later = Date.now() + 11 * 60 * 1000;
-    const release = acquireInstallLock(depsDir, { ...noWait, now: () => later });
+    // A takeover winner that died before writing owner.json left its marker behind. The
+    // marker refreshed the lock's mtime, so the next takeover gets a new marker name.
+    const old = new Date(Date.now() - 60 * 60 * 1000);
+    fs.utimesSync(lockPath, old, old);
+    fs.mkdirSync(path.join(lockPath, `takeover-ownerless-${Math.trunc(fs.statSync(lockPath).mtimeMs)}`));
+    const release = acquireInstallLock(depsDir, { ...noWait, now: () => later, token: 'heir' });
+    assert.equal(JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8')).token, 'heir');
     release();
     assert.equal(fs.existsSync(lockPath), false);
   } finally {

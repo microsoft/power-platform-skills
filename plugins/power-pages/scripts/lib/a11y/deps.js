@@ -165,15 +165,22 @@ function assertManagedDepsDir(depsDir, { env = process.env, readdir = fs.readdir
 //
 // The holder writes owner.json ({ pid, host, token }) into the lock right after
 // creating it. A lock's age alone doesn't prove its owner died (npm ci has no timeout
-// and can be slow on a poor network), so a waiter reclaims a lock only when:
+// and can be slow on a poor network), so a waiter treats a lock as abandoned only when:
 // - the owner is on this host and its PID no longer exists, or
 // - owner.json never appeared and the lock is older than LOCK_STALE_MS (the process
 //   died between mkdir and the write, which a live holder finishes in milliseconds).
-// A lock from another host (a deps folder on a network share) is never reclaimed; the
+// A lock from another host (a deps folder on a network share) is never taken over; the
 // timeout message tells the user how to clear it. PID reuse after a crash can make a
 // dead owner look alive, which only costs a wait until the timeout.
-// Release removes the lock only while owner.json still carries this holder's token, so
-// a holder can never delete a lock that another process now owns.
+//
+// An abandoned lock is taken over in place, never deleted or renamed. Removing it,
+// even briefly, would open a window where a third process could create a fresh lock
+// while the remover still thinks it is reclaiming, and two installs would run at once.
+// Instead the waiter claims the specific dead ownership with an exclusive mkdir of
+// takeover-<dead token> inside the lock. Exactly one waiter can create that marker; it
+// then writes its own owner.json and holds the lock. The others get EEXIST and keep
+// waiting, and the next owner's token gives the next takeover a fresh marker name.
+// Release removes the lock only while owner.json still carries the holder's token.
 const INSTALL_LOCK_SUFFIX = '.install-lock';
 const LOCK_OWNER_FILE = 'owner.json';
 const LOCK_STALE_MS = 10 * 60 * 1000;
@@ -198,6 +205,9 @@ function isPidAlive(pid) {
   }
 }
 
+// A partly written owner.json reads as null (ownerless). That is safe: the lock or
+// takeover mkdir that preceded the write refreshed the lock's mtime, so an ownerless
+// lock that is still being written never looks old enough to be abandoned.
 function readLockOwner(lockPath) {
   try {
     const owner = JSON.parse(fs.readFileSync(path.join(lockPath, LOCK_OWNER_FILE), 'utf8'));
@@ -207,45 +217,19 @@ function readLockOwner(lockPath) {
   }
 }
 
-// Returns the owner snapshot the decision was based on, so the reclaim compares against
-// exactly that owner instead of re-reading owner.json (which may have changed since).
-function checkAbandonedLock(lockPath, { now, staleMs, isAlive, host }) {
+// Returns the takeover marker name for an abandoned lock, or null while it is held.
+// An owned lock's marker is keyed to the dead owner's token. An ownerless lock's marker
+// is keyed to the lock's mtime: creating a marker updates that mtime, so if a takeover
+// winner dies before writing owner.json, the next attempt uses a new name instead of
+// colliding with the dead winner's marker forever.
+function abandonedLockMarker(lockPath, { now, staleMs, isAlive, host }) {
   const owner = readLockOwner(lockPath);
   if (owner) {
-    return { abandoned: owner.host === host && Number.isInteger(owner.pid) && !isAlive(owner.pid), token: owner.token };
+    const dead = owner.host === host && Number.isInteger(owner.pid) && !isAlive(owner.pid);
+    return dead ? `takeover-${owner.token.replace(/[^\w-]/g, '_')}` : null;
   }
-  return { abandoned: now() - fs.statSync(lockPath).mtimeMs > staleMs, token: undefined };
-}
-
-// Reclaiming is rename-then-check, not a plain delete: two waiters can both decide the
-// same dead lock is abandoned, and the slower one must not delete the lock the faster
-// one has just created. rename is atomic, so only one waiter moves a given lock aside;
-// if what it moved isn't the lock it judged dead, it puts it back.
-// Returns true when the slot is free to retry now (reclaimed, or already gone), and
-// false when the lock turned out not to be the dead one, so the caller waits instead
-// of spinning.
-function reclaimLock(lockPath, deadToken, token) {
-  const aside = `${lockPath}.stale-${token}`;
-  try {
-    fs.renameSync(lockPath, aside);
-  } catch (err) {
-    if (err.code === 'ENOENT') return true;
-    throw err;
-  }
-  // An ownerless lock reads as null, so normalize to undefined to match deadToken.
-  const moved = readLockOwner(aside);
-  if ((moved ? moved.token : undefined) !== deadToken) {
-    try {
-      fs.renameSync(aside, lockPath);
-      return false;
-    } catch {
-      // A new holder took the slot in between; leave the moved lock aside. Its owner's
-      // release only removes lockPath while it carries that owner's token.
-      return false;
-    }
-  }
-  fs.rmSync(aside, { recursive: true, force: true });
-  return true;
+  const { mtimeMs } = fs.statSync(lockPath);
+  return now() - mtimeMs > staleMs ? `takeover-ownerless-${Math.trunc(mtimeMs)}` : null;
 }
 
 function acquireInstallLock(depsDir, {
@@ -254,6 +238,11 @@ function acquireInstallLock(depsDir, {
   token = randomUUID(),
 } = {}) {
   const lockPath = `${path.resolve(depsDir)}${INSTALL_LOCK_SUFFIX}`;
+  const ownerPath = path.join(lockPath, LOCK_OWNER_FILE);
+  const release = () => {
+    const owner = readLockOwner(lockPath);
+    if (owner && owner.token === token) fs.rmSync(lockPath, { recursive: true, force: true });
+  };
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
   const deadline = now() + timeoutMs;
   for (;;) {
@@ -265,25 +254,21 @@ function acquireInstallLock(depsDir, {
       if (err.code !== 'EEXIST') throw err;
     }
     if (created) {
-      try {
-        fs.writeFileSync(path.join(lockPath, LOCK_OWNER_FILE), JSON.stringify({ pid, host, token }));
-      } catch (err) {
-        // A waiter moved the still-ownerless lock aside in the instant before this
-        // write. Start over rather than fail the install.
-        if (err.code === 'ENOENT') continue;
-        throw err;
-      }
-      return () => {
-        const owner = readLockOwner(lockPath);
-        if (owner && owner.token === token) fs.rmSync(lockPath, { recursive: true, force: true });
-      };
+      fs.writeFileSync(ownerPath, JSON.stringify({ pid, host, token }));
+      return release;
     }
     try {
-      const check = checkAbandonedLock(lockPath, { now, staleMs, isAlive, host });
-      if (check.abandoned && reclaimLock(lockPath, check.token, token)) continue;
+      const marker = abandonedLockMarker(lockPath, { now, staleMs, isAlive, host });
+      if (marker) {
+        // EEXIST: another waiter already claimed this dead ownership, so keep waiting.
+        fs.mkdirSync(path.join(lockPath, marker));
+        fs.writeFileSync(ownerPath, JSON.stringify({ pid, host, token }));
+        return release;
+      }
     } catch (err) {
+      // ENOENT: the holder released between our mkdir and the check; retry at once.
       if (err.code === 'ENOENT') continue;
-      throw err;
+      if (err.code !== 'EEXIST') throw err;
     }
     if (now() >= deadline) {
       throw new Error(`Timed out waiting for another install of the audit tools to finish. If none is running, delete ${lockPath} and try again.`);
