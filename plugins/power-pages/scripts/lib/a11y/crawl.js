@@ -44,9 +44,23 @@ function exclusionReason(urlString, origin, extraExcludes = []) {
   return null;
 }
 
+// Query values can carry record ids, signed tokens, or sign-in state, for example
+// /case?id=42&token=abc, and a route is copied into every page record, finding
+// occurrence, crawl summary, and the saved report. Keep the parameter names so a reader
+// can still tell page types apart, and drop the values. Navigation and de-duplication
+// always use the full URL from the queue, never this string.
+const REDACTED_VALUE = '[redacted]';
+
 function routeOf(urlString) {
   const url = new URL(urlString);
-  return `${url.pathname}${url.search}`;
+  const names = [...new Set(url.searchParams.keys())];
+  const query = names.length ? `?${names.map((n) => `${encodeURIComponent(n)}=${REDACTED_VALUE}`).join('&')}` : '';
+  return `${url.pathname}${query}`;
+}
+
+// The same policy for a full URL written to output (page records keep their origin).
+function displayUrl(urlString) {
+  return `${new URL(urlString).origin}${routeOf(urlString)}`;
 }
 
 class CrawlQueue {
@@ -112,6 +126,8 @@ class CrawlQueue {
 
 module.exports = {
   CrawlQueue,
+  REDACTED_VALUE,
+  displayUrl,
   exclusionReason,
   normalizeUrl,
   routeOf,

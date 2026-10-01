@@ -31,6 +31,7 @@ for (const [name, data, pattern] of [
   ['route without slash', { states: [{ route: 'x', label: 'a', steps: [{ action: 'wait', ms: 1 }] }] }, /route must start/],
   ['protocol-relative route', { states: [{ route: '//example.com/x', label: 'a', steps: [{ action: 'wait', ms: 1 }] }] }, /protocol-relative/],
   ['backslash route', { states: [{ route: '/\\example.com', label: 'a', steps: [{ action: 'wait', ms: 1 }] }] }, /must not contain/],
+  ['redacted route', { states: [{ route: '/case?id=[redacted]', label: 'a', steps: [{ action: 'wait', ms: 1 }] }] }, /redacted query value/],
   ['missing label', { states: [{ route: '/', steps: [{ action: 'wait', ms: 1 }] }] }, /"label"/],
   ['bad viewport', { states: [{ route: '/', label: 'a', viewport: 'tv', steps: [{ action: 'wait', ms: 1 }] }] }, /viewport/],
   ['no steps', { states: [{ route: '/', label: 'a', steps: [] }] }, /steps must be/],

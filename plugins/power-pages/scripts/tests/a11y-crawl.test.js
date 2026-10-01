@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { CrawlQueue, exclusionReason, normalizeUrl, routeOf } = require('../lib/a11y/crawl');
+const { CrawlQueue, displayUrl, exclusionReason, normalizeUrl, routeOf } = require('../lib/a11y/crawl');
 
 const ORIGIN = 'https://contoso.powerappsportals.com';
 
@@ -25,8 +25,16 @@ test('exclusionReason skips sign-out, platform endpoints, files, external and us
   assert.equal(exclusionReason(`${ORIGIN}/about`, ORIGIN), null);
 });
 
-test('routeOf returns path and query only', () => {
-  assert.equal(routeOf(`${ORIGIN}/a/b?x=1`), '/a/b?x=1');
+test('routeOf returns the path and query parameter names, never their values', () => {
+  assert.equal(routeOf(`${ORIGIN}/a/b?x=1`), '/a/b?x=[redacted]');
+  assert.equal(routeOf(`${ORIGIN}/case?id=42&token=secret&id=43`), '/case?id=[redacted]&token=[redacted]');
+  assert.equal(routeOf(`${ORIGIN}/a?flag`), '/a?flag=[redacted]');
+  assert.equal(routeOf(`${ORIGIN}/a`), '/a');
+  assert.equal(displayUrl(`${ORIGIN}/case?token=secret`), `${ORIGIN}/case?token=[redacted]`);
+  const queue = new CrawlQueue({ origin: ORIGIN, maxPages: 1 });
+  queue.add('/a?sig=one');
+  queue.add('/b?sig=two');
+  assert.equal(JSON.stringify(queue.summary()).includes('two'), false, 'over-cap routes are redacted too');
 });
 
 test('CrawlQueue dedupes, records exclusions and enforces the page cap', () => {

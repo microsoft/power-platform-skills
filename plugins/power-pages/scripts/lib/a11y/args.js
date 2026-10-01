@@ -95,6 +95,9 @@ function routePathError(route) {
   if (route.startsWith('//')) return 'must be a path on the site, not a protocol-relative URL ("//host")';
   if (route.includes('\\')) return 'must not contain "\\"';
   if (/[\x00-\x1f\x7f]/.test(route)) return 'must not contain control characters';
+  // Report routes hide query values (crawl.js routeOf). A route copied back from a
+  // report or discovery would load the wrong page, so ask for the real value instead.
+  if (/\[redacted\]|%5Bredacted%5D/i.test(route)) return 'contains a redacted query value; use the real route';
   return null;
 }
 
@@ -103,7 +106,8 @@ function parseBaseUrl(raw) {
   try {
     url = new URL(raw);
   } catch {
-    throw new UsageError(`--url is not a valid URL: ${raw}`);
+    // Not echoed: a malformed URL can still contain a password.
+    throw new UsageError('--url is not a valid URL');
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new UsageError(`--url must use http or https: ${raw}`);

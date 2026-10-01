@@ -15,7 +15,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { EXIT, USAGE, UsageError, VIEWPORTS, parseArgs } = require('./lib/a11y/args');
-const { CrawlQueue, normalizeUrl, routeOf } = require('./lib/a11y/crawl');
+const { CrawlQueue, displayUrl, normalizeUrl, routeOf } = require('./lib/a11y/crawl');
 const { MissingDependencyError, candidateRoots, launchBrowser, loadAxeSource, loadPlaywright } = require('./lib/a11y/deps');
 const { ensureHelpers, errorLine } = require('./lib/a11y/page-helpers');
 const { runAxe } = require('./lib/a11y/axe-runner');
@@ -141,7 +141,7 @@ async function runDiscover(browser, opts, log) {
         const route = routeOf(url);
         log(`(${i + 1}) discover ${viewport} ${route}`);
         const nav = await visit(page, url, { origin, timeoutMs: opts.timeoutMs });
-        const entry = { url, route, viewport, title: nav.title || null, status: nav.status || null, error: nav.error || null };
+        const entry = { url: displayUrl(url), route, viewport, title: nav.title || null, status: nav.status || null, error: nav.error || null };
         if (!nav.error) {
           if (vi === 0 && opts.crawl) for (const href of await extractLinks(page)) queue.add(href, page.url());
           const inventory = await collectInventory(page);
@@ -203,7 +203,7 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
         const nav = await visit(page, url, { origin, timeoutMs: opts.timeoutMs });
         const checkErrors = [];
         if (nav.error) {
-          builder.addPage({ route, viewport, url, title: nav.title || null, status: nav.status || null, error: nav.error });
+          builder.addPage({ route, viewport, url: displayUrl(url), title: nav.title || null, status: nav.status || null, error: nav.error });
           continue;
         }
         if (vi === 0 && opts.crawl) for (const href of await extractLinks(page)) queue.add(href, page.url());
@@ -243,21 +243,24 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
           const r = await runCheck('keyboard', () => runKeyboardCheck(page), checkErrors);
           if (r) builder.addFindings(r.findings, ctx);
         }
-        builder.addPage({ route, viewport, url, title: nav.title || null, status: nav.status || null, error: pageError, checkErrors });
+        builder.addPage({ route, viewport, url: displayUrl(url), title: nav.title || null, status: nav.status || null, error: pageError, checkErrors });
       }
 
       for (const state of states.filter((s) => (s.viewport || primary) === viewport)) {
         const url = new URL(state.route, opts.url).toString();
-        log(`state ${viewport} ${state.route} "${state.label}"`);
+        // Output gets the same query-value redaction as crawled routes; navigation
+        // uses the full URL.
+        const route = routeOf(url);
+        log(`state ${viewport} ${route} "${state.label}"`);
         // validateStates() already rejects off-site route shapes; this second check
         // keeps a signed-in browser from ever navigating away if that rule regresses.
         if (new URL(url).origin !== origin) {
-          builder.addState({ label: state.label, route: state.route, viewport, error: 'route resolves outside the audited site' });
+          builder.addState({ label: state.label, route, viewport, error: 'route resolves outside the audited site' });
           continue;
         }
         const nav = await visit(page, url, { origin, timeoutMs: opts.timeoutMs });
         if (nav.error) {
-          builder.addState({ label: state.label, route: state.route, viewport, error: nav.error });
+          builder.addState({ label: state.label, route, viewport, error: nav.error });
           continue;
         }
         // Installed after the page load on purpose: classic Power Pages list grids
@@ -268,8 +271,8 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
         const allowFormSubmit = Boolean(opts.allowFormSubmit && state.allowFormSubmit);
         const guard = await guardMutations(page, { allowFormSubmit, origin });
         const checkErrors = [];
-        const ctx = { route: state.route, viewport, state: state.label };
-        const stateInfo = { label: state.label, route: state.route, viewport, formSubmitAllowed: allowFormSubmit };
+        const ctx = { route, viewport, state: state.label };
+        const stateInfo = { label: state.label, route, viewport, formSubmitAllowed: allowFormSubmit };
         try {
           await applyState(page, state, { allowFormSubmit, timeoutMs: Math.min(opts.timeoutMs, 10000) });
           await ensureHelpers(page);

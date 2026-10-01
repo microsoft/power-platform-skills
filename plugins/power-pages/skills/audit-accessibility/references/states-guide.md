@@ -58,6 +58,7 @@ Discovery returns `stateCandidates` for each page and layout. Each one is a clic
 - **Add form validation only with focus and Tab.** Focus a required field, press `Tab`, and audit the message. Never click a submit button.
 - **Exclude side effects.** Leave out sign-out, delete, remove, cancel subscription, payment, "Add to cart", and anything that saves data.
 - **Note unnamed controls.** A control with an empty accessible name can't be replayed. Report it as a finding (button-name or link-name) instead of a state.
+- **Ask for redacted routes.** Routes in discovery and reports show query parameter names but replace their values with `[redacted]`, so a sign-in token or signed link never lands in a report. A route with `[redacted]` is rejected. If the user needs a state on that page, ask for the real route, and don't save a route that carries a token or signature to `a11y-states.json`.
 
 ## Form submission safety
 

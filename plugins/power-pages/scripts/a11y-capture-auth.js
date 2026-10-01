@@ -42,7 +42,8 @@ function parse(argv) {
     i++;
     if (flag === '--url') {
       let u;
-      try { u = new URL(value); } catch { throw new Error(`--url is not a valid URL: ${value}`); }
+      // Not echoed: a malformed URL can still contain a password.
+      try { u = new URL(value); } catch { throw new Error('--url is not a valid URL'); }
       if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('--url must use http or https');
       // Never echo the value: it would print the credentials this refuses.
       if (u.username || u.password) throw new Error('--url must not contain a user name or password; sign in in the browser window instead');

@@ -47,6 +47,7 @@ for (const [name, argv, pattern] of [
   ['protocol-relative route', ['--url', 'http://x', '--routes', '//example.com/x'], /protocol-relative/],
   ['backslash route', ['--url', 'http://x', '--routes', '/\\example.com/x'], /must not contain "\\"/],
   ['control-character route', ['--url', 'http://x', '--routes', '/\t/example.com'], /control characters/],
+  ['redacted route', ['--url', 'http://x', '--routes', '/case?id=[redacted]'], /redacted query value/],
   ['value missing', ['--url'], /requires a value/],
   ['flag as value', ['--url', '--crawl'], /requires a value/],
   ['max-pages too high', ['--url', 'http://x', '--max-pages', '201'], /between 1 and 200/],
