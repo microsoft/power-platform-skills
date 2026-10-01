@@ -758,6 +758,18 @@ test('Source fallback retains all used features and does not warn twice per file
   assert.equal(gated.errors.length, 2);
 });
 
+test('Combined source gates index each file once, including failed analyses', () => {
+  let attempts = 0;
+  const result = gateSources({
+    manifestModel: { features: [{ name: 'Device.captureImage' }] },
+    sources: [{ file: FILE, text: `${CALL};` }, { file: 'src/helper.ts', text: 'consume(1);' }],
+    hosts: ['pages'],
+  }, { indexer: () => { attempts += 1; throw new Error('injected analyzer failure'); } });
+  assert.equal(attempts, 2);
+  assert.deepEqual(result.errors.map((finding) => finding.code), ['PCF_PAGES_API']);
+  assert.deepEqual(result.warnings.map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE', 'PCF_CODE_UNPARSEABLE']);
+});
+
 test('Source fallback uses only executable recognized references, including normalized static members', () => {
   const text = [
     `// ${CALL};`,

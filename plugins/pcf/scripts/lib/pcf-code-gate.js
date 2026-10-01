@@ -529,11 +529,28 @@ function addPagesApiFindings(findings, file, text, index) {
 
 function gateSources({ manifestModel, sources, hosts = [] }, options = {}) {
   const controlType = manifestModel && manifestModel.control ? manifestModel.control.controlType : undefined;
+  const { indexer = indexSource } = options;
+  const indexes = new Map();
+  // Both exports consume the same per-file index. Cache failures too, so feature
+  // checks fail closed without retrying a broken analysis. Keep this cache local
+  // to one gate invocation rather than retaining a project's source indefinitely.
+  const sharedIndexer = (text, mask) => {
+    if (!indexes.has(text)) indexes.set(text, new Map());
+    const masks = indexes.get(text);
+    if (!masks.has(mask)) {
+      try { masks.set(mask, { index: indexer(text, mask), failed: false }); }
+      catch (error) { masks.set(mask, { error, failed: true }); }
+    }
+    const analysis = masks.get(mask);
+    if (analysis.failed) throw analysis.error;
+    return analysis.index;
+  };
+  const sharedOptions = { ...options, indexer: sharedIndexer };
   const all = [];
   for (const source of sources || []) {
-    for (const finding of scanSource(source.file || '<source>', source.text || '', { ...options, controlType })) all.push(finding);
+    for (const finding of scanSource(source.file || '<source>', source.text || '', { ...sharedOptions, controlType })) all.push(finding);
   }
-  for (const finding of featureCoherence(manifestModel || { features: [] }, sources || [], hosts, options)) all.push(finding);
+  for (const finding of featureCoherence(manifestModel || { features: [] }, sources || [], hosts, sharedOptions)) all.push(finding);
   const errors = all.filter((finding) => finding.severity === 'error');
   const warnings = all.filter((finding) => finding.severity === 'warning');
   return { ok: errors.length === 0, errors, warnings };
