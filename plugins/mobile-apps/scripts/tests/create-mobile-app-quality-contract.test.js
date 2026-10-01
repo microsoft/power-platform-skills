@@ -240,3 +240,45 @@ test('scaffold changed-file validation separates preparation and generator owner
   assert.match(shared, /not modified afterward by the skill or its subagents/);
   assert.match(shared, /Do not suppress a protected-path finding/);
 });
+
+test('authentication discovers and checks registrations before writing a client ID', () => {
+  const auth = skill.slice(
+    skill.indexOf('### Step 7 — Auth config'),
+    skill.indexOf('### Step 8 — Apply data model'),
+  );
+  const discovery = auth.indexOf('discover-app-registrations.js');
+  const write = auth.indexOf('#### 7.3 Verify and write the selected client ID');
+
+  assert.ok(discovery >= 0 && discovery < write);
+  assert.match(auth, /all tenant app registrations visible to the signed-in user/);
+  assert.match(auth, /one boolean, `passesRequiredPermissions`, per registration/);
+  assert.match(auth, /Registrations that pass sort first/);
+  assert.match(auth, /Show the top 10 registrations on the first page/);
+  assert.match(auth, /Use this exact question on every page/);
+  assert.match(auth, /Select an app registration:/);
+  assert.match(auth, /<displayName> \(Client ID: <short-client-id>\.\.\.\)/);
+  assert.match(auth, /`✓ All required permissions configured`/);
+  assert.match(auth, /`✗ Missing required permissions`/);
+  assert.match(auth, /shortest unique client-ID prefix on the current page/);
+  assert.match(auth, /Do not show partial scores or individual permission details in the listing/);
+  assert.match(auth, /every returned registration must be reachable/);
+  assert.match(auth, /Never truncate the set to the first page/);
+  assert.match(auth, /native runtime profile, not the Wrap\s+deployment profile/);
+  assert.match(auth, /Dynamics CRM `user_impersonation`/);
+  assert.match(auth, /Power Platform API `PowerApps\.Apps\.Read`/);
+  assert.match(auth, /CONNECTOR_PERMISSION_ARG=--include-connectors/);
+  assert.match(auth, /Connectivity\.Connectors\.Read/);
+  assert.match(auth, /Connectivity\.Connections\.Read/);
+  assert.match(auth, /Connectivity\.Connections\.Write/);
+  assert.match(auth, /Connectivity\.Connections\.UserConsent/);
+  assert.match(auth, /Do not require Microsoft Graph/);
+  assert.match(auth, /Permission status: `<✓ All required permissions configured\|✗ Missing required permissions\|Not verified>`/);
+  assert.match(auth, /Wrap page remains the final\s+authority/);
+  assert.match(auth, /Do not create permissions,\s+grant consent, or claim/);
+  assert.match(auth, /Discovery is best-effort and must never block app creation/);
+  assert.match(auth, /Treat any nonzero exit,[\s\S]*empty registration list as a discovery failure/);
+  assert.match(auth, /Do not retry or ask the user to repair Azure CLI authentication/);
+  assert.match(auth, /App registration discovery was unavailable\. Paste the Entra ID app registration client ID/);
+  assert.match(auth, /continue to 7\.3 with permission check `unavailable`/);
+  assert.doesNotMatch(auth, /tenant-wide admin consent is not required/);
+});
