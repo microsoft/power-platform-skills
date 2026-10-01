@@ -71,7 +71,9 @@ function validatorSource({ which, exitCode }) {
     "  }",
     '  process.stdout.write("STDOUT:" + data);',
     '  process.stderr.write("STDERR:' + which + '");',
-    "  process.exit(" + exitCode + ");",
+    // exitCode, not process.exit(): on macOS a pipe write is asynchronous, and exiting at once
+    // cuts off output past the 64 KiB pipe buffer.
+    "  process.exitCode = " + exitCode + ";",
     "});",
     "",
   ].join("\n");
