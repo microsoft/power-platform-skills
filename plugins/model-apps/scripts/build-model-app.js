@@ -988,7 +988,7 @@ async function main() {
   // — none of which names the actual cause. Dry runs skip it: they perform no writes and need no
   // identity. An INCONCLUSIVE verdict never blocks; see preflightAuth.
   if (opts.apply) {
-    const auth = await preflightAuth(env);
+    const auth = await preflightAuth(env, { identityOnSuccess: false });
     // A single, already-explained failure uses `error`, not `errors: [...]`. `emitResult` reserves
     // the array for a genuine PARTIAL failure and summarises it as a COUNT ("completed with 1
     // error(s); see stdout JSON") — which would replace a message written specifically to tell the

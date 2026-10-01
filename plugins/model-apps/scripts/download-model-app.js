@@ -2367,7 +2367,7 @@ async function main(deps = {}) {
   // not surface as an error here — it degrades to an EMPTY spec: no forms, no views, no columns, and
   // guessed primary attributes, reported as a success. That is AB#6686423's symptom, and this is the
   // gate that stops it being mistaken for a round-trip gap.
-  const auth = await io.preflightAuth(env);
+  const auth = await io.preflightAuth(env, { identityOnSuccess: false });
   if (!auth.ok && !auth.inconclusive) { io.emitResult(false, { ok: false, error: auth.error }); return; }
   // An INCONCLUSIVE probe must not block: it goes through a client with a weaker retry policy than
   // the one the download itself uses, so a transient 5xx here would otherwise fail a run that would

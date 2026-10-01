@@ -187,6 +187,11 @@ function azIdentity(deps = {}) {
  *
  * Dependencies are injected for tests. Returns `{ ok: true, identity }` or `{ ok: false, error }`
  * and never throws — it is a diagnostic.
+ *
+ * `deps.identityOnSuccess: false` drops `identity` from a SUCCESSFUL result. Reading it costs an
+ * `az account show` — a cold Azure CLI start, seconds on Windows — and build and download paid that on
+ * every run for a value they then discarded. A 401 still reads it: naming the rejected identity is the
+ * whole point of that message.
  * WhoAmI: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/whoami
  */
 async function preflightAuth(envUrl, deps = {}) {
@@ -247,7 +252,9 @@ async function preflightAuth(envUrl, deps = {}) {
 
   const status = res && (res.status !== undefined ? res.status : res.statusCode);
   if (status >= 200 && status < 300) {
-    return { ok: true, identity: who() || { user: '(unknown)', tenantId: '(unknown)' }, userId: res.data && (res.data.UserId || res.data.userId) };
+    const userId = res.data && (res.data.UserId || res.data.userId);
+    if (deps.identityOnSuccess === false) return { ok: true, userId };
+    return { ok: true, identity: who() || { user: '(unknown)', tenantId: '(unknown)' }, userId };
   }
 
   if (status === 401) {

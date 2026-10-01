@@ -273,6 +273,30 @@ test('AB#6686427: preflight passes and reports the identity when WhoAmI succeeds
   assert.match(r.identity.user, /maker@contoso\.com/);
 });
 
+test('preflight: identityOnSuccess:false skips the identity read on success but keeps it for a 401', async () => {
+  let reads = 0;
+  const azIdentity = () => { reads += 1; return { user: 'maker@contoso.com', tenantId: 'aaaaaaaa-0000-0000-0000-000000000000' }; };
+  const ok = await preflightAuth('https://contoso.crm.dynamics.com', {
+    getToken: () => 'token',
+    request: async () => ({ status: 200, data: { UserId: '00000000-0000-0000-0000-000000000001' } }),
+    azIdentity,
+    identityOnSuccess: false,
+  });
+  assert.strictEqual(ok.ok, true);
+  assert.strictEqual(ok.userId, '00000000-0000-0000-0000-000000000001');
+  assert.strictEqual('identity' in ok, false, 'no identity on a verdict-only success');
+  assert.strictEqual(reads, 0, 'no `az account show` for a value nobody reads');
+  const denied = await preflightAuth('https://contoso.crm.dynamics.com', {
+    getToken: () => 'token',
+    request: async () => ({ status: 401, headers: {} }),
+    azIdentity,
+    identityOnSuccess: false,
+  });
+  assert.strictEqual(denied.ok, false);
+  assert.strictEqual(reads, 1, 'a 401 still names the identity it rejected');
+  assert.match(denied.error, /maker@contoso\.com/);
+});
+
 test('dataverseRequest USES a preset token and skips the CLI entirely', async () => {
   // The receiving half of the preflight optimisation. Passing the token is pointless if this side
   // fetches its own anyway, and that is invisible from the caller.

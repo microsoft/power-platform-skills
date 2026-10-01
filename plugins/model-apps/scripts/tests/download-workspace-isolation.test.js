@@ -70,7 +70,8 @@ function fakeMainDeps({ outDir, makeDownloadSdkImpl, runDownloadImpl, emitResult
     argv: ['--env', ENV, '--app', APP_UNIQUE, '--out', outDir],
     stderr: stderr || { write: () => {} },
     emitResult: (ok, payload) => emitResults.push({ ok, payload }),
-    preflightAuth: async () => ({ ok: true }),
+    // The download only uses the verdict, so it must not pay the success-path `az account show`.
+    preflightAuth: async (url, opts) => { assert.strictEqual(opts && opts.identityOnSuccess, false); return { ok: true }; },
     makeGenpageCli: () => ({ unused: true }),
     makeDownloadSdk: makeDownloadSdkImpl || (async () => ({ sdk, cleanup: () => {} })),
     runDownload: runDownloadImpl || (async ({ sdk: gotSdk, outDir: gotOutDir, appId, appUnique }) => {

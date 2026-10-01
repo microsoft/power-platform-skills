@@ -2217,7 +2217,12 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
     const authCli = loadCli(path.join(scriptsDir, 'lib', 'dataverse-auth.js'));
     const auth = {
       ...authCli.exports,
-      preflightAuth: async (url) => { assert.strictEqual(url, env); return { ok: true }; },
+      preflightAuth: async (url, opts) => {
+        assert.strictEqual(url, env);
+        // The build only uses the verdict, so it must not pay the success-path `az account show`.
+        assert.strictEqual(opts && opts.identityOnSuccess, false);
+        return { ok: true };
+      },
       readOrgLanguageCode: async (url) => { assert.strictEqual(url, env); return 1033; },
       dataverseRequest: async (...args) => {
         assert.deepStrictEqual(args, [env, 'GET', 'WhoAmI']);
