@@ -90,7 +90,7 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 4. Infer required entities from requirements
 5. Reconcile target metadata and classify reuse / extend / create / adapt / defer / unverified
 6. Build dependency tiers
-6a. Cross-entity Read Audit (when `docs/_screens_section.md` exists OR `mode: cross-entity-audit`)
+6a. Cross-entity Read Audit (when `_screens_section.md` exists OR `mode: cross-entity-audit`)
 7. Produce the `## Data Model` section
 
 **`mode: cross-entity-audit` short-circuit** — when invoked with `mode: cross-entity-audit`, skip Steps 1–6 entirely (the data model is already in `_dm_section.md` from the prior round) and run ONLY Step 6a + a slim Step 7-addendum that writes a `### Cross-entity Reads` block. The orchestrator presents this addendum to the user as an addendum to Gate 2 (the Dataverse data-model gate), not the architecture gate.
@@ -368,7 +368,7 @@ dependency-tier counts.
 **Print before starting:**
 > "→ Auditing planned screens for supported cross-entity read paths…"
 
-**Run condition:** execute this step when EITHER (a) `<working_dir>/docs/_screens_section.md` exists at this point in the workflow OR (b) you were invoked with `mode: cross-entity-audit`. **Skip silently otherwise** (default-mode first-pass run, before screen-planner has produced its section) — the orchestrator will re-spawn you in `mode: cross-entity-audit` after Gates 3 and 4 land.
+**Run condition:** execute this step when EITHER (a) `<working_dir>/_screens_section.md` exists at this point in the workflow OR (b) you were invoked with `mode: cross-entity-audit`. **Skip silently otherwise** (default-mode first-pass run, before screen-planner has produced its section) — the orchestrator will re-spawn you in `mode: cross-entity-audit` after Gates 3 and 4 land.
 
 When `mode: cross-entity-audit`, the orchestrator's prompt also includes the path to the existing `_dm_section.md` so you can append (do NOT regenerate it from scratch — Steps 1–6 are skipped in this mode).
 
@@ -381,11 +381,11 @@ code, so this audit never proposes generated formula metadata.
 
 1. **Read the screen plan.** In `mode: cross-entity-audit`, read `plan_path`
   (default `<working_dir>/native-app-plan.md`) and extract `## Screens`.
-  `docs/_screens_section.md` is graph-only scratch after Gate 3 and is not a substitute
+  `_screens_section.md` is graph-only scratch after Gate 3 and is not a substitute
   for the final per-screen specs. If the canonical plan or completed specs are
   missing, return `NEEDS_CONTEXT: canonical-screen-specs` so the foreground
   restores that handoff; do not report zero related fields from a graph alone.
-  Only legacy default-mode callers may use `docs/_screens_section.md` when it
+  Only legacy default-mode callers may use `_screens_section.md` when it
   actually contains per-screen specs. Walk every spec and collect every
   `related_entity_fields` block.
 
@@ -415,7 +415,7 @@ code, so this audit never proposes generated formula metadata.
    | Gate code | external-projection-required | cr3e9_flightid → cr3e9_gateid → cr3e9_code | home |
    ```
 
-   In `mode: default` (Step 6a runs because `docs/_screens_section.md` was found), append this subsection to the Step 7 output. In `mode: cross-entity-audit`, append it directly to the existing `_dm_section.md` (read it, append the subsection AFTER `### Notes` if present, otherwise at the end, then write back) and skip Step 7 entirely — return immediately.
+   In `mode: default` (Step 6a runs because `_screens_section.md` was found), append this subsection to the Step 7 output. In `mode: cross-entity-audit`, append it directly to the existing `_dm_section.md` (read it, append the subsection AFTER `### Notes` if present, otherwise at the end, then write back) and skip Step 7 entirely — return immediately.
 
 6. **No `related_entity_fields` blocks anywhere?** That is a valid outcome: every screen reads only its primary entity. Skip the addendum entirely; do not write an empty subsection.
 

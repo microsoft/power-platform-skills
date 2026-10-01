@@ -616,7 +616,6 @@ if (require.main === module) {
 
 module.exports = {
   HOST_TSCONFIG,
-  REQUIRED_FILES,
   SHARED_FILES,
   assertFreshTemplate,
   copySharedFiles,

@@ -85,7 +85,6 @@ const SECTIONS = new Set([
  * `skillSteps` records the mapping so a maintainer can trace a phase back to the SKILL.md.
  */
 const PHASES = [
-  { id: 'setup', title: 'Set up the project', detail: 'Create the app folder and install dependencies', skillSteps: '2a' },
   { id: 'requirements', title: 'Understand what to build', detail: 'Confirm the feature brief', skillSteps: '2, 2b, 2c' },
   // Planning is approved before anything is scaffolded: the gates decide the data platform,
   // capabilities and screen set that Steps 5-6 then materialize. This list is the order the
@@ -279,18 +278,12 @@ function capabilityLabels(state) {
 // the app root and the plan is written into `docs/`, so one level up is the whole path.
 const PLAN_DOC = 'native-app-plan.md';
 
-// The full-size screen mockups `/design-system` renders. The carousel shows the same blocks in a
-// phone frame; this is the link out to them at full width. It lives in `docs/` beside this plan,
-// where every artifact written for the user to review is collected.
+// The full-size screen mockups `/design-system` renders at the app root. The carousel shows the
+// same blocks in a phone frame; this is the link out to them at full width.
 const SCREEN_PREVIEW = '_plan_preview.html';
 
 // Linked only when really present: each is written partway through the run, so an unconditional
 // link would 404 in the user's browser for the phases before it exists.
-
-/** A file in `docs/`, beside the plan itself. */
-function docsHref(projectRoot, fileName) {
-  return fs.existsSync(path.join(docsDir(projectRoot), fileName)) ? fileName : '';
-}
 
 /** A file at the app root. The plan is written into `docs/`, so one level up is the whole path. */
 function siblingHref(projectRoot, fileName) {
@@ -322,7 +315,7 @@ function render(projectRoot, state) {
   const summary = summarize(state);
   summary.planDocHref = siblingHref(projectRoot, PLAN_DOC);
   summary.planDocEditorHref = editorHref(projectRoot, PLAN_DOC);
-  summary.screenPreviewHref = docsHref(projectRoot, SCREEN_PREVIEW);
+  summary.screenPreviewHref = siblingHref(projectRoot, SCREEN_PREVIEW);
   return renderTemplate({
     templatePath: TEMPLATE_PATH,
     outputPath: outputPath(projectRoot),

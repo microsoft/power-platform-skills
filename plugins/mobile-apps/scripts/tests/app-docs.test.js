@@ -34,20 +34,20 @@ test('init creates docs/ with the plan and the brand mark beside it', () => {
 test('a resumed run keeps the progress already recorded', () => {
   const root = project('docs-resume');
   seeded(root);
-  save(root, applyStep(loadState(root), { id: 'setup', status: 'done' }));
+  save(root, applyStep(loadState(root), { id: 'requirements', status: 'done' }));
 
   // init must be safe to call again; it must not reset completed phases.
   const again = initState(root, { appName: 'Field Inspections' });
-  assert.equal(again.phases.find((p) => p.id === 'setup').status, 'done');
+  assert.equal(again.phases.find((p) => p.id === 'requirements').status, 'done');
 });
 
 test('only one phase can be in progress at a time', () => {
   const root = project('docs-active');
   const state = initState(root, { appName: 'App' });
-  applyStep(state, { id: 'setup', status: 'active' });
   applyStep(state, { id: 'requirements', status: 'active' });
+  applyStep(state, { id: 'architecture', status: 'active' });
 
-  assert.equal(state.phases.find((p) => p.id === 'setup').status, 'done');
+  assert.equal(state.phases.find((p) => p.id === 'requirements').status, 'done');
   assert.equal(state.phases.filter((p) => p.status === 'active').length, 1);
 });
 
@@ -148,7 +148,7 @@ test('sections merge so a later step can add to an earlier one', () => {
 test('unknown phases, statuses and sections are rejected by name', () => {
   const state = initState(project('docs-reject'), { appName: 'App' });
   assert.throws(() => applyStep(state, { id: 'nope', status: 'done' }), /Unknown phase 'nope'/);
-  assert.throws(() => applyStep(state, { id: 'setup', status: 'nope' }), /Unknown status 'nope'/);
+  assert.throws(() => applyStep(state, { id: 'requirements', status: 'nope' }), /Unknown status 'nope'/);
   assert.throws(() => setSection(state, 'nope', {}), /Unknown section 'nope'/);
   assert.throws(() => setSection(state, 'environment', ['a']), /must be a JSON object/);
   assert.ok(SECTIONS.has('dataModel'));
@@ -171,7 +171,7 @@ test('captured choices reach the rendered page', () => {
 test('a hostile note cannot break out of the JSON script block', () => {
   const root = project('docs-xss');
   const state = initState(root, { appName: 'App' });
-  applyStep(state, { id: 'setup', status: 'done', note: '</script><img src=x onerror=alert(1)>' });
+  applyStep(state, { id: 'requirements', status: 'done', note: '</script><img src=x onerror=alert(1)>' });
   save(root, state);
 
   const html = fs.readFileSync(outputPath(root), 'utf8');
@@ -181,7 +181,7 @@ test('a hostile note cannot break out of the JSON script block', () => {
 
 test('the CLI refuses a step before init and reports the reason', () => {
   const root = project('docs-cli');
-  const early = spawnSync(process.execPath, [scriptPath, '--working-dir', root, 'step', '--id', 'setup', '--status', 'done'], { encoding: 'utf8' });
+  const early = spawnSync(process.execPath, [scriptPath, '--working-dir', root, 'step', '--id', 'requirements', '--status', 'done'], { encoding: 'utf8' });
   assert.equal(early.status, 1);
   assert.match(early.stderr, /run `init` first/);
 
@@ -278,7 +278,7 @@ test('phase order matches the order the skill actually runs them', () => {
   assert.ok(at('data-model') < at('scaffold'));
   assert.ok(at('screen-plan') < at('scaffold'));
 
-  assert.ok(at('setup') < at('scaffold'), 'dependencies must land before the app can run');
+  assert.ok(at('requirements') < at('scaffold'), 'dependencies must land before the app can run');
   assert.ok(at('scaffold') < at('design'), 'the project exists before a design system is written into it');
   assert.ok(at('screen-plan') < at('design'), 'design is locked after the screens are planned');
   assert.ok(at('design') < at('screens'), 'screens are built against a settled design');

@@ -176,7 +176,7 @@ test('preview preferences keep deferred Gate 4 markdown-only', () => {
   const handoff = section(createSkill, '#### Step 3b', '#### 3.9');
   assert.match(handoff, /legacy planner emits `PLAN_PREVIEW_PATH:[\s\S]*ignore that early preview output/);
   assert.match(handoff, /Do not open it[\s\S]*at Gate 4/);
-  assert.match(handoff, /With `--no-design`, Step 6.75 and its HTML preview are both skipped/);
+  assert.match(handoff, /With `--no-design`, Step 6\.75 and its HTML preview are both skipped/);
   assert.doesNotMatch(handoff, /open "|xdg-open|Start-Process/);
   const design = section(createSkill, '### Step 6.75', 'Offline profile setup is intentionally deferred');
   assert.match(design, /legacy[\s\S]*Gate 4 remains markdown-only/i);
@@ -184,11 +184,11 @@ test('preview preferences keep deferred Gate 4 markdown-only', () => {
   assert.match(design, /`--no-design` skips this stage and its HTML preview/);
   assert.doesNotMatch(design, /Step 6\.85|every path through the flow gets at least one visual preview/);
   const brandedPreview = section(design, '#### Branch A', '#### Branch B');
-  assert.match(brandedPreview, /\/design-system` owns rendering of `docs\/_plan_preview\.html`/);
+  assert.match(brandedPreview, /\/design-system` owns rendering of `_plan_preview\.html`/);
   const skippedDesign = section(design, '#### Branch B', '**Preview timing:**');
-  assert.match(skippedDesign, /\*\*Render `docs\/_plan_preview\.html`\*\*/);
-  // Was "open in browser only if visual_companion = yes". The build plan now shows these
-  // screens in its phone frame and links out to the file, so nothing opens a tab mid-run.
+  assert.match(skippedDesign, /\*\*Render `_plan_preview\.html`\*\*/);
+  // The build plan shows these screens in its phone frame and links out to the file, so the
+  // create run no longer opens a browser tab for them.
   assert.match(skippedDesign, /Do not open it in a browser/);
   assert.doesNotMatch(skippedDesign, /xdg-open|Start-Process/);
 });
@@ -369,22 +369,4 @@ test('offline profile opt-in runs after Dataverse materialization and before nat
     createSkill,
     /missing, malformed, or contains no Dataverse[\s\S]*BLOCKED: Dataverse materialization/i,
   );
-});
-
-test('reviewable artifacts are written into docs/, not scattered at the app root', () => {
-  const skill = fs.readFileSync(
-    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
-  );
-
-  // These are things the user is asked to look at, so they belong beside the build plan.
-  for (const artifact of ['_plan_preview.html', '_screens_section.md', '_design_vibe.html']) {
-    const bare = [...skill.matchAll(new RegExp(`(.{0,6})${artifact.replace('.', '\\.')}`, 'g'))]
-      .filter((m) => !m[1].endsWith('docs/'))
-      .map((m) => m[0]);
-    assert.deepEqual(bare, [], `${artifact} must always be referenced under docs/`);
-  }
-
-  // The planner writes into docs/ before app-docs.js has necessarily created it: --no-preview
-  // skips that protocol entirely.
-  assert.match(skill, /mkdir -p <working_dir> <working_dir>\/\.tmp <working_dir>\/docs/);
 });

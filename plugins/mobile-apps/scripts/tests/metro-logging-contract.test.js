@@ -92,18 +92,9 @@ test('skill contracts read logs and persist host-neutral state under .powernativ
   assert.match(createSkill, /Do not rely on Expo's terminal-rendered QR as the only presentation path/);
   assert.match(createSkill, /continue through the optional Step 12\.5 debug handoff and print the Step 13 summary/);
   assert.doesNotMatch(createSkill, /stops after Step 12/);
-  assert.doesNotMatch(createSkill, /without rerunning the `predev` schema hook/);
-  // Step 12 owns the device Metro session and must keep going through `npm run dev` so
-  // `predev` gates run and the host logger writes .powernative/metro-logs. Scoped to
-  // Step 12 rather than the whole file so a later troubleshooting note may still quote
-  // the raw `npx expo start` form without failing this contract.
-  const deviceDevServer = createSkill.slice(
-    createSkill.indexOf('### Step 12 '),
-    createSkill.indexOf('### Step 12.5 '),
-  );
-  assert.ok(deviceDevServer.length > 0, 'Step 12 section must exist');
-  assert.doesNotMatch(deviceDevServer, /npx expo start/);
-  assert.match(deviceDevServer, /npm run dev/);
+  assert.doesNotMatch(createSkill, /npx expo start|without rerunning the `predev` schema hook/);
+  assert.doesNotMatch(createSkill, /delegates Metro terminal output.*power-apps-native-host\/metro-logger/);
+  assert.doesNotMatch(createSkill, /scripts\/metro-session\.js|dev:expo|copy the plugin wrapper/i);
   assert.match(debugSkill, /\.powernative\/metro-logs/);
   assert.match(debugSkill, /\.powernative\/debug-app/);
   assert.doesNotMatch(debugSkill, /\.claude\/debug-app/);
