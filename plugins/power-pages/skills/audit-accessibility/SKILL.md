@@ -460,7 +460,7 @@ If `AUTH_STATE` is set, delete it — it holds live session tokens:
 node "${PLUGIN_ROOT}/scripts/a11y-capture-auth.js" --remove "<AUTH_STATE>"
 ```
 
-Then set `sessionRemoved: true` in the result marker. Do this on every exit path, including when the user cancels a later gate or a step fails.
+Then set `sessionRemoved: true` in the result marker. The session file is gone even if the output includes `keptDir`; that only means its folder held other files and was left in place. Do this on every exit path, including when the user cancels a later gate or a step fails.
 
 #### 8.1 Record skill usage
 

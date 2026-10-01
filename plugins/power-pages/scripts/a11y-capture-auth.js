@@ -21,6 +21,7 @@
 // Exit codes: 0 captured, 1 nothing captured or browser error, 2 usage, 4 missing deps.
 
 const fs = require('node:fs');
+const path = require('node:path');
 const { EXIT } = require('./lib/a11y/args');
 const { candidateRoots, launchBrowser, loadPlaywright, MissingDependencyError } = require('./lib/a11y/deps');
 const { openAuthStateFile, removeAuthState, summarizeAuthState, writeAuthState } = require('./lib/a11y/auth-state');
@@ -97,8 +98,8 @@ async function main(argv = process.argv.slice(2), { stdout = process.stdout, std
 
   if (opts.remove) {
     try {
-      removeAuthState(opts.remove);
-      stdout.write(`${JSON.stringify({ removed: opts.remove })}\n`);
+      const { keptDir } = removeAuthState(opts.remove);
+      stdout.write(`${JSON.stringify({ removed: opts.remove, ...(keptDir ? { keptDir: path.dirname(path.resolve(opts.remove)) } : {}) })}\n`);
       return EXIT.PASS;
     } catch (err) {
       stderr.write(`${err.message}\n`);

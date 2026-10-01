@@ -48,6 +48,22 @@ test('writeAuthState writes JSON through the exclusive descriptor and removeAuth
   }
   removeAuthState(file);
   assert.equal(fs.existsSync(path.dirname(file)), false);
+  // Removing again is a no-op, not an error.
+  assert.deepEqual(removeAuthState(file), { keptDir: false });
+});
+
+test('removeAuthState deletes only the session file when the folder holds anything else', () => {
+  const { file, fd } = openAuthStateFile();
+  fs.closeSync(fd);
+  const other = path.join(path.dirname(file), 'unrelated.txt');
+  fs.writeFileSync(other, 'keep me');
+  try {
+    assert.deepEqual(removeAuthState(file), { keptDir: true });
+    assert.equal(fs.existsSync(file), false);
+    assert.equal(fs.readFileSync(other, 'utf8'), 'keep me');
+  } finally {
+    fs.rmSync(path.dirname(file), { recursive: true, force: true });
+  }
 });
 
 test('openAuthStateFile creates the file exclusively and never reuses an existing path', () => {

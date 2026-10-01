@@ -69,12 +69,29 @@ function summarizeAuthState(state) {
   };
 }
 
-function removeAuthState(file, opts = {}) {
+// Deletes the session file, then the directory only if it's empty. Never recursive:
+// isManagedAuthStatePath() checks names, not ownership, so a lookalike pp-a11y-auth-*
+// folder could hold unrelated files, and those must survive. Same unlink-then-rmdir
+// pattern as scripts/store-keyvault-secret.js. A missing file or folder counts as
+// removed; a non-empty folder is left in place and reported as keptDir.
+function removeAuthState(file, { unlink = fs.unlinkSync, rmdir = fs.rmdirSync, ...opts } = {}) {
   if (!isManagedAuthStatePath(file, opts)) {
     throw new Error(`Refusing to remove ${file}: not a storage state created by a11y-capture-auth.js`);
   }
   const resolved = path.resolve(file);
-  fs.rmSync(path.dirname(resolved), { recursive: true, force: true });
+  try {
+    unlink(resolved);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  try {
+    rmdir(path.dirname(resolved));
+  } catch (err) {
+    // ENOTEMPTY on Linux/Windows, EEXIST on some platforms per POSIX rmdir().
+    if (err.code === 'ENOTEMPTY' || err.code === 'EEXIST') return { keptDir: true };
+    if (err.code !== 'ENOENT') throw err;
+  }
+  return { keptDir: false };
 }
 
 module.exports = {
