@@ -1,6 +1,6 @@
 ---
 name: add-pen-input
-description: Internal implementation skill invoked by /add-native for pen, signature, ink, drawing, and handwriting capture workflows using @microsoft/power-apps-native-pen-input.
+description: Internal implementation skill invoked by /add-native for pen, signature, ink, drawing, and handwriting capture using release-matched controls or legacy pen APIs.
 user-invocable: false
 disable-model-invocation: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
@@ -25,13 +25,21 @@ test -f app.config.js && test -f power.config.json && test -f package.json && te
 
 If this fails, tell the user to run `/create-mobile-app` first and STOP.
 
-### 2. Verify package is already present
+### 2. Verify the app-matched release and import path
 
 ```bash
-node -e "const p=require('./package.json'); const m='@microsoft/power-apps-native-pen-input'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m + ' is not in package.json. The template/app must already ship this native extension. This skill will not install it or edit native config.'); process.exit(1); } console.log('OK: pen input package present');"
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root "<working_dir>"
 ```
 
-If the check fails, STOP. Do not run `npm install`, `npx expo install`, `pod install`, or edit `app.config.js`. This package contains native iOS/Android code and must already be part of the app's native build.
+Read [release lifecycle](../../../shared/references/mobile-release-lifecycle.md)
+and [native controls](../references/native-controls.md). Unknown/missing release
+records STOP native mutation. Match installed public docs/types and native
+inventory before using the example. Do not install packages or edit native config.
+
+The example uses `@microsoft/power-apps-native-controls/pen` only when the
+verified release contains it. A verified legacy release may instead use the
+literal `@microsoft/power-apps-native-pen-input` import if the matching leaf
+is included. Never import both, the aggregate root, or a runtime fallback.
 
 ### 3. Write or verify `src/native/penInput.ts`
 
@@ -46,26 +54,27 @@ The wrapper MUST:
 
 ```ts
 // src/native/penInput.ts
-import {
-  PenInputNative,
-  PenInputStatus,
-  PenInputErrorCode,
-} from '@microsoft/power-apps-native-pen-input';
+import { Platform } from 'react-native';
 
 export type PenInputResult =
   | { ok: true; dataUri: string }
-  | { ok: false; reason: 'USER_CANCELLED' | 'NATIVE_MODULE_MISSING' | 'CAPTURE_FAILED'; message?: string };
+  | { ok: false; reason: 'UNSUPPORTED_PLATFORM' | 'USER_CANCELLED' | 'NATIVE_MODULE_MISSING' | 'CAPTURE_FAILED'; message?: string };
 
 export async function captureSignature(options?: {
   backgroundColor?: string;
   strokeColor?: string;
   strokeWidth?: number;
 }): Promise<PenInputResult> {
-  if (!PenInputNative?.capturePenInput) {
-    return { ok: false, reason: 'NATIVE_MODULE_MISSING', message: 'Pen input module is not available in this build.' };
+  if (Platform.OS !== 'ios' && Platform.OS !== 'android') {
+    return { ok: false, reason: 'UNSUPPORTED_PLATFORM' };
   }
 
   try {
+    const { PenInputNative, PenInputStatus, PenInputErrorCode } =
+      await import('@microsoft/power-apps-native-controls/pen');
+    if (!PenInputNative?.capturePenInput) {
+      return { ok: false, reason: 'NATIVE_MODULE_MISSING' };
+    }
     const result = await PenInputNative.capturePenInput({
       backgroundColor: '#ffffff',
       strokeColor: '#0078d4',
@@ -81,6 +90,9 @@ export async function captureSignature(options?: {
       return { ok: false, reason: 'USER_CANCELLED' };
     }
 
+    if (result.error === PenInputErrorCode.NativeModuleMissing) {
+      return { ok: false, reason: 'NATIVE_MODULE_MISSING' };
+    }
     return { ok: false, reason: 'CAPTURE_FAILED', message: result.error };
   } catch (error: any) {
     return { ok: false, reason: 'CAPTURE_FAILED', message: error?.message ?? String(error) };
@@ -130,7 +142,7 @@ Notes:
 - The result is a PNG data URI: `data:image/png;base64,...`.
 - Color inputs support `#RGB` and `#RRGGBB`.
 - Cancel is normal and returns `USER_CANCELLED`; screens should leave current state unchanged and avoid failure banners.
-- Use `@microsoft/power-apps-native-pen-input` only for native freehand drawing, ink, handwriting, and signature capture. For unrelated native use cases, use the relevant Expo module or other dependency already present in `package.json`.
+- Use the selected `/pen` or verified legacy pen import only for freehand drawing, ink, handwriting, and signatures. Other native use cases require their own resolved package/version and installed public contract.
 
 ### 5. Optional Dataverse save
 
@@ -161,11 +173,13 @@ File column pattern: save or update the parent row first, then upload the PNG by
 npx tsc --noEmit
 ```
 
-Fix any TypeScript errors before rebuilding.
+Fix wrapper TypeScript errors; this is not native device validation.
 
 ### 7. Native rebuild note
 
-This skill does not install native code. If the package was just added outside the skill, the app needs a native rebuild outside this workflow. If the package was already in the build, Metro hot reload is enough for wrapper edits.
+This skill does not install native code or run local native builds. An
+out-of-band package addition is a compatibility block. Use a separately approved
+verified-release migration; Metro updates only JavaScript, not native modules.
 
 ### 8. Do not use HostingSDK / PCF
 
@@ -183,7 +197,7 @@ Tell the user:
 
 ```text
 Pen input added
-Package present   : @microsoft/power-apps-native-pen-input
+Release / package : <resolved release and selected package/version>
 Wrapper           : src/native/penInput.ts
 Output            : PNG data URI
 Type-check        : PASS
@@ -195,5 +209,5 @@ HostingSDK / PCF  : not used
 Update `memory-bank.md` under `Controls`:
 
 ```text
-- Pen input added — @microsoft/power-apps-native-pen-input (<ISO date>)
+- Pen input wrapper added — <resolved release + selected import/version> (<ISO date>); native device validation: <performed / not performed>
 ```

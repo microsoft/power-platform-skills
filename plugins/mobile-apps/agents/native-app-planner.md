@@ -31,6 +31,9 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 - Dataverse planning mode: `required` or `connector-only` in `complete` phase
 - Architecture phase: `gate-only` or `complete`
 - Approved architecture artifact path for `complete` phase
+- Sanitized resolved release context for this app (template, host, Expo, React
+  Native, native inventory, and verified player/base), or explicit unresolved
+  status for existing source-only work
 
 ## Hard Rules
 
@@ -99,15 +102,31 @@ The orchestrator's Step 3 has a documented inline-gate fallback for exactly this
 Read these references once before doing anything else:
 
 - `${PLUGIN_ROOT}/AGENTS.md` — plugin conventions
-- `${PLUGIN_ROOT}/template/package.json` — **the native-code allowlist**. The set of modules with native code/config is fixed by the rewrap pipeline; you may NEVER propose a native capability whose module is not present here. Pure-JavaScript app dependencies are planned separately by `screen-planner` under `## Screens` and need not be bundled in this template.
+- `${PLUGIN_ROOT}/shared/references/mobile-release-lifecycle.md` — the app-matched
+  verified release policy. Use the orchestrator's sanitized resolved context;
+  the newest bundled template is not the runtime allowlist.
+- `${PLUGIN_ROOT}/skills/add-native/references/native-controls.md` — conditional
+  controls subpaths, legacy leaf support, permissions, and location ownership.
 - `${PLUGIN_ROOT}/shared/references/connectivity-intent-ownership.md` — owns
   how offline and connectivity wording is handled during creation.
 
-Do NOT attempt to read `app.config.js` from the working directory — scaffolding has not run yet. Reading `template/package.json` from `${PLUGIN_ROOT}` IS allowed and IS required.
+Do not assume scaffolding has completed or infer a runtime from plugin files.
+If the release context is missing, request it from the orchestrator or resolve
+read-only with `node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root "<working_dir>"`.
+Unknown/missing records block native capability approval for implementation.
+Existing pure source/UI planning may continue explicitly unverified; do not
+turn a plan-only proposal into a native-readiness claim.
 
 From the planner prompt extract:
 - **Target platforms** — always iOS + Android. The foreground does not ask the user to choose a subset; retain platform-specific fallback behavior for both.
-- **Native capability hints** — words like "scan", "photo", "camera" -> `expo-camera`; "pick file", "upload PDF", "import document", "attach file" -> `expo-document-picker`; "generate PDF", "export report", "print report", "evidence packet" -> `pdf-report` (`expo-print` plus optional `expo-sharing`); "view PDF", "open PDF", "preview PDF" -> `native-pdf-viewer` for HTTPS URLs or local `file://` URIs with `@microsoft/power-apps-native-pdf-viewer` 0.2.9+; "signature", "sign off", "approval", "pen", "ink", "draw" -> `pen-input` with `@microsoft/power-apps-native-pen-input`; "track location", "background location", "GPS tracking", "follow my route", "breadcrumb", "field worker location" -> `geolocation` with `@microsoft/power-apps-native-bglocation` (continuous/background tracking + Dataverse sync); "where am I", "current location", "one-shot location", "tag this with my coordinates" -> one-shot `location` with `expo-location`; "save token", "credentials" -> `expo-secure-store`; "share / send" -> `expo-sharing`; "save file / download" -> `expo-file-system`. **Capability hints that the template does NOT ship** (including PDF viewer, PDF report, sharing, pen, or geolocation packages when absent) are surfaced to the user as transparency notes per Step 3 - never silently promoted into the plan. If the request is generated-report-shaped and the Power Apps PDF viewer package is absent, fall back to `pdf-report` only when `expo-print` is present; otherwise drop the PDF capability.
+- **Native capability hints** — capture/scan → camera; user-picked files →
+  document-picker or Dataverse host picker; generated reports → pdf-report;
+  open PDFs → pdf-viewer; signature/ink → pen-input; continuous route/worker
+  tracking → geolocation; a single coordinate → location; secrets →
+  secure-store; local sharing → sharing. Resolve these semantics against this
+  app's inventory using Step 3, not a hardcoded newest-template package list.
+  Missing support is a transparency note, never a silently approved capability.
+  PDF generation is not a substitute for arbitrary PDF viewing.
 - **Pure-JavaScript dependency hints** — pass any explicit JavaScript-library request, or any feature that may benefit from an established JS-only package instead of custom code, to `screen-planner`. These are app dependencies, not native capabilities. The screen planner reuses suitable installed packages first; otherwise it follows the canonical candidate-selection workflow and records the selected package with an exact version under `## Screens → ### JavaScript Dependencies`.
 - **Industry confirmed** — if the prompt contains a line `Industry confirmed: <slug>`, the orchestrator already ran the industry-confidence check (see Step 3c). Treat that slug as the locked industry for Step 3c — skip detection, skip the confidence check, jump straight to mapping the industry to aesthetic direction / palette / tone.
 
@@ -133,25 +152,40 @@ external-system decisions can change schema and storage requirements.
 ## Step 3 — Plan Native Capabilities Inline (Gate 1 input)
 
 **Print before starting:**
-> "→ [2/4] Building native capabilities matrix from requirements (allowlist-bounded against template/package.json)…"
+> "→ [2/4] Building native capabilities matrix from requirements and the app-matched verified release…"
 
 Build the native capabilities matrix yourself (this is a small enough surface
 to keep in-house). Screen planning has not run yet, so tie each capability to
 the confirmed workflow or use case that requires it.
 
-**Important:** the upstream template owns iOS Info.plist keys, Android permissions, and config plugins for every shipped module. Do NOT specify those here — the planner does not pick permission strings, and downstream `/add-native` helpers do not edit `app.config.js` or `package.json`. The matrix only records *which* capabilities the app uses and *why*.
+**Important:** the verified fixed-capability base owns OS declarations and config
+plugins. The matrix records usage, not permission selection. Keep package
+inclusion, OS declarations, runtime grants, and app usage distinct. Omitting
+controls does not remove default Android permissions. Different declarations
+require another verified base; optional permission wrapping is deferred.
 
-### Step 3.0 — Build the allowlist (MANDATORY, before any cap is proposed)
+### Step 3.0 — Resolve the native inventory (MANDATORY, before native approval)
 
-The set of modules with native code/config that the rewrap pipeline supports is FIXED by `${PLUGIN_ROOT}/template/package.json`. You may NEVER propose a native capability whose underlying module is not present there — the customer's binary is built from a pre-built base, not from their `package.json`. Adding a native module to the plan that's not shipped means a downstream `/add-native` call WILL stop, and the orchestrator's whole flow stalls at Step 9. This restriction does not apply to verified pure-JavaScript dependencies; do not infer native code from a package-name prefix.
-
-Read the template's `package.json`:
+Use the app-version-matched resolved inventory, not the newest template or npm
+publication. A customer's manifest cannot add native code to its player/base.
+This restriction does not apply to verified pure-JavaScript dependencies.
+Do not infer native code from a package-name prefix.
 
 ```bash
-node -e "const p = require('${PLUGIN_ROOT}/template/package.json'); console.log(Object.keys({...p.dependencies, ...p.devDependencies}).sort().join('\n'));"
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root "<working_dir>"
 ```
 
-Map each shipped module to a user-facing capability slug. Use this known mapping table, but still gate every row against the live allowlist output; a listed capability is supported only when its exact package appears in `template/package.json` and is not runtime-banned.
+Carry the sanitized resolved context unchanged to every architect, screen
+planner, revision, and downstream builder. An empty policy is intentional and
+blocks native mutations, not evidence that every package is supported.
+Inspect `nativePackages` for canonical `node_modules`-relative package paths
+and exact reviewed versions, including nested native dependencies. Inspect
+`managedDependencies` for reviewed dependency declarations. These are policy
+metadata, not absolute project paths, raw manifests, or lockfile download URLs.
+Do not collapse distinct nested package versions into a name-only allowlist.
+Planning-only `--requirements-only` output cannot authorize native mutation.
+Map the resolved packages to capabilities using this table; every “present”
+condition below also requires matching versions and native support.
 
 | Capability | Module | Add via |
 |---|---|---|
@@ -159,13 +193,13 @@ Map each shipped module to a user-facing capability slug. Use this known mapping
 | `image-picker` | `expo-image-picker` | `/add-native image-picker` |
 | `document-picker` | `expo-document-picker` | `/add-native document-picker` |
 | `pdf-report` | `expo-print` (+ `expo-sharing` when local share is needed and present) | `/add-native pdf-report` |
-| `native-pdf-viewer` | `@microsoft/power-apps-native-pdf-viewer` | `/add-native pdf-viewer` |
-| `pen-input` | `@microsoft/power-apps-native-pen-input` | `/add-native pen-input` |
-| `geolocation` | `@microsoft/power-apps-native-bglocation` | `/add-native geolocation` |
+| `native-pdf-viewer` | Resolved controls `/pdf` or matching legacy PDF leaf | `/add-native pdf-viewer` |
+| `pen-input` | Resolved controls `/pen` or matching legacy pen leaf | `/add-native pen-input` |
+| `geolocation` | Resolved controls `/geolocation` or matching background-location leaf | `/add-native geolocation` |
 | `secure-store` | `expo-secure-store` | — |
 | `file-system` | `expo-file-system` | — |
 | `sharing` | `expo-sharing` | — |
-| `location` | `expo-location` | `/add-native location` |
+| `location` | Resolved controls `/geolocation` or matching leaf; independently verified `expo-location` | `/add-native location` (one-shot) |
 | `biometrics` / `local-authentication` | `expo-local-authentication` | `/add-native biometrics` |
 | `clipboard` | `expo-clipboard` | `/add-native clipboard` |
 | `mail-composer` / `email-draft` | `expo-mail-composer` | `/add-native mail-composer` |
@@ -178,10 +212,26 @@ Map each shipped module to a user-facing capability slug. Use this known mapping
 
 For custom workflows outside Dataverse File/Image form fields, plan `image-picker` with `/add-native image-picker` for user-selected photos and videos, or `document-picker` with `/add-native document-picker` for documents and other files. For Dataverse-bound File/Image fields, plan host `<FilePicker>` / `<ImagePicker>` controls instead. Do not plan broad media-library access when either scoped picker path satisfies the workflow.
 
-Do not propose `native-pdf-viewer` or `pen-input` unless the exact extension package is present in the template allowlist output (`@microsoft/power-apps-native-pdf-viewer` and `@microsoft/power-apps-native-pen-input`). Do not propose `geolocation` unless `@microsoft/power-apps-native-bglocation` is present, and only for continuous/background tracking or durable Dataverse upload — use one-shot `location` (`expo-location`) for a single foreground coordinate read. When proposing `geolocation`, record that its Dataverse target table must already exist and must be verified by `/add-native geolocation` (default entity set `msdyn_locationrecords`, or a custom `tableName` whose `fieldMap` columns exist). Do not propose `pdf-report` unless `expo-print` is present. Do not propose local sharing for generated PDFs unless `expo-sharing` is present. If neither package path is present, drop the PDF capability and add a transparency note.
+Select aggregate subpaths only when the verified release includes controls;
+retain legacy imports only when matching leaves are included. Controls 0.2.0
+uses an Expo 55 / React Native 0.83.6 baseline, not Expo 57. Do not install the
+aggregate to fix an older binary. Host `enableNativeControls` registration
+requires a verified supporting host; published host 0.4.0 lacks it.
+
+One-shot `location` via `new BgLocationClient().getCurrentLocation()` needs no
+`app_id`, data source, table, or `startTracking`. Continuous `geolocation`
+requires the existing `msdyn_locationrecords` table and mapped columns to be
+verified by the helper. Background-location 0.2.3 `startTracking` uses background
+permissions even with `trackInBackground: false`; tracking is shared and
+`stopTracking()` / `isTracking()` have no `app_id`. Plan one coordinated owner.
+Do not import the unrelated `configureSync` / `HttpSyncContract` API.
+
+Do not propose `pdf-report` unless `expo-print` is in the resolved inventory;
+local sharing additionally requires `expo-sharing`. Missing required support
+must be addressed at Gate 1, not replaced with fake wrappers.
 
 PDF fallback order:
-1. Existing HTTPS PDF URL or local `file://` URI + `@microsoft/power-apps-native-pdf-viewer` 0.2.9+ present -> `native-pdf-viewer`.
+1. Existing HTTPS PDF URL or local `file://` URI + resolved PDF contract with 0.2.9+ file support -> `native-pdf-viewer`.
 2. App-generated PDF + `expo-print` present -> `pdf-report`.
 3. App-generated PDF + `expo-print` and `expo-sharing` present -> `pdf-report` plus `sharing` when sharing is required.
 4. User-selected/uploaded PDF -> `document-picker` or Dataverse host `<FilePicker>` when those packages/controls are present.
@@ -197,13 +247,14 @@ Control planning gate:
 PDF/pen inference rules:
 - `document-picker` means user-selected local files only: pick/import/upload PDF/document/attachment.
 - `pdf-report` means app-generated PDFs. Local output is shared with `expo-sharing` only when that package is present. Retention uses an approved Dataverse File column or a supported connector-owned storage operation; do not force a Dataverse model for a connector-owned PDF.
-- `native-pdf-viewer` means opening an HTTPS PDF URL or local `file://` URI with `@microsoft/power-apps-native-pdf-viewer` 0.2.9+. It does not support `content://`, `blob:`, or `http://`.
-- `pen-input` means signature/ink capture with `@microsoft/power-apps-native-pen-input`. It returns a PNG data URI. When retained, use an approved Dataverse Image/File/child-row target or a supported connector-owned storage operation with an explicit conversion/upload path; use on-device/share-only only when retention is not required.
-- `geolocation` means continuous/background GPS tracking with durable storage and inline Dataverse sync via `@microsoft/power-apps-native-bglocation`. Auth is MSAL-only; native uploads each fix to an existing Dataverse table (default entity set `msdyn_locationrecords`). It is distinct from one-shot `location` (`expo-location`). Plan it only for continuous tracking or durable upload, require `/add-native geolocation` to verify the target table exists before use, and never propose the `GeolocationExtension`/HostingSDK path.
+- `native-pdf-viewer` means opening HTTPS or local `file://` PDFs with the resolved `/pdf` or matching legacy contract. It does not support `content://`, `blob:`, or `http://`.
+- `pen-input` means signature/ink capture with the resolved `/pen` or matching legacy contract. It returns a PNG data URI. When retained, use an approved Dataverse Image/File/child-row target or a supported connector-owned storage operation with an explicit conversion/upload path; use on-device/share-only only when retention is not required.
+- `geolocation` means continuous tracking with native durable storage and Dataverse sync via the resolved `/geolocation` or matching leaf contract. Auth is MSAL-only. It is distinct from one-shot `location`; never require a target table for a single coordinate read, and never propose the `GeolocationExtension`/HostingSDK path.
 - `haptics` means supplemental tactile feedback through `expo-haptics`. Record the interaction and feedback kind in the screen spec: impact (`light`, `medium`, `heavy`, `soft`, or `rigid`) for deliberate actions, selection for changed selections, or notification (`success`, `warning`, or `error`) after a completed outcome. Every haptic must accompany visible UI feedback.
-- The Power Apps extensions are use-case-specific, not generic replacements for Expo modules. For other native needs, choose the relevant Expo module or dependency already present in `template/package.json` and still enforce the allowlist.
+- Native controls are use-case-specific. For other native needs, choose a package already in the app's resolved inventory and enforce its installed public contract.
 
-**Capabilities not present** — do not propose anything with required native code/config whose exact package is absent, `expo-notifications` unless a future template ships it, or Bluetooth/NFC/BLE/AR without a shipped package.
+**Capabilities not present** — do not approve anything with required native
+code/config whose exact package/version is absent from the verified release.
 
 ### Pure-JavaScript dependency handoff
 
@@ -212,7 +263,7 @@ Do not put JS-only libraries in `## Native Capabilities` and do not route them t
 If the requirements imply one of these, DROP the capability and add a transparency note to the `## Native Capabilities` section so the user sees what was excluded and why:
 
 ```markdown
-> Excluded — requirements suggested **push notifications**, but the template does not ship `expo-notifications`. The app cannot include native notifications until the upstream template adds it. File a request at the template repo if you need this.
+> Excluded — the app's resolved release does not include the requested native notification capability. A verified release with matching player/base support is required; installing a package cannot add it.
 ```
 
 One transparency line per excluded capability, capped at three lines. If more than three were dropped, list the top three and roll up the rest as `> Additionally excluded: <comma-separated list>.`
