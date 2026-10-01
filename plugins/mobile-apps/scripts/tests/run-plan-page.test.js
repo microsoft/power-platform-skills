@@ -608,7 +608,8 @@ test('the full-size screens are linked under the phone, once they exist', () => 
   // `/design-system` writes it at Step 6.75; before that the link would 404.
   assert.deepEqual(railLink(runPage(outputPath(root))), [], 'no link before the file exists');
 
-  fs.writeFileSync(path.join(root, '_plan_preview.html'), '<html></html>');
+  // Written into docs/, beside the plan, where every reviewable artifact is collected.
+  fs.writeFileSync(path.join(root, 'docs', '_plan_preview.html'), '<html></html>');
   save(root, state);
   const shown = railLink(runPage(outputPath(root)));
   assert.equal(shown.length, 1, 'the link appears once the preview is rendered');
@@ -628,8 +629,9 @@ test('the create skill renders the screen preview but never opens it', () => {
       `a runnable command still touches the screen preview: ${block[1].trim().slice(0, 80)}`,
     );
   }
-  // It must still be rendered - the carousel takes its markup from those blocks.
-  assert.match(skill, /Render `_plan_preview\.html`/);
+  // It must still be rendered - the carousel takes its markup from those blocks - and it is
+  // written into docs/ with every other artifact the user is asked to look at.
+  assert.match(skill, /Render `docs\/_plan_preview\.html`/);
 });
 
 test('the QR is drawn in the phone and linked for scanning full size', () => {

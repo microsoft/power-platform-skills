@@ -259,12 +259,19 @@ function capabilityLabels(state) {
 const PLAN_DOC = 'native-app-plan.md';
 
 // The full-size screen mockups `/design-system` renders. The carousel shows the same blocks in a
-// phone frame; this is the link out to them at full width.
+// phone frame; this is the link out to them at full width. It lives in `docs/` beside this plan,
+// where every artifact written for the user to review is collected.
 const SCREEN_PREVIEW = '_plan_preview.html';
 
-// Both sit beside the app root and the plan is written into `docs/`, so one level up is the
-// whole path. Linked only when really present: each is written partway through the run, so an
-// unconditional link would 404 in the user's browser for the phases before it exists.
+// Linked only when really present: each is written partway through the run, so an unconditional
+// link would 404 in the user's browser for the phases before it exists.
+
+/** A file in `docs/`, beside the plan itself. */
+function docsHref(projectRoot, fileName) {
+  return fs.existsSync(path.join(docsDir(projectRoot), fileName)) ? fileName : '';
+}
+
+/** A file at the app root. The plan is written into `docs/`, so one level up is the whole path. */
 function siblingHref(projectRoot, fileName) {
   return fs.existsSync(path.join(path.resolve(projectRoot), fileName)) ? `../${fileName}` : '';
 }
@@ -294,7 +301,7 @@ function render(projectRoot, state) {
   const summary = summarize(state);
   summary.planDocHref = siblingHref(projectRoot, PLAN_DOC);
   summary.planDocEditorHref = editorHref(projectRoot, PLAN_DOC);
-  summary.screenPreviewHref = siblingHref(projectRoot, SCREEN_PREVIEW);
+  summary.screenPreviewHref = docsHref(projectRoot, SCREEN_PREVIEW);
   return renderTemplate({
     templatePath: TEMPLATE_PATH,
     outputPath: outputPath(projectRoot),

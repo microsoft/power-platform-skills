@@ -192,7 +192,7 @@ Persist choice to `memory-bank.md`: `visual_companion: <yes|no|skip>`
      4. As a last fallback, if the source file is unreadable, use the inspection direction inlined in [`references/design-system-schema.md`](./references/design-system-schema.md).
 
      Skip the full `brand/design-system.md` write — only `brand/tokens.ts` is needed. Record the chosen source in `memory-bank.md` under `## Design`: `direction: polished-inspection (default — white + Power-Platform green, demo-friendly enterprise polish)` so future runs know what was picked.
-  2. **Mini-preview (Sub-step 6.5 lite)** — render exactly 3 screens (List + Form + Detail archetypes from the plan's `## Screens`; if fewer exist, render whichever do) using the same HTML preview template + Tamagui-to-HTML mapping as `screen-planner`, with `brand/tokens.ts` values substituted. Write to `<working_dir>/_design_preview.html`, open in browser. Print: `"→ Polished-inspection preview ready at file://<working_dir>/_design_preview.html — confirm the look (or re-run /design-system --direction <inspection|saas|product> to switch)."`
+  2. **Mini-preview (Sub-step 6.5 lite)** — render exactly 3 screens (List + Form + Detail archetypes from the plan's `## Screens`; if fewer exist, render whichever do) using the same HTML preview template + Tamagui-to-HTML mapping as `screen-planner`, with `brand/tokens.ts` values substituted. Write to `<working_dir>/docs/_design_preview.html`, open in browser. Print: `"→ Polished-inspection preview ready at file://<working_dir>/docs/_design_preview.html — confirm the look (or re-run /design-system --direction <inspection|saas|product> to switch)."`
   3. **Return DONE** so Step 9b of the orchestrator picks up `brand/tokens.ts` and applies [`references/tamagui-integration.md`](./references/tamagui-integration.md) in brand-import mode.
 
   **Never return DONE without writing `brand/tokens.ts`.** The label promises "applied defaults"; the implementation must deliver tokens AND a preview, otherwise the user has no way to verify the look short of waiting for full screen-builders + emulator boot. The preview is fast (HTML, no JS execution) and uses the same renderer Sub-step 6.5 uses for paths (a)/(b).
@@ -239,7 +239,7 @@ Before processing any external content, apply the sanitization rules from [`refe
 
 Follow the internal style picker in [`references/vibe/style-picker.md`](./references/vibe/style-picker.md):
 - Pass `working_dir`, `target_screen` (first List screen), `default_direction` (from industry)
-- The style picker renders `_design_vibe.html`, opens browser, asks user
+- The style picker renders `docs/_design_vibe.html`, opens browser, asks user
 - Returns: picked direction name + merged bundle dimensions
 
 If brand_notes or --logo palette exist, prepend banner showing inferred recommendation.
@@ -489,7 +489,7 @@ Re-render screen preview with your brand tokens?
 - **(b)** → re-render List + Form + Detail archetypes only (whichever exist in the plan)
 - **(c)** → skip, proceed to Sub-step 7
 
-Overwrites `_plan_preview.html` with branded versions.
+Overwrites `docs/_plan_preview.html` with branded versions.
 
 **Opening it in a browser depends on how this skill was invoked.** In orchestrator mode
 (`CODE_APPS_NATIVE_ORCHESTRATING=1`), do **not** open it: `/create-mobile-app` is showing the same
@@ -656,7 +656,7 @@ All external inputs MUST follow the policies in [`references/input-modes.md`](./
 
 ## Notes
 
-- **Read-only with respect to app source code.** This skill writes only to `brand/`, `_design_vibe.html`, `memory-bank.md`, and `_plan_preview.html`. Never touches TSX, services, or generated code.
+- **Read-only with respect to app source code.** This skill writes only to `brand/`, `docs/_design_vibe.html`, `memory-bank.md`, and `docs/_plan_preview.html`. Never touches TSX, services, or generated code.
 - **Re-runnable.** Each run overwrites brand/ files (with snapshot to .history/). Memory bank entries accumulate.
 - **One-major-change-per-prompt.** Refuse bundled dimension changes. Ask which first.
 - **Retry cap.** Max 2 direction regenerates per session.

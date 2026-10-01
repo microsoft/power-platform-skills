@@ -583,7 +583,7 @@ Reject loop = re-spawn with `phase: graph` and the user's feedback. Approve = pr
 > "→ [4/4] Spawning screen-planner (phase 2/2: per-screen specs)…"
 
 Re-spawn the planner with the canonical `native-app-plan.md`; read its `## Screens` section
-as the locked graph. `_screens_section.md` remains graph-only scratch and is
+as the locked graph. `docs/_screens_section.md` remains graph-only scratch and is
 not the specs input or output.
 
 ```
@@ -593,7 +593,7 @@ phase: specs
 plan_path: <working_dir>/native-app-plan.md
 skip_preview: <true for deferred/skip design; false only for the explicitly selected legacy preview mode>
 
-The screen graph + shared conventions are already locked in plan_path's ## Screens section. Read that section and treat it as immutable. Do NOT add, remove, or rename screens, change routes, or change shared conventions. Run the read-only completeness check before writing; missing graph requirements return NEEDS_CONTEXT: graph missing <thing>. Replace only the phase-owned subsections in plan_path using screen-planner Step 5, including any Step 6 summary in the same update. On retries remove stale owned sections rather than appending duplicates; do not update _screens_section.md.
+The screen graph + shared conventions are already locked in plan_path's ## Screens section. Read that section and treat it as immutable. Do NOT add, remove, or rename screens, change routes, or change shared conventions. Run the read-only completeness check before writing; missing graph requirements return NEEDS_CONTEXT: graph missing <thing>. Replace only the phase-owned subsections in plan_path using screen-planner Step 5, including any Step 6 summary in the same update. On retries remove stale owned sections rather than appending duplicates; do not update docs/_screens_section.md.
 
 Requirements: [paste $ARGUMENTS]
 Approved data model: [paste ## Data Model section verbatim]
@@ -622,7 +622,7 @@ Do not retry specs against the unchanged incomplete graph or reuse the old scree
 approval records for a changed graph.
 
 For other returns, apply the Step 3.0 status switch. The planner writes specs only into `plan_path`.
-Keep the approved graph and `_screens_section.md` unchanged. Any explicitly
+Keep the approved graph and `docs/_screens_section.md` unchanged. Any explicitly
 selected legacy HTML preview is a separate preview artifact, never a reason
 to write specifications to the graph scratch file.
 
@@ -639,7 +639,7 @@ conventions, in which case return to Gate 3.
 
 Branch on the orchestrator's `Design vibe opt-in:` value:
 
-- **`Design vibe opt-in: deferred`** (default — `/design-system` handles design at Step 6.75) — pass **`skip_preview: true`** to the specs dispatch above. It replaces only specs-owned content in `native-app-plan.md`; the approved graph scratch remains unchanged and no `_plan_preview.html` is written. Do not dispatch the completed specs phase a second time merely to review it. The foreground design-system phase owns the later visual preview. Skip Step A below entirely (no `PLAN_PREVIEW_PATH:` emission); jump to Step B.
+- **`Design vibe opt-in: deferred`** (default — `/design-system` handles design at Step 6.75) — pass **`skip_preview: true`** to the specs dispatch above. It replaces only specs-owned content in `native-app-plan.md`; the approved graph scratch remains unchanged and no `docs/_plan_preview.html` is written. Do not dispatch the completed specs phase a second time merely to review it. The foreground design-system phase owns the later visual preview. Skip Step A below entirely (no `PLAN_PREVIEW_PATH:` emission); jump to Step B.
 
 - **`Design vibe opt-in: done`** — the orchestrator has already written `## Design Direction` into the plan via the legacy text picker (only happens when `/design-system` is NOT installed). Spawn `screen-planner` WITHOUT `skip_preview`. It generates the HTML preview as before. Continue to Step A.
 
@@ -647,12 +647,12 @@ Branch on the orchestrator's `Design vibe opt-in:` value:
 
 - **`Design vibe opt-in: skip`** — the user opted out of design entirely (`--no-design` flag). Spawn `screen-planner` with `skip_preview: true`. No HTML at any stage; no `/design-system` run later. Skip Step A; jump to Step B.
 
-After `screen-planner` returns: if it wrote `_plan_preview.html` (the legacy/no-design-system path), the orchestrator owns the browser open. Sub-agent shells often lose `DISPLAY`/GUI context and the open silently no-ops, so the planner never opens it itself.
+After `screen-planner` returns: if it wrote `docs/_plan_preview.html` (the legacy/no-design-system path), the orchestrator owns the browser open. Sub-agent shells often lose `DISPLAY`/GUI context and the open silently no-ops, so the planner never opens it itself.
 
-**Step A — Emit the preview path** (ONLY when `screen-planner` generated `_plan_preview.html` — i.e. `skip_preview` was NOT set). Before EnterPlanMode, print exactly this line on its own (no surrounding prose, no nested bullets):
+**Step A — Emit the preview path** (ONLY when `screen-planner` generated `docs/_plan_preview.html` — i.e. `skip_preview` was NOT set). Before EnterPlanMode, print exactly this line on its own (no surrounding prose, no nested bullets):
 
 ```
-PLAN_PREVIEW_PATH: file://<absolute-working-dir>/_plan_preview.html
+PLAN_PREVIEW_PATH: file://<absolute-working-dir>/docs/_plan_preview.html
 ```
 
 The orchestrator greps for the `PLAN_PREVIEW_PATH:` prefix in the planner's return value to know which file to open. **Skip this emission entirely when `skip_preview: true` was passed** — the orchestrator's Step 3b is wired to short-circuit on no-token-emitted; emitting a path that doesn't exist would cause the open to fail with a confusing 404.

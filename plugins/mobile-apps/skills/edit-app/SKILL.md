@@ -353,7 +353,7 @@ Inline fallback rules:
 |---|---|---|
 | Data Model | `mobile-app:data-model-architect` | `_dm_section.md` |
 | Native Capabilities | (handled inline — no separate agent) | `_native_section.md` |
-| Screens | `mobile-app:screen-planner` | `_screens_section.md` |
+| Screens | `mobile-app:screen-planner` | `docs/_screens_section.md` |
 
 ```
 Spawn agent: mobile-app:<agent-name>

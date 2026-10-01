@@ -22,7 +22,7 @@ A self-contained moodboard-before-build reference for `/design-system`. Three na
 - Optional: `target_screen` — screen name to render (defaults to the most representative; see Step 2)
 - Optional: `default_direction` — `inspection | saas | product` to highlight as the recommended pick (defaults to keyword-inferred from app name + purpose)
 - Optional: `sub_step_mode` — `true` when invoked by `/design-system`. Changes behavior:
-  - Still renders `_design_vibe.html` and asks the user
+  - Still renders `docs/_design_vibe.html` and asks the user
   - Returns picked direction + merged dimensions to caller
   - Does NOT write `## Design Direction` to plan (caller does that)
   - Accepts `brand_notes` and `logo_palette` for tinting the 3-up
@@ -33,7 +33,7 @@ A self-contained moodboard-before-build reference for `/design-system`. Three na
 
 1. Verify plan + pick the target screen
 2. Pick the recommended default direction
-3. Render 3-up `_design_vibe.html`
+3. Render 3-up `docs/_design_vibe.html`
 4. Open in browser (with cross-platform fallback)
 5. Ask the user
 6. Write `## Design Direction` block + return
@@ -151,7 +151,7 @@ Otherwise scan `## Project` description and `## Design` industry (if present) fo
 
 The recommendation only **highlights** one card in the picker — the user can still pick any. Do not skip showing all three.
 
-## Step 3 — Render the 3-up `_design_vibe.html`
+## Step 3 — Render the 3-up `docs/_design_vibe.html`
 
 **Print before starting:**
 > "→ [design-system:vibe] Rendering 3 phone-frame mockups (Inspection / SaaS / Product)…"
@@ -221,7 +221,7 @@ Compose the 3-up page:
 </html>
 ```
 
-Write to `<working_dir>/_design_vibe.html` (underscore prefix matches `_plan_preview.html`'s "ephemeral artifact" naming).
+Write to `<working_dir>/docs/_design_vibe.html` (underscore prefix matches `docs/_plan_preview.html`'s "ephemeral artifact" naming).
 
 **Rendering rules per direction:**
 
@@ -302,17 +302,17 @@ This sets the expectation that hybrid is real, named, and supported — without 
 
 Print the file path as a clickable link FIRST (always), then ask before launching:
 
-> "Three directions are at: `file://<working_dir>/_design_vibe.html`
+> "Three directions are at: `file://<working_dir>/docs/_design_vibe.html`
 >
 > Want me to try opening it in your default browser? (yes / no — default: yes)"
 
 On `yes` (or no answer), try OS-appropriate openers in sequence and fall back to the printed link if all fail:
 
 ```bash
-open "<working_dir>/_design_vibe.html" 2>/dev/null \
-  || xdg-open "<working_dir>/_design_vibe.html" 2>/dev/null \
-  || powershell.exe -NoProfile -Command "Start-Process '<working_dir>\_design_vibe.html'" 2>/dev/null \
-  || echo "Could not auto-open. Please open this URL: file://<working_dir>/_design_vibe.html"
+open "<working_dir>/docs/_design_vibe.html" 2>/dev/null \
+  || xdg-open "<working_dir>/docs/_design_vibe.html" 2>/dev/null \
+  || powershell.exe -NoProfile -Command "Start-Process '<working_dir>\docs/_design_vibe.html'" 2>/dev/null \
+  || echo "Could not auto-open. Please open this URL: file://<working_dir>/docs/_design_vibe.html"
 ```
 
 Do not block on whether the browser opened — the link is printed.
@@ -338,7 +338,7 @@ Use `AskUserQuestion` with options if available; otherwise plain text.
 **Handling responses:**
 
 - **`a` / `b` / `c`** → resolve to the direction name; go to Step 6
-- **`hybrid: ...`** → parse the description, merge bundles by picking the named dimensions from each, regenerate `_design_vibe.html` with the merged bundle as a 4th column titled "Your hybrid", re-open, ask "use this hybrid? (yes / refine)"
+- **`hybrid: ...`** → parse the description, merge bundles by picking the named dimensions from each, regenerate `docs/_design_vibe.html` with the merged bundle as a 4th column titled "Your hybrid", re-open, ask "use this hybrid? (yes / refine)"
 - **`mix: ...`** → element-level remix. Parse the picks (`Inspection's status pills, Product's typography, SaaS's spacing`), build a custom bundle by overriding the recommended direction's fields with the named picks, render as a 4th frame titled "Your mix", same re-open / confirm loop as hybrid
 - **`dark` / `light`** → flip the recommended direction's `background` field only (`dark-slate` ↔ `cool-gray-light`, `warm-cream` ↔ `rich-dark`); keep direction otherwise. Re-render the single affected frame so the user sees the swap before committing
 - **`again`** → regenerate with alternate accents (e.g. Product with rust instead of sage; Inspection with amber instead of orange) — same three directions, different concrete realizations. Cap to 1 `again` per session to avoid taste-paralysis.
@@ -425,7 +425,7 @@ The caller uses these dimensions to write `brand/design-system.md` at Sub-step 3
 
 **If auto mode (not sub-step):** return one line to the caller:
 
-> Design direction picked: <Inspection|SaaS|Product|Hybrid>. Block written to `<working_dir>/native-app-plan.md` § Design Direction. Preview kept at `<working_dir>/_design_vibe.html` for reference.
+> Design direction picked: <Inspection|SaaS|Product|Hybrid>. Block written to `<working_dir>/native-app-plan.md` § Design Direction. Preview kept at `<working_dir>/docs/_design_vibe.html` for reference.
 
 If invoked from `/create-mobile-app` Gate 4, the orchestrator continues with screen-builder fan-out using the new direction.
 
@@ -445,9 +445,9 @@ If this skill folder is removed:
 
 ## Notes
 
-- **Read-only with respect to source code.** This skill writes only `_design_vibe.html`, the `## Design Direction` block in `native-app-plan.md`, and one line in `memory-bank.md`. It never touches TSX, configs, or generated services.
+- **Read-only with respect to source code.** This skill writes only `docs/_design_vibe.html`, the `## Design Direction` block in `native-app-plan.md`, and one line in `memory-bank.md`. It never touches TSX, configs, or generated services.
 - **Reuses existing infrastructure.** The phone-frame template comes from `shared/references/tamagui-html-mapping.md`; the browser-open chain is the same as `/preview-screens` and `native-app-planner` Gate 4. No new dependencies.
-- **Re-runnable.** Each run overwrites `_design_vibe.html` and replaces the `## Design Direction` block. Memory bank entries accumulate so the design history is preserved.
+- **Re-runnable.** Each run overwrites `docs/_design_vibe.html` and replaces the `## Design Direction` block. Memory bank entries accumulate so the design history is preserved.
 
 ## References
 

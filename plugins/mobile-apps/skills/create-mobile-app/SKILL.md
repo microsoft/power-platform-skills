@@ -577,7 +577,7 @@ planning degradation; it never relaxes `/add-dataverse` reconciliation.
 
 Set tentative defaults (the preview preference applies at Step 6.75):
 
-- `<visual_companion> = yes` — render `_plan_preview.html` at Step 6.75, after the design choice. It is **not** opened in a browser during a create run: the build plan shows the same screens in its phone frame and links out to the file. The flag still governs whether a later standalone `/preview-screens` or `/edit-app` re-plan opens it. Gate 4 remains markdown-only regardless. `/design-system` may change it to `no`; persist the final value to memory-bank for future runs.
+- `<visual_companion> = yes` — render `docs/_plan_preview.html` at Step 6.75, after the design choice. It is **not** opened in a browser during a create run: the build plan shows the same screens in its phone frame and links out to the file. The flag still governs whether a later standalone `/preview-screens` or `/edit-app` re-plan opens it. Gate 4 remains markdown-only regardless. `/design-system` may change it to `no`; persist the final value to memory-bank for future runs.
 - `<design_vibe_opt_in> = deferred` — Step 6.75 sets the real value. While `deferred`, the planner does NOT prompt for a direction; it writes a placeholder `## Design Direction: <deferred — set by /design-system>` block so screen-planner can still run.
 
 **`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no`, skips the style-picker handoff at Step 3a entirely, and short-circuits Step 6.75 to a no-op (placeholder block stays in `native-app-plan.md`; screen-builders fall back to industry-inferred defaults).
@@ -591,7 +591,7 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --i
 
 ### Step 2c — Plan preview (rough, always shown)
 
-> **Goal:** Give the user a cheap exit before anything expensive or irreversible happens. Step 2a has already created `<working_dir>` and started downloading dependencies into it, so an abort here leaves a plain unused template folder the user can delete: no `npx power-apps init`, no Dataverse writes, no agent tokens spent on planning. After Step 3 starts, every abort gets more expensive (half-written `native-app-plan.md`, partial `_screens_section.md`, architect tokens already burnt).
+> **Goal:** Give the user a cheap exit before anything expensive or irreversible happens. Step 2a has already created `<working_dir>` and started downloading dependencies into it, so an abort here leaves a plain unused template folder the user can delete: no `npx power-apps init`, no Dataverse writes, no agent tokens spent on planning. After Step 3 starts, every abort gets more expensive (half-written `native-app-plan.md`, partial `docs/_screens_section.md`, architect tokens already burnt).
 
 **The confirmed brief is already in the plan** at `docs/create-app-plan.html` under Requirements,
 which is open in the user's browser. Point them at that tab instead of restating the brief in the
@@ -684,8 +684,14 @@ The template is already in `<working_dir>`: Step 2a either copied it there or co
 First, create the working and planning-artifact directories:
 
 ```bash
-mkdir -p <working_dir> <working_dir>/.tmp
+mkdir -p <working_dir> <working_dir>/.tmp <working_dir>/docs
 ```
+
+`docs/` holds every artifact written for the user to review — the build plan, the screen
+mockups, the approved screen graph — so they sit together rather than scattered through the app
+root. It is normally created by `app-docs.js init` at Step 2a, but `--no-preview` skips that
+protocol entirely while the planner still writes `docs/_screens_section.md`, so create it here
+too.
 
 ### Architecture gate
 
@@ -912,7 +918,7 @@ file paths.
 **Hard rule — planner writes are restricted during Step 3.** The planner (and any sub-agents it spawns) is permitted to write to **only**:
 
 - `<working_dir>/native-app-plan.md`
-- `<working_dir>/_screens_section.md`
+- `<working_dir>/docs/_screens_section.md`
 - `<working_dir>/.tmp/*`
 
 All other paths in `<working_dir>/` (notably `app/`, `src/`, `package.json`, `power.config.json`, `tamagui.config.ts`, `tsconfig.json`, `node_modules/`, `memory-bank.md`) are owned by the foreground setup phases. Do not mutate them during planning.
@@ -1036,7 +1042,7 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
    - Spawn `mobile-app:screen-planner` with `phase: graph` first. Present its
      navigation, screen map, and shared conventions as Gate 3 after its Step 5b
      completeness repair; wait for approval.
-   - Embed the approved graph from `_screens_section.md` into `## Screens` in
+   - Embed the approved graph from `docs/_screens_section.md` into `## Screens` in
      `native-app-plan.md` and record Gate 3 acceptance before proceeding.
    - Verify that the canonical plan contains the locked graph, then spawn
      `mobile-app:screen-planner` with `phase: specs`. It reads that plan and
@@ -1054,7 +1060,7 @@ Then execute, in order, using your own `EnterPlanMode` + `AskUserQuestion`:
    Step 6.75 via `/design-system`; do not generate a default-design preview.
 4. **Finalize the existing `native-app-plan.md`**, preserving the approved graph
   and current specs. Update `## Approvals` with each actual user acceptance
-   and timestamp; do not rebuild it from `_screens_section.md`.
+   and timestamp; do not rebuild it from `docs/_screens_section.md`.
 
    **HARD RULES for the plan structure (mirror the planner agent's template at [`agents/native-app-planner.md`](${PLUGIN_ROOT}/agents/native-app-planner.md) Step 6):**
    - Top-level headings are EXACTLY: `## Overview`, `## App Requirements`, `## Data Model`, `## Native Capabilities`, `## Design Direction`, `## Connectors`, `## Screens`, `## Approvals`. Do NOT invent a `## Brief` super-section that nests the data model under it.
@@ -1338,7 +1344,7 @@ For deferred or skipped design, screen-planner receives `skip_preview: true`, so
 no `PLAN_PREVIEW_PATH:` token is expected. Its absence is not an error, and
 `<visual_companion> = yes` does not request an earlier preview.
 
-If a legacy planner emits `PLAN_PREVIEW_PATH: file://<abs-path>/_plan_preview.html`,
+If a legacy planner emits `PLAN_PREVIEW_PATH: file://<abs-path>/docs/_plan_preview.html`,
 ignore that early preview output. Do not open it or request a replacement HTML
 preview at Gate 4. Step 6.75 produces the fresh preview after the design choice,
 using locked brand tokens or the design-system Skip path's defaults, and honors
@@ -1744,7 +1750,7 @@ Immediately after creating `memory-bank.md`, flush any queued planner concerns f
 visual_companion: <yes|no>   # default from Step 2b; applied at Step 6.75 and later previews
 ```
 
-`/preview-screens` reads this flag when invoked from inside this project; if `no`, it prints the file path instead of opening. `/edit-app` reads it to decide whether to re-open `_plan_preview.html` after a re-plan. The flag is per-project and does not leak across apps.
+`/preview-screens` reads this flag when invoked from inside this project; if `no`, it prints the file path instead of opening. `/edit-app` reads it to decide whether to re-open `docs/_plan_preview.html` after a re-plan. The flag is per-project and does not leak across apps.
 
 ### Step 6.75 — Design system
 
@@ -1782,7 +1788,7 @@ If the user picked path (c) Skip in the cost picker, the skill returns immediate
 
 #### Branch A — `brand/` files exist (user picked path a, b, or d)
 
-`/design-system` owns rendering of `_plan_preview.html` at its Sub-step 6.5 using the locked brand tokens — no re-spawn from the orchestrator is needed, the file is fresh when the skill returns. Gate 4 was a structural-only review (markdown screen-graph, no HTML), so this is where screens first become visual. The user sees them in the build plan's phone carousel; the rendered file is linked underneath it rather than opened.
+`/design-system` owns rendering of `docs/_plan_preview.html` at its Sub-step 6.5 using the locked brand tokens — no re-spawn from the orchestrator is needed, the file is fresh when the skill returns. Gate 4 was a structural-only review (markdown screen-graph, no HTML), so this is where screens first become visual. The user sees them in the build plan's phone carousel; the rendered file is linked underneath it rather than opened.
 
 #### Branch B — Skip path preview (user picked path c — no `brand/` files)
 
@@ -1791,13 +1797,13 @@ The user skipped the design system but still deserves to see their screens befor
 1. **Print:**
    > "→ Design system skipped — rendering screen preview with Field/Ops defaults so you can validate the layout before code is written."
 
-2. **Render `_plan_preview.html`** — read the screen specs from `native-app-plan.md` `## Screens` section and render key screens (one List + one Form + one Detail, first match per archetype) using the `tamagui-html-mapping.md` reference and industry-inferred defaults from `## Design Direction`. Write to `<working_dir>/_plan_preview.html`.
+2. **Render `docs/_plan_preview.html`** — read the screen specs from `native-app-plan.md` `## Screens` section and render key screens (one List + one Form + one Detail, first match per archetype) using the `tamagui-html-mapping.md` reference and industry-inferred defaults from `## Design Direction`. Write to `<working_dir>/docs/_plan_preview.html`.
 
 3. **Do not open it in a browser.** The build plan already shows these screens in its phone
    frame and links out to the full-size file underneath, so a second tab opening mid-run
    interrupts the user rather than telling them anything new. Print the path and continue:
 
-   > `→ Full-size screens at <working_dir>/_plan_preview.html (also linked under the phone in the build plan).`
+   > `→ Full-size screens at <working_dir>/docs/_plan_preview.html (also linked under the phone in the build plan).`
 
 4. **Auto-continue — no prompt.** The user already approved the applicable planning gates; the preview does not introduce another approval gate. Print one line and proceed:
 
@@ -1813,7 +1819,7 @@ Dataverse model has been materialized. Follow the shared connectivity-intent
 ownership contract during this phase.
 
 **Switch the plan's phone to the screen carousel.** `/design-system` has just rendered
-`_plan_preview.html` — plan-time mockups built from the locked brand tokens, before a single line
+`docs/_plan_preview.html` — plan-time mockups built from the locked brand tokens, before a single line
 of TSX exists. Those same per-screen blocks become the carousel:
 
 ```bash
@@ -1823,15 +1829,15 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" phone --
 `screens-preview.json` is `[{ "name": "Today's route", "html": "<the screen's markup>" }, …]`, in
 navigation order.
 
-**Carry over exactly the screens `_plan_preview.html` contains — no more, no fewer.** How many
+**Carry over exactly the screens `docs/_plan_preview.html` contains — no more, no fewer.** How many
 that is depends on what the user chose at `/design-system` Sub-step 6.5: option (a) renders every
 screen, and the default (b) renders only the List, Form and Detail archetypes. Take the markup
 from those blocks rather than re-authoring any of it: a hand-written block would drift from
-`_plan_preview.html` and from the screen the builder later generates, which is the one thing the
+`docs/_plan_preview.html` and from the screen the builder later generates, which is the one thing the
 carousel exists to rule out. A three-screen carousel is the expected shape, not a failure.
 
 **When there is no preview to carry over, leave the phone on the building animation.** That is
-`--no-design`, or Sub-step 6.5 option (c) "Skip preview" — in both cases `_plan_preview.html` was
+`--no-design`, or Sub-step 6.5 option (c) "Skip preview" — in both cases `docs/_plan_preview.html` was
 never written, so there is nothing to show and nothing to invent. Skip the `phone --stage screens`
 call entirely; the plan keeps animating until the Step 12 QR replaces it.
 
