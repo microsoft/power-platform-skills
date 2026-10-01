@@ -370,3 +370,22 @@ test('offline profile opt-in runs after Dataverse materialization and before nat
     /missing, malformed, or contains no Dataverse[\s\S]*BLOCKED: Dataverse materialization/i,
   );
 });
+
+test('the screen preview has exactly one filename, everywhere it is named', () => {
+  const designSystem = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'design-system', 'SKILL.md'), 'utf8',
+  );
+
+  // `/create-mobile-app` extracts its carousel from this file and the build plan links it, so a
+  // path that only some branches write leaves both empty. The default no-brand path wrote
+  // `_design_preview.html`, and when that was corrected the message it prints was missed - the
+  // user was handed a link to a file the run no longer creates.
+  assert.doesNotMatch(designSystem, /_design_preview/,
+    'the screen preview is _plan_preview.html on every path');
+
+  // The path written and the path printed must be the same one.
+  const written = [...designSystem.matchAll(/Write to `<working_dir>\/([a-z_.]+)`/g)].map((m) => m[1]);
+  const printed = [...designSystem.matchAll(/preview ready at file:\/\/<working_dir>\/([a-z_.]+)/g)].map((m) => m[1]);
+  assert.ok(written.length > 0 && printed.length > 0, 'the preview must be written and announced');
+  assert.deepEqual([...new Set(written.concat(printed))], ['_plan_preview.html']);
+});
