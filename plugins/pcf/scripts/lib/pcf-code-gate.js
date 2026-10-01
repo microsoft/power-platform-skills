@@ -416,11 +416,12 @@ function featureCoherence(manifestModel, sources, hosts = [], { lex = blankNonCo
       continue;
     }
     const mask = lexed.mask;
+    const memberMask = normalizeFeatureMembers(text, mask);
 
-    collectNamespaceUse({ findings, declared, used, file, text, mask, namespace: 'webAPI', feature: 'WebAPI' });
-    collectNamespaceUse({ findings, declared, used, file, text, mask, namespace: 'utils', feature: 'Utility' });
-    collectDeviceUse({ findings, declared, used, file, text, mask });
-    if (pages) addPagesApiFindings(findings, file, text, mask);
+    collectNamespaceUse({ findings, declared, used, file, text, mask: memberMask, namespace: 'webAPI', feature: 'WebAPI' });
+    collectNamespaceUse({ findings, declared, used, file, text, mask: memberMask, namespace: 'utils', feature: 'Utility' });
+    collectDeviceUse({ findings, declared, used, file, text, mask: memberMask });
+    if (pages) addPagesApiFindings(findings, file, text, mask, memberMask);
   }
 
   for (const feature of declared) {
@@ -435,6 +436,30 @@ function featureCoherence(manifestModel, sources, hosts = [], { lex = blankNonCo
   }
 
   return findings;
+}
+
+function normalizeFeatureMembers(text, mask) {
+  // Match context?.["device"] . captureImage?.() as context.device.captureImage().
+  // Only literal identifier keys are restored from raw text; comments/strings stay masked.
+  // Padding keeps call offsets in the original source. This view is ONLY for detection:
+  // optional calls still require the same explicit guard, and its optional-link proof uses
+  // the untouched mask rather than assuming unsupported Pages methods are always absent.
+  const raw = withoutComments(text);
+  const members = /\bcontext(?:\s*(?:\?\.|\.)\s*[A-Za-z_$][\w$]*|\s*(?:\?\.\s*)?\[\s*(?:"[A-Za-z_$][\w$]*"|'[A-Za-z_$][\w$]*')\s*\])+(?:\s*\?\.(?=\s*\())?/g;
+  let normalized = '';
+  let end = 0;
+  let match;
+  while ((match = members.exec(raw)) !== null) {
+    if (mask[match.index] !== 'c') continue;
+    const path = match[0]
+      .replace(/\s*(?:\?\.\s*)?\[\s*(['"])([A-Za-z_$][\w$]*)\1\s*\]/g, '.$2')
+      .replace(/\?\./g, '.')
+      .replace(/\s/g, '')
+      .replace(/\.$/, '');
+    normalized += mask.slice(end, match.index) + path.padEnd(match[0].length);
+    end = match.index + match[0].length;
+  }
+  return normalized + mask.slice(end);
 }
 
 function collectNamespaceUse({ findings, declared, used, file, text, mask, namespace, feature }) {
@@ -454,7 +479,7 @@ function collectNamespaceUse({ findings, declared, used, file, text, mask, names
 }
 
 function collectDeviceUse({ findings, declared, used, file, text, mask }) {
-  const re = /\bcontext\.device(?:\?\.|\.)([A-Za-z_$][\w$]*)\b/g;
+  const re = /\bcontext\.device\.([A-Za-z_$][\w$]*)\b/g;
   let match;
   while ((match = re.exec(mask)) !== null) {
     const feature = `Device.${match[1]}`;
@@ -470,13 +495,13 @@ function collectDeviceUse({ findings, declared, used, file, text, mask }) {
   }
 }
 
-function addPagesApiFindings(findings, file, text, mask) {
-  const calls = /\bcontext\.(device|utils)(?:\?\.|\.)([A-Za-z_$][\w$]*)(?:\?\.)?\s*\(/g;
+function addPagesApiFindings(findings, file, text, mask, memberMask) {
+  const calls = /\bcontext\.(device|utils)\.([A-Za-z_$][\w$]*)\s*\(/g;
   let match;
-  while ((match = calls.exec(mask)) !== null) {
+  while ((match = calls.exec(memberMask)) !== null) {
     const namespace = match[1];
     const method = match[2];
-    if (hasMethodGuard(text, mask, namespace, method, match.index)) continue;
+    if (hasMethodGuard(text, mask, namespace, method, match.index, memberMask)) continue;
     findings.push(makeFinding(
       'PCF_PAGES_API',
       `Heuristic diagnostic: Pages may not provide context.${namespace}.${method}; guard the method with typeof context.${namespace}?.${method} === 'function' before calling it, or avoid the API for Pages hosts. See ${FEATURE_USAGE}`,
@@ -596,25 +621,210 @@ function hasGridCustomizerMarker(file, text) {
     .some(([start, end]) => text.slice(start, end).includes('pcf-extension-pattern: grid-customizer'));
 }
 
-function hasMethodGuard(text, mask, namespace, method, callIndex) {
+function hasMethodGuard(text, mask, namespace, method, callIndex, memberMask) {
   const start = Math.max(0, callIndex - 500);
   const ifHead = /\bif\s*\(/g;
   ifHead.lastIndex = start;
   let match;
   while ((match = ifHead.exec(mask)) !== null && match.index < callIndex) {
+    if (!isGuardKeyword(mask, match.index, 'if')) continue;
     const openParen = mask.indexOf('(', match.index);
     const closeParen = findMatchingParen(mask, openParen);
     if (closeParen === -1 || closeParen >= callIndex) continue;
     let openBrace = closeParen + 1;
     while (openBrace < mask.length && /\s/.test(mask[openBrace])) openBrace += 1;
     if (mask[openBrace] !== '{' || openBrace >= callIndex) continue;
-    if (mask.slice(openBrace + 1, callIndex).includes('}')) continue;
+    const closeBrace = findMatchingBrace(mask, openBrace);
+    if (closeBrace === -1 || closeBrace <= callIndex) continue;
 
     const rawCondition = withoutComments(text.slice(openParen + 1, closeParen));
     const maskCondition = mask.slice(openParen + 1, closeParen);
-    if (provePositiveCondition(rawCondition, maskCondition, namespace, method)) return true;
+    if (provePositiveCondition(rawCondition, maskCondition, namespace, method)
+      && !guardProofChanged(mask, memberMask, openBrace, closeBrace, callIndex, ['context', namespace, method])) return true;
   }
   return false;
+}
+
+function isGuardKeyword(mask, index, word) {
+  // obj.if(...), obj?.if(...) and $if(...) are calls, not statement guards.
+  // Comments are already blanked, so inspect the previous significant token too.
+  return mask.slice(index, index + word.length) === word
+    && !/[A-Za-z0-9_$]/.test(mask[index - 1] || '')
+    && !/[A-Za-z0-9_$]/.test(mask[index + word.length] || '')
+    && previousNonSpace(mask, index) !== '.';
+}
+
+function guardProofChanged(mask, memberMask, open, close, callIndex, methodPath) {
+  // A capability is static across a captured handler, not across a different binding:
+  //   button.onclick = () => context.device.captureImage()          same context
+  //   contexts.forEach(({ context }) => context.device.captureImage())  new context
+  // Inspect the whole lexical scope for hoisted var / let/const shadowing, but only
+  // preceding writes for reassignment. Balanced blocks keep an unrelated nested block
+  // or destructured event parameter from ending the outer guard prematurely.
+  const functions = guardFunctionScopes(mask, open + 1, close);
+  const shadows = functions
+    .filter((scope) => guardBindingsContain(scope.parameters, methodPath[0]))
+    .map((scope) => ({ start: scope.start, end: scope.end }));
+  const declarations = /\b(let|const|var)\s+/g;
+  declarations.lastIndex = open + 1;
+  let match;
+  while ((match = declarations.exec(mask)) !== null && match.index < close) {
+    const start = match.index + match[0].length;
+    const end = guardExpressionEnd(mask, start, close, false);
+    const declaration = mask.slice(start, end).replace(/\s+(?:of|in)\s+[\s\S]*$/, '');
+    if (!guardBindingsContain(declaration, methodPath[0])) continue;
+    if (match[1] === 'var') {
+      const owner = functions.filter((scope) => scope.body < match.index && match.index < scope.end)
+        .sort((a, b) => b.body - a.body)[0];
+      // A var in the guarded block itself reuses its function's existing root; only
+      // a nested function's var creates a new binding, including before its declaration.
+      if (owner) shadows.push({ start: owner.body, end: owner.end });
+    } else {
+      shadows.push(enclosingGuardBlock(mask, open, close, match.index));
+    }
+  }
+  if (shadows.some((range) => callIndex >= range.start && callIndex < range.end)) return true;
+
+  // Destructuring writes such as ({ context } = next) and [context] = next replace
+  // the same root as context = next. Property keys ({ context: item }) do not.
+  for (let i = open + 1; i < callIndex; i += 1) {
+    if (mask[i] !== '{' && mask[i] !== '[') continue;
+    const end = guardMatchingDelimiter(mask, i, mask[i], mask[i] === '{' ? '}' : ']', 1);
+    if (end === -1 || !/^\s*=(?![=>])/.test(mask.slice(end + 1, callIndex))) continue;
+    if (guardPatternContains(memberMask.slice(i, end + 1), (target) => {
+      const path = parseGuardPath(target);
+      return path && path.names.length <= methodPath.length && path.names.every((name, index) => name === methodPath[index]);
+    })
+      && !shadows.some((range) => i >= range.start && i < range.end)) return true;
+  }
+  const writes = /\b(delete\s+)?(context(?:\.[A-Za-z_$][\w$]*)*)(?:\s*((?:\*\*|>>>|<<|>>|&&|\|\||\?\?|[+\-*/%&|^])?=(?![=>])))?/g;
+  writes.lastIndex = open + 1;
+  while ((match = writes.exec(memberMask)) !== null && match.index < callIndex) {
+    if (!match[1] && !match[3]) continue;
+    if (previousNonSpace(memberMask, match.index + (match[1] || '').length) === '.') continue;
+    const path = match[2].split('.');
+    if (path.length > methodPath.length || !path.every((name, index) => name === methodPath[index])) continue;
+    // Writes to a callback's own context do not mutate the root captured by a sibling.
+    if (shadows.some((range) => match.index >= range.start && match.index < range.end)) continue;
+    return true;
+  }
+  return false;
+}
+
+function guardFunctionScopes(mask, start, end) {
+  const scopes = [];
+  const heads = /\b([A-Za-z_$][\w$]*)\s*\(/g;
+  heads.lastIndex = start;
+  let match;
+  while ((match = heads.exec(mask)) !== null && match.index < end) {
+    if (['if', 'else', 'for', 'while', 'switch', 'catch', 'with'].includes(match[1])
+      && isGuardKeyword(mask, match.index, match[1])) continue;
+    const open = mask.indexOf('(', match.index);
+    const close = findMatchingParen(mask, open);
+    if (close === -1 || close >= end) continue;
+    const bodyHead = /^\s*(?::\s*[^={;]+)?\s*\{/.exec(mask.slice(close + 1, end));
+    if (!bodyHead) continue;
+    const body = close + 1 + bodyHead[0].lastIndexOf('{');
+    const bodyEnd = findMatchingBrace(mask, body);
+    if (bodyEnd !== -1 && bodyEnd <= end) scopes.push({ start: open, parameters: mask.slice(open + 1, close), body, end: bodyEnd });
+  }
+
+  const arrows = /=>/g;
+  arrows.lastIndex = start;
+  while ((match = arrows.exec(mask)) !== null && match.index < end) {
+    let last = match.index - 1;
+    while (last >= start && /\s/.test(mask[last])) last -= 1;
+    // A TS return annotation puts : void / : Promise<void> between ')' and '=>'.
+    // Step over that type only; an unparenthesized arrow parameter stays a name.
+    if (mask[last] !== ')') {
+      const returnType = /\)\s*:\s*[A-Za-z_$][\w$.[\]<>, |&?]*$/.exec(mask.slice(start, last + 1));
+      if (returnType) last = start + returnType.index;
+    }
+    let parameters;
+    let parameterStart;
+    if (mask[last] === ')') {
+      const open = guardMatchingDelimiter(mask, last, ')', '(', -1);
+      if (open < start) continue;
+      parameters = mask.slice(open + 1, last);
+      parameterStart = open;
+    } else {
+      const parameter = /[A-Za-z_$][\w$]*$/.exec(mask.slice(start, last + 1));
+      if (!parameter) continue;
+      parameters = parameter[0];
+      parameterStart = start + parameter.index;
+    }
+    let body = match.index + 2;
+    while (body < end && /\s/.test(mask[body])) body += 1;
+    const bodyEnd = mask[body] === '{' ? findMatchingBrace(mask, body) : guardExpressionEnd(mask, body, end, true);
+    if (bodyEnd !== -1 && bodyEnd <= end) scopes.push({ start: parameterStart, parameters, body, end: bodyEnd });
+  }
+  return scopes;
+}
+
+function guardBindingsContain(mask, root) {
+  return splitTopLevel(mask, ',').some((range) => guardBindingContains(mask.slice(range.start, range.end), root));
+}
+
+function guardBindingContains(mask, root) {
+  return guardPatternContains(mask, (binding) => {
+    binding = binding.replace(/^(?:(?:public|private|protected|readonly)\s+)+/, '');
+    const identifier = /^([A-Za-z_$][\w$]*)(?:\s*\?)?(?:\s*:[\s\S]+)?\s*$/.exec(binding);
+    return Boolean(identifier && identifier[1] === root);
+  });
+}
+
+function guardPatternContains(mask, matchesTarget) {
+  // Binding patterns differ from references: { context: item } binds item, whereas
+  // { current: context }, [context] and ...context bind context. A default's RHS
+  // (item = context) is a reference, and a simple parameter's :Type is not a binding.
+  let binding = mask.slice(0, splitTopLevel(mask, '=')[0].end).trim().replace(/^\.\.\.\s*/, '');
+  if (binding[0] === '{' || binding[0] === '[') {
+    const close = guardMatchingDelimiter(binding, 0, binding[0], binding[0] === '{' ? '}' : ']', 1);
+    if (close === -1) return false;
+    const body = binding.slice(1, close);
+    return splitTopLevel(body, ',').some((range) => {
+      let entry = body.slice(range.start, range.end);
+      const parts = splitTopLevel(entry, ':');
+      if (binding[0] === '{' && parts.length > 1) entry = entry.slice(parts[1].start);
+      return guardPatternContains(entry, matchesTarget);
+    });
+  }
+  return matchesTarget(binding);
+}
+
+function enclosingGuardBlock(mask, open, close, index) {
+  let range = { start: open, end: close };
+  for (let i = open + 1; i < index; i += 1) {
+    if (mask[i] !== '{') continue;
+    const end = findMatchingBrace(mask, i);
+    if (end > index) range = { start: i, end };
+  }
+  return range;
+}
+
+function guardExpressionEnd(mask, start, end, stopAtComma) {
+  let depth = 0;
+  for (let i = start; i < end; i += 1) {
+    const ch = mask[i];
+    if ('([{'.includes(ch)) depth += 1;
+    else if (')]}'.includes(ch)) {
+      if (depth === 0) return i;
+      depth -= 1;
+    } else if (depth === 0 && (ch === ';' || (stopAtComma && ch === ','))) return i;
+  }
+  return end;
+}
+
+function guardMatchingDelimiter(mask, start, opening, closing, direction) {
+  let depth = 0;
+  for (let i = start; i >= 0 && i < mask.length; i += direction) {
+    if (mask[i] === opening) depth += 1;
+    else if (mask[i] === closing) {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
 }
 
 function provePositiveCondition(raw, mask, namespace, method) {
