@@ -30,15 +30,8 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 
-const {
-  isProcessAlive,
-  readJson,
-  sleepSync,
-  spawnDetached,
-  writeJsonAtomic,
-} = require('./lib/detached-worker');
 const { redact } = require('./redact-debug-diagnostic');
 
 const STATE_DIR = path.join('.powernative', 'dependency-install');
@@ -66,8 +59,38 @@ function statePath(projectRoot, fileName) {
   return path.join(stateDir(projectRoot), fileName);
 }
 
+function readJson(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function writeJsonAtomic(filePath, value) {
+  // `status` polls these files from another process, so publish them with a rename
+  // to guarantee a reader never observes a half-written object.
+  const temporary = `${filePath}.tmp.${process.pid}`;
+  fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  fs.renameSync(temporary, filePath);
+}
+
 function dependenciesInstalled(projectRoot) {
   return fs.existsSync(path.join(projectRoot, INSTALL_MARKER));
+}
+
+function isProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    // Signal 0 performs the permission/existence check without delivering a signal.
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the process exists but belongs to another user, which still counts
+    // as alive; only ESRCH proves it is gone. A recycled PID can therefore read as
+    // alive after the worker died; `wait`'s timeout is the backstop for that.
+    return error.code === 'EPERM';
+  }
 }
 
 /**
@@ -209,13 +232,19 @@ function startInstall(projectRoot) {
     fs.rmSync(statePath(root, fileName), { force: true });
   }
 
-  const worker = spawnDetached(__filename, ['--working-dir', root, 'run'], { cwd: root });
+  const worker = spawn(
+    process.execPath,
+    [__filename, '--working-dir', root, 'run'],
+    { cwd: root, detached: true, stdio: 'ignore' },
+  );
   const startedAt = new Date().toISOString();
   writeJsonAtomic(statePath(root, STATE_FILE), {
     pid: worker.pid,
     startedAt,
     command: `npm ${NPM_ARGS.join(' ')}`,
   });
+  // Release the worker so this process can exit while the install keeps running.
+  worker.unref();
 
   return {
     projectRoot: root,
@@ -256,6 +285,11 @@ function runInstall(projectRoot) {
     finishedAt: new Date().toISOString(),
   });
   return exitCode;
+}
+
+function sleepSync(milliseconds) {
+  // Synchronous sleep without a busy loop; `wait` is meant to block its caller.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
 function waitForInstall(projectRoot, timeoutMs = DEFAULT_TIMEOUT_MS) {

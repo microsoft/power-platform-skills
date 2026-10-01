@@ -29,8 +29,29 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { readJson, writeJsonAtomic } = require('./lib/detached-worker');
 const { renderTemplate } = require('./lib/render-template');
+
+/**
+ * The plan's state file is read by one process and rewritten by another as the run advances, so
+ * it is published with a rename: a reader either sees the previous object or the next one, never
+ * a half-written file.
+ */
+function readJson(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    // A missing file and a truncated one are the same to a reader: no plan yet. Callers
+    // distinguish the states from which files exist, not from parse failures.
+    return null;
+  }
+}
+
+function writeJsonAtomic(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const temporary = `${filePath}.tmp.${process.pid}`;
+  fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  fs.renameSync(temporary, filePath);
+}
 
 const DOCS_DIR = 'docs';
 const STATE_FILE = '.run-plan.json';
