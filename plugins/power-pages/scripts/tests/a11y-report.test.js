@@ -1,0 +1,71 @@
+const assert = require('node:assert/strict');
+const test = require('node:test');
+
+const { EXIT } = require('../lib/a11y/args');
+const { ReportBuilder, exitCodeFor, isBlocking, makeFinding } = require('../lib/a11y/report');
+
+const builder = () => new ReportBuilder({ baseUrl: 'http://localhost:5173/', viewports: ['desktop', 'mobile'], checks: ['axe'], bestPractice: true, tool: { name: 't' } });
+
+test('makeFinding infers bestPractice from missing WCAG criteria', () => {
+  assert.equal(makeFinding({ id: 'x', impact: 'minor', description: 'd' }).bestPractice, true);
+  assert.equal(makeFinding({ id: 'x', impact: 'minor', wcag: ['1.1.1'], description: 'd' }).bestPractice, false);
+  assert.equal(makeFinding({ id: 'x', impact: 'minor', description: 'd' }).source, 'extended');
+});
+
+test('isBlocking only counts critical/serious WCAG violations that are not heuristic', () => {
+  const base = { kind: 'violation', impact: 'serious', bestPractice: false, heuristic: false };
+  assert.equal(isBlocking(base), true);
+  assert.equal(isBlocking({ ...base, impact: 'critical' }), true);
+  assert.equal(isBlocking({ ...base, impact: 'moderate' }), false);
+  assert.equal(isBlocking({ ...base, bestPractice: true }), false);
+  assert.equal(isBlocking({ ...base, heuristic: true }), false);
+  assert.equal(isBlocking({ ...base, kind: 'needsReview' }), false);
+});
+
+test('ReportBuilder groups by rule then node and records every occurrence', () => {
+  const b = builder();
+  const contrast = (impact) => ({ id: 'color-contrast', source: 'axe', kind: 'violation', impact, wcag: ['1.4.3'], bestPractice: false, heuristic: false, description: 'c', helpUrl: null, nodes: [{ target: 'header a', html: '<a>', summary: 's' }] });
+  b.addPage({ route: '/', viewport: 'desktop', url: 'u' });
+  b.addFindings([contrast('moderate')], { route: '/', viewport: 'desktop' });
+  b.addFindings([contrast('serious')], { route: '/about', viewport: 'mobile' });
+  b.addFindings([makeFinding({ id: 'pp-page-title-missing', impact: 'serious', wcag: ['2.4.2'], description: 'd' })], { route: '/x', viewport: 'desktop' });
+  b.addFindings([{ ...contrast('serious'), kind: 'needsReview' }], { route: '/', viewport: 'desktop', state: 'Menu open' });
+
+  const report = b.build({ crawl: { queued: 1 } });
+  assert.equal(report.violations.length, 2);
+  assert.equal(report.needsReview.length, 1);
+  const c = report.violations.find((v) => v.id === 'color-contrast');
+  assert.equal(c.impact, 'serious', 'keeps the most severe impact');
+  assert.equal(c.nodes.length, 1);
+  assert.deepEqual(c.nodes[0].occurrences, [
+    { route: '/', viewport: 'desktop', state: null },
+    { route: '/about', viewport: 'mobile', state: null },
+  ]);
+  const t = report.violations.find((v) => v.id === 'pp-page-title-missing');
+  assert.equal(t.nodes[0].target, '(page)', 'nodeless findings get a page placeholder');
+  assert.equal(report.needsReview[0].nodes[0].occurrences[0].state, 'Menu open');
+  assert.deepEqual(report.summary, {
+    pagesAudited: 1, pageErrors: 0, statesAudited: 0, stateErrors: 0, checkErrors: 0,
+    violations: 2, blocking: 2, needsReview: 1,
+    byImpact: { critical: 0, serious: 2, moderate: 0, minor: 0 },
+  });
+  assert.deepEqual(report.crawl, { queued: 1 });
+});
+
+test('exitCodeFor puts load failures ahead of violations', () => {
+  const s = (o) => ({ summary: { pageErrors: 0, stateErrors: 0, blocking: 0, ...o } });
+  assert.equal(exitCodeFor(s({})), EXIT.PASS);
+  assert.equal(exitCodeFor(s({ blocking: 3 })), EXIT.VIOLATIONS);
+  assert.equal(exitCodeFor(s({ blocking: 3, pageErrors: 1 })), EXIT.LOAD_FAILURE);
+  assert.equal(exitCodeFor(s({ stateErrors: 1 })), EXIT.LOAD_FAILURE);
+});
+
+test('check errors are counted without failing the run', () => {
+  const b = builder();
+  b.addPage({ route: '/', viewport: 'desktop', url: 'u', checkErrors: [{ check: 'zoom', message: 'boom' }] });
+  b.addState({ label: 'Menu', route: '/', viewport: 'desktop' });
+  const report = b.build();
+  assert.equal(report.summary.checkErrors, 1);
+  assert.equal(report.summary.statesAudited, 1);
+  assert.equal(exitCodeFor(report), EXIT.PASS);
+});

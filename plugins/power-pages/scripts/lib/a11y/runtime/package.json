@@ -1,0 +1,11 @@
+{
+  "name": "power-pages-a11y-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned runtime for scripts/a11y-audit.js. Installed into a per-user cache by scripts/install-a11y-deps.js with npm ci.",
+  "license": "MIT",
+  "dependencies": {
+    "axe-core": "4.13.0",
+    "playwright-core": "1.63.0"
+  }
+}

@@ -1,0 +1,161 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const http = require('node:http');
+const os = require('node:os');
+const path = require('node:path');
+const test = require('node:test');
+const { spawn, spawnSync } = require('node:child_process');
+
+const { slugForRoute } = require('../a11y-audit');
+
+const SCRIPT = path.join(__dirname, '..', 'a11y-audit.js');
+
+function runSync(args, env = {}) {
+  return spawnSync(process.execPath, [SCRIPT, ...args], {
+    encoding: 'utf8',
+    env: { ...process.env, ...env },
+    shell: false,
+  });
+}
+
+test('no arguments is a usage error (exit 2), not a violation', () => {
+  const r = runSync([]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--url is required/);
+  assert.match(r.stderr, /Exit codes/);
+});
+
+test('--help prints usage and exits 0', () => {
+  const r = runSync(['--help']);
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /Usage: node a11y-audit\.js/);
+});
+
+test('a missing --auth-state file is a usage error', () => {
+  const r = runSync(['--url', 'http://localhost:1', '--auth-state', path.join(os.tmpdir(), 'pp-a11y-does-not-exist.json')]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--auth-state file not found/);
+});
+
+test('an invalid states file is a usage error', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-a11y-cli-'));
+  try {
+    const file = path.join(dir, 'states.json');
+    fs.writeFileSync(file, JSON.stringify({ states: [{ route: 'nope', label: 'x', steps: [{ action: 'wait', ms: 1 }] }] }));
+    const r = runSync(['--url', 'http://localhost:1', '--states', file]);
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /route must start/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('missing dependencies exit 4 with an install hint', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-a11y-nodeps-'));
+  try {
+    const r = runSync(['--url', 'http://localhost:1', '--deps-dir', dir], { POWER_PAGES_A11Y_DEPS_DIR: dir });
+    assert.equal(r.status, 4);
+    assert.match(r.stderr, /install-a11y-deps\.js/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('slugForRoute makes stable, safe snapshot file names', () => {
+  assert.equal(slugForRoute('/', 0), '01-home');
+  assert.equal(slugForRoute('/Products/Item?id=3#x', 11), '12-products-item');
+  assert.equal(slugForRoute('/../../etc', 2), '03-etc');
+});
+
+// Real-browser test. CI has no browser and no audit dependencies, so this runs only
+// when explicitly enabled after `node scripts/install-a11y-deps.js`:
+//   POWER_PAGES_A11Y_LIVE=1 node --test plugins/power-pages/scripts/tests/a11y-audit-cli.test.js
+const LIVE = process.env.POWER_PAGES_A11Y_LIVE === '1';
+
+const FIXTURE = {
+  '/': `<!doctype html><html lang="en"><head><title>Contoso</title>
+<style>.spin{width:20px;height:20px;background:#333;animation:spin 2s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+button.nofocus:focus{outline:none}.low{color:#aaa;background:#fff}</style></head><body><main><h1>Home</h1>
+<a href="/about">About</a> <a href="/trap">Trap</a> <a href="/private">Private</a> <a href="/Account/Login/LogOff">Sign out</a>
+<img src="/x.png"><p class="low">Low contrast</p><div class="spin"></div><button class="nofocus">Do nothing</button>
+<button id="menu" aria-expanded="false">Menu</button><ul id="m" hidden><li><img src="/y.png"></li></ul>
+<script>menu.onclick=function(){m.hidden=!m.hidden;menu.setAttribute('aria-expanded',String(!m.hidden))}</script>
+</main></body></html>`,
+  '/about': `<!doctype html><html lang="en"><head><title>Contoso</title><style>.wide{width:800px}.clip{height:20px;overflow:hidden;width:200px}</style></head>
+<body><main><h1>About</h1><div class="wide">Wide</div><div class="clip">Text in a fixed height box that will be clipped when text size doubles.</div></main></body></html>`,
+  '/trap': `<!doctype html><html lang="en"><head><title>Trap</title></head><body><main><h1>Trap</h1><a href="/">Home</a>
+<input id="t" aria-label="Trap field"><script>t.addEventListener('keydown',function(e){if(e.key==='Tab')e.preventDefault()})</script></main></body></html>`,
+  '/SignIn': '<!doctype html><html lang="en"><head><title>Sign in</title></head><body><main><h1>Sign in</h1></main></body></html>',
+};
+
+function startFixture() {
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://localhost');
+    if (u.pathname === '/private') {
+      res.writeHead(302, { Location: '/SignIn?returnUrl=%2Fprivate' });
+      res.end();
+      return;
+    }
+    const html = FIXTURE[u.pathname];
+    // A CSP that forbids every script: axe must still run because the audit
+    // context bypasses CSP and injects the local copy inline.
+    res.writeHead(html ? 200 : 404, { 'Content-Type': 'text/html', 'Content-Security-Policy': "script-src 'none'" });
+    res.end(html || '<!doctype html><title>Not found</title>');
+  });
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+function runAsync(args) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [SCRIPT, ...args], { shell: false });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    child.on('close', (status) => resolve({ status, stdout, stderr }));
+  });
+}
+
+test('live: audits a crawled fixture site end to end', { skip: !LIVE && 'set POWER_PAGES_A11Y_LIVE=1 to run' }, async () => {
+  const server = await startFixture();
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const r = await runAsync(['--url', base, '--crawl']);
+    assert.equal(r.status, 3, `private page should count as not audited\n${r.stderr}`);
+    const report = JSON.parse(r.stdout);
+    const ids = new Set(report.violations.map((v) => v.id));
+    for (const id of ['image-alt', 'color-contrast', 'pp-keyboard-trap', 'pp-focus-not-visible', 'pp-reflow-horizontal-scroll',
+      'pp-text-clipped-at-200', 'pp-motion-ignores-reduced-motion', 'pp-page-title-duplicate']) {
+      assert.ok(ids.has(id), `expected ${id} in ${[...ids].join(', ')}`);
+    }
+    assert.ok(report.pages.some((p) => p.route === '/private' && /sign-in page/.test(p.error)));
+    assert.ok(report.crawl.excluded.some((e) => e.reason === 'sign-out'));
+    assert.equal(report.tool.axeVersion, '4.13.0');
+  } finally {
+    server.close();
+  }
+});
+
+test('live: discover proposes states and a states file audits hidden content', { skip: !LIVE && 'set POWER_PAGES_A11Y_LIVE=1 to run' }, async () => {
+  const server = await startFixture();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-a11y-live-'));
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const disc = await runAsync(['--url', base, '--mode', 'discover', '--snapshot-dir', dir]);
+    assert.equal(disc.status, 0, disc.stderr);
+    const page = JSON.parse(disc.stdout).pages[0];
+    const candidate = page.stateCandidates.find((c) => c.label === 'disclosure: Menu');
+    assert.ok(candidate);
+    assert.ok(fs.existsSync(page.snapshotFile));
+
+    const statesFile = path.join(dir, 'states.json');
+    fs.writeFileSync(statesFile, JSON.stringify({ states: [{ route: '/', label: 'Menu open', steps: candidate.steps }] }));
+    const r = await runAsync(['--url', base, '--viewports', 'desktop', '--checks', 'axe', '--states', statesFile]);
+    assert.equal(r.status, 1, r.stderr);
+    const alt = JSON.parse(r.stdout).violations.find((v) => v.id === 'image-alt');
+    assert.ok(alt.nodes.some((n) => n.occurrences.some((o) => o.state === 'Menu open')), 'hidden image found only in the open-menu state');
+  } finally {
+    server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
