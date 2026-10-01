@@ -15,6 +15,7 @@ const WARNING_CODES = new Set([
   'PCF_CODE_REFRESH_IN_UPDATEVIEW',
   'PCF_CODE_UNPARSEABLE',
   'PCF_FEATURE_UNUSED',
+  'PCF_CODE_FIXED_ELEMENT_ID',
 ]);
 
 const SOURCE_RULES = [
@@ -87,7 +88,222 @@ function scanSource(file, text, { controlType, lex = blankNonCodePreservingTempl
 
   addDirectApiFindings(findings, file, src, mask);
   addRefreshInUpdateViewFindings(findings, file, src, mask);
+  addFixedElementIdFindings(findings, file, src, mask);
   return findings;
+}
+
+const FIXED_ELEMENT_ID_JSX = new Set(['id', 'htmlFor', 'aria-controls', 'aria-labelledby', 'aria-describedby', 'aria-activedescendant']);
+const FIXED_ELEMENT_ID_DOM = new Set(['id', 'for', 'aria-controls', 'aria-labelledby', 'aria-describedby', 'aria-activedescendant']);
+const TEMPLATE_QUOTE = '\u0060';
+
+function addFixedElementIdFindings(findings, file, src, mask) {
+  // Two instances of one control on a form share a hard-coded id. The shapes this warning covers:
+  //   <div id="popup" />
+  //   <label htmlFor={'popup'} />
+  //   <div id={`popup`} />                 unsubstituted template, still one shared id
+  //   el.id = "popup";
+  //   el.setAttribute("id", "popup");
+  //   el.setAttribute('for', 'popup');
+  // Derived values are not findings:
+  //   <div id={`${this.instanceId}-list`} />
+  //   <div id={popupId} />
+  //   el.id = this.instanceId + "-list";
+  // The match is taken from the code mask so the same text in a comment or string is ignored.
+  scanJsxFixedIds(findings, file, src, mask);
+  scanDomIdAssignments(findings, file, src, mask);
+  scanSetAttributeIds(findings, file, src, mask);
+}
+
+function fixedElementIdMessage() {
+  return `Heuristic diagnostic: a hard-coded element id is shared by every instance of this control, so two instances on one form collide; derive ids per instance, for example React useId or an instance counter. See ${BEST_PRACTICES}`;
+}
+
+function scanJsxFixedIds(findings, file, src, mask) {
+  for (let i = 0; i < mask.length; i += 1) {
+    if (mask[i] !== '<' || src[i] !== '<' || !/[A-Za-z]/.test(src[i + 1] || '')) continue;
+    const end = findJsxTagEnd(src, i + 1);
+    if (end === -1) continue;
+    scanJsxTagAttributes(findings, file, src, i, end);
+    i = end - 1;
+  }
+}
+
+function scanJsxTagAttributes(findings, file, src, tagStart, tagEnd) {
+  let i = tagStart + 1;
+  while (i < tagEnd && /[\w.]/.test(src[i])) i += 1;
+  while (i < tagEnd) {
+    while (i < tagEnd && /\s/.test(src[i])) i += 1;
+    if (i >= tagEnd || src[i] === '/' || src[i] === '>') break;
+    const nameStart = i;
+    while (i < tagEnd && /[\w:-]/.test(src[i])) i += 1;
+    const name = src.slice(nameStart, i);
+    while (i < tagEnd && /\s/.test(src[i])) i += 1;
+    if (src[i] !== '=') continue;
+    i += 1;
+    while (i < tagEnd && /\s/.test(src[i])) i += 1;
+    const value = readJsxAttributeValue(src, i);
+    if (!value) break;
+    if (FIXED_ELEMENT_ID_JSX.has(name) && value.literal) {
+      findings.push(makeFinding('PCF_CODE_FIXED_ELEMENT_ID', fixedElementIdMessage(), file, lineOf(src, nameStart)));
+    }
+    i = value.end;
+  }
+}
+
+function scanDomIdAssignments(findings, file, src, mask) {
+  const re = /\.id(?![A-Za-z0-9_$])\s*=(?!=)/g;
+  let match;
+  while ((match = re.exec(mask)) !== null) {
+    if (mask[match.index] === ' ') continue;
+    const value = readAssignedLiteral(src, match.index + match[0].length);
+    if (!value || !value.literal) continue;
+    findings.push(makeFinding('PCF_CODE_FIXED_ELEMENT_ID', fixedElementIdMessage(), file, lineOf(src, match.index)));
+  }
+}
+
+function scanSetAttributeIds(findings, file, src, mask) {
+  const re = /\bsetAttribute\s*\(/g;
+  let match;
+  while ((match = re.exec(mask)) !== null) {
+    if (mask[match.index] === ' ') continue;
+    const open = src.indexOf('(', match.index);
+    const args = readSetAttributeArgs(src, open);
+    if (args.length < 2 || !args[0].literal || !FIXED_ELEMENT_ID_DOM.has(args[0].text) || !args[1].literal) continue;
+    findings.push(makeFinding('PCF_CODE_FIXED_ELEMENT_ID', fixedElementIdMessage(), file, lineOf(src, match.index)));
+  }
+}
+
+function readJsxAttributeValue(text, index) {
+  if (isQuote(text[index])) return readQuotedLiteral(text, index);
+  if (text[index] !== '{') return { end: index, literal: false };
+  const close = findBraceSkippingStrings(text, index);
+  if (close === -1) return null;
+  const inner = text.slice(index + 1, close).trim();
+  const quoted = isQuote(inner[0]) ? readQuotedLiteral(inner, 0) : null;
+  return { end: close + 1, literal: Boolean(quoted && quoted.end === inner.length && quoted.literal) };
+}
+
+function readAssignedLiteral(text, index) {
+  let i = index;
+  while (i < text.length && /\s/.test(text[i])) i += 1;
+  if (!isQuote(text[i])) return null;
+  return readQuotedLiteral(text, i);
+}
+
+function isQuote(ch) {
+  return ch === '"' || ch === "'" || ch === TEMPLATE_QUOTE;
+}
+
+function readQuotedLiteral(text, index) {
+  const quote = text[index];
+  let i = index + 1;
+  let hasSubstitution = false;
+  while (i < text.length) {
+    if (text[i] === '\\') {
+      i += 2;
+      continue;
+    }
+    if (quote === TEMPLATE_QUOTE && text[i] === '$' && text[i + 1] === '{') {
+      hasSubstitution = true;
+      const close = findBraceSkippingStrings(text, i + 1);
+      i = close === -1 ? text.length : close + 1;
+      continue;
+    }
+    if (text[i] === quote) {
+      return { end: i + 1, literal: quote !== TEMPLATE_QUOTE || !hasSubstitution, text: text.slice(index + 1, i) };
+    }
+    i += 1;
+  }
+  return null;
+}
+
+function readSetAttributeArgs(text, openParen) {
+  const args = [];
+  let i = openParen + 1;
+  while (i < text.length && text[i] !== ')' && args.length < 2) {
+    while (i < text.length && /\s/.test(text[i])) i += 1;
+    if (text[i] === ',') {
+      i += 1;
+      continue;
+    }
+    if (isQuote(text[i])) {
+      const quoted = readQuotedLiteral(text, i);
+      if (!quoted) break;
+      args.push(quoted);
+      i = quoted.end;
+      continue;
+    }
+    const start = i;
+    let depth = 0;
+    while (i < text.length) {
+      const ch = text[i];
+      if (ch === '(' || ch === '{' || ch === '[') depth += 1;
+      else if (ch === ')' || ch === '}' || ch === ']') {
+        if (depth === 0) break;
+        depth -= 1;
+      } else if (ch === ',' && depth === 0) break;
+      i += 1;
+    }
+    args.push({ end: i, literal: false, text: text.slice(start, i) });
+  }
+  return args;
+}
+
+function findJsxTagEnd(text, start) {
+  let quote = null;
+  let brace = 0;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === '\\') {
+        i += 1;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (isQuote(ch)) {
+      quote = ch;
+      continue;
+    }
+    if (ch === '{') {
+      brace += 1;
+      continue;
+    }
+    if (ch === '}') {
+      if (brace > 0) brace -= 1;
+      continue;
+    }
+    if (ch === '>' && brace === 0) return i + 1;
+  }
+  return -1;
+}
+
+function findBraceSkippingStrings(text, open) {
+  if (text[open] !== '{') return -1;
+  let depth = 0;
+  let quote = null;
+  for (let i = open; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === '\\') {
+        i += 1;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (isQuote(ch)) {
+      quote = ch;
+      continue;
+    }
+    if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
 }
 
 function addRegexFindings(findings, rule, file, src, mask) {
@@ -352,7 +568,10 @@ function hasMethodGuard(text, mask, namespace, method, callIndex) {
     const rawCondition = text.slice(openParen + 1, closeParen);
     const maskCondition = mask.slice(openParen + 1, closeParen);
     const optionalMethodGuard = new RegExp(`typeof\\s+context\\.${escapedNamespace}\\?\\.${escapedMethod}\\s*={2,3}\\s*['"]function['"]`, 'g');
-    if (hasCodeMatch(optionalMethodGuard, rawCondition, maskCondition)) {
+    // A negated check is the branch where the method is absent: `!(typeof context.device?.m === "function")`.
+    // That must not count. `||` with an unrelated operand is also not dominating; the else branch never
+    // reaches this return because a `}` sits between the true-branch brace and the call.
+    if (hasPositiveCodeMatch(optionalMethodGuard, rawCondition, maskCondition)) {
       if (!maskCondition.includes('||')) return true;
       continue;
     }
@@ -367,6 +586,7 @@ function hasMethodGuard(text, mask, namespace, method, callIndex) {
     let methodMatch;
     while ((methodMatch = dottedMethodGuard.exec(rawCondition)) !== null) {
       if (maskCondition[methodMatch.index] === ' ') continue;
+      if (!isPositiveGuard(rawCondition, methodMatch.index)) continue;
       if (hasPositiveNamespaceGuardBefore(rawCondition.slice(0, methodMatch.index), maskCondition.slice(0, methodMatch.index), namespace)) return true;
     }
   }
@@ -413,6 +633,25 @@ function findMatchingParen(mask, open) {
     }
   }
   return -1;
+}
+
+function hasPositiveCodeMatch(re, raw, mask) {
+  re.lastIndex = 0;
+  let match;
+  while ((match = re.exec(raw)) !== null) {
+    if (mask[match.index] === ' ') continue;
+    if (!isPositiveGuard(raw, match.index)) continue;
+    return true;
+  }
+  return false;
+}
+
+function isPositiveGuard(raw, index) {
+  // `!(typeof context.device?.captureImage === "function")` still contains the positive comparison.
+  // Walk back over whitespace and the parentheses of the negation so only a dominating true branch counts.
+  let i = index - 1;
+  while (i >= 0 && (raw[i] === '(' || /\s/.test(raw[i]))) i -= 1;
+  return raw[i] !== '!';
 }
 
 function hasCodeMatch(re, raw, mask) {

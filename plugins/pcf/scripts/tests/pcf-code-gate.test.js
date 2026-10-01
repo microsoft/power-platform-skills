@@ -261,6 +261,15 @@ test('featureCoherence rejects negative, disjoined, and late namespace guards', 
   assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (typeof context.device.captureImage === "function" && context.device) { context.device.captureImage(); }' }], ['pages']), 'PCF_PAGES_API', 'error');
 });
 
+test('featureCoherence rejects a negated optional guard, an unrelated OR, and the else branch', () => {
+  const pages = (source) => featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: source }], ['pages']);
+  assertCode(pages('if (!(typeof context.device?.captureImage === "function")) { context.device.captureImage(); }'), 'PCF_PAGES_API', 'error');
+  assertCode(pages('if (context.device && !(typeof context.device.captureImage === "function")) { context.device.captureImage(); }'), 'PCF_PAGES_API', 'error');
+  assertCode(pages('if (ready || typeof context.device?.captureImage === "function") { context.device.captureImage(); }'), 'PCF_PAGES_API', 'error');
+  assertCode(pages('if (typeof context.device?.captureImage === "function") { return; } else { context.device.captureImage(); }'), 'PCF_PAGES_API', 'error');
+  assert.deepEqual(pages('if (typeof context.device?.captureImage === "function") { context.device.captureImage(); } else { return; }'), []);
+});
+
 test('featureCoherence rejects dotted guards in conditions containing OR while keeping optional guards safe', () => {
   assert.match(assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (ready || context.device && typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), 'PCF_PAGES_API', 'error').message, /context\.device\?\.captureImage/);
   assert.match(assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (ready || (context.device && typeof context.device.captureImage === "function")) { context.device.captureImage(); }' }], ['pages']), 'PCF_PAGES_API', 'error').message, /context\.device\?\.captureImage/);
@@ -289,6 +298,54 @@ test('featureCoherence reports Pages utility calls without method-level guards a
 
 test('featureCoherence ignores Pages API words that appear only in comments or strings', () => {
   assert.deepEqual(featureCoherence(manifest(), [{ file: FILE, text: '// context.device.captureImage\nconst s = "context.utils.lookupObjects";' }], ['pages']), []);
+});
+
+test('scanSource warns on hard-coded element ids and allows derived ids', () => {
+  const warned = (source) => scan(source).filter((finding) => finding.code === 'PCF_CODE_FIXED_ELEMENT_ID');
+  const positives = [
+    '<div id="popup" />',
+    "<label htmlFor={'popup'} />",
+    '<div id={"popup"} />',
+    '<div aria-controls="popup" />',
+    '<div aria-labelledby="popup" />',
+    '<div aria-describedby="popup" />',
+    '<div aria-activedescendant="popup" />',
+    'el.id = "popup";',
+    'el.setAttribute("id", "popup");',
+    "el.setAttribute('for', 'popup');",
+    'el.setAttribute("aria-controls", "popup");',
+    'el.setAttribute("aria-labelledby", "popup");',
+    'el.setAttribute("aria-describedby", "popup");',
+    'el.setAttribute("aria-activedescendant", "popup");',
+    'el.id = `popup`;',
+    '<div id={`popup`} />',
+  ];
+  for (const source of positives) {
+    const findings = warned(source);
+    assert.equal(findings.length, 1, source);
+    assert.equal(findings[0].severity, 'warning', source);
+    assert.match(findings[0].message, /two instances/i, source);
+    assert.match(findings[0].message, /useId|instance counter/i, source);
+  }
+  const negatives = [
+    '<div id={`${this.instanceId}-list`} />',
+    '<div id={this.instanceId + "-list"} />',
+    '<div id={popupId} />',
+    'el.id = popupId;',
+    'el.id = `${this.instanceId}-list`;',
+    'el.setAttribute("id", popupId);',
+    'el.setAttribute("role", "status");',
+    'el.setAttribute("aria-label", "Stars");',
+    'const id = "popup";',
+    '// <div id="popup" />',
+    'const note = \'<div id="popup" />\';',
+  ];
+  for (const source of negatives) {
+    assert.deepEqual(warned(source), [], source);
+  }
+  const gated = gateSources({ manifestModel: manifest(), sources: [{ file: FILE, text: '<div id="popup" />' }], hosts: ['model'] });
+  assert.equal(gated.ok, true);
+  assert.equal(gated.warnings.some((finding) => finding.code === 'PCF_CODE_FIXED_ELEMENT_ID'), true);
 });
 
 test('gateSources partitions errors and warnings and labels code-gate output as heuristic diagnostics', () => {
