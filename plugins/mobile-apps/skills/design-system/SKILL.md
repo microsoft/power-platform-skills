@@ -22,7 +22,7 @@ Design-system and Tamagui integration are complementary, not alternatives. `/des
 
 ## When to use
 
-- **Step 6.5** — auto-invoked from `/create-mobile-app` after scaffold + `npx power-apps init`, before screen builders
+- **Step 6.5** — auto-invoked from `/create-mobile-app` after scaffold + `pa app init`, before screen builders
 - **Standalone** — `/design-system` callable any time to create or refresh a brand system
 - **Refresh** — `/design-system --refresh <dimension>` to change one aspect
 - **Reskin** — `/design-system --reskin` for full visual layer swap

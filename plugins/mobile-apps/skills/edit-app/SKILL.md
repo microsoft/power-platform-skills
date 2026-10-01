@@ -57,7 +57,7 @@ This is a focused edit workflow, not a lighter quality bar. Reuse `/create-mobil
 
 | Edit touches | Required gates |
 |---|---|
-| Any source file | Existing-app health gate, final `npx tsc --noEmit` |
+| Any source file | Existing-app health gate, final `npx --no-install tsc --noEmit` |
 | Dataverse/schema/connector | Environment drift gate, data-source/schema gate, Generated Services snapshot refresh, final `tsc` |
 | Navigation/routes | Navigation/layout gate, route contract check, final `tsc` |
 | New screen | Shared scaffold gate, skeleton gate, screen-builder wave gate, style-quality sweep, route check, final `tsc` |
@@ -111,7 +111,7 @@ Run these existing-app health checks before any mutation:
 
 If the worktree has uncommitted changes that overlap likely edit targets, show the affected files and ask before continuing. Do not revert or stash automatically.
 
-If the app already fails `npx tsc --noEmit`, capture the errors once. Continue only when the failures are in files this edit will touch or are generated-service drift this edit can repair; otherwise surface the pre-existing failure and ask whether to proceed. If the edit would add screens or generated services, clean the prerequisite gate before continuing.
+If the app already fails `npx --no-install tsc --noEmit`, capture the errors once. Continue only when the failures are in files this edit will touch or are generated-service drift this edit can repair; otherwise surface the pre-existing failure and ask whether to proceed. If the edit would add screens or generated services, clean the prerequisite gate before continuing.
 
 ### Step 0.5 — Application Insights configuration fast path
 
@@ -427,7 +427,7 @@ If this is `--plan-only`, update `memory-bank.md` with `plan_only: true`, print 
 Apply sections in dependency order so screens always build against the current data/native surface:
 
 0. **Environment drift gate for data edits** — before Dataverse, SharePoint, connector, or sample-data work, compare `memory-bank.md`, `power.config.json`, and `.resolved-environment.json`. If they disagree, show the values and ask the user which environment is intended. Do not create tables or connections until confirmed.
-1. **Data Model** — read and execute `/add-dataverse --skip-planning` with the approved Data Model section. It must create/extend Dataverse tables, refresh generated services/models, update `.datamodel-manifest.json`, and leave generated services compiling. After it returns, run `npm run generate-schemas` and `npx tsc --noEmit`; do not continue to screens until clean.
+1. **Data Model** — read and execute `/add-dataverse --skip-planning` with the approved Data Model section. It must create/extend Dataverse tables, refresh generated services/models, update `.datamodel-manifest.json`, and leave generated services compiling. After it returns, run `npm run generate-schemas` and `npx --no-install tsc --noEmit`; do not continue to screens until clean.
 2. **Sample Data** — if a new Dataverse table was created and any changed screen will show list/detail data from it, read and execute `/add-sample-data` for the project. If seeding fails, record a concern and continue only if the app handles empty states.
 3. **Connector/Data Source** — read and execute `/add-datasource` when ambiguous, or `/add-sharepoint` / `/add-connector` for approved connector changes. Regenerate services and record connection notes in `memory-bank.md`.
 4. **Pure-JavaScript Dependencies** — execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) for new or changed rows in the approved `## Screens → ### JavaScript Dependencies` table. Approval is consent for those exact packages and versions. Install and validate before screen work; if final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and stop with the exact failed criterion.
@@ -512,7 +512,7 @@ Shared scaffold algorithm:
 Run the navigation/skeleton gate before screen-builder work:
 
 ```bash
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
 If it fails, batch-fix layouts, route names, skeleton imports, generated-service names, shared exports, or hook signatures, then rerun once. Do not launch screen-builders from a broken shell.
@@ -528,7 +528,7 @@ Batch affected screens in waves of up to 5. For each wave:
 3. Parse each first line per `AGENTS.md` (`DONE`, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `BLOCKED`). Unknown first lines are `BLOCKED`.
 4. Retry `NEEDS_CONTEXT` once with the missing context from plan/files/services.
 5. Stop on `BLOCKED` unless the user chooses to skip with an approved placeholder.
-6. Run `npx tsc --noEmit` after the wave before launching the next wave.
+6. Run `npx --no-install tsc --noEmit` after the wave before launching the next wave.
 7. If the wave gate fails, group errors by root cause and respawn affected builders with consolidated TypeScript output. Cap at 2 retries per screen.
 
 Do not launch wave N+1 until wave N is clean.
@@ -559,7 +559,7 @@ Required gates, selected by what changed:
 
 ```bash
 npm run generate-schemas      # if any data source/schema/connector changed
-npx tsc --noEmit              # always after app mutation
+npx --no-install tsc --noEmit              # always after app mutation
 npm run check-routes --if-present
 ```
 
@@ -589,7 +589,7 @@ Rules:
 3. Auto-fix deterministic issues: weak readable tokens, yellow/orange badges with white text, missing icon-only `aria-label`, missing `role`, tiny icon hit targets, raw hex tokens, missing safe-area padding, `allowFontScaling={false}`. Apply these web-standard accessibility props to Tamagui 2 components; raw React Native components retain their React Native accessibility props.
 4. Treat judgement calls as concerns, not infinite loops: complex safe-area restructuring, ambiguous brand color choices, large hierarchy redesigns, or empty-state rewrites that require large JSX movement.
 5. Re-run the same report validators for touched files. Cap retries at 2 per file per validator.
-6. Run `npx tsc --noEmit` after style fixes. Style concerns may remain, but TypeScript may not.
+6. Run `npx --no-install tsc --noEmit` after style fixes. Style concerns may remain, but TypeScript may not.
 
 If auto-fixable issues remain after retries, record `DONE_WITH_CONCERNS` in `memory-bank.md` with file/rule summaries.
 
@@ -599,7 +599,7 @@ If verification fails because the edit exposed stale generated services, rerun t
 
 **Telemetry checkpoint: `refresh_app_preview_and_history`**
 
-Before Step 8, `npx tsc --noEmit` must be clean after all code edits from this `/edit-app` run. If any code was written after Step 7's `tsc`, rerun `npx tsc --noEmit`, batch-fix root causes, and continue only when TypeScript is error-free.
+Before Step 8, `npx --no-install tsc --noEmit` must be clean after all code edits from this `/edit-app` run. If any code was written after Step 7's `tsc`, rerun `npx --no-install tsc --noEmit`, batch-fix root causes, and continue only when TypeScript is error-free.
 
 If any UI, design, navigation, native interaction, or visible data state changed — or if the user explicitly asked for a preview — read and execute `/preview-screens` after verification. This regenerates `preview.html` and opens it according to the project's `visual_companion` setting.
 

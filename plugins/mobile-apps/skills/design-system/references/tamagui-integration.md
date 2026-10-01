@@ -197,7 +197,7 @@ and custom provider props when applying this change.
 After Tamagui or provider changes:
 
 ```bash
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
 Also verify that `tamagui.config.ts` contains no local color parser or semantic

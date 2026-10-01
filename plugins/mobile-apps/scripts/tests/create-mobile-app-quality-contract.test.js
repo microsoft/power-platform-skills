@@ -212,7 +212,13 @@ test('Power Apps initialization directly invokes the CLI with approved values', 
   const initializeStart = skill.indexOf('### Step 6 — Initialize');
   const initializeEnd = skill.indexOf('### Step 6.5 — Verify dependencies');
   const initialize = skill.slice(initializeStart, initializeEnd);
-  assert.match(initialize, /npx power-apps init -t MobileApp/);
+  // `$PA` is only safe because every resolver assignment keeps `--no-install`; without it, npx
+  // would download a registry package when the local shim is missing.
+  const cliBinary = fs.readFileSync(path.resolve(__dirname, '../../shared/cli-binary.md'), 'utf8');
+  assert.match(initialize, /\$PA app init -t MobileApp/);
+  assert.match(cliBinary, /PA="npx --no-install pa"/);
+  assert.match(cliBinary, /PA="npx --no-install power-apps"/);
+  assert.doesNotMatch(cliBinary, /PA="npx (?!--no-install )/);
   assert.match(initialize, /--display-name "<displayName>"/);
   assert.match(initialize, /--environment-id "<environment-id>"/);
   assert.match(initialize, /approved Step 2 display name and Step 4 environment ID/);

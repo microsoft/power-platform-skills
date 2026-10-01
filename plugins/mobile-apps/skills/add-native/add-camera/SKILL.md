@@ -406,7 +406,7 @@ async function readUriAsBase64(uri: string): Promise<string | null> {
 > "→ Running tsc to verify camera + upload helper compile (~10–20 seconds)."
 
 ```bash
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
 Fix any errors. Common issues:
