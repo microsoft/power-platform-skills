@@ -402,7 +402,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   **icon** web resource is referenced by the table itself, so Dataverse refuses to delete it until the table
   is gone (form JS, referenced by its already-deleted form, is safe either way). Teardown also removes the
   build's **generated default app icon** (`<appUnique>_icon`, created in-solution when the spec sets no
-  `app.icon`) so it doesn't leak as an orphan. **An app is TWO rows** — an `appmodule` AND a `sitemaps`
+  `app.icon`) so it doesn't leak as an orphan. It keeps the **page manifest** while the generative-pages
+  step fails (a failed manifest or page read fails that step too), so a re-run still finds the pages the
+  app authored. **An app is TWO rows** — an `appmodule` AND a `sitemaps`
   row, with no lookup between them and no server-side cascade; the only link is
   `sitemap.sitemapnameunique === appmodule.uniquename`. Deleting only the appmodule strands the sitemap
   forever and, because `sitemapnameunique` is unique-constrained, permanently **burns that unique name**:
@@ -1188,8 +1190,10 @@ NODE20_BIN=/path/to/node20/bin node scripts/run-tests.js --with-sdk /path/to/pow
   telemetry-emitting hook or script.
 - The SDK's Jest suite needs **Node 20** (its `canvas` native module is built for the Node-20 ABI).
   Set `NODE20_BIN` to a Node-20 bin dir; without it the SDK suite is skipped (plugin suite still runs).
-- genpage evals: `node --test evals/model-apps/genpage/tests/*.test.js`, plus the Layer 1/2 runners
-  (`node evals/model-apps/genpage/run-layer-{1,2}.js --tier smoke`). See `## Eval Suite` below. CI's
+- Evals: `node --test evals/model-apps/tests/*.test.js evals/model-apps/app-builder/tests/*.test.js
+  evals/model-apps/genpage/tests/*.test.js` (the first directory holds the cross-runner coverage
+  contract), plus the runners (`node evals/model-apps/genpage/run-layer-{1,2}.js --tier smoke`,
+  `node evals/model-apps/app-builder/run-app-builder.js`). See `## Eval Suite` below. CI's
   `test-model-apps-evals` job runs the eval tests AND all three runners (genpage Layer 1/2, app-builder)
   over every committed fixture — offline, no org — so a fixture that falls out of step fails the PR.
 
@@ -1354,12 +1358,17 @@ layers are automated (TAP v13 runners); Layer 3 is manual.
   we evaluate, the 3 layers, tiers (smoke/full/stress), fixture types
   (synthetic vs real captures), runner output, capture flow, cadence,
   diagnosing failures, adding evals and assertions.
-- **Eval definitions:** `evals/model-apps/genpage/evals.json` — 18 evals
-  with prompts, answers, and expectations.
+- **Eval definitions:** `evals/model-apps/genpage/evals.json` — prompts,
+  answers, and expectations.
 - **Fixtures:** `evals/model-apps/genpage/fixtures/<eval-id>-<slug>/` —
   one folder per captured or synthetic run. Each contains the `.tsx`,
   `workflow-log.md`, `genpage-plan.md`, and (when applicable)
-  `entity-creation-log.md` and `RuntimeTypes.ts`.
+  `genpage-entity-creation-log.md` (older captures: `entity-creation-log.md`)
+  and `RuntimeTypes.ts`.
+- **Coverage contract:** `evals/model-apps/tests/eval-coverage-contract.test.js`
+  fails when a prompt has no fixture, an expectation has no check, or a check
+  skips on every fixture, unless `eval-coverage-baseline.json` beside it records
+  the gap and why; it also pins the guides' counts to the registries.
 
 Run on every PR that touches the skill, agents, rules, or evals:
 
@@ -1382,7 +1391,9 @@ snapshots — using the plugin's own pure primitives. No live env required.
 
 Per-stage oracles: `author` (validate + lint), `plan` (`planFor`), `data`
 (`schema-facts.js` normalized tables/columns/relationships), `ui` (view/chart/form
-intent facts), `app` (sitemap facts + nav graph), `verify` (`verifySpec` reconcile).
+intent facts), `app` (sitemap facts + nav graph), `security`, `verify` (`verifySpec`
+reconcile, fail-closed), `process`, `generate-pages`, `teardown`, `round-trip` and
+`changed-only` — see the guide's stage → oracle table for what each grades.
 
 ```bash
 # From repo root:

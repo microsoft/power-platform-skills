@@ -1907,3 +1907,282 @@ test('#587 a plain --apply calls the snapshot guard before building', () => {
   assert.match(before, /if \(opts\.apply\) assertSnapshotInvalidated\(applySnapshotStore, workspaceDir\);/,
     'the guard must run, gated on apply, immediately before the mutation engine');
 });
+
+test('main changed-only full-fast-noop cycle uses the real flow', async () => {
+  const os = require('node:os');
+  const { loadCli } = require('./helpers/cli-harness.js');
+  const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
+  const snapshotStore = require('../lib/apply-snapshot-store.js');
+  const { sha256 } = require('../lib/hash.js');
+  const { makeGenpageCli } = require('../lib/genpage-cli.js');
+  const scriptsDir = path.join(__dirname, '..');
+  const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'main-changed-only-'));
+  const workspaceDir = path.join(appDir, '.maker-workspace');
+  const specPath = path.join(appDir, 'app-spec.json');
+  const env = 'https://contoso.crm.dynamics.com';
+  const orgId = '11111111-0000-4000-8000-000000000001';
+  const appIds = ['22222222-0000-4000-8000-000000000001', '22222222-0000-4000-8000-000000000002', '22222222-0000-4000-8000-000000000003'];
+  const appUniqueValue = '33333333-0000-4000-8000-000000000001';
+  const sitemapId = '44444444-0000-4000-8000-000000000001';
+  const pageIds = {
+    Overview: '55555555-0000-4000-8000-000000000001',
+    Detail: '55555555-0000-4000-8000-000000000002',
+  };
+  const spec = {
+    ...pageBearingSpec(),
+    solution: { uniqueName: 'ChangedOnlySln', publisherPrefix: 'contoso' },
+    app: { name: 'Renamed App', uniqueName: 'contoso_liveidentity' },
+    entities: [{ schemaName: 'contoso_item', primaryAttribute: { schemaName: 'contoso_name' }, columns: [] }],
+    pages: [
+      { key: 'overview', name: 'Overview', navigatesTo: [{ targetKey: 'detail' }], source: { kind: 'tsx', codeFile: 'overview.tsx' } },
+      { key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'detail.tsx' } },
+    ],
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [{ page: 'overview' }, { page: 'detail' }] }] }] },
+  };
+  const state = { orgId, app: null, creates: 0, table: null, resources: new Map(), pages: new Map(), failDownload: false };
+  const { sdk } = makeSimpleMockSdk();
+  const writes = [];
+  const uploads = [];
+  const whoAmI = [];
+  const sdkTempDirs = [];
+  const uploadTempDirs = [];
+  const createArtifact = sdk.createArtifact;
+  sdk.createArtifact = (type, def) => {
+    if (type !== 'app') return createArtifact(type, def);
+    state.app = { ...jclone(def), id: appIds[state.creates++] };
+    return jclone(state.app);
+  };
+  sdk.initWorkspace = async () => {};
+  sdk.listArtifacts = async () => state.app ? [{ id: state.app.id, isDirty: false }] : [];
+  sdk.findArtifact = async (type, identity) => {
+    assert.strictEqual(type, 'app');
+    assert.strictEqual(identity.uniqueName, spec.app.uniqueName, 'rebuild resolves the immutable app name');
+    return state.app && state.app.id;
+  };
+  sdk.fetchArtifact = async (type, id) => {
+    assert.strictEqual(type, 'app');
+    assert.strictEqual(id, state.app.id);
+    return jclone(state.app);
+  };
+  sdk.getArtifact = async (type, id) => {
+    assert.strictEqual(type, 'app');
+    assert.strictEqual(id, state.app.id);
+    return jclone(state.app);
+  };
+  sdk.updateElement = async (type, id, pointer, value) => {
+    assert.strictEqual(type, 'app');
+    assert.strictEqual(id, state.app.id);
+    jpSet(state.app, pointer, jclone(value));
+    return jclone(state.app);
+  };
+  sdk.createTable = async (o) => {
+    state.table = { logicalName: o.schemaName.toLowerCase(), entitySetName: `${o.schemaName.toLowerCase()}s`, isCustom: true };
+    return state.table;
+  };
+  sdk.findTables = async () => state.table ? [state.table] : [];
+  sdk.findColumns = async () => [{ logicalName: 'contoso_name' }];
+  sdk.createWebResource = async (o) => {
+    const row = { webresourceid: `wr-${state.resources.size + 1}`, name: o.name, content: Buffer.from(o.content || '', 'utf8').toString('base64') };
+    state.resources.set(o.name, row);
+    return { id: row.webresourceid, name: row.name };
+  };
+  sdk.updateWebResource = async (id, o) => {
+    const row = [...state.resources.values()].find((r) => r.webresourceid === id);
+    assert.ok(row, `web resource ${id} exists`);
+    row.content = Buffer.from(o.content, 'utf8').toString('base64');
+  };
+  sdk.dataverse = { get: async (url) => {
+    assert.match(url, /^\/EntityDefinitions\(LogicalName='/);
+    return state.table && !url.includes("LogicalName='entity'")
+      ? { status: 200, body: { LogicalName: state.table.logicalName, EntitySetName: state.table.entitySetName } }
+      : { status: 404, body: {} };
+  } };
+  sdk.queryRecords = async (set, o = {}) => {
+    const filter = o.filter || '';
+    if (set === 'appmodule') {
+      if (filter) assert.strictEqual(filter, `uniquename eq '${spec.app.uniqueName}'`);
+      return state.app ? [{ appmoduleid: state.app.id, appmoduleidunique: appUniqueValue, uniquename: spec.app.uniqueName }] : [];
+    }
+    if (set === 'appmodulecomponent') {
+      assert.match(filter, new RegExp(`_appmoduleidunique_value eq ${appUniqueValue}`));
+      return /componenttype eq 62/.test(filter) ? [{ objectid: sitemapId, componenttype: 62 }] : [];
+    }
+    if (set === 'sitemap') {
+      if (/sitemapnameunique eq/.test(filter)) return [{ sitemapid: sitemapId }];
+      assert.strictEqual(filter, `sitemapid eq ${sitemapId}`);
+      // Render the page membership from the real engine's app definition, not from the desired spec.
+      const subareas = state.app.siteMap.areas.flatMap((a) => a.groups.flatMap((g) => g.subAreas || []));
+      return [{ sitemapxml: `<SiteMap><Area><Group>${subareas.filter((s) => s.genPageId).map((s) => `<SubArea GenPageId="${s.genPageId}"/>`).join('')}</Group></Area></SiteMap>` }];
+    }
+    if (set === 'webresource') {
+      const name = (filter.match(/name eq '([^']+)'/) || [])[1];
+      const row = state.resources.get(name);
+      return row ? [row] : [];
+    }
+    if (set === 'publisher') return [{ publisherid: 'publisher-1' }];
+    return [];
+  };
+  for (const method of Object.keys(sdk).filter((name) => /^(create|update|push|publish|add|remove|set|enrich|seed)/.test(name))) {
+    const original = sdk[method];
+    sdk[method] = (...args) => { writes.push({ method, args }); return original(...args); };
+  }
+  const pacRun = async (args) => {
+    const value = (flag) => args[args.indexOf(flag) + 1];
+    assert.deepStrictEqual(args.slice(0, 2), ['model', 'genpage']);
+    assert.strictEqual(value('--environment'), env);
+    if (args[2] === 'list') {
+      const pages = [...state.pages.values()];
+      return { status: 0, stdout: `Found ${pages.length} generated page(s):\nPage ID                              Name          Published\n`
+        + pages.map((p) => `${p.pageId} ${p.name.padEnd(14)}-\n`).join(''), stderr: '' };
+    }
+    assert.strictEqual(value('--app-id'), state.app.id, 'PAC is scoped to the app resolved by main');
+    if (args[2] === 'upload') {
+      const name = value('--name');
+      const pageId = args.includes('--page-id') ? value('--page-id') : pageIds[name];
+      const code = fs.readFileSync(value('--code-file'), 'utf8');
+      uploads.push({ name, pageId, requestedId: args.includes('--page-id') ? value('--page-id') : null, code });
+      uploadTempDirs.push(path.dirname(value('--prompt-file')));
+      state.pages.set(pageId, { pageId, name, code });
+      return { status: 0, stdout: `Page ID: ${pageId}`, stderr: '' };
+    }
+    assert.strictEqual(args[2], 'download', 'no other PAC command is allowed');
+    if (state.failDownload) return { status: 1, stdout: '', stderr: 'offline verification download failed' };
+    for (const pageId of value('--page-id').split(',')) {
+      const dir = path.join(value('--output-directory'), pageId);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'page.tsx'), state.pages.get(pageId).code, 'utf8');
+    }
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  const genpageModule = { ...require('../lib/genpage-cli.js'), makeGenpageCli: (url) => {
+    assert.strictEqual(url, env);
+    return makeGenpageCli(url, { run: pacRun, attempts: 1, request: async () => { throw new Error('unexpected Dataverse page request'); } });
+  } };
+  // Only transport/SDK construction is fake: main, buildModelApp, engine, verifier, flow and snapshot
+  // store remain real. Loading the engine with the PAC seam avoids replacing the build with a stub.
+  const engine = loadCli(path.join(scriptsDir, 'lib', 'sdk-build.js'), { requires: { './genpage-cli.js': genpageModule } }).exports;
+  const previousPath = process.env.PATH;
+  process.env.PATH = path.dirname(process.execPath);
+  const assertCleaned = () => {
+    for (const dir of [...sdkTempDirs, ...uploadTempDirs]) assert.strictEqual(fs.existsSync(dir), false, `temporary workspace removed: ${dir}`);
+    assert.strictEqual(fs.existsSync(snapshotStore.leasePath(workspaceDir)), false, 'snapshot lease released');
+    const staging = path.join(workspaceDir, '.pageref-deploy');
+    assert.ok(!fs.existsSync(staging) || fs.readdirSync(staging).length === 0, 'page staging removed');
+  };
+  const runMain = async (exitCode = 0) => {
+    writes.length = uploads.length = 0;
+    const authCli = loadCli(path.join(scriptsDir, 'lib', 'dataverse-auth.js'));
+    const auth = {
+      ...authCli.exports,
+      preflightAuth: async (url) => { assert.strictEqual(url, env); return { ok: true }; },
+      readOrgLanguageCode: async (url) => { assert.strictEqual(url, env); return 1033; },
+      dataverseRequest: async (...args) => {
+        assert.deepStrictEqual(args, [env, 'GET', 'WhoAmI']);
+        whoAmI.push(state.orgId);
+        return { status: 200, data: { OrganizationId: state.orgId } };
+      },
+      emitResult: (ok, result) => { assertCleaned(); authCli.exports.emitResult(ok, result); },
+    };
+    const entityProvision = loadCli(path.join(scriptsDir, 'lib', 'entity-provision.js'), { requires: { './dataverse-auth.js': auth } }).exports;
+    const cli = loadCli(path.join(scriptsDir, 'build-model-app.js'), {
+      argv: ['--env', env, '--spec', '@' + specPath, '--apply', '--changed-only'],
+      env: { PATH: path.dirname(process.execPath), POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' },
+      requires: {
+        './lib/dataverse-auth.js': auth,
+        './lib/entity-provision.js': entityProvision,
+        './lib/sdk-build.js': engine,
+        './lib/genpage-cli.js': genpageModule,
+        './lib/sdk-http-client.js': { createAzHttpClient: () => ({}), SQL_DEADLOCK_VICTIM: /Sql Number: 1205/ },
+        './vendor/cds-maker-sdk.cjs': {
+          createNodeWorkspaceStorage: (dir) => { if (dir !== workspaceDir) sdkTempDirs.push(dir); return { dir }; },
+          createMakerSdk: (o) => { assert.strictEqual(o.instanceUrl, env); assert.strictEqual(o.languageCode, 1033); return sdk; },
+        },
+      },
+    });
+    await assert.rejects(cli.main(), (e) => e.exitCode === exitCode, cli.stderrText());
+    assert.strictEqual(authCli.exitCode, exitCode, 'the real emitter uses effective build/verify success');
+    assertCleaned();
+    return JSON.parse(authCli.stdoutText());
+  };
+  try {
+    const overviewCode = 'export default function Overview(){ Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_detail" }); return null; }';
+    fs.writeFileSync(specPath, JSON.stringify(spec), 'utf8');
+    fs.writeFileSync(path.join(appDir, 'overview.tsx'), overviewCode, 'utf8');
+    fs.writeFileSync(path.join(appDir, 'detail.tsx'), 'export default function Detail(){ return null; }', 'utf8');
+    const full = await runMain();
+    assert.strictEqual(full.ok, true);
+    assert.strictEqual(full.verify.ok, true);
+    assert.strictEqual(full.changedOnly.decision, 'full');
+    assert.deepStrictEqual(uploads.map((u) => u.name).sort(), ['Detail', 'Overview']);
+    assert.ok(writes.some((w) => w.method === 'createTable'), 'first apply runs the data model');
+    const baseline = snapshotStore.readSnapshot(workspaceDir);
+    assert.strictEqual(baseline.eligible, true, 'a verified fresh full apply establishes eligibility');
+    assert.strictEqual(baseline.orgId, orgId);
+    assert.strictEqual(baseline.envUrl, env);
+    assert.strictEqual(baseline.appUniqueName, spec.app.uniqueName);
+    assert.strictEqual(baseline.appId, appIds[0]);
+    assert.deepStrictEqual(baseline.debt, []);
+    assert.deepStrictEqual(Object.keys(baseline.artifacts.pages).sort(), ['detail', 'overview']);
+    assert.strictEqual(baseline.artifacts.pages.detail.pageId, pageIds.Detail);
+    assert.strictEqual(whoAmI.length, 2, 'main resolves fresh identity before and after the full build');
+
+    const changedCode = overviewCode.replace('return null;', 'const revised = true; return null;');
+    const deployedCode = changedCode.replace('"PAGEREF_detail"', JSON.stringify(pageIds.Detail));
+    fs.writeFileSync(path.join(appDir, 'overview.tsx'), changedCode, 'utf8');
+    const fast = await runMain();
+    assert.strictEqual(fast.ok, true);
+    assert.strictEqual(fast.changedOnly.decision, 'fast');
+    assert.strictEqual(fast.verify.ok, true);
+    assert.deepStrictEqual(fast.changedOnly.pageKeys, ['overview']);
+    assert.deepStrictEqual(uploads, [{ name: 'Overview', pageId: pageIds.Overview, requestedId: pageIds.Overview, code: deployedCode }]);
+    assert.ok(writes.every((w) => w.method === 'updateWebResource' || (w.method === 'addSolutionComponent' && w.args[0].componentType === 61)),
+      `fast apply writes only the page manifest, never the data model or sitemap: ${JSON.stringify(writes)}`);
+    const eligible = snapshotStore.readSnapshot(workspaceDir);
+    assert.strictEqual(eligible.eligible, true);
+    assert.notStrictEqual(eligible.generation, baseline.generation);
+    assert.strictEqual(eligible.artifacts.pages.overview.sourceSha, sha256(changedCode));
+    assert.strictEqual(eligible.artifacts.pages.overview.deployedSha, sha256(deployedCode), 'snapshot records the actual nav-resolved upload, not the canonical source hash');
+    assert.deepStrictEqual(eligible.artifacts.pages.detail, baseline.artifacts.pages.detail, 'unchanged page identity and hashes survive');
+
+    const snapshotBytes = fs.readFileSync(snapshotStore.snapshotPath(workspaceDir));
+    const noop = await runMain();
+    assert.strictEqual(noop.ok, true);
+    assert.strictEqual(noop.noop, true);
+    assert.strictEqual(noop.changedOnly.decision, 'noop');
+    assert.deepStrictEqual(writes, [], 'NOOP makes no SDK writes');
+    assert.deepStrictEqual(uploads, [], 'NOOP makes no PAC writes');
+    assert.deepStrictEqual(fs.readFileSync(snapshotStore.snapshotPath(workspaceDir)), snapshotBytes, 'NOOP leaves the snapshot byte-identical');
+
+    fs.writeFileSync(path.join(appDir, 'overview.tsx'), changedCode + '\n', 'utf8');
+    state.failDownload = true;
+    const failedVerify = await runMain(1);
+    assert.strictEqual(failedVerify.ok, true, 'the upload succeeded, but verification did not');
+    assert.strictEqual(failedVerify.changedOnly.decision, 'fast');
+    assert.strictEqual(failedVerify.verify.ok, false);
+    assert.ok(failedVerify.verify.missing.some((m) => /offline verification download failed/.test(m)));
+    assert.strictEqual(snapshotStore.readSnapshot(workspaceDir).eligible, false, 'failed verification cannot re-bless the baseline');
+    state.failDownload = false;
+    fs.writeFileSync(path.join(appDir, 'overview.tsx'), changedCode, 'utf8');
+
+    for (const identity of ['foreign-org', 'foreign-app', 'deleted']) {
+      snapshotStore.writeSnapshotAtomic(workspaceDir, eligible);
+      state.orgId = identity === 'foreign-org' ? '11111111-0000-4000-8000-000000000002' : orgId;
+      if (identity === 'foreign-app') state.app.id = appIds[2];
+      if (identity === 'deleted') state.app = null;
+      const fallback = await runMain();
+      assert.strictEqual(fallback.ok, true);
+      assert.strictEqual(fallback.changedOnly.decision, 'full', `${identity} identity cannot NOOP`);
+      assert.strictEqual(fallback.verify.ok, true);
+      assert.match(fallback.changedOnly.reason, identity === 'foreign-org' ? /orgId/ : identity === 'foreign-app' ? /appId/ : /app not found live/);
+      assert.deepStrictEqual(uploads.map((u) => u.name).sort(), ['Detail', 'Overview'], 'identity fallback runs all pages');
+      assert.ok(writes.some((w) => w.method === 'updateElement' && w.args[2] === '/siteMap'), 'identity fallback performs a full sitemap build');
+      assert.strictEqual(fallback.created.app, identity === 'foreign-org' ? appIds[0] : identity === 'foreign-app' ? appIds[2] : appIds[1]);
+      assert.strictEqual(snapshotStore.readSnapshot(workspaceDir).eligible, identity === 'deleted', 'only the proven fresh replacement is eligible');
+    }
+  } finally {
+    process.env.PATH = previousPath;
+    for (const dir of [...sdkTempDirs, ...uploadTempDirs]) fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+  assert.strictEqual(fs.existsSync(appDir), false, 'the test removes its durable temporary state too');
+});

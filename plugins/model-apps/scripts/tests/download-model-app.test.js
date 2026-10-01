@@ -1190,6 +1190,89 @@ test('ROUND-TRIP: manifest → download → reverse → hydrate → validate →
 
 // ── Task 6: sitemap-membership + download-by-id + keep pageId + env-wide names + injectable seam ─
 
+test('lexical navigation variants survive deploy-download-rebuild', async () => {
+  const overviewId = 'aaaaaaaa-0000-4000-8000-000000000001';
+  const detailId = 'bbbbbbbb-0000-4000-8000-000000000002';
+  const appId = 'cccccccc-0000-4000-8000-000000000003';
+  const appUniqueId = 'cccccccc-0000-4000-8000-000000000004';
+  const sitemapId = 'cccccccc-0000-4000-8000-000000000005';
+  const appUnique = 'contoso_lexical';
+  const manifest = buildManifest({ pages: [
+    { key: 'overview', name: 'Overview', navigatesTo: [{ targetKey: 'detail' }] },
+    { key: 'detail', name: 'Detail' },
+  ] }, new Map([['overview', overviewId], ['detail', detailId]]));
+  const manifestB64 = Buffer.from(JSON.stringify(manifest), 'utf8').toString('base64');
+  // Only the target arguments depend on this parameter; comments, escapes and Unicode are the oracle.
+  const overviewCode = (target) => [
+    'export default function Overview() {',
+    `  const idText = "${detailId}"; const token = "PAGEREF_detail";`,
+    '  const text = "left\u2028middle\u2029right";',
+    `  // navigateTo({pageType:"generative",pageId:"${detailId}"})\u2028  Xrm.Navigation.navigateTo?.(/* pageType and pageId */{pageType:"generative",pageId:"${target}"});`,
+    `  // another inert pageId\u2029  Xrm.Navigation.navigateTo?.({pageType:"generative",pageId:"${target}"});`,
+    String.raw`  Xrm?.Navigation?.navigateTo({"page\u0054ype":"generative","page\u{49}d":"` + target + '"});',
+    `  Xrm.Navigation.navigateTo({pageType:"generative",pageId:"${target}",// keep pageId\u2029data:{}});`,
+    String.raw`  Xrm.Navigation.navigate\u0054o?.({"pageType":"generative",'page\x49d':"` + target + '"});',
+    `  Xrm.Navigation.navigateTo({pageType:"entityrecord",entityName:"contoso_item",entityId:"${detailId}"});`,
+    '  return null;',
+    '}',
+    '',
+  ].join('\r\n');
+  const deployed = overviewCode(detailId);
+  const canonical = overviewCode('PAGEREF_detail');
+  const detailCode = 'export default function Detail() { const text = "left\u2028right\u2029"; return null; }\r\n';
+  const xml = `<SiteMap><Area><Group><SubArea GenPageId="${overviewId}" Title="Navigation A"/><SubArea GenPageId="${detailId}" Title="Navigation B"/></Group></Area></SiteMap>`;
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'download-lexical-'));
+  try {
+    const sdk = {
+      fetchArtifact: async () => ({
+        name: 'Lexical App', description: '',
+        siteMap: { areas: [{ title: 'Main', groups: [{ title: 'Pages', subAreas: [
+          { type: 'GenPage', genPageId: overviewId, title: 'Navigation A' },
+          { type: 'GenPage', genPageId: detailId, title: 'Navigation B' },
+          { type: 'Entity', entity: 'contoso_item' },
+        ] }] }] },
+      }),
+      queryRecords: async (logical, opts = {}) => {
+        if (logical === 'appmodule') return [{ appmoduleid: appId, appmoduleidunique: appUniqueId, uniquename: appUnique }];
+        if (logical === 'appmodulecomponent') return [{ objectid: sitemapId, componenttype: 62 }];
+        if (logical === 'sitemap') return [{ sitemapxml: xml }];
+        if (logical === 'webresource') return /_pagemanifest'/.test(opts.filter || '') ? [{ content: manifestB64 }] : [];
+        return [];
+      },
+      fetchEntityMetadata: async (logical) => ({ schemaName: logical, displayName: 'Item', primaryNameAttribute: 'contoso_name', attributes: [], relationships: [] }),
+      dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
+    };
+    const genpageCli = {
+      enumerateEnv: async () => ({ ok: true, ids: [overviewId, detailId], pages: [{ pageId: overviewId, name: 'Overview' }, { pageId: detailId, name: 'Detail' }] }),
+      download: async ({ outputDir, pageIds }) => {
+        assert.deepStrictEqual([...pageIds].sort(), [overviewId, detailId].sort());
+        for (const id of pageIds) {
+          const dir = path.join(outputDir, id);
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(path.join(dir, 'page.tsx'), id === overviewId ? deployed : detailCode, 'utf8');
+          fs.writeFileSync(path.join(dir, 'config.json'), '\uFEFF{"dataSources":["contoso_item"]}', 'utf8');
+        }
+        return true;
+      },
+    };
+    const downloaded = await runDownload({ sdk, genpageCli, outDir: out, appId, appUnique });
+    assert.ok(downloaded.ok, JSON.stringify(downloaded));
+    const validation = validateAppSpec(downloaded.spec);
+    assert.ok(validation.ok, validation.errors.join('; '));
+    const overview = downloaded.spec.pages.find((p) => p.key === 'overview');
+    const detail = downloaded.spec.pages.find((p) => p.key === 'detail');
+    const downloadedOverview = fs.readFileSync(path.join(out, overview.source.codeFile));
+    assert.deepStrictEqual(downloadedOverview, Buffer.from(canonical, 'utf8'), 'reverse normalization changes only effective target literals');
+    assert.deepStrictEqual(fs.readFileSync(path.join(out, detail.source.codeFile)), Buffer.from(detailCode, 'utf8'), 'a page without navigation is byte-identical');
+    assert.deepStrictEqual(overview.navigatesTo, [{ targetKey: 'detail' }]);
+    assert.deepStrictEqual(overview.dataSources, ['contoso_item']);
+    const { deployment, unresolved } = resolvePageRefs(new Map([['overview', { code: downloadedOverview.toString('utf8') }]]),
+      new Map(downloaded.spec.pages.map((p) => [p.key, p.pageId])));
+    assert.deepStrictEqual(unresolved, []);
+    assert.strictEqual(deployment.get('overview'), deployed, 're-resolution reproduces every deployed byte, including inert IDs and LS/PS');
+  } finally { fs.rmSync(out, { recursive: true, force: true }); }
+});
+
 test('Task-6: Maker-added page (sitemap, not in manifest) gets a minted key, keeps pageId (C3)', () => {
   const GP_O = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
   const GP_MAKER = '9f2b1a3c-77de-4a10-8b6e-2c4d5e6f7a8b';

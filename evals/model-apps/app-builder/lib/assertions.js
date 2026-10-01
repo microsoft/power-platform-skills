@@ -31,6 +31,39 @@ ASSERTIONS.set('author: spec-lint reports no errors', ({ facts }) =>
     ? PASS
     : fail(`lint errors: ${facts.author.lint.errors.join('; ')}`));
 
+ASSERTIONS.set('author: artifact-name warnings use per-table and form-type scope', ({ facts, eval: ev }) => {
+  const f = facts.author;
+  if (!Array.isArray(f.artifactNameCollisions) || !Array.isArray(f.artifactNames)) return fail('no independent artifact-name scope facts');
+  if (f.artifactNameCollisions.length) {
+    return fail(`same-table duplicate ${f.artifactNameCollisions.map((c) => `${c.kind} on ${c.entity}: ${c.name}`).join('; ')}`);
+  }
+  const duplicateWarnings = f.lint.warnings.filter((w) => /^Duplicate (?:form|view|chart) name\b/.test(w));
+  if (duplicateWarnings.length) return fail(`lint falsely flags per-table scoped names: ${duplicateWarnings.join('; ')}`);
+  const expected = ev.expect && ev.expect.nameScope;
+  if (!Array.isArray(expected) || !expected.length) return fail('no independent repeated-name scope expectations');
+  for (const group of expected) {
+    const actual = f.artifactNames.filter((a) => a.kind === group.kind && a.name === group.name
+      && (group.kind !== 'form' || a.formType === group.formType)).map((a) => a.entity).sort();
+    if (!eq(actual, sortedLc(group.entities))) return fail(`${group.kind} ${group.name}: expected tables [${group.entities}], got [${actual}]`);
+  }
+  return PASS;
+});
+
+ASSERTIONS.set('author: page quote warnings remain visible without rewriting approved names', ({ facts }) => {
+  const approved = facts.author.approvedPageNames;
+  if (!Array.isArray(approved)) return fail('no independent approved page-name snapshot');
+  if (!approved.length) return skip('spec declares no pages');
+  const actual = (facts.author.pageNames || []).map((p) => p.name);
+  if (!eq(actual, approved)) return fail(`approved page names were rewritten: expected ${JSON.stringify(approved)}, got ${JSON.stringify(actual)}`);
+  const quoted = approved.filter((name) => typeof name === 'string' && name.includes('"'));
+  const warnings = facts.author.lint.warnings.filter((w) => /^Page '/.test(w) && w.includes('ASCII double quote'));
+  if (warnings.length !== quoted.length) return fail(`page quote warnings: expected ${quoted.length}, got ${warnings.length}`);
+  for (const name of quoted) if (!warnings.some((w) => w.startsWith(`Page '${name}':`))) {
+    return fail(`page ${JSON.stringify(name)} is missing its ASCII double quote warning`);
+  }
+  return PASS;
+});
+
 // plan stage -----------------------------------------------------------------
 
 ASSERTIONS.set('plan: every planned item targets a known engine phase', ({ facts }) => {
@@ -222,10 +255,59 @@ ASSERTIONS.set('app: every navigatesTo target resolves to a known page key', ({ 
 // verify stage ---------------------------------------------------------------
 
 ASSERTIONS.set('verify: reconcile against an all-present reader returns ok with no missing', ({ facts }) => {
-  if (facts.verify.skipped) return skip(`verifySpec needs a reader method not synthesized here (Plan 3): ${facts.verify.skipped}`);
-  return facts.verify.ok
+  if (facts.verify.error) return fail(`verifySpec threw: ${facts.verify.error}`);
+  if (facts.verify.skipped) return fail(`required verifySpec was skipped: ${facts.verify.skipped}`);
+  return facts.verify.ok === true && facts.verify.missing.length === 0
     ? PASS
-    : fail(`verify missing: ${facts.verify.missing.map((m) => `${m.kind} ${m.name}`).join(', ')}`);
+    : fail(`verify missing: ${facts.verify.missing.map((m) => `${m.kind} ${m.name}${m.detail ? ` (${m.detail})` : ''}`).join(', ')}`);
+});
+
+ASSERTIONS.set('verify: every required check kind actually ran', ({ facts }) => {
+  const v = facts.verify;
+  if (!v.requiredChecks) return fail('no required verification check manifest was computed');
+  for (const [kind, expected] of Object.entries(v.requiredChecks)) {
+    const ran = (v.checks || []).filter((c) => c.kind === kind).length;
+    if (ran < expected) return fail(`required ${kind} check(s): expected at least ${expected}, ran ${ran}`);
+  }
+  return PASS;
+});
+
+ASSERTIONS.set('verify: served Main form order is checked or explicitly unavailable', ({ facts }) => {
+  const v = facts.verify;
+  if (v.error || v.skipped) return fail(`verification failed: ${v.error || v.skipped}`);
+  const unavailable = (v.optionalUnavailable || []).find((c) => c.capability === 'servedMainForms');
+  if (unavailable) return skip(unavailable.reason);
+  const expected = (v.requiredChecks && v.requiredChecks['form-order-served']) || 0;
+  if (!expected) return skip('no spec-declared Main form order to serve');
+  const checks = (v.checks || []).filter((c) => c.kind === 'form-order-served');
+  if (checks.length < expected) return fail(`form-order-served: expected ${expected} check(s), ran ${checks.length}`);
+  const bad = checks.filter((c) => !c.present);
+  return bad.length ? fail(bad.map((c) => `${c.kind} ${c.name}: ${c.detail}`).join('; ')) : PASS;
+});
+
+ASSERTIONS.set('changed-only: page bytes use a page-only fast path data-model edits use full and identical inputs are noop', ({ facts, eval: ev }) => {
+  const f = facts.changedOnly;
+  if (!f || f.error) return fail(f && f.error ? f.error : 'no real changed-only classification facts');
+  if (!f.baselineVerified) return fail('changed-only baseline was not verified');
+  if (!f.snapshot || f.snapshot.eligible !== true) return fail(`changed-only snapshot is not eligible: ${f.snapshot && f.snapshot.reason}`);
+  const expected = ev.expect && ev.expect.changedOnly;
+  if (!Array.isArray(expected) || !Array.isArray(f.cases) || f.cases.length !== expected.length) {
+    return fail('changed-only case roster does not match the independent expectations');
+  }
+  for (const wanted of expected) {
+    const actual = f.cases.find((c) => c.name === wanted.name);
+    if (!actual) return fail(`changed-only case ${wanted.name} is missing`);
+    if (actual.verdict !== wanted.verdict) return fail(`${wanted.name} verdict: expected ${wanted.verdict}, got ${actual.verdict}`);
+    if (!eq(actual.changedPhases, wanted.changedPhases)) return fail(`${wanted.name} phases: expected [${wanted.changedPhases}], got [${actual.changedPhases}]`);
+    const fast = (actual.fastChanges || []).map(({ shape, phase, identity }) => ({ shape, phase, identity }));
+    if (!eq(fast, wanted.fastChanges)) return fail(`${wanted.name} fast changes: expected ${JSON.stringify(wanted.fastChanges)}, got ${JSON.stringify(fast)}`);
+    if (!Array.isArray(actual.fullReasons) || actual.fullReasons.length !== wanted.fullReasons.length
+      || wanted.fullReasons.some((prefix, i) => !actual.fullReasons[i].startsWith(prefix))) {
+      return fail(`${wanted.name} full reason: expected ${JSON.stringify(wanted.fullReasons)}, got ${JSON.stringify(actual.fullReasons)}`);
+    }
+    if (!Array.isArray(actual.debt) || actual.debt.length) return fail(`${wanted.name}: unexpected changed-only debt ${JSON.stringify(actual.debt)}`);
+  }
+  return PASS;
 });
 
 // generate-pages stage -------------------------------------------------------
@@ -298,6 +380,36 @@ ASSERTIONS.set('round-trip: generative pages preserve their keys', ({ facts, spe
   const expKeys = sorted((spec.pages || []).map((p) => p.key || p.name));
   if (!expKeys.length) return skip('spec declares no pages');
   return eq(expKeys, facts.roundTrip.pageKeys) ? PASS : fail(`page keys: expected [${expKeys}] got [${facts.roundTrip.pageKeys}]`);
+});
+
+ASSERTIONS.set('round-trip: generative pages preserve their names and models', ({ facts, spec }) => {
+  const f = facts.roundTrip;
+  if (f.error) return fail(`hydrate threw: ${f.error}`);
+  if (!(spec.pages || []).length) return skip('spec declares no pages');
+  for (const expected of spec.pages) {
+    const key = expected.key || expected.name;
+    const actual = (f.pageMetadata || []).find((p) => p.key === key);
+    if (!actual) return fail(`page ${key}: name/model metadata is missing`);
+    if (actual.name !== expected.name) return fail(`page ${key} name: expected ${JSON.stringify(expected.name)}, got ${JSON.stringify(actual.name)}`);
+    const model = expected.model === undefined ? null : expected.model;
+    if (actual.model !== model) return fail(`page ${key} model: expected ${JSON.stringify(model)}, got ${JSON.stringify(actual.model)}`);
+  }
+  return PASS;
+});
+
+ASSERTIONS.set('round-trip: invalid downloaded models are omitted with explicit diagnostics', ({ facts, eval: ev }) => {
+  const f = facts.roundTrip;
+  if (f.error) return fail(`hydrate threw: ${f.error}`);
+  if (f.source !== 'pac-download-fixture') return fail('no real downloaded page/config fixture was read');
+  if ((f.unreadableConfigs || []).length) return fail(`unreadable page config: ${JSON.stringify(f.unreadableConfigs)}`);
+  const expected = ev.expect && ev.expect.unkeptModels;
+  if (!Array.isArray(expected)) return fail('no independent invalid-model expectation');
+  if (!eq(expected, f.unkeptModels)) return fail(`page model loss diagnostics: expected ${JSON.stringify(expected)}, got ${JSON.stringify(f.unkeptModels)}`);
+  for (const dropped of expected) {
+    const page = (f.pageMetadata || []).find((p) => p.pageId === dropped.pageId);
+    if (!page || page.model !== null) return fail(`page ${dropped.pageId}: invalid model must be omitted, got ${JSON.stringify(page && page.model)}`);
+  }
+  return PASS;
 });
 
 ASSERTIONS.set('teardown: every declared dashboard has a teardown step', ({ facts, spec }) => {
@@ -505,10 +617,11 @@ ASSERTIONS.set('ui: an explicit layout compiles to the authored tab, form-column
       if (at.label !== ct.label) return fail(`${where}: label became ${JSON.stringify(ct.label)}`);
       if (at.expanded !== ct.expanded) return fail(`${where}: expanded ${at.expanded} became ${ct.expanded}`);
       if (at.columnCount !== ct.columnCount) return fail(`${where}: ${at.columnCount} form-column(s) authored, ${ct.columnCount} compiled — a multi-column tab was collapsed`);
-      // Only the widths the author actually WROTE. An omitted width is split evenly by the compiler,
-      // and grading that split here would compare the compiler against a copy of itself.
-      for (let wi = 0; wi < at.declaredWidths.length; wi++) {
-        const w = at.declaredWidths[wi];
+      // The authored projection includes the default percentage split, independently of the
+      // compiler. Omission must not excuse a missing width or a 100/100 two-column layout.
+      const widths = at.expectedWidths || at.declaredWidths;
+      for (let wi = 0; wi < widths.length; wi++) {
+        const w = widths[wi];
         if (w !== null && w !== ct.declaredWidths[wi]) return fail(`${where} form-column ${wi}: authored width ${w}, compiled ${ct.declaredWidths[wi]}`);
       }
       if (at.sectionsByColumn.length !== ct.sectionsByColumn.length) return fail(`${where}: ${at.sectionsByColumn.length} form-column(s) of sections authored, ${ct.sectionsByColumn.length} compiled`);
@@ -525,6 +638,75 @@ ASSERTIONS.set('ui: an explicit layout compiles to the authored tab, form-column
           if (!eq(as.fields, cs.fields)) return fail(`${where} form-column ${ci} section ${JSON.stringify(as.label)}: authored [${as.fields}] compiled [${cs.fields}]`);
         }
       }
+    }
+  }
+  return PASS;
+});
+
+ASSERTIONS.set('ui: explicit container names display flags and field state match authored intent', ({ facts }) => {
+  const explicit = (facts.ui.forms || []).filter((f) => f.authoredShape);
+  if (!explicit.length) return skip('no form in this fixture declares an explicit layout');
+  for (const f of explicit) {
+    for (const [ti, tab] of f.authoredShape.entries()) {
+      const compiled = (f.compiledShape || [])[ti];
+      if (!compiled) return fail(`form ${f.name}: tab ${tab.name} was not compiled`);
+      for (const key of ['name', 'visible']) if (tab[key] !== compiled[key]) {
+        return fail(`form ${f.name} tab ${tab.name}: ${key} expected ${JSON.stringify(tab[key])}, got ${JSON.stringify(compiled[key])}`);
+      }
+      for (const [ci, sections] of tab.sectionsByColumn.entries()) for (const [si, section] of sections.entries()) {
+        const actual = ((compiled.sectionsByColumn || [])[ci] || [])[si];
+        if (!actual) return fail(`form ${f.name}: section ${section.name} was not compiled`);
+        for (const key of ['name', 'visible', 'showLabel']) if (section[key] !== actual[key]) {
+          return fail(`form ${f.name} section ${section.name}: ${key} expected ${JSON.stringify(section[key])}, got ${JSON.stringify(actual[key])}`);
+        }
+      }
+    }
+    for (const wanted of f.authoredPlacements || []) {
+      const actual = (f.placements || []).find((p) => p.field === wanted.field && p.tab === wanted.tab && p.section === wanted.section);
+      if (!actual) return fail(`form ${f.name}: field ${wanted.field} is missing from ${wanted.tab}/${wanted.section}`);
+      for (const key of ['hidden', 'readOnly']) if (wanted[key] !== actual[key]) {
+        return fail(`form ${f.name} field ${wanted.field}: ${key} expected ${wanted[key]}, got ${actual[key]}`);
+      }
+    }
+  }
+  return PASS;
+});
+
+ASSERTIONS.set('verify: form reconciliation exercises an inserted tab and reordered existing containers', ({ facts, eval: ev }) => {
+  const f = facts.formReconcile;
+  if (!f || f.error) return fail(f && f.error ? f.error : 'no independent form reconciliation baseline');
+  if (!f.baselineValidation.ok) return fail(`baseline validation: ${f.baselineValidation.errors.join('; ')}`);
+  const wanted = ev.expect && ev.expect.formReconcile;
+  if (!wanted) return fail('no expected form reconciliation transition');
+  const edit = f.edits.find((e) => e.entity === wanted.entity && e.name === wanted.form);
+  if (!edit || !edit.before) return fail(`no baseline form ${wanted.form}`);
+  const before = edit.before.map((t) => t.name), after = edit.after.map((t) => t.name);
+  if (!eq(before, wanted.beforeTabs)) return fail(`baseline tab order: expected [${wanted.beforeTabs}], got [${before}]`);
+  if (!eq(after, wanted.afterTabs)) return fail(`reconciled tab order: expected [${wanted.afterTabs}], got [${after}]`);
+  const inserted = after.filter((t) => !before.includes(t));
+  if (!eq(inserted, wanted.insertedTabs)) return fail(`inserted tabs: expected [${wanted.insertedTabs}], got [${inserted}]`);
+  const sections = (shape) => shape.find((t) => t.name === wanted.sectionTab).sectionsByColumn[0].map((s) => s.name);
+  if (!eq(sections(edit.before), wanted.beforeSections)) return fail('baseline section order does not exercise the requested reorder');
+  if (!eq(sections(edit.after), wanted.afterSections)) return fail('reconciled section order does not match the requested reorder');
+  const order = (rows) => (rows.find((r) => r.entity === wanted.entity) || {}).forms;
+  if (!eq(order(f.beforeMainFormOrder), wanted.beforeMainFormOrder)) return fail('baseline Main form order does not match the fixture contract');
+  if (!eq(order(f.afterMainFormOrder), wanted.afterMainFormOrder)) return fail('reconciled Main form order does not match the fixture contract');
+  return PASS;
+});
+
+ASSERTIONS.set('verify: Quick View bindings survive form reconciliation', ({ facts, eval: ev }) => {
+  const f = facts.formReconcile;
+  if (!f || f.error) return fail(f && f.error ? f.error : 'no deployed Quick View evidence');
+  const expected = ev.expect && ev.expect.formReconcile && ev.expect.formReconcile.quickViews;
+  if (!expected || f.quickViews.length !== expected) return fail(`Quick View declarations: expected ${expected}, got ${f.quickViews.length}`);
+  for (const qv of f.quickViews) {
+    if (!qv.formId) return fail(`Quick View ${qv.host}/${qv.form}: target form could not be resolved`);
+    if (!qv.deployed.length) return fail(`Quick View ${qv.host}/${qv.form} is missing`);
+    const hits = qv.deployed.filter((p) => p.lookup === qv.lookup);
+    if (hits.length !== 1) return fail(`Quick View ${qv.host}/${qv.form}: expected one lookup ${qv.lookup}, got ${hits.length}`);
+    if (hits[0].classId !== '5c5600e0-1d6e-4205-a272-be80da87fd42') return fail(`Quick View ${qv.host}/${qv.form}: wrong control class`);
+    if (hits[0].formId !== qv.formId || hits[0].targetEntity !== qv.targetEntity) {
+      return fail(`Quick View ${qv.host}/${qv.form}: expected form ${qv.formId} on ${qv.targetEntity}, got ${hits[0].formId} on ${hits[0].targetEntity}`);
     }
   }
   return PASS;

@@ -1,0 +1,12 @@
+{
+  "model": "gpt-4.1",
+  "dataSources": ["account"],
+  "connectorBindings": [
+    { "logicalName": "cnt_docs", "connectorId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline", "dataset": "https://contoso.sharepoint.com/sites/team", "tables": ["77777777-7777-4777-8777-777777777777"] },
+    { "logicalName": "cnt_weather", "connectorId": "/providers/Microsoft.PowerApps/apis/shared_msnweather", "dataset": "", "operations": ["CurrentWeather"] }
+  ],
+  "actionBindings": [
+    { "name": "cnt_ApproveOrder", "isFunction": false, "boundEntityLogicalName": "salesorder", "displayName": "Approve Order", "parameterKinds": { "Comment": "String" } },
+    { "name": "cnt_GetOrderSummary", "isFunction": true, "displayName": "Summary", "parameterKinds": { "OrderId": "Guid" } }
+  ]
+}

@@ -5,14 +5,14 @@
 // `plugins/power-pages/scripts/lib/telemetry/lib` is a physical copy of
 // `shared/telemetry/lib` (not a symlink — some Windows checkouts and plugin
 // hosts materialize symlinks as plain link files, which breaks hook-time
-// require()). Nothing else in CI compares the two: `shared/telemetry/tests` has
-// no workflow, and validate-legacy-compatibility.js only mirrors the marketplace
+// require()). Nothing else in CI compares the two: `shared/telemetry/tests` runs
+// against the shared source only, and validate-legacy-compatibility.js only mirrors the marketplace
 // manifests. So an author who edits the shared source and forgets to refresh the
 // copy gets a green build while the plugin ships stale code.
 //
 // This suite runs in power-pages-script-tests.yml, so it turns that silent drift
 // into a CI failure — and additionally exercises the copy's behavior directly,
-// since the shared suite that normally covers it never runs in CI.
+// since the shared suite (shared-telemetry-tests.yml) never loads the copy.
 
 const test = require("node:test");
 const assert = require("node:assert/strict");

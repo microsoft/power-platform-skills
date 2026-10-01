@@ -6483,6 +6483,46 @@ test('form topology: a new tab declared mid-layout is created in its place, not 
   await settlesIn(spec, sdk, calls, shape, 'new tab');
 });
 
+test('form topology: new tab with a reserved sibling label cannot steal that sibling', async () => {
+  for (const [what, authoredName, deployedName, incomingLabel, deployedLabel] of [
+    ['same spelling', 'tab_reserved', 'tab_reserved', 'Reserved', 'Reserved'],
+    ['case variants', 'TaB_ReSeRvEd', 'TAB_RESERVED', 'rEsErVeD', 'RESERVED'],
+  ]) {
+    const spec = orderSpec([
+      { name: 'tab_one', label: 'One', sections: [{ name: 'sec_a', label: 'A', columns: 1, fields: ['new_name'] }] },
+      { name: 'tab_new', label: incomingLabel, sections: [{ name: 'sec_new', label: 'New', columns: 1, fields: ['new_tier'] }] },
+      { name: authoredName, label: deployedLabel, sections: [{ name: 'sec_reserved', label: 'Reserved', columns: 1, fields: ['new_code'] }] },
+    ]);
+    const deployed = tabsForm([
+      ['tab_one', 'One', [['s0', 'sec_a', 'A', ['new_name']]]],
+      [deployedName, deployedLabel, [['s2', 'sec_reserved', 'Reserved', ['new_code']]]],
+    ]);
+    const { sdk, calls } = mockSdk({ artifactsExist: true, existingFormJson: deployed });
+    await runSdkBuild(spec, { sdk, apply: true, phases: formsOnly });
+    const shape = [
+      ['tab_one', [['s0', 'sec_a', ['new_name']]]],
+      ['tab_new', [['new', 'sec_new', ['new_tier']]]],
+      [deployedName, [['s2', 'sec_reserved', ['new_code']]]],
+    ];
+    assert.deepStrictEqual(await formShape(sdk, calls), shape, `${what}: distinct fields and containers, in authored order`);
+    const formId = find(calls, 'fetchArtifact').find((c) => c.args[0] === 'form').args[1];
+    const form = await sdk.getArtifact('form', formId);
+    assert.strictEqual(form.tabs.length, 3, `${what}: exactly one new tab`);
+    assert.strictEqual(form.tabs[2].id, deployed.tabs[1].id, `${what}: the reserved sibling keeps its deployed id`);
+    assert.strictEqual(form.tabs[0].id, deployed.tabs[0].id, `${what}: the first tab also keeps its id`);
+    const tabAdds = find(calls, 'addElement').filter((c) => c.args[0] === 'form' && c.args[2] === '/tabs');
+    assert.deepStrictEqual(tabAdds.map((c) => [c.args[3].name, c.args[4]]),
+      [['tab_new', { position: { index: 1 } }]], `${what}: the new tab is inserted, not a replacement for the sibling`);
+    assert.deepStrictEqual(tabMoves(calls), [], `${what}: insertion needs no corrective reorder`);
+    const first = calls.length;
+    await settlesIn(spec, sdk, calls, shape, what);
+    assert.deepStrictEqual(find(calls.slice(first), 'updateElement').filter((c) => c.args[0] === 'form'), [],
+      `${what}: the second apply changes no form attributes either`);
+    assert.strictEqual((await sdk.getArtifact('form', formId)).tabs[2].id, deployed.tabs[1].id,
+      `${what}: the same reserved sibling survives the second apply`);
+  }
+});
+
 // Only the layout's own sections are ordered: a maker's section (kept by `prune: false`) and an engine host
 // (the notes timeline) are not moved for their own sake.
 test('form topology: ordering moves only the layout\'s sections — a maker\'s own and an engine host keep their place', async () => {

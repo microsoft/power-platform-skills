@@ -22,8 +22,9 @@ const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 const ai = require('../lib/artifact-intent.js');
 const { verifySpec } = require('../lib/verify-spec.js');
 
-const META = { new_ticket: { new_name: 'String', new_notes: 'Memo', new_code: 'String', new_area: 'String' } };
+const META = { new_ticket: { new_name: 'String', new_notes: 'Memo', new_code: 'String', new_area: 'String', new_customerid: 'Lookup' } };
 const NOTES_CLASS_ID = '06375649-C143-495E-A496-C962E5B4488E';
+const QUICK_VIEW_CLASS_ID = '5C5600E0-1D6E-4205-A272-BE80DA87FD42';
 const dirs = [];
 test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
 
@@ -41,7 +42,7 @@ const baseSpec = () => ({
 });
 
 // The formxml the real bundle would send for a compiled form — the engine's createFormShell order.
-async function compiledFormXml(spec, form) {
+async function compiledFormXml(spec, form, addControls) {
   const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const cap = [];
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-rt-'));
@@ -66,6 +67,7 @@ async function compiledFormXml(spec, form) {
   const art = await sdk.createArtifact('form', { name: intent.name, entityLogicalName: intent.entityLogicalName, formType: intent.formType, status: intent.status });
   for (const tab of intent.tabs) await sdk.addElement('form', art.id, '/tabs', tab);
   await sdk.removeElement('form', art.id, '/tabs/0');
+  if (addControls) await addControls(sdk, art.id);
   await sdk.pushArtifact('form', art.id);
   const xml = String((cap.find((c) => c && typeof c.formxml === 'string') || {}).formxml || '');
   assert.ok(xml.includes('<section'), 'the bundle must have serialized a form');
@@ -77,6 +79,10 @@ async function topologyVerdict(form, tamper) {
   spec.forms = [form];
   let xml = await compiledFormXml(spec, form);
   if (tamper) xml = tamper(xml);
+  return topologyVerdictForXml(spec, form, xml);
+}
+
+async function topologyVerdictForXml(spec, form, xml) {
   const read = {
     findTable: async () => ({ logicalName: 'new_ticket' }),
     findColumns: async () => [],
@@ -185,3 +191,55 @@ for (const [what, tamper, expected] of TAMPER) {
     assert.match(chk.detail, expected);
   });
 }
+
+test('lookup state ignores a bound quick view after real serialization', async () => {
+  for (const surface of ['inline flags', 'fieldOptions']) for (const enabled of [true, false]) {
+    const spec = baseSpec();
+    const form = STATEFUL();
+    const lookup = 'new_customerid';
+    const context = `${surface}: ${enabled ? 'hidden and read-only' : 'explicit defaults'}`;
+    const flags = { hidden: enabled, readOnly: enabled, colspan: 1, rowspan: 1 };
+    form.tabs[1].columns[0].sections[0].fields.push(surface === 'inline flags' ? { name: lookup, ...flags } : lookup);
+    if (surface === 'fieldOptions') form.fieldOptions = { [lookup]: flags };
+    spec.forms = [form];
+    const xml = await compiledFormXml(spec, form, async (sdk, id) => {
+      const cell = ai.quickViewCellIntent({ quickViewClassId: QUICK_VIEW_CLASS_ID, lookupFieldName: lookup,
+        targetEntity: 'new_customer', quickViewFormId: '22222222-2222-4222-8222-222222222222', label: 'Customer' });
+      cell.visible = enabled;
+      cell.control.isReadOnly = !enabled;
+      // Earlier than the ordinary lookup and in a different section: without exclusion the Quick View
+      // supplies both the wrong placement and the opposite state, even though it binds the same field.
+      await sdk.addElement('form', id, '/tabs/0/columns/0/sections/0/rows', { cells: [cell] }, { position: { index: 0 } });
+    });
+    assert.strictEqual((xml.match(/datafieldname="new_customerid"/g) || []).length, 2, `${context}: both controls are really serialized`);
+    assert.match(xml, new RegExp(`classid="\\{${QUICK_VIEW_CLASS_ID}\\}"`, 'i'));
+    assert.match(xml, /QuickForms/);
+    const ordinaryAt = xml.search(/<section\b[^>]*\bname="sec_b1"/);
+    assert.ok(ordinaryAt > 0);
+    const quickViewXml = xml.slice(0, ordinaryAt);
+    assert.match(quickViewXml, /datafieldname="new_customerid"/, 'the Quick View precedes the ordinary lookup');
+    const good = await topologyVerdictForXml(spec, form, xml);
+    assert.ok(good);
+    assert.strictEqual(good.present, true, `${context}: ${good.detail}`);
+
+    const controls = enabled ? [
+      ['hidden', (cell, labels, control) => cell.replace(/visible="false"/, 'visible="true"') + labels + control,
+        /field 'new_customerid' is deployed with visible="true", the spec declares hidden: true/],
+      ['read-only', (cell, labels, control) => cell + labels + control.replace(/disabled="true"/, 'disabled="false"'),
+        /field 'new_customerid' is deployed with disabled="false", the spec declares readOnly: true/],
+    ] : [
+      // False state flags are deliberately no opinion. An explicitly declared default span supplies
+      // the ordinary-field negative control without incorrectly treating false as an unlock/unhide.
+      ['default span', (cell, labels, control) => cell.replace(/colspan="1"/, 'colspan="2"') + labels + control,
+        /field 'new_customerid' has colspan 2, the spec declares 1/],
+    ];
+    for (const [what, tamper, expected] of controls) {
+      const changed = quickViewXml + cellOf(lookup, tamper)(xml.slice(ordinaryAt));
+      assert.notStrictEqual(changed, xml, `${context}: the ordinary lookup's ${what} changes`);
+      assert.strictEqual(changed.slice(0, ordinaryAt), quickViewXml, 'the Quick View is untouched by the negative control');
+      const bad = await topologyVerdictForXml(spec, form, changed);
+      assert.strictEqual(bad.present, false, `${context}: the ordinary lookup's ${what} drift must fail`);
+      assert.match(bad.detail, expected);
+    }
+  }
+});

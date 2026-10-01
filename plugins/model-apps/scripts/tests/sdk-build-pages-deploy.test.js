@@ -520,3 +520,116 @@ test('deploy: pages that omit prompt/agentMessage entirely still deploy', async 
     assert.ok(genpageCli.uploads.length > 0, 'an omitted key is not an authoring mistake');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
+
+test('lexical navigation variants survive deploy-download-rebuild', async () => {
+  const { runDownload } = require('../download-model-app.js');
+  const { appDir, spec } = makeTwoPageApp();
+  const overviewId = 'aaaaaaaa-0000-4000-8000-000000000001';
+  const detailId = 'bbbbbbbb-0000-4000-8000-000000000002';
+  const live = [{ pageId: overviewId, name: 'Overview' }, { pageId: detailId, name: 'Detail' }];
+  // Build the expected bytes independently; decoy IDs and PAGEREFs outside navigation must stay put.
+  const source = (target) => [
+    'export default function Overview() {',
+    `  const decoy = "${detailId}"; const token = "PAGEREF_detail";`,
+    '  const separators = "left\u2028middle\u2029right";',
+    `  // navigateTo({pageType:"generative",pageId:"${detailId}"})\u2028  Xrm.Navigation.navigateTo?.({pageType:"generative",/* keep pageId */pageId:"${target}",data:{}});`,
+    `  // another inert pageId\u2029  Xrm.Navigation.navigateTo?.({pageType:"generative",pageId:"${target}"});`,
+    String.raw`  Xrm?.Navigation?.navigateTo({"page\u0054ype":"generative","page\u{49}d":"` + target + '"});',
+    `  Xrm.Navigation.navigateTo({pageType:"generative",pageId:"${target}",// pageId stays\u2029data:{}});`,
+    String.raw`  Xrm.Navigation.navigate\u0054o?.({"pageType":"generative",'page\x49d':"` + target + '"});',
+    `  Xrm.Navigation.navigateTo?.({pageType(){return "entityrecord";},pageType:"generative",get pageId(){return "runtime";},pageId:"${target}"});`,
+    '  return null;',
+    '}',
+    '',
+  ].join('\r\n');
+  const canonical = source('PAGEREF_detail');
+  const resolved = source(detailId);
+  try {
+    fs.writeFileSync(path.join(appDir, 'overview.tsx'), canonical, 'utf8');
+    spec.pages[0].pageId = overviewId;
+    spec.pages[1].pageId = detailId;
+    const xml = `<SiteMap><Area><Group><SubArea GenPageId="${overviewId}" Title="Overview"/><SubArea GenPageId="${detailId}" Title="Detail"/></Group></Area></SiteMap>`;
+    const { sdk, calls } = mockSdk({ liveSitemapXml: xml });
+    const genpageCli = mockGenpageCli(live);
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://contoso.crm.dynamics.com', appDir, genpageCli, phases: PHASES });
+    assert.strictEqual(genpageCli.uploads.length, 2);
+    assert.strictEqual(genpageCli.uploads.find((u) => u.requestedId === overviewId).content, resolved);
+    assert.strictEqual(fs.readFileSync(path.join(appDir, 'overview.tsx'), 'utf8'), canonical);
+    const writes = calls.filter((c) => (c.name === 'createWebResource' && /_pagemanifest$/.test(c.args[0].name)) || c.name === 'updateWebResource');
+    const last = writes[writes.length - 1];
+    const manifest = last.name === 'updateWebResource' ? last.args[1].content : last.args[0].content;
+    const manifestB64 = Buffer.from(manifest, 'utf8').toString('base64');
+    const downloadDir = path.join(appDir, 'download');
+    fs.mkdirSync(downloadDir);
+    const downloadSdk = {
+      fetchArtifact: async () => ({
+        name: spec.app.name, description: '',
+        siteMap: { areas: [{ title: 'Main', groups: [{ title: 'Pages', subAreas: [
+          ...live.map((p) => ({ type: 'GenPage', genPageId: p.pageId, title: p.name })),
+          { type: 'Entity', entity: 'contoso_item' },
+        ] }] }] },
+      }),
+      queryRecords: async (logical) => {
+        if (logical === 'appmodule') return [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: 'contoso_deployapp' }];
+        if (logical === 'appmodulecomponent') return [{ objectid: SELF_SITEMAP_ID, componenttype: 62 }];
+        if (logical === 'sitemap') return [{ sitemapxml: xml }];
+        if (logical === 'webresource') return [{ content: manifestB64 }];
+        return [];
+      },
+      fetchEntityMetadata: async (logical) => ({ schemaName: logical, displayName: 'Item', primaryNameAttribute: 'contoso_name', attributes: [], relationships: [] }),
+      dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
+    };
+    genpageCli.download = async ({ outputDir, pageIds }) => {
+      assert.deepStrictEqual([...pageIds].sort(), [overviewId, detailId].sort());
+      for (const id of pageIds) {
+        const dir = path.join(outputDir, id);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'page.tsx'), genpageCli.uploads.find((u) => u.requestedId === id).content, 'utf8');
+        fs.writeFileSync(path.join(dir, 'config.json'), '\uFEFF{"dataSources":[]}', 'utf8');
+      }
+      return true;
+    };
+    const downloaded = await runDownload({ sdk: downloadSdk, genpageCli, outDir: downloadDir, appId: APP_ID, appUnique: 'contoso_deployapp' });
+    assert.ok(downloaded.ok, JSON.stringify(downloaded));
+    const overview = downloaded.spec.pages.find((p) => p.key === 'overview');
+    assert.deepStrictEqual(overview.navigatesTo, [{ targetKey: 'detail' }]);
+    assert.strictEqual(fs.readFileSync(path.join(downloadDir, overview.source.codeFile), 'utf8'), canonical, 'download reverses only effective navigation target spans');
+    const rebuiltCli = mockGenpageCli(live);
+    const { sdk: rebuiltSdk } = mockSdk({ liveSitemapXml: xml, pageManifest: manifestB64 });
+    await runSdkBuild(downloaded.spec, { sdk: rebuiltSdk, apply: true, env: 'https://contoso.crm.dynamics.com', appDir: downloadDir, genpageCli: rebuiltCli, phases: ['app-shell', 'pages'] });
+    assert.strictEqual(rebuiltCli.uploads.length, 2);
+    assert.ok(rebuiltCli.uploads.every((u) => u.requestedId), 'the rebuild performs only updates');
+    assert.strictEqual(rebuiltCli.uploads.find((u) => u.requestedId === overviewId).content, resolved);
+    assert.strictEqual(fs.readFileSync(path.join(downloadDir, overview.source.codeFile), 'utf8'), canonical);
+    for (const dir of [appDir, downloadDir]) {
+      const staging = path.join(dir, '.maker-workspace', '.pageref-deploy');
+      assert.ok(!fs.existsSync(staging) || fs.readdirSync(staging).length === 0, 'run-scoped staging cleaned');
+    }
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('lexical navigation overrides halt before any upload', async () => {
+  for (const override of [
+    'pageId(){return "runtime";}',
+    'get pageId(){return "runtime";}',
+    'set pageId(value){}',
+    'pageId',
+    '["page" + "Id"]:"runtime"',
+    '...{pageId:"runtime"}',
+  ]) {
+    const { appDir, spec } = makeTwoPageApp();
+    try {
+      spec.pages[0].navigatesTo = [];
+      fs.writeFileSync(path.join(appDir, 'overview.tsx'),
+        `export default function Overview(){ const pageId = "runtime"; Xrm.Navigation.navigateTo?.({pageType:"generative",/* pageId */pageId:"PAGEREF_detail",${override}}); return null; }`, 'utf8');
+      const { sdk } = mockSdk();
+      const genpageCli = mockGenpageCli();
+      await assert.rejects(
+        runSdkBuild(spec, { sdk, apply: true, env: 'https://contoso.crm.dynamics.com', appDir, genpageCli, phases: PHASES }),
+        (e) => e && e.phase === 'pages' && e.code === 'pages-nav-parity' && /non-symbolic navigation target/.test(e.message),
+        override
+      );
+      assert.strictEqual(genpageCli.uploads.length, 0, `${override}: rejected before target pre-minting or source upload`);
+    } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+  }
+});

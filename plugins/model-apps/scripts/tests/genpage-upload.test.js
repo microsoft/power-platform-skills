@@ -553,14 +553,125 @@ test('an /app-builder-shaped upload sends none of the standalone flags', async (
 
 // pac's env-wide listing, in the LIVE shape (auto-sized fixed-width columns) — an invented format is
 // correctly rejected as 'unrecognized', so a fixture that only LOOKS plausible tests the wrong path.
-const envListing = (ids) => {
-  const names = ids.map((_, i) => `Page${i}`);
+const envListing = (ids, names = ids.map((_, i) => `Page${i}`)) => {
   const nameW = Math.max(4, ...names.map((n) => n.length));
   const header = 'Page ID'.padEnd(37) + 'Name'.padEnd(nameW + 1) + 'Published';
   const body = ids.map((id, i) => `${id} ${names[i].padEnd(nameW)} -`).join('\n');
   return `Connected as tester@contoso.com\nRetrieving generated pages...\n`
     + `Found ${ids.length} generated page(s):\n\n${header}\n${body}\n`;
 };
+
+test('implicit update metadata reaches real wrapper argv', async () => {
+  const id = 'aaaaaaaa-0000-4000-8000-000000000001';
+  const appId = 'bbbbbbbb-0000-4000-8000-000000000002';
+  const env = 'https://contoso.crm.dynamics.com';
+  const navigationTitle = 'Navigation title';
+  const d = tmp();
+  const codeFile = path.join(d, 'page.tsx');
+  fs.writeFileSync(codeFile, 'export default function Page() { return null; }', 'utf8');
+  // No executable is started: both PAC installation shapes use the real invocation constructor.
+  const winPac = (file) => ({
+    platform: 'win32', env: { Path: 'C:\\pac', PATHEXT: '.EXE;.CMD', SystemRoot: 'C:\\Windows' },
+    exists: (p) => p === file, readFile: () => '@"%~dp0tools\\pac.exe" %*\r\n',
+  });
+  for (const [installation, storedName, expectedName] of [
+    ['pac.exe', 'Say \\"hi\\"', 'Say "hi"'],
+    ['pac.exe', 'Revenue 100%', 'Revenue 100%'],
+    ['pac.cmd', 'Revenue 100%', undefined],
+  ]) {
+    const seen = [];
+    const requests = [];
+    const probeDirs = [];
+    const uploadDirs = [];
+    const pacInvocation = winPac(`C:\\pac\\${installation}`);
+    const factory = (url) => makeGenpageCli(url, {
+      pacInvocation,
+      request: async (...args) => {
+        requests.push(args);
+        return { status: 200, data: { name: storedName } };
+      },
+      run: async (args) => {
+        const invocation = buildPacInvocation(args, pacInvocation);
+        seen.push({ args: [...args], invocation });
+        const valueOf = (flag) => args[args.indexOf(flag) + 1];
+        if (args[2] === 'list') {
+          const name = args.includes('--app-id') ? navigationTitle : storedName;
+          return { status: 0, stdout: envListing([id], [name]), stderr: '' };
+        }
+        if (args[2] === 'download') {
+          assert.strictEqual(valueOf('--page-id'), id);
+          const outputDir = valueOf('--output-directory');
+          probeDirs.push(outputDir);
+          dirs.push(outputDir);
+          const pageDir = path.join(outputDir, id.toUpperCase());
+          fs.mkdirSync(pageDir, { recursive: true });
+          const config = Buffer.from('\uFEFF' + JSON.stringify({ model: ' gpt-4.1 ', dataSources: ['contoso_ticket', 'contoso_asset'] }), 'utf8');
+          fs.writeFileSync(path.join(pageDir, 'config.json'), config);
+          assert.deepStrictEqual([...config.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+          return { status: 0, stdout: 'Downloaded 1 page(s)', stderr: '' };
+        }
+        assert.strictEqual(args[2], 'upload', 'only fake list/download/upload operations are permitted');
+        uploadDirs.push(path.dirname(valueOf('--prompt-file')));
+        dirs.push(uploadDirs[uploadDirs.length - 1]);
+        assert.strictEqual(fs.readFileSync(valueOf('--prompt-file'), 'utf8'), 'Fix the sort handler');
+        assert.strictEqual(fs.readFileSync(valueOf('--agent-message-file'), 'utf8'), 'Preserve page metadata');
+        return { status: 0, stdout: `Page ID: ${id}`, stderr: '' };
+      },
+      sleep: async () => {},
+    });
+    let result;
+    let cleanupAtEmit;
+    await main(['--env', env, '--app-id', appId, '--code-file', codeFile, '--page-id', id,
+      '--prompt', 'Fix the sort handler', '--agent-message', 'Preserve page metadata'], {
+      makeGenpageCli: factory,
+      emit: (ok, payload) => {
+        cleanupAtEmit = [...probeDirs, ...uploadDirs].map((dir) => fs.existsSync(dir));
+        result = { ok, payload };
+      },
+    });
+    assert.strictEqual(result.ok, true, `${installation}: ${JSON.stringify(result.payload)}`);
+    assert.deepStrictEqual([result.payload.pageId, result.payload.appId, result.payload.updated], [id, appId, true]);
+    assert.deepStrictEqual(requests, [[env, 'GET', `uxagentprojects(${id})?$select=name`]], 'the page row, not its navigation title, supplies the implicit name');
+    const listings = seen.filter((call) => call.args[2] === 'list');
+    assert.strictEqual(listings.length, 2);
+    assert.ok(listings.some((call) => !call.args.includes('--app-id') && call.args.includes('--include-unpublished')), 'existence is checked environment-wide');
+    assert.ok(listings.some((call) => call.args.includes('--app-id')), 'app membership is also checked');
+    const uploads = seen.filter((call) => call.args[2] === 'upload');
+    assert.strictEqual(uploads.length, 1);
+    const { args, invocation } = uploads[0];
+    const valueOf = (flag) => {
+      assert.strictEqual(args.filter((a) => a === flag).length, 1, `${installation}: ${flag} appears exactly once`);
+      return args[args.indexOf(flag) + 1];
+    };
+    assert.strictEqual(valueOf('--environment'), env);
+    assert.strictEqual(valueOf('--app-id'), appId);
+    assert.strictEqual(valueOf('--page-id'), id);
+    assert.strictEqual(valueOf('--code-file'), codeFile);
+    assert.strictEqual(valueOf('--model'), 'gpt-4.1');
+    assert.strictEqual(valueOf('--data-sources'), 'contoso_ticket,contoso_asset');
+    for (const flag of ['--connectors', '--actions', '--add-to-sitemap']) assert.ok(!args.includes(flag), flag);
+    if (expectedName !== undefined) {
+      assert.strictEqual(valueOf('--name'), expectedName);
+      assert.notStrictEqual(valueOf('--name'), navigationTitle);
+      assert.strictEqual(result.payload.warnings, undefined, 'metadata that reaches native PAC intact produces no warning');
+      assert.strictEqual(invocation.file, 'C:\\pac\\pac.exe');
+      assert.deepStrictEqual(invocation.args, args, 'native PAC receives every argument verbatim');
+      assert.strictEqual(invocation.options.shell, false);
+    } else {
+      assert.ok(!args.includes('--name'), 'an implicit name containing % must never reach a batch shim');
+      assert.strictEqual(result.payload.warnings.length, 1);
+      assert.match(result.payload.warnings[0], /name "Revenue 100%" could not be sent to keep it \(cannot pass .* to pac\.cmd/);
+      assert.match(result.payload.warnings[0], /pac may have renamed the page to its navigation title/);
+      assert.strictEqual(invocation.file, 'C:\\Windows\\System32\\cmd.exe');
+      assert.ok(!invocation.args[4].includes('Revenue 100%'));
+      assert.ok(invocation.args[4].includes('--model gpt-4.1'));
+      assert.ok(invocation.args[4].includes('--data-sources contoso_ticket,contoso_asset'));
+      assert.strictEqual(invocation.options.windowsVerbatimArguments, true);
+    }
+    assert.deepStrictEqual([probeDirs.length, uploadDirs.length], [1, 1]);
+    assert.deepStrictEqual(cleanupAtEmit, [false, false], 'both temp directories are gone before the emitter can exit');
+  }
+});
 
 test('REAL wrapper: updating an id absent from the environment is refused and never uploads', async () => {
   const seen = [];

@@ -53,6 +53,13 @@ they cannot read instead of guessing.
   and a longer budget to try — never more than the 15-minute maximum.
 - **Lint no longer warns about a view, chart or form name used on two tables** — only a repeat on
   one table collides.
+- **A re-run of a failed teardown finds the generative pages it left.** When teardown could not delete
+  a page, or could not read which pages the app authored, it still deleted the page manifest — the
+  only record of them — so a re-run reported success and the pages stayed behind. The manifest and the
+  solution are now kept until the pages step succeeds.
+- **`capture-fixture.js` no longer passes an eval it could not verify.** A runner that exited with an
+  error but no failing assertion, or reported no assertions at all, was summarized as clean; each is
+  now listed as a failure, with the runner's exit code.
 
 ## [2.11.0]
 

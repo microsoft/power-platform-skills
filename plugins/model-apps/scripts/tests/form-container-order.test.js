@@ -8,7 +8,7 @@
 // pre-removal array is off by one against the real one.
 const test = require('node:test');
 const assert = require('node:assert');
-const { planOrderMoves } = require('../lib/form-container-match.js');
+const { planOrderMoves, matchContainer, claimedByAuthoredName } = require('../lib/form-container-match.js');
 
 // The SDK's moveElement on one array: remove first, then insert at `to` in the shortened array.
 const applyMove = (list, { from, to }) => {
@@ -73,4 +73,34 @@ test('planOrderMoves: examples, in the SDK\'s post-removal index space', () => {
   // A swap across a maker's container: [b, x, a] laid out as a, b. The run keeps the first container,
   // so b moves after a and the maker's x keeps its place before them.
   assert.deepStrictEqual(planOrderMoves([2, 0]), { moves: [{ from: 0, to: 2 }], positions: [1, 2] });
+});
+
+test('claimedByAuthoredName reserves only non-empty authored names, case-insensitively', () => {
+  const reserved = claimedByAuthoredName(new Set(['tab_reserved', 'sec_reserved']));
+  for (const name of ['tab_reserved', 'TAB_RESERVED', 'TaB_ReSeRvEd', 'SEC_RESERVED']) {
+    assert.strictEqual(reserved({ name }), true, name);
+  }
+  for (const item of [null, undefined, {}, { name: '' }, { name: null }, { name: 'maker_tab', label: 'tab_reserved' }]) {
+    assert.strictEqual(reserved(item), false, `not reserved by its name: ${JSON.stringify(item)}`);
+  }
+  assert.strictEqual(claimedByAuthoredName(new Set(['']))({ name: '' }), false, 'an absent name is never an identity claim');
+});
+
+test('matchContainer skips reserved siblings for label and position but permits their name match', () => {
+  for (const [name, label] of [['tab_reserved', 'Shared'], ['TAB_RESERVED', 'sHaReD']]) {
+    const sibling = { id: 'reserved', name, label };
+    const maker = { id: 'maker', name: 'maker_tab', label: 'Maker' };
+    const list = [sibling, maker];
+    const skip = claimedByAuthoredName(new Set(['tab_reserved']));
+    assert.deepStrictEqual(matchContainer(list, { name: 'tab_new', label: 'SHARED' }, 1, { skip }),
+      { index: 1, item: maker }, 'a reserved label cannot outrank the unreserved positional fallback');
+    assert.strictEqual(matchContainer([sibling], { name: 'tab_new', label: 'SHARED' }, 1, { skip }), null,
+      'a reserved label without another candidate requires a new container');
+    assert.strictEqual(matchContainer(list, { name: 'tab_new', label: 'New' }, 0, { skip }), null,
+      'the positional fallback cannot take a named sibling either');
+    assert.deepStrictEqual(matchContainer(list, { name: 'TaB_ReSeRvEd', label: 'Renamed' }, 1, { skip }),
+      { index: 0, item: sibling }, 'its own name match is allowed despite reservation from the other passes');
+    assert.strictEqual(matchContainer([sibling], { name: 'tab_reserved', label: 'SHARED' }, 0,
+      { skip, claimed: new Set([0]) }), null, 'a container already consumed by an earlier want cannot be matched twice');
+  }
 });
