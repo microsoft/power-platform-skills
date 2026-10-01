@@ -7,7 +7,7 @@ const test = require('node:test');
 const {
   DIR_PREFIX, FILE_NAME, createAuthStatePath, filterAuthStateForSite, isManagedAuthStatePath, openAuthStateFile, removeAuthState, summarizeAuthState, writeAuthState,
 } = require('../lib/a11y/auth-state');
-const { parse } = require('../a11y-capture-auth');
+const { SessionCleanupError, capture, main, parse } = require('../a11y-capture-auth');
 
 test('createAuthStatePath creates a private temp folder with the managed layout', () => {
   const file = createAuthStatePath();
@@ -163,5 +163,34 @@ test('removeAuthState refuses a pp-a11y-auth-* folder that is a link to somewher
   } finally {
     try { fs.unlinkSync(link); } catch { try { fs.rmdirSync(link); } catch { /* not created */ } }
     fs.rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test('a capture that fails and cannot delete its partial session hands the path to the caller', async () => {
+  const files = [];
+  const deps = {
+    loadPw: () => ({ chromium: {} }),
+    launch: async () => { throw new Error('browser crashed'); },
+    removeState: (f) => { files.push(f); const err = new Error('EBUSY: resource busy'); err.code = 'EBUSY'; throw err; },
+  };
+  try {
+    await assert.rejects(capture({ url: 'https://contoso.powerappsportals.com/' }, { stderr: { write() {} }, ...deps }), (err) => {
+      assert.ok(err instanceof SessionCleanupError);
+      assert.equal(err.file, files[0]);
+      assert.match(err.message, /browser crashed/);
+      assert.match(err.message, /EBUSY/);
+      return true;
+    });
+    let out = '';
+    let errOut = '';
+    const code = await main(['--url', 'https://contoso.powerappsportals.com/'], {
+      stdout: { write: (d) => { out += d; } }, stderr: { write: (d) => { errOut += d; } }, captureDeps: deps,
+    });
+    assert.equal(code, 1);
+    assert.deepEqual(JSON.parse(out), { cleanupRequired: files[1] });
+    assert.match(errOut, /browser crashed/);
+    assert.match(errOut, /--remove/);
+  } finally {
+    for (const file of files) fs.rmSync(path.dirname(file), { recursive: true, force: true });
   }
 });

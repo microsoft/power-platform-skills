@@ -112,6 +112,18 @@ button.nofocus:focus{outline:none}.low{color:#aaa;background:#fff}</style></head
 <label for="n">Name</label> <input id="n"> <a href="/">Home</a>
 <script>n.addEventListener('blur',function(){fetch('/api/autosave',{method:'POST',body:'x'}).catch(function(){})})</script>
 </main></body></html>`,
+  // Not linked from "/". Defers its writes past the checks: blur schedules a POST for
+  // later, and leaving the page sends one. Both must still meet the guard.
+  '/deferred': `<!doctype html><html lang="en"><head><title>Deferred</title></head><body><main><h1>Deferred</h1>
+<label for="n">Name</label> <input id="n"> <a href="/">Home</a>
+<script>n.addEventListener('blur',function(){setTimeout(function(){fetch('/api/later',{method:'POST',body:'x'}).catch(function(){})},1500)});
+addEventListener('pagehide',function(){fetch('/api/unload',{method:'POST',body:'x',keepalive:true}).catch(function(){})})</script>
+</main></body></html>`,
+  // Not linked from "/". The page fits at 320px, but one wrapper scrolls plain text
+  // sideways; the other scrolls a data table, which 1.4.10 exempts.
+  '/scroller': `<!doctype html><html lang="en"><head><title>Scroller</title><style>.s{overflow-x:auto;max-width:100%}.nw{white-space:nowrap}</style></head>
+<body><main><h1>Scroller</h1><div class="s" id="text"><p class="nw">This sentence never wraps, so at 320 pixels wide it needs a sideways scroll to read.</p></div>
+<div class="s" id="data"><table><tr><th>Region</th><th>Q1 revenue</th><th>Q2 revenue</th><th>Q3 revenue</th><th>Q4 revenue</th><th>Total revenue</th></tr></table></div></main></body></html>`,
   // Not linked from "/". The page ships its own window.axe that reports nothing, and a
   // RequireJS-style define() that throws on anonymous modules. The audit must still run
   // the pinned axe and find the missing alt text.
@@ -256,6 +268,37 @@ test('live: page checks are guarded, so a blur handler cannot write', { skip: !L
     assert.ok(blocked.count >= 1, 'the autosave POST was blocked and reported');
     for (const req of blocked.requests) assert.deepEqual(req, { method: 'POST', url: `${base}/api/autosave` });
     assert.equal(report.summary.blockedRequests, blocked.count);
+  } finally {
+    server.close();
+  }
+});
+
+test('live: writes a page defers past its checks (timer or unload) are still blocked', { skip: !LIVE && 'set POWER_PAGES_A11Y_LIVE=1 to run' }, async () => {
+  const server = await startFixture();
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    // A second route makes the audit navigate away, which fires the first page's unload
+    // handler; the pause lets a timer scheduled during the checks come due.
+    const r = await runAsync(['--url', base, '--routes', '/deferred,/about', '--viewports', 'desktop', '--checks', 'keyboard']);
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    assert.ok([0, 1].includes(r.status), r.stderr);
+    assert.deepEqual(server.posts, [], 'no deferred write reached the site');
+  } finally {
+    server.close();
+  }
+});
+
+test('live: reflow flags a scroll container of plain text but not a data table', { skip: !LIVE && 'set POWER_PAGES_A11Y_LIVE=1 to run' }, async () => {
+  const server = await startFixture();
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const r = await runAsync(['--url', base, '--routes', '/scroller', '--viewports', 'desktop', '--checks', 'reflow']);
+    assert.equal(r.status, 0, `a heuristic finding never fails the run\n${r.stderr}`);
+    const report = JSON.parse(r.stdout);
+    assert.ok(!report.violations.some((v) => v.id === 'pp-reflow-horizontal-scroll'), 'the page itself fits');
+    const found = report.violations.find((v) => v.id === 'pp-reflow-scroll-container');
+    assert.ok(found, 'the text wrapper is reported');
+    assert.deepEqual(found.nodes.map((n) => n.target), ['div#text']);
   } finally {
     server.close();
   }

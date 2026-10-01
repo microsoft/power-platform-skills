@@ -21,7 +21,9 @@
 // Saves only cookies for the site's host and localStorage for its origin; identity
 // provider cookies picked up during sign-in are dropped (filterAuthStateForSite).
 // Prints JSON: { authState: <path>, cookies: <count>, domains: <count>, originsWithStorage: <count> }.
-// Never prints cookie names or values.
+// Never prints cookie names or values. If a failed capture can't delete what it saved
+// (for example, antivirus holds the file open), it prints { cleanupRequired: <path> }
+// instead, so the caller can retry with --remove rather than leave live cookies behind.
 // Exit codes: 0 captured, 1 nothing captured, timed out, or browser error, 2 usage,
 // 4 missing deps.
 
@@ -62,8 +64,22 @@ function parse(argv) {
   return opts;
 }
 
-async function capture(opts, { stderr = process.stderr } = {}) {
-  const { chromium } = loadPlaywright(candidateRoots(opts));
+// Thrown when a capture failed and then couldn't delete the partial session. Carries
+// the path so main() can hand cleanup to the caller instead of losing track of a file
+// that holds live cookies.
+class SessionCleanupError extends Error {
+  constructor(file, cleanupError, cause) {
+    super(`${cause ? `${cause.message}; ` : ''}the partial session could not be deleted (${cleanupError.message})`);
+    this.file = file;
+    this.cleanupError = cleanupError;
+    this.cause = cause;
+  }
+}
+
+async function capture(opts, {
+  stderr = process.stderr, loadPw = loadPlaywright, launch = launchBrowser, removeState = removeAuthState,
+} = {}) {
+  const { chromium } = loadPw(candidateRoots(opts));
   // Create the private session file before launching the browser, and launch inside
   // the try: a failure at either step must not leave a browser process or an orphaned
   // session file behind.
@@ -72,8 +88,9 @@ async function capture(opts, { stderr = process.stderr } = {}) {
   let saved = null;
   let closed = false;
   let completed = false;
+  let failure = null;
   try {
-    browser = await launchBrowser(chromium, { headless: false });
+    browser = await launch(chromium, { headless: false });
     const context = await browser.newContext({ viewport: null });
     const page = await context.newPage();
     browser.on('disconnected', () => { closed = true; });
@@ -105,17 +122,29 @@ async function capture(opts, { stderr = process.stderr } = {}) {
       throw new Error(`timed out after ${opts.timeoutSec} seconds before sign-in was confirmed; the partial session was deleted`);
     }
     completed = true;
+  } catch (err) {
+    failure = err;
+    throw err;
   } finally {
-    fs.closeSync(fd);
+    // Writes are synchronous, so a failed close loses nothing; it must never skip the
+    // cleanup below.
+    try { fs.closeSync(fd); } catch { /* see above */ }
     if (browser) await browser.close().catch(() => {});
     if (!completed) {
-      try { removeAuthState(file); } catch { /* best effort; the error being thrown matters more */ }
+      // Replaces the original error on purpose: the caller must learn the file still
+      // exists, and the original message is kept in the new one.
+      try { removeState(file); } catch (err) { throw new SessionCleanupError(file, err, failure); }
     }
   }
   return { file, saved };
 }
 
-async function main(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
+function reportCleanupRequired(file, err, { stdout, stderr }) {
+  stdout.write(`${JSON.stringify({ cleanupRequired: file })}\n`);
+  stderr.write(`The saved session at ${file} could not be deleted (${err.message}). It holds live sign-in cookies; delete it with: node a11y-capture-auth.js --remove "${file}"\n`);
+}
+
+async function main(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, captureDeps = {} } = {}) {
   let opts;
   try {
     opts = parse(argv);
@@ -136,17 +165,28 @@ async function main(argv = process.argv.slice(2), { stdout = process.stdout, std
   }
 
   try {
-    const { file, saved } = await capture(opts, { stderr });
+    const { file, saved } = await capture(opts, { stderr, ...captureDeps });
     const summary = summarizeAuthState(saved);
     if (!saved || summary.cookies === 0) {
-      // Nothing worth keeping; do not leave an empty session file behind.
-      try { removeAuthState(file); } catch { /* already gone */ }
+      // Nothing worth keeping; do not leave an empty session file behind. A missing
+      // file already counts as removed, so any error here means the file is still there.
+      try {
+        (captureDeps.removeState || removeAuthState)(file);
+      } catch (err) {
+        reportCleanupRequired(file, err, { stdout, stderr });
+        return 1;
+      }
       stderr.write('No session cookies were captured. Sign in before closing the browser window.\n');
       return 1;
     }
     stdout.write(`${JSON.stringify({ authState: file, ...summary })}\n`);
     return EXIT.PASS;
   } catch (err) {
+    if (err instanceof SessionCleanupError) {
+      if (err.cause) stderr.write(`Session capture failed: ${err.cause.message}\n`);
+      reportCleanupRequired(err.file, err.cleanupError, { stdout, stderr });
+      return 1;
+    }
     if (err instanceof MissingDependencyError) {
       stderr.write(`${err.message}\n`);
       return EXIT.MISSING_DEPS;
@@ -160,4 +200,4 @@ if (require.main === module) {
   main().then((code) => { process.exitCode = code; });
 }
 
-module.exports = { main, parse };
+module.exports = { SessionCleanupError, capture, main, parse };

@@ -212,7 +212,10 @@ function isMutatingRequest(method, url, origin) {
 // are blocked too; that is harmless for an audit. The route is registered on the
 // browser context, not the page, so a popup or new tab opened by a state step is
 // guarded too. Requests from service workers bypass routing, so the audit context is
-// created with serviceWorkers: 'block'.
+// created with serviceWorkers: 'block'. Routing also misses a write the page defers
+// past dispose() (a timer) or sends while unloading (keepalive fetch, sendBeacon), so
+// callers must end the page's renderer before dispose() — see retireGuardedPage() in
+// a11y-audit.js.
 // https://playwright.dev/docs/api/class-browsercontext#browser-context-route
 async function guardMutations(page, { allowFormSubmit = false, origin = null } = {}) {
   const blocked = { count: 0, requests: [] };

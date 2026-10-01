@@ -267,9 +267,39 @@ test('only one waiter can claim a given dead owner', () => {
   try {
     acquireInstallLock(depsDir, { pid: 999999, token: 'dead' });
     // Another waiter won the race for this dead ownership but hasn't written owner.json yet.
-    fs.mkdirSync(path.join(lockPath, 'takeover-dead'));
+    fs.mkdirSync(path.join(lockPath, 'takeover-dead-g0'));
     assert.throws(() => acquireInstallLock(depsDir, { isAlive: () => false, timeoutMs: 0, sleep: () => {} }), /Timed out/);
     assert.equal(JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8')).token, 'dead');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a takeover winner that died before writing owner.json does not block the lock forever', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-a11y-lock-'));
+  const depsDir = path.join(dir, 'deps');
+  const lockPath = depsDir + INSTALL_LOCK_SUFFIX;
+  const noWait = { isAlive: () => false, timeoutMs: 0, sleep: () => {} };
+  try {
+    acquireInstallLock(depsDir, { pid: 999999, token: 'dead' });
+    // The winner of generation 0 crashed after its mkdir; the dead owner is still recorded.
+    const marker = path.join(lockPath, 'takeover-dead-g0');
+    fs.mkdirSync(marker);
+    const later = Date.now() + 11 * 60 * 1000;
+    const release = acquireInstallLock(depsDir, { ...noWait, now: () => later, token: 'heir' });
+    assert.equal(JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8')).token, 'heir');
+    assert.equal(fs.existsSync(path.join(lockPath, 'takeover-dead-g1')), true, 'the next generation was claimed');
+    release();
+    assert.equal(fs.existsSync(lockPath), false);
+
+    // A newer generation that is still recent may belong to a live winner mid-write.
+    acquireInstallLock(depsDir, { pid: 999999, token: 'dead' });
+    fs.mkdirSync(path.join(lockPath, 'takeover-dead-g0'));
+    const old = new Date(Date.now() - 60 * 60 * 1000);
+    fs.utimesSync(path.join(lockPath, 'takeover-dead-g0'), old, old);
+    fs.mkdirSync(path.join(lockPath, 'takeover-dead-g1'));
+    assert.throws(() => acquireInstallLock(depsDir, noWait), /Timed out/);
+    assert.equal(fs.existsSync(path.join(lockPath, 'takeover-dead-g2')), false);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -103,16 +103,74 @@ async function newContext(browser, viewportName, opts) {
     serviceWorkers: 'block',
     storageState: opts.authState || undefined,
   });
+  return { context, page: await newPage(context, opts) };
+}
+
+async function newPage(context, opts) {
   const page = await context.newPage();
   page.setDefaultTimeout(opts.timeoutMs);
-  return { context, page };
+  return page;
+}
+
+// Ends a page's renderer process so none of its script runs again: no timer callback,
+// no pagehide/unload handler, no beacon. Uses the Chromium DevTools Protocol, which the
+// audit's Chromium always provides. Page.crash never answers (the renderer it would
+// answer from is gone), so the send isn't awaited; Playwright's 'crash' event confirms
+// it. Resolves false if the page couldn't be crashed within waitMs.
+// See: https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-crash
+async function crashPage(context, page, waitMs) {
+  let cdp;
+  try {
+    cdp = await context.newCDPSession(page);
+  } catch {
+    return false;
+  }
+  let timer;
+  const crashed = new Promise((resolve) => {
+    page.once('crash', () => resolve(true));
+    page.once('close', () => resolve(true));
+    timer = setTimeout(() => resolve(false), waitMs);
+  });
+  cdp.send('Page.crash').catch(() => {});
+  try {
+    return await crashed;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// A page's own handlers can defer a write past the guarded checks: a blur handler that
+// schedules a POST with setTimeout, or a pagehide/unload handler that fires when the
+// page is left. Either would reach the live site without consent. Routing can't be
+// relied on to catch them: a timer can fire after guard.dispose(), and Chromium sends an
+// unload-time keepalive fetch or sendBeacon() outside the interception that
+// page.route() and context.route() use, so it escapes even while the guard is installed
+// (verified live: navigating to about:blank, going offline, Network.setBlockedURLs and
+// Emulation.setScriptExecutionDisabled all let it through). Ending the renderer is the
+// one exit that runs none of the page's script. So, while the guard is still installed,
+// every page in the context (the checked page and any popup it opened, which can share
+// its renderer) is crashed, then closed, and a fresh page in the same context, which
+// keeps the signed-in session, is returned for the next route. A page that couldn't be
+// crashed is still closed: that runs its unload handlers, so the guard records anything
+// they send through the routes it can see.
+async function retireGuardedPage(context, page, opts) {
+  const pages = [page, ...context.pages().filter((p) => p !== page)];
+  for (const p of pages) {
+    if (!p.isClosed()) await crashPage(context, p, Math.min(opts.timeoutMs, 5000));
+  }
+  for (const p of pages) await p.close().catch(() => {});
+  return newPage(context, opts);
 }
 
 // Runs one extended check and records (not throws) its failure, so one flaky check
-// on one page does not discard everything else audited on that page.
+// on one page does not discard everything else audited on that page. A check that
+// finished but couldn't cover the whole page returns an `incomplete` reason: its
+// findings are kept, and the reason is recorded as a check error so the run can't pass.
 async function runCheck(name, fn, checkErrors) {
   try {
-    return await fn();
+    const result = await fn();
+    if (result && result.incomplete) checkErrors.push({ check: name, message: result.incomplete });
+    return result;
   } catch (err) {
     checkErrors.push({ check: name, message: errorLine(err) });
     return null;
@@ -187,7 +245,9 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
   const urls = [];
   const titles = [];
   for (const [vi, viewport] of opts.viewports.entries()) {
-    const { context, page } = await newContext(browser, viewport, opts);
+    const { context, page: firstPage } = await newContext(browser, viewport, opts);
+    // Replaced after every guarded block (see retireGuardedPage).
+    let page = firstPage;
     try {
       const list = vi === 0 ? null : [...urls];
       let i = 0;
@@ -251,7 +311,11 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
             if (r) builder.addFindings(r.findings, ctx);
           }
         } finally {
-          await guard.dispose();
+          try {
+            page = await retireGuardedPage(context, page, opts);
+          } finally {
+            await guard.dispose();
+          }
         }
         builder.addPage({ route, viewport, url: displayUrl(url), key: url, title: nav.title || null, status: nav.status || null, error: pageError, checkErrors, blockedRequests: guard.blocked });
       }
@@ -300,7 +364,11 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
         } catch (err) {
           builder.addState({ ...stateInfo, error: errorLine(err), checkErrors, blockedRequests: guard.blocked });
         } finally {
-          await guard.dispose();
+          try {
+            page = await retireGuardedPage(context, page, opts);
+          } finally {
+            await guard.dispose();
+          }
         }
       }
     } finally {

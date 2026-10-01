@@ -177,9 +177,16 @@ function assertManagedDepsDir(depsDir, { env = process.env, readdir = fs.readdir
 // even briefly, would open a window where a third process could create a fresh lock
 // while the remover still thinks it is reclaiming, and two installs would run at once.
 // Instead the waiter claims the specific dead ownership with an exclusive mkdir of
-// takeover-<dead token> inside the lock. Exactly one waiter can create that marker; it
-// then writes its own owner.json and holds the lock. The others get EEXIST and keep
-// waiting, and the next owner's token gives the next takeover a fresh marker name.
+// takeover-<dead token>-g<N> inside the lock. Exactly one waiter can create that
+// marker; it then writes its own owner.json and holds the lock. The others get EEXIST
+// and keep waiting, and the next owner's token gives the next takeover a fresh name.
+// The generation N covers a takeover winner that dies between its mkdir and its
+// owner.json write: the dead owner is still recorded and its marker exists, so a fixed
+// name would fail with EEXIST forever. Once the newest marker is older than
+// LOCK_STALE_MS while the dead owner is still recorded, the claim is abandoned too (a
+// live winner writes owner.json milliseconds after its mkdir), and the next waiter
+// claims generation N+1. Each generation is still a single exclusive mkdir, so only
+// one waiter can win it.
 // Release removes the lock only while owner.json still carries the holder's token.
 const INSTALL_LOCK_SUFFIX = '.install-lock';
 const LOCK_OWNER_FILE = 'owner.json';
@@ -218,18 +225,29 @@ function readLockOwner(lockPath) {
 }
 
 // Returns the takeover marker name for an abandoned lock, or null while it is held.
-// An owned lock's marker is keyed to the dead owner's token. An ownerless lock's marker
-// is keyed to the lock's mtime: creating a marker updates that mtime, so if a takeover
-// winner dies before writing owner.json, the next attempt uses a new name instead of
-// colliding with the dead winner's marker forever.
+// An owned lock's marker is keyed to the dead owner's token plus a generation (see
+// above). An ownerless lock's marker is keyed to the lock's mtime: creating a marker
+// updates that mtime, so if a takeover winner dies before writing owner.json, the next
+// attempt uses a new name instead of colliding with the dead winner's marker forever.
 function abandonedLockMarker(lockPath, { now, staleMs, isAlive, host }) {
   const owner = readLockOwner(lockPath);
-  if (owner) {
-    const dead = owner.host === host && Number.isInteger(owner.pid) && !isAlive(owner.pid);
-    return dead ? `takeover-${owner.token.replace(/[^\w-]/g, '_')}` : null;
+  if (!owner) {
+    const { mtimeMs } = fs.statSync(lockPath);
+    return now() - mtimeMs > staleMs ? `takeover-ownerless-${Math.trunc(mtimeMs)}` : null;
   }
-  const { mtimeMs } = fs.statSync(lockPath);
-  return now() - mtimeMs > staleMs ? `takeover-ownerless-${Math.trunc(mtimeMs)}` : null;
+  const dead = owner.host === host && Number.isInteger(owner.pid) && !isAlive(owner.pid);
+  if (!dead) return null;
+  // e.g. takeover-3f2b…-g0, takeover-3f2b…-g1. Tokens are sanitized UUIDs, so the
+  // prefix can't match another owner's markers.
+  const prefix = `takeover-${owner.token.replace(/[^\w-]/g, '_')}-g`;
+  let newest = -1;
+  for (const name of fs.readdirSync(lockPath)) {
+    const gen = name.startsWith(prefix) ? name.slice(prefix.length) : '';
+    if (/^\d+$/.test(gen)) newest = Math.max(newest, Number(gen));
+  }
+  if (newest < 0) return `${prefix}0`;
+  const { mtimeMs } = fs.statSync(path.join(lockPath, `${prefix}${newest}`));
+  return now() - mtimeMs > staleMs ? `${prefix}${newest + 1}` : null;
 }
 
 function acquireInstallLock(depsDir, {

@@ -10,10 +10,16 @@
 // The focus-visible test compares computed styles of the element while focused and
 // after blur. It cannot see focus indicators drawn by a parent or a sibling, so it is
 // marked heuristic and never fails the run on its own.
+//
+// The walk stops when focus wraps back to the start, leaves the document, or sticks on
+// one element. If it reaches MAX_TABS first, the controls after that point were never
+// checked, so the result carries an `incomplete` reason and the audit reports a check
+// error (exit 3) instead of passing on partial coverage. The cap is generous because a
+// Power Pages header with a large navigation menu can easily hold 100+ tab stops.
 
 const { makeFinding } = require('../report');
 
-const MAX_TABS = 60;
+const MAX_TABS = 250;
 const TRAP_REPEAT = 5;
 
 // Runs in the page. Describes document.activeElement after a Tab press.
@@ -73,18 +79,21 @@ async function walkFocus(page, { maxTabs = MAX_TABS } = {}) {
     const info = await page.evaluate(describeActiveElementInPage);
     if (!info) {
       // Focus left the document (browser chrome) — the cycle is complete.
-      if (sequence.length) break;
+      if (sequence.length) return { sequence, complete: true };
       continue;
     }
     const last = sequence[sequence.length - 1];
     // Back at the first element after visiting others = the tab cycle wrapped.
     // Landing on the same element as last time is not a wrap; it may be a trap.
-    if (sequence.length > 1 && info.selector === sequence[0].selector && last.selector !== info.selector) break;
+    if (sequence.length > 1 && info.selector === sequence[0].selector && last.selector !== info.selector) {
+      return { sequence, complete: true };
+    }
     sequence.push(info);
     const tail = sequence.slice(-TRAP_REPEAT);
-    if (tail.length === TRAP_REPEAT && tail.every((s) => s.selector === info.selector)) break;
+    if (tail.length === TRAP_REPEAT && tail.every((s) => s.selector === info.selector)) return { sequence, complete: true };
   }
-  return sequence;
+  // A page with no focusable element never moves focus off the body: nothing was missed.
+  return { sequence, complete: sequence.length === 0 };
 }
 
 // Pure analysis of a focus sequence so it can be unit tested without a browser.
@@ -140,12 +149,20 @@ function analyzeFocusSequence(sequence) {
   return findings;
 }
 
-async function runKeyboardCheck(page, opts) {
-  const sequence = await walkFocus(page, opts);
-  return { findings: analyzeFocusSequence(sequence), focusOrder: sequence.map((s) => ({ selector: s.selector, name: s.name })) };
+async function runKeyboardCheck(page, opts = {}) {
+  const maxTabs = opts.maxTabs || MAX_TABS;
+  const { sequence, complete } = await walkFocus(page, { maxTabs });
+  return {
+    findings: analyzeFocusSequence(sequence),
+    focusOrder: sequence.map((s) => ({ selector: s.selector, name: s.name })),
+    // Findings up to the cap are still real, so they are kept; the reason makes the
+    // run report a check error instead of a pass.
+    incomplete: complete ? null : `focus didn't cycle back to the start within ${maxTabs} Tab presses (more tab stops than the limit, or focus loops inside one region); later controls weren't checked`,
+  };
 }
 
 module.exports = {
+  MAX_TABS,
   TRAP_REPEAT,
   analyzeFocusSequence,
   runKeyboardCheck,

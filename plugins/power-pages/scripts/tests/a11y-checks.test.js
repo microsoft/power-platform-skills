@@ -3,6 +3,7 @@ const test = require('node:test');
 
 const { TRAP_REPEAT, analyzeFocusSequence } = require('../lib/a11y/checks/keyboard');
 const { analyzeReflow } = require('../lib/a11y/checks/reflow');
+const { runKeyboardCheck } = require('../lib/a11y/checks/keyboard');
 const { analyzeZoom } = require('../lib/a11y/checks/zoom');
 const { analyzeMotion, videoCriteria } = require('../lib/a11y/checks/motion');
 const { analyzeTitles } = require('../lib/a11y/checks/titles');
@@ -42,6 +43,41 @@ test('analyzeFocusSequence flags missing focus indicators and offscreen focus as
   assert.equal(byId['pp-focus-not-visible'].heuristic, true);
   assert.deepEqual(byId['pp-focus-not-visible'].wcag, ['2.4.7']);
   assert.equal(byId['pp-focus-offscreen'].nodes[0].target, 'a.hidden-menu');
+});
+
+// Minimal page stand-in for walkFocus: the first evaluate() resets focus, each later
+// one describes the element the Tab press landed on.
+function fakeFocusPage(describe) {
+  let calls = 0;
+  return {
+    keyboard: { press: async () => {} },
+    evaluate: async () => (calls++ === 0 ? undefined : describe(calls - 1)),
+  };
+}
+const focusInfo = (n) => ({ selector: `#e${n}`, tag: 'a', name: `e${n}`, html: '<a>', inIframe: false, indicator: true, offscreen: false });
+
+test('runKeyboardCheck reports an incomplete walk when the Tab limit runs out first', async () => {
+  const capped = await runKeyboardCheck(fakeFocusPage((i) => focusInfo(i)), { maxTabs: 5 });
+  assert.match(capped.incomplete, /within 5 Tab presses/);
+  assert.equal(capped.focusOrder.length, 5, 'what was walked is still reported');
+
+  const wrapped = await runKeyboardCheck(fakeFocusPage((i) => focusInfo(i % 3)), { maxTabs: 50 });
+  assert.equal(wrapped.incomplete, null);
+  assert.equal(wrapped.focusOrder.length, 3);
+
+  const empty = await runKeyboardCheck(fakeFocusPage(() => null), { maxTabs: 5 });
+  assert.equal(empty.incomplete, null, 'a page with nothing focusable is fully covered');
+});
+
+test('analyzeReflow flags a horizontally scrolling container even when the page fits', () => {
+  const findings = analyzeReflow({
+    overflow: false, scrollWidth: 320, viewportWidth: 320, offenders: [],
+    scrollContainers: [{ target: 'div.scroller', html: '<div>', scrollWidth: 900, clientWidth: 300 }],
+  });
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].id, 'pp-reflow-scroll-container');
+  assert.equal(findings[0].heuristic, true, 'whether the content needs 2D layout is a judgment call');
+  assert.match(findings[0].nodes[0].summary, /900px wide in a 300px scroll area/);
 });
 
 test('analyzeReflow reports outermost offenders or the page', () => {
