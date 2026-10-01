@@ -18,6 +18,7 @@ SDK is refreshed.
 
 ### Fixed
 
+- **A Dataverse response cut off mid-body is reported as an error** instead of leaving a script hanging.
 - **A table opens with its default form** (AB#6736948). What opens is decided by the order of a
   table's Main forms, not the default flag, and new forms all share one position — so a table with
   several Main forms could open with an alternate one. The build now also puts the default form
