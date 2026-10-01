@@ -612,42 +612,114 @@ function hasMethodGuard(text, mask, namespace, method, callIndex) {
 
     const rawCondition = withoutComments(text.slice(openParen + 1, closeParen));
     const maskCondition = mask.slice(openParen + 1, closeParen);
-    // A positive substring is not a proof: !(ready && typeof X === "function") and
-    // (typeof X === "function") === false both run where X may be absent. Prove the whole true
-    // condition, keeping OR conservative and requiring a preceding namespace check for dotted X.
-    if (maskCondition.includes('||')) continue;
-    if (provePositiveCondition(rawCondition, maskCondition, namespace, method).methodSafe) return true;
+    if (provePositiveCondition(rawCondition, maskCondition, namespace, method)) return true;
   }
   return false;
 }
 
-function provePositiveCondition(raw, mask, namespace, method, namespaceSafe = false) {
+function provePositiveCondition(raw, mask, namespace, method) {
+  // Only a whole positive conjunction proves the method. Raw examples:
+  //   context.device && typeof context.device.captureImage === "function"
+  //   !!context.device?.captureImage && !busy
+  // A later optional proof cannot rescue an earlier unsafe dereference or arbitrary operand.
+  // The executable mask catches side effects even in template substitutions; the structural
+  // mask blanks entire literals so their text, brackets and && cannot split the conjunction.
+  const assignment = /(?<![=!<>])=(?!=)|(?:\*\*|>>>|<<|>>|&&|\|\||\?\?|[+\-*/%&|^])=/;
+  if (mask.includes('=>') || assignment.test(mask) || /\?(?!\.)|!\s*\(/.test(mask)
+    || mask.includes('||') || mask.includes('??')) return false;
+  const state = { proven: new Set(), methodSafe: false };
+  return proveGuardConjunction(raw, blankLiterals(raw), ['context', namespace, method], state) && state.methodSafe;
+}
+
+function proveGuardConjunction(raw, mask, methodPath, state) {
   const expression = unwrapExpression(raw, mask);
   raw = expression.raw;
   mask = expression.mask;
-  const unproven = { namespaceSafe, methodSafe: false };
-  // Ternary and comma expressions bind more loosely than &&: "guard && ready ? ready : true"
-  // and "(guard && ready), true" can be true without the guard. Optional chaining's ?. is not a
-  // ternary separator. Unsupported leaves stay unproven rather than borrowing a nested match.
-  if (splitTopLevel(mask, '?').length > 1 || splitTopLevel(mask, ',').length > 1) return unproven;
+  if (splitTopLevel(mask, ',').length > 1) return false;
   const conjunction = splitTopLevel(mask, '&&');
   if (conjunction.length > 1) {
-    let methodSafe = false;
     for (const range of conjunction) {
-      const proof = provePositiveCondition(raw.slice(range.start, range.end), mask.slice(range.start, range.end), namespace, method, namespaceSafe);
-      namespaceSafe = proof.namespaceSafe;
-      methodSafe = methodSafe || proof.methodSafe;
+      if (!proveGuardConjunction(raw.slice(range.start, range.end), mask.slice(range.start, range.end), methodPath, state)) return false;
     }
-    return { namespaceSafe, methodSafe };
+    return true;
   }
 
-  const namespacePath = `context\\.${escapeRegExp(namespace)}`;
-  const optionalMethod = `${namespacePath}\\?\\.${escapeRegExp(method)}`;
-  const dottedMethod = `${namespacePath}\\.${escapeRegExp(method)}`;
-  const provesMethod = (reference) => new RegExp(`^(?:${reference}|typeof\\s+${reference}\\s*={2,3}\\s*(['"])function\\1)$`).test(raw);
-  const methodSafe = provesMethod(optionalMethod) || (namespaceSafe && provesMethod(dottedMethod));
-  const provesNamespace = new RegExp(`^(?:${namespacePath}|!!\\s*${namespacePath}|${namespacePath}\\s*!=\\s*null|${namespacePath}\\s*!==\\s*undefined)$`).test(raw);
-  return { namespaceSafe: namespaceSafe || provesNamespace || methodSafe, methodSafe };
+  const typeofLeft = /^typeof\s+(.+?)\s*={2,3}\s*(['"])function\2$/.exec(raw);
+  const typeofRight = /^(['"])function\1\s*={2,3}\s*typeof\s+(.+)$/.exec(raw);
+  const typeofPath = typeofLeft ? typeofLeft[1] : typeofRight ? typeofRight[2] : null;
+  const path = parseGuardPath(typeofPath || raw.replace(/^!!\s*/, ''));
+  if (path && path.names.join('.') === methodPath.join('.')) {
+    if (!safeGuardLinks(path, state.proven)) return false;
+    proveGuardPrefixes(path, state.proven);
+    state.methodSafe = true;
+    return true;
+  }
+  if (typeofPath) return false;
+  if (path && isGuardPrefix(path, methodPath)) {
+    if (!safeGuardLinks(path, state.proven)) return false;
+    proveGuardPrefixes(path, state.proven);
+    return true;
+  }
+
+  // X != null excludes BOTH null and undefined, preserving existing safe namespace guards.
+  // X !== undefined does not exclude null, so it must not authorize a dotted method access.
+  const nonNull = /^(.+?)\s*!=\s*null$/.exec(raw);
+  const prefix = nonNull && parseGuardPath(nonNull[1]);
+  if (prefix && isGuardPrefix(prefix, methodPath)) {
+    if (!safeGuardLinks(prefix, state.proven)) return false;
+    proveGuardPrefixes(prefix, state.proven);
+    return true;
+  }
+  return isNeutralGuardOperand(raw, methodPath, state.proven);
+}
+
+function parseGuardPath(raw) {
+  if (!/^[A-Za-z_$][\w$]*(?:\s*(?:\?\.|\.)\s*[A-Za-z_$][\w$]*)*$/.test(raw.trim())) return null;
+  const parts = raw.trim().split(/\s*(\?\.|\.)\s*/);
+  return {
+    names: parts.filter((_, index) => index % 2 === 0),
+    optional: parts.filter((_, index) => index % 2 !== 0).map((link) => link === '?.'),
+  };
+}
+
+function isGuardPrefix(path, methodPath) {
+  return path.names.length < methodPath.length && path.names.every((name, index) => name === methodPath[index]);
+}
+
+function safeGuardLinks(path, proven) {
+  // The context parameter and unrelated identifier roots are assumed present. Each deeper
+  // object (for example context.device) needs ?. at its access or an earlier positive proof.
+  return path.optional.every((optional, index) => optional || index === 0 || proven.has(path.names.slice(0, index + 1).join('.')));
+}
+
+function proveGuardPrefixes(path, proven) {
+  for (let length = 1; length <= path.names.length; length += 1) proven.add(path.names.slice(0, length).join('.'));
+}
+
+function isNeutralGuardOperand(raw, methodPath, proven) {
+  const neutralPath = (value) => {
+    const path = parseGuardPath(value);
+    if (!path) return false;
+    const objectPath = methodPath.slice(0, -1);
+    const mentionsObject = objectPath.every((name, index) => path.names[index] === name);
+    return !mentionsObject && safeGuardLinks(path, proven);
+  };
+  // !busy is an existing safe neutral: it neither negates the method proof nor touches its
+  // object. Calls, computed paths, arbitrary operators and parenthesized negation stay rejected.
+  if (neutralPath(raw.replace(/^!{1,2}\s*/, ''))) return true;
+  const comparison = /^(.+?)\s*(===|!==|==|!=|<=|>=|<|>)\s*(.+)$/.exec(raw);
+  if (!comparison) return false;
+  const left = comparison[1].trim();
+  const right = comparison[3].trim();
+  const leftLiteral = isGuardLiteral(left);
+  const rightLiteral = isGuardLiteral(right);
+  return (leftLiteral || rightLiteral) && (leftLiteral || neutralPath(left)) && (rightLiteral || neutralPath(right));
+}
+
+function isGuardLiteral(raw) {
+  if (/^(?:true|false|null|undefined|[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)$/.test(raw)) return true;
+  const quoted = isQuote(raw[0]) ? readQuotedLiteral(raw, 0) : null;
+  return Boolean(quoted && quoted.literal && quoted.end === raw.length);
 }
 
 function previousNonSpace(text, index) {
@@ -722,10 +794,6 @@ function hasCodeMatch(re, raw, mask) {
 
 function inRanges(index, ranges) {
   return ranges.some(([start, end]) => index >= start && index < end);
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 module.exports = {

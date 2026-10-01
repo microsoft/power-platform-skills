@@ -53,6 +53,16 @@ function usesFeature(name, required = 'false') {
   return `<uses-feature name="${name}" required="${required}" />`;
 }
 
+function assertPagesConditions(conditions, expectedCount) {
+  const results = conditions.map((condition) => {
+    const findings = featureCoherence(manifest(usesFeature('Device.captureImage')), [{
+      file: FILE, text: `if (${condition}) { context.device.captureImage(); }`,
+    }], ['pages']);
+    return { condition, count: findings.filter((finding) => finding.code === 'PCF_PAGES_API').length };
+  });
+  assert.deepEqual(results, conditions.map((condition) => ({ condition, count: expectedCount })));
+}
+
 const sourceRuleCases = [
   ['PCF_CODE_XRM', 'const id = Xrm.Page.data.entity.getId();', 'const id = context.parameters.entityId.raw;'],
   ['PCF_CODE_PARENT_WINDOW', 'const host = window.parent.location.href;', 'const host = context.client.getClientUrl();'],
@@ -251,7 +261,7 @@ test('featureCoherence rejects unsafe dotted method guards and accepts namespace
   assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), 'PCF_PAGES_API', 'error');
   assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (context.device && typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), []);
   assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (context.device != null && typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), []);
-  assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (context.device !== undefined && typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), []);
+  assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (context.device !== undefined && typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), 'PCF_PAGES_API', 'error');
   assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (!!context.device && typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), []);
 });
 
@@ -281,6 +291,93 @@ test('featureCoherence accepts parenthesized and composed method guards', () => 
   assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if ((typeof context.device?.captureImage === "function")) { context.device.captureImage(); }' }], ['pages']), []);
   assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (ready && typeof context.device?.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), []);
   assert.deepEqual(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: 'if (ready && context.device && typeof context.device.captureImage === "function") { context.device.captureImage(); }' }], ['pages']), []);
+  assertPagesConditions([
+    'ready && (count > 0 && typeof context.device?.captureImage === "function")',
+    '(ready && typeof context.device?.captureImage === "function") && this.enabled',
+  ], 0);
+});
+
+test('featureCoherence rejects arrow operands anywhere in a Pages guard', () => {
+  assertPagesConditions([
+    '() => ready && context.device?.captureImage',
+    'typeof context.device?.captureImage === "function" && (() => ready)',
+    'ready && (() => context.device?.captureImage)',
+  ], 1);
+});
+
+test('featureCoherence rejects assignment operands anywhere in a Pages guard', () => {
+  const proof = 'typeof context.device?.captureImage === "function"';
+  assertPagesConditions([
+    `x = ${proof}`,
+    `(ready ||= ${proof})`,
+    ...['=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^=', '&&=', '||=', '??=']
+      .flatMap((operator) => [`(ready ${operator} true) && ${proof}`, `${proof} && (ready ${operator} true)`]),
+  ], 1);
+});
+
+test('featureCoherence rejects unsafe or unrelated object-path operands even with another proof', () => {
+  assertPagesConditions([
+    'context.device.captureImage && context.device?.captureImage',
+    '(context.device.captureImage && ready) && typeof context.device?.captureImage === "function"',
+    'context.device?.other && typeof context.device?.captureImage === "function"',
+    'typeof context.device?.captureImage === "function" && context.device.other',
+    'context.device !== null && typeof context.device.captureImage === "function"',
+    'context.device !== undefined && context.device?.captureImage',
+  ], 1);
+});
+
+test('featureCoherence rejects non-neutral operands and whole-condition fallbacks', () => {
+  assertPagesConditions([
+    'checkReady() && typeof context.device?.captureImage === "function"',
+    'typeof context.device?.captureImage === "function" && checkReady()',
+    '!(ready && typeof context.device?.captureImage === "function")',
+    '(typeof context.device?.captureImage === "function") === false',
+    '(typeof context.device?.captureImage === "function") === 0',
+    '(typeof context.device?.captureImage === "function") === null',
+    'ready, typeof context.device?.captureImage === "function"',
+    'ready ? typeof context.device?.captureImage === "function" : true',
+    '(ready ?? typeof context.device?.captureImage === "function")',
+    'typeof context.device?.captureImage === "function" && (ready || fallback)',
+    'typeof context.device?.captureImage === "function" && (ready, fallback)',
+    'typeof context.device?.captureImage === "function" && !(ready)',
+    'values[ready && fallback] && context.device?.captureImage',
+    '({ ready: ready && fallback }) && context.device?.captureImage',
+    '`ready ${context.device?.captureImage}` && context.device?.captureImage',
+  ], 1);
+});
+
+test('featureCoherence accepts double-negated methods with neutral paths and literal comparisons', () => {
+  assertPagesConditions([
+    '!!context.device?.captureImage && ready',
+    'ready && !!context.device?.captureImage',
+    '(!!context.device?.captureImage && count >= 0) && this.enabled',
+    '!!context.device?.captureImage && !busy',
+    'note === "ready && (}) ? : => = || ?? context.device" && !!context.device?.captureImage',
+    "note === 'ready && \\'quoted\\'' && !!context.device?.captureImage",
+    'note === `ready && (}) ? : => = || ?? context.device` && !!context.device?.captureImage',
+  ], 0);
+});
+
+test('featureCoherence accepts positive typeof equality in either order and quote style', () => {
+  assertPagesConditions([
+    '"function" === typeof context.device?.captureImage',
+    "'function' == typeof context.device?.captureImage",
+    "typeof context.device?.captureImage == 'function'",
+    'context.device && "function" === typeof context.device.captureImage',
+    "'function' === typeof context.device?.captureImage && count != 0",
+  ], 0);
+});
+
+test('featureCoherence tracks safe prefix proofs left to right through grouped operands', () => {
+  assertPagesConditions([
+    'context.device && typeof context.device.captureImage === "function"',
+    '!!context.device && context.device.captureImage',
+    'context.device != null && typeof context.device.captureImage === "function"',
+    'context?.device && typeof context.device.captureImage === "function"',
+    '(ready && context.device) && (this.enabled && !!context.device.captureImage)',
+    'context.device?.captureImage && context.device.captureImage',
+    'typeof context.device?.captureImage === "function" && context.device.captureImage',
+  ], 0);
 });
 
 test('featureCoherence does not treat a string-only method guard as a Pages guard', () => {
@@ -383,7 +480,6 @@ test('featureCoherence proves method truthiness in positive AND branches without
     'ready && context.device?.captureImage',
     'context.device && context.device.captureImage',
     'context.device != null && context.device.captureImage',
-    'context.device !== undefined && context.device.captureImage',
     '!!context.device && context.device.captureImage',
     'context.device && (ready && typeof context.device.captureImage === "function")',
     '/* capability */ typeof context.device?.captureImage === /* expected */ "function"',
@@ -396,6 +492,7 @@ test('featureCoherence proves method truthiness in positive AND branches without
     'typeof context.device?.captureImage !== "function"',
     '!(context.device?.captureImage)',
     'context.device.captureImage',
+    'context.device !== undefined && context.device.captureImage',
     'context.device?.captureImage || ready',
     'context.device && !(typeof context.device.captureImage === "function")',
   ]) {
