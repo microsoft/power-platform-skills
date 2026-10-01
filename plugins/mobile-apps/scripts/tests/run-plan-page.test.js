@@ -824,6 +824,31 @@ test('generated markup is cleaned before it reaches the document', () => {
   assert.doesNotMatch(template, /panel\.innerHTML = result\.svg/);
 });
 
+test('the third-party script is pinned by version and by content', () => {
+  const template = fs.readFileSync(path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8');
+
+  const tag = template.match(/<script[^>]*cdn\.jsdelivr\.net[^>]*>/s);
+  assert.ok(tag, 'the page loads one script from the CDN');
+  const attrs = tag[0];
+
+  // A floating major resolves to whatever is latest when the plan is opened, so the code running
+  // inside a page holding the environment URL, tenant id and the whole plan could change with
+  // nothing changing here.
+  assert.doesNotMatch(attrs, /mermaid@\d+\//, 'the version must be exact, not a floating major');
+  assert.match(attrs, /mermaid@\d+\.\d+\.\d+\//);
+
+  // The CSP pins where a script may come from; only integrity pins what it is.
+  assert.match(attrs, /integrity="sha(256|384|512)-[A-Za-z0-9+/]+={0,2}"/);
+  // Integrity is not enforced on a cross-origin script without this.
+  assert.match(attrs, /crossorigin="anonymous"/);
+  // And it still carries the nonce the CSP names.
+  assert.match(attrs, /nonce="__ATTR_CSP_NONCE__"/);
+
+  // A refusal must degrade, not break: the page falls back to the diagram source.
+  assert.match(template, /typeof mermaid === 'undefined'/);
+  assert.match(template, /Mermaid could not load/);
+});
+
 test('every function the page defines is defined exactly once', () => {
   // `showSource` was defined twice, the second copy silently replacing the first. Duplicates are
   // invisible at runtime, so the only way to see one is to count the definitions.

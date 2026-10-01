@@ -20,7 +20,27 @@
 -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-__ATTR_CSP_NONCE__' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'"/>
 <title>__PLAN_TITLE__ - __APP_NAME__</title>
-<script nonce="__ATTR_CSP_NONCE__" src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<!--
+  Mermaid is pinned to an exact version and checked against a hash of its bytes.
+
+  `@11` floated: it resolved to whatever the latest 11.x was at the moment the plan was opened,
+  so the code running inside a page that holds the environment URL, tenant id and the whole plan
+  could change without anything changing here. The CSP pins where a script may come from; only
+  integrity pins what it is. A file that does not match is refused, and the page already falls
+  back to showing each diagram's source, so a refusal degrades rather than breaks.
+
+  `crossorigin="anonymous"` is required for integrity to be enforced on a cross-origin script.
+
+  To upgrade: pick the new version, then
+    curl -sSL https://cdn.jsdelivr.net/npm/mermaid@<version>/dist/mermaid.min.js \
+      | openssl dgst -sha384 -binary | openssl base64 -A
+  and put "sha384-<output>" here. Cross-check jsDelivr's published hash for the same file at
+  https://data.jsdelivr.com/v1/packages/npm/mermaid@<version>?structure=flat before trusting it.
+-->
+<script nonce="__ATTR_CSP_NONCE__"
+        src="https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.min.js"
+        integrity="sha384-EOXBFmc3gx5mb+vn0vPvvGqACToJD24hhacX5Yx+8NUUQrHIle/Qi5Bg9o3zKwW2"
+        crossorigin="anonymous"></script>
 <style>
 :root{
   --bg:#faf9f8; --surface:#ffffff; --surface2:#f3f2f1; --border:#e1dfdd; --border-light:#c8c6c4;
