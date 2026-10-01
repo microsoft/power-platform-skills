@@ -37,12 +37,45 @@ const OUTCOMES = new Set(['passed', 'passed-with-warnings', 'failed']);
 // `storage-state.json`; neither name has any reason to appear in the report.
 const SESSION_LEAK_PATTERNS = ['storage-state.json', 'pp-a11y-auth-'];
 
+// The exact {{...}} tokens in the report template, so an unfilled template is caught
+// without rejecting real report content: fixes for declarative sites legitimately quote
+// Liquid such as {{ page.title }} or {% include %}. Read from the template itself so the
+// two can't drift; the template ships inside the plugin, beside this script.
+const TEMPLATE_PATH = path.join(__dirname, '..', 'references', 'report-template.md');
+function templatePlaceholders() {
+  try {
+    return [...new Set(fs.readFileSync(TEMPLATE_PATH, 'utf8').match(/\{\{[^{}]*\}\}/g) || [])];
+  } catch {
+    return [];
+  }
+}
+
+// runValidation() approves when the callback throws, so every read that a malformed
+// marker can steer (a directory, a broken link, a permission error) must turn into a
+// validation error instead of an exception.
+function readRegularFile(file) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch (err) {
+    if (err.code === 'ENOENT') return { missing: true };
+    return { error: err.code || err.message };
+  }
+  if (!stat.isFile()) return { error: 'not a regular file' };
+  try {
+    return { text: fs.readFileSync(file, 'utf8') };
+  } catch (err) {
+    return { error: err.code || err.message };
+  }
+}
+
 runValidation((cwd) => {
   const projectRoot = findProjectRoot(cwd) || cwd;
   const markerPath = path.join(projectRoot, MARKER_REL);
-  if (!fs.existsSync(markerPath)) approve();
-
-  const markerRaw = fs.readFileSync(markerPath, 'utf8');
+  const markerFile = readRegularFile(markerPath);
+  if (markerFile.missing) approve();
+  if (markerFile.error) block(`${MARKER_REL} can't be read (${markerFile.error}). Rewrite it using the schema in Phase 6.4 of the audit-accessibility skill.`);
+  const markerRaw = markerFile.text;
   let marker;
   try {
     marker = JSON.parse(markerRaw);
@@ -130,13 +163,19 @@ function checkReport(projectRoot, reportFile, errors) {
     errors.push(`reportFile must be inside the project (found ${reportFile})`);
     return;
   }
-  if (!fs.existsSync(reportPath)) {
+  const file = readRegularFile(reportPath);
+  if (file.missing) {
     errors.push(`reportFile not found: ${reportFile}`);
     return;
   }
-  const report = fs.readFileSync(reportPath, 'utf8');
-  if (report.includes('{{')) {
-    errors.push(`${reportFile} contains unreplaced {{placeholders}} from the report template`);
+  if (file.error) {
+    errors.push(`reportFile can't be read (${file.error}): ${reportFile}`);
+    return;
+  }
+  const report = file.text;
+  const unfilled = templatePlaceholders().filter((token) => report.includes(token));
+  if (unfilled.length > 0) {
+    errors.push(`${reportFile} contains unreplaced template placeholders: ${unfilled.slice(0, 3).join(', ')}`);
   }
   if (SESSION_LEAK_PATTERNS.some((p) => report.includes(p))) {
     errors.push(`${reportFile} references the session file. Remove session paths from the report.`);

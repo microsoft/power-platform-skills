@@ -157,6 +157,52 @@ function assertManagedDepsDir(depsDir, { env = process.env, readdir = fs.readdir
   );
 }
 
+// The version-keyed cache is shared by every session on the machine, and `npm ci`
+// deletes node_modules before it installs. Two first-time audits running at once would
+// each wipe the other's half-finished install. A lock directory beside the deps folder
+// serializes them: mkdir is atomic and fails with EEXIST if another process holds it.
+// A lock older than LOCK_STALE_MS is treated as left behind by a killed process
+// (npm ci for two packages takes well under a minute) and is reclaimed.
+const INSTALL_LOCK_SUFFIX = '.install-lock';
+const LOCK_STALE_MS = 10 * 60 * 1000;
+const LOCK_TIMEOUT_MS = 12 * 60 * 1000;
+const LOCK_POLL_MS = 500;
+
+// installDeps is synchronous (install-a11y-deps.js is a one-shot CLI), so wait with
+// Atomics.wait rather than a busy loop.
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function acquireInstallLock(depsDir, {
+  now = Date.now, sleep = sleepSync, timeoutMs = LOCK_TIMEOUT_MS, staleMs = LOCK_STALE_MS,
+} = {}) {
+  const lockPath = `${path.resolve(depsDir)}${INSTALL_LOCK_SUFFIX}`;
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  const deadline = now() + timeoutMs;
+  for (;;) {
+    try {
+      fs.mkdirSync(lockPath);
+      return () => { try { fs.rmdirSync(lockPath); } catch { /* already released */ } };
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+    }
+    try {
+      if (now() - fs.statSync(lockPath).mtimeMs > staleMs) {
+        fs.rmdirSync(lockPath);
+        continue;
+      }
+    } catch (err) {
+      if (err.code === 'ENOENT') continue;
+      throw err;
+    }
+    if (now() >= deadline) {
+      throw new Error(`Timed out waiting for another install of the audit tools to finish. If none is running, delete ${lockPath} and try again.`);
+    }
+    sleep(LOCK_POLL_MS);
+  }
+}
+
 function installDeps({
   depsDir = defaultDepsDir(),
   npmCliPath,
@@ -168,10 +214,22 @@ function installDeps({
   readdir = fs.readdirSync,
   writeFile = fs.writeFileSync,
   exists = fs.existsSync,
+  lock = acquireInstallLock,
 } = {}) {
   if (isInstalled(depsDir, { readFile, exists })) return { depsDir, installed: false, versions: { ...PINNED } };
 
   assertManagedDepsDir(depsDir, { env, readdir });
+  const release = lock(depsDir);
+  try {
+    // Another session may have finished the install while this one waited for the lock.
+    if (isInstalled(depsDir, { readFile, exists })) return { depsDir, installed: false, versions: { ...PINNED } };
+    return runInstall({ depsDir, npmCliPath, spawnSyncFn, mkdir, copyFile, readFile, writeFile, exists });
+  } finally {
+    release();
+  }
+}
+
+function runInstall({ depsDir, npmCliPath, spawnSyncFn, mkdir, copyFile, readFile, writeFile, exists }) {
   mkdir(depsDir, { recursive: true });
   writeFile(path.join(depsDir, MANAGED_MARKER), 'Created by power-pages install-a11y-deps.js. Safe to delete with this folder.\n');
   // Always overwrite with the committed manifest + lock: `npm ci` installs exactly
@@ -219,11 +277,13 @@ async function launchBrowser(chromium, { headless = true, detect } = {}) {
 
 module.exports = {
   DEPS_DIR_ENV,
+  INSTALL_LOCK_SUFFIX,
   MANAGED_MARKER,
   MissingDependencyError,
   PINNED,
   RUNTIME_DIR,
   UnmanagedDepsDirError,
+  acquireInstallLock,
   assertManagedDepsDir,
   cacheDepsDir,
   candidateRoots,

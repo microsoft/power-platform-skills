@@ -1,10 +1,11 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
 const {
-  DEPS_DIR_ENV, MANAGED_MARKER, MissingDependencyError, PINNED, RUNTIME_DIR, UnmanagedDepsDirError, assertManagedDepsDir, cacheDepsDir,
+  DEPS_DIR_ENV, INSTALL_LOCK_SUFFIX, MANAGED_MARKER, MissingDependencyError, PINNED, RUNTIME_DIR, UnmanagedDepsDirError, acquireInstallLock, assertManagedDepsDir, cacheDepsDir,
   candidateRoots, defaultDepsDir, installDeps, isInstalled, launchBrowser, loadAxeSource, loadPlaywright, resolveNpmCli,
 } = require('../lib/a11y/deps');
 const { main: installMain } = require('../install-a11y-deps');
@@ -120,6 +121,7 @@ test('installDeps copies the committed lock and runs npm ci through node with sc
       return JSON.stringify({ version: p.includes('axe-core') ? '4.13.0' : '1.63.0' });
     },
     spawnSyncFn: (exe, args, opts) => { call = { exe, args, opts }; installedNow = true; return { status: 0 }; },
+    lock: () => () => {},
   });
   assert.equal(result.installed, true);
   assert.deepEqual(writes, [path.join('/deps', MANAGED_MARKER)], 'marks the directory as managed before writing into it');
@@ -139,6 +141,7 @@ test('installDeps surfaces npm failures', () => {
     depsDir: '/deps', npmCliPath: 'npm-cli.js', mkdir: () => {}, copyFile: () => {}, readdir: () => [], writeFile: () => {},
     readFile: () => { throw new Error('ENOENT'); },
     spawnSyncFn: () => ({ status: 1, stderr: 'line1\nEINTEGRITY sha512 mismatch' }),
+    lock: () => () => {},
   }), /npm ci failed \(exit 1\): line1\nEINTEGRITY sha512 mismatch/);
 });
 
@@ -192,4 +195,45 @@ test('install-a11y-deps main prints JSON and maps failures', () => {
   assert.match(err.join(''), /offline/);
   assert.equal(installMain(['--deps-dir', 'proj'], { ...io, install: () => { throw new UnmanagedDepsDirError('Refusing to install into proj'); } }), 2);
   assert.match(err.join(''), /Refusing to install into proj/);
+});
+
+test('installDeps holds the install lock and reuses an install finished while it waited', () => {
+  let released = 0;
+  let checks = 0;
+  let spawned = false;
+  const result = installDeps({
+    depsDir: '/deps', npmCliPath: 'npm-cli.js', readdir: () => [],
+    // Not installed on the first check; another session finishes before the lock is granted.
+    exists: () => checks > 0,
+    readFile: (p) => {
+      if (checks === 0) { checks++; throw new Error('ENOENT'); }
+      return JSON.stringify({ version: p.includes('axe-core') ? '4.13.0' : '1.63.0' });
+    },
+    lock: () => () => { released++; },
+    spawnSyncFn: () => { spawned = true; return { status: 0 }; },
+  });
+  assert.equal(result.installed, false);
+  assert.equal(spawned, false, 'npm ci is not run again');
+  assert.equal(released, 1, 'the lock is released');
+});
+
+test('acquireInstallLock serializes installs and reclaims a stale lock', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-a11y-lock-'));
+  const depsDir = path.join(dir, 'deps');
+  const lockPath = depsDir + INSTALL_LOCK_SUFFIX;
+  try {
+    const release = acquireInstallLock(depsDir);
+    assert.equal(fs.statSync(lockPath).isDirectory(), true);
+    assert.throws(() => acquireInstallLock(depsDir, { timeoutMs: 0, sleep: () => {} }), /Timed out waiting for another install/);
+    release();
+    assert.equal(fs.existsSync(lockPath), false);
+
+    fs.mkdirSync(lockPath);
+    const later = Date.now() + 11 * 60 * 1000;
+    const releaseStale = acquireInstallLock(depsDir, { now: () => later, sleep: () => {} });
+    assert.equal(fs.existsSync(lockPath), true, 'a lock left by a dead process is reclaimed');
+    releaseStale();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

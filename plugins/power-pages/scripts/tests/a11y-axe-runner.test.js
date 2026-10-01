@@ -78,6 +78,10 @@ test('sanitizeHtml blanks secret-bearing attributes and URL query strings', () =
   assert.equal(sanitizeHtml('<a href="/a?b=c'), '<a href="/a?[redacted]"');
   assert.equal(sanitizeHtml('<button aria-label="Save" type="submit">'), '<button aria-label="Save" type="submit">');
   assert.equal(sanitizeHtml(undefined), '');
+  // Fragments can carry OAuth tokens; an id-shaped in-page anchor is kept as evidence.
+  assert.equal(sanitizeHtml('<a href="/callback#access_token=eyJ.abc&id_token=x">'), '<a href="/callback#[redacted]">');
+  assert.equal(sanitizeHtml('<a href="#main-content">Skip</a>'), '<a href="#main-content">Skip</a>');
+  assert.equal(sanitizeHtml('<a href="/page?x=1#state=abc">'), '<a href="/page?[redacted]#[redacted]">');
 });
 
 test('redactHtml sanitizes before truncating so a cut cannot expose a value', () => {

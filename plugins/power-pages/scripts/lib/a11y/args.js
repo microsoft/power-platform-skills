@@ -109,8 +109,11 @@ function parseBaseUrl(raw) {
     // Not echoed: a malformed URL can still contain a password.
     throw new UsageError('--url is not a valid URL');
   }
+  // Only the parsed scheme is echoed, never the raw value: a non-HTTP URL such as
+  // ftp://user:pass@host still carries credentials, and the userinfo check below
+  // hasn't run yet.
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new UsageError(`--url must use http or https: ${raw}`);
+    throw new UsageError(`--url must use http or https (found ${url.protocol})`);
   }
   // --url ends up in the JSON report (baseUrl) and the skill's committed marker, so
   // it must not carry secrets. Credentials in the userinfo part are refused outright

@@ -221,3 +221,31 @@ test('blocks a report that references the session file', () => {
   assert.equal(result.code, 2);
   assert.match(result.stderr, /references the session file/);
 });
+
+test('allows Liquid in the report but blocks real template placeholders', () => {
+  const dir = makeProject();
+  writeReport(dir, '# Accessibility audit: Contoso\n\nChange `<title>{{ page.title }}</title>` in the Layout 1 web template.\n');
+  writeMarker(dir, validMarker());
+  assert.equal(runValidator(dir).code, 0);
+  writeReport(dir, '# Accessibility audit: Contoso\n\n{{One or two sentences on the overall result and the most important issue to fix first.}}\n');
+  const result = runValidator(dir);
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /unreplaced template placeholders/);
+});
+
+test('blocks a reportFile that is a folder instead of approving on the read error', () => {
+  const dir = makeProject();
+  writeReport(dir);
+  writeMarker(dir, validMarker({ reportFile: 'docs/accessibility' }));
+  const result = runValidator(dir);
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /reportFile can't be read \(not a regular file\)/);
+});
+
+test('blocks a marker path that is a folder', () => {
+  const dir = makeProject();
+  fs.mkdirSync(path.join(dir, 'docs', 'accessibility', 'last-audit.json'), { recursive: true });
+  const result = runValidator(dir);
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /can't be read/);
+});

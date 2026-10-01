@@ -743,7 +743,7 @@ New standalone skill (crawls a deployed or local site, audits pages and interact
 | `audit-accessibility:3.sign-in` | gate | pause | 3.3 | Waits while the user signs in through a visible browser window; the session is stored in a private temp folder and removed in Phase 8. | nothing |
 | `audit-accessibility:4.states` | gate | plan | 4.3 | Approves the interaction states (menus, dialogs, tabs, validation) the audit replays. | nothing |
 | `audit-accessibility:4.form-submit` | gate | consent | 4.4 | Asked only when an approved state submits a form — marks only the consented states `"allowFormSubmit": true` and passes `--allow-form-submit`, which can create Dataverse records or send email. | nothing |
-| `audit-accessibility:7.fix-offer` | gate | plan | 7.2 | Approves the source changes proposed for the findings before any file is edited. The report and marker from Phase 6 stay. | nothing |
+| `audit-accessibility:7.fix-offer` | gate | plan | 7.2 | Approves the source changes proposed for the findings before any file is edited. The report and marker from Phase 6 stay. | audit-report-and-marker |
 
 ---
 ### Cross-plugin shared skills — out of catalog scope

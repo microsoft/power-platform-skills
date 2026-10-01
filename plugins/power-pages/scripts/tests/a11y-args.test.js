@@ -86,3 +86,9 @@ test('parseArgs drops the query string and hash from --url', () => {
   const opts = parseArgs(['--url', 'https://contoso.powerappsportals.com/start?code=abc&state=xyz#frag']);
   assert.equal(opts.url.href, 'https://contoso.powerappsportals.com/start');
 });
+
+test('--url errors never echo the raw value, which can carry credentials', () => {
+  for (const raw of ['ftp://user:hunter2@contoso.com/', 'http://user:hunter2@[bad']) {
+    assert.throws(() => parseArgs(['--url', raw]), (err) => !err.message.includes('hunter2'));
+  }
+});

@@ -17,7 +17,10 @@
 //   <script nonce="r4nd0m">                                                      (CSP nonce)
 // So: every `value` attribute and any attribute whose NAME looks like a credential
 // is blanked, and query strings are dropped from URL attributes (the path is kept,
-// because it is useful evidence). Matches both quote styles and a value cut off by
+// because it is useful evidence). Fragments are dropped too, because OAuth implicit
+// and hybrid flows return tokens there ("/callback#access_token=...&id_token=...").
+// A plain in-page anchor ("#main-content", the skip-link target) is kept: it is short,
+// id-shaped, and is the evidence for bypass-block findings. Matches both quote styles and a value cut off by
 // truncation ("...` with no closing quote at end of input).
 //
 // Must stay self-contained (no closures, no requires): ensureHelpers() ships its
@@ -33,7 +36,9 @@ function sanitizeHtml(html) {
       const inner = quoted.slice(1, closed ? -1 : undefined);
       // srcset is a comma-separated list ("a.png?x=1 1x, b.png?x=2 2x"), so stop at
       // whitespace and commas rather than only at the closing quote.
-      const cleaned = inner.replace(/\?[^\s,#]*/g, '?[redacted]');
+      const cleaned = inner
+        .replace(/\?[^\s,#]*/g, '?[redacted]')
+        .replace(/#([^\s,]*)/g, (m, frag) => (/^[A-Za-z][\w:.-]{0,63}$/.test(frag) ? m : '#[redacted]'));
       return `${space}${name}${eq}${q}${cleaned}${q}`;
     }
     return match;

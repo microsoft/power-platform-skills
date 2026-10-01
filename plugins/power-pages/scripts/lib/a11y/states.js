@@ -209,9 +209,11 @@ function isMutatingRequest(method, url, origin) {
 // Aborts state-changing requests (POST/PUT/PATCH/DELETE, including a form POST
 // navigation) until dispose() is called. Records the method and path only — never
 // the query string or body, which can carry tokens or form data. Analytics beacons
-// are blocked too; that is harmless for an audit. Requests from service workers
-// bypass page.route, so the audit context is created with serviceWorkers: 'block'.
-// https://playwright.dev/docs/api/class-page#page-route
+// are blocked too; that is harmless for an audit. The route is registered on the
+// browser context, not the page, so a popup or new tab opened by a state step is
+// guarded too. Requests from service workers bypass routing, so the audit context is
+// created with serviceWorkers: 'block'.
+// https://playwright.dev/docs/api/class-browsercontext#browser-context-route
 async function guardMutations(page, { allowFormSubmit = false, origin = null } = {}) {
   const blocked = { count: 0, requests: [] };
   if (allowFormSubmit) return { blocked, dispose: async () => {} };
@@ -229,10 +231,11 @@ async function guardMutations(page, { allowFormSubmit = false, origin = null } =
     }
     return route.abort('blockedbyclient');
   };
-  await page.route('**/*', handler);
+  const context = page.context();
+  await context.route('**/*', handler);
   return {
     blocked,
-    dispose: async () => { await page.unroute('**/*', handler).catch(() => {}); },
+    dispose: async () => { await context.unroute('**/*', handler).catch(() => {}); },
   };
 }
 

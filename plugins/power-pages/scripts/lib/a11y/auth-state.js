@@ -92,16 +92,44 @@ function summarizeAuthState(state) {
   };
 }
 
+// isManagedAuthStatePath() only reads the path text. If pp-a11y-auth-* were a
+// symlink (or a Windows junction, which lstat also reports as a link), unlinking
+// <dir>/storage-state.json would follow it and delete a file somewhere else. So before
+// deleting, confirm on disk that the folder is a real directory whose real parent is
+// the real temp root. Returns false when the folder is already gone (nothing to do).
+// realpath.native resolves Windows 8.3 short names (C:\Users\JANEDO~1), so both sides
+// compare in the same long form; Windows paths are compared case-insensitively.
+function isRealManagedDir(dir, { lstat = fs.lstatSync, realpath = fs.realpathSync.native, tmpdir = os.tmpdir() } = {}) {
+  let stat;
+  try {
+    stat = lstat(dir);
+  } catch (err) {
+    if (err.code === 'ENOENT') return false;
+    throw err;
+  }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(`Refusing to remove ${dir}: it is a link or not a folder`);
+  }
+  const norm = (p) => (process.platform === 'win32' ? p.toLowerCase() : p);
+  if (norm(path.dirname(realpath(dir))) !== norm(realpath(tmpdir))) {
+    throw new Error(`Refusing to remove ${dir}: it is not inside the system temp folder`);
+  }
+  return true;
+}
+
 // Deletes the session file, then the directory only if it's empty. Never recursive:
 // isManagedAuthStatePath() checks names, not ownership, so a lookalike pp-a11y-auth-*
 // folder could hold unrelated files, and those must survive. Same unlink-then-rmdir
 // pattern as scripts/store-keyvault-secret.js. A missing file or folder counts as
 // removed; a non-empty folder is left in place and reported as keptDir.
-function removeAuthState(file, { unlink = fs.unlinkSync, rmdir = fs.rmdirSync, ...opts } = {}) {
+function removeAuthState(file, {
+  unlink = fs.unlinkSync, rmdir = fs.rmdirSync, lstat = fs.lstatSync, realpath = fs.realpathSync.native, ...opts
+} = {}) {
   if (!isManagedAuthStatePath(file, opts)) {
     throw new Error(`Refusing to remove ${file}: not a storage state created by a11y-capture-auth.js`);
   }
   const resolved = path.resolve(file);
+  if (!isRealManagedDir(path.dirname(resolved), { lstat, realpath, tmpdir: opts.tmpdir })) return { keptDir: false };
   try {
     unlink(resolved);
   } catch (err) {

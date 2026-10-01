@@ -327,9 +327,20 @@ The audit takes roughly 5–15 seconds per page and layout. Keyboard, reflow, 20
 
 Exit 3 takes priority over exit 1, so always check `summary.blocking` in the report too. If `summary.blockedRequests` is above 0, mention in the report that some state interactions were stopped before they could write data, so those states may differ on the live site.
 
+#### Session cleanup
+
+The audit is the last step that uses `AUTH_STATE`. If it's set, delete it as soon as the audit finishes (exit 0, 1, or 3), before you read any results. It holds live session tokens:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/a11y-capture-auth.js" --remove "<AUTH_STATE>"
+```
+
+Record `SESSION_REMOVED=true` when the command succeeds. The session file is gone even if the output includes `keptDir`; that only means its folder held other files and was left in place. Keep the session only while you re-run the audit for exit 2 or 4. Delete it the same way on every other exit path, including when the user cancels a gate or a step fails before this point.
+
 ### Output
 
 - `<RUN_DIR>/audit.json`
+- Session file deleted when one was captured
 
 ---
 
@@ -347,9 +358,9 @@ From `<RUN_DIR>/audit.json`, read `summary`, `violations`, `needsReview`, `pages
 
 Sort findings into these groups:
 
-1. **Must fix**: Blocking findings — `critical` or `serious` WCAG violations that aren't best-practice or heuristic.
+1. **Must fix**: Blocking findings — `critical` or `serious` WCAG violations that aren't best-practice or heuristic. These match `summary.blocking` and the exit code, so never move one to another group. This includes the extended checks `pp-keyboard-trap` (2.1.2) and `pp-reflow-horizontal-scroll` (1.4.10), which are observed failures, not heuristics.
 2. **Should fix**: `moderate` and `minor` WCAG violations.
-3. **Verify**: `heuristic: true` findings from the extended checks (`pp-keyboard-trap`, `pp-focus-not-visible`, `pp-focus-offscreen`, `pp-reflow-horizontal-scroll`, `pp-text-clipped-at-200`, `pp-motion-ignores-reduced-motion`, `pp-autoplay-video-no-controls`) and every `needsReview` item, including a `pp-autoplay-video-no-controls` video that has the autoplay attribute but didn't play during the audit. Check the evidence and the ARIA snapshot. Keep the finding when the evidence holds; otherwise list it as a manual check. A `pp-autoplay-video-no-controls` violation was observed playing without native controls: move it to **Must fix** unless the page shows its own pause or stop button for it, or the video is essential to the content.
+3. **Verify**: findings whose `heuristic` flag is `true` (for example `pp-focus-not-visible`, `pp-focus-offscreen`, `pp-text-clipped-at-200`, `pp-motion-ignores-reduced-motion`, `pp-autoplay-video-no-controls`, and `pp-page-title-duplicate`) and every `needsReview` item, including a `pp-autoplay-video-no-controls` video that has the autoplay attribute but didn't play during the audit. Check the evidence and the ARIA snapshot. Keep the finding when the evidence holds; otherwise list it as a manual check. A `pp-autoplay-video-no-controls` violation was observed playing without native controls: move it to **Must fix** unless the page shows its own pause or stop button for it, or the video is essential to the content.
 4. **Best practice**: `bestPractice: true` findings. Recommended, but not WCAG failures.
 
 Group repeated issues. When the same rule and element appear on many pages (for example, a shared header), report it once as a shared component issue with its page count. A missing page title is a blocking 2.4.2 failure: axe reports it as `document-title` (or `pp-page-title-missing` when `axe` isn't in `--checks`), and it belongs in **Must fix**. `pp-page-title-duplicate` is heuristic, so it goes in **Verify**: confirm the routes really are different pages, then move it to **Should fix**.
@@ -390,7 +401,7 @@ With `PROJECT_ROOT`, write `<PROJECT_ROOT>/docs/accessibility/last-audit.json`:
 - `status`: `Completed` when the audit ran; `Incomplete` when it stopped early.
 - `outcome`: `failed` when `blocking` is greater than 0; `passed-with-warnings` when there are other violations, review items, load gaps, or check errors; otherwise `passed`.
 - `summary`: copy the counts from the audit report's `summary`.
-- `signedIn` and `sessionRemoved`: when a session was captured, write `sessionRemoved: false` now and set it to `true` after [Session cleanup](#session-cleanup).
+- `signedIn` and `sessionRemoved`: when a session was captured, `sessionRemoved` is `SESSION_REMOVED` from [Session cleanup](#session-cleanup). If that cleanup failed, write `false`, run the cleanup again, and then set it to `true`.
 
 #### 6.5 Present the summary
 
@@ -416,13 +427,13 @@ Skip to Phase 8 when there's no `PROJECT_ROOT`, when there are no must-fix or sh
 
 For each mapped finding, propose the smallest change that fixes it by following [`references/fix-patterns.md`](references/fix-patterns.md): the file, the change, and the WCAG criterion it resolves. List shared-component fixes first, because one change fixes every page that uses the component.
 
-<!-- gate: audit-accessibility:7.fix-offer | category=plan | cancel-leaves=nothing -->
+<!-- gate: audit-accessibility:7.fix-offer | category=plan | cancel-leaves=audit-report-and-marker -->
 
 > 🚦 **Gate (plan · audit-accessibility:7.fix-offer):** Approve source changes before any file is edited.
 >
 > **Trigger:** The report is written and at least one finding maps to a source file.
 > **Why we ask:** Fixes change the site's source code, and some changes (color, wording) are design decisions.
-> **Cancel leaves:** nothing — the report stays as written and no source file changes.
+> **Cancel leaves:** the Phase 6 report and result marker, as written. No source file changes.
 
 Show the fix plan, then use `AskUserQuestion`:
 
@@ -436,7 +447,7 @@ Show the fix plan, then use `AskUserQuestion`:
 #### 7.3 Apply and verify
 
 1. Apply the approved changes with minimal edits. Don't reformat unrelated code. For color contrast, prefer existing theme tokens or variables.
-2. If `SITE_URL` is a local dev server, re-run Phase 5 for the affected routes with `--output "<RUN_DIR>/audit-after.json"` and compare. Report which findings were fixed, which remain, and any new ones.
+2. If `SITE_URL` is a local dev server, re-run Phase 5 for the affected routes with `--output "<RUN_DIR>/audit-after.json"` and compare. The session was deleted after the first audit, so run without `--auth-state`; if an affected route needs sign-in, recommend re-running `/audit-accessibility` instead of capturing a new session here. Report which findings were fixed, which remain, and any new ones.
 3. If `SITE_URL` is a deployed site, the fixes aren't live yet. Recommend `/deploy-site`, then re-running `/audit-accessibility`.
 4. Add a "Fixes applied" section to the report listing each change.
 
@@ -452,15 +463,9 @@ Show the fix plan, then use `AskUserQuestion`:
 
 ### Actions
 
-#### Session cleanup
+#### Confirm session cleanup
 
-If `AUTH_STATE` is set, delete it — it holds live session tokens:
-
-```bash
-node "${PLUGIN_ROOT}/scripts/a11y-capture-auth.js" --remove "<AUTH_STATE>"
-```
-
-Then set `sessionRemoved: true` in the result marker. The session file is gone even if the output includes `keptDir`; that only means its folder held other files and was left in place. Do this on every exit path, including when the user cancels a later gate or a step fails.
+If `AUTH_STATE` is set and `SESSION_REMOVED` isn't `true`, the [Session cleanup](#session-cleanup) in Phase 5 didn't run or failed. Run it now, then set `sessionRemoved: true` in the result marker.
 
 #### 8.1 Record skill usage
 

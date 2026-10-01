@@ -143,3 +143,25 @@ test('filterAuthStateForSite keeps only cookies and storage for the audited site
 test('a11y-capture-auth refuses credentials in --url', () => {
   assert.throws(() => parse(['--url', 'https://maker:secret@contoso.powerappsportals.com']), (err) => /user name or password/.test(err.message) && !err.message.includes('secret'));
 });
+
+test('removeAuthState refuses a pp-a11y-auth-* folder that is a link to somewhere else', (t) => {
+  const target = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-a11y-target-'));
+  const victim = path.join(target, FILE_NAME);
+  fs.writeFileSync(victim, 'keep me');
+  const link = path.join(os.tmpdir(), `${DIR_PREFIX}link-${process.pid}-${Date.now()}`);
+  try {
+    try {
+      // A junction needs no admin rights on Windows; lstat reports it as a link too.
+      fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+    } catch (err) {
+      t.skip(`cannot create a directory link here: ${err.code}`);
+      return;
+    }
+    assert.equal(isManagedAuthStatePath(path.join(link, FILE_NAME)), true, 'the path alone looks managed');
+    assert.throws(() => removeAuthState(path.join(link, FILE_NAME)), /link or not a folder/);
+    assert.equal(fs.readFileSync(victim, 'utf8'), 'keep me');
+  } finally {
+    try { fs.unlinkSync(link); } catch { try { fs.rmdirSync(link); } catch { /* not created */ } }
+    fs.rmSync(target, { recursive: true, force: true });
+  }
+});

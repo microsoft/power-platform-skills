@@ -167,16 +167,22 @@ test('isMutatingRequest allows reads and the list-grid data POST', () => {
   assert.equal(isMutatingRequest('POST', 'not a url'), true);
 });
 
-// Fake page.route/unroute that lets a test push requests through the installed handler.
+// Fake page whose context().route/unroute lets a test push requests through the
+// installed handler. page.route throws: the guard must cover the whole context.
 function routingPage() {
   const routes = [];
-  return {
-    routes,
+  const context = {
     async route(pattern, handler) { routes.push({ pattern, handler }); },
     async unroute(pattern, handler) {
       const i = routes.findIndex((r) => r.pattern === pattern && r.handler === handler);
       if (i >= 0) routes.splice(i, 1);
     },
+  };
+  return {
+    routes,
+    context: () => context,
+    async route() { throw new Error('guard must use context().route'); },
+    async unroute() { throw new Error('guard must use context().unroute'); },
     async send(method, url) {
       let outcome = 'unrouted';
       for (const r of routes) {
