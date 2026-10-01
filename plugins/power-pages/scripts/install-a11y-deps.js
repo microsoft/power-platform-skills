@@ -7,9 +7,10 @@
 //
 // Usage: node install-a11y-deps.js [--deps-dir <path>]
 // Prints JSON: { depsDir, installed: true|false, versions: {...} }
-// Exit codes: 0 ok, 1 install failed, 2 usage error.
+// Exit codes: 0 ok, 1 install failed, 2 usage error (including a --deps-dir that is a
+// non-empty directory this script didn't create, which it refuses to overwrite).
 
-const { defaultDepsDir, installDeps } = require('./lib/a11y/deps');
+const { UnmanagedDepsDirError, defaultDepsDir, installDeps } = require('./lib/a11y/deps');
 
 function parse(argv) {
   const opts = { depsDir: null };
@@ -34,6 +35,10 @@ function main(argv = process.argv.slice(2), { install = installDeps, stdout = pr
     stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return 0;
   } catch (err) {
+    if (err instanceof UnmanagedDepsDirError) {
+      stderr.write(`${err.message}\n`);
+      return 2;
+    }
     stderr.write(`Failed to install accessibility audit dependencies: ${err.message}\n`);
     return 1;
   }

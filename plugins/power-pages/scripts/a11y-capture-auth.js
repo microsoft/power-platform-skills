@@ -23,7 +23,7 @@
 const fs = require('node:fs');
 const { EXIT } = require('./lib/a11y/args');
 const { candidateRoots, launchBrowser, loadPlaywright, MissingDependencyError } = require('./lib/a11y/deps');
-const { createAuthStatePath, removeAuthState, summarizeAuthState, writeAuthState } = require('./lib/a11y/auth-state');
+const { openAuthStateFile, removeAuthState, summarizeAuthState, writeAuthState } = require('./lib/a11y/auth-state');
 
 const USAGE = 'Usage: node a11y-capture-auth.js --url <site-url> [--timeout-sec 600] [--done-file <path>] [--deps-dir <p>]\n'
   + '       node a11y-capture-auth.js --remove <storage-state-path>';
@@ -56,7 +56,7 @@ function parse(argv) {
 async function capture(opts, { stderr = process.stderr } = {}) {
   const { chromium } = loadPlaywright(candidateRoots(opts));
   const browser = await launchBrowser(chromium, { headless: false });
-  const file = createAuthStatePath();
+  const { file, fd } = openAuthStateFile();
   let saved = null;
   let closed = false;
   try {
@@ -71,7 +71,7 @@ async function capture(opts, { stderr = process.stderr } = {}) {
     while (!closed && Date.now() < deadline) {
       try {
         saved = await context.storageState();
-        writeAuthState(file, saved);
+        writeAuthState(fd, saved);
       } catch {
         // Context closed between the check and the call — the last save stands.
         break;
@@ -80,6 +80,7 @@ async function capture(opts, { stderr = process.stderr } = {}) {
       await new Promise((r) => setTimeout(r, 2000));
     }
   } finally {
+    fs.closeSync(fd);
     await browser.close().catch(() => {});
   }
   return { file, saved };

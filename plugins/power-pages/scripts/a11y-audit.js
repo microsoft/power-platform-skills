@@ -15,7 +15,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { EXIT, USAGE, UsageError, VIEWPORTS, parseArgs } = require('./lib/a11y/args');
-const { CrawlQueue, routeOf } = require('./lib/a11y/crawl');
+const { CrawlQueue, normalizeUrl, routeOf } = require('./lib/a11y/crawl');
 const { MissingDependencyError, candidateRoots, launchBrowser, loadAxeSource, loadPlaywright } = require('./lib/a11y/deps');
 const { ensureHelpers } = require('./lib/a11y/page-helpers');
 const { runAxe } = require('./lib/a11y/axe-runner');
@@ -75,6 +75,18 @@ function slugForRoute(route, index) {
   return `${String(index + 1).padStart(2, '0')}-${slug.slice(0, 60)}`;
 }
 
+// Named routes skip --exclude and the page cap, but never the built-in safety
+// exclusions (sign-out, platform endpoints, files). Say so on stderr; the refused
+// route is also listed in crawl.excluded.
+function queueRoutes(queue, opts, log) {
+  for (const r of opts.routes) {
+    const url = new URL(r, opts.url).toString();
+    if (!queue.addExplicit(url) && queue.excluded.has(normalizeUrl(url))) {
+      log(`skipping ${r}: ${queue.excluded.get(normalizeUrl(url))} URLs are never audited`);
+    }
+  }
+}
+
 async function newContext(browser, viewportName, opts) {
   const v = VIEWPORTS[viewportName];
   const context = await browser.newContext({
@@ -106,48 +118,58 @@ async function runCheck(name, fn, checkErrors) {
   }
 }
 
+// Discovery visits every selected viewport because the inventory keeps only rendered
+// controls: a mobile-only navigation toggle or dialog trigger never appears in the
+// desktop pass, so a desktop-only discovery could never propose the mobile states.
+// The first viewport crawls; later viewports inventory exactly that route list.
 async function runDiscover(browser, opts, log) {
   const origin = opts.url.origin;
   const queue = new CrawlQueue({ origin, maxPages: opts.maxPages, exclude: opts.exclude });
-  for (const r of opts.routes) queue.addExplicit(new URL(r, opts.url).toString());
+  queueRoutes(queue, opts, log);
   if (opts.snapshotDir) fs.mkdirSync(opts.snapshotDir, { recursive: true });
 
-  const viewport = opts.viewports[0];
-  const { context, page } = await newContext(browser, viewport, opts);
+  const urls = [];
   const pages = [];
-  try {
-    let url;
-    while ((url = queue.next())) {
-      const route = routeOf(url);
-      log(`(${pages.length + 1}) discover ${viewport} ${route}`);
-      const nav = await visit(page, url, { origin, timeoutMs: opts.timeoutMs });
-      const entry = { url, route, title: nav.title || null, status: nav.status || null, error: nav.error || null };
-      if (!nav.error) {
-        if (opts.crawl) for (const href of await extractLinks(page)) queue.add(href, page.url());
-        Object.assign(entry, await collectInventory(page));
-        if (opts.snapshotDir) {
-          const snap = await ariaSnapshot(page);
-          if (snap) {
-            const file = path.join(opts.snapshotDir, `${slugForRoute(route, pages.length)}.aria.yml`);
-            fs.writeFileSync(file, snap);
-            entry.snapshotFile = file;
+  for (const [vi, viewport] of opts.viewports.entries()) {
+    const { context, page } = await newContext(browser, viewport, opts);
+    try {
+      for (let i = 0; ; i++) {
+        const url = vi === 0 ? queue.next() : urls[i];
+        if (!url) break;
+        if (vi === 0) urls.push(url);
+        const route = routeOf(url);
+        log(`(${i + 1}) discover ${viewport} ${route}`);
+        const nav = await visit(page, url, { origin, timeoutMs: opts.timeoutMs });
+        const entry = { url, route, viewport, title: nav.title || null, status: nav.status || null, error: nav.error || null };
+        if (!nav.error) {
+          if (vi === 0 && opts.crawl) for (const href of await extractLinks(page)) queue.add(href, page.url());
+          const inventory = await collectInventory(page);
+          entry.controls = inventory.controls;
+          entry.stateCandidates = inventory.stateCandidates.map((c) => ({ ...c, viewport }));
+          if (opts.snapshotDir) {
+            const snap = await ariaSnapshot(page);
+            if (snap) {
+              const file = path.join(opts.snapshotDir, `${slugForRoute(route, i)}.${viewport}.aria.yml`);
+              fs.writeFileSync(file, snap);
+              entry.snapshotFile = file;
+            }
           }
         }
+        pages.push(entry);
       }
-      pages.push(entry);
+    } finally {
+      await context.close();
     }
-  } finally {
-    await context.close();
   }
-  const report = { mode: 'discover', baseUrl: opts.url.toString(), viewport, pages, crawl: queue.summary() };
+  const report = { mode: 'discover', baseUrl: opts.url.toString(), viewports: opts.viewports, pages, crawl: queue.summary() };
   return { report, code: pages.some((p) => p.error) ? EXIT.LOAD_FAILURE : EXIT.PASS };
 }
 
 async function runAudit(browser, opts, { axeSource, states }, log) {
   const origin = opts.url.origin;
   const checks = new Set(opts.checks);
-  // Layout-dependent checks that would only repeat themselves per viewport run once,
-  // on desktop when it is selected (reflow already simulates the narrowest layout).
+  // Title analysis compares titles across routes, so it runs once (titles do not
+  // change with the layout). States without a viewport also replay here.
   const primary = opts.viewports.includes('desktop') ? 'desktop' : opts.viewports[0];
   const builder = new ReportBuilder({
     baseUrl: opts.url.toString(),
@@ -157,7 +179,7 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
     tool: { name: 'power-pages a11y-audit', axeVersion: null },
   });
   const queue = new CrawlQueue({ origin, maxPages: opts.maxPages, exclude: opts.exclude });
-  for (const r of opts.routes) queue.addExplicit(new URL(r, opts.url).toString());
+  queueRoutes(queue, opts, log);
 
   // The first viewport drives discovery; later viewports audit exactly that list so
   // results are comparable across viewports.
@@ -196,26 +218,29 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
             pageError = `axe failed: ${err.message.split('\n')[0]}`;
           }
         }
-        if (viewport === primary) {
-          if (checks.has('titles')) titles.push({ route, title: nav.title });
-          // Order matters: each check restores what it changes, and the keyboard walk
-          // runs last because moving focus can open menus that would skew the others.
-          if (checks.has('motion')) {
-            const r = await runCheck('motion', () => runMotionCheck(page), checkErrors);
-            if (r) builder.addFindings(r.findings, ctx);
-          }
-          if (checks.has('zoom')) {
-            const r = await runCheck('zoom', () => runZoomCheck(page), checkErrors);
-            if (r) builder.addFindings(r.findings, ctx);
-          }
-          if (checks.has('reflow')) {
-            const r = await runCheck('reflow', () => runReflowCheck(page), checkErrors);
-            if (r) builder.addFindings(r.findings, ctx);
-          }
-          if (checks.has('keyboard')) {
-            const r = await runCheck('keyboard', () => runKeyboardCheck(page), checkErrors);
-            if (r) builder.addFindings(r.findings, ctx);
-          }
+        if (viewport === primary && checks.has('titles')) titles.push({ route, title: nav.title });
+        // The remaining checks are layout-dependent — mobile navigation has its own
+        // focus order and traps, and text can clip or animate differently at a narrow
+        // width — so they run on every selected viewport. Nodes are grouped per
+        // element, so a barrier shared by both layouts is still reported once with an
+        // occurrence per viewport.
+        // Order matters: each check restores what it changes, and the keyboard walk
+        // runs last because moving focus can open menus that would skew the others.
+        if (checks.has('motion')) {
+          const r = await runCheck('motion', () => runMotionCheck(page), checkErrors);
+          if (r) builder.addFindings(r.findings, ctx);
+        }
+        if (checks.has('zoom')) {
+          const r = await runCheck('zoom', () => runZoomCheck(page), checkErrors);
+          if (r) builder.addFindings(r.findings, ctx);
+        }
+        if (checks.has('reflow')) {
+          const r = await runCheck('reflow', () => runReflowCheck(page), checkErrors);
+          if (r) builder.addFindings(r.findings, ctx);
+        }
+        if (checks.has('keyboard')) {
+          const r = await runCheck('keyboard', () => runKeyboardCheck(page), checkErrors);
+          if (r) builder.addFindings(r.findings, ctx);
         }
         builder.addPage({ route, viewport, url, title: nav.title || null, status: nav.status || null, error: pageError, checkErrors });
       }

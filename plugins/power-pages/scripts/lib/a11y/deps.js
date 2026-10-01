@@ -40,8 +40,7 @@ class MissingDependencyError extends Error {}
 
 // A per-user cache keyed by the pinned versions, so bumping a pin installs side by
 // side instead of mutating a directory another session may be using.
-function defaultDepsDir({ env = process.env, platform = process.platform, homedir = os.homedir() } = {}) {
-  if (env[DEPS_DIR_ENV]) return path.resolve(env[DEPS_DIR_ENV]);
+function cacheDepsDir({ env = process.env, platform = process.platform, homedir = os.homedir() } = {}) {
   let base;
   if (platform === 'win32') {
     base = env.LOCALAPPDATA || path.join(homedir, 'AppData', 'Local');
@@ -52,6 +51,11 @@ function defaultDepsDir({ env = process.env, platform = process.platform, homedi
   }
   const key = `a11y-pw${PINNED['playwright-core']}-axe${PINNED['axe-core']}`;
   return path.join(base, 'power-platform-skills', 'power-pages', key);
+}
+
+function defaultDepsDir({ env = process.env, platform = process.platform, homedir = os.homedir() } = {}) {
+  if (env[DEPS_DIR_ENV]) return path.resolve(env[DEPS_DIR_ENV]);
+  return cacheDepsDir({ env, platform, homedir });
 }
 
 // Resolution order: explicit --deps-dir, then the locked default cache. The user's
@@ -119,17 +123,47 @@ function resolveNpmCli(resolveNpxCliFn) {
   return path.join(path.dirname(resolveNpx()), 'npm-cli.js');
 }
 
+// Written into every directory installDeps prepares. installDeps overwrites
+// package.json and package-lock.json and `npm ci` deletes node_modules, so a
+// --deps-dir (or POWER_PAGES_A11Y_DEPS_DIR) that points at an existing project would
+// lose its package setup. Only directories that are new, empty, the built-in cache,
+// or carry this marker are ever written to.
+const MANAGED_MARKER = '.power-pages-a11y-deps';
+
+class UnmanagedDepsDirError extends Error {}
+
+function assertManagedDepsDir(depsDir, { env = process.env, readdir = fs.readdirSync } = {}) {
+  if (path.resolve(depsDir) === cacheDepsDir({ env })) return;
+  let entries;
+  try {
+    entries = readdir(depsDir);
+  } catch (err) {
+    if (err.code === 'ENOENT') return;
+    throw err;
+  }
+  if (entries.length === 0 || entries.includes(MANAGED_MARKER)) return;
+  throw new UnmanagedDepsDirError(
+    `Refusing to install into ${depsDir}: it isn't empty and wasn't created by install-a11y-deps.js. `
+    + 'Choose a new or empty directory, or omit --deps-dir to use the default cache.',
+  );
+}
+
 function installDeps({
   depsDir = defaultDepsDir(),
   npmCliPath,
+  env = process.env,
   spawnSyncFn = spawnSync,
   mkdir = fs.mkdirSync,
   copyFile = fs.copyFileSync,
   readFile = fs.readFileSync,
+  readdir = fs.readdirSync,
+  writeFile = fs.writeFileSync,
 } = {}) {
   if (isInstalled(depsDir, { readFile })) return { depsDir, installed: false, versions: { ...PINNED } };
 
+  assertManagedDepsDir(depsDir, { env, readdir });
   mkdir(depsDir, { recursive: true });
+  writeFile(path.join(depsDir, MANAGED_MARKER), 'Created by power-pages install-a11y-deps.js. Safe to delete with this folder.\n');
   // Always overwrite with the committed manifest + lock: `npm ci` installs exactly
   // what the lock says (verifying each sha512) and fails if the two disagree. The
   // private package.json also stops npm walking up into an ancestor project.
@@ -175,9 +209,13 @@ async function launchBrowser(chromium, { headless = true, detect } = {}) {
 
 module.exports = {
   DEPS_DIR_ENV,
+  MANAGED_MARKER,
   MissingDependencyError,
   PINNED,
   RUNTIME_DIR,
+  UnmanagedDepsDirError,
+  assertManagedDepsDir,
+  cacheDepsDir,
   candidateRoots,
   defaultDepsDir,
   installDeps,

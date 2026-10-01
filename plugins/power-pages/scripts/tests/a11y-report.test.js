@@ -45,11 +45,25 @@ test('ReportBuilder groups by rule then node and records every occurrence', () =
   assert.equal(t.nodes[0].target, '(page)', 'nodeless findings get a page placeholder');
   assert.equal(report.needsReview[0].nodes[0].occurrences[0].state, 'Menu open');
   assert.deepEqual(report.summary, {
-    pagesAudited: 1, pageErrors: 0, statesAudited: 0, stateErrors: 0, checkErrors: 0, blockedRequests: 0,
+    pagesAudited: 1, pageLayoutsAudited: 1, pageErrors: 0, statesAudited: 0, stateErrors: 0, checkErrors: 0, blockedRequests: 0,
     violations: 2, blocking: 2, needsReview: 1,
     byImpact: { critical: 0, serious: 2, moderate: 0, minor: 0 },
   });
   assert.deepEqual(report.crawl, { queued: 1 });
+});
+
+test('ReportBuilder counts pages by route, not by route and layout', () => {
+  const b = builder();
+  for (const route of ['/', '/about']) {
+    for (const viewport of ['desktop', 'mobile']) b.addPage({ route, viewport, url: 'u' });
+  }
+  b.addPage({ route: '/contact', viewport: 'desktop', url: 'u' });
+  b.addPage({ route: '/contact', viewport: 'mobile', url: 'u', error: 'HTTP 500' });
+  b.addPage({ route: '/broken', viewport: 'desktop', url: 'u', error: 'HTTP 500' });
+  const { summary } = b.build();
+  assert.equal(summary.pagesAudited, 3, '/, /about, and /contact loaded on at least one layout');
+  assert.equal(summary.pageLayoutsAudited, 5);
+  assert.equal(summary.pageErrors, 2);
 });
 
 test('ReportBuilder keeps different elements that share a positional selector apart', () => {

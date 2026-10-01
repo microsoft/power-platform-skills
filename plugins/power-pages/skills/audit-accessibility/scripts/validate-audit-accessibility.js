@@ -63,6 +63,10 @@ runValidation((cwd) => {
     if (!marker.finishedAt) errors.push('Completed audit is missing finishedAt');
     if (!marker.summary || typeof marker.summary !== 'object') {
       errors.push('Completed audit is missing summary');
+    } else if (!Number.isInteger(marker.summary.blocking) || marker.summary.blocking < 0) {
+      // Without a real count the outcome rule below cannot run, so `summary: {}` with
+      // outcome "passed" would slip through.
+      errors.push(`summary.blocking must be a non-negative integer (found ${JSON.stringify(marker.summary.blocking)})`);
     }
     if (!OUTCOMES.has(marker.outcome)) {
       errors.push(`outcome must be "passed", "passed-with-warnings", or "failed" (found ${JSON.stringify(marker.outcome)})`);

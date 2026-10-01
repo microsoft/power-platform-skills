@@ -79,11 +79,19 @@ class CrawlQueue {
     return true;
   }
 
-  // Routes the user asked for by name skip the exclusion rules and the crawl cap:
-  // naming a route is an explicit request to audit it. Cross-origin is still refused.
+  // Routes the user asked for by name skip --exclude and the crawl cap: naming a route
+  // is an explicit request to audit it. The built-in safety exclusions still apply —
+  // visiting a sign-out URL would end a captured session for every later page, and
+  // platform endpoints and files are not pages — and cross-origin is still refused.
+  // A refused route is recorded in summary().excluded so the report shows it.
   addExplicit(href) {
     const normalized = normalizeUrl(href, this.origin);
-    if (!normalized || new URL(normalized).origin !== this.origin || this.seen.has(normalized)) return false;
+    if (!normalized || this.seen.has(normalized)) return false;
+    const reason = exclusionReason(normalized, this.origin);
+    if (reason) {
+      if (reason !== 'external') this.excluded.set(normalized, reason);
+      return false;
+    }
     this.seen.add(normalized);
     this.pending.push(normalized);
     return true;

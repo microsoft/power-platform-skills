@@ -153,10 +153,19 @@ test('live: discover proposes states and a states file audits hidden content', {
     const base = `http://127.0.0.1:${server.address().port}`;
     const disc = await runAsync(['--url', base, '--mode', 'discover', '--snapshot-dir', dir]);
     assert.equal(disc.status, 0, disc.stderr);
-    const page = JSON.parse(disc.stdout).pages[0];
+    const discovered = JSON.parse(disc.stdout);
+    assert.deepEqual(discovered.viewports, ['desktop', 'mobile']);
+    const page = discovered.pages[0];
+    assert.equal(page.viewport, 'desktop');
     const candidate = page.stateCandidates.find((c) => c.label === 'disclosure: Menu');
     assert.ok(candidate);
+    assert.equal(candidate.viewport, 'desktop');
     assert.ok(fs.existsSync(page.snapshotFile));
+    assert.match(path.basename(page.snapshotFile), /\.desktop\.aria\.yml$/);
+    const mobile = discovered.pages.find((p) => p.route === page.route && p.viewport === 'mobile');
+    assert.ok(mobile, 'every viewport is explored, so mobile-only controls can be proposed');
+    assert.ok(mobile.stateCandidates.every((c) => c.viewport === 'mobile'));
+    assert.notEqual(mobile.snapshotFile, page.snapshotFile);
 
     const statesFile = path.join(dir, 'states.json');
     fs.writeFileSync(statesFile, JSON.stringify({ states: [{ route: '/', label: 'Menu open', steps: candidate.steps }] }));

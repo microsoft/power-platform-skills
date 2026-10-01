@@ -4,7 +4,8 @@ const path = require('node:path');
 const test = require('node:test');
 
 const {
-  DEPS_DIR_ENV, MissingDependencyError, PINNED, RUNTIME_DIR, candidateRoots, defaultDepsDir, installDeps, launchBrowser, loadAxeSource, loadPlaywright, resolveNpmCli,
+  DEPS_DIR_ENV, MANAGED_MARKER, MissingDependencyError, PINNED, RUNTIME_DIR, UnmanagedDepsDirError, assertManagedDepsDir, cacheDepsDir,
+  candidateRoots, defaultDepsDir, installDeps, launchBrowser, loadAxeSource, loadPlaywright, resolveNpmCli,
 } = require('../lib/a11y/deps');
 const { main: installMain } = require('../install-a11y-deps');
 
@@ -92,11 +93,14 @@ test('installDeps is a no-op when the pinned versions are present', () => {
 test('installDeps copies the committed lock and runs npm ci through node with scripts disabled', () => {
   let installedNow = false;
   const copies = [];
+  const writes = [];
   let call;
   const result = installDeps({
     depsDir: '/deps',
     npmCliPath: '/node/npm-cli.js',
     mkdir: () => {},
+    readdir: () => [],
+    writeFile: (p) => writes.push(p),
     copyFile: (from, to) => copies.push([from, to]),
     readFile: (p) => {
       if (!installedNow) throw new Error('ENOENT');
@@ -105,6 +109,7 @@ test('installDeps copies the committed lock and runs npm ci through node with sc
     spawnSyncFn: (exe, args, opts) => { call = { exe, args, opts }; installedNow = true; return { status: 0 }; },
   });
   assert.equal(result.installed, true);
+  assert.deepEqual(writes, [path.join('/deps', MANAGED_MARKER)], 'marks the directory as managed before writing into it');
   assert.deepEqual(copies, [
     [path.join(RUNTIME_DIR, 'package.json'), path.join('/deps', 'package.json')],
     [path.join(RUNTIME_DIR, 'package-lock.json'), path.join('/deps', 'package-lock.json')],
@@ -118,10 +123,33 @@ test('installDeps copies the committed lock and runs npm ci through node with sc
 
 test('installDeps surfaces npm failures', () => {
   assert.throws(() => installDeps({
-    depsDir: '/deps', npmCliPath: 'npm-cli.js', mkdir: () => {}, copyFile: () => {},
+    depsDir: '/deps', npmCliPath: 'npm-cli.js', mkdir: () => {}, copyFile: () => {}, readdir: () => [], writeFile: () => {},
     readFile: () => { throw new Error('ENOENT'); },
     spawnSyncFn: () => ({ status: 1, stderr: 'line1\nEINTEGRITY sha512 mismatch' }),
   }), /npm ci failed \(exit 1\): line1\nEINTEGRITY sha512 mismatch/);
+});
+
+test('installDeps refuses a non-empty directory it did not create', () => {
+  const touched = [];
+  const record = (name) => (...args) => { touched.push([name, ...args]); };
+  assert.throws(() => installDeps({
+    depsDir: '/my-project', env: {}, npmCliPath: 'npm-cli.js',
+    readFile: () => { throw new Error('ENOENT'); },
+    readdir: () => ['package.json', 'package-lock.json', 'node_modules', 'src'],
+    mkdir: record('mkdir'), writeFile: record('writeFile'), copyFile: record('copyFile'), spawnSyncFn: record('spawn'),
+  }), (e) => e instanceof UnmanagedDepsDirError && /Refusing to install into/.test(e.message));
+  assert.deepEqual(touched, [], 'nothing is written, copied, or run');
+});
+
+test('assertManagedDepsDir accepts new, empty, marked, and built-in cache directories', () => {
+  const enoent = () => { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; };
+  assert.doesNotThrow(() => assertManagedDepsDir('/new', { env: {}, readdir: enoent }));
+  assert.doesNotThrow(() => assertManagedDepsDir('/empty', { env: {}, readdir: () => [] }));
+  assert.doesNotThrow(() => assertManagedDepsDir('/prev', { env: {}, readdir: () => [MANAGED_MARKER, 'node_modules'] }));
+  const env = { LOCALAPPDATA: path.resolve('/cache-root'), XDG_CACHE_HOME: path.resolve('/cache-root') };
+  assert.doesNotThrow(() => assertManagedDepsDir(cacheDepsDir({ env }), { env, readdir: () => ['node_modules'] }),
+    'installs from before the marker existed keep working');
+  assert.throws(() => assertManagedDepsDir('/proj', { env: {}, readdir: () => ['package.json'] }), UnmanagedDepsDirError);
 });
 
 test('resolveNpmCli derives npm-cli.js beside npx-cli.js', () => {
@@ -149,4 +177,6 @@ test('install-a11y-deps main prints JSON and maps failures', () => {
   assert.equal(installMain(['--bogus'], io), 2);
   assert.equal(installMain([], { ...io, install: () => { throw new Error('offline'); } }), 1);
   assert.match(err.join(''), /offline/);
+  assert.equal(installMain(['--deps-dir', 'proj'], { ...io, install: () => { throw new UnmanagedDepsDirError('Refusing to install into proj'); } }), 2);
+  assert.match(err.join(''), /Refusing to install into proj/);
 });

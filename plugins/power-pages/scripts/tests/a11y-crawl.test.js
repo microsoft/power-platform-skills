@@ -47,11 +47,24 @@ test('CrawlQueue dedupes, records exclusions and enforces the page cap', () => {
   });
 });
 
-test('CrawlQueue.addExplicit bypasses exclusions and the cap but not cross-origin', () => {
+test('CrawlQueue.addExplicit bypasses --exclude and the cap but not cross-origin', () => {
   const q = new CrawlQueue({ origin: ORIGIN, maxPages: 1, exclude: ['/private'] });
   assert.equal(q.addExplicit(`${ORIGIN}/`), true);
   assert.equal(q.addExplicit(`${ORIGIN}/private`), true);
   assert.equal(q.addExplicit('https://example.com/'), false);
   assert.equal(q.addExplicit(`${ORIGIN}/`), false);
   assert.equal(q.summary().queued, 2);
+});
+
+test('CrawlQueue.addExplicit keeps the built-in safety exclusions', () => {
+  const q = new CrawlQueue({ origin: ORIGIN, maxPages: 25 });
+  assert.equal(q.addExplicit(`${ORIGIN}/Account/Login/LogOff`), false);
+  assert.equal(q.addExplicit(`${ORIGIN}/_api/contacts`), false);
+  assert.equal(q.addExplicit(`${ORIGIN}/files/guide.pdf`), false);
+  assert.equal(q.next(), null, 'nothing was queued');
+  assert.deepEqual(q.summary().excluded, [
+    { route: '/Account/Login/LogOff', reason: 'sign-out' },
+    { route: '/_api/contacts', reason: 'platform-endpoint' },
+    { route: '/files/guide.pdf', reason: 'file' },
+  ]);
 });

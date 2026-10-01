@@ -29,7 +29,7 @@ Hidden UI — menus, dialogs, tabs, accordions, and validation messages — isn'
 |-------|----------|-------|
 | `route` | Yes | Path that starts with `/`. |
 | `label` | Yes | Short, human-readable name shown in the report. |
-| `viewport` | No | `desktop` or `mobile`. Defaults to the first audit viewport. |
+| `viewport` | No | `desktop` or `mobile`. Use the candidate's `viewport` from discovery. Defaults to `desktop` when it's in the audit, otherwise the first audit viewport. |
 | `steps` | Yes | 1–20 steps, run in order. |
 
 Step actions:
@@ -48,10 +48,10 @@ Limits: 100 states per file, 20 steps per state, 200 characters per text field.
 
 ## Choosing states from discovery
 
-Discovery returns `stateCandidates` per page. Each one is a click step for a control that reveals content (`popup`, `disclosure`, or `tab`). Choose from them like this:
+Discovery returns `stateCandidates` for each page and layout. Each one is a click step for a control that reveals content (`popup`, `disclosure`, or `tab`), plus the `viewport` it was found on. Choose from them like this:
 
 - **Include each control once.** A header menu found on every page is audited once, on the first route where it appears.
-- **Add the mobile navigation.** Collapsed navigation usually exists only at the mobile width, so add a `"viewport": "mobile"` state for its toggle button.
+- **Add the mobile navigation.** Collapsed navigation usually exists only at the mobile width. Pick its toggle button from the `mobile` candidates and keep `"viewport": "mobile"` on the state.
 - **Open dialogs.** Include buttons whose `aria-haspopup` is `dialog`, or whose name suggests a dialog ("Sign up", "Filter", "Share").
 - **Include each tab set.** One state per tab panel is enough when the panels share a template; otherwise include each panel.
 - **Add form validation only with focus and Tab.** Focus a required field, press `Tab`, and audit the message. Never click a submit button.

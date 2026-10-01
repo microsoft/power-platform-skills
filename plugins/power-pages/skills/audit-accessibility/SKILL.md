@@ -238,13 +238,15 @@ Build the shared flags once and reuse them in Phase 5 so both phases cover the s
 node "${PLUGIN_ROOT}/scripts/a11y-audit.js" <shared flags> --mode discover --snapshot-dir "<RUN_DIR>/snapshots" --output "<RUN_DIR>/discover.json"
 ```
 
-- **Exit 0**: All pages loaded.
-- **Exit 3**: Some pages failed. Read `pages[].error`. A redirect to sign-in means the page needs a signed-in session; note it as a coverage gap.
+- **Exit 0**: All pages loaded on every layout.
+- **Exit 3**: First check that `<RUN_DIR>/discover.json` exists and parses as JSON. If it doesn't, the script stopped on an unexpected error before writing results: show its stderr, and offer to re-run discovery or continue with a quick audit (skip to Phase 5 with `AUDIT_STATES=false`). If it does, some pages failed: read `pages[].error`. A redirect to sign-in means the page needs a signed-in session; note it as a coverage gap.
 - **Exit 2 or 4**: Fix the arguments or tools, as in Phase 2.
+
+Discovery explores every layout in scope, so `pages[]` has one entry per page and layout (`viewport`). Pages listed with `--routes` skip the crawl filters and page limit, but sign-out links, platform endpoints such as `/_api/`, and file downloads are never visited; they're listed in `crawl.excluded`.
 
 #### 4.2 Review the inventory and propose states
 
-Read `<RUN_DIR>/discover.json`. Each page has `controls` (role, accessible name, kind) and `stateCandidates` (proposed click steps for popups, disclosures, and tabs). Read the ARIA snapshots in `<RUN_DIR>/snapshots/` when a candidate's purpose isn't clear.
+Read `<RUN_DIR>/discover.json`. Each page entry has `viewport`, `controls` (role, accessible name, kind), and `stateCandidates` (proposed click steps for popups, disclosures, and tabs). Each candidate also has a `viewport`: use it as the state's `viewport`, because controls such as a mobile menu button exist only on that layout. Read the ARIA snapshots in `<RUN_DIR>/snapshots/` (named `<page>.<viewport>.aria.yml`) when a candidate's purpose isn't clear.
 
 Choose the states worth auditing by following [`references/states-guide.md`](references/states-guide.md). Start from the saved `a11y-states.json` when the user chose to reuse it. Write the proposed states to `<RUN_DIR>/states.json`.
 
@@ -311,7 +313,7 @@ Add these flags when they apply:
 - `--allow-form-submit` only when `ALLOW_FORM_SUBMIT=true`. It turns off both the submit-step guard and the request blocking.
 - `--viewports`, `--checks`, or `--no-best-practice` when the user changed them in Phase 3
 
-The audit takes roughly 5–15 seconds per page. Tell the user it's running and how many pages are in scope.
+The audit takes roughly 5–15 seconds per page and layout. Keyboard, reflow, 200% text, and motion checks run on every layout, so a mobile-only problem is caught; page titles are checked once per page. Tell the user it's running and how many pages are in scope.
 
 #### 5.2 Interpret the exit code
 
@@ -320,7 +322,7 @@ The audit takes roughly 5–15 seconds per page. Tell the user it's running and 
 | 0 | No blocking violations | Continue to Phase 6 |
 | 1 | Blocking violations found (critical or serious WCAG issues) | Continue to Phase 6 |
 | 2 | Usage error (bad flag or states file) | Fix the input and re-run |
-| 3 | Audit incomplete: a page or state failed to load, or a check errored | Continue to Phase 6 and report the gaps from `pages[].error`, `states[].error`, and `checkErrors`; the rest of the report is valid |
+| 3 | Audit incomplete: a page or state failed to load, a check errored, or the script stopped on an unexpected error | Check that `<RUN_DIR>/audit.json` exists and parses as JSON. If it doesn't, no results were written: show the script's stderr and offer to re-run; don't write a report or a `Completed` marker. If it does, continue to Phase 6 and report the gaps from `pages[].error`, `states[].error`, and `checkErrors`; the rest of the report is valid |
 | 4 | Tools or browser missing | Return to Phase 2 |
 
 Exit 3 takes priority over exit 1, so always check `summary.blocking` in the report too. If `summary.blockedRequests` is above 0, mention in the report that some state interactions were stopped before they could write data, so those states may differ on the live site.
@@ -381,7 +383,7 @@ With `PROJECT_ROOT`, write `<PROJECT_ROOT>/docs/accessibility/last-audit.json`:
   "signedIn": false,
   "sessionRemoved": true,
   "reportFile": "docs/accessibility/accessibility-audit.md",
-  "summary": { "pagesAudited": 12, "pageErrors": 0, "statesAudited": 6, "stateErrors": 0, "checkErrors": 0, "blockedRequests": 0, "violations": 9, "blocking": 3, "needsReview": 4 }
+  "summary": { "pagesAudited": 12, "pageLayoutsAudited": 24, "pageErrors": 0, "statesAudited": 6, "stateErrors": 0, "checkErrors": 0, "blockedRequests": 0, "violations": 9, "blocking": 3, "needsReview": 4 }
 }
 ```
 

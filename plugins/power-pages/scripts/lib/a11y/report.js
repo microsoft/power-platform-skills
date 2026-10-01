@@ -97,7 +97,12 @@ class ReportBuilder {
     const needsReview = findings.filter((f) => f.kind === 'needsReview');
     const byImpact = Object.fromEntries(IMPACT_ORDER.map((i) => [i, violations.filter((f) => f.impact === i).length]));
     const blocking = violations.filter(isBlocking).length;
-    const pageErrors = this.pages.filter((p) => p.error).length;
+    // `pages` has one entry per route and layout, so 12 routes on desktop + mobile is
+    // 24 entries. pagesAudited counts routes that loaded on at least one layout, which
+    // is what "N pages" means to a reader; pageLayoutsAudited keeps the per-layout
+    // count, and pageErrors counts failed loads (one per route and layout).
+    const okPages = this.pages.filter((p) => !p.error);
+    const pageErrors = this.pages.length - okPages.length;
     const states = this.states;
     const stateErrors = states.filter((s) => s.error).length;
     const checkErrors = [...this.pages, ...states].reduce((n, p) => n + (p.checkErrors || []).length, 0);
@@ -108,7 +113,8 @@ class ReportBuilder {
       ...extra,
       finishedAt: new Date().toISOString(),
       summary: {
-        pagesAudited: this.pages.filter((p) => !p.error).length,
+        pagesAudited: new Set(okPages.map((p) => p.route)).size,
+        pageLayoutsAudited: okPages.length,
         pageErrors,
         statesAudited: states.length - stateErrors,
         stateErrors,

@@ -9,7 +9,7 @@ Copy this template into `docs/accessibility/accessibility-audit.md` and replace 
 
 **Site:** {{base URL}}
 **Audited:** {{finished date and time, UTC}}
-**Scope:** {{pages audited}} pages and {{states audited}} interaction states on {{viewports}} layouts{{", signed in" when a session was used}}
+**Scope:** {{pages audited (summary.pagesAudited: unique pages, not page × layout)}} pages and {{states audited}} interaction states on {{viewports}} layouts{{", signed in" when a session was used}}
 **Standard:** WCAG 2.2 Level A and AA (axe-core {{axe version}}){{", plus best-practice rules" when included}}
 
 ## Summary

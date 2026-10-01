@@ -20,6 +20,17 @@ function createAuthStatePath({ tmpdir = os.tmpdir(), mkdtemp = fs.mkdtempSync } 
   return path.join(dir, FILE_NAME);
 }
 
+// Creates the session file exclusively ('wx' = O_CREAT | O_EXCL) inside a fresh
+// mkdtemp directory and returns the open descriptor. Exclusive creation fails instead
+// of following a path or link that already exists, so a planted file can never
+// receive the cookies (AGENTS.md "Secret temporary files"). Later refreshes write
+// through this descriptor and never reopen the path.
+function openAuthStateFile({ tmpdir = os.tmpdir(), mkdtemp = fs.mkdtempSync, open = fs.openSync } = {}) {
+  const file = createAuthStatePath({ tmpdir, mkdtemp });
+  const fd = open(file, 'wx', 0o600);
+  return { file, fd };
+}
+
 function isManagedAuthStatePath(file, { tmpdir = os.tmpdir() } = {}) {
   if (typeof file !== 'string' || !file) return false;
   const resolved = path.resolve(file);
@@ -33,11 +44,18 @@ function isManagedAuthStatePath(file, { tmpdir = os.tmpdir() } = {}) {
     && roots.has(path.dirname(dir));
 }
 
-function writeAuthState(file, state, { writeFile = fs.writeFileSync, chmod = fs.chmodSync } = {}) {
-  writeFile(file, JSON.stringify(state), { mode: 0o600 });
-  // mode on writeFile applies only when the file is created; enforce it on rewrites.
-  // chmod is effectively a no-op on Windows, where the per-user temp dir ACL applies.
-  try { chmod(file, 0o600); } catch { /* best effort */ }
+// Rewrites the whole file through the descriptor from openAuthStateFile(): truncate,
+// then write from offset 0, looping because writeSync may write fewer bytes than asked.
+// Mode 0600 was set at exclusive creation; chmod is effectively a no-op on Windows,
+// where the per-user temp directory ACL applies.
+function writeAuthState(fd, state, { ftruncate = fs.ftruncateSync, write = fs.writeSync } = {}) {
+  if (typeof fd !== 'number') throw new TypeError('writeAuthState needs the descriptor from openAuthStateFile()');
+  const data = Buffer.from(JSON.stringify(state), 'utf8');
+  ftruncate(fd, 0);
+  let offset = 0;
+  while (offset < data.length) {
+    offset += write(fd, data, offset, data.length - offset, offset);
+  }
 }
 
 // Counts only — the report and console must never contain cookie values.
@@ -64,6 +82,7 @@ module.exports = {
   FILE_NAME,
   createAuthStatePath,
   isManagedAuthStatePath,
+  openAuthStateFile,
   removeAuthState,
   summarizeAuthState,
   writeAuthState,

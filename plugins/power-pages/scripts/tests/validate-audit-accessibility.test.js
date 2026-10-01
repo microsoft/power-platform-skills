@@ -137,6 +137,17 @@ test('blocks an outcome that hides blocking issues', () => {
   assert.match(result.stderr, /use "failed"/);
 });
 
+test('blocks a completed audit whose summary has no blocking count', () => {
+  for (const summary of [{}, { blocking: '2' }, { blocking: -1 }, { blocking: 1.5 }]) {
+    const dir = makeProject();
+    writeReport(dir);
+    writeMarker(dir, validMarker({ outcome: 'passed', summary }));
+    const result = runValidator(dir);
+    assert.equal(result.code, 2, JSON.stringify(summary));
+    assert.match(result.stderr, /summary\.blocking must be a non-negative integer/);
+  }
+});
+
 test('blocks when a signed-in session was not removed', () => {
   const dir = makeProject();
   writeReport(dir);
