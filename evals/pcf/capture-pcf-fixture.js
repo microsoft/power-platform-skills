@@ -17,14 +17,22 @@ function comparablePath(value) {
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
+function escapesParent(rel) {
+  // `path.relative` of a child named `..source` is the string `..source`. startsWith('..') treats
+  // that name as parent traversal, so capturing into an ancestor deletes the source. A path is
+  // outside only when the relative result is exactly `..`, starts with `..` plus a separator, or
+  // is absolute.
+  return rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel);
+}
+
 function isStrictChild(root, target) {
   const rel = path.relative(comparablePath(root), comparablePath(target));
-  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+  return rel !== '' && !escapesParent(rel);
 }
 
 function isInsideOrSame(root, target) {
   const rel = path.relative(comparablePath(root), comparablePath(target));
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  return rel === '' || !escapesParent(rel);
 }
 
 function deepestExistingAncestor(target) {

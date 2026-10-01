@@ -560,6 +560,62 @@ test('applyUpgrade computes all transforms before writing any file', () => {
   }
 });
 
+test('applyUpgrade restores every target when a writer truncates then throws', () => {
+  const { applyUpgrade } = require('../lib/pcf-upgrade.js');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-upgrade-partial-'));
+  try {
+    const projectDir = path.join(tmp, 'StarRating');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const pkg = path.join(projectDir, 'package.json');
+    const proj = path.join(projectDir, 'StarRating.pcfproj');
+    const originalPkg = '{"name":"before"}\n';
+    const originalProj = '<Project />\n';
+    fs.writeFileSync(pkg, originalPkg);
+    fs.writeFileSync(proj, originalProj);
+    const afterPkg = '{"name":"after"}\n';
+    const afterProj = '<Project><PcfBuildMode>production</PcfBuildMode></Project>\n';
+
+    const run = (failContent) => {
+      fs.writeFileSync(pkg, originalPkg);
+      fs.writeFileSync(proj, originalProj);
+      const failingFs = {
+        ...fs,
+        writeFileSync: (file, content) => {
+          if (content === failContent) {
+            fs.writeFileSync(file, '<Projec');
+            throw new Error('ENOSPC');
+          }
+          return fs.writeFileSync(file, content);
+        },
+        realpathSync: fs.realpathSync,
+      };
+      failingFs.realpathSync.native = fs.realpathSync.native;
+      let error;
+      try {
+        applyUpgrade({
+          steps: [
+            { id: 'DEPS_TO_MATRIX', file: pkg, apply: () => afterPkg },
+            { id: 'BUILDMODE_PRODUCTION', file: proj, apply: () => afterProj },
+          ],
+        }, projectDir, { fs: failingFs });
+      } catch (err) {
+        error = err;
+      }
+      assert.ok(error);
+      assert.match(error.message, /ENOSPC/);
+      assert.deepEqual(error.applied, []);
+      assert.deepEqual(error.changedFiles, []);
+      assert.equal(fs.readFileSync(pkg).equals(Buffer.from(originalPkg)), true);
+      assert.equal(fs.readFileSync(proj).equals(Buffer.from(originalProj)), true);
+    };
+
+    run(afterPkg);
+    run(afterProj);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('applyUpgrade rolls back earlier writes when a later write fails', () => {
   const { applyUpgrade } = require('../lib/pcf-upgrade.js');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-upgrade-write-fail-'));

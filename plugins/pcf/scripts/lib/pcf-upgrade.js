@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnResultSync: defaultSpawnResultSync } = require('./process-runner.js');
@@ -313,27 +314,26 @@ function applyUpgrade(plan, projectDir, deps = {}) {
   // project reached through a linked folder, including all of macOS's os.tmpdir() (/var -> /private/var).
   const prepared = prepareUpgradeWrites(plan, projectDir, fsDep);
   const changedFiles = [];
+  const attempted = [];
 
   try {
     for (const item of prepared.writes) {
-      if (item.after !== item.before) {
-        fsDep.writeFileSync(item.file, item.after);
-        changedFiles.push(item.file);
-      }
+      if (item.after === item.before) continue;
+      // Record the target before the write. A throw after a partial write must still restore this
+      // file from the in-memory original, not only the targets whose writes returned.
+      attempted.push(item);
+      writeReplacement(fsDep, item.file, item.after);
+      changedFiles.push(item.file);
     }
   } catch (err) {
-    for (const item of [...prepared.writes].reverse()) {
-      if (!changedFiles.includes(item.file)) continue;
-      try {
-        fsDep.writeFileSync(item.file, item.before);
-      } catch {
-        // Keep rolling back other files. The final changedFiles list below reports any file that
-        // still differs from its pre-apply bytes so callers do not get a success-shaped empty list.
-      }
-    }
+    const restored = restoreWrites(attempted, fsDep);
+    // Nothing stuck: every attempted target, including the one whose write threw, was put back.
+    // If a restore itself fails, changedFiles names what still differs and applied stays empty
+    // because the plan was not left applied.
     err.applied = [];
     err.skipped = prepared.skipped;
-    err.changedFiles = survivingChangedFiles(prepared.writes, fsDep);
+    err.restored = restored.restored;
+    err.changedFiles = restored.changedFiles;
     throw err;
   }
 
@@ -357,16 +357,45 @@ function applyUpgrade(plan, projectDir, deps = {}) {
   return { applied: prepared.applied, skipped: prepared.skipped, changedFiles };
 }
 
-function survivingChangedFiles(writes, fsDep) {
-  const changed = [];
-  for (const item of writes) {
+function writeReplacement(fsDep, file, content) {
+  // A direct writeFileSync that throws after flushing a prefix leaves the target truncated
+  // (observed as `<Projec` on ENOSPC). Write the replacement beside the target, then rename.
+  // Rename on the same volume replaces the target only after the temp file is complete, so a
+  // throw never publishes a half-written project file.
+  const temp = path.join(
+    path.dirname(file),
+    `.${path.basename(file)}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`,
+  );
+  try {
+    fsDep.writeFileSync(temp, content);
+    if (typeof fsDep.renameSync === 'function') fsDep.renameSync(temp, file);
+    else fs.renameSync(temp, file);
+  } catch (err) {
     try {
-      if (fsDep.readFileSync(item.file, 'utf8') !== item.before) changed.push(item.file);
+      if (typeof fsDep.unlinkSync === 'function') fsDep.unlinkSync(temp);
     } catch {
-      changed.push(item.file);
+      // writeFileSync may have thrown before creating the temp file.
+    }
+    throw err;
+  }
+}
+
+function restoreWrites(writes, fsDep) {
+  const restored = [];
+  const changedFiles = [];
+  for (const item of [...writes].reverse()) {
+    try {
+      writeReplacement(fsDep, item.file, item.before);
+      if (fsDep.readFileSync(item.file, 'utf8') !== item.before) {
+        changedFiles.push(item.file);
+        continue;
+      }
+      restored.push(item.file);
+    } catch {
+      changedFiles.push(item.file);
     }
   }
-  return changed;
+  return { restored, changedFiles };
 }
 
 function prepareUpgradeWrites(plan, projectDir, fsDep) {
@@ -497,6 +526,7 @@ function runUpgrade(options = {}, deps = {}) {
         after: null,
         error: String(err && err.message ? err.message : err),
         changedFiles: err.changedFiles || [],
+        restored: err.restored || [],
       };
     }
     applied = result.applied;

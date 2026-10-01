@@ -186,6 +186,33 @@ test('pcfprojBuildMode preserves Conditions whose quoted value contains a greate
   );
 });
 
+test('pcfprojBuildMode finds Microsoft.Common.props when a quoted greater-than is in the Import condition', () => {
+  // A Condition before Project, with a quoted '>', used to hide the Import from the regex scanner.
+  // An early PcfBuildMode then looked like production because a missing import is treated as "no
+  // import to be before". Both attribute orders are valid MSBuild.
+  const commonProps = '<Import Project="$(MSBuildExtensionsPath)\\$(MSBuildToolsVersion)\\Microsoft.Common.props" />';
+  const withoutMode = renderedPcfproj().replace(/\s*<PcfBuildMode>production<\/PcfBuildMode>/, '');
+  const conditionFirst = withoutMode.replace(
+    commonProps,
+    '<PcfBuildMode>production</PcfBuildMode>\n  <Import Condition="\'$(Foo)\' == \'>\'" Project="$(MSBuildExtensionsPath)\\$(MSBuildToolsVersion)\\Microsoft.Common.props" />',
+  );
+  const projectFirst = withoutMode.replace(
+    commonProps,
+    '<Import Project="$(MSBuildExtensionsPath)\\$(MSBuildToolsVersion)\\Microsoft.Common.props" Condition="\'$(Foo)\' == \'>\'" />\n    <PcfBuildMode>production</PcfBuildMode>',
+  );
+
+  const hiddenImport = pcfprojBuildMode(conditionFirst);
+  assert.notEqual(hiddenImport.importOffset, -1);
+  assert.equal(hiddenImport.status, 'ineffective');
+  assert.equal(hiddenImport.reason, 'before-import');
+  assert.ok(hiddenImport.modeOffset < hiddenImport.importOffset);
+
+  const projectFirstMode = pcfprojBuildMode(projectFirst);
+  assert.notEqual(projectFirstMode.importOffset, -1);
+  assert.equal(projectFirstMode.status, 'production');
+  assert.ok(projectFirstMode.modeOffset > projectFirstMode.importOffset);
+});
+
 test('pcfprojBuildMode reports conditioned overrides after unconditioned production as ineffective', () => {
   const conditionedAfterProduction = renderedPcfproj().replace(
     /<\/PropertyGroup>\s*<PropertyGroup>\s*<TargetFrameworkVersion>/,

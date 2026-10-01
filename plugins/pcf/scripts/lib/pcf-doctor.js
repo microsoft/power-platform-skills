@@ -277,6 +277,7 @@ function buildModeFindingMessage(mode) {
  *
  * Raw project shapes this detector must distinguish:
  *   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" />
+ *   <Import Condition="'$(Foo)' == '>'" Project="...\Microsoft.Common.props" />
  *   <PropertyGroup>
  *     <Name>StarRating</Name>
  *     <PcfBuildMode>production</PcfBuildMode>
@@ -299,9 +300,13 @@ function buildModeFindingMessage(mode) {
 function pcfprojBuildMode(pcfprojText) {
   const text = stripXmlCommentsPreserveOffsets(String(pcfprojText || ''));
   const occurrences = pcfBuildModeOccurrences(text);
-  const importMatch = /<Import\b[^>]*\bProject\s*=\s*["'][^"']*Microsoft\.Common\.props["'][^>]*>/i.exec(text);
-  const importOffset = importMatch ? importMatch.index : -1;
-  const importEndOffset = importMatch ? importMatch.index + importMatch[0].length : -1;
+  // Quote-aware, same scanner as PropertyGroup. A regex stopped at the first '>' and missed a
+  // valid import when Condition contained a quoted '>' before Project:
+  //   <Import Condition="'$(Foo)' == '>'" Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" />
+  // A missed import made an earlier unconditional PcfBuildMode look effective (status production).
+  const commonPropsImport = microsoftCommonPropsImport(text);
+  const importOffset = commonPropsImport ? commonPropsImport.offset : -1;
+  const importEndOffset = commonPropsImport ? commonPropsImport.endOffset : -1;
   if (occurrences.length === 0) {
     return {
       status: 'missing',
@@ -362,6 +367,26 @@ function pcfprojBuildMode(pcfprojText) {
     };
   }
   return { status: 'missing', importOffset, importEndOffset, modeOffset: -1, occurrences };
+}
+
+function microsoftCommonPropsImport(text) {
+  for (const tag of scanXmlTags(text, 'Import')) {
+    if (tag.closing) continue;
+    const project = xmlAttr(xmlAttrs(tag.attrsText || ''), 'Project');
+    if (/Microsoft\.Common\.props/i.test(project)) {
+      return { offset: tag.offset, endOffset: tag.endOffset };
+    }
+  }
+  return null;
+}
+
+function xmlAttr(attrs, name) {
+  if (Object.hasOwn(attrs, name)) return attrs[name];
+  const wanted = name.toLowerCase();
+  for (const [key, value] of Object.entries(attrs)) {
+    if (key.toLowerCase() === wanted) return value;
+  }
+  return '';
 }
 
 function pcfBuildModeOccurrences(text) {
