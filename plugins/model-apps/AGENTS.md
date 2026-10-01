@@ -234,6 +234,12 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   default; `--apply` writes, `--sample-data` / `--publish` opt-in (`--publish` gates the final *bulk*
   publish; edit/finalize paths — reconciling an existing form/view, form events, quick-views,
   existing-app sitemap, page finalize — still publish their one artifact so the change takes effect).
+  The bulk publish is ONE `PublishXml` envelope (`publishArtifacts`) for every table and the app, and
+  with `--publish` the default-view enrichment defers its own publish to it. A build that halts before
+  it hands what is still owed to the CLI, which keeps each attempt's debt across transient retries until
+  a publish phase pays it, and settles the rest per target once no retry follows (`settleOwedPublishes`)
+  — so a halted build leaves those views live, as it did before the batching. A default-view push
+  refused by a concurrent edit fails the enrichment step, as any refused push does.
   **The modern ("new look") shell is opt-in via `app.newLook`.** It is a per-app SETTING
   (`NewLookAlwaysOn`, written through the SDK's `saveSettingValue` scoped to app + solution), NOT an
   app-module column — `navigationtype` is Single/Multi *session* and unrelated, which is the reason
@@ -242,11 +248,13 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   a silent success.
   **`app.aiDescription` (the routing description) is written only when the spec sets it** — at create,
   and on an existing app when it differs from the fetched draft, riding that run's app push. The
-  platform may author this text itself, so an omitted field is never written or blanked. A 412 on the
-  appmodule row over an UNPUBLISHED header change (componentstate 1, proven by a draft read) halts with
+  platform may author this text itself, so an omitted field is never written or blanked. A
+  never-published app refuses the write (`APP_DRAFT_HEADER_NOT_WRITABLE`), which halts with
   `app-header-unpublished` — publish, then re-run — after resetting the workspace copy, which a plain
-  re-fetch would otherwise refuse to replace (`LOCAL_EDITS_WOULD_BE_LOST`). A 412 on the sitemap is a
-  concurrent edit even then (the push writes the header first, so its own write left that layer). Any
+  re-fetch would otherwise refuse to replace (`LOCAL_EDITS_WOULD_BE_LOST`). An app with an UNPUBLISHED
+  header change takes it: the vendored SDK conditions the header write on the appmodule's row token, so
+  the push saves and keeps that change (live-verified). A 412 is a concurrent edit, on the appmodule
+  row as on the sitemap, and is never re-explained as "publish first". Any
   other failed push that carried the change resets the copy too — except a concurrent edit
   (`VERSION_CONFLICT` / a code-less 412), where the unrecorded copy is what stops a blind re-run — and
   without the pages phase the change is applied only after the live-page gate, so a gate halt leaves

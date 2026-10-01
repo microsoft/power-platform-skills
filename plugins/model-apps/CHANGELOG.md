@@ -9,13 +9,29 @@ evidence and trade-offs behind a change live in its PR, in `docs/`, or in the li
 
 Fixes from a retest of 2.11.0: an existing form converges to its layout's order and `--verify` checks
 more of it, a generative page keeps its name and model on update, and several readers refuse output
-they cannot read instead of guessing.
+they cannot read instead of guessing. A `--publish` build publishes in fewer requests, with the refreshed
+vendored SDK.
 
 ### Added
 
 - **`pages[].model`** — the model id a generative page was generated with. A download writes it and
   the build sends it with every upload.
 - **`POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS`** — how long an Azure CLI call may take (default 60 s).
+
+### Changed
+
+- **Faster `--publish` builds.** The final publish sends every table and the app in one request,
+  and the enriched default views wait for it instead of publishing each table on the way: on a
+  three-table app, 8 publishes became 3 and the build took 152 s instead of 172 s. A build that stops
+  before its end still publishes the default views it had enriched, once no automatic retry follows.
+  A failed publish of them is now a warning naming the re-run, like any other, rather than a stop
+  before the forms are built; a default view someone edits while the build writes it now stops the
+  build, as any concurrent edit does, instead of being skipped.
+- **The vendored SDK is refreshed.** A build that changes an app's routing description no longer
+  stops with `app-header-unpublished` when the app holds an unpublished change to its name or
+  descriptions: it saves alongside that change. Only a never-published app must be published first,
+  and a concurrent edit is reported as one. On an org whose base language is not English, a new app
+  gets its System Administrator role, and the inactive default view is enriched too.
 
 ### Fixed
 

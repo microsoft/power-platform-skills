@@ -318,6 +318,99 @@ test('transient auto-retry: a non-transient halt is NOT retried', async () => {
   assert.strictEqual(attempts, 1, 'no retry on a non-transient error');
 });
 
+// With --publish the build defers its default-view enrichment's publish to its final phase
+// (sdk-build.js, 4b), so a build that halts before that phase still owes it. The CLI pays it only once
+// no retry follows: a transient halt is retried at once, and the retry saves the views again and owes
+// their publish again — a publish sent into that throttling would only fail the same way.
+function owingSdk() {
+  const { sdk, calls } = mockSdk();
+  // The mock answers every query with a publisher row, which the form lookup would read as an existing
+  // (id-less) form and republish; a fresh org has none of the sample's forms.
+  const query = sdk.queryRecords;
+  sdk.queryRecords = async (entity, ...rest) => (entity === 'systemform' ? [] : query(entity, ...rest));
+  sdk.enrichDefaultViews = async (logical, cols, o = {}) => {
+    calls.push(['enrichDefaultViews', logical, o]);
+    const updated = [`defview-${logical}`];
+    if (o.publish !== false) return { updated };
+    return { updated, results: [], pendingPublish: [{ scope: { envelope: 'entity', entityLogicalName: logical }, artifacts: [{ type: 'view', id: `defview-${logical}` }] }] };
+  };
+  sdk.publishArtifacts = async (targets) => { calls.push(['publishArtifacts', targets]); return targets.map(({ type, id }) => ({ type, id, shipped: true, publish: { kind: 'verified' } })); };
+  const publishOne = sdk.publishArtifact;
+  sdk.publishArtifact = async (type, id) => { calls.push(['publishArtifact', type, id]); return publishOne(type, id); };
+  return { sdk, calls };
+}
+
+test('a build that halts before its publish phase publishes the default views it enriched, once, after the last retry', async () => {
+  const { sdk, calls } = owingSdk();
+  let retried = false;
+  const create = sdk.createArtifact;
+  sdk.createArtifact = (t, def) => {
+    if (t !== 'app') return create(t, def);
+    calls.push(['attempt']);
+    throw new Error(retried ? 'bad request' : 'CustomizationLockException: try again later');
+  };
+  const journal = { path: 'x', record: (e) => { if (e.status === 'retry') { retried = true; calls.push(['retry']); } }, close: () => {} };
+  await assert.rejects(buildModelApp(desk, { apply: true, publish: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, journal }), /bad request/);
+  const at = (name) => calls.findIndex((c) => c[0] === name);
+  const publishes = calls.filter((c) => c[0] === 'publishArtifacts' || c[0] === 'publishArtifact');
+  assert.strictEqual(calls.filter((c) => c[0] === 'attempt').length, 2, 'one transient retry, then the final halt');
+  assert.strictEqual(publishes.length, 1, `one publish, after the final halt: ${JSON.stringify(publishes)}`);
+  assert.ok(at('retry') < at('publishArtifacts'), 'nothing was published for the retried attempt');
+  const enriched = calls.slice(at('retry')).filter((c) => c[0] === 'enrichDefaultViews' && c[2].publish === false).map((c) => c[1]);
+  assert.ok(enriched.length >= 2, `the retry deferred its enrichment publishes: ${enriched}`);
+  assert.deepStrictEqual(publishes[0][1], enriched.map((l) => ({ type: 'view', id: `defview-${l}` })), 'exactly the tables the final attempt enriched');
+});
+
+test('a final halt whose owed publish fails too warns, and still reports the halt', async () => {
+  const { sdk } = owingSdk();
+  sdk.publishArtifacts = async () => { throw new Error('envelope refused'); };
+  sdk.publishArtifact = async () => { throw new Error('publish down'); };
+  const create = sdk.createArtifact;
+  sdk.createArtifact = (t, def) => { if (t === 'app') throw new Error('bad request'); return create(t, def); };
+  const warnings = [];
+  await assert.rejects(buildModelApp(desk, { apply: true, publish: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, warn: (m) => warnings.push(m) }), /bad request/);
+  const failed = warnings.filter((w) => /^the build stopped before its publish phase; publish view defview-\w+ FAILED: publish down/.test(w));
+  assert.strictEqual(failed.length, 3, `each enriched table is still attempted, and reported: ${warnings.join('\n')}`);
+});
+
+test('without --publish a halted build owes nothing: the enrichment published itself', async () => {
+  const { sdk, calls } = owingSdk();
+  const create = sdk.createArtifact;
+  sdk.createArtifact = (t, def) => { if (t === 'app') throw new Error('bad request'); return create(t, def); };
+  await assert.rejects(buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk }), /bad request/);
+  assert.ok(calls.some((c) => c[0] === 'enrichDefaultViews'), 'the enrichment ran');
+  assert.ok(calls.filter((c) => c[0] === 'enrichDefaultViews').every((c) => c[2].publish !== false), 'not deferred');
+  assert.deepStrictEqual(calls.filter((c) => c[0] === 'publishArtifacts' || c[0] === 'publishArtifact'), []);
+});
+
+// Every attempt re-runs every phase, but a later one can halt before the enrichment an earlier one did, so
+// what each failed attempt owed is kept until a publish phase pays it, and the final halt settles all of it.
+const quietState = { collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null };
+const owing = (message, owedPublishes, owedPaid) => Object.defineProperties(new Error(message), {
+  ...(owedPublishes ? { owedPublishes: { value: owedPublishes } } : {}),
+  ...(owedPaid !== undefined ? { owedPaid: { value: owedPaid } } : {}),
+});
+const TRANSIENT = 'CustomizationLockException: try again later';
+async function haltAfter(attempts) {
+  const { sdk, calls } = owingSdk();
+  let n = 0;
+  const runBuild = async () => { throw attempts[n++]; };
+  await assert.rejects(buildModelApp(desk, { apply: true, publish: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, runBuild, discoverOpDiffState: async () => quietState }), /bad request/);
+  assert.strictEqual(n, attempts.length, 'every attempt ran');
+  return calls.filter((c) => c[0] === 'publishArtifacts' || c[0] === 'publishArtifact');
+}
+
+test('an earlier attempt\u2019s owed publishes are settled when a later attempt halts before its own enrichment', async () => {
+  const publishes = await haltAfter([owing(TRANSIENT, [['view', 'defview-a'], ['view', 'defview-b']]), owing('bad request')]);
+  assert.deepStrictEqual(publishes.map((c) => c[1].map((t) => t.id)), [['defview-a', 'defview-b']]);
+});
+
+test('a later attempt whose publish phase ran pays what an earlier one owed, and a debt owed twice is published once', async () => {
+  assert.deepStrictEqual(await haltAfter([owing(TRANSIENT, [['view', 'defview-a']]), owing('bad request', [], true)]), [], 'nothing left to settle');
+  const twice = await haltAfter([owing(TRANSIENT, [['view', 'defview-a'], ['view', 'defview-b']]), owing('bad request', [['view', 'defview-b'], ['view', 'defview-a']])]);
+  assert.deepStrictEqual(twice.map((c) => c[1].map((t) => t.id)), [['defview-a', 'defview-b']]);
+});
+
 test('transient auto-retry: no retries in dry-run', async () => {
   const { sdk } = mockSdk();
   const r = await buildModelApp(desk, { apply: false, env: 'https://x' }, { sdk });

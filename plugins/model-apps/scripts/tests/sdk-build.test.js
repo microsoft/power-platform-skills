@@ -774,10 +774,11 @@ test('#583 the deferred routing-description push refuses a copy holding an earli
   assert.strictEqual(find(quiet.calls, 'listArtifacts').length, 0, 'without a routing description there is nothing to push');
 });
 
-// #583: the SDK refuses a header write with a 412 while an earlier header change is unpublished, and the
-// generic remedy (re-download) cannot clear that. The explanation is keyed on a PROVEN draft only. The
-// error is shaped as the real bundle returns it: `detail` names the refused request (pinned in
-// app-ai-description-real-bundle.test.js), and the message carries it too.
+// #583: a 412 on the app push is a concurrent edit wherever it lands. With cds-maker-sdk 8930278f the header
+// write carries the appmodule's ROW token, so an unpublished header change no longer refuses it (pinned in
+// app-ai-description-real-bundle.test.js); only a never-published app's header is "publish first". The
+// error is shaped as the real bundle returns it: `detail` names the refused request, and the message
+// carries it too.
 const conflictOn = (row) => {
   const detail = `Version conflict (412) from https://contoso.crm.dynamics.com/api/data/v9.2/${row}`;
   return { saved: false, shipped: false, publish: { kind: 'notRequested' }, error: Object.assign(new Error(`Version conflict for app/x: local=W/"2", server=(none). Re-fetch and reapply changes. ${detail}`), { code: 'VERSION_CONFLICT', detail }) };
@@ -797,55 +798,34 @@ const draftReader = (answer, seen = []) => ({ get: async (url) => {
 } });
 const routingSpec = () => makeSpec({ app: { name: 'Support Desk', description: 'Tickets', aiDescription: ROUTING } });
 
-test('#583 a 412 over an unpublished header change halts with the step that works', async () => {
-  // The last case puts the PUBLISHED row first: the unpublished layer must be found wherever it is.
-  for (const [deferred, value] of [[false, [{ componentstate: 1 }]], [true, [{ componentstate: 1 }]], [false, [{ componentstate: 0 }, { componentstate: 1 }]]]) {
-    const spec = routingSpec();
-    if (deferred) spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
-    const { sdk, calls } = mockSdk({ artifactsExist: true, appPushResult: HEADER_412 });
-    const seen = [];
-    sdk.dataverse = draftReader({ status: 200, body: { value } }, seen);
-    await assert.rejects(runSdkBuild(spec, { sdk, apply: true, phases: appShellPhases }), (e) => {
-      assert.strictEqual(e.code, 'app-header-unpublished', `${deferred ? 'deferred' : 'sitemap'} path, rows ${JSON.stringify(value)}: ${e.message}`);
-      assert.match(e.message, /unpublished change to its name, description or routing description/);
-      assert.match(e.message, /publish the app in Power Apps \(or discard the change\), then re-run the build\.$/);
-      return true;
-    });
-    assert.strictEqual(seen.length, 1);
-    assert.match(seen[0], /^\/appmodules\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)\?\$select=componentstate&\$filter=appmoduleid eq \S+$/);
-    assert.strictEqual(appCalls(calls, 'publishArtifact').length, 0, 'nothing is published after the refused push');
-    // The refused push left this run's edits in the workspace copy; it is reset so the re-run's plain
-    // fetch is not refused with LOCAL_EDITS_WOULD_BE_LOST once the operator has published.
-    const resets = appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true);
-    assert.strictEqual(resets.length, 1, 'the workspace copy is reset');
-    assert.ok(calls.indexOf(resets[0]) > calls.indexOf(appCalls(calls, 'pushArtifact')[0]), 'after the refused push');
+test('#583 a 412 on the appmodule row is a concurrent edit, over a pending draft too: the generic halt, and the copy is kept', async () => {
+  // Whatever the draft holds — pending (in either order), settled, nothing — none of it is read.
+  const drafts = [[{ componentstate: 1 }], [{ componentstate: 0 }, { componentstate: 1 }], [{ componentstate: 0 }], []];
+  for (const [what, deferred, phases] of [['app-shell', false, appShellPhases], ['app-shell, deferred', true, appShellPhases], ['finalizer', false, fullPhases]]) {
+    for (const value of drafts) {
+      const spec = routingSpec();
+      if (deferred) spec.appShell.areas[0].groups[0].subAreas.push({ page: 'Overview', title: 'Overview' });
+      const { sdk, calls } = mockSdk({ artifactsExist: true, appPushResult: HEADER_412 });
+      const seen = [];
+      sdk.dataverse = draftReader({ status: 200, body: { value } }, seen);
+      await assert.rejects(runSdkBuild(spec, { sdk, apply: true, phases, genpageCli: noPages }), (e) => {
+        assert.strictEqual(e.code, 'version-conflict', `${what}, rows ${JSON.stringify(value)}: ${e.message}`);
+        return true;
+      });
+      assert.strictEqual(seen.length, 0, `${what}: no draft read`);
+      assert.strictEqual(appCalls(calls, 'publishArtifact').length, 0, `${what}: nothing is published after the refused push`);
+      assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 0, `${what}: the copy is kept as the fence`);
+    }
   }
 });
 
 test('#583 when the workspace copy cannot be reset, the halt names the workspace to delete', async () => {
-  const { sdk } = mockSdk({ artifactsExist: true, appPushResult: HEADER_412, failOverwriteFetch: true });
-  sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } });
+  const { sdk } = mockSdk({ artifactsExist: true, appPushThrows: 'APP_DRAFT_HEADER_NOT_WRITABLE', failOverwriteFetch: true });
   await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
     assert.strictEqual(e.code, 'app-header-unpublished', e.message);
     assert.match(e.message, /then re-run the build\. First reset the workspace, which still holds this run's unpushed copy of the app \(a re-run would refuse to overwrite it\): stop any other build or teardown using the \.maker-workspace directory \(or the --workspace one\), then delete everything in it except last-applied\.json and destructive-approval\.json\./);
     return true;
   });
-});
-
-test('#583 any other 412 keeps the generic re-download halt', async () => {
-  for (const [what, answer] of [
-    ['a settled row', { status: 200, body: { value: [{ componentstate: 0 }] } }],
-    ['no row', { status: 200, body: { value: [] } }],
-    ['a non-2xx draft read, whatever its body', { status: 500, body: { value: [{ componentstate: 1 }] } }],
-    ['a failed draft read', new Error('network down')],
-  ]) {
-    const { sdk } = mockSdk({ artifactsExist: true, appPushResult: HEADER_412 });
-    sdk.dataverse = draftReader(answer);
-    await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
-      assert.strictEqual(e.code, 'version-conflict', `${what}: ${e.message}`);
-      return true;
-    });
-  }
 });
 
 test('#583 a push refused for another reason keeps its own halt, even over a pending draft', async () => {
@@ -859,10 +839,9 @@ test('#583 a push refused for another reason keeps its own halt, even over a pen
 
 // The halt reads a push result the way requireSuccessfulPush does: `saved`, then the older SDK spelling
 // `success`. Reading `saved` alone sent a legacy-shaped refusal to the generic conflict remedy.
-test('#583 the unpublished-header halt reads the older `success` result shape as well', async () => {
-  const legacy = { success: false, error: HEADER_412.error };
+test('#583 the never-published halt reads the older `success` result shape as well', async () => {
+  const legacy = { success: false, error: Object.assign(new Error('The retrieval of version numbers failed.'), { code: 'APP_DRAFT_HEADER_NOT_WRITABLE' }) };
   const { sdk, calls } = mockSdk({ artifactsExist: true, appPushResult: legacy });
-  sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } });
   await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: appShellPhases }), (e) => {
     assert.strictEqual(e.code, 'app-header-unpublished', e.message);
     return true;
@@ -870,9 +849,9 @@ test('#583 the unpublished-header halt reads the older `success` result shape as
   assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1, 'and resets the copy');
 });
 
-// Only the APPMODULE row's 412 can be the unpublished-header state. A sitemap 412 is a concurrent sitemap
-// edit, over the unpublished layer this very push's header write just left — relabelling it reset the copy,
-// and "publish, then re-run" then overwrote the other edit. So is a conflict that names no request at all.
+// A sitemap 412 is a concurrent sitemap edit too, over the unpublished layer this very push's header write
+// just left — re-explaining it as "publish, then re-run" would reset the copy and then overwrite the other
+// edit. So is a conflict that names no request at all.
 test('#583 a 412 that is not the appmodule row\u2019s keeps the generic halt and the copy, over a pending draft too', async () => {
   const unnamed = { ...HEADER_412, error: Object.assign(new Error('Version conflict for app/x: local=W/"2", server=W/"3". Re-fetch and reapply changes.'), { code: 'VERSION_CONFLICT' }) };
   for (const [what, result] of [['a sitemap 412', SITEMAP_412], ['a conflict naming no request', unnamed]]) {
@@ -909,17 +888,6 @@ test('#583 with the pages phase, the routing description rides the finalizer pus
   const at = (c) => calls.indexOf(c);
   assert.ok(at(fetches[1]) < at(added[0]) && at(added[0]) < at(pushes[0]), 'applied after the finalizer fetch, before its push');
   assert.ok(at(pushes[0]) > at(appCalls(calls, 'updateElement', (c) => c.args[2] === '/siteMap')[0]), 'on the same push as the finalized sitemap');
-});
-
-test('#583 the finalizer push halts precisely over an unpublished header change, after resetting the copy', async () => {
-  const { sdk, calls } = mockSdk({ artifactsExist: true, appPushResult: HEADER_412 });
-  sdk.dataverse = draftReader({ status: 200, body: { value: [{ componentstate: 1 }] } });
-  await assert.rejects(runSdkBuild(routingSpec(), { sdk, apply: true, phases: fullPhases, genpageCli: noPages }), (e) => {
-    assert.strictEqual(e.code, 'app-header-unpublished', e.message);
-    assert.match(e.message, /^pages failed: push app Support Desk failed: the app has an unpublished change/);
-    return true;
-  });
-  assert.strictEqual(appCalls(calls, 'fetchArtifact', (c) => c.args[2] && c.args[2].overwrite === true).length, 1);
 });
 
 // #583 review: a copy an earlier run left holding unpushed edits went out with the next push of the app, whatever

@@ -611,7 +611,8 @@ child view id. Each step emits `[n/total]`.
   designer-grade FormXML/FetchXML/sitemap by reusing the designer's own serializers, and writes via
   the Web API using an `az`-token HttpClient. No relay, no designer tab.
 - **Dedicated unmanaged solution per app** (review / teardown). **`--publish` gates the final
-  *bulk* publish** of the app's entity + app customizations (a `PublishXml` per entity + the app). It
+  *bulk* publish** of the app's entity + app customizations (one `PublishXml` for every entity and the
+  app, which also carries the default-view enrichment's publish, deferred to it). It
   does **not** suppress the small **targeted** publishes that edit/finalize paths must run so the change
   takes effect — reconciling an existing form or view, wiring form events, placing quick-views,
   re-syncing an existing app's sitemap, and finalizing the sitemap after generative pages each publish
