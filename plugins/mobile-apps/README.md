@@ -60,37 +60,48 @@ connector wiring.
     When prompted to sign in, use credentials for the tenant where the Dataverse
     environment belongs.
 
-4. Create the Microsoft Entra app registration from Power Apps Wrap.
+4. Select or create the Microsoft Entra app registration.
 
-    Open the app-registration page for the Power Platform environment selected
-    during `/create-mobile-app`:
+    `/create-mobile-app` uses your Azure CLI sign-in to list all app registrations
+    that Microsoft Graph allows you to read in the selected environment's tenant.
+    Registrations passing every applicable native runtime permission check appear first, and
+    the rest remain available through pagination. Each choice shows only a short
+    client-ID prefix and either `✓ All required permissions configured` or
+    `✗ Missing required permissions`. The full client ID and missing-permission
+    details are shown after selection.
+    Discovery is best-effort: if Azure CLI,
+    Microsoft Graph, tenant validation, or permission checking fails, the skill
+    immediately falls back to asking for the app registration client ID and
+    continues with its permission check marked unavailable.
+
+    To create a registration or repair one whose permissions are incomplete,
+    open the Power Apps Wrap page for the selected environment:
 
     ```text
     https://make.powerapps.com/environments/<environment-id>/wraps#create-app-registration
     ```
 
-    Create the registration on that page, copy its **Application (client) ID**,
-    and paste it when `/create-mobile-app` asks. The Wrap experience configures
-    the native app registration for this flow. You do not need to add redirect
-    URIs or API permissions manually, and tenant-wide admin consent is not
-    required.
+    The Wrap experience configures the native registration, flags missing
+    permissions, and offers one-click repair. Do not add redirect URIs or API
+    permissions manually. Some repairs and consent operations require an Azure
+    tenant admin.
 
     If the app was created without a client ID, run
-    `/set-app-registration-native` later from the app folder. It opens the same
-    environment-specific page and writes the pasted client ID to
-    `auth.config.json`.
+    `/set-app-registration-native` later from the app folder. It provides the
+    same discovery and verification flow before writing `auth.config.json`.
 
     ### Required API permissions
 
-    The Microsoft Entra app registration requires these delegated permissions
-    from the **Power Platform API**:
-
-    - `PowerApps.Apps.Play`
-    - `PowerApps.Apps.Read`
-    - `Connectivity.Connectors.Read`
-    - `Connectivity.Connections.Read`
-    - `Connectivity.Connections.Write`
-    - `Connectivity.Connections.UserConsent`
+    The read-only checker validates the native runtime profile. The baseline is
+    Dynamics CRM `user_impersonation` plus Power Platform API
+    `PowerApps.Apps.Read`. Apps using Power Platform connectors additionally
+    require Azure API Connections `Runtime.All` and the Power Platform API
+    `Connectivity.Connectors.Read`, `Connectivity.Connections.Read`,
+    `Connectivity.Connections.Write`, and
+    `Connectivity.Connections.UserConsent` scopes. The checker does not require
+    unrelated Wrap packaging permissions. Platform redirects, packaging
+    permissions, third-party-app allowlisting, and admin consent are finalized
+    in Wrap.
 
 5. Start mobile app:
 
@@ -257,8 +268,8 @@ Example edit flows:
 
 | Command | Status | Description |
 | --- | --- | --- |
-| `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `npx power-apps init`, resolves the selected environment tenant, lets the user paste an app registration client ID, create one in the portal and paste it, or skip auth for later, then applies data/native/connectors, builds screens, starts dev server |
-| `/set-app-registration-native` | ✅ v0 | Manual auth helper — opens the Power Apps Wrap app-registration page for the selected environment, captures the pasted client ID, and writes `auth.config.json`. |
+| `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `npx power-apps init`, resolves the selected environment tenant, discovers tenant-visible app registrations and checks the complete required permission profile, lets the user select or create one (or skip auth), then applies data/native/connectors, builds screens, starts dev server |
+| `/set-app-registration-native` | ✅ v0 | Auth helper — discovers tenant-visible app registrations, checks the applicable native runtime permission profile, opens the environment-specific Wrap page for creation or repair, and writes the selected client ID to `auth.config.json`. |
 | `/add-dataverse` | ✅ v0 | Add Dataverse — connect to existing tables, or create / extend tables in Tier 0 → N order via the Dataverse Web API, then generate TS services. Accepts ER diagrams via image / Mermaid / text, or spawns the data-model-architect agent. |
 | `/setup-datamodel` | ✅ v0 | Discoverable alias for `/add-dataverse` optimized for the design-first entry point ("how do I plan my Dataverse schema?"). Same workflow under a more searchable name. |
 | `/add-connector` | ✅ v0 | Generic connector — runs `npx power-apps add-data-source` for any first-party or custom connector |
