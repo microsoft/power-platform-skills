@@ -8,7 +8,7 @@ Entries use the diagnostic format required by the `/pcf` skill: **Symptom** → 
 
 **Symptom**: `Missing required tool: node`, `Missing required tool: npm`, `Missing required tool: pac`, `Missing required tool: dotnet`, or `Missing required tool: az`.
 
-**Candidate causes**: The selected mode needs a tool that is not installed, not on `PATH`, or not usable in the current shell. Build-only modes need Node/npm; `pac pcf push` needs PAC and MSBuild/.NET; environment verification needs `az` plus PAC auth.
+**Candidate causes**: The selected mode needs a tool that is not installed, not on `PATH`, or not usable in the current shell. Build-only modes need Node/npm; `pac pcf push` needs PAC and MSBuild/.NET; environment verification and inventory need authenticated Azure CLI (`az`) plus SDK Dataverse reads, not PAC auth. PAC auth is a prerequisite only for push/package paths.
 
 **Discriminating checks**: Run the doctor command for the same mode. Check `node --version`, `npm --version`, `pac help`, `dotnet --info` and `az account show` only for tools the mode needs.
 

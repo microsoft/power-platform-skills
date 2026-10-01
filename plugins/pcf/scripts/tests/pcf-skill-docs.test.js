@@ -47,11 +47,30 @@ function parseTroubleshootingEntries(text) {
     });
 }
 
-function assertA30Entry(entry) {
+function assertTroubleshootingEntry(entry) {
   for (const label of ['Symptom', 'Candidate causes', 'Discriminating checks', 'Fix', 'Verify']) {
     assert.match(entry.body, new RegExp(`\\*\\*${label}\\*\\*:`), `${entry.title} is missing ${label}`);
   }
   assert.doesNotMatch(entry.body, /\bAll causes\b/i, `${entry.title} must not claim an exhaustive list of causes`);
+}
+
+function verificationPacPrerequisites(text) {
+  const offenders = [];
+  for (const section of text.split(/(?=^#{1,6}\s)/m)) {
+    const heading = section.split(/\r?\n/, 1)[0];
+    // A "## Verify registration" heading also scopes a later "check-auth.js --require-pac"
+    // example; checking command lines alone would miss that prerequisite regression.
+    const readOnlyHeading = /^#{1,6}\s+(?:verify|verification|inventory)\b/i.test(heading) ? heading : '';
+    for (const statement of section.split(/(?<=[.!?;])\s+|\r?\n/)) {
+      const instruction = `${readOnlyHeading} ${statement}`.trim();
+      if (!/\b(?:verify(?:-pcf\.js)?|verification|inventory|pcf-inventory\.js)\b/i.test(instruction)) continue;
+      if (!/--require-pac|\bPAC\s+(?:auth(?:entication)?|login)\b|\bpac\s+auth\s+(?:create|select)\b/i.test(statement)) continue;
+      if (/\b(?:not|never|without)\b[^.;]*(?:--require-pac|\bPAC\b)/i.test(statement)) continue;
+      if (/\bPAC\b[^.;]*\b(?:not required|not needed|only for push|only for packag)/i.test(statement)) continue;
+      offenders.push(instruction);
+    }
+  }
+  return offenders;
 }
 
 function versionSelectorsFromMatrix(matrix) {
@@ -174,6 +193,86 @@ test('/pcf docs use boolean apply plus --steps for scoped upgrades', () => {
   }
 
   assert.deepEqual(offenders, []);
+});
+
+test('/pcf verification and inventory instructions do not require PAC authentication', () => {
+  for (const instruction of [
+    'Environment verification needs az plus PAC auth.',
+    'Run verify-pcf.js after check-auth.js --require-pac.',
+    'Inventory requires PAC authentication.',
+    '## Verify registration\n\nnode check-auth.js --require-pac\n',
+    '## Inventory\n\nRun pac auth create first.\n',
+  ]) {
+    assert.equal(verificationPacPrerequisites(instruction).length, 1, instruction);
+  }
+  for (const instruction of [
+    'Verification and inventory require az auth but not PAC.',
+    'PAC auth is not required for verification.',
+    'Do not use --require-pac for inventory.',
+    'Use --require-pac only for push/package paths. Verification needs Azure CLI auth.',
+  ]) {
+    assert.deepEqual(verificationPacPrerequisites(instruction), [], instruction);
+  }
+
+  const files = [
+    'skills/pcf/SKILL.md',
+    ...fs.readdirSync(path.join(ROOT, 'skills', 'pcf')).filter((name) => name.endsWith('-flow.md'))
+      .map((name) => `skills/pcf/${name}`),
+    ...fs.readdirSync(path.join(ROOT, 'references')).filter((name) => name.endsWith('.md'))
+      .map((name) => `references/${name}`),
+  ];
+  const offenders = files.flatMap((file) => verificationPacPrerequisites(readPluginFile(file))
+    .map((instruction) => `${file}: ${instruction}`));
+  assert.deepEqual(offenders, []);
+});
+
+test('redeploy guidance requires a separate previous-manifest comparison', () => {
+  const skill = readPluginFile('skills/pcf/SKILL.md');
+  const gates = skill.slice(skill.indexOf('## Phase 4'), skill.indexOf('## Phase 5'));
+  const deploy = readPluginFile('skills/pcf/deploy-flow.md').split('\nRun:')[0];
+  const upgrade = readPluginFile('skills/pcf/upgrade-flow.md');
+  assert.match(gates, /Before redeploying an existing control,[^\n]*compare[^\n]*previous manifest/);
+  assert.match(deploy, /Preconditions:[\s\S]*Existing controls[^\n]*have passed `lint-pcf\.js[^\n]*--against/);
+  assert.match(upgrade, /Before redeploying over an existing registration,[^\n]*run `lint-pcf\.js[^\n]*--against/);
+  for (const [name, text] of [['SKILL.md gates phase', gates], ['deploy prerequisites', deploy], ['upgrade flow', upgrade]]) {
+    assert.match(text, /existing control|existing registration/i, `${name} must cover existing controls`);
+    assert.match(text, /lint-pcf\.js"?`?\s+--manifest\s+<[^>]+>\s+--against\s+<[^>]+>/,
+      `${name} must run lint-pcf.js --against separately before redeploy`);
+  }
+});
+
+test('redeploy guidance discloses when no baseline comparison was possible', () => {
+  for (const file of ['skills/pcf/SKILL.md', 'skills/pcf/deploy-flow.md', 'skills/pcf/upgrade-flow.md']) {
+    const text = readPluginFile(file);
+    assert.match(text, /If no (?:previous manifest is available|baseline exists)[^\n]*compatibility was not compared/i,
+      `${file} must disclose an unavailable previous manifest`);
+  }
+  assert.match(readPluginFile('skills/pcf/SKILL.md'), /do not claim[^\n]*backwards-compatible[^\n]*gates alone/i);
+});
+
+test('capability and design docs keep breaking-change comparison outside pcf-gates', () => {
+  const capabilities = readPluginFile('docs/pcf-capabilities.md');
+  const design = readPluginFile('docs/pcf-design.md');
+  assert.match(capabilities, /Breaking-change comparison is a separate manifest check:[^\n]*lint-pcf\.js[^\n]*--against/);
+  assert.match(design, /Breaking-change diff checks[^\n]*are not part of `pcf-gates\.js`[^\n]*lint-pcf\.js[^\n]*--against[^\n]*separately/);
+  for (const [name, text] of [['pcf-capabilities.md', capabilities], ['pcf-design.md', design]]) {
+    assert.doesNotMatch(text, /pcf-gates\.js[^\n]*(?:runs?|includes?|performs?)[^\n]*breaking-change/i,
+      `${name} must not advertise a breaking-change diff inside pcf-gates.js`);
+  }
+});
+
+test('troubleshooting helpers have descriptive public names', () => {
+  const source = readPluginFile('scripts/tests/pcf-skill-docs.test.js');
+  assert.doesNotMatch(source, /\bassert[A-Z]\d+(?:Entry|Case|Test|Fix)\b/);
+  assert.match(source, /function assertTroubleshootingEntry\(/);
+});
+
+test('PCF docs use real newline bytes instead of literal escape endings', () => {
+  for (const file of PCF_DOC_FILES) {
+    const text = readPluginFile(file);
+    assert.doesNotMatch(text, /\\(?:r\\n|n)$/m, `${file} contains a literal newline escape at a line end`);
+    assert.ok(text.endsWith('\n'), `${file} must have a final newline`);
+  }
 });
 
 test('gated evidence definition includes the production build', () => {
@@ -312,7 +411,7 @@ test('every troubleshooting entry uses the symptom-led diagnostic format', () =>
   assert.ok(entries.length > 10, 'expected multiple troubleshooting entries under ### headings');
 
   for (const entry of entries) {
-    assertA30Entry(entry);
+    assertTroubleshootingEntry(entry);
   }
 });
 
@@ -343,7 +442,7 @@ test('troubleshooting covers the required PCF failure modes', () => {
   for (const required of requiredEntries) {
     const matches = entries.filter((entry) => entry.title.includes(required.title) && entry.body.includes(required.body));
     assert.equal(matches.length, 1, `expected one troubleshooting entry for ${required.title} / ${required.body}`);
-    assertA30Entry(matches[0]);
+    assertTroubleshootingEntry(matches[0]);
   }
 });
 

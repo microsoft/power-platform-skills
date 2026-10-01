@@ -8,7 +8,15 @@ const path = require('node:path');
 const { loadCli } = require('./helpers/cli-harness.js');
 
 const scriptPath = path.join(__dirname, '..', 'verify-pcf.js');
-const evalFixtureRoot = path.join(__dirname, '..', '..', '..', '..', 'evals', 'pcf', 'fixtures');
+const fixtureRoot = path.join(__dirname, 'fixtures', 'pcf-verify');
+
+test('verification intent fixtures are bundled inside the installed plugin', () => {
+  const pluginRoot = path.join(__dirname, '..', '..');
+  assert.ok(!path.relative(pluginRoot, fixtureRoot).startsWith('..'), 'verification fixtures must not come from outside the plugin');
+  for (const name of ['001-intent-field-clean', '003-intent-quickcreate-subgrid']) {
+    assert.ok(fs.existsSync(path.join(fixtureRoot, name, 'pcf-intent.json')), `${name} fixture is missing`);
+  }
+});
 
 async function run(argv, stubs) {
   const cli = loadCli(scriptPath, { argv, requires: stubs });
@@ -240,7 +248,7 @@ test('verify-pcf reads canonical intent target.column bindings and reaches FormX
   const cli = await run([
     '--env', 'https://contoso.crm.dynamics.com',
     '--control', 'new_Contoso.Controls.StarRating',
-    '--intent', `@${path.join(evalFixtureRoot, '001-intent-field-clean', 'pcf-intent.json')}`,
+    '--intent', `@${path.join(fixtureRoot, '001-intent-field-clean', 'pcf-intent.json')}`,
   ], stubs);
 
   assert.equal(cli.exitCode, 0);
@@ -272,7 +280,7 @@ test('verify-pcf reads canonical intent target.controlId dataset-subgrid binding
   const cli = await run([
     '--env', 'https://contoso.crm.dynamics.com',
     '--control', 'new_Contoso.Controls.StarRating',
-    '--intent', `@${path.join(evalFixtureRoot, '003-intent-quickcreate-subgrid', 'pcf-intent.json')}`,
+    '--intent', `@${path.join(fixtureRoot, '003-intent-quickcreate-subgrid', 'pcf-intent.json')}`,
   ], stubs);
 
   assert.equal(cli.exitCode, 0);

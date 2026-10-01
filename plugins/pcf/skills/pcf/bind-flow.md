@@ -44,4 +44,4 @@ Two checks are distinct and must not be conflated:
 
 ## Unbind and teardown
 
-Before deleting or replacing a control, remove it from every form/grid or reset to the default control, save and publish, then verify again. Observed behavior on 2026-09-29: deleting a bound control failed until unbind → publish → delete. Use `pcf-inventory.js --where-used` as a dependency hint, not as proof that Liquid/text references do not exist.\r\n
+Before deleting or replacing a control, remove it from every form/grid or reset to the default control, save and publish, then verify again. Observed behavior on 2026-09-29: deleting a bound control failed until unbind → publish → delete. Use `pcf-inventory.js --where-used` as a dependency hint, not as proof that Liquid/text references do not exist.
