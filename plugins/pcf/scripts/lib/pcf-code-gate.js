@@ -1,6 +1,6 @@
 'use strict';
 
-const { blankLiterals, blankNonCodePreservingTemplateExpressions, expressionPosition } = require('./source-literals.js');
+const { blankLiterals, blankNonCodePreservingTemplateExpressions, commentRanges, expressionPosition } = require('./source-literals.js');
 
 const BEST_PRACTICES = 'https://learn.microsoft.com/power-apps/developer/component-framework/code-components-best-practices';
 const FEATURE_USAGE = 'https://learn.microsoft.com/power-apps/developer/component-framework/manifest-schema-reference/feature-usage';
@@ -104,6 +104,7 @@ function addFixedElementIdFindings(findings, file, src, mask) {
   //   el.id = "popup";
   //   el.setAttribute("id", "popup");
   //   el.setAttribute('for', 'popup');
+  //   React.createElement("ul", { id: "popup", "aria-controls": "popup" });
   // Derived values are not findings:
   //   <div id={`${this.instanceId}-list`} />
   //   <div id={popupId} />
@@ -112,6 +113,7 @@ function addFixedElementIdFindings(findings, file, src, mask) {
   scanJsxFixedIds(findings, file, src, mask);
   scanDomIdAssignments(findings, file, src, mask);
   scanSetAttributeIds(findings, file, src, mask);
+  scanCreateElementIds(findings, file, src, mask);
 }
 
 function fixedElementIdMessage() {
@@ -175,6 +177,46 @@ function scanSetAttributeIds(findings, file, src, mask) {
     const args = readSetAttributeArgs(src, open);
     if (args.length < 2 || !args[0].literal || !FIXED_ELEMENT_ID_DOM.has(args[0].text) || !args[1].literal) continue;
     findings.push(makeFinding('PCF_CODE_FIXED_ELEMENT_ID', fixedElementIdMessage(), file, lineOf(src, match.index)));
+  }
+}
+
+function scanCreateElementIds(findings, file, src, mask) {
+  const calls = /\b(?:React\s*\.\s*createElement|createElement|h)\s*\(/g;
+  let match;
+  while ((match = calls.exec(mask)) !== null) {
+    if (previousNonSpace(mask, match.index) === '.') continue;
+    const open = mask.indexOf('(', match.index);
+    const close = findMatchingParen(mask, open);
+    if (close === -1) continue;
+    const args = splitTopLevel(mask.slice(open + 1, close), ',');
+    if (args.length < 2) continue;
+    const start = open + 1 + args[1].start;
+    const end = open + 1 + args[1].end;
+    const props = unwrapExpression(withoutComments(src.slice(start, end)), mask.slice(start, end));
+    if (props.mask[0] !== '{' || findMatchingBrace(props.mask, 0) !== props.mask.length - 1) continue;
+
+    // Factory props have the raw shape createElement("ul", { id: "list", "aria-controls": "list" }).
+    // Only inspect top-level props in argument two; nested style objects and child arguments are
+    // not element IDs. A whole literal value warns, but "prefix-" + instanceId remains derived.
+    const bodyStart = start + props.offset + 1;
+    const rawBody = props.raw.slice(1, -1);
+    const maskBody = props.mask.slice(1, -1);
+    for (const range of splitTopLevel(maskBody, ',')) {
+      const rawProperty = rawBody.slice(range.start, range.end);
+      const maskProperty = maskBody.slice(range.start, range.end);
+      const parts = splitTopLevel(maskProperty, ':');
+      if (parts.length < 2) continue;
+      const colon = parts[0].end;
+      const rawKey = rawProperty.slice(0, colon).trim();
+      const quotedKey = isQuote(rawKey[0]) ? readQuotedLiteral(rawKey, 0) : null;
+      const key = quotedKey && quotedKey.literal && quotedKey.end === rawKey.length ? quotedKey.text : rawKey;
+      if (!FIXED_ELEMENT_ID_JSX.has(key)) continue;
+      const value = unwrapExpression(rawProperty.slice(colon + 1), maskProperty.slice(colon + 1));
+      const quotedValue = isQuote(value.raw[0]) ? readQuotedLiteral(value.raw, 0) : null;
+      if (!quotedValue || !quotedValue.literal || quotedValue.end !== value.raw.length) continue;
+      const keyStart = rawProperty.search(/\S/);
+      findings.push(makeFinding('PCF_CODE_FIXED_ELEMENT_ID', fixedElementIdMessage(), file, lineOf(src, bodyStart + range.start + keyStart)));
+    }
   }
 }
 
@@ -556,8 +598,6 @@ function hasGridCustomizerMarker(file, text) {
 
 function hasMethodGuard(text, mask, namespace, method, callIndex) {
   const start = Math.max(0, callIndex - 500);
-  const escapedNamespace = escapeRegExp(namespace);
-  const escapedMethod = escapeRegExp(method);
   const ifHead = /\bif\s*\(/g;
   ifHead.lastIndex = start;
   let match;
@@ -570,54 +610,44 @@ function hasMethodGuard(text, mask, namespace, method, callIndex) {
     if (mask[openBrace] !== '{' || openBrace >= callIndex) continue;
     if (mask.slice(openBrace + 1, callIndex).includes('}')) continue;
 
-    const rawCondition = text.slice(openParen + 1, closeParen);
+    const rawCondition = withoutComments(text.slice(openParen + 1, closeParen));
     const maskCondition = mask.slice(openParen + 1, closeParen);
-    const optionalMethodGuard = new RegExp(`typeof\\s+context\\.${escapedNamespace}\\?\\.${escapedMethod}\\s*={2,3}\\s*['"]function['"]`, 'g');
-    // A negated check is the branch where the method is absent: `!(typeof context.device?.m === "function")`.
-    // That must not count. `||` with an unrelated operand is also not dominating; the else branch never
-    // reaches this return because a `}` sits between the true-branch brace and the call.
-    if (hasPositiveCodeMatch(optionalMethodGuard, rawCondition, maskCondition)) {
-      if (!maskCondition.includes('||')) return true;
-      continue;
-    }
-
-    // Dotted guards dereference the namespace before checking the method, so this heuristic accepts
-    // them only in pure-AND conditions. Any `||` in the balanced condition can make the namespace
-    // guard non-dominating; fail closed and point authors to the optional-chain form, which is always
-    // safe on an absent namespace and remains accepted above.
+    // A positive substring is not a proof: !(ready && typeof X === "function") and
+    // (typeof X === "function") === false both run where X may be absent. Prove the whole true
+    // condition, keeping OR conservative and requiring a preceding namespace check for dotted X.
     if (maskCondition.includes('||')) continue;
-
-    const dottedMethodGuard = new RegExp(`typeof\\s+context\\.${escapedNamespace}\\.${escapedMethod}\\s*={2,3}\\s*['"]function['"]`, 'g');
-    let methodMatch;
-    while ((methodMatch = dottedMethodGuard.exec(rawCondition)) !== null) {
-      if (maskCondition[methodMatch.index] === ' ') continue;
-      if (!isPositiveGuard(rawCondition, methodMatch.index)) continue;
-      if (hasPositiveNamespaceGuardBefore(rawCondition.slice(0, methodMatch.index), maskCondition.slice(0, methodMatch.index), namespace)) return true;
-    }
+    if (provePositiveCondition(rawCondition, maskCondition, namespace, method).methodSafe) return true;
   }
   return false;
 }
 
-function hasPositiveNamespaceGuardBefore(rawPrefix, maskPrefix, namespace) {
-  const escapedNamespace = escapeRegExp(namespace);
-  // Heuristic only: require an explicit positive namespace check joined by && before the dotted
-  // method check, so `!context.device && typeof context.device.m === "function"` and `||` do not
-  // make an unsafe dereference look guarded.
-  const guards = [
-    new RegExp(`\\bcontext\\.${escapedNamespace}\\s*!=\\s*null\\s*&&`, 'g'),
-    new RegExp(`\\bcontext\\.${escapedNamespace}\\s*!==\\s*undefined\\s*&&`, 'g'),
-    new RegExp(`!!\\s*context\\.${escapedNamespace}\\s*&&`, 'g'),
-    new RegExp(`\\bcontext\\.${escapedNamespace}\\s*&&`, 'g'),
-  ];
-  for (const guard of guards) {
-    let match;
-    while ((match = guard.exec(rawPrefix)) !== null) {
-      if (maskPrefix[match.index] === ' ') continue;
-      if (guard.source.startsWith('\\b') && previousNonSpace(rawPrefix, match.index) === '!') continue;
-      if (!rawPrefix.slice(match.index + match[0].length).includes('||')) return true;
+function provePositiveCondition(raw, mask, namespace, method, namespaceSafe = false) {
+  const expression = unwrapExpression(raw, mask);
+  raw = expression.raw;
+  mask = expression.mask;
+  const unproven = { namespaceSafe, methodSafe: false };
+  // Ternary and comma expressions bind more loosely than &&: "guard && ready ? ready : true"
+  // and "(guard && ready), true" can be true without the guard. Optional chaining's ?. is not a
+  // ternary separator. Unsupported leaves stay unproven rather than borrowing a nested match.
+  if (splitTopLevel(mask, '?').length > 1 || splitTopLevel(mask, ',').length > 1) return unproven;
+  const conjunction = splitTopLevel(mask, '&&');
+  if (conjunction.length > 1) {
+    let methodSafe = false;
+    for (const range of conjunction) {
+      const proof = provePositiveCondition(raw.slice(range.start, range.end), mask.slice(range.start, range.end), namespace, method, namespaceSafe);
+      namespaceSafe = proof.namespaceSafe;
+      methodSafe = methodSafe || proof.methodSafe;
     }
+    return { namespaceSafe, methodSafe };
   }
-  return false;
+
+  const namespacePath = `context\\.${escapeRegExp(namespace)}`;
+  const optionalMethod = `${namespacePath}\\?\\.${escapeRegExp(method)}`;
+  const dottedMethod = `${namespacePath}\\.${escapeRegExp(method)}`;
+  const provesMethod = (reference) => new RegExp(`^(?:${reference}|typeof\\s+${reference}\\s*={2,3}\\s*(['"])function\\1)$`).test(raw);
+  const methodSafe = provesMethod(optionalMethod) || (namespaceSafe && provesMethod(dottedMethod));
+  const provesNamespace = new RegExp(`^(?:${namespacePath}|!!\\s*${namespacePath}|${namespacePath}\\s*!=\\s*null|${namespacePath}\\s*!==\\s*undefined)$`).test(raw);
+  return { namespaceSafe: namespaceSafe || provesNamespace || methodSafe, methodSafe };
 }
 
 function previousNonSpace(text, index) {
@@ -625,6 +655,47 @@ function previousNonSpace(text, index) {
     if (!/\s/.test(text[i])) return text[i];
   }
   return '';
+}
+
+function withoutComments(text) {
+  let code = text;
+  for (const { start, end } of commentRanges(text).reverse()) {
+    code = code.slice(0, start) + code.slice(start, end).replace(/[^\n\r]/g, ' ') + code.slice(end);
+  }
+  return code;
+}
+
+function unwrapExpression(raw, mask) {
+  let offset = 0;
+  while (true) {
+    const start = raw.length - raw.trimStart().length;
+    const end = raw.trimEnd().length;
+    offset += start;
+    raw = raw.slice(start, end);
+    mask = mask.slice(start, end);
+    if (mask[0] !== '(' || findMatchingParen(mask, 0) !== mask.length - 1) return { raw, mask, offset };
+    raw = raw.slice(1, -1);
+    mask = mask.slice(1, -1);
+    offset += 1;
+  }
+}
+
+function splitTopLevel(mask, separator) {
+  const ranges = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < mask.length; i += 1) {
+    if ('([{'.includes(mask[i])) depth += 1;
+    else if (')]}'.includes(mask[i])) depth -= 1;
+    else if (depth === 0 && mask.startsWith(separator, i)) {
+      if (separator === '?' && mask[i + 1] === '.') continue;
+      ranges.push({ start, end: i });
+      i += separator.length - 1;
+      start = i + 1;
+    }
+  }
+  ranges.push({ start, end: mask.length });
+  return ranges;
 }
 
 function findMatchingParen(mask, open) {
@@ -638,25 +709,6 @@ function findMatchingParen(mask, open) {
     }
   }
   return -1;
-}
-
-function hasPositiveCodeMatch(re, raw, mask) {
-  re.lastIndex = 0;
-  let match;
-  while ((match = re.exec(raw)) !== null) {
-    if (mask[match.index] === ' ') continue;
-    if (!isPositiveGuard(raw, match.index)) continue;
-    return true;
-  }
-  return false;
-}
-
-function isPositiveGuard(raw, index) {
-  // `!(typeof context.device?.captureImage === "function")` still contains the positive comparison.
-  // Walk back over whitespace and the parentheses of the negation so only a dominating true branch counts.
-  let i = index - 1;
-  while (i >= 0 && (raw[i] === '(' || /\s/.test(raw[i]))) i -= 1;
-  return raw[i] !== '!';
 }
 
 function hasCodeMatch(re, raw, mask) {

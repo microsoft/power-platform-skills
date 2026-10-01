@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { parseManifest, lintManifest, diffManifests, findManifests } = require('../lib/pcf-manifest.js');
 const { loadMatrix } = require('../lib/pcf-matrix.js');
+const { planScaffold } = require('../lib/pcf-scaffold.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 const FIXTURES = path.join(__dirname, 'fixtures', 'pcf-manifests');
@@ -194,6 +195,90 @@ for (const [code, beforeInner, afterInner, beforeAttrs = {}, afterAttrs = {}] of
     assert.ok(diffManifests(before, after).breaking.some((finding) => finding.code === code));
   });
 }
+
+function generatedDatasetModel() {
+  const plan = planScaffold({ template: 'dataset-standard', namespace: 'Contoso.Controls', name: 'DatasetGate' });
+  const xml = plan.files.find((file) => file.relPath === path.join('DatasetGate', 'ControlManifest.Input.xml')).content;
+  const parsed = parseManifest(xml);
+  assert.deepEqual(parsed.errors, []);
+  return parsed.model;
+}
+
+const datasetDiffCases = [
+  ['dataset removal', 'PCF_DIFF_PROPERTY_REMOVED', (model) => { model.dataSets = []; }, /Dataset.*sampleDataSet/],
+  ['dataset rename', 'PCF_DIFF_PROPERTY_REMOVED', (model) => { model.dataSets[0].name = 'renamedRows'; }, /Dataset.*sampleDataSet/],
+  ['property-set removal', 'PCF_DIFF_PROPERTY_REMOVED', (model) => { model.dataSets[0].propertySets = []; }, /sampleDataSet.*sampleProperty/],
+  ['property-set rename', 'PCF_DIFF_PROPERTY_REMOVED', (model) => { model.dataSets[0].propertySets[0].name = 'renamedColumn'; }, /sampleDataSet.*sampleProperty/],
+  ['property-set type change', 'PCF_DIFF_TYPE_CHANGED', (model) => { model.dataSets[0].propertySets[0].ofType = 'Currency'; }, /sampleDataSet.*sampleProperty.*SingleLine\.Text/],
+  ['property-set usage change', 'PCF_DIFF_USAGE_CHANGED', (model) => { model.dataSets[0].propertySets[0].usage = 'input'; }, /sampleDataSet.*sampleProperty.*bound.*input/],
+  ['property-set becoming required', 'PCF_DIFF_REQUIRED_ADDED', (model) => { model.dataSets[0].propertySets[0].required = true; }, /sampleDataSet.*sampleProperty/],
+  ['new required property-set', 'PCF_DIFF_REQUIRED_ADDED', (model) => {
+    model.dataSets[0].propertySets.push({ name: 'requiredColumn', ofType: 'SingleLine.Text', usage: 'bound', required: true });
+  }, /sampleDataSet.*requiredColumn/],
+];
+
+for (const [name, code, change, message] of datasetDiffCases) {
+  test(`diffManifests detects ${name} after a version bump`, () => {
+    const before = generatedDatasetModel();
+    const after = structuredClone(before);
+    after.control.version = '0.0.2';
+    change(after);
+
+    const diff = diffManifests(before, after);
+
+    assert.deepEqual(diff.breaking.map((finding) => finding.code), [code]);
+    assert.equal(diff.breaking[0].severity, 'error');
+    assert.match(diff.breaking[0].message, message);
+    assert.deepEqual(diff.compatible, []);
+  });
+}
+
+test('diffManifests compares resolved property-set type-group members rather than group names', () => {
+  const before = generatedDatasetModel();
+  before.typeGroups.columns = ['SingleLine.Text', 'SingleLine.TextArea'];
+  const propertySet = before.dataSets[0].propertySets[0];
+  propertySet.ofType = undefined;
+  propertySet.ofTypeGroup = 'columns';
+  const after = structuredClone(before);
+  after.control.version = '0.0.2';
+  after.typeGroups.columns = ['SingleLine.Text'];
+
+  const diff = diffManifests(before, after);
+
+  assert.deepEqual(diff.breaking.map((finding) => finding.code), ['PCF_DIFF_TYPE_CHANGED']);
+  assert.match(diff.breaking[0].message, /sampleDataSet.*sampleProperty.*SingleLine\.TextArea/);
+  assert.deepEqual(diff.compatible, []);
+
+  const renamed = structuredClone(before);
+  renamed.control.version = '0.0.2';
+  renamed.typeGroups.renamedColumns = renamed.typeGroups.columns;
+  delete renamed.typeGroups.columns;
+  renamed.dataSets[0].propertySets[0].ofTypeGroup = 'renamedColumns';
+  assert.deepEqual(diffManifests(before, renamed).breaking, [], 'a group rename preserving support is compatible');
+
+  const expanded = structuredClone(before);
+  expanded.control.version = '0.0.2';
+  expanded.typeGroups.columns.push('SingleLine.Email');
+  expanded.dataSets[0].propertySets.push({ name: 'optionalColumn', ofType: 'SingleLine.Text', usage: 'bound', required: false });
+  assert.deepEqual(diffManifests(before, expanded).breaking, [], 'additional type support and optional columns are compatible');
+});
+
+test('diffManifests scopes same-named property-sets to their dataset', () => {
+  const before = generatedDatasetModel();
+  const second = structuredClone(before.dataSets[0]);
+  second.name = 'secondaryRows';
+  before.dataSets.push(second);
+  const after = structuredClone(before);
+  after.control.version = '0.0.2';
+  after.dataSets[1].propertySets[0].ofType = 'Currency';
+
+  const diff = diffManifests(before, after);
+
+  assert.deepEqual(diff.breaking.map((finding) => finding.code), ['PCF_DIFF_TYPE_CHANGED']);
+  assert.match(diff.breaking[0].message, /secondaryRows.*sampleProperty/);
+  assert.doesNotMatch(diff.breaking[0].message, /sampleDataSet/);
+});
+
 
 test('diffManifests does not warn when a changed manifest bumps the version', () => {
   const before = parseManifest(m({}, '<resources><code path="index.ts" /></resources>')).model;

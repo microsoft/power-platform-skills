@@ -356,6 +356,104 @@ test('scanSource does not loop on TypeScript generics while scanning element ids
   assert.ok(Date.now() - started < 2000);
 });
 
+const enclosingGuardCases = [
+  ['negation around a conjunction', '!(ready && typeof context.device?.captureImage === "function")'],
+  ['guard compared to false', '(typeof context.device?.captureImage === "function") === false'],
+  ['negated conjunction nested inside AND', 'ready && !(fallback && typeof context.device?.captureImage === "function")'],
+  ['negation around dotted namespace and method guards', '!(context.device && typeof context.device.captureImage === "function")'],
+  ['guard compared not-equal to true', '(typeof context.device?.captureImage === "function") !== true'],
+  ['ternary fallback after AND', 'typeof context.device?.captureImage === "function" && ready ? ready : true'],
+  ['comma fallback after AND', '(typeof context.device?.captureImage === "function" && ready), true'],
+];
+
+for (const [name, condition] of enclosingGuardCases) {
+  test(`featureCoherence rejects ${name}`, () => {
+    const source = `if (${condition}) { context.device.captureImage(); }`;
+    assertCode(featureCoherence(manifest(usesFeature('Device.captureImage')), [{ file: FILE, text: source }], ['pages']), 'PCF_PAGES_API', 'error');
+  });
+}
+
+test('featureCoherence proves method truthiness in positive AND branches without accepting negating comparisons', () => {
+  const pages = (condition) => featureCoherence(manifest(usesFeature('Device.captureImage')), [{
+    file: FILE, text: `if (${condition}) { context.device.captureImage(); }`,
+  }], ['pages']);
+  for (const condition of [
+    'context.device?.captureImage',
+    '(context.device?.captureImage)',
+    'ready && context.device?.captureImage',
+    'context.device && context.device.captureImage',
+    'context.device != null && context.device.captureImage',
+    'context.device !== undefined && context.device.captureImage',
+    '!!context.device && context.device.captureImage',
+    'context.device && (ready && typeof context.device.captureImage === "function")',
+    '/* capability */ typeof context.device?.captureImage === /* expected */ "function"',
+    'typeof context.device?.captureImage === "function" && !busy',
+  ]) {
+    assert.deepEqual(pages(condition), [], condition);
+  }
+  for (const condition of [
+    'typeof context.device?.captureImage != "function"',
+    'typeof context.device?.captureImage !== "function"',
+    '!(context.device?.captureImage)',
+    'context.device.captureImage',
+    'context.device?.captureImage || ready',
+    'context.device && !(typeof context.device.captureImage === "function")',
+  ]) {
+    assertCode(pages(condition), 'PCF_PAGES_API', 'error');
+  }
+});
+
+for (const factory of ['React.createElement', 'createElement', 'h']) {
+  test(`scanSource warns on literal ID and association props in ${factory} calls, not derived values`, () => {
+    const warned = (source) => scan(source).filter((finding) => finding.code === 'PCF_CODE_FIXED_ELEMENT_ID');
+    const source = [
+      `${factory}("ul", {`,
+      '  id: "listbox",',
+      '  htmlFor: "input",',
+      '  "aria-controls": "listbox",',
+      '  "aria-labelledby": "label",',
+      '  "aria-describedby": "description",',
+      '  "aria-activedescendant": "option",',
+      '});',
+    ].join('\n');
+    const findings = warned(source);
+
+    assert.equal(findings.length, 6, source);
+    assert.deepEqual(findings.map((finding) => finding.line), [2, 3, 4, 5, 6, 7]);
+    for (const finding of findings) {
+      assert.equal(finding.severity, 'warning');
+      assert.match(finding.message, /two instances/i);
+      assert.match(finding.message, /useId|instance counter/i);
+    }
+    for (const positive of [
+      `${factory}("ul", ({ "id": "fixed" }));`,
+      `${factory}("ul", { id: ("fixed") });`,
+      `${factory}("ul", { /* key */ id: /* value */ "fixed" });`,
+      factory + '("ul", { id: `fixed` });',
+    ]) {
+      assert.equal(warned(positive).length, 1, positive);
+    }
+    for (const negative of [
+      `${factory}("ul", { id: instanceId + "-list", htmlFor: inputId, "aria-controls": listId, "aria-labelledby": labelId, "aria-describedby": descriptionId, "aria-activedescendant": activeId });`,
+      `${factory}("ul", { id: "prefix-" + instanceId });`,
+      factory + '("ul", { id: `${instanceId}-list` });',
+      `${factory}("ul", { id: getId("fixed", instanceId) });`,
+      `${factory}("ul", { style: { id: "nested" }, title: "fixed" });`,
+      `${factory}("ul", props, { id: "child" });`,
+      `${factory}({ id: "first-argument" }, null);`,
+      `${factory}("ul", { /* id: "comment-only" */ title: "text" });`,
+      `// ${factory}("ul", { id: "comment-only" });`,
+      `const note = ${JSON.stringify(`${factory}("ul", { id: "string-only" });`)};`,
+      'const props = { id: "unrelated" };',
+      'Other.createElement("ul", { id: "unrelated-factory" });',
+      'object.h("ul", { id: "unrelated-factory" });',
+    ]) {
+      assert.deepEqual(warned(negative), [], negative);
+    }
+  });
+}
+
+
 test('gateSources partitions errors and warnings and labels code-gate output as heuristic diagnostics', () => {
   const result = gateSources({
     manifestModel: manifest(),

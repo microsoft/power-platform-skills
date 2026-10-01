@@ -317,8 +317,6 @@ function lintExternalServices(model, add) {
 function diffManifests(before, after) {
   const breaking = [];
   const compatible = [];
-  const beforeByName = new Map(before.properties.map((prop) => [prop.name, prop]));
-  const afterByName = new Map(after.properties.map((prop) => [prop.name, prop]));
 
   if (before.control.namespace !== after.control.namespace || before.control.constructor !== after.control.constructor) {
     breaking.push(finding('PCF_DIFF_IDENTITY_CHANGED', 'error', 'The control namespace or constructor changed.', 'Keep the same namespace and constructor for upgrades, or ship a new control identity.'));
@@ -327,22 +325,21 @@ function diffManifests(before, after) {
     breaking.push(finding('PCF_DIFF_CONTROL_TYPE_CHANGED', 'error', 'The control type changed.', 'Keep the existing control-type for compatible upgrades.'));
   }
 
-  for (const [name, beforeProp] of beforeByName) {
-    const afterProp = afterByName.get(name);
-    if (!afterProp) {
-      breaking.push(finding('PCF_DIFF_PROPERTY_REMOVED', 'error', `Property '${name}' was removed.`, `Keep '${name}' or release a new major control identity.`));
+  diffPropertyContracts(before.properties, after.properties, before, after, breaking);
+  const afterDataSets = new Map(after.dataSets.map((dataSet) => [dataSet.name, dataSet]));
+  // Bindings name both <data-set name="rows"> and its <property-set name="column">. Scope column
+  // identities to that dataset and reuse the property type/usage/required checks rather than compare
+  // only the top-level properties. See: https://learn.microsoft.com/en-us/power-apps/developer/component-framework/manifest-schema-reference/property-set
+  for (const beforeDataSet of before.dataSets) {
+    const name = beforeDataSet.name;
+    const afterDataSet = afterDataSets.get(name);
+    if (!afterDataSet) {
+      breaking.push(finding('PCF_DIFF_PROPERTY_REMOVED', 'error', `Dataset '${name}' was removed.`, `Keep dataset '${name}' or release a new major control identity.`));
       continue;
     }
-    const removedTypes = removedPropertyTypes(beforeProp, before, afterProp, after);
-    if (removedTypes.length > 0) {
-      breaking.push(finding('PCF_DIFF_TYPE_CHANGED', 'error', `Property '${name}' removed previously supported type(s): ${removedTypes.join(', ')}.`, `Keep '${name}' compatible with ${propertyTypes(beforeProp, before).join(', ')} or add a new property.`));
-    }
-    if (beforeProp.usage !== afterProp.usage) {
-      breaking.push(finding('PCF_DIFF_USAGE_CHANGED', 'error', `Property '${name}' changed usage from '${beforeProp.usage}' to '${afterProp.usage}'.`, 'Keep property usage stable for existing controls.'));
-    }
-    if (!beforeProp.required && afterProp.required) {
-      breaking.push(finding('PCF_DIFF_REQUIRED_ADDED', 'error', `Property '${name}' became required.`, `Keep '${name}' optional or add a new optional property.`));
-    }
+    diffPropertyContracts(beforeDataSet.propertySets, afterDataSet.propertySets, before, after, breaking, {
+      label: 'Property-set', scope: name, addedRequired: true,
+    });
   }
 
   const versionComparison = compareVersions(after.control.version || '0.0.0', before.control.version || '0.0.0');
@@ -351,6 +348,38 @@ function diffManifests(before, after) {
   }
 
   return { breaking, compatible };
+}
+
+function diffPropertyContracts(beforeProperties, afterProperties, before, after, breaking, { label = 'Property', scope = '', addedRequired = false } = {}) {
+  const beforeByName = new Map(beforeProperties.map((prop) => [prop.name, prop]));
+  const afterByName = new Map(afterProperties.map((prop) => [prop.name, prop]));
+  const displayName = (name) => scope ? `${scope}.${name}` : name;
+  for (const [name, beforeProp] of beforeByName) {
+    const qualifiedName = displayName(name);
+    const contract = `${label} '${qualifiedName}'`;
+    const afterProp = afterByName.get(name);
+    if (!afterProp) {
+      breaking.push(finding('PCF_DIFF_PROPERTY_REMOVED', 'error', `${contract} was removed.`, `Keep '${qualifiedName}' or release a new major control identity.`));
+      continue;
+    }
+    const removedTypes = removedPropertyTypes(beforeProp, before, afterProp, after);
+    if (removedTypes.length > 0) {
+      breaking.push(finding('PCF_DIFF_TYPE_CHANGED', 'error', `${contract} removed previously supported type(s): ${removedTypes.join(', ')}.`, `Keep '${qualifiedName}' compatible with ${propertyTypes(beforeProp, before).join(', ')} or add a new property.`));
+    }
+    if (beforeProp.usage !== afterProp.usage) {
+      breaking.push(finding('PCF_DIFF_USAGE_CHANGED', 'error', `${contract} changed usage from '${beforeProp.usage}' to '${afterProp.usage}'.`, `Keep ${label.toLowerCase()} usage stable for existing controls.`));
+    }
+    if (!beforeProp.required && afterProp.required) {
+      breaking.push(finding('PCF_DIFF_REQUIRED_ADDED', 'error', `${contract} became required.`, `Keep '${qualifiedName}' optional or add a new optional property.`));
+    }
+  }
+  if (addedRequired) {
+    for (const [name, prop] of afterByName) {
+      if (!beforeByName.has(name) && prop.required) {
+        breaking.push(finding('PCF_DIFF_REQUIRED_ADDED', 'error', `${label} '${displayName(name)}' was added as required.`, 'Add new property-sets as optional so existing dataset bindings remain valid.'));
+      }
+    }
+  }
 }
 
 function typeKey(prop) {
