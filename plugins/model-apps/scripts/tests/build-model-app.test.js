@@ -344,6 +344,24 @@ test('transient auto-retry: a view rejected for a column the spec never declared
   assert.ok(!events.some((e) => e.status === 'retry'), 'no retry for a column nobody declared');
 });
 
+test('transient auto-retry: a declared column that never appears exhausts the retries and surfaces the original error', async () => {
+  // The lag clause must not loop: maxRetries (3 on --apply) bounds it to four attempts, and the halt that ends the
+  // run still carries Dataverse's own words so the operator can see which column never became visible.
+  const { sdk } = mockSdk();
+  const push = sdk.pushArtifact;
+  sdk.pushArtifact = async (type, ...rest) => {
+    if (type === 'view') { const e = new Error(LAG_MESSAGE); e.statusCode = 400; throw e; }
+    return push(type, ...rest);
+  };
+  const events = [];
+  const journal = { path: 'x', record: (e) => events.push(e), close: () => {} };
+  await assert.rejects(
+    buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, journal }),
+    (err) => /entity doesn't contain attribute with Name = 'new_customerid'/.test(String((err && err.message) || '') + String((err && err.cause && err.cause.message) || '')),
+  );
+  assert.strictEqual(events.filter((e) => e.status === 'retry').length, 3, 'three retries, then the halt');
+});
+
 test('transient auto-retry: a transient halt is retried and then succeeds', async () => {
   const { sdk, calls } = mockSdk();
   let firstTable = true;
