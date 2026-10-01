@@ -18,7 +18,11 @@ const { redact, redactHtml } = require('./page-helpers');
 // this name because it can't guess it.
 const AXE_KEY = `__ppA11yAxe_${crypto.randomBytes(8).toString('hex')}`;
 
-const WCAG_TAGS = Object.freeze(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']);
+// Every WCAG A/AA level tag axe 4.x uses. 'wcag22a' is listed even though axe 4.13
+// tags no rule with it today, so a future pinned axe that adds 2.2 Level A rules
+// (for example 3.2.6 Consistent Help) is included without a code change.
+// https://github.com/dequelabs/axe-core/blob/develop/doc/API.md#axe-core-tags
+const WCAG_TAGS = Object.freeze(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22a', 'wcag22aa']);
 
 function axeTags({ bestPractice = true } = {}) {
   return bestPractice ? [...WCAG_TAGS, 'best-practice'] : [...WCAG_TAGS];

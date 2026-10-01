@@ -5,7 +5,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const {
-  DIR_PREFIX, FILE_NAME, createAuthStatePath, isManagedAuthStatePath, openAuthStateFile, removeAuthState, summarizeAuthState, writeAuthState,
+  DIR_PREFIX, FILE_NAME, createAuthStatePath, filterAuthStateForSite, isManagedAuthStatePath, openAuthStateFile, removeAuthState, summarizeAuthState, writeAuthState,
 } = require('../lib/a11y/auth-state');
 const { parse } = require('../a11y-capture-auth');
 
@@ -118,4 +118,28 @@ test('a11y-capture-auth parse validates arguments', () => {
   // Dependencies resolve only from --deps-dir or the plugin cache, never the site
   // project, so the flag was removed rather than silently ignored.
   assert.throws(() => parse(['--url', 'http://x', '--project-root', '.']), /Unknown argument: --project-root/);
+});
+
+test('filterAuthStateForSite keeps only cookies and storage for the audited site', () => {
+  const state = {
+    cookies: [
+      { name: 'a', value: 'v', domain: 'contoso.powerappsportals.com' },
+      { name: 'b', value: 'v', domain: '.powerappsportals.com' },
+      { name: 'c', value: 'v', domain: 'login.microsoftonline.com' },
+      { name: 'd', value: 'v', domain: 'evilcontoso.powerappsportals.com' },
+      { name: 'e', value: 'v', domain: '' },
+    ],
+    origins: [
+      { origin: 'https://contoso.powerappsportals.com', localStorage: [] },
+      { origin: 'https://login.microsoftonline.com', localStorage: [] },
+    ],
+  };
+  const filtered = filterAuthStateForSite(state, 'https://contoso.powerappsportals.com/start');
+  assert.deepEqual(filtered.cookies.map((c) => c.name), ['a', 'b']);
+  assert.deepEqual(filtered.origins.map((o) => o.origin), ['https://contoso.powerappsportals.com']);
+  assert.deepEqual(filterAuthStateForSite({}, 'https://contoso.powerappsportals.com'), { cookies: [], origins: [] });
+});
+
+test('a11y-capture-auth refuses credentials in --url', () => {
+  assert.throws(() => parse(['--url', 'https://maker:secret@contoso.powerappsportals.com']), (err) => /user name or password/.test(err.message) && !err.message.includes('secret'));
 });

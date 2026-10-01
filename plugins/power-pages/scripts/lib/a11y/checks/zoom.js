@@ -3,6 +3,9 @@
 // WCAG 1.4.4 Resize Text: text must stay readable at 200% without loss of content.
 //
 // Doubling the root font size approximates a user's "text size" browser setting.
+// It doubles the COMPUTED size in px rather than setting "200%": a percentage on the
+// root resolves against the browser default (16px), so a site that sets
+// html { font-size: 62.5% } (10px) would jump to 32px (3.2x) instead of 20px.
 // Layouts that use rem/em scale with it; fixed-height containers with overflow
 // hidden then clip their text, which is the defect this looks for. Fixed px font
 // sizes do not scale with this method at all, so a pass here is not proof of
@@ -14,7 +17,7 @@ function findClippedTextInPage() {
   const h = window.__ppA11y;
   const root = document.documentElement;
   const previous = root.style.fontSize;
-  root.style.fontSize = '200%';
+  root.style.fontSize = `${parseFloat(getComputedStyle(root).fontSize) * 2}px`;
   // Force layout before measuring.
   void root.offsetHeight;
   try {

@@ -21,7 +21,8 @@
 //
 // Accessibility violations are the skill's normal output, so this validator never
 // blocks because the site failed the audit. It blocks only when the marker or report is
-// malformed, misreports the outcome, or a signed-in session was left on disk.
+// malformed (including a wrong schemaVersion or skill, or non-boolean session fields),
+// misreports the outcome, or a signed-in session was left on disk.
 
 const fs = require('fs');
 const path = require('path');
@@ -54,6 +55,15 @@ runValidation((cwd) => {
 
   const errors = [];
 
+  // Another tool (or an older skill version) writing to the same path must not pass as
+  // this skill's result.
+  if (marker.schemaVersion !== 1) {
+    errors.push(`schemaVersion must be 1 (found ${JSON.stringify(marker.schemaVersion)})`);
+  }
+  if (marker.skill !== 'audit-accessibility') {
+    errors.push(`skill must be "audit-accessibility" (found ${JSON.stringify(marker.skill)})`);
+  }
+
   if (!STATUSES.has(marker.status)) {
     errors.push(`status must be "Completed" or "Incomplete" (found ${JSON.stringify(marker.status)})`);
   }
@@ -77,6 +87,15 @@ runValidation((cwd) => {
   const blocking = Number(marker.summary && marker.summary.blocking);
   if (Number.isFinite(blocking) && blocking > 0 && marker.outcome && marker.outcome !== 'failed') {
     errors.push(`outcome is "${marker.outcome}" but summary.blocking is ${blocking}; use "failed"`);
+  }
+
+  // A strict boolean, so "signedIn": "true" or 1 can't skip the session-cleanup rule
+  // below, which only fires on signedIn === true.
+  if (marker.signedIn !== undefined && typeof marker.signedIn !== 'boolean') {
+    errors.push(`signedIn must be true or false (found ${JSON.stringify(marker.signedIn)})`);
+  }
+  if (marker.sessionRemoved !== undefined && typeof marker.sessionRemoved !== 'boolean') {
+    errors.push(`sessionRemoved must be true or false (found ${JSON.stringify(marker.sessionRemoved)})`);
   }
 
   if (marker.signedIn === true && marker.sessionRemoved !== true) {

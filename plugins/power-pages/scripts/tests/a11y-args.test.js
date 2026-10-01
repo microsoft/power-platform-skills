@@ -73,3 +73,15 @@ test('states run only the checks that keep the state open', () => {
 test('exit codes keep "could not audit" distinct from "found violations"', () => {
   assert.deepEqual(EXIT, { PASS: 0, VIOLATIONS: 1, USAGE: 2, LOAD_FAILURE: 3, MISSING_DEPS: 4 });
 });
+
+test('parseArgs refuses credentials in --url without echoing them', () => {
+  for (const url of ['https://maker:hunter2@contoso.powerappsportals.com', 'https://token@contoso.powerappsportals.com']) {
+    assert.throws(() => parseArgs(['--url', url]), (err) => err instanceof UsageError
+      && /user name or password/.test(err.message) && !err.message.includes('hunter2') && !err.message.includes('token@'));
+  }
+});
+
+test('parseArgs drops the query string and hash from --url', () => {
+  const opts = parseArgs(['--url', 'https://contoso.powerappsportals.com/start?code=abc&state=xyz#frag']);
+  assert.equal(opts.url.href, 'https://contoso.powerappsportals.com/start');
+});

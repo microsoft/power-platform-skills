@@ -60,8 +60,9 @@ Audit options
   --states <file>           JSON file of interaction states to audit. Each state
                             runs ${STATE_CHECKS.join(' and ')} (whichever are selected);
                             state-changing requests are blocked while it replays.
-  --allow-form-submit       Allow state steps that would submit a form, and stop
-                            blocking state-changing requests during replay.
+  --allow-form-submit       Master switch for form submission. Only states that
+                            also set "allowFormSubmit": true may submit a form or
+                            send state-changing requests; all others stay guarded.
 
 Session and environment
   --auth-state <file>       Playwright storage state from a11y-capture-auth.js.
@@ -107,6 +108,17 @@ function parseBaseUrl(raw) {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new UsageError(`--url must use http or https: ${raw}`);
   }
+  // --url ends up in the JSON report (baseUrl) and the skill's committed marker, so
+  // it must not carry secrets. Credentials in the userinfo part are refused outright
+  // (the message omits the raw value so they never reach the terminal either); use
+  // a11y-capture-auth.js to audit signed-in pages instead.
+  if (url.username || url.password) {
+    throw new UsageError('--url must not contain a user name or password. Use a11y-capture-auth.js to audit signed-in pages.');
+  }
+  // A query string can carry tokens (for example a signed preview link), and the base
+  // only scopes the crawl to an origin + path. Audit a page that needs its query by
+  // passing it as a route: --routes "/search?q=help".
+  url.search = '';
   url.hash = '';
   return url;
 }

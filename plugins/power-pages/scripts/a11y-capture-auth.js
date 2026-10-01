@@ -16,6 +16,8 @@
 // Stops when the browser window is closed, when --done-file exists (lets an agent
 // end capture without the user closing the window), or after --timeout-sec.
 //
+// Saves only cookies for the site's host and localStorage for its origin; identity
+// provider cookies picked up during sign-in are dropped (filterAuthStateForSite).
 // Prints JSON: { authState: <path>, cookies: <count>, domains: <count>, originsWithStorage: <count> }.
 // Never prints cookie names or values.
 // Exit codes: 0 captured, 1 nothing captured or browser error, 2 usage, 4 missing deps.
@@ -24,7 +26,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { EXIT } = require('./lib/a11y/args');
 const { candidateRoots, launchBrowser, loadPlaywright, MissingDependencyError } = require('./lib/a11y/deps');
-const { openAuthStateFile, removeAuthState, summarizeAuthState, writeAuthState } = require('./lib/a11y/auth-state');
+const { filterAuthStateForSite, openAuthStateFile, removeAuthState, summarizeAuthState, writeAuthState } = require('./lib/a11y/auth-state');
 
 const USAGE = 'Usage: node a11y-capture-auth.js --url <site-url> [--timeout-sec 600] [--done-file <path>] [--deps-dir <p>]\n'
   + '       node a11y-capture-auth.js --remove <storage-state-path>';
@@ -42,6 +44,8 @@ function parse(argv) {
       let u;
       try { u = new URL(value); } catch { throw new Error(`--url is not a valid URL: ${value}`); }
       if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('--url must use http or https');
+      // Never echo the value: it would print the credentials this refuses.
+      if (u.username || u.password) throw new Error('--url must not contain a user name or password; sign in in the browser window instead');
       opts.url = u.toString();
     } else if (flag === '--timeout-sec') {
       if (!/^\d+$/.test(value) || Number(value) < 10 || Number(value) > 3600) throw new Error('--timeout-sec must be 10-3600');
@@ -60,6 +64,7 @@ async function capture(opts, { stderr = process.stderr } = {}) {
   const { file, fd } = openAuthStateFile();
   let saved = null;
   let closed = false;
+  let completed = false;
   try {
     const context = await browser.newContext({ viewport: null });
     const page = await context.newPage();
@@ -70,19 +75,29 @@ async function capture(opts, { stderr = process.stderr } = {}) {
 
     const deadline = Date.now() + opts.timeoutSec * 1000;
     while (!closed && Date.now() < deadline) {
+      let state;
       try {
-        saved = await context.storageState();
-        writeAuthState(fd, saved);
+        state = await context.storageState();
       } catch {
         // Context closed between the check and the call — the last save stands.
         break;
       }
+      // Only the read above is expected to fail when the user closes the window. A
+      // write failure (disk full, file locked by antivirus) must not be swallowed:
+      // the file could hold a truncated or stale session, so it propagates and the
+      // finally block deletes the file.
+      saved = filterAuthStateForSite(state, opts.url);
+      writeAuthState(fd, saved);
       if (opts.doneFile && fs.existsSync(opts.doneFile)) break;
       await new Promise((r) => setTimeout(r, 2000));
     }
+    completed = true;
   } finally {
     fs.closeSync(fd);
     await browser.close().catch(() => {});
+    if (!completed) {
+      try { removeAuthState(file); } catch { /* best effort; the error being thrown matters more */ }
+    }
   }
   return { file, saved };
 }

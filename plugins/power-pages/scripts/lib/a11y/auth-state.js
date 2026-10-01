@@ -58,6 +58,29 @@ function writeAuthState(fd, state, { ftruncate = fs.ftruncateSync, write = fs.wr
   }
 }
 
+// Keeps only the session material the audit can use for the site being audited.
+// Signing in passes through the identity provider (for example
+// login.microsoftonline.com for Microsoft Entra ID), so the raw storage state also
+// holds the user's IdP cookies, which are more powerful than the site session and
+// are never needed: a11y-audit.js treats any redirect off the site as a page error.
+// Cookies are kept when the site host domain-matches the cookie domain
+// (RFC 6265 §5.1.3: equal, or the host ends with "." + domain); Playwright reports a
+// domain cookie with a leading dot (".contoso.com") and a host-only cookie without
+// one. localStorage is kept only for the site's exact origin.
+// https://www.rfc-editor.org/rfc/rfc6265#section-5.1.3
+function filterAuthStateForSite(state, siteUrl) {
+  const site = new URL(siteUrl);
+  const host = site.hostname.toLowerCase();
+  const matches = (domain) => {
+    const d = String(domain || '').toLowerCase().replace(/^\./, '');
+    return Boolean(d) && (host === d || host.endsWith(`.${d}`));
+  };
+  return {
+    cookies: ((state && state.cookies) || []).filter((c) => matches(c.domain)),
+    origins: ((state && state.origins) || []).filter((o) => o.origin === site.origin),
+  };
+}
+
 // Counts only — the report and console must never contain cookie values.
 function summarizeAuthState(state) {
   const cookies = (state && state.cookies) || [];
@@ -98,6 +121,7 @@ module.exports = {
   DIR_PREFIX,
   FILE_NAME,
   createAuthStatePath,
+  filterAuthStateForSite,
   isManagedAuthStatePath,
   openAuthStateFile,
   removeAuthState,

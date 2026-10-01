@@ -4,7 +4,7 @@ const test = require('node:test');
 const { TRAP_REPEAT, analyzeFocusSequence } = require('../lib/a11y/checks/keyboard');
 const { analyzeReflow } = require('../lib/a11y/checks/reflow');
 const { analyzeZoom } = require('../lib/a11y/checks/zoom');
-const { analyzeMotion } = require('../lib/a11y/checks/motion');
+const { analyzeMotion, videoCriteria } = require('../lib/a11y/checks/motion');
 const { analyzeTitles } = require('../lib/a11y/checks/titles');
 const { isSubmitLikeDescriptor, stateCandidates } = require('../lib/a11y/checks/inventory');
 
@@ -136,4 +136,22 @@ test('stateCandidates keeps named popups, disclosures and tabs, deduped, never s
   ]);
   assert.deepEqual(candidates.map((c) => c.label), ['disclosure: Menu', 'tab: Details']);
   assert.deepEqual(candidates[0].steps, [{ action: 'click', role: 'button', name: 'Menu', exact: true }]);
+});
+
+test('videoCriteria applies 1.4.2 and 2.2.2 thresholds per video', () => {
+  assert.deepEqual(videoCriteria({ muted: true, loop: false, duration: 4 }), []);
+  assert.deepEqual(videoCriteria({ muted: false, loop: false, duration: 2 }), []);
+  assert.deepEqual(videoCriteria({ muted: false, loop: false, duration: 4 }), ['1.4.2']);
+  assert.deepEqual(videoCriteria({ muted: true, loop: false, duration: 6 }), ['2.2.2']);
+  assert.deepEqual(videoCriteria({ muted: false, loop: false, duration: 6 }), ['1.4.2', '2.2.2']);
+  assert.deepEqual(videoCriteria({ muted: true, loop: true, duration: 1 }), ['2.2.2']);
+  // Unknown length (live stream, metadata not loaded) is treated as long.
+  assert.deepEqual(videoCriteria({ muted: false, loop: false, duration: null }), ['1.4.2', '2.2.2']);
+});
+
+test('analyzeTitles leaves missing titles to axe when asked', () => {
+  const pages = [{ route: '/', viewport: 'desktop', title: '' }, { route: '/a', viewport: 'desktop', title: 'Same' }, { route: '/b', viewport: 'desktop', title: 'Same' }];
+  const ids = (results) => [...new Set(results.map((r) => r.finding.id))].sort();
+  assert.deepEqual(ids(analyzeTitles(pages)), ['pp-page-title-duplicate', 'pp-page-title-missing']);
+  assert.deepEqual(ids(analyzeTitles(pages, { includeMissing: false })), ['pp-page-title-duplicate']);
 });

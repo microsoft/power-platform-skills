@@ -19,7 +19,8 @@
 // agent cannot name by role is itself an accessibility defect.
 //
 // Safety: an audit must never change data. Steps that would submit a form are
-// refused unless --allow-form-submit is passed explicitly, because a Power Pages
+// refused unless the run passes --allow-form-submit AND the state itself sets
+// "allowFormSubmit": true, because a Power Pages
 // form submit writes a Dataverse record (and may send email) on a live site. The step
 // guard only sees the control a step targets, and page scripts can still send data
 // on any click (fetch/XHR, Web API calls), so guardMutations() adds a network-level
@@ -89,7 +90,13 @@ function validateStates(data) {
       throw new StatesFileError(`${where}: steps must be an array of 1-${LIMITS.steps} steps`);
     }
     const steps = s.steps.map((st, j) => validateStep(st, `${where}.steps[${j}]`));
-    return { route, label, viewport: s.viewport || null, steps };
+    // Per-state consent: a state may submit a form only when it opts in here AND the
+    // run passes --allow-form-submit. Consent therefore covers the states the user
+    // approved, not every state in the file.
+    if (s.allowFormSubmit !== undefined && typeof s.allowFormSubmit !== 'boolean') {
+      throw new StatesFileError(`${where}: allowFormSubmit must be true or false`);
+    }
+    return { route, label, viewport: s.viewport || null, allowFormSubmit: s.allowFormSubmit === true, steps };
   });
 }
 
@@ -161,7 +168,7 @@ async function applyStep(page, step, { allowFormSubmit = false, timeoutMs = 1000
   if (!allowFormSubmit && (step.action === 'click' || step.action === 'press')) {
     const target = locator ? await locator.evaluate(describeForSubmitCheck) : await page.evaluate(describeForSubmitCheck);
     const refusal = submitRefusal(step, target);
-    if (refusal) throw new Error(`${refusal} Pass --allow-form-submit to permit this.`);
+    if (refusal) throw new Error(`${refusal} To permit it, set "allowFormSubmit": true on this state and pass --allow-form-submit.`);
   }
 
   switch (step.action) {
@@ -185,12 +192,16 @@ async function applyState(page, state, opts) {
   await page.waitForTimeout(400);
 }
 
-function isMutatingRequest(method, url) {
+function isMutatingRequest(method, url, origin) {
   if (SAFE_METHODS.has(String(method).toUpperCase())) return false;
   if (String(method).toUpperCase() === 'POST') {
-    let pathname = '';
-    try { pathname = new URL(url).pathname; } catch { /* not a URL: treat as mutating */ }
-    if (READ_ONLY_POST_PATHS.some((re) => re.test(pathname))) return false;
+    let parsed = null;
+    try { parsed = new URL(url); } catch { /* not a URL: treat as mutating */ }
+    // The grid exemption is path-only, so bind it to the audited origin: a script on
+    // the page could otherwise POST to https://other.example/_services/entity-grid-data.json
+    // and have it let through. Without an origin the exemption never applies.
+    if (parsed && origin && parsed.origin === origin
+      && READ_ONLY_POST_PATHS.some((re) => re.test(parsed.pathname))) return false;
   }
   return true;
 }
@@ -201,12 +212,12 @@ function isMutatingRequest(method, url) {
 // are blocked too; that is harmless for an audit. Requests from service workers
 // bypass page.route, so the audit context is created with serviceWorkers: 'block'.
 // https://playwright.dev/docs/api/class-page#page-route
-async function guardMutations(page, { allowFormSubmit = false } = {}) {
+async function guardMutations(page, { allowFormSubmit = false, origin = null } = {}) {
   const blocked = { count: 0, requests: [] };
   if (allowFormSubmit) return { blocked, dispose: async () => {} };
   const handler = (route) => {
     const request = route.request();
-    if (!isMutatingRequest(request.method(), request.url())) return route.continue();
+    if (!isMutatingRequest(request.method(), request.url(), origin)) return route.continue();
     blocked.count++;
     if (blocked.requests.length < MAX_BLOCKED_SAMPLES) {
       let where = '(unparseable URL)';

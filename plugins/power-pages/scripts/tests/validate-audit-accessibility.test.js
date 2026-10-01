@@ -148,6 +148,37 @@ test('blocks a completed audit whose summary has no blocking count', () => {
   }
 });
 
+test('blocks a marker written by another tool or schema version', () => {
+  for (const [overrides, pattern] of [
+    [{ schemaVersion: 2 }, /schemaVersion must be 1/],
+    [{ schemaVersion: undefined }, /schemaVersion must be 1/],
+    [{ skill: 'test-site' }, /skill must be "audit-accessibility"/],
+    [{ skill: undefined }, /skill must be "audit-accessibility"/],
+  ]) {
+    const dir = makeProject();
+    writeReport(dir);
+    writeMarker(dir, validMarker(overrides));
+    const result = runValidator(dir);
+    assert.equal(result.code, 2, JSON.stringify(overrides));
+    assert.match(result.stderr, pattern);
+  }
+});
+
+test('blocks non-boolean signedIn or sessionRemoved', () => {
+  for (const [overrides, pattern] of [
+    [{ signedIn: 'true', sessionRemoved: true }, /signedIn must be true or false/],
+    [{ signedIn: 1 }, /signedIn must be true or false/],
+    [{ signedIn: true, sessionRemoved: 'yes' }, /sessionRemoved must be true or false/],
+  ]) {
+    const dir = makeProject();
+    writeReport(dir);
+    writeMarker(dir, validMarker(overrides));
+    const result = runValidator(dir);
+    assert.equal(result.code, 2, JSON.stringify(overrides));
+    assert.match(result.stderr, pattern);
+  }
+});
+
 test('blocks when a signed-in session was not removed', () => {
   const dir = makeProject();
   writeReport(dir);

@@ -17,7 +17,7 @@ const path = require('node:path');
 const { EXIT, USAGE, UsageError, VIEWPORTS, parseArgs } = require('./lib/a11y/args');
 const { CrawlQueue, normalizeUrl, routeOf } = require('./lib/a11y/crawl');
 const { MissingDependencyError, candidateRoots, launchBrowser, loadAxeSource, loadPlaywright } = require('./lib/a11y/deps');
-const { ensureHelpers } = require('./lib/a11y/page-helpers');
+const { ensureHelpers, errorLine } = require('./lib/a11y/page-helpers');
 const { runAxe } = require('./lib/a11y/axe-runner');
 const { ReportBuilder, exitCodeFor } = require('./lib/a11y/report');
 const { StatesFileError, applyState, guardMutations, loadStatesFile } = require('./lib/a11y/states');
@@ -37,14 +37,15 @@ const SETTLE_MS = 500;
 // so a 200 response alone does not mean the requested page was audited.
 const SIGN_IN_PATH = /^\/(signin|account\/login)/i;
 
-// Load a page and decide whether it is auditable. Never return the final URL's query
-// string in errors: sign-in redirects carry state and nonce parameters.
+// Load a page and decide whether it is auditable. Never return a URL's query string
+// in errors: sign-in redirects carry state and nonce parameters, and Playwright's own
+// navigation errors quote the full URL (errorLine redacts it).
 async function visit(page, url, { origin, timeoutMs }) {
   let response;
   try {
     response = await page.goto(url, { waitUntil: 'load', timeout: timeoutMs });
   } catch (err) {
-    return { error: `Navigation failed: ${err.message.split('\n')[0]}` };
+    return { error: `Navigation failed: ${errorLine(err)}` };
   }
   // SPAs keep fetching after load; wait for quiet but do not fail if it never comes
   // (long-polling, analytics beacons).
@@ -113,7 +114,7 @@ async function runCheck(name, fn, checkErrors) {
   try {
     return await fn();
   } catch (err) {
-    checkErrors.push({ check: name, message: err.message.split('\n')[0] });
+    checkErrors.push({ check: name, message: errorLine(err) });
     return null;
   }
 }
@@ -215,7 +216,7 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
             if (axeResult.axeVersion) builder.meta.tool.axeVersion = axeResult.axeVersion;
             builder.addFindings(axeResult.findings, ctx);
           } catch (err) {
-            pageError = `axe failed: ${err.message.split('\n')[0]}`;
+            pageError = `axe failed: ${errorLine(err)}`;
           }
         }
         if (viewport === primary && checks.has('titles')) titles.push({ route, title: nav.title });
@@ -261,12 +262,16 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
         }
         // Installed after the page load on purpose: classic Power Pages list grids
         // fetch their rows with a POST, so the guard only covers what the replayed
-        // steps trigger.
-        const guard = await guardMutations(page, { allowFormSubmit: opts.allowFormSubmit });
+        // steps trigger. Form submission needs two consents: the run-wide
+        // --allow-form-submit switch and the state's own "allowFormSubmit": true, so
+        // approving one submitting state never unguards the others.
+        const allowFormSubmit = Boolean(opts.allowFormSubmit && state.allowFormSubmit);
+        const guard = await guardMutations(page, { allowFormSubmit, origin });
         const checkErrors = [];
         const ctx = { route: state.route, viewport, state: state.label };
+        const stateInfo = { label: state.label, route: state.route, viewport, formSubmitAllowed: allowFormSubmit };
         try {
-          await applyState(page, state, { allowFormSubmit: opts.allowFormSubmit, timeoutMs: Math.min(opts.timeoutMs, 10000) });
+          await applyState(page, state, { allowFormSubmit, timeoutMs: Math.min(opts.timeoutMs, 10000) });
           await ensureHelpers(page);
           if (checks.has('axe')) {
             const { findings } = await runAxe(page, axeSource, { bestPractice: opts.bestPractice });
@@ -278,9 +283,9 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
             const r = await runCheck('keyboard', () => runKeyboardCheck(page), checkErrors);
             if (r) builder.addFindings(r.findings, ctx);
           }
-          builder.addState({ label: state.label, route: state.route, viewport, checkErrors, blockedRequests: guard.blocked });
+          builder.addState({ ...stateInfo, checkErrors, blockedRequests: guard.blocked });
         } catch (err) {
-          builder.addState({ label: state.label, route: state.route, viewport, error: err.message.split('\n')[0], checkErrors, blockedRequests: guard.blocked });
+          builder.addState({ ...stateInfo, error: errorLine(err), checkErrors, blockedRequests: guard.blocked });
         } finally {
           await guard.dispose();
         }
@@ -290,7 +295,8 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
     }
   }
 
-  for (const { route, finding } of analyzeTitles(titles)) {
+  // When axe ran, its document-title rule already reports an empty <title>.
+  for (const { route, finding } of analyzeTitles(titles, { includeMissing: !checks.has('axe') })) {
     builder.addFindings([finding], { route, viewport: primary });
   }
 
@@ -318,6 +324,14 @@ async function main(argv = process.argv.slice(2), { stdout = process.stdout, std
       return EXIT.PASS;
     }
     if (opts.statesFile) states = loadStatesFile(opts.statesFile);
+    // Both consents are required for a state to submit. Say so when only one is
+    // present, so a missing flag is not mistaken for a passing submit flow.
+    const marked = states.filter((s) => s.allowFormSubmit).map((s) => `"${s.label}"`);
+    if (marked.length && !opts.allowFormSubmit) {
+      stderr.write(`[a11y] ${marked.join(', ')} set allowFormSubmit, but --allow-form-submit was not passed; they stay guarded.\n`);
+    } else if (opts.allowFormSubmit && !marked.length) {
+      stderr.write('[a11y] --allow-form-submit has no effect: no state sets "allowFormSubmit": true.\n');
+    }
     if (opts.authState && !fs.existsSync(opts.authState)) {
       throw new UsageError(`--auth-state file not found: ${opts.authState}`);
     }
@@ -348,7 +362,7 @@ async function main(argv = process.argv.slice(2), { stdout = process.stdout, std
       stderr.write(`${err.message}\n`);
       return EXIT.MISSING_DEPS;
     }
-    stderr.write(`Accessibility audit failed: ${err.message}\n`);
+    stderr.write(`Accessibility audit failed: ${errorLine(err)}\n`);
     return EXIT.LOAD_FAILURE;
   } finally {
     if (browser) await browser.close().catch(() => {});

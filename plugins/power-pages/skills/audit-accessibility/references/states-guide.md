@@ -30,6 +30,7 @@ Hidden UI — menus, dialogs, tabs, accordions, and validation messages — isn'
 | `route` | Yes | Path that starts with `/`. |
 | `label` | Yes | Short, human-readable name shown in the report. |
 | `viewport` | No | `desktop` or `mobile`. Use the candidate's `viewport` from discovery. Defaults to `desktop` when it's in the audit, otherwise the first audit viewport. |
+| `allowFormSubmit` | No | `true` only for a state the user consented to submit. Takes effect only when the run also passes `--allow-form-submit`. Defaults to `false`. |
 | `steps` | Yes | 1–20 steps, run in order. |
 
 Step actions:
@@ -60,12 +61,12 @@ Discovery returns `stateCandidates` for each page and layout. Each one is a clic
 
 ## Form submission safety
 
-`a11y-audit.js` protects the site in two layers while it replays a state, unless `--allow-form-submit` is passed:
+`a11y-audit.js` protects the site in two layers while it replays a state:
 
 - **Step guard.** It refuses any step that would submit a form: clicking a submit button, pressing `Space` on a submit button, or pressing `Enter` inside a form.
-- **Network guard.** Steps can still trigger writes from script, such as a plain button that calls the Web API. During a state, the audit browser blocks every `POST`, `PUT`, `PATCH`, and `DELETE` request before it leaves the browser, except the read-only list-grid data request. Each state reports how many requests were blocked in `states[].blockedRequests` (method and path only), and the total appears in `summary.blockedRequests`. A blocked request isn't a failure. It does mean the state may look different on the live site, for example a missing "Saved" message.
+- **Network guard.** Steps can still trigger writes from script, such as a plain button that calls the Web API. During a state, the audit browser blocks every `POST`, `PUT`, `PATCH`, and `DELETE` request before it leaves the browser, except the read-only list-grid data request to the audited site itself. Each state reports how many requests were blocked in `states[].blockedRequests` (method and path only), and the total appears in `summary.blockedRequests`. A blocked request isn't a failure. It does mean the state may look different on the live site, for example a missing "Saved" message.
 
-On a Power Pages site, a form submission can create or update a Dataverse record and send email. Only use `--allow-form-submit` after the user consents, and only on a test or development site.
+On a Power Pages site, a form submission can create or update a Dataverse record and send email. Both guards turn off for a state only when two things are true: the state sets `"allowFormSubmit": true`, and the run passes `--allow-form-submit`. Set the field only on the states the user consented to, and only on a test or development site. Every other state in the same run stays guarded, and `states[].formSubmitAllowed` in the report shows which states ran unguarded.
 
 ## Checks run on each state
 

@@ -15,13 +15,16 @@ const HELP_URL = 'https://www.w3.org/WAI/WCAG22/Understanding/page-titled.html';
 
 // pages: [{ route, title }] — one entry per audited route (desktop pass only, since
 // the title does not depend on viewport).
-function analyzeTitles(pages) {
+// includeMissing: false when axe ran on the same pages, because axe's document-title
+// rule already reports an empty <title> and the same defect would otherwise be
+// counted twice (once per rule id) in the blocking total.
+function analyzeTitles(pages, { includeMissing = true } = {}) {
   const missing = [];
   const byTitle = new Map();
   for (const p of pages) {
     const title = (p.title || '').trim();
     if (!title) {
-      missing.push({ route: p.route });
+      if (includeMissing) missing.push({ route: p.route });
       continue;
     }
     const key = title.toLowerCase();

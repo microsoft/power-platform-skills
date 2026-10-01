@@ -52,8 +52,8 @@ class ReportBuilder {
     this.pages.push({ route, viewport, state, url, title, status, error, checkErrors });
   }
 
-  addState({ label, route, viewport, error = null, checkErrors = [], blockedRequests = null }) {
-    this.states.push({ label, route, viewport, error, checkErrors, blockedRequests });
+  addState({ label, route, viewport, error = null, checkErrors = [], blockedRequests = null, formSubmitAllowed = false }) {
+    this.states.push({ label, route, viewport, formSubmitAllowed, error, checkErrors, blockedRequests });
   }
 
   addFindings(findings, { route, viewport, state = null }) {
@@ -62,7 +62,7 @@ class ReportBuilder {
       let rule = this.rules.get(key);
       if (!rule) {
         rule = {
-          id: f.id, source: f.source, kind: f.kind, impact: f.impact, wcag: f.wcag,
+          id: f.id, source: f.source, kind: f.kind, impact: f.impact, wcag: [...f.wcag],
           bestPractice: f.bestPractice, heuristic: f.heuristic, description: f.description,
           helpUrl: f.helpUrl, nodes: new Map(),
         };
@@ -70,6 +70,13 @@ class ReportBuilder {
       }
       // A rule's impact can differ per node in axe; keep the most severe one seen.
       if (IMPACT_ORDER.indexOf(f.impact) < IMPACT_ORDER.indexOf(rule.impact)) rule.impact = f.impact;
+      // Some extended rules derive their criteria per element (motion: an unmuted
+      // video maps to 1.4.2, a long one to 2.2.2), so the first occurrence does not
+      // speak for the whole rule. Union them so no criterion is dropped.
+      for (const c of f.wcag) if (!rule.wcag.includes(c)) rule.wcag.push(c);
+      // A rule is best practice only if every occurrence is; one WCAG-mapped
+      // occurrence makes it a conformance issue.
+      if (!f.bestPractice) rule.bestPractice = false;
       const nodes = f.nodes.length ? f.nodes : [{ target: '(page)', html: '', summary: '' }];
       for (const n of nodes) {
         // Keyed on the markup and summary as well as the selector: a positional

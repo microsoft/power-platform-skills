@@ -223,3 +223,35 @@ test('live: state replay blocks script writes, runs keyboard, and sanitizes snip
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('live: --allow-form-submit lifts the guard only for states that opt in', { skip: !LIVE && 'set POWER_PAGES_A11Y_LIVE=1 to run' }, async () => {
+  const server = await startFixture();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-a11y-live-'));
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const statesFile = path.join(dir, 'states.json');
+    const step = [{ action: 'click', role: 'button', name: 'Save draft' }];
+    fs.writeFileSync(statesFile, JSON.stringify({ states: [
+      { route: '/draft', label: 'Guarded', steps: step },
+      { route: '/draft', label: 'Consented', allowFormSubmit: true, steps: step },
+    ] }));
+    const r = await runAsync(['--url', base, '--routes', '/draft', '--viewports', 'desktop', '--checks', 'axe', '--states', statesFile, '--allow-form-submit']);
+    const report = JSON.parse(r.stdout);
+    const byLabel = Object.fromEntries(report.states.map((s) => [s.label, s]));
+    assert.equal(byLabel.Guarded.formSubmitAllowed, false);
+    assert.equal(byLabel.Guarded.blockedRequests.count, 1);
+    assert.equal(byLabel.Consented.formSubmitAllowed, true);
+    assert.deepEqual(server.posts, ['POST /api/save'], 'only the consented state reached the site');
+
+    // The flag alone (no state opted in) keeps every state guarded and warns.
+    const flagOnly = path.join(dir, 'flag-only.json');
+    fs.writeFileSync(flagOnly, JSON.stringify({ states: [{ route: '/draft', label: 'Guarded', steps: step }] }));
+    server.posts.length = 0;
+    const r2 = await runAsync(['--url', base, '--routes', '/draft', '--viewports', 'desktop', '--checks', 'axe', '--states', flagOnly, '--allow-form-submit']);
+    assert.deepEqual(server.posts, []);
+    assert.match(r2.stderr, /allowFormSubmit/);
+  } finally {
+    server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

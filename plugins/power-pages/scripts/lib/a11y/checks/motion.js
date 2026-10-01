@@ -1,6 +1,7 @@
 'use strict';
 
-// WCAG 2.2.2 Pause, Stop, Hide (and the 2.3.3 intent behind prefers-reduced-motion).
+// WCAG 2.2.2 Pause, Stop, Hide and 1.4.2 Audio Control (and the 2.3.3 intent behind
+// prefers-reduced-motion).
 //
 // Emulates the "reduce motion" OS setting and then asks the browser which animations
 // are still running. A carousel or hero animation that keeps moving forever while the
@@ -45,15 +46,41 @@ async function findMotionInPage({ longMs, sampleMs }) {
   candidates.forEach((v, i) => {
     const playing = !v.paused && !v.ended && v.currentTime > before[i];
     if (!playing && !v.autoplay) return;
-    // Muted short clips (under 5s, no loop) fall inside 2.2.2's 5-second allowance.
-    if (v.muted && !v.loop && v.duration > 0 && v.duration <= 5) return;
-    videos.push({ target: h.cssPath(v), html: h.snippet(v), muted: v.muted, playing });
+    // Which criteria apply depends on length and sound, decided in Node by
+    // videoCriteria(). NaN (metadata not loaded) and Infinity (live stream) are sent
+    // as null, meaning "unknown length".
+    const duration = Number.isFinite(v.duration) ? v.duration : null;
+    videos.push({ target: h.cssPath(v), html: h.snippet(v), muted: v.muted, loop: v.loop, duration, playing });
   });
   return { running, videos };
 }
 
-function analyzeMotion({ running, videos }) {
+// Each criterion has its own time allowance, so a video can fail one and not the other:
+//   1.4.2 Audio Control: audio that plays automatically for more than 3 seconds
+//         https://www.w3.org/WAI/WCAG22/Understanding/audio-control.html
+//   2.2.2 Pause, Stop, Hide: motion that starts automatically and lasts more than 5 seconds
+//         https://www.w3.org/WAI/WCAG22/Understanding/pause-stop-hide.html
+// A looping video, or one whose length is unknown, is treated as long.
+const AUDIO_ALLOWANCE_S = 3;
+const MOTION_ALLOWANCE_S = LONG_ANIMATION_MS / 1000;
+
+function videoCriteria({ muted, loop, duration }) {
+  const lasts = (limit) => Boolean(loop) || !(typeof duration === 'number' && duration <= limit);
+  const wcag = [];
+  if (!muted && lasts(AUDIO_ALLOWANCE_S)) wcag.push('1.4.2');
+  if (lasts(MOTION_ALLOWANCE_S)) wcag.push('2.2.2');
+  return wcag;
+}
+
+function unionCriteria(videos) {
+  return [...new Set(videos.flatMap((v) => v.wcag))].sort();
+}
+
+function analyzeMotion({ running, videos: rawVideos }) {
   const findings = [];
+  // Videos within both allowances (for example a 2-second clip with sound) fail
+  // neither criterion and are not reported.
+  const videos = rawVideos.map((v) => ({ ...v, wcag: videoCriteria(v) })).filter((v) => v.wcag.length);
   if (running.length) {
     findings.push(makeFinding({
       id: 'pp-motion-ignores-reduced-motion',
@@ -68,9 +95,9 @@ function analyzeMotion({ running, videos }) {
   const playing = videos.filter((v) => v.playing);
   const notObserved = videos.filter((v) => !v.playing);
   if (playing.length) {
-    // Unmuted autoplay is also a 1.4.2 Audio Control failure: sound that starts on its
-    // own drowns out screen reader speech.
-    const wcag = playing.some((v) => !v.muted) ? ['1.4.2', '2.2.2'] : ['2.2.2'];
+    // Criteria come from the videos in this finding, so a muted 4-second clip maps to
+    // 2.2.2 only and a 4-second clip with sound to 1.4.2 only.
+    const wcag = unionCriteria(playing);
     // Heuristic, so non-blocking: the check proves the video plays with no native
     // controls, but not a failure. The page may have its own pause button (a valid
     // 2.2.2 mechanism), and 2.2.2 applies only when the motion is non-essential and
@@ -95,7 +122,7 @@ function analyzeMotion({ running, videos }) {
       id: 'pp-autoplay-video-no-controls',
       kind: 'needsReview',
       impact: 'moderate',
-      wcag: notObserved.some((v) => !v.muted) ? ['1.4.2', '2.2.2'] : ['2.2.2'],
+      wcag: unionCriteria(notObserved),
       heuristic: true,
       description: 'Video has the autoplay attribute and no controls, but it did not play during the audit. Confirm whether it plays for users; if it does, add controls or a pause button.',
       helpUrl: 'https://www.w3.org/WAI/WCAG22/Understanding/pause-stop-hide.html',
@@ -117,4 +144,4 @@ async function runMotionCheck(page) {
   }
 }
 
-module.exports = { LONG_ANIMATION_MS, PLAYBACK_SAMPLE_MS, analyzeMotion, runMotionCheck };
+module.exports = { LONG_ANIMATION_MS, PLAYBACK_SAMPLE_MS, analyzeMotion, runMotionCheck, videoCriteria };

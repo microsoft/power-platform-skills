@@ -287,7 +287,7 @@ Use `AskUserQuestion`:
 |----------|--------|---------|
 | <K> of the states submit a form on <SITE_URL>. Submitting can create records or send email, so only allow it on a test or development site. Allow form submission for these states? | Form submit | Remove these states (Recommended), Allow on this test site |
 
-If allowed, set `ALLOW_FORM_SUBMIT=true`. Otherwise remove those states from `states.json`.
+If allowed, set `ALLOW_FORM_SUBMIT=true` and add `"allowFormSubmit": true` to only those <K> states in `states.json`. Every other state stays guarded. Otherwise remove those states from `states.json`.
 
 ### Output
 
@@ -310,7 +310,7 @@ node "${PLUGIN_ROOT}/scripts/a11y-audit.js" <shared flags> --mode audit --output
 Add these flags when they apply:
 
 - `--states "<RUN_DIR>/states.json"` when `AUDIT_STATES=true`. Each state runs axe-core and the keyboard check. While a state replays, the audit blocks requests that would write data (see [`references/states-guide.md`](references/states-guide.md#form-submission-safety)).
-- `--allow-form-submit` only when `ALLOW_FORM_SUBMIT=true`. It turns off both the submit-step guard and the request blocking.
+- `--allow-form-submit` only when `ALLOW_FORM_SUBMIT=true`. It's a run-wide switch: the submit-step guard and the request blocking turn off only for states that also set `"allowFormSubmit": true`. Each state reports this as `states[].formSubmitAllowed`.
 - `--viewports`, `--checks`, or `--no-best-practice` when the user changed them in Phase 3
 
 The audit takes roughly 5–15 seconds per page and layout. Keyboard, reflow, 200% text, and motion checks run on every layout, so a mobile-only problem is caught; page titles are checked once per page. Tell the user it's running and how many pages are in scope.
@@ -352,7 +352,7 @@ Sort findings into these groups:
 3. **Verify**: `heuristic: true` findings from the extended checks (`pp-keyboard-trap`, `pp-focus-not-visible`, `pp-focus-offscreen`, `pp-reflow-horizontal-scroll`, `pp-text-clipped-at-200`, `pp-motion-ignores-reduced-motion`, `pp-autoplay-video-no-controls`) and every `needsReview` item, including a `pp-autoplay-video-no-controls` video that has the autoplay attribute but didn't play during the audit. Check the evidence and the ARIA snapshot. Keep the finding when the evidence holds; otherwise list it as a manual check. A `pp-autoplay-video-no-controls` violation was observed playing without native controls: move it to **Must fix** unless the page shows its own pause or stop button for it, or the video is essential to the content.
 4. **Best practice**: `bestPractice: true` findings. Recommended, but not WCAG failures.
 
-Group repeated issues. When the same rule and element appear on many pages (for example, a shared header), report it once as a shared component issue with its page count. Page title findings (`pp-page-title-missing`, `pp-page-title-duplicate`) belong in **Should fix**.
+Group repeated issues. When the same rule and element appear on many pages (for example, a shared header), report it once as a shared component issue with its page count. A missing page title is a blocking 2.4.2 failure: axe reports it as `document-title` (or `pp-page-title-missing` when `axe` isn't in `--checks`), and it belongs in **Must fix**. `pp-page-title-duplicate` is heuristic, so it goes in **Verify**: confirm the routes really are different pages, then move it to **Should fix**.
 
 If `PROJECT_ROOT` is set, find the likely source file for each must-fix and should-fix finding. Search for the element's id, class names, visible text, or component name from `target`. For declarative sites, search web templates, page copy, and content snippets under `.powerpages-site/`. Record the file and line only when you're confident.
 

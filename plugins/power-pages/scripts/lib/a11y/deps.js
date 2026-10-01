@@ -111,8 +111,17 @@ function installedVersion(depsDir, name, { readFile = fs.readFileSync } = {}) {
   }
 }
 
-function isInstalled(depsDir, opts) {
-  return Object.entries(PINNED).every(([name, version]) => installedVersion(depsDir, name, opts) === version);
+// The files the audit actually loads: loadPlaywright() resolves the playwright-core
+// package entry ("main": "index.js") and loadAxeSource() reads axe-core/axe.min.js.
+const ENTRY_FILES = Object.freeze({ 'playwright-core': 'index.js', 'axe-core': 'axe.min.js' });
+
+// Matching package.json versions alone are not proof of a usable install: an
+// interrupted `npm ci`, or antivirus quarantining a file, can leave the manifest in
+// place with the entry file missing. installDeps() would then skip the reinstall and
+// every audit would fail with "not found". Check both.
+function isInstalled(depsDir, { readFile = fs.readFileSync, exists = fs.existsSync } = {}) {
+  return Object.entries(PINNED).every(([name, version]) => installedVersion(depsDir, name, { readFile }) === version
+    && (!ENTRY_FILES[name] || exists(path.join(depsDir, 'node_modules', name, ENTRY_FILES[name]))));
 }
 
 // npm ships a JS entry point beside npx-cli.js. Reuse the MCP launcher's lookup so
@@ -158,8 +167,9 @@ function installDeps({
   readFile = fs.readFileSync,
   readdir = fs.readdirSync,
   writeFile = fs.writeFileSync,
+  exists = fs.existsSync,
 } = {}) {
-  if (isInstalled(depsDir, { readFile })) return { depsDir, installed: false, versions: { ...PINNED } };
+  if (isInstalled(depsDir, { readFile, exists })) return { depsDir, installed: false, versions: { ...PINNED } };
 
   assertManagedDepsDir(depsDir, { env, readdir });
   mkdir(depsDir, { recursive: true });
@@ -185,7 +195,7 @@ function installDeps({
     const detail = result.error ? result.error.message : (result.stderr || '').trim().split('\n').slice(-5).join('\n');
     throw new Error(`npm ci failed (exit ${result.status}): ${detail}`);
   }
-  if (!isInstalled(depsDir, { readFile })) {
+  if (!isInstalled(depsDir, { readFile, exists })) {
     throw new Error(`npm ci completed but pinned versions were not found in ${depsDir}`);
   }
   return { depsDir, installed: true, versions: { ...PINNED } };

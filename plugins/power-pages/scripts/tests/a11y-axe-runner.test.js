@@ -3,7 +3,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { AXE_KEY, axeTags, criteriaFromTags, normalizeAxeResults, runAxe, tagToCriterion, wrapAxeSource } = require('../lib/a11y/axe-runner');
-const { redact, redactHtml, sanitizeHtml } = require('../lib/a11y/page-helpers');
+const { errorLine, redact, redactHtml, redactUrls, sanitizeHtml } = require('../lib/a11y/page-helpers');
 
 test('tagToCriterion converts axe criterion tags and ignores level tags', () => {
   assert.equal(tagToCriterion('wcag143'), '1.4.3');
@@ -162,4 +162,20 @@ test('wrapAxeSource refuses a page that locks window.axe', () => {
   assert.throws(() => vm.runInContext(wrapAxeSource(FAKE_AXE, 'k3'), ctx), /locked/);
   assert.equal(ctx.k3, undefined);
   assert.equal(ctx.axe, pageAxe);
+});
+
+test('axeTags include WCAG 2.2 Level A as well as AA', () => {
+  assert.ok(axeTags().includes('wcag22a'));
+  assert.ok(axeTags().includes('wcag22aa'));
+});
+
+test('redactUrls and errorLine strip query strings, fragments, and emails from error text', () => {
+  const msg = 'page.goto: net::ERR_ABORTED at https://contoso.powerappsportals.com/signin?returnUrl=%2F&code=secret#t for maker@contoso.com\n    at stack line';
+  const line = errorLine(new Error(msg));
+  assert.equal(line.includes('\n'), false, 'first line only');
+  assert.equal(line.includes('secret'), false);
+  assert.equal(line.includes('maker@contoso.com'), false);
+  assert.ok(line.includes('https://contoso.powerappsportals.com/signin?[redacted]'));
+  assert.equal(redactUrls('see http://x.test/a#frag'), 'see http://x.test/a?[redacted]');
+  assert.equal(errorLine('plain text'), 'plain text');
 });

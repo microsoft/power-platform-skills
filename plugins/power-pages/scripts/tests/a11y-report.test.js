@@ -96,6 +96,33 @@ test('check errors from pages and states make the audit incomplete', () => {
   assert.equal(report.summary.checkErrors, 2);
   assert.equal(report.summary.statesAudited, 2);
   assert.equal(report.summary.blockedRequests, 2);
-  assert.deepEqual(report.states[1], { label: 'Dialog', route: '/', viewport: 'desktop', error: null, checkErrors: [], blockedRequests: null });
+  assert.deepEqual(report.states[1], { label: 'Dialog', route: '/', viewport: 'desktop', error: null, checkErrors: [], blockedRequests: null, formSubmitAllowed: false });
   assert.equal(exitCodeFor(report), EXIT.LOAD_FAILURE);
+});
+
+test('ReportBuilder unions WCAG criteria across occurrences of a rule', () => {
+  const b = builder();
+  const video = (wcag) => makeFinding({ id: 'pp-motion-ignores-reduced-motion', impact: 'serious', wcag, description: 'd', nodes: [{ target: 'video', html: '<video>', summary: 's' }] });
+  b.addPage({ route: '/', viewport: 'desktop', url: 'u' });
+  b.addFindings([video(['2.2.2'])], { route: '/', viewport: 'desktop' });
+  b.addFindings([video(['1.4.2', '2.2.2'])], { route: '/b', viewport: 'desktop' });
+  const finding = b.build().violations.find((v) => v.id === 'pp-motion-ignores-reduced-motion');
+  assert.deepEqual([...finding.wcag].sort(), ['1.4.2', '2.2.2']);
+  assert.equal(finding.bestPractice, false);
+});
+
+test('ReportBuilder clears bestPractice when any occurrence maps to WCAG', () => {
+  const b = builder();
+  const f = (wcag) => makeFinding({ id: 'pp-x', impact: 'minor', wcag, description: 'd', nodes: [{ target: 'a', html: '<a>', summary: 's' }] });
+  b.addFindings([f([])], { route: '/', viewport: 'desktop' });
+  b.addFindings([f(['2.4.7'])], { route: '/b', viewport: 'desktop' });
+  const finding = b.build().violations.find((v) => v.id === 'pp-x');
+  assert.equal(finding.bestPractice, false);
+  assert.deepEqual(finding.wcag, ['2.4.7']);
+});
+
+test('addState records whether form submission was allowed for the state', () => {
+  const b = builder();
+  b.addState({ label: 'Submit', route: '/', viewport: 'desktop', formSubmitAllowed: true });
+  assert.equal(b.build().states[0].formSubmitAllowed, true);
 });

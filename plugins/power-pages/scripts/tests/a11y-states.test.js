@@ -16,7 +16,7 @@ test('validateStates normalizes a valid file', () => {
       ] },
     ],
   });
-  assert.deepEqual(states[0], { route: '/', label: 'Menu open', viewport: 'mobile', steps: [{ action: 'click', role: 'button', name: 'Menu', exact: true }] });
+  assert.deepEqual(states[0], { route: '/', label: 'Menu open', viewport: 'mobile', allowFormSubmit: false, steps: [{ action: 'click', role: 'button', name: 'Menu', exact: true }] });
   assert.equal(states[1].viewport, null);
   assert.deepEqual(states[1].steps, [
     { action: 'focus', role: 'textbox', name: 'Email', exact: false },
@@ -154,7 +154,12 @@ test('isMutatingRequest allows reads and the list-grid data POST', () => {
   assert.equal(isMutatingRequest('GET', 'https://contoso.powerappsportals.com/_api/accounts'), false);
   assert.equal(isMutatingRequest('head', 'https://contoso.powerappsportals.com/'), false);
   assert.equal(isMutatingRequest('OPTIONS', 'https://contoso.powerappsportals.com/_api/x'), false);
-  assert.equal(isMutatingRequest('POST', 'https://contoso.powerappsportals.com/_services/entity-grid-data.json/00000000-0000-0000-0000-000000000000'), false);
+  const origin = 'https://contoso.powerappsportals.com';
+  assert.equal(isMutatingRequest('POST', 'https://contoso.powerappsportals.com/_services/entity-grid-data.json/00000000-0000-0000-0000-000000000000', origin), false);
+  // The exemption is bound to the audited origin: the same path on another host, or a
+  // call that doesn't say which origin is audited, is still treated as a write.
+  assert.equal(isMutatingRequest('POST', 'https://attacker.example/_services/entity-grid-data.json/1', origin), true);
+  assert.equal(isMutatingRequest('POST', 'https://contoso.powerappsportals.com/_services/entity-grid-data.json/1'), true);
   assert.equal(isMutatingRequest('POST', 'https://contoso.powerappsportals.com/_api/contacts'), true);
   assert.equal(isMutatingRequest('PATCH', 'https://contoso.powerappsportals.com/_api/contacts(1)'), true);
   assert.equal(isMutatingRequest('DELETE', 'https://contoso.powerappsportals.com/_api/contacts(1)'), true);
@@ -187,7 +192,7 @@ function routingPage() {
 
 test('guardMutations blocks writes during a state and records only origin + path', async () => {
   const page = routingPage();
-  const guard = await guardMutations(page, {});
+  const guard = await guardMutations(page, { origin: 'https://contoso.powerappsportals.com' });
   assert.equal(await page.send('GET', 'https://contoso.powerappsportals.com/page?x=1'), 'continued');
   assert.equal(await page.send('POST', 'https://contoso.powerappsportals.com/_services/entity-grid-data.json/1'), 'continued');
   assert.equal(await page.send('POST', 'https://contoso.powerappsportals.com/contact-us?token=secret'), 'aborted:blockedbyclient');
@@ -223,4 +228,22 @@ test('applyState explains a missing control', async () => {
     applyState(fakePage({ visible: false }), state([{ action: 'click', role: 'button', name: 'Nope', exact: true }]), { timeoutMs: 50 }),
     /Could not find a visible button named "Nope"/,
   );
+});
+
+test('validateStates accepts a boolean allowFormSubmit and rejects anything else', () => {
+  const state = (extra) => ({ states: [{ route: '/', label: 'a', steps: [{ action: 'wait', ms: 1 }], ...extra }] });
+  assert.equal(validateStates(state({}))[0].allowFormSubmit, false);
+  assert.equal(validateStates(state({ allowFormSubmit: false }))[0].allowFormSubmit, false);
+  assert.equal(validateStates(state({ allowFormSubmit: true }))[0].allowFormSubmit, true);
+  for (const value of ['true', 1, null, {}]) {
+    assert.throws(() => validateStates(state({ allowFormSubmit: value })), (err) => err instanceof StatesFileError && /allowFormSubmit/.test(err.message));
+  }
+});
+
+test('guardMutations blocks a cross-origin list-grid POST', async () => {
+  const page = routingPage();
+  const guard = await guardMutations(page, { origin: 'https://contoso.powerappsportals.com' });
+  assert.equal(await page.send('POST', 'https://attacker.example/_services/entity-grid-data.json/1'), 'aborted:blockedbyclient');
+  assert.equal(guard.blocked.count, 1);
+  await guard.dispose();
 });

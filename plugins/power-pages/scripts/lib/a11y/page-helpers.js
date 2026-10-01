@@ -89,7 +89,17 @@ function installHelpersInPage(sanitize) {
     if (alt) return clean(alt, 80);
     const text = el.innerText || el.textContent;
     if (text && text.trim()) return clean(text, 80);
-    return clean(el.getAttribute('title') || el.getAttribute('placeholder') || el.value || '', 80);
+    const fallback = el.getAttribute('title') || el.getAttribute('placeholder');
+    if (fallback) return clean(fallback, 80);
+    // `value` names only button-like inputs (<input type="submit" value="Send">). On a
+    // text field it is what the user typed or what the profile prefilled (an email,
+    // a phone number), which is not a name and must not reach the report.
+    // https://www.w3.org/TR/html-aam-1.0/#input-type-button-input-type-submit-and-input-type-reset-accessible-name-computation
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    if (el.tagName === 'INPUT' && (type === 'submit' || type === 'button' || type === 'reset')) {
+      return clean(el.value || '', 80);
+    }
+    return '';
   }
 
   // outerHTML of a container can be the whole page; cap it before sanitizing so the
@@ -128,10 +138,30 @@ function redactHtml(html, max = 300) {
   return redact(sanitizeHtml(html), max);
 }
 
+// Error messages from Playwright quote the URL they were working on, e.g.
+//   page.goto: net::ERR_NAME_NOT_RESOLVED at https://contoso.powerappsportals.com/x?token=abc
+//   page.goto: Timeout 30000ms exceeded. ... navigating to "https://.../SignIn?returnUrl=...&nonce=..."
+// Query strings and fragments can carry tokens, sign-in state, and nonces, so they are
+// replaced before an error reaches the report or chat. The origin and path stay,
+// because they tell the reader which page failed. Emails are redacted too.
+const URL_WITH_QUERY = /(\bhttps?:\/\/[^\s?#'"<>]+)[?#][^\s'"<>]*/gi;
+
+function redactUrls(text) {
+  return String(text || '').replace(URL_WITH_QUERY, '$1?[redacted]').replace(EMAIL_PATTERN, '[redacted-email]');
+}
+
+// First line of an error, with URLs and emails redacted. Used for every error string
+// the audit records (navigation, state replay, check and axe failures).
+function errorLine(err) {
+  return redactUrls(String((err && err.message) || err || '').split('\n')[0]);
+}
+
 module.exports = {
   ensureHelpers,
+  errorLine,
   installHelpersInPage,
   redact,
   redactHtml,
+  redactUrls,
   sanitizeHtml,
 };

@@ -5,7 +5,7 @@ const test = require('node:test');
 
 const {
   DEPS_DIR_ENV, MANAGED_MARKER, MissingDependencyError, PINNED, RUNTIME_DIR, UnmanagedDepsDirError, assertManagedDepsDir, cacheDepsDir,
-  candidateRoots, defaultDepsDir, installDeps, launchBrowser, loadAxeSource, loadPlaywright, resolveNpmCli,
+  candidateRoots, defaultDepsDir, installDeps, isInstalled, launchBrowser, loadAxeSource, loadPlaywright, resolveNpmCli,
 } = require('../lib/a11y/deps');
 const { main: installMain } = require('../install-a11y-deps');
 
@@ -84,10 +84,22 @@ test('installDeps is a no-op when the pinned versions are present', () => {
   const result = installDeps({
     depsDir: '/deps',
     readFile: (p) => JSON.stringify({ version: p.includes('axe-core') ? '4.13.0' : '1.63.0' }),
+    exists: () => true,
     spawnSyncFn: () => { spawned = true; },
   });
   assert.equal(result.installed, false);
   assert.equal(spawned, false);
+});
+
+test('isInstalled requires the entry files, not just matching package.json versions', () => {
+  const readFile = (p) => JSON.stringify({ version: p.includes('axe-core') ? '4.13.0' : '1.63.0' });
+  assert.equal(isInstalled('/deps', { readFile, exists: () => true }), true);
+  for (const missing of [
+    path.join('node_modules', 'playwright-core', 'index.js'),
+    path.join('node_modules', 'axe-core', 'axe.min.js'),
+  ]) {
+    assert.equal(isInstalled('/deps', { readFile, exists: (p) => !p.endsWith(missing) }), false, missing);
+  }
 });
 
 test('installDeps copies the committed lock and runs npm ci through node with scripts disabled', () => {
@@ -102,6 +114,7 @@ test('installDeps copies the committed lock and runs npm ci through node with sc
     readdir: () => [],
     writeFile: (p) => writes.push(p),
     copyFile: (from, to) => copies.push([from, to]),
+    exists: () => installedNow,
     readFile: (p) => {
       if (!installedNow) throw new Error('ENOENT');
       return JSON.stringify({ version: p.includes('axe-core') ? '4.13.0' : '1.63.0' });
