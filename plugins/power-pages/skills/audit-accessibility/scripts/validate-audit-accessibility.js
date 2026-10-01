@@ -103,6 +103,7 @@ runValidation((cwd) => {
 
   if (marker.status === 'Completed') {
     if (!marker.baseUrl) errors.push('Completed audit is missing baseUrl');
+    else checkBaseUrl(marker.baseUrl, errors);
     if (!marker.finishedAt) errors.push('Completed audit is missing finishedAt');
     if (!marker.summary || typeof marker.summary !== 'object') {
       errors.push('Completed audit is missing summary');
@@ -152,9 +153,32 @@ runValidation((cwd) => {
   approve();
 });
 
+// last-audit.json is committed. A signed link's query string can carry a token, and a
+// URL's user info is a credential, so neither may be persisted. The skill cleans
+// SITE_URL when it first stores it; this is the deterministic backstop. The value is
+// never echoed, because it may be the secret being refused.
+function checkBaseUrl(baseUrl, errors) {
+  let u;
+  try {
+    u = new URL(baseUrl);
+  } catch {
+    errors.push('baseUrl is not a valid URL');
+    return;
+  }
+  if (u.username || u.password || u.search || u.hash) {
+    errors.push('baseUrl must not contain a user name, password, query string, or fragment');
+  }
+}
+
 function checkReport(projectRoot, reportFile, errors) {
   if (typeof reportFile !== 'string' || !reportFile.trim()) {
     errors.push('reportFile must be a relative path string');
+    return;
+  }
+  // An absolute path can point inside the checkout and still pass the containment
+  // check below, but it is machine-specific and would be committed in last-audit.json.
+  if (path.isAbsolute(reportFile) || path.win32.isAbsolute(reportFile)) {
+    errors.push(`reportFile must be relative to the project root (found an absolute path)`);
     return;
   }
   const reportPath = path.resolve(projectRoot, reportFile);

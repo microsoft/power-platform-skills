@@ -58,7 +58,14 @@ Search for `**/powerpages.config.json` (code sites) or a `.powerpages-site/` fol
    ```
 
    If `activated` is `true` and `websiteUrl` is present, use it as `SITE_URL` and tell the user: "Detected your site URL: **<websiteUrl>**".
-3. Also note whether `$ARGUMENTS` mentions routes (`--routes`) or signed-in pages (`--signed-in`, "after sign-in", "authenticated"). Store them as `REQUESTED_ROUTES` and `WANTS_SIGNED_IN`.
+3. Clean every `SITE_URL`, including one the user pastes in 1.4, before you use or store it. `SITE_URL` is written to the report and the result marker, and a signed link can carry a token in its query string:
+
+   ```bash
+   node -e "let u;try{u=new URL(process.argv[1])}catch{process.exit(2)}if(!/^https?:$/.test(u.protocol)||u.username||u.password)process.exit(2);u.search='';u.hash='';process.stdout.write(u.toString())" "<url>"
+   ```
+
+   Store the printed URL as `SITE_URL`. If the command exits 2, the URL isn't a valid http or https URL, or it contains a user name or password. Don't store or repeat it. Ask for the URL again, without credentials, and explain that the user signs in through a browser window in Phase 3.
+4. Also note whether `$ARGUMENTS` mentions routes (`--routes`) or signed-in pages (`--signed-in`, "after sign-in", "authenticated"). Store them as `REQUESTED_ROUTES` and `WANTS_SIGNED_IN`.
 
 #### 1.4 Ask for the URL when it can't be detected
 
@@ -208,7 +215,7 @@ Only when the user chose to include signed-in pages.
    node -e "require('fs').writeFileSync(process.argv[1], '')" "<RUN_DIR>/auth-done"
    ```
 
-4. Wait for the capture to finish and read its JSON output: `{ authState, cookies, domains, originsWithStorage }`. It never prints cookie values.
+4. Wait for the capture to finish and read its JSON output: `{ authState, cookies, domains, originsWithStorage }`. It never prints cookie values. If the window stays open past `--timeout-sec` without the done file, the capture exits 1 and deletes what it saved.
    - **I've signed in** and `cookies` is greater than 0: store `authState` as `AUTH_STATE`.
    - **I've signed in** but the capture exited 1 or `cookies` is 0: say the sign-in wasn't captured, delete the done file, and repeat this step from step 1.
    - **Skip signed-in pages**: If `authState` was returned, delete it now (see [Session cleanup](#session-cleanup)). Continue without `AUTH_STATE`.
@@ -400,6 +407,7 @@ With `PROJECT_ROOT`, write `<PROJECT_ROOT>/docs/accessibility/last-audit.json`:
 
 - `status`: `Completed` when the audit ran; `Incomplete` when it stopped early.
 - `outcome`: `failed` when `blocking` is greater than 0; `passed-with-warnings` when there are other violations, review items, load gaps, or check errors; otherwise `passed`.
+- `baseUrl`: `SITE_URL`, which 1.3 already cleaned. The validator rejects a URL with a user name, password, query string, or fragment.
 - `summary`: copy the counts from the audit report's `summary`.
 - `signedIn` and `sessionRemoved`: when a session was captured, `sessionRemoved` is `SESSION_REMOVED` from [Session cleanup](#session-cleanup). If that cleanup failed, write `false`, run the cleanup again, and then set it to `true`.
 

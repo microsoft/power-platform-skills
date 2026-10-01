@@ -10,7 +10,7 @@ Copy this template into `docs/accessibility/accessibility-audit.md` and replace 
 **Site:** {{base URL}}
 **Audited:** {{finished date and time, UTC}}
 **Scope:** {{pages audited (summary.pagesAudited: unique pages, not page × layout)}} pages and {{states audited}} interaction states on {{viewports}} layouts{{", signed in" when a session was used}}
-**Standard:** WCAG 2.2 Level A and AA (axe-core {{axe version}}){{", plus best-practice rules" when included}}
+**Standard:** WCAG 2.2 Level A and AA, checked with {{the checks that ran: "axe-core <axe version>" when axe ran, then the targeted checks by name; never name axe-core when it didn't run}}{{", plus best-practice rules" when included}}
 
 ## Summary
 

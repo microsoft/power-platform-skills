@@ -13,14 +13,17 @@
 //   node a11y-capture-auth.js --url <site-url> [--timeout-sec 600] [--done-file <path>] [--deps-dir <p>]
 //   node a11y-capture-auth.js --remove <storage-state-path>
 //
-// Stops when the browser window is closed, when --done-file exists (lets an agent
-// end capture without the user closing the window), or after --timeout-sec.
+// Stops when the browser window is closed, or when --done-file exists (lets an agent
+// end capture without the user closing the window). Reaching --timeout-sec first is an
+// error, and the saved session is deleted: nobody confirmed the sign-in, and the agent
+// that started the capture may have moved on, so no caller would clean the file up.
 //
 // Saves only cookies for the site's host and localStorage for its origin; identity
 // provider cookies picked up during sign-in are dropped (filterAuthStateForSite).
 // Prints JSON: { authState: <path>, cookies: <count>, domains: <count>, originsWithStorage: <count> }.
 // Never prints cookie names or values.
-// Exit codes: 0 captured, 1 nothing captured or browser error, 2 usage, 4 missing deps.
+// Exit codes: 0 captured, 1 nothing captured, timed out, or browser error, 2 usage,
+// 4 missing deps.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -95,6 +98,11 @@ async function capture(opts, { stderr = process.stderr } = {}) {
       writeAuthState(fd, saved);
       if (opts.doneFile && fs.existsSync(opts.doneFile)) break;
       await new Promise((r) => setTimeout(r, 2000));
+    }
+    // The loop also exits on the deadline. Only a closed window or the done file
+    // confirms the user finished; otherwise fail so the finally block deletes the file.
+    if (!closed && !(opts.doneFile && fs.existsSync(opts.doneFile)) && Date.now() >= deadline) {
+      throw new Error(`timed out after ${opts.timeoutSec} seconds before sign-in was confirmed; the partial session was deleted`);
     }
     completed = true;
   } finally {

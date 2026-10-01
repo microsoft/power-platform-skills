@@ -19,6 +19,9 @@ test('exclusionReason skips sign-out, platform endpoints, files, external and us
   assert.equal(exclusionReason(`${ORIGIN}/signout`, ORIGIN), 'sign-out');
   assert.equal(exclusionReason(`${ORIGIN}/_api/contacts`, ORIGIN), 'platform-endpoint');
   assert.equal(exclusionReason(`${ORIGIN}/_services/about`, ORIGIN), 'platform-endpoint');
+  assert.equal(exclusionReason(`${ORIGIN}/_api`, ORIGIN), 'platform-endpoint', 'the endpoint root itself');
+  assert.equal(exclusionReason(`${ORIGIN}/_services?x=1`, ORIGIN), 'platform-endpoint');
+  assert.equal(exclusionReason(`${ORIGIN}/_apiary`, ORIGIN), null, 'a page whose name only starts with an endpoint name');
   assert.equal(exclusionReason(`${ORIGIN}/docs/guide.PDF`, ORIGIN), 'file');
   assert.equal(exclusionReason('https://example.com/', ORIGIN), 'external');
   assert.equal(exclusionReason(`${ORIGIN}/admin/users`, ORIGIN, ['/admin']), 'user-excluded');

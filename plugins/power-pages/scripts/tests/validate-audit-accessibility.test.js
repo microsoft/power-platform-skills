@@ -204,6 +204,25 @@ test('blocks a report path outside the project', () => {
   assert.match(result.stderr, /inside the project/);
 });
 
+test('blocks a baseUrl that would persist a token or credentials, without echoing it', () => {
+  for (const baseUrl of ['https://contoso.powerappsportals.com/?token=s3cret', 'https://contoso.powerappsportals.com/#s3cret', 'https://user:s3cret@contoso.powerappsportals.com/']) {
+    const dir = makeProject();
+    writeMarker(dir, validMarker({ baseUrl }));
+    const result = runValidator(dir);
+    assert.equal(result.code, 2, baseUrl);
+    assert.match(result.stderr, /must not contain a user name, password, query string, or fragment/);
+    assert.doesNotMatch(result.stderr, /s3cret/);
+  }
+});
+
+test('blocks an absolute report path even when it points inside the project', () => {
+  const dir = makeProject();
+  writeMarker(dir, validMarker({ reportFile: path.join(dir, REPORT_REL) }));
+  const result = runValidator(dir);
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /must be relative to the project root/);
+});
+
 test('blocks a report with unreplaced template placeholders', () => {
   const dir = makeProject();
   writeReport(dir, '# Accessibility audit: {{site name}}\n');

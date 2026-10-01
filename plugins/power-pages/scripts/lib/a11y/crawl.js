@@ -14,7 +14,8 @@ const SIGN_OUT_PATTERN = /(log-?off|log-?out|sign-?out)/i;
 
 // Platform endpoints that are not pages: Web API, server logic, portal services,
 // and static resources. Auditing them produces noise (raw JSON has no landmarks).
-const NON_PAGE_PATH_PATTERN = /^\/(_api|_services|_resources|_layout|_portal)\//i;
+// Matches the endpoint root itself (/_api) as well as anything below it (/_api/x).
+const NON_PAGE_PATH_PATTERN = /^\/(_api|_services|_resources|_layout|_portal)(\/|$)/i;
 
 const FILE_EXTENSION_PATTERN = /\.(pdf|zip|docx?|xlsx?|pptx?|csv|txt|json|xml|png|jpe?g|gif|svg|webp|ico|mp4|mp3|webm)$/i;
 
