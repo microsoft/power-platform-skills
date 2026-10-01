@@ -1,6 +1,6 @@
 # Interaction states guide
 
-Hidden UI — menus, dialogs, tabs, accordions, and validation messages — isn't in the page when it first loads, so a page-load audit never sees it. A **state** tells `a11y-audit.js` how to reveal that UI before it runs axe-core.
+Hidden UI — menus, dialogs, tabs, accordions, and validation messages — isn't in the page when it first loads, so a page-load audit never sees it. A **state** tells `a11y-audit.js` how to reveal that UI before it runs axe-core and the keyboard check.
 
 ## States file format
 
@@ -60,7 +60,16 @@ Discovery returns `stateCandidates` per page. Each one is a click step for a con
 
 ## Form submission safety
 
-`a11y-audit.js` refuses any step that would submit a form — clicking a submit button, or pressing `Enter` inside a form — unless `--allow-form-submit` is passed. On a Power Pages site, a form submission can create or update a Dataverse record and send email. Only use `--allow-form-submit` after the user consents, and only on a test or development site.
+`a11y-audit.js` protects the site in two layers while it replays a state, unless `--allow-form-submit` is passed:
+
+- **Step guard.** It refuses any step that would submit a form: clicking a submit button, pressing `Space` on a submit button, or pressing `Enter` inside a form.
+- **Network guard.** Steps can still trigger writes from script, such as a plain button that calls the Web API. During a state, the audit browser blocks every `POST`, `PUT`, `PATCH`, and `DELETE` request before it leaves the browser, except the read-only list-grid data request. Each state reports how many requests were blocked in `states[].blockedRequests` (method and path only), and the total appears in `summary.blockedRequests`. A blocked request isn't a failure. It does mean the state may look different on the live site, for example a missing "Saved" message.
+
+On a Power Pages site, a form submission can create or update a Dataverse record and send email. Only use `--allow-form-submit` after the user consents, and only on a test or development site.
+
+## Checks run on each state
+
+Each state runs axe-core and, when selected, the keyboard check. Reflow, 200% text, and reduced motion resize or restyle the page, which closes most menus and dialogs, so they run on page loads only. `--states` needs `--checks` to include `axe` or `keyboard`.
 
 ## Reusing states
 

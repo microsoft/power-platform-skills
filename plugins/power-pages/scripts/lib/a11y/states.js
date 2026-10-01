@@ -20,7 +20,10 @@
 //
 // Safety: an audit must never change data. Steps that would submit a form are
 // refused unless --allow-form-submit is passed explicitly, because a Power Pages
-// form submit writes a Dataverse record (and may send email) on a live site.
+// form submit writes a Dataverse record (and may send email) on a live site. The step
+// guard only sees the control a step targets, and page scripts can still send data
+// on any click (fetch/XHR, Web API calls), so guardMutations() adds a network-level
+// backstop that aborts state-changing requests while a state is replayed.
 
 const fs = require('node:fs');
 const { VIEWPORTS } = require('./args');
@@ -28,6 +31,15 @@ const { isSubmitLikeDescriptor } = require('./checks/inventory');
 
 const ACTIONS = Object.freeze(['click', 'hover', 'focus', 'blur', 'press', 'wait']);
 const LIMITS = Object.freeze({ states: 100, steps: 20, waitMs: 10000, text: 200 });
+
+// RFC 9110 §9.2.1 safe methods: by definition they do not change server state.
+// https://www.rfc-editor.org/rfc/rfc9110#section-9.2.1
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+// Power Pages list (entity grid) controls page and sort through a POST that only
+// reads rows, e.g. POST /_services/entity-grid-data.json/<website-id>. Blocking it
+// would leave a "next page" or "sort" state empty, so it is the one POST let through.
+const READ_ONLY_POST_PATHS = Object.freeze([/^\/_services\/entity-grid-data\.json(\/|$)/i]);
+const MAX_BLOCKED_SAMPLES = 20;
 
 class StatesFileError extends Error {}
 
@@ -90,13 +102,45 @@ function loadStatesFile(file, { readFile = fs.readFileSync } = {}) {
   return validateStates(data);
 }
 
-// Runs in the page against a located element.
+// Runs in the page against a located element, or (no argument) against the focused
+// element for a bare `press`. `el.form` also covers controls associated through the
+// form="<id>" attribute that sit outside the <form> element.
 function describeForSubmitCheck(el) {
+  const t = el || document.activeElement;
+  if (!t || t === document.body || t === document.documentElement) return { tag: 'body', type: null, inForm: false };
   return {
-    tag: el.tagName.toLowerCase(),
-    type: el.getAttribute('type'),
-    inForm: Boolean(el.closest('form')),
+    tag: t.tagName.toLowerCase(),
+    type: t.getAttribute('type'),
+    inForm: Boolean(t.form || t.closest('form')),
   };
+}
+
+// Normalizes a Playwright key string to the activation key it ends with. Playwright
+// accepts chords ("Shift+Enter", "Control+Space") and either the key name or the
+// character (" " and "Space" are both the space bar).
+function activationKey(key) {
+  const last = key.length > 1 ? key.split('+').pop() : key;
+  if (/^(Numpad)?Enter$/i.test(last)) return 'enter';
+  if (last === ' ' || /^space$/i.test(last)) return 'space';
+  return null;
+}
+
+// Pure decision so it can be tested without a browser. Returns the refusal message,
+// or null when the step is safe. Activation keys submit just like a click:
+//   - Space on a submit button activates it (HTML: button activation behavior)
+//   - Enter on a submit button activates it, and Enter in a text field submits the
+//     form implicitly (HTML "implicit submission")
+// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#implicit-submission
+function submitRefusal(step, target) {
+  const submitLike = isSubmitLikeDescriptor(target);
+  if (step.action === 'click') {
+    return submitLike ? `Refusing to click "${step.name}": it would submit a form.` : null;
+  }
+  if (step.action !== 'press') return null;
+  const key = activationKey(step.key);
+  if (key === 'enter' && (submitLike || target.inForm)) return 'Refusing to press Enter inside a form: it may submit.';
+  if (key === 'space' && submitLike) return 'Refusing to press Space on a submit button: it would submit a form.';
+  return null;
 }
 
 async function applyStep(page, step, { allowFormSubmit = false, timeoutMs = 10000 } = {}) {
@@ -113,18 +157,10 @@ async function applyStep(page, step, { allowFormSubmit = false, timeoutMs = 1000
     }
   }
 
-  if (!allowFormSubmit && locator && step.action === 'click') {
-    const d = await locator.evaluate(describeForSubmitCheck);
-    if (isSubmitLikeDescriptor(d)) {
-      throw new Error(`Refusing to click "${step.name}": it would submit a form. Pass --allow-form-submit to permit this.`);
-    }
-  }
-  if (!allowFormSubmit && step.action === 'press' && /^(Enter|NumpadEnter)$/i.test(step.key)) {
-    // Enter in a text field submits its form implicitly.
-    const inForm = locator
-      ? await locator.evaluate((el) => Boolean(el.closest('form')))
-      : await page.evaluate(() => Boolean(document.activeElement && document.activeElement.closest('form')));
-    if (inForm) throw new Error('Refusing to press Enter inside a form: it may submit. Pass --allow-form-submit to permit this.');
+  if (!allowFormSubmit && (step.action === 'click' || step.action === 'press')) {
+    const target = locator ? await locator.evaluate(describeForSubmitCheck) : await page.evaluate(describeForSubmitCheck);
+    const refusal = submitRefusal(step, target);
+    if (refusal) throw new Error(`${refusal} Pass --allow-form-submit to permit this.`);
   }
 
   switch (step.action) {
@@ -148,11 +184,55 @@ async function applyState(page, state, opts) {
   await page.waitForTimeout(400);
 }
 
+function isMutatingRequest(method, url) {
+  if (SAFE_METHODS.has(String(method).toUpperCase())) return false;
+  if (String(method).toUpperCase() === 'POST') {
+    let pathname = '';
+    try { pathname = new URL(url).pathname; } catch { /* not a URL: treat as mutating */ }
+    if (READ_ONLY_POST_PATHS.some((re) => re.test(pathname))) return false;
+  }
+  return true;
+}
+
+// Aborts state-changing requests (POST/PUT/PATCH/DELETE, including a form POST
+// navigation) until dispose() is called. Records the method and path only — never
+// the query string or body, which can carry tokens or form data. Analytics beacons
+// are blocked too; that is harmless for an audit. Requests from service workers
+// bypass page.route, so the audit context is created with serviceWorkers: 'block'.
+// https://playwright.dev/docs/api/class-page#page-route
+async function guardMutations(page, { allowFormSubmit = false } = {}) {
+  const blocked = { count: 0, requests: [] };
+  if (allowFormSubmit) return { blocked, dispose: async () => {} };
+  const handler = (route) => {
+    const request = route.request();
+    if (!isMutatingRequest(request.method(), request.url())) return route.continue();
+    blocked.count++;
+    if (blocked.requests.length < MAX_BLOCKED_SAMPLES) {
+      let where = '(unparseable URL)';
+      try {
+        const u = new URL(request.url());
+        where = `${u.origin}${u.pathname}`;
+      } catch { /* keep placeholder */ }
+      blocked.requests.push({ method: request.method(), url: where });
+    }
+    return route.abort('blockedbyclient');
+  };
+  await page.route('**/*', handler);
+  return {
+    blocked,
+    dispose: async () => { await page.unroute('**/*', handler).catch(() => {}); },
+  };
+}
+
 module.exports = {
   ACTIONS,
   LIMITS,
   StatesFileError,
+  activationKey,
   applyState,
+  guardMutations,
+  isMutatingRequest,
   loadStatesFile,
+  submitRefusal,
   validateStates,
 };

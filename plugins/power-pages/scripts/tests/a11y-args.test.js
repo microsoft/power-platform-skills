@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { ALL_CHECKS, EXIT, UsageError, parseArgs } = require('../lib/a11y/args');
+const { ALL_CHECKS, EXIT, STATE_CHECKS, UsageError, parseArgs } = require('../lib/a11y/args');
 
 test('parseArgs applies defaults for a bare --url', () => {
   const opts = parseArgs(['--url', 'https://contoso.powerappsportals.com/#top']);
@@ -54,11 +54,18 @@ for (const [name, argv, pattern] of [
   ['unknown flag', ['--url', 'http://x', '--fast'], /Unknown argument: --fast/],
   ['snapshot-dir outside discover', ['--url', 'http://x', '--snapshot-dir', 'd'], /only valid with --mode discover/],
   ['states outside audit', ['--url', 'http://x', '--mode', 'discover', '--states', 's.json'], /only valid with --mode audit/],
+  ['states with no state check', ['--url', 'http://x', '--states', 's.json', '--checks', 'reflow,zoom'], /--states needs --checks to include axe or keyboard/],
 ]) {
   test(`parseArgs rejects ${name}`, () => {
     assert.throws(() => parseArgs(argv), (err) => err instanceof UsageError && pattern.test(err.message));
   });
 }
+
+test('states run only the checks that keep the state open', () => {
+  assert.deepEqual(STATE_CHECKS, ['axe', 'keyboard']);
+  assert.ok(STATE_CHECKS.every((c) => ALL_CHECKS.includes(c)));
+  assert.equal(parseArgs(['--url', 'http://x', '--states', 's.json', '--checks', 'keyboard']).statesFile, 's.json');
+});
 
 test('exit codes keep "could not audit" distinct from "found violations"', () => {
   assert.deepEqual(EXIT, { PASS: 0, VIOLATIONS: 1, USAGE: 2, LOAD_FAILURE: 3, MISSING_DEPS: 4 });

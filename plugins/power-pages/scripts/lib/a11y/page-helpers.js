@@ -8,7 +8,39 @@
 // in-page check reads them from there. Navigation discards window, so callers must
 // re-install after every goto (ensureHelpers does this idempotently).
 
-function installHelpersInPage() {
+// Strips data that must never reach the JSON report or chat from an HTML snippet.
+// Reports quote element markup as evidence, and on a signed-in Power Pages page that
+// markup can carry live secrets, e.g.:
+//   <input type="hidden" name="__RequestVerificationToken" value="CfDJ8...">   (anti-forgery token)
+//   <input id="emailaddress1" value="jane@contoso.com">                         (prefilled profile data)
+//   <img src="/File/download.aspx?Entity=...&sig=...">                          (signed file URL)
+//   <script nonce="r4nd0m">                                                      (CSP nonce)
+// So: every `value` attribute and any attribute whose NAME looks like a credential
+// is blanked, and query strings are dropped from URL attributes (the path is kept,
+// because it is useful evidence). Matches both quote styles and a value cut off by
+// truncation ("...` with no closing quote at end of input).
+//
+// Must stay self-contained (no closures, no requires): ensureHelpers() ships its
+// source text into the page so in-page snippets use the exact same rules as Node.
+function sanitizeHtml(html) {
+  const SENSITIVE_NAME = /^(value|nonce)$|token|secret|passw|csrf|xsrf|session|signature|credential|api-?key/i;
+  const URL_ATTR = /^(href|src|srcset|action|formaction|poster|data|cite|background|xlink:href)$/i;
+  return String(html || '').replace(/(\s)([^\s"'<>/=]+)(\s*=\s*)("[^"]*"?|'[^']*'?)/g, (match, space, name, eq, quoted) => {
+    const q = quoted[0];
+    if (SENSITIVE_NAME.test(name)) return `${space}${name}${eq}${q}[redacted]${q}`;
+    if (URL_ATTR.test(name)) {
+      const closed = quoted.length > 1 && quoted.endsWith(q);
+      const inner = quoted.slice(1, closed ? -1 : undefined);
+      // srcset is a comma-separated list ("a.png?x=1 1x, b.png?x=2 2x"), so stop at
+      // whitespace and commas rather than only at the closing quote.
+      const cleaned = inner.replace(/\?[^\s,#]*/g, '?[redacted]');
+      return `${space}${name}${eq}${q}${cleaned}${q}`;
+    }
+    return match;
+  });
+}
+
+function installHelpersInPage(sanitize) {
   if (window.__ppA11y) return;
 
   const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
@@ -60,8 +92,11 @@ function installHelpersInPage() {
     return clean(el.getAttribute('title') || el.getAttribute('placeholder') || el.value || '', 80);
   }
 
+  // outerHTML of a container can be the whole page; cap it before sanitizing so the
+  // regex pass stays cheap. Sanitize before clean() truncates to 300 so a cut can
+  // never land in the middle of an unredacted attribute value.
   function snippet(el) {
-    return clean(el.outerHTML, 300);
+    return clean(sanitize(el.outerHTML.slice(0, 4000)), 300);
   }
 
   function isRendered(el) {
@@ -73,8 +108,11 @@ function installHelpersInPage() {
   window.__ppA11y = { cssPath, accessibleName, snippet, clean, isRendered };
 }
 
+// page.evaluate(fn, arg) can only pass serializable arguments, not a function, so the
+// sanitizer travels as source text inside one expression. Both functions are
+// module-level constants, never user input.
 async function ensureHelpers(page) {
-  await page.evaluate(installHelpersInPage);
+  await page.evaluate(`(${installHelpersInPage})(${sanitizeHtml})`);
 }
 
 // Email redaction for Node-side strings (axe node HTML, failure summaries). Pages
@@ -85,8 +123,15 @@ function redact(text, max = 300) {
   return String(text || '').replace(EMAIL_PATTERN, '[redacted-email]').slice(0, max);
 }
 
+// Node-side equivalent of the in-page snippet(): sanitize first, then truncate.
+function redactHtml(html, max = 300) {
+  return redact(sanitizeHtml(html), max);
+}
+
 module.exports = {
   ensureHelpers,
   installHelpersInPage,
   redact,
+  redactHtml,
+  sanitizeHtml,
 };

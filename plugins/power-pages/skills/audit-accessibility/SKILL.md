@@ -307,8 +307,8 @@ node "${PLUGIN_ROOT}/scripts/a11y-audit.js" <shared flags> --mode audit --output
 
 Add these flags when they apply:
 
-- `--states "<RUN_DIR>/states.json"` when `AUDIT_STATES=true`
-- `--allow-form-submit` only when `ALLOW_FORM_SUBMIT=true`
+- `--states "<RUN_DIR>/states.json"` when `AUDIT_STATES=true`. Each state runs axe-core and the keyboard check. While a state replays, the audit blocks requests that would write data (see [`references/states-guide.md`](references/states-guide.md#form-submission-safety)).
+- `--allow-form-submit` only when `ALLOW_FORM_SUBMIT=true`. It turns off both the submit-step guard and the request blocking.
 - `--viewports`, `--checks`, or `--no-best-practice` when the user changed them in Phase 3
 
 The audit takes roughly 5–15 seconds per page. Tell the user it's running and how many pages are in scope.
@@ -320,10 +320,10 @@ The audit takes roughly 5–15 seconds per page. Tell the user it's running and 
 | 0 | No blocking violations | Continue to Phase 6 |
 | 1 | Blocking violations found (critical or serious WCAG issues) | Continue to Phase 6 |
 | 2 | Usage error (bad flag or states file) | Fix the input and re-run |
-| 3 | A page or state failed to load | Continue to Phase 6 and report the gaps; the rest of the report is valid |
+| 3 | Audit incomplete: a page or state failed to load, or a check errored | Continue to Phase 6 and report the gaps from `pages[].error`, `states[].error`, and `checkErrors`; the rest of the report is valid |
 | 4 | Tools or browser missing | Return to Phase 2 |
 
-Exit 3 takes priority over exit 1, so always check `summary.blocking` in the report too.
+Exit 3 takes priority over exit 1, so always check `summary.blocking` in the report too. If `summary.blockedRequests` is above 0, mention in the report that some state interactions were stopped before they could write data, so those states may differ on the live site.
 
 ### Output
 
@@ -347,7 +347,7 @@ Sort findings into these groups:
 
 1. **Must fix**: Blocking findings — `critical` or `serious` WCAG violations that aren't best-practice or heuristic.
 2. **Should fix**: `moderate` and `minor` WCAG violations.
-3. **Verify**: `heuristic: true` findings from the extended checks (`pp-keyboard-trap`, `pp-focus-not-visible`, `pp-focus-offscreen`, `pp-reflow-horizontal-scroll`, `pp-text-clipped-at-200`, `pp-motion-ignores-reduced-motion`, `pp-autoplay-video-no-controls`) and every `needsReview` item. Check the evidence and the ARIA snapshot. Keep the finding when the evidence holds; otherwise list it as a manual check.
+3. **Verify**: `heuristic: true` findings from the extended checks (`pp-keyboard-trap`, `pp-focus-not-visible`, `pp-focus-offscreen`, `pp-reflow-horizontal-scroll`, `pp-text-clipped-at-200`, `pp-motion-ignores-reduced-motion`) and every `needsReview` item, including a `pp-autoplay-video-no-controls` video that has the autoplay attribute but didn't play during the audit. Check the evidence and the ARIA snapshot. Keep the finding when the evidence holds; otherwise list it as a manual check. A `pp-autoplay-video-no-controls` violation was observed playing, so it belongs in **Must fix**.
 4. **Best practice**: `bestPractice: true` findings. Recommended, but not WCAG failures.
 
 Group repeated issues. When the same rule and element appear on many pages (for example, a shared header), report it once as a shared component issue with its page count. Page title findings (`pp-page-title-missing`, `pp-page-title-duplicate`) belong in **Should fix**.
@@ -381,12 +381,12 @@ With `PROJECT_ROOT`, write `<PROJECT_ROOT>/docs/accessibility/last-audit.json`:
   "signedIn": false,
   "sessionRemoved": true,
   "reportFile": "docs/accessibility/accessibility-audit.md",
-  "summary": { "pagesAudited": 12, "pageErrors": 0, "statesAudited": 6, "stateErrors": 0, "violations": 9, "blocking": 3, "needsReview": 4 }
+  "summary": { "pagesAudited": 12, "pageErrors": 0, "statesAudited": 6, "stateErrors": 0, "checkErrors": 0, "blockedRequests": 0, "violations": 9, "blocking": 3, "needsReview": 4 }
 }
 ```
 
 - `status`: `Completed` when the audit ran; `Incomplete` when it stopped early.
-- `outcome`: `failed` when `blocking` is greater than 0; `passed-with-warnings` when there are other violations, review items, or load gaps; otherwise `passed`.
+- `outcome`: `failed` when `blocking` is greater than 0; `passed-with-warnings` when there are other violations, review items, load gaps, or check errors; otherwise `passed`.
 - `summary`: copy the counts from the audit report's `summary`.
 - `signedIn` and `sessionRemoved`: when a session was captured, write `sessionRemoved: false` now and set it to `true` after [Session cleanup](#session-cleanup).
 

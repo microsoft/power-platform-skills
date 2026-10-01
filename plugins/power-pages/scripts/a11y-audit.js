@@ -20,7 +20,7 @@ const { MissingDependencyError, candidateRoots, launchBrowser, loadAxeSource, lo
 const { ensureHelpers } = require('./lib/a11y/page-helpers');
 const { runAxe } = require('./lib/a11y/axe-runner');
 const { ReportBuilder, exitCodeFor } = require('./lib/a11y/report');
-const { StatesFileError, applyState, loadStatesFile } = require('./lib/a11y/states');
+const { StatesFileError, applyState, guardMutations, loadStatesFile } = require('./lib/a11y/states');
 const { runKeyboardCheck } = require('./lib/a11y/checks/keyboard');
 const { runReflowCheck } = require('./lib/a11y/checks/reflow');
 const { runZoomCheck } = require('./lib/a11y/checks/zoom');
@@ -84,6 +84,10 @@ async function newContext(browser, viewportName, opts) {
     // Lets the inline axe script run even when the site's Content-Security-Policy
     // forbids inline scripts. Affects only this audit browser, never the site.
     bypassCSP: true,
+    // A service worker can issue fetches that page.route() never sees, which would
+    // let a replayed state slip a write past guardMutations(). Power Pages does not
+    // need one to render, so block registration for the whole audit.
+    serviceWorkers: 'block',
     storageState: opts.authState || undefined,
   });
   const page = await context.newPage();
@@ -224,16 +228,30 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
           builder.addState({ label: state.label, route: state.route, viewport, error: nav.error });
           continue;
         }
+        // Installed after the page load on purpose: classic Power Pages list grids
+        // fetch their rows with a POST, so the guard only covers what the replayed
+        // steps trigger.
+        const guard = await guardMutations(page, { allowFormSubmit: opts.allowFormSubmit });
+        const checkErrors = [];
+        const ctx = { route: state.route, viewport, state: state.label };
         try {
           await applyState(page, state, { allowFormSubmit: opts.allowFormSubmit, timeoutMs: Math.min(opts.timeoutMs, 10000) });
           await ensureHelpers(page);
           if (checks.has('axe')) {
             const { findings } = await runAxe(page, axeSource, { bestPractice: opts.bestPractice });
-            builder.addFindings(findings, { route: state.route, viewport, state: state.label });
+            builder.addFindings(findings, ctx);
           }
-          builder.addState({ label: state.label, route: state.route, viewport });
+          // Only checks that leave the page as it is: reflow and zoom resize or
+          // restyle the page, which closes most menus and dialogs (see STATE_CHECKS).
+          if (checks.has('keyboard')) {
+            const r = await runCheck('keyboard', () => runKeyboardCheck(page), checkErrors);
+            if (r) builder.addFindings(r.findings, ctx);
+          }
+          builder.addState({ label: state.label, route: state.route, viewport, checkErrors, blockedRequests: guard.blocked });
         } catch (err) {
-          builder.addState({ label: state.label, route: state.route, viewport, error: err.message.split('\n')[0] });
+          builder.addState({ label: state.label, route: state.route, viewport, error: err.message.split('\n')[0], checkErrors, blockedRequests: guard.blocked });
+        } finally {
+          await guard.dispose();
         }
       }
     } finally {
@@ -283,7 +301,7 @@ async function main(argv = process.argv.slice(2), { stdout = process.stdout, std
   const log = (msg) => stderr.write(`[a11y] ${msg}\n`);
   let browser;
   try {
-    const roots = candidateRoots({ depsDir: opts.depsDir, projectRoot: opts.projectRoot });
+    const roots = candidateRoots({ depsDir: opts.depsDir });
     const { chromium } = loadPlaywright(roots);
     let axe = { source: null };
     if (opts.mode === 'audit' && opts.checks.includes('axe')) axe = loadAxeSource(roots);

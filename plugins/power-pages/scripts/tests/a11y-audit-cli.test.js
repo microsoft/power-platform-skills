@@ -86,11 +86,20 @@ button.nofocus:focus{outline:none}.low{color:#aaa;background:#fff}</style></head
   '/trap': `<!doctype html><html lang="en"><head><title>Trap</title></head><body><main><h1>Trap</h1><a href="/">Home</a>
 <input id="t" aria-label="Trap field"><script>t.addEventListener('keydown',function(e){if(e.key==='Tab')e.preventDefault()})</script></main></body></html>`,
   '/SignIn': '<!doctype html><html lang="en"><head><title>Sign in</title></head><body><main><h1>Sign in</h1></main></body></html>',
+  // Not linked from "/", so the crawl test never visits it. "Save draft" is a plain
+  // button (not submit-like) whose click POSTs from script: only the network guard
+  // can stop that write. The signed image URL checks snippet sanitization.
+  '/draft': `<!doctype html><html lang="en"><head><title>Draft</title></head><body><main><h1>Draft</h1>
+<button type="button" id="save">Save draft</button><p id="done" hidden><img src="/z.png?sig=SECRET456">Saved</p>
+<script>save.onclick=function(){fetch('/api/save',{method:'POST',body:'x'}).catch(function(){});done.hidden=false}</script>
+</main></body></html>`,
 };
 
 function startFixture() {
+  const posts = [];
   const server = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://localhost');
+    if (req.method !== 'GET' && req.method !== 'HEAD') posts.push(`${req.method} ${u.pathname}`);
     if (u.pathname === '/private') {
       res.writeHead(302, { Location: '/SignIn?returnUrl=%2Fprivate' });
       res.end();
@@ -102,6 +111,7 @@ function startFixture() {
     res.writeHead(html ? 200 : 404, { 'Content-Type': 'text/html', 'Content-Security-Policy': "script-src 'none'" });
     res.end(html || '<!doctype html><title>Not found</title>');
   });
+  server.posts = posts;
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
 }
 
@@ -154,6 +164,30 @@ test('live: discover proposes states and a states file audits hidden content', {
     assert.equal(r.status, 1, r.stderr);
     const alt = JSON.parse(r.stdout).violations.find((v) => v.id === 'image-alt');
     assert.ok(alt.nodes.some((n) => n.occurrences.some((o) => o.state === 'Menu open')), 'hidden image found only in the open-menu state');
+  } finally {
+    server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('live: state replay blocks script writes, runs keyboard, and sanitizes snippets', { skip: !LIVE && 'set POWER_PAGES_A11Y_LIVE=1 to run' }, async () => {
+  const server = await startFixture();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-a11y-live-'));
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const statesFile = path.join(dir, 'states.json');
+    fs.writeFileSync(statesFile, JSON.stringify({ states: [{ route: '/draft', label: 'Saved', steps: [{ action: 'click', role: 'button', name: 'Save draft' }] }] }));
+    const r = await runAsync(['--url', base, '--routes', '/draft', '--viewports', 'desktop', '--checks', 'axe,keyboard', '--states', statesFile]);
+    assert.equal(r.status, 1, r.stderr);
+    assert.deepEqual(server.posts, [], 'the POST never reached the site');
+    const report = JSON.parse(r.stdout);
+    assert.equal(report.summary.blockedRequests, 1);
+    assert.deepEqual(report.states[0].blockedRequests.requests, [{ method: 'POST', url: `${base}/api/save` }]);
+    assert.equal(report.summary.checkErrors, 0);
+    const alt = report.violations.find((v) => v.id === 'image-alt');
+    assert.ok(alt.nodes.some((n) => n.occurrences.some((o) => o.state === 'Saved')));
+    assert.ok(!r.stdout.includes('SECRET456'), 'signed query string is redacted');
+    assert.ok(alt.nodes.some((n) => n.html.includes('/z.png?[redacted]')));
   } finally {
     server.close();
     fs.rmSync(dir, { recursive: true, force: true });

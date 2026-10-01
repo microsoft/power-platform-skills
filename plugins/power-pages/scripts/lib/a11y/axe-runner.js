@@ -8,7 +8,7 @@
 // Content-Security-Policy on a deployed site cannot block the inline script; the
 // legacy create-site axe-audit.js loads from a CDN and fails silently in that case.
 
-const { redact } = require('./page-helpers');
+const { redact, redactHtml } = require('./page-helpers');
 
 const WCAG_TAGS = Object.freeze(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']);
 
@@ -47,7 +47,9 @@ function normalizeAxeResult(result, kind) {
     helpUrl: result.helpUrl || null,
     nodes: (result.nodes || []).map((n) => ({
       target: Array.isArray(n.target) ? n.target.map(String).join(' ') : String(n.target || ''),
-      html: redact(n.html, 300),
+      // axe's node html is the element's outerHTML, so it needs the same scrubbing
+      // as the extended checks' snippets (tokens, input values, signed URLs).
+      html: redactHtml(n.html, 300),
       summary: redact(n.failureSummary, 500),
     })),
   };

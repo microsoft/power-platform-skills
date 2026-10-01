@@ -73,4 +73,7 @@ test('a11y-capture-auth parse validates arguments', () => {
   assert.throws(() => parse(['--url', 'http://x', '--timeout-sec', '5']), /10-3600/);
   assert.throws(() => parse(['--url']), /requires a value/);
   assert.throws(() => parse(['--bogus', '1']), /Unknown argument/);
+  // Dependencies resolve only from --deps-dir or the plugin cache, never the site
+  // project, so the flag was removed rather than silently ignored.
+  assert.throws(() => parse(['--url', 'http://x', '--project-root', '.']), /Unknown argument: --project-root/);
 });

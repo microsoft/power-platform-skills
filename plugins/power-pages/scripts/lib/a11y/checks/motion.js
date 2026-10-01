@@ -14,8 +14,11 @@
 const { makeFinding } = require('../report');
 
 const LONG_ANIMATION_MS = 5000;
+// How long to watch videos. Long enough for currentTime to advance several frames
+// on a playing video, short enough to keep a crawl of many pages fast.
+const PLAYBACK_SAMPLE_MS = 750;
 
-function findMotionInPage(longMs) {
+async function findMotionInPage({ longMs, sampleMs }) {
   const h = window.__ppA11y;
   const running = [];
   for (const a of document.getAnimations()) {
@@ -30,15 +33,21 @@ function findMotionInPage(longMs) {
     running.push({ target: h.cssPath(target), html: h.snippet(target), infinite, name: a.animationName || a.id || '' });
   }
 
+  // Judge autoplay by what the video actually does, not by the autoplay attribute:
+  // a site may honor reduced motion by pausing it, and a video without the attribute
+  // may be started from script. A video is playing when it is not paused and its
+  // playhead advances across the sample window.
+  const candidates = Array.from(document.querySelectorAll('video')).filter((v) => !v.controls && h.isRendered(v));
+  const before = candidates.map((v) => v.currentTime);
+  if (candidates.length) await new Promise((resolve) => setTimeout(resolve, sampleMs));
   const videos = [];
-  for (const v of document.querySelectorAll('video')) {
-    if (!h.isRendered(v)) continue;
-    const autoplays = v.autoplay || (!v.paused && v.currentTime > 0);
-    if (!autoplays || v.controls) continue;
+  candidates.forEach((v, i) => {
+    const playing = !v.paused && !v.ended && v.currentTime > before[i];
+    if (!playing && !v.autoplay) return;
     // Muted short clips (under 5s, no loop) fall inside 2.2.2's 5-second allowance.
-    if (v.muted && !v.loop && v.duration > 0 && v.duration <= 5) continue;
-    videos.push({ target: h.cssPath(v), html: h.snippet(v), muted: v.muted });
-  }
+    if (v.muted && !v.loop && v.duration > 0 && v.duration <= 5) return;
+    videos.push({ target: h.cssPath(v), html: h.snippet(v), muted: v.muted, playing });
+  });
   return { running, videos };
 }
 
@@ -55,17 +64,36 @@ function analyzeMotion({ running, videos }) {
       nodes: running.map((r) => ({ target: r.target, html: r.html, summary: `${r.infinite ? 'Infinite' : 'Long'} animation${r.name ? ` "${r.name}"` : ''} is running with reduced motion enabled` })),
     }));
   }
-  if (videos.length) {
+  const playing = videos.filter((v) => v.playing);
+  const notObserved = videos.filter((v) => !v.playing);
+  if (playing.length) {
     // Unmuted autoplay is also a 1.4.2 Audio Control failure: sound that starts on its
     // own drowns out screen reader speech.
-    const wcag = videos.some((v) => !v.muted) ? ['1.4.2', '2.2.2'] : ['2.2.2'];
+    const wcag = playing.some((v) => !v.muted) ? ['1.4.2', '2.2.2'] : ['2.2.2'];
     findings.push(makeFinding({
       id: 'pp-autoplay-video-no-controls',
       impact: 'serious',
       wcag,
       description: 'Video plays automatically and has no controls, so users cannot pause or stop it. Add the controls attribute or a visible pause button.',
       helpUrl: 'https://www.w3.org/WAI/WCAG22/Understanding/pause-stop-hide.html',
-      nodes: videos.map((v) => ({ target: v.target, html: v.html, summary: v.muted ? 'Muted autoplay video without controls' : 'Autoplay video with sound and without controls' })),
+      nodes: playing.map((v) => ({ target: v.target, html: v.html, summary: v.muted ? 'Muted video playing on its own without controls' : 'Video with sound playing on its own without controls' })),
+    }));
+  }
+  if (notObserved.length) {
+    // The autoplay attribute is set but nothing played during the audit. That can be
+    // correct (the site pauses it for reduced motion) or an artifact of the browser's
+    // autoplay policy, which can block unmuted autoplay without a user gesture, so a
+    // person has to confirm it.
+    // https://developer.chrome.com/blog/autoplay
+    findings.push(makeFinding({
+      id: 'pp-autoplay-video-no-controls',
+      kind: 'needsReview',
+      impact: 'moderate',
+      wcag: notObserved.some((v) => !v.muted) ? ['1.4.2', '2.2.2'] : ['2.2.2'],
+      heuristic: true,
+      description: 'Video has the autoplay attribute and no controls, but it did not play during the audit. Confirm whether it plays for users; if it does, add controls or a pause button.',
+      helpUrl: 'https://www.w3.org/WAI/WCAG22/Understanding/pause-stop-hide.html',
+      nodes: notObserved.map((v) => ({ target: v.target, html: v.html, summary: 'autoplay attribute set, no playback observed with reduced motion enabled' })),
     }));
   }
   return findings;
@@ -76,11 +104,11 @@ async function runMotionCheck(page) {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     // Give CSS media queries a frame to re-evaluate and cancel animations.
     await page.waitForTimeout(250);
-    const result = await page.evaluate(findMotionInPage, LONG_ANIMATION_MS);
+    const result = await page.evaluate(findMotionInPage, { longMs: LONG_ANIMATION_MS, sampleMs: PLAYBACK_SAMPLE_MS });
     return { findings: analyzeMotion(result) };
   } finally {
     await page.emulateMedia({ reducedMotion: null });
   }
 }
 
-module.exports = { LONG_ANIMATION_MS, analyzeMotion, runMotionCheck };
+module.exports = { LONG_ANIMATION_MS, PLAYBACK_SAMPLE_MS, analyzeMotion, runMotionCheck };

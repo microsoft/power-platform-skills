@@ -51,7 +51,7 @@ Copy this template into `docs/accessibility/accessibility-audit.md` and replace 
 
 ## Coverage gaps
 
-<!-- Optional. Pages or states that failed to load, and why (for example, redirected to sign-in). -->
+<!-- Optional. Pages or states that failed to load or whose checks errored, and why (for example, redirected to sign-in). Also note states where summary.blockedRequests shows that a write was stopped. -->
 
 | Page or state | Reason |
 |---------------|--------|

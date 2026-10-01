@@ -66,16 +66,36 @@ test('analyzeMotion separates animations from autoplay video and adds 1.4.2 for 
   assert.deepEqual(analyzeMotion({ running: [], videos: [] }), []);
   const findings = analyzeMotion({
     running: [{ target: 'div.spin', html: '', infinite: true, name: 'spin' }],
-    videos: [{ target: 'video', html: '', muted: false }],
+    videos: [{ target: 'video', html: '', muted: false, playing: true }],
   });
   const [motion, video] = findings;
   assert.equal(motion.id, 'pp-motion-ignores-reduced-motion');
   assert.equal(motion.heuristic, true);
   assert.match(motion.nodes[0].summary, /Infinite animation "spin"/);
   assert.equal(video.id, 'pp-autoplay-video-no-controls');
+  assert.equal(video.kind, 'violation');
+  assert.equal(video.heuristic, false);
   assert.deepEqual(video.wcag, ['1.4.2', '2.2.2']);
-  const [mutedOnly] = analyzeMotion({ running: [], videos: [{ target: 'video', html: '', muted: true }] });
+  const [mutedOnly] = analyzeMotion({ running: [], videos: [{ target: 'video', html: '', muted: true, playing: true }] });
   assert.deepEqual(mutedOnly.wcag, ['2.2.2']);
+});
+
+test('analyzeMotion only asks for review when an autoplay video did not play', () => {
+  const findings = analyzeMotion({
+    running: [],
+    videos: [
+      { target: 'video#hero', html: '', muted: true, playing: false },
+      { target: 'video#promo', html: '', muted: false, playing: true },
+    ],
+  });
+  assert.deepEqual(findings.map((f) => [f.kind, f.nodes.map((n) => n.target)]), [
+    ['violation', ['video#promo']],
+    ['needsReview', ['video#hero']],
+  ]);
+  const [review] = analyzeMotion({ running: [], videos: [{ target: 'video', html: '', muted: true, playing: false }] });
+  assert.equal(review.kind, 'needsReview');
+  assert.equal(review.heuristic, true);
+  assert.deepEqual(review.wcag, ['2.2.2']);
 });
 
 test('analyzeTitles reports missing titles and titles shared by several routes', () => {

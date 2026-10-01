@@ -10,7 +10,7 @@
 // window is what gets audited.
 //
 // Usage:
-//   node a11y-capture-auth.js --url <site-url> [--timeout-sec 600] [--done-file <path>] [--deps-dir <p>] [--project-root <p>]
+//   node a11y-capture-auth.js --url <site-url> [--timeout-sec 600] [--done-file <path>] [--deps-dir <p>]
 //   node a11y-capture-auth.js --remove <storage-state-path>
 //
 // Stops when the browser window is closed, when --done-file exists (lets an agent
@@ -25,12 +25,12 @@ const { EXIT } = require('./lib/a11y/args');
 const { candidateRoots, launchBrowser, loadPlaywright, MissingDependencyError } = require('./lib/a11y/deps');
 const { createAuthStatePath, removeAuthState, summarizeAuthState, writeAuthState } = require('./lib/a11y/auth-state');
 
-const USAGE = 'Usage: node a11y-capture-auth.js --url <site-url> [--timeout-sec 600] [--done-file <path>] [--deps-dir <p>] [--project-root <p>]\n'
+const USAGE = 'Usage: node a11y-capture-auth.js --url <site-url> [--timeout-sec 600] [--done-file <path>] [--deps-dir <p>]\n'
   + '       node a11y-capture-auth.js --remove <storage-state-path>';
 
 function parse(argv) {
-  const opts = { url: null, timeoutSec: 600, doneFile: null, depsDir: null, projectRoot: null, remove: null };
-  const takes = new Set(['--url', '--timeout-sec', '--done-file', '--deps-dir', '--project-root', '--remove']);
+  const opts = { url: null, timeoutSec: 600, doneFile: null, depsDir: null, remove: null };
+  const takes = new Set(['--url', '--timeout-sec', '--done-file', '--deps-dir', '--remove']);
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     if (!takes.has(flag)) throw new Error(`Unknown argument: ${flag}`);
@@ -47,7 +47,6 @@ function parse(argv) {
       opts.timeoutSec = Number(value);
     } else if (flag === '--done-file') opts.doneFile = value;
     else if (flag === '--deps-dir') opts.depsDir = value;
-    else if (flag === '--project-root') opts.projectRoot = value;
     else if (flag === '--remove') opts.remove = value;
   }
   if (!opts.remove && !opts.url) throw new Error('--url is required');

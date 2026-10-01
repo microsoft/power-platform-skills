@@ -32,7 +32,7 @@
         "Proposes a scope limited to the / and /contact routes without crawling",
         "Skips discovery and interaction states after the user chooses the quick scope",
         "Runs a11y-audit.js with --routes /,/contact and without --crawl or --states",
-        "Interprets exit code 1 as blocking violations and exit code 3 as pages that failed to load, reporting load failures as coverage gaps rather than passes",
+        "Interprets exit code 1 as blocking violations and exit code 3 as an incomplete audit (pages or states that failed to load, or checks that errored), reporting those as coverage gaps rather than passes",
         "Writes an accessibility report and presents a short summary with counts by group",
         "If fixes are applied, re-runs the audit against the local dev server to verify them",
         "Does not suggest or run /deploy-site automatically"

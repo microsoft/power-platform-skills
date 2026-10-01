@@ -1,7 +1,9 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { LIMITS, StatesFileError, applyState, loadStatesFile, validateStates } = require('../lib/a11y/states');
+const {
+  LIMITS, StatesFileError, activationKey, applyState, guardMutations, isMutatingRequest, loadStatesFile, submitRefusal, validateStates,
+} = require('../lib/a11y/states');
 
 test('validateStates normalizes a valid file', () => {
   const states = validateStates({
@@ -46,14 +48,13 @@ test('loadStatesFile wraps JSON errors', () => {
 });
 
 // Minimal Playwright page/locator fake that records actions and lets each test choose
-// what the located element looks like for the form-submit guard.
-function fakePage({ descriptor = { tag: 'button', type: 'button', inForm: false }, visible = true, activeInForm = false } = {}) {
+// what the located element (descriptor) and the focused element (active) look like
+// for the form-submit guard.
+function fakePage({ descriptor = { tag: 'button', type: 'button', inForm: false }, visible = true, active = { tag: 'body', type: null, inForm: false } } = {}) {
   const actions = [];
   const locator = {
     async waitFor() { if (!visible) throw new Error('Timeout 10000ms exceeded'); },
-    async evaluate(fn) {
-      return fn.toString().includes('closest') && !fn.toString().includes('tagName') ? descriptor.inForm : descriptor;
-    },
+    async evaluate() { return descriptor; },
     async click() { actions.push('click'); },
     async hover() { actions.push('hover'); },
     async focus() { actions.push('focus'); },
@@ -64,7 +65,7 @@ function fakePage({ descriptor = { tag: 'button', type: 'button', inForm: false 
     actions,
     getByRole(role, opts) { actions.push(`find:${role}:${opts.name}:${opts.exact}`); return { first: () => locator }; },
     keyboard: { async press(key) { actions.push(`key:${key}`); } },
-    async evaluate() { return activeInForm; },
+    async evaluate() { return active; },
     async waitForTimeout() {},
   };
 }
@@ -93,13 +94,126 @@ test('applyState refuses to click a submit button unless allowed', async () => {
 
 test('applyState refuses Enter inside a form', async () => {
   await assert.rejects(
-    applyState(fakePage({ activeInForm: true }), state([{ action: 'press', key: 'Enter' }]), {}),
+    applyState(fakePage({ active: { tag: 'input', type: 'text', inForm: true } }), state([{ action: 'press', key: 'Enter' }]), {}),
     /Refusing to press Enter/,
   );
   await assert.rejects(
     applyState(fakePage({ descriptor: { tag: 'input', type: 'email', inForm: true } }), state([{ action: 'press', role: 'textbox', name: 'Email', exact: true, key: 'Enter' }]), {}),
     /Refusing to press Enter/,
   );
+  const page = fakePage();
+  await applyState(page, state([{ action: 'press', key: 'Enter' }]), {});
+  assert.deepEqual(page.actions, ['key:Enter'], 'Enter with nothing focused in a form is allowed');
+});
+
+test('applyState refuses Space on a focused submit button', async () => {
+  const submit = { tag: 'button', type: 'submit', inForm: true };
+  for (const key of [' ', 'Space', 'Shift+Space']) {
+    await assert.rejects(
+      applyState(fakePage({ active: submit }), state([{ action: 'press', key }]), {}),
+      /Refusing to press Space on a submit button/,
+    );
+  }
+  await assert.rejects(
+    applyState(fakePage({ descriptor: submit }), state([{ action: 'press', role: 'button', name: 'Send', exact: true, key: 'Space' }]), {}),
+    /--allow-form-submit/,
+  );
+  const page = fakePage({ active: submit });
+  await applyState(page, state([{ action: 'press', key: 'Space' }]), { allowFormSubmit: true });
+  assert.deepEqual(page.actions, ['key:Space']);
+});
+
+test('activationKey normalizes key names and chords', () => {
+  assert.equal(activationKey('Enter'), 'enter');
+  assert.equal(activationKey('NumpadEnter'), 'enter');
+  assert.equal(activationKey('Shift+Enter'), 'enter');
+  assert.equal(activationKey(' '), 'space');
+  assert.equal(activationKey('Control+Space'), 'space');
+  assert.equal(activationKey('Tab'), null);
+  assert.equal(activationKey('Escape'), null);
+  assert.equal(activationKey('+'), null);
+});
+
+test('submitRefusal decides per action, key and target', () => {
+  const text = { tag: 'input', type: 'text', inForm: true };
+  const submit = { tag: 'button', type: null, inForm: true };
+  const plain = { tag: 'button', type: 'button', inForm: true };
+  assert.match(submitRefusal({ action: 'click', name: 'Go' }, submit), /click "Go"/);
+  assert.equal(submitRefusal({ action: 'click', name: 'Menu' }, plain), null);
+  assert.match(submitRefusal({ action: 'press', key: 'Enter' }, text), /Enter/);
+  assert.equal(submitRefusal({ action: 'press', key: 'Space' }, text), null, 'Space in a text field types a space');
+  assert.equal(submitRefusal({ action: 'press', key: 'Space' }, plain), null);
+  assert.match(submitRefusal({ action: 'press', key: 'Space' }, submit), /Space/);
+  assert.equal(submitRefusal({ action: 'press', key: 'Tab' }, submit), null);
+  assert.equal(submitRefusal({ action: 'hover' }, submit), null);
+});
+
+test('isMutatingRequest allows reads and the list-grid data POST', () => {
+  assert.equal(isMutatingRequest('GET', 'https://contoso.powerappsportals.com/_api/accounts'), false);
+  assert.equal(isMutatingRequest('head', 'https://contoso.powerappsportals.com/'), false);
+  assert.equal(isMutatingRequest('OPTIONS', 'https://contoso.powerappsportals.com/_api/x'), false);
+  assert.equal(isMutatingRequest('POST', 'https://contoso.powerappsportals.com/_services/entity-grid-data.json/00000000-0000-0000-0000-000000000000'), false);
+  assert.equal(isMutatingRequest('POST', 'https://contoso.powerappsportals.com/_api/contacts'), true);
+  assert.equal(isMutatingRequest('PATCH', 'https://contoso.powerappsportals.com/_api/contacts(1)'), true);
+  assert.equal(isMutatingRequest('DELETE', 'https://contoso.powerappsportals.com/_api/contacts(1)'), true);
+  assert.equal(isMutatingRequest('POST', 'not a url'), true);
+});
+
+// Fake page.route/unroute that lets a test push requests through the installed handler.
+function routingPage() {
+  const routes = [];
+  return {
+    routes,
+    async route(pattern, handler) { routes.push({ pattern, handler }); },
+    async unroute(pattern, handler) {
+      const i = routes.findIndex((r) => r.pattern === pattern && r.handler === handler);
+      if (i >= 0) routes.splice(i, 1);
+    },
+    async send(method, url) {
+      let outcome = 'unrouted';
+      for (const r of routes) {
+        await r.handler({
+          request: () => ({ method: () => method, url: () => url }),
+          continue: async () => { outcome = 'continued'; },
+          abort: async (code) => { outcome = `aborted:${code}`; },
+        });
+      }
+      return outcome;
+    },
+  };
+}
+
+test('guardMutations blocks writes during a state and records only origin + path', async () => {
+  const page = routingPage();
+  const guard = await guardMutations(page, {});
+  assert.equal(await page.send('GET', 'https://contoso.powerappsportals.com/page?x=1'), 'continued');
+  assert.equal(await page.send('POST', 'https://contoso.powerappsportals.com/_services/entity-grid-data.json/1'), 'continued');
+  assert.equal(await page.send('POST', 'https://contoso.powerappsportals.com/contact-us?token=secret'), 'aborted:blockedbyclient');
+  assert.equal(await page.send('DELETE', 'https://contoso.powerappsportals.com/_api/contacts(1)'), 'aborted:blockedbyclient');
+  assert.equal(guard.blocked.count, 2);
+  assert.deepEqual(guard.blocked.requests, [
+    { method: 'POST', url: 'https://contoso.powerappsportals.com/contact-us' },
+    { method: 'DELETE', url: 'https://contoso.powerappsportals.com/_api/contacts(1)' },
+  ]);
+  await guard.dispose();
+  assert.equal(page.routes.length, 0, 'dispose removes the route');
+  assert.equal(await page.send('POST', 'https://contoso.powerappsportals.com/contact-us'), 'unrouted');
+});
+
+test('guardMutations caps recorded samples but keeps counting', async () => {
+  const page = routingPage();
+  const guard = await guardMutations(page, {});
+  for (let i = 0; i < 25; i++) await page.send('POST', `https://contoso.powerappsportals.com/p${i}`);
+  assert.equal(guard.blocked.count, 25);
+  assert.equal(guard.blocked.requests.length, 20);
+});
+
+test('guardMutations is a no-op with --allow-form-submit', async () => {
+  const page = routingPage();
+  const guard = await guardMutations(page, { allowFormSubmit: true });
+  assert.equal(page.routes.length, 0);
+  assert.deepEqual(guard.blocked, { count: 0, requests: [] });
+  await guard.dispose();
 });
 
 test('applyState explains a missing control', async () => {

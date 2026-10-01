@@ -13,6 +13,8 @@ const EXIT = Object.freeze({
   PASS: 0,
   VIOLATIONS: 1,
   USAGE: 2,
+  // "Audit incomplete": a page or state never rendered, or a check errored. The name
+  // is kept for compatibility; see report.js exitCodeFor().
   LOAD_FAILURE: 3,
   MISSING_DEPS: 4,
 });
@@ -26,6 +28,10 @@ const VIEWPORTS = Object.freeze({
 });
 
 const ALL_CHECKS = Object.freeze(['axe', 'keyboard', 'reflow', 'zoom', 'motion', 'titles']);
+// Checks that also run inside each interaction state. The others are page-level:
+// reflow and zoom resize the page and would close the open menu or dialog they are
+// meant to inspect, motion is about load-time animation, and titles compare routes.
+const STATE_CHECKS = Object.freeze(['axe', 'keyboard']);
 const MODES = Object.freeze(['audit', 'discover']);
 
 const DEFAULT_MAX_PAGES = 25;
@@ -51,8 +57,11 @@ Audit options
   --viewports <list>        desktop,mobile (default both).
   --checks <list>           ${ALL_CHECKS.join(',')} (default all).
   --no-best-practice        Exclude axe best-practice rules (WCAG A/AA only).
-  --states <file>           JSON file of interaction states to audit.
-  --allow-form-submit       Allow state steps that would submit a form.
+  --states <file>           JSON file of interaction states to audit. Each state
+                            runs ${STATE_CHECKS.join(' and ')} (whichever are selected);
+                            state-changing requests are blocked while it replays.
+  --allow-form-submit       Allow state steps that would submit a form, and stop
+                            blocking state-changing requests during replay.
 
 Session and environment
   --auth-state <file>       Playwright storage state from a11y-capture-auth.js.
@@ -65,7 +74,8 @@ Output
   --snapshot-dir <dir>      discover mode: write per-page ARIA snapshots here.
 
 Exit codes: 0 pass, 1 critical/serious WCAG violations, 2 usage error,
-            3 one or more pages failed to load, 4 dependencies missing.`;
+            3 audit incomplete (a page or state failed to load, or a check
+            errored), 4 dependencies missing.`;
 
 function splitList(value) {
   return value.split(',').map((s) => s.trim()).filter(Boolean);
@@ -187,6 +197,10 @@ function parseArgs(argv) {
   if (opts.statesFile && opts.mode !== 'audit') {
     throw new UsageError('--states is only valid with --mode audit');
   }
+  if (opts.statesFile && !opts.checks.some((c) => STATE_CHECKS.includes(c))) {
+    // Otherwise states would be replayed and reported as audited with nothing run.
+    throw new UsageError(`--states needs --checks to include ${STATE_CHECKS.join(' or ')}`);
+  }
   return opts;
 }
 
@@ -195,6 +209,7 @@ module.exports = {
   DEFAULT_MAX_PAGES,
   EXIT,
   MODES,
+  STATE_CHECKS,
   USAGE,
   UsageError,
   VIEWPORTS,

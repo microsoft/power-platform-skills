@@ -6,8 +6,9 @@
 //   { id, source: 'axe'|'extended', kind: 'violation'|'needsReview', impact,
 //     wcag: ['1.4.3'], bestPractice, heuristic, description, helpUrl,
 //     nodes: [{ target, html, summary }] }
-// The report groups by rule id and then by node target so a header defect repeated
-// on 25 pages appears once with 25 occurrences instead of 25 separate findings.
+// The report groups by rule id and then by node (selector + markup + summary) so a
+// header defect repeated on 25 pages appears once with 25 occurrences instead of 25
+// separate findings.
 
 const { EXIT } = require('./args');
 
@@ -51,8 +52,8 @@ class ReportBuilder {
     this.pages.push({ route, viewport, state, url, title, status, error, checkErrors });
   }
 
-  addState({ label, route, viewport, error = null }) {
-    this.states.push({ label, route, viewport, error });
+  addState({ label, route, viewport, error = null, checkErrors = [], blockedRequests = null }) {
+    this.states.push({ label, route, viewport, error, checkErrors, blockedRequests });
   }
 
   addFindings(findings, { route, viewport, state = null }) {
@@ -71,10 +72,16 @@ class ReportBuilder {
       if (IMPACT_ORDER.indexOf(f.impact) < IMPACT_ORDER.indexOf(rule.impact)) rule.impact = f.impact;
       const nodes = f.nodes.length ? f.nodes : [{ target: '(page)', html: '', summary: '' }];
       for (const n of nodes) {
-        let node = rule.nodes.get(n.target);
+        // Keyed on the markup and summary as well as the selector: a positional
+        // selector such as "main > p:nth-of-type(2)" names different elements on
+        // different routes, and merging them would hide all but the first one's
+        // evidence. A shared header/footer element has identical markup on every
+        // page, so it still collapses into one node with many occurrences.
+        const nodeKey = JSON.stringify([n.target, n.html || '', n.summary || '']);
+        let node = rule.nodes.get(nodeKey);
         if (!node) {
           node = { target: n.target, html: n.html, summary: n.summary, occurrences: [] };
-          rule.nodes.set(n.target, node);
+          rule.nodes.set(nodeKey, node);
         }
         node.occurrences.push({ route, viewport, state });
       }
@@ -93,7 +100,8 @@ class ReportBuilder {
     const pageErrors = this.pages.filter((p) => p.error).length;
     const states = this.states;
     const stateErrors = states.filter((s) => s.error).length;
-    const checkErrors = this.pages.reduce((n, p) => n + p.checkErrors.length, 0);
+    const checkErrors = [...this.pages, ...states].reduce((n, p) => n + (p.checkErrors || []).length, 0);
+    const blockedRequests = states.reduce((n, s) => n + (s.blockedRequests ? s.blockedRequests.count : 0), 0);
 
     return {
       ...this.meta,
@@ -105,6 +113,7 @@ class ReportBuilder {
         statesAudited: states.length - stateErrors,
         stateErrors,
         checkErrors,
+        blockedRequests,
         violations: violations.length,
         blocking,
         needsReview: needsReview.length,
@@ -119,13 +128,16 @@ class ReportBuilder {
   }
 }
 
-// A load failure takes priority over violations: a page or state that never rendered
-// was not audited, so a "pass" or a violation count would both misrepresent coverage.
-// Errors in individual extended checks (checkErrors) are reported but do not change
-// the exit code; axe itself failing on a page is recorded as a page error.
+// An incomplete audit takes priority over violations: a page or state that never
+// rendered, or a check that errored, was not audited, so a "pass" or a violation
+// count would both misrepresent coverage. The skill still reads summary.blocking
+// from the report, so violations found on the pages that did run are not lost.
+// Blocked requests (summary.blockedRequests) are the safety guard working as
+// designed, not a failure, so they do not change the exit code.
 function exitCodeFor(report) {
-  if (report.summary.pageErrors > 0 || report.summary.stateErrors > 0) return EXIT.LOAD_FAILURE;
-  if (report.summary.blocking > 0) return EXIT.VIOLATIONS;
+  const s = report.summary;
+  if (s.pageErrors > 0 || s.stateErrors > 0 || s.checkErrors > 0) return EXIT.LOAD_FAILURE;
+  if (s.blocking > 0) return EXIT.VIOLATIONS;
   return EXIT.PASS;
 }
 
