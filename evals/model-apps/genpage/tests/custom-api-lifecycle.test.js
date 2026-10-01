@@ -35,7 +35,13 @@ async function readSummary(api: ActionApi, recordId: string) {
   if (!res.ok) { setError(res.error?.message ?? 'Summary failed.'); return; }
   setTotal(res.outputs?.Total);
 }
-const GeneratedComponent = () => null;
+const GeneratedComponent = (props: Props) => {
+  const { dataApi } = props;
+  const pending = { current: false };
+  void approveOrder(dataApi, 'record', 1, pending);
+  void readSummary(dataApi, 'record');
+  return null;
+};
 export default GeneratedComponent;
 `;
 const cleared = 'const GeneratedComponent = () => null;\nexport default GeneratedComponent;\n';
@@ -130,6 +136,24 @@ test('Custom API response handling is scoped, sanitized and never auto-retries i
     const bad = apiFixture();
     bad.artifacts['stages/with-api.tsx'] = mutate(source) + '\n// res.ok; res.outputs; typeof api.executeAction; pending.current = true;\n';
     assert.equal(score(bad).status, 'fail');
+  }
+});
+
+test('Custom API calls and their presence checks must use the page dataApi prop', () => {
+  assert.equal(score(apiFixture()).status, 'pass');
+  const other = 'const other = { executeAction: async () => ({ ok: true }), executeFunction: async () => ({ ok: true }) };\n';
+  for (const [label, mutate, reason] of [
+    ['call on an unrelated object', (text) => other + text.replace('await api.executeAction({', 'await other.executeAction({'), /called on other, which is not the page's dataApi prop/],
+    ['call and presence check both on an unrelated object', (text) => other + text.replace('await api.executeAction({', 'await other.executeAction({').replace('typeof api.executeAction', 'typeof other.executeAction'), /called on other, which is not the page's dataApi prop/],
+    ['presence check on an unrelated object', (text) => other + text.replace('typeof api.executeAction', 'typeof other.executeAction'), /not presence-checked on the same receiver/],
+    ['helper filled with an unrelated object', (text) => other + text.replace('approveOrder(dataApi,', 'approveOrder(other,'), /called on api, which is not the page's dataApi prop/],
+    ['helper never called with the prop', (text) => text.replace("void approveOrder(dataApi, 'record', 1, pending);", ''), /called on api, which is not the page's dataApi prop/],
+  ]) {
+    const bad = apiFixture();
+    bad.artifacts['stages/with-api.tsx'] = mutate(source);
+    const result = score(bad);
+    assert.equal(result.status, 'fail', label);
+    assert.match(result.reason, reason, label);
   }
 });
 

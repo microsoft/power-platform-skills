@@ -5,8 +5,8 @@
 // Marketplace installs copy only the plugin directory, so model-apps carries physical copies of
 //   * `shared/telemetry/lib` at `scripts/lib/telemetry/lib` (the 1DS library its hooks require), and
 //   * the shared skill workflows at `skills/telemetry/` and `skills/report-issue/`.
-// Nothing else in CI compares them with their source: `shared/telemetry/tests` (its own workflow) tests
-// the shared source, never this copy. So an edit to one side that forgets the other gives a green build while the
+// The telemetry library copy is also compared by shared/telemetry/tests/bundled-copies.test.js when
+// either side changes; nothing else compares the skill copies. So an edit to one side that forgets the other gives a green build while the
 // plugin ships stale code, or a stale disclosure. That happened to the telemetry workflow's
 // disclosure: a Power Pages change updated its own copy and not the shared source. This suite turns
 // that silent drift into a failure. It mirrors the Power Pages guard of the same name. The workflow's

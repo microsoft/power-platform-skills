@@ -1,6 +1,7 @@
-# Unit tests for the shared telemetry library. Adopting plugins copy this tree and
-# keep their own path-filtered workflows; nothing else runs these tests, so a
-# regression in shared/telemetry would otherwise ship green.
+# Unit tests for the shared telemetry library, plus a check that every adopting plugin's
+# bundled copy (plugins/<plugin>/scripts/lib/telemetry/lib) still matches it. Adopting
+# plugins keep their own path-filtered workflows, which run only when the plugin changes,
+# so this workflow runs on a change to the source or to any copy.
 #
 # The glob is expanded by bash (shell: bash), including on Windows runners, where
 # PowerShell would pass the wildcard through to node unexpanded.
@@ -12,12 +13,14 @@ on:
             - main
         paths:
             - "shared/telemetry/**"
+            - "plugins/*/scripts/lib/telemetry/lib/**"
             - ".github/workflows/shared-telemetry-tests.yml"
     push:
         branches:
             - main
         paths:
             - "shared/telemetry/**"
+            - "plugins/*/scripts/lib/telemetry/lib/**"
             - ".github/workflows/shared-telemetry-tests.yml"
 
 # The job only reads the checkout; the token needs nothing more.

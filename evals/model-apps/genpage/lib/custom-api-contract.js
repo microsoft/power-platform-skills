@@ -6,7 +6,7 @@ const { pageStructureProblems } = require('../../../../plugins/model-apps/script
 const { workflowCalls, isGeneration, isUpload, isMutation, resultObject, unassociatedCallProblems } = require('./workflow-evidence.js');
 const { artifactText, artifactJson, commandInfo, fileName, isGuid, pathKey } = require('./evidence-utils.js');
 const { planSection, parseMarkdownRows } = require('./plan-evidence.js');
-const { actionCalls, literalString, objectFields } = require('./source-evidence.js');
+const { actionCalls, literalString, objectFields, receiverIsDataApi, escapeRe } = require('./source-evidence.js');
 const { desiredBindings, sameBindings } = require('./upload-contract.js');
 
 const KINDS = new Set(Object.values(PARAMETER_KIND_BY_TYPE));
@@ -106,9 +106,14 @@ function runtimeProblems(code, bindings, declaredOutputs) {
     const prefixMask = call.mask.slice(call.scope.start, call.start);
     const post = code.slice(call.end + 1, call.scope.end);
     const postMask = call.mask.slice(call.end + 1, call.scope.end);
-    const presence = new RegExp(`\\btypeof\\s+[\\w$.?]+\\.${call.method}\\s*!==?\\s*(['"])`);
+    if (!receiverIsDataApi(call.mask, call.scopes, call.receiver, call.start)) {
+      problems.push(`${name}: ${call.method} is called on ${call.receiver || 'an expression'}, which is not the page's dataApi prop`);
+    }
+    // The presence check must test the same object the call uses; a check on another object proves nothing.
+    const receiverPattern = call.receiver ? call.receiver.split('.').map(escapeRe).join('\\s*\\??\\.\\s*') : '(?!)';
+    const presence = new RegExp(`\\btypeof\\s+${receiverPattern}\\s*\\??\\.\\s*${call.method}\\s*!==?\\s*(['"])`);
     const match = presence.exec(prefixMask);
-    if (!match || !/^['"]function['"]/.test(prefix.slice(match.index + match[0].length - 1))) problems.push(`${name}: method is not presence-checked in its helper before the call`);
+    if (!match || !/^['"]function['"]/.test(prefix.slice(match.index + match[0].length - 1))) problems.push(`${name}: method is not presence-checked on the same receiver in its helper before the call`);
     const parameters = call.fields.has('parameters') ? objectFields(call.fields.get('parameters')) : new Map();
     if ([...parameters.keys()].sort().join('|') !== Object.keys(binding.parameterKinds).sort().join('|')) problems.push(`${name}: runtime parameter names differ from the declared kinds`);
     for (const [parameter, kind] of Object.entries(binding.parameterKinds)) {
