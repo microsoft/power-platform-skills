@@ -751,11 +751,11 @@ function specDeclaresAttribute(spec, tableLogical, attributeLogical) {
   for (const ent of spec.entities || []) {
     if (!ent || lc(ent.schemaName) !== table) continue;
     // Only attributes this build can MATERIALIZE count — lag can explain a column the build just
-    // created, never one it skips. A table marked existing is reused, and a reused table's primary
-    // attribute is never created by the build, so a misspelled one would only spend three backoffs.
-    // A `Lookup` entry in columns[] is skipped by provisioning (a lookup is the side effect of a
-    // OneToMany relationship, handled below), so it is not a column this build creates either.
-    if (ent.existing !== true && ent.primaryAttribute && lc(ent.primaryAttribute.schemaName) === attribute) return true;
+    // created, never one it skips. A `Lookup` entry in columns[] is skipped by provisioning (a lookup is
+    // the side effect of a OneToMany relationship, handled below), so it is not a column this build
+    // creates. The primary attribute always counts: `existing: true` records ownership, not presence —
+    // a downloaded spec rebuilt into another environment still creates the table and its primary column.
+    if (ent.primaryAttribute && lc(ent.primaryAttribute.schemaName) === attribute) return true;
     if ((ent.columns || []).some((c) => c && lc(c.type) !== 'lookup' && lc(c.schemaName) === attribute)) return true;
   }
   return (spec.relationships || []).some((rel) => rel && rel.type === 'OneToMany'

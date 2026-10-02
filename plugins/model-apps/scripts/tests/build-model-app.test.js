@@ -325,10 +325,11 @@ test('isTransientHalt: only attributes the build materializes ride the lag retry
     ],
     relationships: [],
   };
-  // Provisioning skips a standalone Lookup entry (a lookup is the side effect of a relationship) and never
-  // creates a reused table's primary attribute, so a view naming either is an authoring error, not lag.
+  // Provisioning skips a standalone Lookup entry (a lookup is the side effect of a relationship), so a view
+  // naming one is an authoring error, not lag. `existing: true` marks ownership, not presence: a downloaded
+  // spec rebuilt into another environment still creates that table WITH its primary column.
   assert.strictEqual(isTransientHalt(lag('new_asset', 'new_ownerref'), { spec }), false, 'a Lookup entry in columns[]');
-  assert.strictEqual(isTransientHalt(lag('new_asset', 'new_title'), { spec }), false, 'the primary attribute of an existing table');
+  assert.strictEqual(isTransientHalt(lag('new_asset', 'new_title'), { spec }), true, 'the primary attribute of a table marked existing');
   assert.strictEqual(isTransientHalt(lag('new_asset', 'new_points'), { spec }), true, 'a scalar column the build adds to an existing table');
   assert.strictEqual(isTransientHalt(lag('new_site', 'new_name'), { spec }), true, 'the primary attribute created with a new table');
 });
