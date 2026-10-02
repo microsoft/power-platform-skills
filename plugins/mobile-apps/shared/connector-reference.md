@@ -4,6 +4,11 @@ Applies to non-Dataverse connector skills such as `/add-connector` and `/add-sha
 
 Does NOT apply to `/add-dataverse` — Dataverse uses the runtime's built-in executor and doesn't need a separate connection ID.
 
+Before app-local reads or commands, apply
+[app-working-directory.md](references/app-working-directory.md). Reuse the
+caller's resolved root for every shell call and file tool, including examples
+and retries below; do not derive a new root from the launch directory.
+
 ## Connection ID or reference (required)
 
 All non-Dataverse connectors require either a **connection ID** (`--connection-id` / `-c`) or a **connection reference** (`--connection-ref` / `-cr`) when adding via `npx power-apps add-data-source`. Without one, the command fails with:
@@ -17,12 +22,31 @@ CONNECTION_ID argument is required for connector data sources
 Use one of these supported paths:
 
 - If the caller already has an existing connection ID, use it directly with `--connection-id`.
+- If the caller supplied a connection reference, preserve it with `--connection-ref`;
+  do not rediscover or create a replacement binding.
 - If the app is solution-aware and the caller has a solution ID, run `list-connection-references` and use the returned connection reference name with `--connection-ref`.
 - Otherwise create a connection with `create-connection` and use the returned `connectionId`.
 
+Resolve from explicit arguments and the approved handoff before calling a picker.
+If both binding forms are supplied without a clear approved choice, or the
+connector/environment does not match, return `NEEDS_CONTEXT` to the owner (ask
+standalone). Blank or malformed supplied values are errors, not permission to
+create a new binding. Only a genuinely missing binding enters lookup/creation.
+When both values are intentionally supplied, follow the approved generation
+binding: a backing connection ID supplied only for picker calls does not replace
+the approved connection reference in `add-data-source`.
+
+For tabular discovery, use already-supplied dataset/table/procedure values when
+available. Picker commands below require a connection ID, not a reference name.
+If only a reference is available and a picker is needed, obtain that reference's
+backing ID or ask for the concrete dataset/table values. Preserve the approved
+reference in the final `add-data-source`; never create another connection to
+make discovery convenient.
+
 ```bash
-npx power-apps create-connection --api-id <apiId> --json
-npx power-apps list-connection-references --solution-id <solutionId> --json
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+npx --no-install power-apps create-connection --api-id <apiId> --json
+npx --no-install power-apps list-connection-references --solution-id <solutionId> --json
 ```
 
 With `--json`, `create-connection` prints `{ "connectionId": "...", "displayName": "..." }` on success. Browser-based connection creation is disabled by default in the CLI; if a connector is not SSO-eligible and interactive browser creation is required, set `POWERAPPS_CLI_ENABLE_BROWSER_CONNECTION=true` before running the command, or create the connection in the maker portal.
@@ -34,26 +58,28 @@ If `create-connection` fails because browser-based connection creation is disabl
 1. Construct the URL using the active environment ID from `power.config.json`:
    `https://make.powerapps.com/environments/<environment-id>/connections`
 2. Direct the user to **+ New connection** → search for the connector → sign in / consent.
-3. Capture the connection ID from the portal or rerun `npx power-apps create-connection --api-id <apiId> --json` if the connector can now complete.
+3. Capture the connection ID from the portal or rerun `npx --no-install power-apps create-connection --api-id <apiId> --json` from the same guarded app root if the connector can now complete.
 
 ### Step 3 — Add the data source
 
 Use long-form flags. Run from the app root after `power.config.json` exists, and use the exact `apiId` plus either a `connectionId` from `create-connection`/the portal or a `connectionRef` from `list-connection-references`:
 
 ```bash
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 # Non-tabular connectors (Teams, Office 365 Users, Azure DevOps, etc.)
-npx power-apps add-data-source --api-id <apiId> --connection-id <connectionId>
+npx --no-install power-apps add-data-source --api-id <apiId> --connection-id <connectionId>
 
 # Tabular connectors (SharePoint, Excel, SQL, etc.) — also need dataset and resource name
-npx power-apps add-data-source --api-id <apiId> --connection-id <connectionId> --dataset '<dataset>' --resource-name '<table>'
+npx --no-install power-apps add-data-source --api-id <apiId> --connection-id <connectionId> --dataset '<dataset>' --resource-name '<table>'
 
 # SQL stored procedures
-npx power-apps add-data-source --api-id shared_sql --connection-id <connectionId> --dataset '<database>' --sql-stored-procedure '<procedure>'
+npx --no-install power-apps add-data-source --api-id shared_sql --connection-id <connectionId> --dataset '<database>' --sql-stored-procedure '<procedure>'
 ```
 
 **Dataverse is different** — never needs a connection ID:
 ```bash
-npx power-apps add-data-source --api-id dataverse --org-url <environmentUrl> --resource-name <table-logical-name>
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+npx --no-install power-apps add-data-source --api-id dataverse --org-url <environmentUrl> --resource-name <table-logical-name>
 ```
 
 ## Common connector apiId values
@@ -75,9 +101,10 @@ These are common connector API IDs you may see in connection output:
 ## Discovering datasets and tables (tabular connectors)
 
 ```bash
-npx power-apps list-datasets --api-id <apiId> --connection-id <connectionId> --json
-npx power-apps list-tables --api-id <apiId> --connection-id <connectionId> --dataset '<dataset>' --json
-npx power-apps list-sqlStoredProcedures --connection-id <connectionId> --dataset '<database>' --json
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+npx --no-install power-apps list-datasets --api-id <apiId> --connection-id <connectionId> --json
+npx --no-install power-apps list-tables --api-id <apiId> --connection-id <connectionId> --dataset '<dataset>' --json
+npx --no-install power-apps list-sqlStoredProcedures --connection-id <connectionId> --dataset '<database>' --json
 ```
 
 For SharePoint, the **dataset** is the site URL (e.g., `https://contoso.sharepoint.com/sites/sales`). The **table** is the list display name.
@@ -87,19 +114,26 @@ For SharePoint, the **dataset** is the site URL (e.g., `https://contoso.sharepoi
 Use these instead of hand-rolled discovery when they match the user's goal:
 
 ```bash
-npx power-apps list-connection-references --solution-id <solutionId> --json
-npx power-apps list-environment-variables --json
-npx power-apps list-flows --search '<flow-name-or-keyword>' --json
-npx power-apps find-dataverse-api --search '<operation-name>' --json
-npx power-apps create-connection --api-id <apiId> --json
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+npx --no-install power-apps list-connection-references --solution-id <solutionId> --json
+npx --no-install power-apps list-environment-variables --json
+npx --no-install power-apps list-flows --search '<flow-name-or-keyword>' --json
+npx --no-install power-apps find-dataverse-api --search '<operation-name>' --json
+npx --no-install power-apps create-connection --api-id <apiId> --json
 ```
 
 Cloud flows are added with `add-flow`, not `add-data-source`:
 
 ```bash
-npx power-apps add-flow --flow-id <flow-guid> --non-interactive
-npx power-apps remove-flow --flow-id <flow-guid> --non-interactive
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+npx --no-install power-apps add-flow --flow-id <flow-guid> --non-interactive
 ```
+
+For removal, use [data-source-removal.md](references/data-source-removal.md).
+`delete-data-source` / `remove-flow` own app registration, schema, and
+model/service cleanup; they do not delete server data. `npm run generate-schemas`
+only rebuilds the mobile runtime schema map afterward. Use the removal workflow
+for approval, `--force`, shared-reference preflight, and postcondition checks.
 
 Do not use local Expo web-player testing from mobile-app skills. Mobile-app runtime diagnosis uses the native dev-client flow and `/debug-app` reading the sanitized `.powernative/metro-logs/` files.
 

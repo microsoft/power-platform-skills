@@ -20,8 +20,13 @@ There are two related-but-distinct offline checks — do not confuse them:
 
 ## The delta check
 
+Apply [app-working-directory.md](app-working-directory.md) before project reads.
+Keep the owner's resolved absolute `working_dir` for checks, helper handoffs,
+file tools, and retries; do not rediscover a root in a child invocation.
+
 ```bash
-node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js" [--project-root <path>]
+cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js" --project-root "<working_dir>"
 ```
 
 Purely local and deterministic — no `az` token, no Dataverse call — so it is safe and
@@ -30,6 +35,16 @@ fast to run as a gate. It auto-locates `.datamodel-manifest.json` (root or
 stdout; exit `0` when the comparison ran (branch on `status`), exit `1` on a fatal error
 (bad args, an explicit `--manifest`/`--profile` path that doesn't exist, or an
 unreadable/invalid JSON file).
+
+Capture the exit status and stdout/stderr before dispatching on `status`.
+Any non-zero exit, `status: error`, missing/malformed JSON, or unknown status
+stops reconciliation: surface the diagnostic, do not invoke mutation helpers,
+and do not continue to a clean success summary. Schema edits already applied
+are not rolled back: record `offline_reconciliation: failed` and preserve
+`offlineRetirement` outcomes in memory-bank, then return `DONE_WITH_CONCERNS`.
+If no edits were applied, return `BLOCKED`. Apply the same failure handling to
+the re-check after helper execution; an unreadable profile is never evidence
+of `not-applicable` or `in-sync`.
 
 | `status` | Meaning | What to do |
 |---|---|---|
@@ -47,6 +62,18 @@ A `delta` result carries:
   table that gained schema columns since it was last reconciled.
 - `columnBaselineMissing[]` — profiled tables whose snapshot predates the `schemaColumns`
   baseline (see below). Column delta can't be computed for these; treat as advisory only.
+
+### Retirement outcomes are independent
+
+This checker detects additions, not excess profile tables or completed removals.
+Preserve the per-table `offlineRetirement` outcomes from
+[data-source-removal.md](data-source-removal.md) and prior memory-bank entries.
+None of `in-sync`, `no-manifest`, or `no-profile` clears a pending retirement.
+Report pending decisions/migrations even when the addition check needs no work;
+do not silently delete profile items or edit the local snapshot to simulate a
+server change. Only approved retention or verified profile migration resolves
+that pending outcome. A failure to read/verify the profile is not evidence of
+`not-applicable`.
 
 ---
 
@@ -87,14 +114,43 @@ default = update now):
 > - **Yes — update the offline profile (recommended)**
 > - Skip — I'll run it later (it will be re-checked at `/deploy`)
 
-On **Yes**, apply in this order (both are non-interactive when the target is explicit):
+On **Yes**, apply in this order using the scoped handoffs below. Reuse the exact
+approved scope; unresolved row filters or profile details still use the helper's
+normal approval gate. The initial prompt is not blanket profile-write consent.
 
 1. For each `missingTables[]` entry, read and execute
   `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` with
-  `--table <logicalName>` (or `--all-new` to add them all at once).
+  `--working-dir "<working_dir>" --table <logicalName>`.
 2. For each `tablesWithNewColumns[]` entry, read and execute
   `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` with
-  `--table <logicalName> --columns add:<comma-separated newColumns>`.
+  `--working-dir "<working_dir>" --table <logicalName> --columns add:<comma-separated newColumns>`.
+
+### Scoped helper handoffs
+
+Pass this invocation context with **each** direct-read helper execution:
+
+```text
+Context:
+  MOBILE_APP_ORCHESTRATING=1
+  orchestrator: <current reconciliation owner>
+  working_dir: <owner's resolved absolute working_dir>
+  phase: implementation
+  approved_scope: <exact environment/profile identity, target logical table, and approved filter/column delta>
+
+Arguments for add-table-to-offline-profile:
+  --working-dir "<working_dir>"
+  --table "<logicalName>"
+
+Arguments for edit-offline-profile:
+  --working-dir "<working_dir>"
+  --table "<logicalName>"
+  --columns "add:<comma-separated newColumns>"
+```
+
+Never send `--all-new` as a replacement for an explicitly approved table set.
+Carry the same root, profile identity, and narrowed scope into nested helpers.
+`--plan-only` or a planning-phase handoff returns a proposal without calling
+mutation helpers; a marker or earlier schema approval cannot override it.
 
 Re-run the delta check afterward; expect `in-sync`. Surface any remaining `delta` as a
 concern rather than looping.

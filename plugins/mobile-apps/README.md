@@ -215,6 +215,42 @@ Native modules are allowlist-bound by the current template `package.json`. If th
 
 Runs `npx power-apps add-data-source` under the hood, regenerates services, prints how to import in your screens.
 
+### Data-source planning, refresh, and retirement
+
+`/setup-datamodel` and `/add-dataverse` plan only the requested Dataverse delta
+using compact live-metadata evidence and decision validation before approval.
+An existing plan is context, not permission to replay unrelated schema changes.
+Their `--plan-only` mode returns a proposal without saving the live plan or
+changing data/configuration. SQL/Excel/SharePoint schemas stay with their
+connectors rather than becoming Dataverse tables automatically.
+
+For an existing binding, use the dedicated operation instead of adding it again:
+
+```text
+> /add-dataverse --refresh --data-source-name <registered-name>
+> /add-connector --refresh --data-source-name <registered-name>
+> /add-sharepoint --remove --data-source-name <registered-name>
+```
+
+Refresh preserves the approved binding identity. Removal requires approval,
+consumer checks, and verification of CLI-owned registration/generated-output
+cleanup. Remove or update consumers first; a remaining or unknown dependency
+blocks retirement. Removing an app binding does not delete server tables,
+records, lists, connections, or flows. An offline-profile retirement decision
+is separate and remains visible if pending; an addition-only sync check cannot
+clear it.
+
+Data commands use the resolved app root on every shell/file operation, including
+verification and retries. Bash/Git Bash and PowerShell guards stop if the root is
+missing. Supplied connection IDs/references are retained rather than recreated.
+`npm run generate-schemas` rebuilds the runtime schema map; it does not register,
+refresh, or unregister sources.
+
+Sample seeding uses an explicitly approved table allowlist and count/media
+policy. Dependencies and retries cannot silently expand it to the full schema
+inventory. These data-only workflows report service signatures and remaining
+integration work rather than claiming that screens were wired.
+
 ### 5. Iterate on the generated app after the fact
 
 ```text
@@ -260,7 +296,7 @@ Example edit flows:
 | `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `npx power-apps init`, resolves the selected environment tenant, lets the user paste an app registration client ID, create one in the portal and paste it, or skip auth for later, then applies data/native/connectors, builds screens, starts dev server |
 | `/set-app-registration-native` | ✅ v0 | Manual auth helper — opens the Power Apps Wrap app-registration page for the selected environment, captures the pasted client ID, and writes `auth.config.json`. |
 | `/add-dataverse` | ✅ v0 | Add Dataverse — connect to existing tables, or create / extend tables in Tier 0 → N order via the Dataverse Web API, then generate TS services. Accepts ER diagrams via image / Mermaid / text, or spawns the data-model-architect agent. |
-| `/setup-datamodel` | ✅ v0 | Discoverable alias for `/add-dataverse` optimized for the design-first entry point ("how do I plan my Dataverse schema?"). Same workflow under a more searchable name. |
+| `/setup-datamodel` | ✅ v0 | Plan and approve a scoped Dataverse/connector change, apply only accepted data operations, refresh retained bindings, or retire app-local bindings after consumer checks. `--plan-only` returns before saving or applying. |
 | `/add-connector` | ✅ v0 | Generic connector — runs `npx power-apps add-data-source` for any first-party or custom connector |
 | `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, haptics, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx power-apps add-data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
