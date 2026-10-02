@@ -51684,9 +51684,7 @@ var FlowClient = class _FlowClient {
     try {
       await this.ppapiRequestWithFallback(envId, path7, "POST");
     } catch (err) {
-      if (err instanceof FlowApiError && err.statusCode === 409) {
-        alreadyStarted = true;
-      } else if (err instanceof FlowApiError && /CannotStartUnpublishedSolutionFlow/i.test(err.body)) {
+      if (err instanceof FlowApiError && /CannotStartUnpublishedSolutionFlow/i.test(err.body)) {
         logger.info(`[publish-flow] PPAPI blocked with CannotStartUnpublishedSolutionFlow, attempting Dataverse activation`);
         const ctx = await this.getFlowContext(envId, flowId);
         if (!ctx.workflowId)
@@ -51701,6 +51699,19 @@ var FlowClient = class _FlowClient {
           logger.warn(`[publish-flow] Dataverse activation failed: ${dvErr instanceof Error ? dvErr.message : dvErr}`);
           throw err;
         }
+      } else if (err instanceof FlowApiError && err.statusCode === 409) {
+        // A 409 is not proof that the flow is already running. Verify the state before
+        // suppressing the conflict so callers never receive alreadyStarted=true for a
+        // stopped flow. Tracking: https://github.com/microsoft/power-platform-skills/issues/407
+        let actualState;
+        try {
+          actualState = (await this.getFlow(envId, flowId)).properties?.state;
+        } catch {
+          throw err;
+        }
+        if (actualState !== "Started")
+          throw err;
+        alreadyStarted = true;
       } else {
         throw err;
       }
