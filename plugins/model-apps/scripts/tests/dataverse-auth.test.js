@@ -150,6 +150,45 @@ test('makeRequest settles with an error when the connection closes mid-response'
   }
 });
 
+test('makeRequest marks a timeout after the headers arrived as an incomplete response', async () => {
+  const { makeRequest } = require('../lib/dataverse-auth.js');
+  // The server answers, sends part of the body, then stalls. The request timeout fires on the
+  // request, not the response, but the answer had arrived: a POST may already have been applied.
+  const sockets = new Set();
+  const server = http.createServer((req, res) => {
+    res.writeHead(201, { 'Content-Type': 'application/json', 'Content-Length': '100' });
+    res.write('{"id":');
+  });
+  server.on('connection', (s) => { sockets.add(s); s.on('close', () => sockets.delete(s)); });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const answered = await makeRequest({ url: `http://127.0.0.1:${port}/stall`, method: 'POST', body: '{}', timeout: 150 });
+    assert.strictEqual(answered.incompleteResponse, true);
+    assert.strictEqual(answered.statusCode, 201);
+    assert.match(answered.error, /timed out before the response completed/);
+  } finally {
+    for (const s of sockets) s.destroy();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('makeRequest keeps a timeout with no answer as a plain request failure', async () => {
+  const { makeRequest } = require('../lib/dataverse-auth.js');
+  const sockets = new Set();
+  const server = http.createServer(() => { /* never answers */ });
+  server.on('connection', (s) => { sockets.add(s); s.on('close', () => sockets.delete(s)); });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const silent = await makeRequest({ url: `http://127.0.0.1:${port}/silent`, method: 'POST', body: '{}', timeout: 150 });
+    assert.deepStrictEqual(silent, { error: 'Request timed out' });
+  } finally {
+    for (const s of sockets) s.destroy();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('dataverseRequest does not replay a POST whose response was cut off, but retries a GET', async () => {
   const { dataverseRequest } = require('../lib/dataverse-auth.js');
   const cut = (statusCode) => ({ error: 'Connection closed before the response completed', incompleteResponse: true, statusCode });

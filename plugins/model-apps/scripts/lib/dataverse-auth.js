@@ -318,6 +318,15 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
     const http = require('http');
     const u = new URL(url);
     const mod = u.protocol === 'https:' ? https : http;
+    // Set once the status line and headers arrive. Every failure after that point is reported as an
+    // incomplete RESPONSE, not as a request that never reached the server: the server answered, so a
+    // POST may already have been applied and must not be replayed blindly (see dataverseRequest and
+    // sdk-http-client). That includes a timeout or a socket error that fires while the body is still
+    // streaming — they are delivered on the request, not the response, but the answer had arrived.
+    let answeredStatus = null;
+    const fail = (error) => resolve(answeredStatus === null
+      ? { error }
+      : { error, incompleteResponse: true, statusCode: answeredStatus });
     const req = mod.request(
       {
         method,
@@ -328,6 +337,7 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
         timeout,
       },
       (res) => {
+        answeredStatus = res.statusCode;
         const chunks = [];
         res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
         res.on('end', () => {
@@ -337,25 +347,21 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
           resolve(result);
         });
         // A response cut off after its headers (the connection reset or closed mid-body) emits
-        // 'aborted' / 'error' / 'close' but never 'end', and the socket timeout above cannot fire on
-        // a closed socket — so without these the promise never settled. A bounded fan-out that waits
+        // 'aborted' / 'error' / 'close' but never 'end', and the socket timeout cannot fire on a
+        // closed socket — so without these the promise never settled. A bounded fan-out that waits
         // for its in-flight writes before reporting a failure (mapLimit) then waited forever.
         // Resolving `{ error }` is the same contract as a request-level failure; a later call is a no-op.
-        // `incompleteResponse` and the status that already arrived tell the retry loops this is not a
-        // request that never reached the server: the server ANSWERED, so a POST may have been applied
-        // and must not be replayed blindly (see dataverseRequest and sdk-http-client).
-        const cutOff = (error) => resolve({ error, incompleteResponse: true, statusCode: res.statusCode });
-        res.on('aborted', () => cutOff('Response aborted before it completed'));
-        res.on('error', (e) => cutOff(`Response failed before it completed: ${e.message}`));
+        res.on('aborted', () => fail('Response aborted before it completed'));
+        res.on('error', (e) => fail(`Response failed before it completed: ${e.message}`));
         res.on('close', () => {
-          if (!res.complete) cutOff('Connection closed before the response completed');
+          if (!res.complete) fail('Connection closed before the response completed');
         });
       }
     );
-    req.on('error', (e) => resolve({ error: e.message }));
+    req.on('error', (e) => fail(e.message));
     req.on('timeout', () => {
       req.destroy();
-      resolve({ error: 'Request timed out' });
+      fail(answeredStatus === null ? 'Request timed out' : 'Request timed out before the response completed');
     });
     if (body) req.write(body);
     req.end();
