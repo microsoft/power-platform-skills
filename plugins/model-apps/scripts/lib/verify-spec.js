@@ -9,6 +9,7 @@ const { matchContainer, isEngineOwnedSection, isEngineHostSection, claimedByAuth
 const { authoredSectionNames, authoredTabNames } = require('./app-spec.js');
 const { decodeXmlEntities } = require('./sitemap-pages.js');
 const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf } = require('./app-spec.js');
+const { sameRelationship, describeRelationship } = require('./relationship-metadata.js');
 const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef, dashboardsInSolution, findDashboardsByName, findPinnedDashboard } = require('./sdk-build.js');
 const { DASHBOARD_LAUNCHER_URL, isDashboardLauncherUrl, subAreaTargetKey, specSubAreaTargetKey, specSubAreas, chromeByTargetKey, keepsLiveValue } = require('./sitemap-merge.js');
 // Recorded on an icon check the build's keep rule satisfies (keepsLiveValue, sitemap-merge.js).
@@ -31,6 +32,7 @@ const { isMainForm, selectDefaultForm, plannedMainFormSequence, displayCondition
 // block below). They exist so tests can drive the absent path without paying real backoff; the
 // defaults are what the CLIs use.
 async function verifySpec(spec, read, opts = {}) {
+  if (read && typeof read.beginVerificationPass === 'function') read.beginVerificationPass();
   const checks = [];
   const add = (kind, name, present, detail) => checks.push({ kind, name, present: !!present, detail: detail || '' });
   // Artifacts the BUILD reported as impossible on this environment, keyed `entity|name`. Supplied by
@@ -278,6 +280,31 @@ async function verifySpec(spec, read, opts = {}) {
     }
     add('dashboard', d.name, problems.length === 0, problems.join('; '));
   }
+  // One published systemform row feeds the default flag, the layout proof and the stored order.
+  // formRow selects all of them. Memoized for THIS verify only: the reader is reused, and a later
+  // verify must observe a row that changed in between (a recorded FormXML can be rewritten).
+  const publishedFormP = new Map();
+  const useCombinedFormRead = typeof read.formRow === 'function';
+  const publishedForm = (entity, formId) => {
+    const key = String(formId || '').toLowerCase();
+    if (!publishedFormP.has(key)) publishedFormP.set(key, Promise.resolve().then(() => read.formRow(entity, formId)));
+    return publishedFormP.get(key);
+  };
+  const readDefaultState = async (entity, formId) => {
+    if (useCombinedFormRead) {
+      const row = await publishedForm(entity, formId);
+      return row ? { isDefault: row.isDefault === true } : null;
+    }
+    return read.formDefaultState(entity, formId);
+  };
+  const readFormXml = async (entity, formId) => {
+    if (useCombinedFormRead) {
+      const row = await publishedForm(entity, formId);
+      return (row && row.formxml) || null;
+    }
+    return read.formTopology(entity, formId);
+  };
+  const canReadDefault = useCombinedFormRead || typeof read.formDefaultState === 'function';
   const resolvedMainFormsByEntity = new Map();
   for (const f of spec.forms || []) {
     const name = f.name || `${f.entity} form`;
@@ -296,10 +323,10 @@ async function verifySpec(spec, read, opts = {}) {
       if (!resolvedMainFormsByEntity.has(entityLogical)) resolvedMainFormsByEntity.set(entityLogical, []);
       resolvedMainFormsByEntity.get(entityLogical).push({ form: f, name, id });
     }
-    if (id && selectedDefaultForms.get(entityLogical) === f && typeof read.formDefaultState === 'function') {
+    if (id && selectedDefaultForms.get(entityLogical) === f && canReadDefault) {
       let state = null;
       let readError = null;
-      try { state = await read.formDefaultState(entityLogical, id); } catch (e) { readError = (e && e.message) || String(e); }
+      try { state = await readDefaultState(entityLogical, id); } catch (e) { readError = (e && e.message) || String(e); }
       // Default-form promotion is a stored systemform flag, not a property of the App Spec or the
       // build result. A form can exist with the right name/type while still not being the table's
       // default, so this proves the platform row the model-driven runtime uses.
@@ -311,14 +338,14 @@ async function verifySpec(spec, read, opts = {}) {
           : `expected this Main form to be the table default, but deployed systemform.isdefault is ${state && state.isDefault === false ? 'false' : 'unreadable'}`);
     }
   }
-  if (typeof read.formDefaultState === 'function') {
+  if (canReadDefault) {
     for (const [entityLogical, selected] of selectedDefaultForms) {
       const selectedName = selected.name || `${selected.entity} form`;
       for (const sibling of resolvedMainFormsByEntity.get(entityLogical) || []) {
         if (sibling.form === selected) continue;
         let state = null;
         let readError = null;
-        try { state = await read.formDefaultState(entityLogical, sibling.id); } catch (e) { readError = (e && e.message) || String(e); }
+        try { state = await readDefaultState(entityLogical, sibling.id); } catch (e) { readError = (e && e.message) || String(e); }
         const present = !!(state && state.isDefault !== true && !readError);
         add('form-default-unique', `${entityLogical}.${sibling.name}`, present, present ? '' :
           readError
@@ -341,7 +368,7 @@ async function verifySpec(spec, read, opts = {}) {
   //                      reported as not verifiable here, never as a pass.
   // Neither sees a user's remembered form (the one they last switched to), which opens first for them
   // while they may open it; it is per user and not configuration (references/app-spec-schema.md).
-  if (typeof read.formTopology === 'function') {
+  if (useCombinedFormRead || typeof read.formTopology === 'function') {
     for (const [entityLogical, declared] of declaredMainFormsByEntity) {
       if (!plannedMainFormSequence(spec, entityLogical)) continue;
       const resolved = resolvedMainFormsByEntity.get(entityLogical) || [];
@@ -353,7 +380,7 @@ async function verifySpec(spec, read, opts = {}) {
       let readError = null;
       for (const f of declared) {
         try {
-          current.set(f, displayConditionsOrder(await read.formTopology(entityLogical, idOf.get(f))).order);
+          current.set(f, displayConditionsOrder(await readFormXml(entityLogical, idOf.get(f))).order);
         } catch (e) {
           readError = `'${nameOf.get(f)}': ${(e && e.message) || e}`;
           break;
@@ -398,25 +425,66 @@ async function verifySpec(spec, read, opts = {}) {
     }
   }
 
-  // Relationships (existence) — currently a build can declare a relationship that silently fails to
-  // materialize and still pass verify (relationships weren't checked at all). Best-effort: only when the
-  // reader can list a child entity's relationship schema names (`entityRelationships`). Match the same
-  // schema name the build/teardown compute (relationshipSchemaName / manyToManySchemaName), so an
-  // explicit schemaName or an auto-prefixed system-table relationship is compared correctly.
+  // Relationships. A name on the child is not proof: a 1:N and an N:N between the same pair derive
+  // the same schema name, and the second create used to be skipped. Match the endpoints the build
+  // sends. Plain-string rows (older test doubles) stay name-only. A read failure stays an empty
+  // list, which fails closed, same as before.
   if (typeof read.entityRelationships === 'function') {
     const prefix = spec.solution && spec.solution.publisherPrefix;
-    const relCache = new Map(); // childLogical -> Set(schemaName lower) — one metadata read per child
+    const relCache = new Map();
     for (const r of spec.relationships || []) {
-      const schema = String(r.type === 'ManyToMany' ? manyToManySchemaName(r, prefix) : relationshipSchemaName(r, prefix)).toLowerCase();
-      // A 1:N relationship lives on the referencing (child) entity; an N:N is symmetric — check entity1.
+      if (!r || (r.type !== 'OneToMany' && r.type !== 'ManyToMany')) continue;
+      const rawSchema = r.type === 'ManyToMany' ? manyToManySchemaName(r, prefix) : relationshipSchemaName(r, prefix);
+      const schema = String(rawSchema).toLowerCase();
+      // A 1:N lives on the referencing (child) entity; an N:N is symmetric — check entity1.
       const child = String((r.type === 'ManyToMany' ? (r.entity1 || r.entity2) : r.referencing) || '').toLowerCase();
       if (!child) continue;
       if (!relCache.has(child)) {
-        let names = [];
-        try { names = (await read.entityRelationships(child)) || []; } catch { names = []; }
-        relCache.set(child, new Set(names.map((n) => String(n).toLowerCase())));
+        let rows = [];
+        try { rows = (await read.entityRelationships(child)) || []; } catch { rows = []; }
+        relCache.set(child, rows);
       }
-      add('relationship', schema, relCache.get(child).has(schema));
+      const rows = relCache.get(child);
+      const nameOnly = rows.length > 0 && rows.every((row) => typeof row === 'string');
+      if (nameOnly) {
+        add('relationship', schema, rows.some((n) => String(n).toLowerCase() === schema));
+        continue;
+      }
+      const declared = Object.assign({}, r, { schemaName: rawSchema });
+      const detailed = rows.filter((row) => row && typeof row === 'object');
+      const named = (row) => String(row.schemaName || row.SchemaName || '').toLowerCase() === schema;
+      if (detailed.some((row) => named(row) && sameRelationship(declared, row))) {
+        add('relationship', schema, true);
+        continue;
+      }
+      const nameHit = detailed.find(named);
+      if (nameHit) {
+        add('relationship', schema, false, `exists as ${describeRelationship(nameHit)}`);
+        continue;
+      }
+      // The typed collection on this side cannot see a holder of the other type (a 1:N is not in
+      // the parent's ManyToMany list). Ask the shared exact-name lookup so the failure names it.
+      if (typeof read.relationshipHolder === 'function') {
+        let holder = null;
+        try {
+          const candidates = r.type === 'ManyToMany' ? [r.entity1, r.entity2] : [r.referenced, r.referencing];
+          holder = await read.relationshipHolder(rawSchema, candidates);
+        } catch (e) {
+          add('relationship', schema, false, `could not read the relationship that holds '${schema}' (${(e && e.message) || e})`);
+          continue;
+        }
+        if (holder && holder.found === true) {
+          if (sameRelationship(declared, holder.holder)) { add('relationship', schema, true); continue; }
+          const declaredKind = r.type === 'ManyToMany' ? 'N:N' : '1:N';
+          add('relationship', schema, false, `${schema} exists as ${describeRelationship(holder.holder)}, not as the declared ${declaredKind}`);
+          continue;
+        }
+        if (holder && holder.found === null) {
+          add('relationship', schema, false, `could not read the relationship that holds '${schema}'${holder.status ? ` (HTTP ${holder.status})` : ''}`);
+          continue;
+        }
+      }
+      add('relationship', schema, false);
     }
   }
 
@@ -438,7 +506,7 @@ async function verifySpec(spec, read, opts = {}) {
   // applies to a MISSING READER CAPABILITY too: gating the whole oracle on
   // `typeof read.formTopology === 'function'` let a reader without it skip every layout check, so an
   // explicit form passed verify on identity and default checks alone with no layout proof at all.
-  const canReadTopology = typeof read.formTopology === 'function';
+  const canReadTopology = useCombinedFormRead || typeof read.formTopology === 'function';
   {
     for (const f of spec.forms || []) {
       const explicit = Array.isArray(f.tabs) && f.tabs.length > 0;
@@ -490,7 +558,7 @@ async function verifySpec(spec, read, opts = {}) {
 
       let xml = null;
       let readError = null;
-      try { xml = await read.formTopology(entity, id); } catch (e) { readError = (e && e.message) || String(e); }
+      try { xml = await readFormXml(entity, id); } catch (e) { readError = (e && e.message) || String(e); }
       if (!xml) {
         add(kind, `${entity}.${name}`, false,
           `could not read the deployed form layout${readError ? `: ${readError}` : ''} — the layout is unverified, not proven correct`);

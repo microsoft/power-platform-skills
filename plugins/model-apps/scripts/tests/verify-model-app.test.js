@@ -156,14 +156,22 @@ test('readerFor base readers normalize exact identities for tables, relationship
     queryRecords: async () => [],
     fetchEntityMetadata: async (logical) => {
       calls.push({ method: 'fetchEntityMetadata', logical });
-      return {
-        Relationships: [
-          { SchemaName: 'new_Parent_Child' },
-          { schemaName: 'new_lower' },
-          { name: 'new_named' },
-          {},
-        ],
-      };
+      return { Relationships: [] };
+    },
+    dataverse: {
+      get: async (p) => {
+        calls.push({ method: 'dataverse.get', path: p });
+        if (p.includes('/ManyToOneRelationships')) {
+          return { status: 200, body: { value: [
+            { SchemaName: 'new_Parent_Child', ReferencedEntity: 'new_parent', ReferencingAttribute: 'new_parentid' },
+            { SchemaName: 'new_lower', ReferencedEntity: 'new_other', ReferencingAttribute: 'new_otherid' },
+          ] } };
+        }
+        if (p.includes('/ManyToManyRelationships')) {
+          return { status: 200, body: { value: [{ SchemaName: 'new_named', Entity1LogicalName: 'new_child', Entity2LogicalName: 'new_tag' }] } };
+        }
+        return { status: 200, body: { value: [] } };
+      },
     },
     resolveArtifact: async (kind, identity) => {
       calls.push({ method: 'resolveArtifact', kind, identity });
@@ -178,11 +186,13 @@ test('readerFor base readers normalize exact identities for tables, relationship
 
   assert.deepStrictEqual(await reader.findTable('NEW_ACCOUNT'), { logicalName: 'NEW_ACCOUNT' });
   assert.deepStrictEqual(await reader.findColumns('new_account'), [{ logicalName: 'new_account_name' }]);
-  assert.deepStrictEqual(await reader.entityRelationships('NEW_CHILD'), ['new_parent_child', 'new_lower', 'new_named']);
+  const relRows = await reader.entityRelationships('NEW_CHILD');
+  assert.deepStrictEqual(relRows.map((r) => r.schemaName), ['new_Parent_Child', 'new_lower', 'new_named']);
+  assert.strictEqual(relRows[0].referencingEntity, 'new_child', 'the queried table is the referencing end of a ManyToOne row');
   assert.strictEqual(await reader.commandBar('NEW_ACCOUNT'), true);
   assert.deepStrictEqual(await reader.retrieveSetting('NLGridSearchSetting'), { value: '2' });
-  assert.ok(calls.some((c) => c.method === 'findTables' && c.logical === 'new_account'));
-  assert.ok(calls.some((c) => c.method === 'fetchEntityMetadata' && c.logical === 'new_child'));
+  assert.ok(calls.some((c) => c.method === 'findTables'));
+  assert.ok(calls.some((c) => c.method === 'dataverse.get' && /ManyToOneRelationships/.test(c.path)));
   assert.ok(calls.some((c) => c.method === 'resolveArtifact' && c.identity.entity === 'new_account'));
   assert.ok(calls.some((c) => c.method === 'retrieveSetting' && c.opts && Object.keys(c.opts).length === 0));
 });
@@ -284,7 +294,7 @@ test('readerFor.appRoleIds fails closed when the association rows cannot be read
   assert.match(res.reason, /403/);
 });
 
-function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResult = { ok: true, checks: [], missing: [] }, sdkThrows = null, invokeAsMain = false }) {
+function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResult = { ok: true, checks: [], missing: [] }, sdkThrows = null, invokeAsMain = false, specObject = null, realGates = false, sdkFactory = null }) {
   const scriptPath = path.join(__dirname, '..', 'verify-model-app.js');
   const source = `${fs.readFileSync(scriptPath, 'utf8')}\nmodule.exports.__mainForTest = main;\n`;
   const events = [];
@@ -302,7 +312,7 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
         validateFlags: validateFlagsFromParsed(() => parseResult.flags),
         readJsonArg: (arg) => {
           events.push({ type: 'readJsonArg', arg });
-          return { app: { name: 'Support Desk' }, solution: { publisherPrefix: 'new' } };
+          return specObject || { app: { name: 'Support Desk' }, solution: { publisherPrefix: 'new' } };
         },
         emitResult: (ok, payload) => events.push({ type: 'emitResult', ok, payload }),
         // Pure, so the real one — the CLI uses it to identify the environment's baseline.
@@ -312,7 +322,7 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
     if (id === './lib/sdk-http-client.js') {
       return { createAzHttpClient: (env) => ({ env }) };
     }
-    if (id === './lib/verify-spec.js') {
+    if (!realGates && id === './lib/verify-spec.js') {
       return {
         verifySpec: async (spec, read) => {
           events.push({ type: 'verifySpec', spec, hasReader: typeof read.findTable === 'function' });
@@ -323,7 +333,7 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
     if (id === './lib/sdk-build.js') {
       return { appUniqueName: () => 'new_supportdesk' };
     }
-    if (id === './lib/app-spec.js') {
+    if (!realGates && id === './lib/app-spec.js') {
       return {
         validateAppSpec: () => validateResult,
         migrateAppSpec: (spec) => {
@@ -359,6 +369,7 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
         createMakerSdk: (cfg) => {
           events.push({ type: 'createMakerSdk', cfg });
           if (sdkThrows) throw sdkThrows;
+          if (sdkFactory) return sdkFactory(cfg);
           return {
             initWorkspace: () => events.push({ type: 'initWorkspace' }),
             findTables: async () => [],
@@ -479,6 +490,56 @@ test('verify CLI accepts a positional spec, uses the default workspace, and prin
   assert.strictEqual(emitted.ok, true);
   assert.deepStrictEqual(emitted.payload.missing, []);
   assert.ok(harness.events.some((e) => e.type === 'createMakerSdk' && e.cfg.workspaceStorage.__mockWorkspaceRoot === path.join(__dirname, '..', '..', 'samples', '.maker-workspace')));
+});
+
+test('verify CLI still verifies an older colliding spec and names the holder', async () => {
+  // Dropping relationshipCollisions: 'warn' makes validateAppSpec refuse this spec before any
+  // read. The relationship line is the proof verification actually ran.
+  const specObject = {
+    solution: { uniqueName: 'Contoso', publisherPrefix: 'contoso' },
+    app: { name: 'Projects', uniqueName: 'contoso_projects' },
+    entities: [
+      { schemaName: 'contoso_project', displayName: 'Project', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' } },
+      { schemaName: 'contoso_task', displayName: 'Task', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' } },
+    ],
+    relationships: [
+      { type: 'OneToMany', referenced: 'contoso_project', referencing: 'contoso_task', lookup: { schemaName: 'contoso_ProjectId', displayName: 'Project' } },
+      { type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_task' },
+    ],
+  };
+  const harness = loadVerifyCli({
+    parseResult: { positional: [], flags: { env: 'https://contoso.crm.dynamics.com', spec: '@app-spec.json', workspace: 'D:\\Projects\\_temp\\verify-collision' } },
+    realGates: true,
+    specObject,
+    sdkFactory: () => ({
+      initWorkspace: async () => {},
+      findTables: async () => [{ logicalName: 'contoso_project' }, { logicalName: 'contoso_task' }],
+      findColumns: async () => [{ logicalName: 'contoso_name' }],
+      queryRecords: async () => [],
+      fetchEntityMetadata: async () => ({ Relationships: [] }),
+      resolveArtifact: async () => [],
+      retrieveSetting: async () => null,
+      dataverse: {
+        get: async (p) => {
+          if (String(p).includes('RelationshipType')) {
+            return { status: 200, body: { '@odata.type': '#Microsoft.Dynamics.CRM.OneToManyRelationshipMetadata', SchemaName: 'contoso_project_contoso_task', RelationshipType: 'OneToManyRelationship' } };
+          }
+          if (String(p).includes('OneToManyRelationshipMetadata')) {
+            return { status: 200, body: { SchemaName: 'contoso_project_contoso_task', ReferencedEntity: 'contoso_project', ReferencingEntity: 'contoso_task', ReferencingAttribute: 'contoso_projectid' } };
+          }
+          return { status: 200, body: { value: [] } };
+        },
+      },
+    }),
+  });
+
+  await harness.main();
+  const stderr = harness.stderr.join('');
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+  assert.match(stderr, /WARNING:.*both use the schema name 'contoso_project_contoso_task'/);
+  assert.match(stderr, /exists as 1:N contoso_project -> contoso_task \(lookup contoso_projectid\), not as the declared N:N/);
+  assert.ok(emitted && Array.isArray(emitted.payload.missing), 'a validation refusal returns errors and never a missing list');
+  assert.ok(emitted.payload.missing.some((m) => /not as the declared N:N/.test(m)), JSON.stringify(emitted.payload));
 });
 
 test('verify CLI entrypoint converts SDK startup errors into emitResult failures', async () => {
@@ -885,4 +946,139 @@ test('readerFor + verifySpec: a cross-wired dashboard chart tile fails verify th
   assert.strictEqual(chk.present, false);
   assert.match(chk.detail, /shows new_ticket, but its chart belongs to new_customer/);
   assert.deepStrictEqual(calls, [['fetchArtifact', 'dashboard', 'dash-1'], ['getArtifact', 'dashboard', 'dash-1']], 'the tiles come from the SDK artifact of THAT dashboard');
+});
+
+test('readerFor + verifySpec reads isdefault and formxml once per verify, and re-reads on the next', async () => {
+  const calls = [];
+  const xml = '<form><tabs><tab name="tab_main"><columns><column width="100%"><sections><section name="sec_main"><rows><row><cell><control datafieldname="contoso_name" /></cell></row></rows></section></sections></column></columns></tab></tabs></form>';
+  const sdk = {
+    findTables: async () => [{ logicalName: 'contoso_task' }],
+    findColumns: async () => [{ logicalName: 'contoso_name' }],
+    queryRecords: async (set, opts) => {
+      calls.push({ set, opts });
+      if (set !== 'systemform') return [];
+      if (opts && opts.filter && /name eq/.test(opts.filter)) return [{ formid: 'form-1' }];
+      if (opts && opts.filter && /formid eq form-1/.test(opts.filter)) {
+        return [{ formid: 'form-1', name: 'Main', objecttypecode: 'contoso_task', type: 2, isdefault: true, formxml: xml }];
+      }
+      return [];
+    },
+    dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
+  };
+  const spec = {
+    solution: { uniqueName: 'Contoso', publisherPrefix: 'contoso' },
+    app: { name: 'Projects', uniqueName: 'contoso_projects' },
+    entities: [{ schemaName: 'contoso_task', primaryAttribute: { schemaName: 'contoso_name' }, columns: [] }],
+    views: [], charts: [], appShell: { areas: [] },
+    forms: [{
+      entity: 'contoso_task', name: 'Main', formType: 'Main', isDefault: true,
+      tabs: [{ name: 'tab_main', label: 'Main', columns: [{ width: '100%', sections: [{ name: 'sec_main', label: 'Main', fields: ['contoso_name'] }] }] }],
+    }],
+  };
+  const reader = readerFor(sdk, 'contoso_projects', {});
+  const byId = () => calls.filter((c) => c.set === 'systemform' && c.opts && /formid eq /.test(c.opts.filter || ''));
+  const first = await verifySpec(spec, reader);
+  assert.ok(first.checks.some((c) => c.kind === 'form-default' && c.present), JSON.stringify(first.missing));
+  assert.ok(first.checks.some((c) => c.kind === 'form-topology' && c.present), JSON.stringify(first.missing));
+  assert.strictEqual(byId().length, 1, `default and layout must share one row read: ${JSON.stringify(byId())}`);
+  assert.ok(byId()[0].opts.select.includes('isdefault') && byId()[0].opts.select.includes('formxml'));
+  await verifySpec(spec, reader);
+  assert.strictEqual(byId().length, 2, 'a second verify on the same reader must re-read the row');
+});
+
+test('readerFor memoizes findTables once per verify run', async () => {
+  let calls = 0;
+  const sdk = {
+    findTables: async () => { calls += 1; return [{ logicalName: 'contoso_project' }, { logicalName: 'contoso_task' }, { logicalName: 'account' }]; },
+    findColumns: async () => [],
+    queryRecords: async () => [],
+    dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
+  };
+  const reader = readerFor(sdk, 'contoso_app', {});
+  assert.deepStrictEqual(await reader.findTable('CONTOSO_PROJECT'), { logicalName: 'contoso_project' });
+  assert.deepStrictEqual(await reader.findTable('contoso_task'), { logicalName: 'contoso_task' });
+  assert.strictEqual(await reader.findTable('missing'), null);
+  assert.strictEqual(calls, 1, 'three findTable calls must share one catalog scan');
+});
+
+test('a reused reader sees a table created after the first verify pass', async () => {
+  let tables = [];
+  let scans = 0;
+  const sdk = {
+    findTables: async () => { scans += 1; return tables.slice(); },
+    findColumns: async () => [],
+    queryRecords: async () => [],
+    dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
+  };
+  const spec = {
+    solution: { publisherPrefix: 'contoso' },
+    app: { name: 'Projects', uniqueName: 'contoso_projects' },
+    entities: [{ schemaName: 'contoso_task', primaryAttribute: { schemaName: 'contoso_name' } }],
+    views: [], charts: [], forms: [], appShell: { areas: [] },
+  };
+  const reader = readerFor(sdk, 'contoso_projects', {});
+  const first = await verifySpec(spec, reader);
+  assert.strictEqual(first.checks.find((c) => c.kind === 'entity').present, false);
+  tables = [{ logicalName: 'contoso_task' }];
+  const second = await verifySpec(spec, reader);
+  assert.strictEqual(second.checks.find((c) => c.kind === 'entity').present, true, 'the catalog memo must not outlive one verify pass');
+  assert.ok(scans >= 2);
+});
+
+test('a rejected catalog read does not poison the next verify pass', async () => {
+  let fail = true;
+  const sdk = {
+    findTables: async () => {
+      if (fail) throw new Error('catalog down');
+      return [{ logicalName: 'contoso_task' }];
+    },
+    findColumns: async () => [],
+    queryRecords: async () => [],
+    dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
+  };
+  const spec = {
+    solution: { publisherPrefix: 'contoso' },
+    app: { name: 'Projects', uniqueName: 'contoso_projects' },
+    entities: [{ schemaName: 'contoso_task', primaryAttribute: { schemaName: 'contoso_name' } }],
+    views: [], charts: [], forms: [], appShell: { areas: [] },
+  };
+  const reader = readerFor(sdk, 'contoso_projects', {});
+  await assert.rejects(() => verifySpec(spec, reader), /catalog down/);
+  fail = false;
+  const second = await verifySpec(spec, reader);
+  assert.strictEqual(second.checks.find((c) => c.kind === 'entity').present, true);
+});
+
+test('readerFor + verifySpec names the 1:N that holds an N:N schema name', async () => {
+  const sdk = {
+    findTables: async () => [],
+    findColumns: async () => [],
+    queryRecords: async () => [],
+    fetchEntityMetadata: async () => ({ Relationships: [] }),
+    resolveArtifact: async () => [],
+    retrieveSetting: async () => null,
+    dataverse: {
+      get: async (p) => {
+        if (p.includes('RelationshipType')) {
+          return { status: 200, body: { '@odata.type': '#Microsoft.Dynamics.CRM.OneToManyRelationshipMetadata', SchemaName: 'contoso_project_contoso_task', RelationshipType: 'OneToManyRelationship' } };
+        }
+        if (p.includes('OneToManyRelationshipMetadata')) {
+          return { status: 200, body: { SchemaName: 'contoso_project_contoso_task', ReferencedEntity: 'contoso_project', ReferencingEntity: 'contoso_task', ReferencingAttribute: 'contoso_projectid' } };
+        }
+        return { status: 200, body: { value: [] } };
+      },
+    },
+  };
+  const spec = {
+    solution: { uniqueName: 'Contoso', publisherPrefix: 'contoso' },
+    app: { name: 'Projects', uniqueName: 'contoso_projects' },
+    entities: [{ schemaName: 'contoso_project', primaryAttribute: { schemaName: 'contoso_name' } }],
+    views: [], charts: [], forms: [], appShell: { areas: [] },
+    relationships: [{ type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_task' }],
+  };
+  const r = await verifySpec(spec, readerFor(sdk, 'contoso_projects', {}));
+  const rc = r.checks.find((c) => c.kind === 'relationship');
+  assert.ok(rc, 'the real reader must check the relationship');
+  assert.strictEqual(rc.present, false);
+  assert.match(rc.detail, /exists as 1:N contoso_project -> contoso_task \(lookup contoso_projectid\), not as the declared N:N/);
 });

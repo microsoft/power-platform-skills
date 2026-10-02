@@ -18,6 +18,7 @@ const { sha256 } = require('./hash.js');
 // normalizePageSource: read the page source from the discriminated `source` field (v2) or the
 // legacy top-level `codeFile` (pre-migration). PHASES: canonical ordered phase list — imported
 // here so the engine and the stage layer can never drift.
+const { describeRelationship, readExact, sameRelationship, findRelationshipHolder } = require('./relationship-metadata.js');
 const {
   sampleRecordsFor,
   resolveSampleRecords,
@@ -479,8 +480,8 @@ function planFor(spec, opts) {
       for (const k of e.alternateKeys || []) items.push({ phase: 'data-model', label: `alt key ${e.schemaName}.${k.schemaName}` });
     }
     for (const r of spec.relationships || []) {
-      if (r.type === 'OneToMany') items.push({ phase: 'data-model', label: `relationship 1:N ${r.referenced}->${r.referencing}`, key: { kind: 'relationship', entity: r.referenced, name: relationshipSchemaName(r, relPrefix), relType: 'OneToMany' } });
-      else if (r.type === 'ManyToMany') items.push({ phase: 'data-model', label: `relationship N:N ${r.entity1}<->${r.entity2}`, key: { kind: 'relationship', entity: r.entity1, name: manyToManySchemaName(r, relPrefix), relType: 'ManyToMany' } });
+      if (r.type === 'OneToMany') items.push({ phase: 'data-model', label: `relationship 1:N ${r.referenced}->${r.referencing}`, key: { kind: 'relationship', entity: r.referenced, name: relationshipSchemaName(r, relPrefix), relType: 'OneToMany', declared: r } });
+      else if (r.type === 'ManyToMany') items.push({ phase: 'data-model', label: `relationship N:N ${r.entity1}<->${r.entity2}`, key: { kind: 'relationship', entity: r.entity1, name: manyToManySchemaName(r, relPrefix), relType: 'ManyToMany', declared: r } });
     }
   }
   if (has('sample-data') && opts.sampleData) {
@@ -1533,6 +1534,9 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
   }
   const tableCache = new Map();   // entity logical -> { found: bool|null }
   const columnCache = new Map();  // entity logical -> Set<logicalName> | null
+  // Relationship collection reads for this plan, keyed `<table>|<kind>`. The typed probe and the
+  // case-insensitive fallback share it, so a second relationship on the same tables does not re-read.
+  const relationshipReads = new Map();
 
   // `findExistingColumns` is written for the APPLY path, where a failed read is safe to treat as
   // "assume every column is new" — the create's own already-exists handling absorbs the duplicates.
@@ -1629,9 +1633,48 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
         // has no `fetchEntityMetadata` at all (see above), so an inconclusive probe already returns
         // `null` either way. Passing it would be inert code that reads as though it decides
         // something.
-        const present = await relationshipExists(relReader, String(k.entity).toLowerCase(), k.name, k.relType);
-        item.state = present === null || present === undefined ? 'unknown' : (present ? 'reuse' : 'create');
-        if (item.state === 'unknown') item.stateWhy = 'the relationship metadata read was inconclusive';
+        // declared lets a same-name row with different endpoints come back as { mismatch }, which
+        // a name-only probe reported as reuse. 'unknown' is the rendered non-reuse state: the plan
+        // printer names only that state's reason, and a reader must not see '= reuse'.
+        const present = await relationshipExists(relReader, String(k.entity).toLowerCase(), k.name, k.relType, { declared: k.declared, cache: relationshipReads });
+        if (present && present.mismatch) {
+          item.state = 'unknown';
+          item.stateWhy = `schema name '${k.name}' is already used by ${describeRelationship(present.holder)}, not the declared relationship`;
+        } else if (present === false) {
+          // The typed collection of this end cannot see a holder of the other type (an N:N name
+          // held by a 1:N). One exact-name read, no collection scan — the plan stays cheap.
+          const exact = await readExact(provision && provision.dataverse, k.name);
+          const declared = Object.assign({}, k.declared, { schemaName: (k.declared && k.declared.schemaName) || k.name });
+          if (exact.found === true && sameRelationship(declared, exact.holder)) item.state = 'reuse';
+          else if (exact.found === true) {
+            item.state = 'unknown';
+            item.stateWhy = `schema name '${k.name}' is already used by ${describeRelationship(exact.holder)}, not the declared relationship`;
+          } else if (exact.found === false) {
+            // The SchemaName key is case-sensitive. A differently-cased holder 404s here and would
+            // otherwise be planned as create. The collection scan is case-insensitive; skipExact
+            // because this read already 404'd that spelling.
+            const ends = k.declared
+              ? (k.relType === 'ManyToMany' ? [k.declared.entity1, k.declared.entity2] : [k.declared.referenced, k.declared.referencing])
+              : [k.entity];
+            const holder = await findRelationshipHolder(provision && provision.dataverse, k.name, { candidates: ends, cache: relationshipReads, skipExact: true });
+            if (holder.found === true && sameRelationship(declared, holder.holder)) item.state = 'reuse';
+            else if (holder.found === true) {
+              item.state = 'unknown';
+              item.stateWhy = `schema name '${k.name}' is already used by ${describeRelationship(holder.holder)}, not the declared relationship`;
+            } else if (holder.found === false) item.state = 'create';
+            else {
+              item.state = 'unknown';
+              item.stateWhy = 'the relationship metadata read was inconclusive';
+            }
+          }
+          else {
+            item.state = 'unknown';
+            item.stateWhy = 'the relationship metadata read was inconclusive';
+          }
+        } else {
+          item.state = present === null || present === undefined ? 'unknown' : 'reuse';
+          if (item.state === 'unknown') item.stateWhy = 'the relationship metadata read was inconclusive';
+        }
       } else if (k.kind === 'app') {
         const present = await artifactPresent('app', { uniqueName: k.uniqueName });
         item.state = present ? 'reuse' : 'create';

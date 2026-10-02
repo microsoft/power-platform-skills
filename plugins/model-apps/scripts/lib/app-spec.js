@@ -386,6 +386,63 @@ function manyToManySchemaName(rel, publisherPrefix) {
   return prefixedRelationshipName(a, b, publisherPrefix);
 }
 
+// Effective schema name, or null when the entry cannot name one. An explicit schemaName wins
+// verbatim (the same rule relationshipSchemaName / manyToManySchemaName use). Incomplete entries
+// are skipped: composing them would yield a shared "_" name and a false collision.
+function effectiveRelationshipSchemaName(rel, publisherPrefix) {
+  if (!rel || typeof rel !== 'object' || Array.isArray(rel)) return null;
+  const explicit = typeof rel.schemaName === 'string' && rel.schemaName.trim() ? rel.schemaName : '';
+  if (rel.type === 'ManyToMany') {
+    if (explicit) return explicit;
+    if (typeof rel.entity1 !== 'string' || !rel.entity1.trim() || typeof rel.entity2 !== 'string' || !rel.entity2.trim()) return null;
+    return manyToManySchemaName(rel, publisherPrefix);
+  }
+  if (rel.type === 'OneToMany') {
+    if (explicit) return explicit;
+    if (typeof rel.referenced !== 'string' || !rel.referenced.trim() || typeof rel.referencing !== 'string' || !rel.referencing.trim()) return null;
+    return relationshipSchemaName(rel, publisherPrefix);
+  }
+  return null;
+}
+
+// Pairs whose EFFECTIVE schema names compare equal, ignoring case.
+// Dataverse allows one relationship per name. The RelationshipDefinitions alternate key is
+// case-sensitive (a differently-cased spelling 404s), but a create of the other casing still
+// collides, so the gate compares the names the build would actually send.
+// -> [{ name, first, second }] with name lower-cased and indices into relationships[].
+function relationshipNameCollisions(relationships, publisherPrefix) {
+  const named = [];
+  (Array.isArray(relationships) ? relationships : []).forEach((rel, index) => {
+    let name;
+    try { name = effectiveRelationshipSchemaName(rel, publisherPrefix); } catch { name = null; }
+    if (!name) return;
+    named.push({ index, name: String(name).toLowerCase() });
+  });
+  const hits = [];
+  for (let i = 0; i < named.length; i += 1) {
+    for (let j = i + 1; j < named.length; j += 1) {
+      if (named[i].name === named[j].name) hits.push({ name: named[i].name, first: named[i].index, second: named[j].index });
+    }
+  }
+  return hits;
+}
+
+function relationshipEndsBrief(rel) {
+  const lc = (v) => String(v || '').toLowerCase();
+  if (!rel || typeof rel !== 'object') return 'invalid relationship';
+  if (rel.type === 'ManyToMany') return `N:N ${lc(rel.entity1)} <-> ${lc(rel.entity2)}`;
+  if (rel.type === 'OneToMany') return `1:N ${lc(rel.referenced)} -> ${lc(rel.referencing)}`;
+  return String(rel.type || 'relationship');
+}
+
+// Both gates must emit this exact sentence. Built here so they cannot drift.
+function relationshipCollisionMessage(relationships, collision) {
+  const list = Array.isArray(relationships) ? relationships : [];
+  const a = relationshipEndsBrief(list[collision.first]);
+  const b = relationshipEndsBrief(list[collision.second]);
+  return `relationships[${collision.first}] (${a}) and relationships[${collision.second}] (${b}) both use the schema name '${collision.name}'. Dataverse allows one relationship per name, so the second would not be created. Give one of them an explicit "schemaName".`;
+}
+
 // Turn author-friendly sample records into Web-API bodies: Choice / MultiChoice values
 // written as labels ("Platinum", or "Low,High" for multi-select) are resolved to their
 // option ints — for inline-option AND global-choice columns (pass `spec` so global
@@ -3511,6 +3568,18 @@ function validateAppSpec(spec, opts = {}) {
   (spec.relationships || []).forEach((r, i) => {
     if (r && r.lookup) validateLabel(r.lookup.displayName, `relationships[${i}] (${r.lookup.schemaName || '?'}): lookup.displayName`, errors, { warnings, baseLanguageCode: spec.languageCode });
   });
+  // Structural is teardown: an already-built colliding spec must still tear down. Read-only verify
+  // passes relationshipCollisions: 'warn' so a spec built before this check can still be verified;
+  // the endpoint-aware checks then name whatever holds the name. Every other profile refuses,
+  // because the second create would be swallowed as "already exists" and never materialize.
+  if (profile !== 'structural') {
+    const prefix = spec.solution && spec.solution.publisherPrefix;
+    for (const hit of relationshipNameCollisions(spec.relationships, prefix)) {
+      const msg = relationshipCollisionMessage(spec.relationships, hit);
+      if (opts.relationshipCollisions === 'warn') warnings.push(msg);
+      else errors.push(msg);
+    }
+  }
   for (const e of spec.entities || []) {
     (e && Array.isArray(e.alternateKeys) ? e.alternateKeys : []).forEach((k, i) => {
       if (k) validateLabel(k.displayName, `entity ${e.schemaName}: alternateKeys[${i}] displayName`, errors, { warnings, baseLanguageCode: spec.languageCode });
@@ -3830,6 +3899,8 @@ module.exports = {
   prefixedRelationshipName,
   manyToManyFor,
   manyToManySchemaName,
+  relationshipNameCollisions,
+  relationshipCollisionMessage,
   specDeclaresAttribute,
   isSafeHttpUrl,
   CHART_TYPES,

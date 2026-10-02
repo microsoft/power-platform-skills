@@ -502,6 +502,10 @@ run the lint, so an unlinted spec hits the failure at build time instead).
   `contoso_teammember` → `contoso_systemuser_teammember`), so you don't need to set `schemaName`.
   If you *do* supply an explicit `schemaName`, it **must** start with `<publisherPrefix>_` — the
   lint errors otherwise (an unprefixed relationship name is a build-time 400).
+- Two relationships may not share a schema name. Dataverse allows one relationship per name, so
+  the second would not be created. A 1:N and an N:N between the same pair, two 1:N relationships
+  on one pair (different lookups), and a self-referential 1:N plus an N:N on that table all derive
+  the same default name — give one of them an explicit `schemaName`.
 
 **Many-to-many:**
 ```jsonc
@@ -516,9 +520,11 @@ run the lint, so an unlinted spec hits the failure at build time instead).
 
 **What a download reconstructs.** `download-model-app.js` rebuilds `relationships[]` from live
 metadata, keeping the lookup's deployed casing (`new_CustomerId`, not `new_customerid`) and its
-label. It emits an explicit `schemaName` only when the deployed name differs from the generated
-default, so a rebuild into the **same** environment matches the existing relationship instead of
-creating a second one beside it. Three cases it **cannot** express are reported by name and reason
+label. It emits an explicit `schemaName` whenever the deployed name is not the one this
+solution's prefix would generate, including a name that uses another publisher's prefix. Omitting
+that name would make a rebuild into the **same** environment create under a different name and
+fail on the lookup that already exists. A foreign-prefix name is a lint warning: a new environment
+cannot create it under this publisher, so rename it explicitly there. Three cases it **cannot** express are reported by name and reason
 rather than silently dropped:
 - a **polymorphic** lookup — one column targeting several tables (Dataverse surfaces it as several
   relationships sharing one lookup attribute), where `relationships[]` declares exactly one

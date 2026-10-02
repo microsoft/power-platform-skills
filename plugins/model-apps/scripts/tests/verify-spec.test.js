@@ -2395,3 +2395,70 @@ test('verify ignores non-chart tiles when proving a dashboard', async () => {
   const chk = await dashCheck({ components: [{ type: 'list', name: 'L', parameters: { TargetEntityType: 'new_ticket', ViewId: DASH_VIEW } }, { type: 'iframe', name: 'I', parameters: { Url: 'https://x' } }] });
   assert.strictEqual(chk.present, true, chk.detail);
 });
+
+test('verifySpec: a plain-string relationship list stays name-only', async () => {
+  const spec = { solution: { publisherPrefix: 'contoso' }, entities: [], views: [], charts: [], forms: [], appShell: { areas: [] },
+    relationships: [{ type: 'OneToMany', referenced: 'contoso_project', referencing: 'contoso_task', lookup: { schemaName: 'contoso_ProjectId' } }] };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], queryRecords: async () => [], sitemapXml: async () => '',
+    entityRelationships: async () => ['contoso_project_contoso_task'],
+  };
+  const r = await verifySpec(spec, read);
+  const rc = r.checks.find((c) => c.kind === 'relationship');
+  assert.strictEqual(rc && rc.present, true, JSON.stringify(rc));
+});
+
+test('verifySpec: a 1:N passes only when the name and both endpoints match', async () => {
+  const spec = { solution: { publisherPrefix: 'contoso' }, entities: [], views: [], charts: [], forms: [], appShell: { areas: [] },
+    relationships: [{ type: 'OneToMany', referenced: 'contoso_project', referencing: 'contoso_task', lookup: { schemaName: 'contoso_ProjectId' } }] };
+  const row = { schemaName: 'CONTOSO_PROJECT_CONTOSO_TASK', type: 'OneToMany', referencedEntity: 'contoso_project', referencingAttribute: 'contoso_projectid' };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], queryRecords: async () => [], sitemapXml: async () => '',
+    entityRelationships: async () => [row],
+  };
+  const ok = await verifySpec(spec, read);
+  assert.strictEqual(ok.checks.find((c) => c.kind === 'relationship').present, true);
+
+  const wrongLookup = await verifySpec(spec, { ...read, entityRelationships: async () => [{ ...row, referencingAttribute: 'contoso_ownerid' }] });
+  const bad = wrongLookup.checks.find((c) => c.kind === 'relationship');
+  assert.strictEqual(bad.present, false);
+  assert.match(bad.detail, /exists as 1:N/);
+  assert.match(bad.detail, /contoso_ownerid/);
+});
+
+test('verifySpec: an N:N passes on an unordered pair and fails when the name is a different relationship', async () => {
+  const spec = { solution: { publisherPrefix: 'contoso' }, entities: [], views: [], charts: [], forms: [], appShell: { areas: [] },
+    relationships: [{ type: 'ManyToMany', entity1: 'contoso_task', entity2: 'contoso_project' }] };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], queryRecords: async () => [], sitemapXml: async () => '',
+    entityRelationships: async () => [{ schemaName: 'contoso_project_contoso_task', type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_task' }],
+  };
+  const ok = await verifySpec(spec, read);
+  assert.strictEqual(ok.checks.find((c) => c.kind === 'relationship').present, true);
+
+  const other = await verifySpec(spec, {
+    ...read,
+    entityRelationships: async () => [{ schemaName: 'contoso_project_contoso_task', type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_tag' }],
+  });
+  const bad = other.checks.find((c) => c.kind === 'relationship');
+  assert.strictEqual(bad.present, false);
+  assert.match(bad.detail, /exists as N:N contoso_project <-> contoso_tag/);
+});
+
+test('verifySpec: when the typed read cannot see the holder, relationshipHolder names it', async () => {
+  const spec = { solution: { publisherPrefix: 'contoso' }, entities: [], views: [], charts: [], forms: [], appShell: { areas: [] },
+    relationships: [{ type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_task' }] };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], queryRecords: async () => [], sitemapXml: async () => '',
+    entityRelationships: async () => [],
+    relationshipHolder: async (name, candidates) => {
+      assert.strictEqual(name, 'contoso_project_contoso_task');
+      assert.ok(candidates.map((c) => String(c).toLowerCase()).includes('contoso_project'));
+      return { found: true, holder: { schemaName: 'contoso_project_contoso_task', type: 'OneToMany', referencedEntity: 'contoso_project', referencingEntity: 'contoso_task', referencingAttribute: 'contoso_projectid' } };
+    },
+  };
+  const r = await verifySpec(spec, read);
+  const rc = r.checks.find((c) => c.kind === 'relationship');
+  assert.strictEqual(rc.present, false);
+  assert.match(rc.detail, /contoso_project_contoso_task exists as 1:N contoso_project -> contoso_task \(lookup contoso_projectid\), not as the declared N:N/);
+});

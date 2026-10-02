@@ -3067,15 +3067,16 @@ test('readRelationships carries a divergent N:N SchemaName, and omits it when it
   assert.strictEqual(nn2.length, 1);
   assert.ok(!('schemaName' in nn2[0]), `a name equal to the generated default adds nothing; got ${JSON.stringify(nn2[0])}`);
 
-  // 3. FOREIGN publisher prefix -> reported as a rename, NOT carried (it would fail the spec's own
-  //    lint) and NOT counted as skipped (the relationship is still in the spec).
+  // 3. FOREIGN publisher prefix -> carried, with a warning that a new environment cannot create
+  //    that name. Omitting it made a same-environment rebuild CREATE under the generated name and
+  //    halt. Lint warns on existing: true rather than refusing the download.
   const warnings = [];
   const foreign = await readRelationships(mk('zzz_ForeignPrefixLink'), ['new_ticket', 'new_tag'], 'new', (m) => warnings.push(m));
   const nn3 = (foreign.relationships || []).filter((r) => r.type === 'ManyToMany');
   assert.strictEqual(nn3.length, 1, 'the relationship is still carried');
-  assert.ok(!('schemaName' in nn3[0]), 'but not under a name that fails the publisher-prefix lint');
-  assert.ok(warnings.some((w) => /zzz_ForeignPrefixLink/.test(w) && /publisher prefix/.test(w)),
-    `the rename must be reported; got ${JSON.stringify(warnings)}`);
+  assert.strictEqual(nn3[0].schemaName, 'zzz_ForeignPrefixLink');
+  assert.ok(warnings.some((w) => /zzz_ForeignPrefixLink/.test(w) && /new environment/i.test(w) && /cannot create/i.test(w)),
+    `the foreign name must be warned, not renamed; got ${JSON.stringify(warnings)}`);
   assert.deepStrictEqual((foreign.skipped || []).filter((s) => /zzz_ForeignPrefixLink/.test(s.name)), [],
     'and never counted as skipped — it IS in the rebuildable spec');
 });

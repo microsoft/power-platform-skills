@@ -159,12 +159,24 @@ function lintAppSpec(spec) {
     }
   }
 
+  // An explicit foreign-prefix name 400s on create. A downloaded relationship marked existing
+  // already has that name in this environment, so lint warns instead of refusing the download's
+  // own output. A rebuild can reuse it only where it already exists.
+  const foreignRelationshipName = (rel, publisherPrefix, error, warn) => {
+    const name = rel.schemaName;
+    const kind = rel.type === 'ManyToMany' ? 'N:N relationship schema name' : 'Relationship schema name';
+    if (rel.existing === true) {
+      warn(`${kind} '${name}' does not start with this solution's publisher prefix '${publisherPrefix}_'. It is adopted from the environment (existing: true); a rebuild can reuse it only where that relationship already exists. A new environment cannot create that name under this publisher.`);
+      return;
+    }
+    error(`${kind} '${name}' must start with the publisher prefix '${publisherPrefix}_' (Dataverse rejects an unprefixed relationship name); omit schemaName to auto-generate a valid one`);
+  };
   for (const r of spec.relationships || []) {
     if (r.type === 'ManyToMany') {
       if (!entityNames.has(lc(r.entity1))) E(`N:N relationship references unknown entity '${r.entity1}'`);
       if (!entityNames.has(lc(r.entity2))) E(`N:N relationship references unknown entity '${r.entity2}'`);
       if (prefix && r.schemaName && !lc(r.schemaName).startsWith(lc(prefix) + '_')) {
-        E(`N:N relationship schema name '${r.schemaName}' must start with the publisher prefix '${prefix}_' (Dataverse rejects an unprefixed relationship name); omit schemaName to auto-generate a valid one`);
+        foreignRelationshipName(r, prefix, E, W);
       }
       continue;
     }
@@ -186,7 +198,7 @@ function lintAppSpec(spec) {
     // name is auto-prefixed (incl. relationships to standard tables like systemuser/account), but an
     // EXPLICIT rel.schemaName is honored verbatim — so catch an explicit name that would 400 at build.
     if (prefix && r.schemaName && !lc(r.schemaName).startsWith(lc(prefix) + '_')) {
-      E(`Relationship schema name '${r.schemaName}' must start with the publisher prefix '${prefix}_' (Dataverse rejects an unprefixed relationship name); omit schemaName to auto-generate a valid one`);
+      foreignRelationshipName(r, prefix, E, W);
     }
   }
 

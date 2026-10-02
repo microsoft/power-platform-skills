@@ -153,11 +153,13 @@ async function readDashboards(sdk, app, warn) {
 // This deliberately does NOT use the SDK's `fetchEntityMetadata().relationships` projection, which
 // LIVE-MEASURED returns entries shaped:
 //   {"schemaName":"cfo_workorder_SyncErrors","type":"OneToMany","relatedEntity":"syncerror","relatedAttribute":"regardingobjectid"}
-// and is missing all three facts this needs: (1) no `IsCustomRelationship`, and on a 3-table app 20
+// and is missing the facts this needs: (1) no `IsCustomRelationship`, and on a 3-table app 20
 // of 22 entries per table were platform plumbing (SyncErrors, AsyncOperations,
 // MailboxTrackingFolders, BulkDeleteFailures, …) that must not become spec relationships; (2) no
 // properly-cased lookup `SchemaName` — App Spec wants `cfo_CustomerId`, the projection lowercases
-// to `cfo_customerid`; and (3) no ManyToMany entries.
+// to `cfo_customerid`. The vendored SDK (8930278f) projection does include ManyToMany entries, so
+// that is no longer a reason to avoid it — (1) and (2) still are, and this read also needs the
+// cased lookup SchemaName the projection does not carry.
 //
 // Returns { relationships, skipped } — `skipped` feeds the not-round-tripped report so a
 // relationship this cannot express is DECLARED missing rather than silently absent, which was the
@@ -166,6 +168,19 @@ async function readDashboards(sdk, app, warn) {
 // `prefixUnknown`: the spec's publisher prefix is a placeholder (see runDownload), so every deployed name is
 // carried as it is. Omitting one because it equals the name the build would generate is only safe under the
 // REAL prefix: under the placeholder, a rebuild generates another name and creates the relationship twice.
+// A name that is not the one this prefix would generate is the name a same-environment rebuild
+// must send. Dropping a foreign name onto the generated default makes the CREATE fail on the
+// lookup that already exists, and the name search then finds nothing. One warning per such name:
+// a new environment cannot create it under this publisher.
+function adoptDeployedName(rel, deployed, auto, publisherPrefix, prefixUnknown, where, warn) {
+  const lc = (s) => String(s || '').toLowerCase();
+  if (deployed && (prefixUnknown || lc(deployed) !== lc(auto))) rel.schemaName = deployed;
+  if (!deployed || !publisherPrefix || lc(deployed).startsWith(`${lc(publisherPrefix)}_`)) return;
+  if (typeof warn === 'function') {
+    warn(`relationship '${deployed}' on '${where}' does not start with this solution's publisher prefix '${publisherPrefix}_'. A new environment cannot create that name under this publisher; rename it explicitly there.`);
+  }
+}
+
 async function readRelationships(sdk, logicals, publisherPrefix, warn, { prefixUnknown = false } = {}) {
   const inApp = new Set((logicals || []).map((l) => String(l).toLowerCase()));
   const lc = (s) => String(s || '').toLowerCase();
@@ -267,31 +282,18 @@ async function readRelationships(sdk, logicals, publisherPrefix, warn, { prefixU
       const lookup = { schemaName: (a && a.SchemaName) || r.ReferencingAttribute };
       const displayName = a && labelFromDataverse(a.DisplayName);
       if (displayName) lookup.displayName = displayName;
-      // The deployed schema name is emitted ONLY when it differs from the one the build would
-      // generate anyway AND it satisfies the publisher-prefix rule the lint enforces
-      // (spec-lint.js "must start with the publisher prefix"). Emitting a foreign-prefix name would
-      // hand back a spec that fails its own lint — the exact defect #572 is about — while omitting a
-      // DIVERGENT name would make a rebuild into this same environment create a second relationship
-      // beside the existing one instead of matching it.
+      // Keep the deployed name whenever it is not the one this prefix would generate. Omitting a
+      // foreign name used to rename it onto the generated default; the rebuild then created under
+      // that name, the CREATE failed because the lookup already existed, and the name search found
+      // nothing. Lint warns on an existing foreign name instead of refusing it (#572).
       const auto = relationshipSchemaName({ referenced, referencing }, publisherPrefix);
       const deployed = r.SchemaName;
-      const prefixOk = !publisherPrefix || lc(deployed).startsWith(`${lc(publisherPrefix)}_`);
       // `existing: true` for the reason the recovered TABLES carry it (#587 item 6): nothing here can
       // prove this app created the relationship, and a teardown that deleted it would take the lookup
       // column — and its data — off a table that teardown otherwise retains. A rebuild still creates a
       // missing one; only teardown reads the flag.
       const rel = { type: 'OneToMany', referenced, referencing, lookup, existing: true };
-      if (deployed && prefixUnknown) rel.schemaName = deployed;
-      else if (deployed && lc(deployed) !== lc(auto)) {
-        if (prefixOk) rel.schemaName = deployed;
-        else if (typeof warn === 'function') {
-          // RENAMED, not skipped. This relationship IS pushed below, so recording it in `skipped`
-          // made the summary claim it was "absent from the rebuildable spec" — the opposite of what
-          // happens. Warn through the plain channel so the rename stays visible without being
-          // counted as a loss.
-          warn(`relationship '${deployed}' on '${referencing}' does not start with this solution's publisher prefix '${publisherPrefix}_', so the spec rebuilds it under the generated name '${auto}' instead`);
-        }
-      }
+      adoptDeployedName(rel, deployed, auto, publisherPrefix, prefixUnknown, referencing, warn);
       relationships.push(rel);
     }
 
@@ -313,27 +315,11 @@ async function readRelationships(sdk, logicals, publisherPrefix, warn, { prefixU
           note(r.SchemaName, lc(logical), `it links '${e1}' to '${e2}' and this app does not include both tables`);
           continue;
         }
-        // The deployed schema name is emitted ONLY when it differs from the one the build would
-        // generate anyway AND it satisfies the publisher-prefix rule the lint enforces — the same
-        // rule the 1:N branch above applies, for the same two reasons: a foreign-prefix name would
-        // hand back a spec that fails its own lint, while omitting a DIVERGENT name makes a rebuild
-        // into this same environment create a SECOND intersect relationship beside the existing one
-        // instead of matching it.
-        //
         // `manyToManySchemaName` SORTS the two entity names before composing, so `auto` is computed
         // from the same pair that is emitted rather than from the order Dataverse happened to report.
         const rel = { type: 'ManyToMany', entity1: e1, entity2: e2, existing: true }; // ownership unprovable, as for 1:N above
         const auto = manyToManySchemaName({ entity1: e1, entity2: e2 }, publisherPrefix);
-        const deployed = r.SchemaName;
-        if (deployed && prefixUnknown) rel.schemaName = deployed;
-        else if (deployed && lc(deployed) !== lc(auto)) {
-          if (!publisherPrefix || lc(deployed).startsWith(`${lc(publisherPrefix)}_`)) rel.schemaName = deployed;
-          else if (typeof warn === 'function') {
-            // RENAMED, not skipped — this relationship IS carried into the spec, so recording it as
-            // skipped would claim it was absent from the rebuildable spec, the opposite of the truth.
-            warn(`relationship '${deployed}' between '${e1}' and '${e2}' does not start with this solution's publisher prefix '${publisherPrefix}_', so the spec rebuilds it under the generated name '${auto}' instead`);
-          }
-        }
+        adoptDeployedName(rel, r.SchemaName, auto, publisherPrefix, prefixUnknown, `${e1} <-> ${e2}`, warn);
         relationships.push(rel);
       }
     } catch (e) {

@@ -17,6 +17,7 @@ const { verifySpec } = require('./lib/verify-spec.js');
 const { readBaseline } = require('./lib/deployed-baseline.js');
 const { appUniqueName } = require('./lib/sdk-build.js');
 const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
+const { readRelationshipsOf, findRelationshipHolder } = require('./lib/relationship-metadata.js');
 const { odataLit } = require('./lib/odata.js');
 const { makeGenpageCli } = require('./lib/genpage-cli.js');
 const { depthFromMask } = require('./lib/role-privileges.js');
@@ -191,27 +192,54 @@ function readerFor(sdk, appUnique, opts) {
   // (the old all-pages downloadP). Each id gets its own output dir to avoid directory collision.
   const codeById = new Map();
 
+  // One catalog scan per verification pass, not per reader. A reader is reused across verifies;
+  // keeping the first scan would report a table created between passes as missing, and a rejected
+  // scan would fail every later pass. verifySpec calls beginVerificationPass at the start of each.
+  let catalogP;
+  const beginVerificationPass = () => { catalogP = null; };
+  const catalog = () => {
+    if (!catalogP) {
+      catalogP = Promise.resolve().then(() => sdk.findTables('')).catch((err) => {
+        catalogP = null;
+        throw err;
+      });
+    }
+    return catalogP;
+  };
+
+
   const base = {
-    findTable: async (logical) => { const l = String(logical).toLowerCase(); const t = await sdk.findTables(l); return (t || []).find((x) => String(x.logicalName).toLowerCase() === l) || null; },
+    // findTables scans the whole EntityDefinitions catalog and filters client-side, so one
+    // unfiltered read serves every findTable in this verify run. Caching a filtered page would
+    // hide a later table whose name does not contain the first query.
+    beginVerificationPass,
+    findTable: async (logical) => {
+      const l = String(logical).toLowerCase();
+      const tables = await catalog();
+      return (tables || []).find((x) => String(x.logicalName).toLowerCase() === l) || null;
+    },
     findColumns: async (logical) => sdk.findColumns(logical),
     // Grid data visualization (preview) for one column. Passed straight through — including the raw
     // 404 the SDK emits on an environment where the preview is not provisioned, which verify-spec
     // interprets (it must stay distinguishable from the legitimate 'None' answer).
     columnVisualization: async (logical, columnLogical) => sdk.getColumnVisualization(String(logical).toLowerCase(), String(columnLogical).toLowerCase()),
     queryRecords: (set, o) => sdk.queryRecords(set, o),
-    // entityRelationships(childLogical): the relationship SCHEMA NAMES defined on a child entity, for the
-    // content-verify relationship-existence check. Best-effort — a metadata read failure yields [] so the
-    // check simply can't confirm (never a false pass: [] => the declared relationship reads as missing,
-    // which is the fail-closed direction for a read-only reconcile). Reads OneToMany + ManyToMany schema
-    // names from the entity metadata (the shape download's fetchEntityMetadata already returns).
+    // entityRelationships(childLogical): detailed rows for the relationship check. ManyToOne is
+    // the 1:N seen from the child; ManyToMany is read from entity1. A failed read throws so
+    // verify-spec's catch turns it into an empty list — fail closed, same as before.
     entityRelationships: async (childLogical) => {
-      const meta = await sdk.fetchEntityMetadata(String(childLogical).toLowerCase());
-      const rels = (meta && (meta.relationships || meta.Relationships)) || [];
-      return rels
-        .map((r) => r && (r.schemaName || r.SchemaName || r.name))
-        .filter(Boolean)
-        .map((n) => String(n).toLowerCase());
+      const client = sdk.dataverse;
+      if (!client || typeof client.get !== 'function') throw new Error('relationship metadata client is not available');
+      const logical = String(childLogical).toLowerCase();
+      const manyToOne = await readRelationshipsOf(client, logical, 'ManyToOne');
+      if (!manyToOne.ok) throw new Error(manyToOne.error || `HTTP ${manyToOne.status}`);
+      const manyToMany = await readRelationshipsOf(client, logical, 'ManyToMany');
+      if (!manyToMany.ok) throw new Error(manyToMany.error || `HTTP ${manyToMany.status}`);
+      return [...manyToOne.rows, ...manyToMany.rows];
     },
+    // Used when the typed collection on one side cannot see the holder (a 1:N is not in the
+    // parent's ManyToMany list). The SchemaName key is case-sensitive; the helper falls back.
+    relationshipHolder: async (schemaName, candidates) => findRelationshipHolder(sdk.dataverse, schemaName, { candidates }),
     // commandBar(entity): truthy when a command bar (appaction set) exists for the entity — the identity
     // the build/teardown use (resolveArtifact('command', { entity })). Best-effort — a resolve failure
     // reads as absent (fail-closed for a read-only check).
@@ -254,10 +282,23 @@ function readerFor(sdk, appUnique, opts) {
     // feature and reports the read failure as a not-present check, which is the fail-closed direction —
     // a verify that cannot prove a feature is in effect must not claim it is.
     retrieveSetting: async (name, opts) => sdk.retrieveSetting(name, opts || {}),
-    // formDefaultState(entity, formId): a Main form's actual default flag. The identity
-    // check in verify-spec proves the form row exists; this separate read proves both the selected
-    // default and any spec-declared sibling that must no longer hold the default slot. Errors propagate as a fail-closed
-    // finding, because a missing proof is not evidence that promotion succeeded.
+    // isdefault and formxml are two proofs of the same published systemform row. verifySpec asks
+    // for both, so one select replaces the two GETs the verify trace counted. Not cached on the
+    // reader: the same reader is reused across verifies, and the row can change between them.
+    // verifySpec memoizes the promise for a single pass. The dashboard published/draft bracket
+    // stays its own read.
+    formRow: async (_entity, formId) => {
+      const rows = await sdk.queryRecords('systemform', {
+        select: ['formid', 'isdefault', 'formxml'],
+        filter: `formid eq ${formId}`,
+        top: 1,
+      });
+      const row = rows && rows[0];
+      if (!row) return null;
+      return { isDefault: row.isdefault === true, formxml: row.formxml || null };
+    },
+    // formDefaultState(entity, formId): a Main form's actual default flag. Kept for a reader that
+    // is asked for the flag alone. Errors propagate as a fail-closed finding.
     // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/systemform
     formDefaultState: async (_entity, formId) => {
       const rows = await sdk.queryRecords('systemform', {
@@ -270,7 +311,8 @@ function readerFor(sdk, appUnique, opts) {
     },
     // formTopology(entity, formId): the deployed FormXml, so verify can prove the LAYOUT and not just
     // that a form row exists. Errors propagate to verify-spec, which reports the read failure as a
-    // not-present check — a layout nobody could read is unverified, not correct.
+    // not-present check — a layout nobody could read is unverified, not correct. A direct call
+    // always re-reads: a later verify on this reader must see a row that changed after the last one.
     formTopology: async (_entity, formId) => {
       const rows = await sdk.queryRecords('systemform', {
         select: ['formid', 'formxml'],
@@ -487,8 +529,11 @@ async function main() {
   const spec = migrateAppSpec(readJsonArg('@' + specPath));
   // Validate the spec up front (consistent with teardown) so malformed input yields a structured
   // error instead of a later throw when dereferencing spec.entities / schemaName.
-  const v = validateAppSpec(spec, { profile: 'deploy' });
+  // 'warn' is verify-only. A spec built before the collision gate must still be verifiable; the
+  // endpoint check below names the holder. Every other entry point keeps the error.
+  const v = validateAppSpec(spec, { profile: 'deploy', relationshipCollisions: 'warn' });
   if (!v.ok) { emitResult(false, { ok: false, errors: v.errors }); return; }
+  for (const w of v.warnings || []) process.stderr.write(`WARNING: ${w}\n`);
   const workspaceDir = workspaceArg || path.join(path.dirname(specPath), '.maker-workspace');
   const httpClient = createAzHttpClient(env);
   const sdk = await makeProvision(env, workspaceDir, httpClient);
