@@ -245,12 +245,28 @@ function failedTitle(state) {
   return failed ? failed.title : '';
 }
 
+/**
+ * What the run is blocked on, if anything.
+ *
+ * The active phase's note is the authority, because it is the only signal that distinguishes
+ * "a question is open" from "work is in progress". A `proposed` section does not mean a question
+ * is open: `screens` is proposed at Gate 3 and stays proposed until Step 3.9, so between Gate 3's
+ * approval and Gate 4 the plan showed "Review the screen plan, then answer in your terminal"
+ * while the planner was busy writing specs and nobody had been asked anything.
+ *
+ * A proposed section still raises the banner when the phase says nothing at all, so a gate that
+ * forgets its note is not silent.
+ */
 function awaitingInput(state, active) {
+  const note = (active && active.note) || '';
+  if (AWAITING_NOTE.test(note)) return note;
+  // A note that says something else is a progress report, not a question.
+  if (note.trim()) return '';
+
   const states = state.sectionStates || {};
   for (const name of Object.keys(AWAITING_LABEL)) {
     if (states[name] === 'proposed') return `Review ${AWAITING_LABEL[name]} above, then answer in your terminal`;
   }
-  if (active && AWAITING_NOTE.test(active.note || '')) return active.note;
   return '';
 }
 

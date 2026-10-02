@@ -413,6 +413,36 @@ test('nested skills are handed the orchestration flag, not just told about it', 
     'the invocation must pass the flag the guards read');
 });
 
+test('a section still proposed between two gates does not read as a question', () => {
+  const root = project('docs-between-gates');
+  const state = initState(root, { appName: 'Field Readings' });
+
+  // `screens` is proposed at Gate 3 and stays proposed until Step 3.9, because one section
+  // covers both gates. Between Gate 3's approval and Gate 4 the plan therefore showed "Review
+  // the screen plan, then answer in your terminal" while the planner was busy writing specs and
+  // nobody had been asked anything.
+  setSection(state, 'screens', { list: [] }, 'proposed');
+
+  applyStep(state, { id: 'screen-plan', status: 'active', note: 'Gate 3 — awaiting your approval' });
+  assert.match(summarize(state).awaitingInput, /awaiting your approval/);
+
+  applyStep(state, { id: 'screen-plan', status: 'active', note: 'Gate 3 approved — writing per-screen specs' });
+  assert.equal(summarize(state).awaitingInput, '', 'a progress note means the run is working, not waiting');
+
+  applyStep(state, { id: 'screen-plan', status: 'active', note: 'Gate 4 — awaiting your approval of the screen specs' });
+  assert.match(summarize(state).awaitingInput, /Gate 4/);
+});
+
+test('a gate that forgets its note is still not silent', () => {
+  const root = project('docs-gate-no-note');
+  const state = initState(root, { appName: 'App' });
+  // The note is the authority, but a proposed section with nothing said about it is the safety
+  // net - otherwise a skill that proposes a section and omits the note blocks in silence.
+  setSection(state, 'dataModel', { tables: [] }, 'proposed');
+  applyStep(state, { id: 'data-model', status: 'active' });
+  assert.match(summarize(state).awaitingInput, /Review the data model/);
+});
+
 test('phase order matches the order the skill actually runs them', () => {
   const order = PHASES.map((phase) => phase.id);
   const at = (id) => order.indexOf(id);
