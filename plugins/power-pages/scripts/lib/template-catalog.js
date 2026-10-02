@@ -820,19 +820,27 @@ function repositoryDirectoryCheckoutRoot({ cacheRoot = getDefaultCacheRoot(), sh
     'Repository directory path'
   );
   if (pathError) throw new Error(pathError);
-  // Keep cached content under a reserved leaf so a cached parent path and one of
-  // its descendants cannot overwrite each other.
+  // Git materializes the sparse repository path below a temporary checkout root.
+  // Repeating that hierarchy in the cache key doubles its length and can exceed
+  // Windows' path limit before Git creates the working tree. Hash the already
+  // validated POSIX path so cache keys stay bounded while distinct directories
+  // remain isolated. Old hierarchy-based entries are intentionally ignored.
+  const directoryKey = crypto.createHash('sha256').update(directoryPath, 'utf8').digest('hex');
   return path.join(
     cacheDirForSha(cacheRoot, sha),
     '.directory-checkouts',
-    ...directoryPath.split('/'),
+    directoryKey,
     '.checkout'
   );
 }
 
 function runGitCheckoutCommand(args, deps = {}) {
   const execFile = deps.execFileSync || execFileSync;
-  return execFile('git', args, {
+  // Compact cache roots avoid duplicating the repository hierarchy, but sparse
+  // working-tree entries can still exceed MAX_PATH. Scope long-path support to
+  // these isolated Git commands so Windows users need no global config or
+  // registry change, while retaining argv-array execution without a shell.
+  return execFile('git', ['-c', 'core.longpaths=true', ...args], {
     encoding: 'utf8',
     timeout: deps.gitTimeoutMs || 120000,
     stdio: ['ignore', 'pipe', 'pipe'],
