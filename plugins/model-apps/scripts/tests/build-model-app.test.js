@@ -314,6 +314,25 @@ test('isTransientHalt: a missing-attribute fetch error is transient only for a c
   assert.strictEqual(isTransientHalt(err('The column, fetchxml, has invalid fetch.'), { spec }), false, 'another fetch error');
 });
 
+test('isTransientHalt: only attributes the build materializes ride the lag retry', () => {
+  const err = (message) => ({ message, cause: { statusCode: 400 } });
+  const lag = (table, column) => err(LAG_MESSAGE.replace("'new_ticket'", `'${table}'`).replace("'new_customerid'", `'${column}'`));
+  const spec = {
+    entities: [
+      { schemaName: 'new_asset', existing: true, primaryAttribute: { schemaName: 'new_title' },
+        columns: [{ schemaName: 'new_OwnerRef', type: 'Lookup' }, { schemaName: 'new_points', type: 'Integer' }] },
+      { schemaName: 'new_site', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
+    ],
+    relationships: [],
+  };
+  // Provisioning skips a standalone Lookup entry (a lookup is the side effect of a relationship) and never
+  // creates a reused table's primary attribute, so a view naming either is an authoring error, not lag.
+  assert.strictEqual(isTransientHalt(lag('new_asset', 'new_ownerref'), { spec }), false, 'a Lookup entry in columns[]');
+  assert.strictEqual(isTransientHalt(lag('new_asset', 'new_title'), { spec }), false, 'the primary attribute of an existing table');
+  assert.strictEqual(isTransientHalt(lag('new_asset', 'new_points'), { spec }), true, 'a scalar column the build adds to an existing table');
+  assert.strictEqual(isTransientHalt(lag('new_site', 'new_name'), { spec }), true, 'the primary attribute created with a new table');
+});
+
 test('transient auto-retry: a view rejected for a lookup the build just created is retried, then succeeds', async () => {
   const { sdk, calls } = mockSdk();
   let failed = 0;
