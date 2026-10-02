@@ -401,6 +401,12 @@ test('no instruction promises a browser window during an orchestrated run', () =
   assert.doesNotMatch(preference, /automatically open/);
   assert.match(preference, /Nothing is opened in a browser during a create run/);
 
+  // The guarantee is about windows that appear on their own. Step 11.4 offers a preview the
+  // user picks, defaulting to skip, and `/preview-screens` honours this same flag - so the
+  // definition must not claim the flag is irrelevant inside a create run.
+  assert.doesNotMatch(preference, /governs only a later standalone/);
+  assert.match(preference, /Step 11\.4 offer/);
+
   // And the nested skill's own branch descriptions say which runs they apply to.
   const designSystem = fs.readFileSync(
     path.resolve(__dirname, '..', '..', 'skills', 'design-system', 'SKILL.md'), 'utf8',
