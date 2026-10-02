@@ -34,7 +34,7 @@ A self-contained moodboard-before-build reference for `/design-system`. Three na
 1. Verify plan + pick the target screen
 2. Pick the recommended default direction
 3. Render 3-up `_design_vibe.html`
-4. Open in browser (with cross-platform fallback)
+4. Open in browser (standalone runs only; with cross-platform fallback)
 5. Ask the user
 6. Write `## Design Direction` block + return
 
@@ -295,7 +295,7 @@ This sets the expectation that hybrid is real, named, and supported — without 
 
 **8. Explicit dark/light toggle per frame.** Render a small `Light / Dark` toggle pill above each phone frame, and make the alternate state available via `?dark=1` URL params or a click handler that swaps the frame's classes. This is what prevents the "I picked dark for aesthetics → got pushed into Inspection" failure mode.
 
-## Step 4 — Open the preview in the user's browser
+## Step 4 — Open the preview in the user's browser (standalone runs only)
 
 **Print before starting:**
 > "→ [design-system:vibe] Opening the preview in your default browser…"
@@ -306,7 +306,11 @@ Print the file path as a clickable link FIRST (always), then ask before launchin
 >
 > Want me to try opening it in your default browser? (yes / no — default: yes)"
 
-On `yes` (or no answer), try OS-appropriate openers in sequence and fall back to the printed link if all fail:
+On `yes` (or no answer), try OS-appropriate openers in sequence and fall back to the printed link if all fail.
+
+**Skip the opener entirely when `CODE_APPS_NATIVE_ORCHESTRATING=1`** and print the path: a
+`/create-mobile-app` run already has its build plan open in the browser, and a tab appearing over
+it interrupts the user rather than showing them something new.
 
 ```bash
 open "<working_dir>/_design_vibe.html" 2>/dev/null \

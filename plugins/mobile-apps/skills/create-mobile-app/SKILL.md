@@ -75,6 +75,100 @@ This gate is intentionally simple: `/create-mobile-app` creates a new app from a
 
 ---
 
+## Build documentation protocol
+
+The run also writes a plan the user can read while it happens and keep afterwards:
+`<working_dir>/docs/create-app-plan.html`, rendered by
+[`scripts/app-docs.js`](${PLUGIN_ROOT}/scripts/app-docs.js) in the same Fluent format the
+Power Pages `/create-site` plan uses. It is the record of *why* the app looks the way it does,
+so a teammate opening the repo months later can see the environment, the approved data model,
+and the screen plan without re-reading a transcript.
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" <command>
+```
+
+| Command | Use |
+|---|---|
+| `init --app-name "<displayName>" --data-platform <dataverse\|connector-only>` | Once, at Step 2b. Safe to re-run: a resume keeps recorded progress. |
+| `step --id <phase> --status <pending\|active\|done\|skipped\|failed> [--note "<text>"]` | At every phase boundary. Marking a phase `active` closes any previous one. |
+| `set --section <name> --json '<object>'` or `--json-file <path>` | When a decision is made. Merges, so a later step can add to a section. |
+| `step --id <phase> --status failed --note "<what stopped it>"` | Before surfacing any unrecoverable STOP. Best-effort like the rest: if it fails, still stop. |
+| `phone --stage building\|screens\|qr` | Moves the plan's phone through its three stages: the building animation, the screen carousel at Step 6.75, and the Metro QR at Step 12. |
+
+**Open the plan in the user's browser as soon as `init` creates it**, with the host's file opener
+or `open` / `xdg-open` / `cmd /c start ""` on the quoted path. A plan the user never sees is a plan
+that only ever existed as terminal text, and terminal text scrolls away during a long run. Opening
+it once is enough: the page reloads itself as each phase lands.
+
+**Phases** (`--id`): `requirements`, `architecture`, `data-model`, `screen-plan`, `scaffold`,
+`design`, `dataverse`, `capabilities`, `screens`, `run`. Any other id is rejected by name.
+
+**Write each gated section into the plan *before* asking for approval**, with `--state proposed`,
+then flip it to `--state approved` once the user says yes. The plan is already open in their
+browser, so a rendered ER diagram or screen graph is what they answer the gate against. Recording
+the decision afterwards means approving from terminal text and seeing the picture only once it is
+too late to change it.
+
+```bash
+DOCS="${PLUGIN_ROOT}/scripts/app-docs.js"
+# 1. propose - the tab shows "Proposed - review this, then answer the prompt in your terminal"
+node "$DOCS" --working-dir "<working_dir>" set --section dataModel --json-file <tmp>/data-model.json --state proposed
+node "$DOCS" --working-dir "<working_dir>" step --id data-model --status active --note "Gate 2 — awaiting your approval"
+# 2. point the user at that tab, then ask the gate question
+# 3. on approval
+node "$DOCS" --working-dir "<working_dir>" set --section dataModel --json-file <tmp>/data-model.json --state approved
+node "$DOCS" --working-dir "<working_dir>" step --id data-model --status done --note "Gate 2 — approved"
+```
+
+Pass a fresh `--note` when you close a gate. A note belongs to the status it was written with, so
+changing status without one clears it rather than leaving "awaiting your approval" under a step the
+user has already approved.
+
+If the user asks for changes, rewrite the section with `--state proposed` again and re-ask. The
+page reloads itself, so they see the revision without touching anything.
+
+**Record each other section as soon as it is known** — not in a batch at the end, or an abort
+leaves a plan that explains nothing:
+
+| Section | Written at | Contents |
+|---|---|---|
+| `environment` | Step 1, confirmed Step 4 | `displayName`, `environmentId`, `environmentUrl`, `tenantId`, `publisherPrefix` |
+| `requirements` | Steps 2 and 2b | `appName`, `slug`, `platforms`, `aesthetic`, `industry`, `brief`, `features[]` |
+| `architecture` | Gate 1 | `dataPlatform`, `nativeCapabilities[]` and `connectors[]` as `{ name, reason }` — a bare name cannot be approved or rejected, the reason is the decision |
+| `dataModel` | Gate 2 | `connectorOnly` when there are no tables; otherwise `tables[]` with `logicalName`, `displayName`, `status` (`new`/`reused`/`modified`, or the plan's `create`/`reuse`/`extend`), `purpose` (what it holds), **`reason` (why it is created, reused or extended)**, `columns[]` (`logicalName`, `displayName`, `type`, `key: PK\|FK`), `relationships[]` (`relatedTable`, `name`, `cardinality`) |
+| `offline` | Gate 2 | `enabled`, `mode`, `tables[]`, `rationale` |
+| `screens` | Gates 3 and 4 | `navigation`, `list[]` with `name`, `route`, `purpose`, `data`, `capabilities[]` |
+| `design` | Step 6.75 | `direction`, `headingFont`, `bodyFont`, `darkMode`, `palette[]` (`name`, `value` as `#rrggbb`). Use the real family names from [`typography-and-tone.md`](${PLUGIN_ROOT}/shared/references/typography-and-tone.md) (`Inter`, `JetBrains Mono`, …) — the plan renders each name in the typeface it names, so a label that is not a real family shows as the fallback. |
+| `auth` | Step 7 | `status` |
+| `trust` | Step 10, after capabilities and connectors are wired | `permissions[]` (`name`, `status` as one of the acquisition patterns below, **`detail`: when access is requested and why**), `handles[]`, `notCollected[]`, `battery[]` (`name`, `detail`) |
+
+The ER diagram is **built from `dataModel.tables`**, so populate the structured fields rather
+than only a Mermaid string — that is what makes the diagram, the column tables, and the
+new/reused/extended colouring agree with each other.
+
+**Every reuse, create and extend decision needs a `reason`.** "Reusing `account`" is not
+reviewable; "Reusing `account` — sites are already maintained there by the service desk, and a
+second Site table would drift" is. Write the reason the architect actually used, including what
+was rejected, since that is what the user is being asked to approve at Gate 2.
+
+**Use `--json-file` for anything large** (a full table list, a screen list). A long JSON blob
+as one shell argument is fragile to quote and easy to truncate.
+
+**Every one of these calls is best-effort.** If `app-docs.js` fails, say nothing and carry on:
+the documentation must never gate, retry, or fail a build.
+
+**Mark the phase `failed` before you stop.** Every STOP in this skill is a terminal state the
+user has to act on, and the plan is probably still open in their browser. Without this the last
+phase stays `active`, so the page keeps reloading and keeps reporting work in progress on a run
+that ended. A failed phase settles the page, so the final thing it shows names what stopped.
+
+**No argument switches this protocol off.** `--no-design` suppresses design previews and
+`--no-preview` does not exist (Step 2c). The plan is how an abandoned or failed run explains
+itself, so it is written on every path.
+
+---
+
 ### Step 0 — Resume check + fresh-template gate
 
 **Telemetry checkpoint: `validate_fresh_template`**
@@ -256,13 +350,25 @@ Don't enter plan mode here — that's the planner agent's job in Step 3.
 
 ### Step 2b — Requirements discovery
 
+Create the plan now that the display name is known, and open the first phase:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" init --app-name "<displayName>" --data-platform unknown
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id requirements --status active --note "Waiting for your answers to the setup questions"
+```
+
+The note is what raises the waiting-for-input banner on the plan, so the user can tell from the page
+that the run is blocked on them rather than still working. **Set one whenever you are about to ask a
+question and the answer gates the run.** It clears itself on the next status change, so there is
+nothing to remember to take down.
+
 > **Goal:** Turn the user's thin prompt into a confirmed feature brief before the planner runs. The planner agent receives this brief verbatim — richer input means better data model inference, accurate connector detection, and correct screen specs.
 
 #### Step 2b.0 — Prompt richness scoring (decides which path to take)
 
 Before asking anything, score the description on four signals. The score decides whether we ask a multi-select feature picker, a single confirmation, or skip the discovery question entirely.
 
-Run this scorer mentally on `<description>` (the prompt the user gave with `/create-mobile-app`, plus any clarifying text from Step 2a). Count how many of the four trip:
+Run this scorer mentally on `<description>` (the prompt the user gave with `/create-mobile-app`, plus any clarifying text from Step 2). Count how many of the four trip:
 
 | Signal | Trips when |
 |---|---|
@@ -314,7 +420,7 @@ Skip the multi-select question. Extract a 6–10 bullet brief directly from `<de
 
 - `yes` → store as `<requirements_brief>`, fall through to Step 2c.
 - `adjust` → drop to Step 2b.1 (walk-through) so the user can edit via the multi-select.
-- `start over` → return to Step 2a and re-prompt for the description.
+- `start over` → return to Step 2 and re-prompt for the description.
 
 #### Step 2b.3 — Auto-plan path (tier = `auto-plan`)
 
@@ -360,14 +466,22 @@ planning degradation; it never relaxes `/add-dataverse` reconciliation.
 
 Set tentative defaults (the preview preference applies at Step 6.75):
 
-- `<visual_companion> = yes` — automatically open `_plan_preview.html` in the browser at Step 6.75, after the design choice. Gate 4 remains markdown-only regardless of this preference. `/design-system` may change it to `no`; persist the final value to memory-bank for future runs.
+- `<visual_companion> = yes` — render `_plan_preview.html` at Step 6.75, after the design choice. **Nothing is opened in a browser during a create run**, whatever this is set to: the build plan shows the same screens in its phone frame and links out to the file, and every opener in `/design-system` and its style picker is gated on `CODE_APPS_NATIVE_ORCHESTRATING=1`, which this skill passes. The flag governs `/preview-screens` wherever it runs — including the Step 11.4 offer, which is a browser window the user asked for by picking (a) or (b), not one that appears on its own — and a later `/edit-app` re-plan. Gate 4 remains markdown-only regardless. `/design-system` may change it to `no`; persist the final value to memory-bank for future runs.
 - `<design_vibe_opt_in> = deferred` — Step 6.75 sets the real value. While `deferred`, the planner does NOT prompt for a direction; it writes a placeholder `## Design Direction: <deferred — set by /design-system>` block so screen-planner can still run.
 
 **`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no`, skips the style-picker handoff at Step 3a entirely, and short-circuits Step 6.75 to a no-op (placeholder block stays in `native-app-plan.md`; screen-builders fall back to industry-inferred defaults).
 
+**Record the confirmed brief.** The phase stays open: Step 2c still asks the user to approve the
+plan preview, and a closed phase cannot report that the run is waiting on them.
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" set --section requirements --json '{"appName":"<displayName>","slug":"<slug>","platforms":"iOS and Android","aesthetic":"<aesthetic>","industry":"<industry>","brief":"<confirmed brief>","features":["<feature>"]}'
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id requirements --status active --note "Brief confirmed"
+```
+
 ### Step 2c — Plan preview (rough, always shown)
 
-> **Goal:** Give the user a cheap exit before any mutation happens. This is the **last point** in the flow with zero side effects — no `git clone`, no `npm install`, no `npx power-apps init`, no agent tokens spent on planning. After Step 3 starts, every abort gets more expensive (half-written `native-app-plan.md`, partial `_screens_section.md`, architect tokens already burnt).
+> **Goal:** Give the user a cheap exit before any mutation happens. This is the **last point** before the run touches the app itself — no `npx power-apps init`, no Dataverse writes, no agent tokens spent on planning. The one thing already written is the build plan under `docs/`, which Step 2b created so the user has something to read while answering; an abort here leaves that folder and nothing else. After Step 3 starts, every abort gets more expensive (half-written `native-app-plan.md`, partial `_screens_section.md`, architect tokens already burnt).
 
 **Always runs. There is no `--no-preview` flag in v0** — we need calibration data (~10+ runs with recorded estimate-vs-actual) before we can trust the rough estimates enough to let users skip them. Once the data shows estimates are reliably within ±50%, evaluate adding a skip flag for repeat-user workflows.
 
@@ -428,6 +542,14 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 - Forced calibration: every run produces the `<estimate, actual>` data we need for v0.x model routing decisions. Skipping drops calibration data.
 
 **Set expectations before handing off to the planner:**
+Raise the wait before showing the estimate, and close the phase once the user approves:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id requirements --status active --note "Waiting for you to approve the plan preview"
+# ... after they approve ...
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id requirements --status done
+```
+
 > "Brief locked in. Planning surfaces up to 4 approval prompts (data platform + native capabilities + connectors → data model when Dataverse is selected → screen graph → screen specs). Data-model readiness is quality-first, with a 10–15 minute target:
 >  • Gate 1 (architecture) — confirm Dataverse choice, native capabilities, and connectors before schema work
 >  • Gate 2 (data model, Dataverse only) — budget 10–15 min for verified reuse/extend/create decisions, ER columns, relationships, tiers, and risks; auto-skipped for no-Dataverse apps
@@ -457,7 +579,14 @@ First, create the working and planning-artifact directories:
 mkdir -p <working_dir> <working_dir>/.tmp
 ```
 
+
 ### Architecture gate
+
+Planning is now the live phase. The gates that follow are recorded in the Step 3.9 batch:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id architecture --status active --note "Planning — approval gates ahead"
+```
 
 Run the planner once in architecture-only mode before any Dataverse discovery:
 
@@ -1167,6 +1296,44 @@ Adapt from `core` or missing detail, or Create/Adapt names without
 checked-missing collision evidence. Do not fall back to parsing the Markdown
 ER diagram when a sidecar is missing or malformed.
 
+### Step 3.9 — Confirm the approved plan
+
+Each gated section was already written with `--state proposed` before its gate — that is what the
+user reviewed. Here the approved ones are confirmed, so the plan records decisions rather than
+proposals. Do this before any mutation starts, so an abort still leaves a document explaining what
+was agreed:
+
+```bash
+DOCS="${PLUGIN_ROOT}/scripts/app-docs.js"
+node "$DOCS" --working-dir "<working_dir>" set --section architecture --json-file <tmp>/architecture.json --state approved
+node "$DOCS" --working-dir "<working_dir>" step --id architecture --status done --note "Gate 1 — approved"
+node "$DOCS" --working-dir "<working_dir>" set --section trust --json-file <tmp>/trust.json --state proposed
+node "$DOCS" --working-dir "<working_dir>" set --section dataModel --json-file <tmp>/data-model.json --state approved
+node "$DOCS" --working-dir "<working_dir>" step --id data-model --status done --note "Gate 2 — <n> tables approved"
+node "$DOCS" --working-dir "<working_dir>" set --section screens --json-file <tmp>/screens.json --state approved
+node "$DOCS" --working-dir "<working_dir>" step --id screen-plan --status done --note "Gates 3-4 — <n> screens approved"
+```
+
+**Write a first-pass trust report here.** Gate 1 settles the device capabilities and connectors,
+which is everything the `permissions[]` and `battery[]` lists are derived from, so the Trust report
+tab fills as soon as the user approves rather than staying empty for most of the run. Mark it
+`proposed`: it states what the approved plan intends, and Step 10 rewrites it as `approved` once
+the capabilities are actually wired. Leave `handles[]` and `notCollected[]` out for now — those
+depend on the data model and offline profile, which are not settled yet.
+
+Build each JSON from the approved `native-app-plan.md` using the shapes in the
+[Build documentation protocol](#build-documentation-protocol). Populate `dataModel.tables[]`
+structurally — `logicalName`, `status`, `columns[]` with `key: PK|FK`, `relationships[]` — because
+the ER diagram, the column tables, and the new/reused/extended colours are all derived from it.
+
+**Connector-only apps:** mark both Dataverse phases as not applicable rather than leaving them
+pending, or the plan never reaches 100%:
+
+```bash
+node "$DOCS" --working-dir "<working_dir>" step --id data-model --status skipped
+node "$DOCS" --working-dir "<working_dir>" step --id dataverse --status skipped
+```
+
 ### Step 4 — Auth & environment selection
 
 **Telemetry checkpoint: `select_app_environment`**
@@ -1180,6 +1347,12 @@ If the resolved environment doesn't match what the planner used in Step 3, ask t
 ### Step 5 — Prepare existing template
 
 **Telemetry checkpoint: `prepare_template_files`**
+
+Open the scaffold phase:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id scaffold --status active
+```
 
 This step is template-only and foreground-only. Do not clone/copy templates, do not run background scaffold jobs, and do not use any legacy fallback path.
 
@@ -1420,6 +1593,12 @@ npx tsc --noEmit
 
 This is the **Scaffold gate** from the TypeScript Gate Policy. If it fails, capture the full error list once, batch-fix scaffold/template causes, and rerun this gate. Do not continue to Step 6.7 or any app-specific mutation until this gate is clean. If the only failure is a missing generated schema import, preserve the template `@ts-ignore` boundary rather than generating an empty schema artifact.
 
+A clean scaffold gate is what completes the scaffold phase:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id scaffold --status done
+```
+
 ### Step 6.7 — Seed the memory bank
 
 ```bash
@@ -1449,18 +1628,47 @@ visual_companion: <yes|no>   # default from Step 2b; applied at Step 6.75 and la
 **Print before starting:**
 > "→ [Step 6.75/13] Locking your design system — source of truth for every screen built next. Takes 5 sec to 3 min depending on path."
 
-**Skip this step if `--no-design` is in `$ARGUMENTS`** — placeholder `## Design Direction: <deferred>` block stays in the plan, screen-builders fall back to industry-inferred defaults from `universal-patterns.md`.
+**Skip this step if `--no-design` is in `$ARGUMENTS`** — record it as skipped rather than leaving
+it open, because this branch never reaches the `done` call below:
 
-**Otherwise**, invoke `/design-system` (ships with this plugin):
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id design --status skipped
+```
+
+Marking it `active` here instead would leave it active through auth and most of Step 8, until
+opening the next phase auto-closed it as `done` — reporting a design system that was never built.
+
+**On the skip branch** — placeholder `## Design Direction: <deferred>` block stays in the plan, screen-builders fall back to industry-inferred defaults from `universal-patterns.md`.
+
+**Otherwise**, open the phase and invoke `/design-system` (ships with this plugin). `/design-system`
+asks for brand inputs, a cost choice and a style pick, so the phase opens as waiting:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id design --status active --note "Waiting for your brand and design choices"
+```
 
 ```
 Invoke skill: /design-system
+
+Environment:
+  CODE_APPS_NATIVE_ORCHESTRATING=1
 
 Arguments:
   --working-dir <working_dir>
 ```
 
+The `Environment` block is load-bearing, and follows the nested-skill handoff `/edit-app` already
+uses. `/design-system` and its style picker gate every browser opener on that variable; without it
+they detect a standalone run and open tabs over the build plan.
+
 The skill detects orchestrator mode (`CODE_APPS_NATIVE_ORCHESTRATING=1`), collects brand inputs, presents the cost picker (a/b/c/d), runs the internal style picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders `brand/design-system.html`, and returns with status.
+
+As soon as `/design-system` returns, replace the note — the user has answered and the run is
+working again:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id design --status active --note "Applying your design system"
+```
 
 Handle the return per the status protocol (AGENTS.md rule #10):
 - `DONE` → finish the applicable preview branch below, then continue to Step 7. Record `brand_path`, `tokens_path`, `direction` in memory-bank.
@@ -1474,7 +1682,7 @@ If the user picked path (c) Skip in the cost picker, the skill returns immediate
 
 #### Branch A — `brand/` files exist (user picked path a, b, or d)
 
-This is the **FIRST and ONLY HTML preview** the user sees in the new flow — Gate 4 was a structural-only review (markdown screen-graph, no HTML). `/design-system` owns rendering of `_plan_preview.html` at its Sub-step 6.5 using the locked brand tokens. No re-spawn from the orchestrator is needed; the preview is fresh when the skill returns.
+`/design-system` owns rendering of `_plan_preview.html` at its Sub-step 6.5 using the locked brand tokens — no re-spawn from the orchestrator is needed, the file is fresh when the skill returns. Gate 4 was a structural-only review (markdown screen-graph, no HTML), so this is where screens first become visual. The user sees them in the build plan's phone carousel, and the rendered file is linked underneath it. Nothing opens a browser window: `/create-mobile-app` sets `CODE_APPS_NATIVE_ORCHESTRATING=1`, and every opener in `/design-system` and its style picker is gated on that, so the plan stays the single surface the user is watching.
 
 #### Branch B — Skip path preview (user picked path c — no `brand/` files)
 
@@ -1485,13 +1693,11 @@ The user skipped the design system but still deserves to see their screens befor
 
 2. **Render `_plan_preview.html`** — read the screen specs from `native-app-plan.md` `## Screens` section and render key screens (one List + one Form + one Detail, first match per archetype) using the `tamagui-html-mapping.md` reference and industry-inferred defaults from `## Design Direction`. Write to `<working_dir>/_plan_preview.html`.
 
-3. **Print the preview path; open in browser only if `<visual_companion> = yes`:**
-   ```bash
-   open "<working_dir>/_plan_preview.html" 2>/dev/null \
-     || xdg-open "<working_dir>/_plan_preview.html" 2>/dev/null \
-     || powershell.exe -NoProfile -Command "Start-Process '<working_dir>\_plan_preview.html'" 2>/dev/null \
-     || true
-   ```
+3. **Do not open it in a browser.** The build plan already shows these screens in its phone
+   frame and links out to the full-size file underneath, so a second tab opening mid-run
+   interrupts the user rather than telling them anything new. Print the path and continue:
+
+   > `→ Full-size screens at <working_dir>/_plan_preview.html (also linked under the phone in the build plan).`
 
 4. **Auto-continue — no prompt.** The user already approved the applicable planning gates; the preview does not introduce another approval gate. Print one line and proceed:
 
@@ -1505,6 +1711,44 @@ browser opening, not rendering. `--no-design` skips this stage and its HTML prev
 Offline profile setup is intentionally deferred until after the approved
 Dataverse model has been materialized. Follow the shared connectivity-intent
 ownership contract during this phase.
+
+**Switch the plan's phone to the screen carousel.** `/design-system` has just rendered
+`_plan_preview.html` — plan-time mockups built from the locked brand tokens, before a single line
+of TSX exists. Those same per-screen blocks become the carousel:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" phone --stage screens --screens-file <tmp>/screens-preview.json
+```
+
+`screens-preview.json` is `[{ "name": "Today's route", "html": "<the screen's markup>" }, …]`, in
+navigation order.
+
+**Carry over exactly the screens `_plan_preview.html` contains — no more, no fewer.** How many
+that is depends on what the user chose at `/design-system` Sub-step 6.5: option (a) renders every
+screen, and the default (b) renders only the List, Form and Detail archetypes. Take the markup
+from those blocks rather than re-authoring any of it: a hand-written block would drift from
+`_plan_preview.html` and from the screen the builder later generates, which is the one thing the
+carousel exists to rule out. A three-screen carousel is the expected shape, not a failure.
+
+**When there is no preview to carry over, leave the phone on the building animation.** That is
+`--no-design`, or Sub-step 6.5 option (c) "Skip preview" — in both cases `_plan_preview.html` was
+never written, so there is nothing to show and nothing to invent. Skip the `phone --stage screens`
+call entirely; the plan keeps animating until the Step 12 QR replaces it.
+
+**This is the moment the plan stops being abstract** — the user sees real screens, in their real
+brand, while the data model is still being built. Do not skip it because they are "only mockups":
+they are the same mockups `/preview-screens` would produce, and they are the first concrete thing
+in the whole run.
+
+**Record the design** once `/design-system` returns, taking the palette from `brand/tokens.ts`:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" set --section design --json '{"direction":"<direction>","headingFont":"<font>","bodyFont":"<font>","darkMode":"<enabled|disabled>","palette":[{"name":"Primary","value":"#rrggbb"}]}'
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id design --status done
+```
+
+Only `#rrggbb` literals render as swatches; any other value is shown as text rather than
+becoming an arbitrary CSS value.
 
 ### Step 7 — Auth config
 
@@ -1765,6 +2009,12 @@ npx tsc --noEmit
 
 If this fails, do not continue to native capabilities, connectors, navigation, or screens. Capture the full error list once, batch-fix generated-service/model or alias-map issues, then rerun the gate. If the failure is a hidden Dataverse collision already recovered via an alias (for example `aircraft` → `aircraftv2`), make sure the alias is reflected in `native-app-plan.md`, `memory-bank.md`, and the Generated Services snapshot before rerunning.
 
+The Dataverse build phase is live from here until sample data lands:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id dataverse --status active
+```
+
 ### Step 8.5 — Seed sample data (auto)
 
 Before sample data or offline setup, require the materialized table inventory
@@ -1822,7 +2072,13 @@ Skip only when `memory-bank.md` `## Offline profile` already records
 `status: done` or `status: not-applicable`. Print:
 `↷ Offline profile skipped — already <done|not-applicable> from a prior run.`
 
-Otherwise ask one neutral foreground question:
+Otherwise ask one neutral foreground question. Say so in the plan first, and replace the note
+once the user answers:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id dataverse --status active --note "Waiting for your offline support choice"
+```
+
 
 > **Question header:** `Offline support`
 >
@@ -1843,9 +2099,21 @@ It consumes the materialized manifest, owns its own profile approval flow, and
 writes `offline-profile.json`. Surface concerns and stop on a substantive
 failure. Do not reopen data-model or screen approvals after this choice.
 
+Tables and generated services now exist, so the Dataverse phase is complete:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id dataverse --status done
+```
+
 ### Step 9 — Apply native capabilities
 
 **Telemetry checkpoint: `configure_native_capabilities`**
+
+Open the capabilities phase; Step 10 closes it after connectors are added:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id capabilities --status active
+```
 
 **Print before starting:**
 > "→ [Step 9/13] Wiring <N> native capabilities: <list>. Each runs sequentially."
@@ -1970,6 +2238,68 @@ For each row in the table, route to the correct skill based on the API name:
 Run sequentially — each generates files under `src/generated/`. Parallel writes would race.
 
 **Mutation-heavy steps stay sequential.** Dataverse table creation (Step 8), connector adds (Step 10), and generated-service writes are all sequential by design. The fast path in this skill is **parallel screen generation** (Step 11) plus **fewer prompts** (token cache, sticky policies, auto-proceed) — NOT parallelizing the data-source/service mutations. Do not attempt to parallel-batch `npx power-apps add-data-source` or `/add-connector` invocations; they share `src/generated/` and `power.config.json` and will race or corrupt state.
+
+Device capabilities and connectors are both wired, so close the phase:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id capabilities --status done
+```
+
+**Finalise the trust report.** Gate 1 wrote a first pass from the approved plan; everything it
+claimed is now decided — which capabilities were actually wired, which connectors were added, and
+what the offline profile syncs. Rewrite it in full and mark it `approved`, so it describes what the
+app *does* rather than what was intended. `set` merges, so restate every key you want to change.
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" set --section trust --json-file <tmp>/trust.json --state approved
+```
+
+`trust.json` has four keys:
+
+- **`permissions[]`** — one entry per OS permission the app could plausibly touch, **including the
+  ones it never asks for**. `{ "name", "status", "detail", "activation" }`. A report that lists only
+  what was granted answers the easy question; "Microphone — NOT REQUESTED — no audio workflow exists
+  anywhere in the app" is the one a reviewer actually needs.
+
+  `status` names **how the permission is acquired**, not merely whether it is. Two apps can end up
+  with the same grant and be nothing alike — asking at first launch and asking when the user taps
+  Scan are different postures. Use one of:
+
+  | `status` | When the prompt happens | Typical example |
+  |---|---|---|
+  | `on-demand` | Explicitly requested when the user invokes the feature | Camera, after tapping Scan |
+  | `on-startup` | Explicitly requested during launch or onboarding | Notifications at first launch. Technically fine, usually discouraged — prefer `on-demand` |
+  | `on-first-access` | The OS prompts automatically the first time the app touches the API | Core Bluetooth initialization on Apple platforms |
+  | `per-operation` | Authorized every time, with no lasting grant | Face ID / Touch ID |
+  | `incremental` | Narrow access first, broader only when justified | Foreground location now, background later |
+  | `system-settings` | No normal dialog exists, so the app sends the user to Settings | Android overlay or all-files access |
+  | `system-mediated` | The OS hands over just the selected data, granting nothing broader | The iOS/Android photo picker |
+  | `not-requested` | Never asked for at all | Microphone in an app with no audio workflow |
+
+  Anything unrecognised renders as `not-requested`, so a wrong value understates rather than
+  overstates access. Prefer the **narrowest accurate** pattern: if the OS picker gives you the one
+  file you need, that is `system-mediated` and not a library permission.
+
+  `detail` must say **when** the request happens and **why** — "Requested when the technician starts
+  photo capture on a work order", not "Used for photos". `activation` is optional and records the
+  separate question of **when the hardware actually runs**: holding a camera grant is not the same
+  as the lens being on, and a reviewer needs both.
+
+  **Do not claim the permission is absent from the build.** The binary is produced from a signed
+  pre-built base and `/add-native` may not edit `app.config.js`, so the declared permission set is
+  the wrapper's and is the same for every generated app. Least privilege here is a **runtime**
+  property — which permissions this app ever requests and which hardware it ever activates — not a
+  manifest one. Say "no screen requests it", never "the OS cannot prompt for it".
+- **`handles[]`** — the record types and identity data the app actually reads or writes.
+- **`notCollected[]`** — what it deliberately does not touch. Be specific: name the field classes a
+  reader would otherwise have to assume about.
+- **`battery[]`** — `{ "name", "detail" }` for each background-cost decision: polling, sensor
+  subscriptions, sync intervals, and anything that runs off-screen.
+
+Derive every entry from the approved `native-app-plan.md`, `offline-profile.json`, and the
+capabilities you just wired. **Do not claim a boundary you have not checked** — an unverified "no
+location access" is worse than omitting the line, because the plan is the artifact a reviewer
+trusts. Capabilities the user declined at Gate 1 belong here as `not-requested`.
 
 ### Step 10b — Wire navigation layout
 
@@ -2482,6 +2812,15 @@ After handling every builder status in the wave, run the **Screen-wave gate** be
 npx tsc --noEmit
 ```
 
+**Mark screen progress in the plan** once the wave's TypeScript gate is clean:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id screens --status active --note "<n> of <total> screens built"
+```
+
+The plan's phone is already showing the screen carousel from Step 6.75, so there is nothing to
+re-point here — only the count to keep honest.
+
 If the wave gate fails, capture the full error list once, group failures by root cause, and repair in batch. For screen-owned files, re-spawn the affected screen-builder(s) with the consolidated TypeScript output appended to their prompts. Affected builders can be re-spawned in parallel. Cap retries at 2 per screen, then surface the failure to the user. Do not launch the next wave until the current wave gate is clean.
 
 Common wave-gate repair classes to batch instead of fixing line-by-line:
@@ -2563,7 +2902,13 @@ Then continue only if TypeScript is clean. Step 11.4 may leave concerns, but it 
 
 #### Optional static preview
 
-After `tsc` passes, offer a static HTML preview. The dev server starts next (Step 12), so default is skip:
+After `tsc` passes, offer a static HTML preview. The dev server starts next (Step 12), so default is skip.
+Mark the wait, since the run does not continue until the user picks:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id screens --status active --note "Waiting for your preview choice"
+```
+
 
 > "→ N screens built and type-checked. The live app starts next.
 >
@@ -2581,12 +2926,24 @@ After `tsc` passes, offer a static HTML preview. The dev server starts next (Ste
 
 ---
 
+Every screen is built and type-checked, so close the screens phase:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id screens --status done
+```
+
 ### Step 12 — Start dev server (Metro writes project-local logs)
 
 **Telemetry checkpoint: `launch_metro_dev_server`**
 
 **Print before starting:**
 > "→ [Step 12/13] Launching Metro so you can scan the QR; logs will be written under .powernative/."
+
+Open the final phase (Step 13 marks it done):
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id run --status active
+```
 
 This skill launches the template's canonical `npm run dev` command. Its `predev` lifecycle runs schema generation followed by the final TypeScript gate before Expo starts, and logging is configured in `metro.config.js`.
 
@@ -2633,7 +2990,7 @@ Branch as follows:
   - Define `METRO_QR="<working_dir>/.expo/metro-qr.png"` and run `npx --yes qrcode -o "$METRO_QR" "<metro-url>"`. If the project's npm config requires auth and the fetch fails with `E401`, retry once with `npm_config_registry=https://registry.npmjs.org/ npm_config_always_auth=false` prefixed.
   - Verify the PNG with a host-neutral Node check: `node -e "const fs=require('node:fs'); process.exit(fs.existsSync(process.argv[1]) ? 0 : 1)" "$METRO_QR"`. If it fails, print the qrcode error and continue without the image.
   - **Chat-first render (best effort):** read and base64-encode the file with Node (`node -e "process.stdout.write(require('node:fs').readFileSync(process.argv[1]).toString('base64'))" "$METRO_QR"`) and embed in markdown as a data URI (`![QR](data:image/png;base64,<data>)`) so hosts that support inline image markdown show the QR directly in chat.
-  - **Guaranteed visible fallback:** if inline chat image rendering is unavailable, use the host's file-open tool when present. Otherwise use the quoted OS command (`open "$METRO_QR"` on macOS, `xdg-open "$METRO_QR"` on Linux, or `cmd /c start "" "$METRO_QR"` on Windows). If opening fails, print the quoted path. Never interpolate an unquoted project path.
+  - **Guaranteed visible fallback: the build plan, not a new window.** If inline chat image rendering is unavailable, do **not** open the PNG with the host's file-open tool or an OS command. The plan already draws the QR in its phone frame and links the file underneath it for scanning full size, so a window opening on top of a run the user is watching adds nothing. Print the quoted path instead, and point at the plan. Never interpolate an unquoted project path.
   - Surface only the native Metro URL immediately after the image/fallback message.
 2. Follow with:
 
@@ -2651,6 +3008,16 @@ Branch as follows:
 ```
 
 Do not persist PIDs, ports, or Metro URLs to the memory bank. They are ephemeral and are resolved from the latest `.powernative` log when needed.
+
+**Put the QR in the plan** so the document ends on the thing the user acts on:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" phone --stage qr \
+  --qr-image "<working_dir>/.expo/metro-qr.png" --qr-url "<metro-url>"
+```
+
+The PNG is inlined as a data URI, so the plan still shows the code after `.expo/` is cleaned. This
+is the phone's final stage: animation while building, the screen carousel once designed, then this.
 
 After Step 12 starts the long-running server, continue through the optional Step 12.5 debug handoff and print the Step 13 summary, then return so the user can iterate locally. Production build + tenant push remains a separate, explicit user action via the `/deploy` skill.
 
@@ -2689,11 +3056,25 @@ Approval wait : <N ms> (excluded from agent performance)
 Execution     : scaffold <N ms or not recorded> | mutation <N ms or not recorded>
 App Insights  : <enabled for selected customer-owned resource | disabled>
 Dev server    : Metro running on port <port>
+Build plan    : docs/create-app-plan.html
 Debug logs    : .powernative/metro-logs/
 ─────────────────────────────────────────────
 ```
 
+Close the build plan before printing the summary:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id run --status done
+```
+
+Point the user at `docs/create-app-plan.html` once — it holds the environment, the approved data
+model with its ER diagram, and the screen plan, and it outlives the terminal session.
+
 If Step 1 emitted warnings, list them in one line each under the block (no decoration).
+
+Do **not** re-open the `run` phase for these. The build is finished, the plan has settled and
+stopped reloading, and marking a phase active again would restart that loop and report work in
+progress on a run that is over. These options are a menu, not a gate the run is blocked on.
 
 Then present exactly these 6 options:
 
