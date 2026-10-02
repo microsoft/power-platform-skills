@@ -1114,7 +1114,8 @@ custom control), but the spec validator emits a warning.
   `navigatesTo[].targetKey`, the `PAGEREF_<key>` navigation placeholder, and the `page` sitemap
   subarea. Renaming a page never changes its key. It must match `^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`,
   be unique across all pages in the spec, and (for an implemented page) its `codeFile` path must be
-  unique and workspace-confined (no `..` or absolute-path escape).
+  unique and workspace-confined: a relative path to a regular file inside the app folder.
+  Rooted, drive-relative and alternate-stream paths, parent escapes, symlinks and junctions are refused.
 - **`navigatesTo`**: `[{ "targetKey": "<page key>", "data": { … } }]` — declared page-to-page
   navigation (custom ids travel in `data`, read as `pageInput?.data?.<key>` on the target).
 - **Page-name uniqueness** is enforced **only on pages this run creates**. A page carrying a `pageId`
@@ -1143,11 +1144,42 @@ custom control), but the spec validator emits a warning.
      (downloaded from a live app), the spec's own `pages[].pageId` is the highest authority and
      outranks the manifest.
   2. **EXISTENCE** — env-wide `pac model genpage list` (no `--app-id`). This set alone decides
-     create-vs-reuse (crash-safe: a page present in the env but not yet in the sitemap is reused,
-     never re-created). A read failure HALTs (`pages-existence-failed`).
+     whether an id is still live. An unplaced id needs a local creation receipt for this app/key/id
+     and a decoded stored name exactly equal to the spec page name; otherwise `unproven-manifest-id` halts,
+     never requests a replacement CREATE. If it is this app's page, add it to the app's navigation
+     in the maker and re-run; otherwise remove the stale id from the manifest/spec (or delete the
+     page) and re-run. A read failure HALTs (`pages-existence-failed`).
+     An uncertain CLI CREATE stops and reports each new candidate's id, stored name and `createdon`.
+     No candidate is automatically adopted, even with a matching name/date. If the candidate is yours,
+     re-run the upload explicitly with `--page-id`; otherwise leave it and re-run the create.
   3. **MEMBERSHIP** — the app's sitemap `GenPageId` set (read via `fetchSitemap` —
      fail-closed, discriminated). This set alone decides placement, download enumeration, and verify
      coverage. A read failure HALTs (`pages-sitemap-read-failed`).
+- **Teardown page scope.** The manifest supplies candidates, not permission to delete. A candidate
+  is deleted only when it is in this app's sitemap or a local app/key/id creation receipt proves it,
+  with its stored name corroborating the receipt. Other candidates are kept with a manual-removal hint.
+  The build writes `page-ownership.created.<hash>.json` in its workspace after an acknowledged create,
+  before manifest persistence/placement. Version-2 records include an opaque SHA-256 fingerprint of
+  the normalized target HTTPS origin (lower-case host, no path or trailing slash), not its URL.
+  Lookup and consumption require that same fingerprint; another target's records stay untouched.
+  There is only this environment-bound format. An unknown version, malformed or unreadable file
+  halts with its path: inspect it; delete it only if no page it names still exists.
+  These records contain no environment routing; copied
+  baselines, downloaded ids, remote manifests and diagnostic journals cannot substitute for them.
+  Without a workspace, off-sitemap ids are kept or halted. Dry-run lists
+  every candidate without writes; absent rows are labeled "not found" with their manifest name only.
+  Before app removal, the verified set is saved as local `page-ownership.teardown.<hash>.json` records.
+  An unreadable proof or failed record write leaves the app intact. A retry uses those records even
+  when `pages[]` is empty and the app has already gone. Proven pages still undeleted keep their records,
+  manifest and solution and prevent a successful result. Only completed deletion or confirmed absence
+  consumes the records. Form-only references are not scanned; platform sitemap dependencies remain an
+  additional safeguard, not proof that no form embeds the page.
+- **Workspace clearing preserves ownership.** `--clear-workspace` refuses while any unconsumed local
+  ownership record remains, including other apps/environments. The refusal names each record file.
+  Teardown consumes a record when it deletes or confirms the page's absence; a record whose page
+  you have confirmed gone may be deleted by hand. Resume in the original app/environment before
+  clearing; do not relabel receipts.
+  A record arriving while the workspace is isolated keeps that isolated directory and reports its path.
 - **Every page must be in the sitemap.** Validation rejects a page that is not referenced by a
   `page` subarea in `appShell`. Navigation-only (headless) pages — reachable only by a `PAGEREF_`
   call but absent from the sitemap — are not supported; they are not owned by the app. A "detail"
@@ -1171,7 +1203,7 @@ custom control), but the spec validator emits a warning.
 - **Safety HALTs (pages phase).** The build halts on identity/safety violations rather than
   proceeding with potentially wrong state:
   - `pages-identity-conflict` — spec `pageId` and manifest disagree on a key, or a duplicate id is
-    detected across two keys. Manual resolution required.
+    detected across two keys, or an off-sitemap id lacks a corroborated local creation receipt. Manual resolution required.
   - `pages-manifest-corrupt` — the manifest web resource cannot be parsed (two keys mapping to the
     same id). Fix or delete the manifest and rebuild.
   - `pages-shared-across-apps` — a page appears in another app's sitemap. Detach it in Maker first.
@@ -1414,6 +1446,8 @@ auto-selects tables that are good row-summary candidates and skips those that ar
 - `ai.appFeatures` keys must be one of `formFill · formFillSuggestions · formFillSmartPaste · formFillFiles · nlSearch · nlChart · m365`; values must be a boolean or an integer between `0` and `1000000` (hard error) — the same range the SDK enforces, so an out-of-range value is rejected here rather than aborting the build half-applied. The boolean spelling is **not** a flat `1`/`0`: `true` writes `2` (*On*) for every feature, and `false` writes that setting's *Off* — `1` for most, but **`0` for `nlChart`**, whose `1` means *Auto*. `0` means *Default* (defer to the platform) everywhere except `nlChart`. Use an explicit integer for any other state, such as the platform default.
 - **`false` is not "leave alone".** It writes an app-scope override that beats the org value, and unlike enabling it is **not** gated — so `false` on a feature the org has enabled will turn that feature off for this app. To defer a feature to the platform, give it the setting's platform-default value instead (`0`, or `1` for `nlChart`).
 - Omitting `ai.appFeatures` does **not** mean "no AI features": a spec carrying any `ai` block gets the defaults `formFill · nlSearch · nlChart` on (`2`) and `m365` left at its platform default (`0`), and `--verify` reconciles that whole resolved set.
+- A rejected row-summary publish does not authorize name-based cleanup. Same-name AI models are
+  kept and reported because the failed SDK call returns no created-model id to the build.
 - `ai.summaries.default` must be `"auto"` or `"off"` (hard error).
 - `ai.summaries.tables` keys must match a declared entity `schemaName` (case-insensitive, hard error).
 - `columns[]` entries must be declared column `schemaName` values on that entity (hard error in both validate and lint).

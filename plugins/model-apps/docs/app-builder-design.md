@@ -251,7 +251,8 @@ persistence is therefore **foundational**, and the mechanism is **decided** (not
   environment-specific and can be stale after import to another env, so they are **reconciled against
   the fail-closed current-app enumeration** (§9) before use — the manifest keeps `key ↔ name`
   durable (so a display-name change never orphans a page), while the *deployed* id is confirmed live
-  each run.
+  each run. An off-sitemap id additionally needs a local CREATE receipt for this app/key/id and a
+  corroborating stored name; a remote manifest or matching name alone never authorizes reuse.
 - **Canonical symbolic source is retained** in the working dir / app-spec sidecar (the `.tsx` with
   `PAGEREF_<key>`); the resolved deployment derivative is never written back over it.
 - **Download reconstructs keys** from the manifest and **reverse-normalizes** sibling page-GUID
@@ -553,8 +554,26 @@ The user-facing contract:
 ## Deferred to follow-ups (v1 does NOT implement; tracked in the capabilities doc)
 Pre-mutation live page-content drift verifier; `expectedSitemap` population + pre/post sitemap projection
 equality (sitemap fast shape unwired in v1); a `clearDebtMatching` production caller (v1 clears debt only
-via teardown+rebuild); unifying `contentPath` confinement between hashing and the build; view/form/sitemap
-fast submodes. None are reachable on the v1 pages-only fast path.
+via teardown+rebuild); view/form/sitemap fast submodes. None are reachable on the v1 pages-only fast path.
+
+Page `codeFile` and web-resource `contentPath` reads share one app-folder resolver for hashing and
+deployment: only relative, regular files inside the app folder are accepted; source symlinks and
+junctions are refused. Canonical spelling changes such as Windows 8.3 aliases are allowed when
+component link checks and canonical containment succeed.
+
+Off-sitemap page recovery requires a local CREATE receipt, not a remote manifest/name match.
+The workspace's `page-ownership.created.<hash>.json` records bind app unique name, page key, id and
+an opaque fingerprint of the normalized target environment origin, without storing its URL,
+after an acknowledged create and before placement. Local teardown records preserve verified ownership
+before the app is removed; pending page deletions keep those records and the manifest/solution across
+retries, including page-less retries. Uncertain CLI creates report candidates for explicit user
+resolution instead of updating one automatically. Form-only references are not scanned.
+There is one environment-bound receipt format. Unknown versions, malformed or unreadable records
+halt with the filename and guidance rather than silently losing identity. Foreign-environment records
+never authorize a current-target operation or get consumed there.
+Workspace clearing refuses all unconsumed ownership records, naming each file and its retirement
+condition (page deletion or confirmed absence), and checking both before
+atomic isolation and before removal; a late record keeps the isolated folder for explicit recovery.
 
 ## Why this is hard
 `/app-builder`'s build engine is **ADDITIVE, not convergent**: existing chart/command/dashboard defs and

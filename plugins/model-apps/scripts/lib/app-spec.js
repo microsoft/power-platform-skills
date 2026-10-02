@@ -2,6 +2,7 @@
 // the app-builder's LLM proposal and the deterministic builder.
 
 const path = require('node:path');
+const { isAppSourcePath } = require('./app-source-path.js');
 const { normalizeSpecShape } = require('./spec-shape.js');
 const { isMainForm, selectDefaultForm, ordersByHand } = require('./form-order.js');
 
@@ -2270,6 +2271,9 @@ function validateAppSpec(spec, opts = {}) {
     if (wr.content === undefined && wr.contentBase64 === undefined && !wr.contentPath) {
       errors.push(`webResource ${wr.name}: needs content, contentBase64, or contentPath`);
     }
+    if (wr.contentPath !== undefined && !isAppSourcePath(wr.contentPath)) {
+      errors.push(`webResource ${wr.name}: contentPath must be an app-folder-confined relative path (no parent escape, rooted or drive path, or alternate stream)`);
+    }
   }
   // AB#6686426: `isDefault` picks which Main form a table opens with. Explicit beats the fallback
   // (first Main form in spec order), and both are order-independent — which is the property the old
@@ -2958,23 +2962,6 @@ function validateAppSpec(spec, opts = {}) {
   // (e.g. a cross-env GUID that happens to match an unrelated page). Addenda Task 4 / C3.
   const PAGE_ID_GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
   const pageCodeFilesNorm = new Set(); // implemented-page normalized codeFile uniqueness (Critical 4)
-  // A codeFile must resolve INSIDE the working directory. Use path.normalize to canonicalize before
-  // checking — this catches aliases like 'pages/./x.tsx' and 'pages/../pages/x.tsx' that resolve to
-  // the same file but evade a naive string-split check (addendum Crit 4). path.isAbsolute is
-  // platform-specific (on POSIX it does NOT flag a Windows drive-letter path like 'C:/x'), so we ALSO
-  // match a drive-letter prefix explicitly — a spec authored on Windows must be rejected the same way
-  // on a Linux CI runner. After normalization, a path starting with '..' has escaped the workspace
-  // root. sdk-build resolves codeFile with path.resolve(appDir, codeFile) at :1037-1041, so an
-  // unconfined path reaches the filesystem outside the app folder — reject it here, before any write. Design §7.2.
-  const codeFileConfined = (codeFile) => {
-    const cf = String(codeFile);
-    // Drive-letter guard (/^[a-zA-Z]:[/\\]/) catches 'C:\x'/'C:/x' on POSIX where path.isAbsolute misses it.
-    if (path.isAbsolute(cf) || /^[a-zA-Z]:[/\\]/.test(cf)) return false;
-    const normalized = path.normalize(cf);
-    // normalized === '..' means the codeFile IS the parent directory.
-    // normalized.startsWith('..' + path.sep) means it is a path beneath the parent directory.
-    return normalized !== '..' && !normalized.startsWith('..' + path.sep);
-  };
   for (const p of spec.pages || []) {
     if (!p || !p.name) { errors.push('a page is missing a name'); continue; }
     pageNamesSet.add(p.name);
@@ -3020,10 +3007,10 @@ function validateAppSpec(spec, opts = {}) {
     // duplicates of 'pages/x.tsx' (addendum Crit 4). Replace backslashes with forward slashes before
     // lowercasing for cross-platform-safe comparison in the set.
     if (src && src.kind === 'tsx' && typeof src.codeFile === 'string' && src.codeFile) {
-      if (!codeFileConfined(src.codeFile)) {
-        errors.push(`page '${p.key || p.name}': codeFile '${src.codeFile}' must be a workspace-confined relative path (no '..' escape, no absolute path)`);
+      if (!isAppSourcePath(src.codeFile)) {
+        errors.push(`page '${p.key || p.name}': codeFile '${src.codeFile}' must be a workspace-confined relative path (no parent escape, rooted or drive path, or alternate stream)`);
       }
-      const cfNorm = path.normalize(src.codeFile).replace(/\\/g, '/').toLowerCase();
+      const cfNorm = path.posix.normalize(src.codeFile.replace(/\\/g, '/')).toLowerCase();
       if (pageCodeFilesNorm.has(cfNorm)) errors.push(`page '${p.key || p.name}': duplicate codeFile '${src.codeFile}' (another page already uses this path)`);
       else pageCodeFilesNorm.add(cfNorm);
     }

@@ -7,6 +7,7 @@ const { compileFormIntent, formFieldLogicals, NON_FORM_RENDERABLE_TYPES } = requ
 const { normalizeSpecShape } = require('./spec-shape.js');
 const { resolveSurfaces, unresolvedSurfaceMessage } = require('./surface-resolver.js');
 const { nearestName } = require('./nearest-name.js');
+const { isAppSourcePath } = require('./app-source-path.js');
 
 const CHOICE_OPTION_WARN = 12;
 const SEQNUM_RE = /\{SEQNUM(:\d+)?\}/i;
@@ -112,6 +113,7 @@ function lintAppSpec(spec) {
     if (!wr.name) E('A webResource is missing a name');
     if (!WEB_RESOURCE_KINDS.has(lc(wr.type || 'js'))) E(`webResource '${wr.name}' has unknown type '${wr.type}'`);
     if (wr.content === undefined && wr.contentBase64 === undefined && !wr.contentPath) E(`webResource '${wr.name}' needs content, contentBase64, or contentPath`);
+    if (wr.contentPath !== undefined && !isAppSourcePath(wr.contentPath)) E(`webResource '${wr.name}': contentPath must be an app-folder-confined relative path (no parent escape, rooted or drive path, or alternate stream)`);
     if (lc(wr.type || 'js') === 'js' && wr.name && !lc(wr.name).endsWith('.js')) W(`web resource '${wr.name}' is a script but its name doesn't end in .js — Dataverse convention expects the extension`);
     if (prefix && wr.name && !lc(wr.name).startsWith(lc(prefix) + '_')) W(`web resource '${wr.name}' does not use the solution prefix '${prefix}_'`);
   }

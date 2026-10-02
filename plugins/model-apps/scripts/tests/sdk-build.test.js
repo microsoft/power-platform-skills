@@ -112,6 +112,7 @@ function mockSdk(opts = {}) {
         if (/_pagemanifest'/.test(filter)) return opts.pageManifest ? [{ webresourceid: opts.manifestId || 'wr-manifest', content: opts.pageManifest }] : [];
         return opts.existingWebResource ? [{ webresourceid: 'wr-existing' }] : [];
       }
+      if (e === 'uxagentproject') return (opts.pageRows || []).filter((r) => filter.includes(r.uxagentprojectid.toLowerCase()));
       // appmodule / appmodulecomponent / sitemap answer the fetchSitemap + fetchAppsForPages reads (Imp9).
       // FILTERED appmodule (fetchSitemap for one app) echoes a resolvable row for ANY uniquename — self
       // resolves to SELF_SITEMAP_ID (→ opts.liveSitemapXml); a named otherApp resolves to its own sitemap.
@@ -4175,10 +4176,9 @@ test('ai-features phase: an UNRELATED row-summary failure still halts — the sk
   );
 });
 
-// `configureRowSummary` CREATES the msdyn_aimodel row and THEN publishes it, so a licence rejection
-// at publish leaves the row committed. Skipping without sweeping made the FIRST build pass and every
-// rebuild fail with DuplicateRecordKey — strictly worse than failing consistently. Live-observed.
-test('ai-features phase: a skipped summary sweeps the orphan msdyn_aimodel row it left behind', async () => {
+// A failed SDK call returns no new model id. Same-name models may predate this attempt, so they
+// are reported and kept rather than deleted by name.
+test('ai-features phase: a skipped summary keeps and reports same-name AI models', async () => {
   const spec = makeSpec({ ai: { summaries: { default: 'off', tables: { new_ticket: { enabled: true } } } } });
   const { sdk, calls } = mockSdk();
   sdk.configureRowSummary = async () => { throw modelNotSupported(); };
@@ -4199,14 +4199,17 @@ test('ai-features phase: a skipped summary sweeps the orphan msdyn_aimodel row i
     return rows.slice(0, opts.top || rows.length);
   };
   sdk.deleteRecord = async (entity, id) => { calls.push({ name: 'deleteRecord', args: [entity, id] }); };
-  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'], warn: () => {} });
+  const warnings = [];
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'], warn: (w) => warnings.push(w) });
   assert.ok(result.ok, 'still a successful build');
   const deletes = find(calls, 'deleteRecord').filter((c) => c.args[0] === 'msdyn_aimodel');
-  assert.deepStrictEqual(deletes.map((d) => d.args[1]), ['orphan-1'], 'sweeps the orphan and only the orphan');
-  assert.ok(queries.length && queries[0].filter, 'the sweep MUST filter server-side, not page-scan');
+  assert.deepStrictEqual(deletes, []);
+  assert.ok(warnings.some((w) => /kept same-name AI model orphan-1/.test(w)));
+  assert.ok(queries.length && queries[0].filter, 'the read-only report filters server-side');
+  assert.strictEqual(queries[0].paginate, true);
 });
 
-test('ai-features phase: DuplicateRecordKey (the orphan from a previous gated run) also skips, not halts', async () => {
+test('ai-features phase: DuplicateRecordKey also skips and keeps the existing model', async () => {
   const spec = makeSpec({ ai: { summaries: { default: 'off', tables: { new_ticket: { enabled: true } } } } });
   const { sdk } = mockSdk();
   const warnings = [];
@@ -4219,7 +4222,7 @@ test('ai-features phase: DuplicateRecordKey (the orphan from a previous gated ru
   assert.ok(result.ok, 'a rebuild against a gated org must not fail where the first build passed');
   assert.deepStrictEqual(result.skipped.aiSummaries, ['new_ticket']);
   // A leftover row is NOT a licensing problem. Telling the operator their environment is unlicensed
-  // sends them to the Admin Center for a condition the build just cleaned up itself.
+  // sends them to the Admin Center rather than to the reported existing-model match.
   assert.ok(warnings.some((w) => /already exists/i.test(w)), `expected a duplicate-specific warning; got ${JSON.stringify(warnings)}`);
   assert.ok(!warnings.some((w) => /does not license/i.test(w)), 'must NOT claim the environment is unlicensed');
 });
@@ -4241,51 +4244,53 @@ test('ai-features phase: the gate is recognised from err.cause alone (localized 
   assert.deepStrictEqual(result.skipped.aiSummaries, ['new_ticket']);
 });
 
-test('ai-features phase: a failing orphan sweep never turns the skip back into a halt', async () => {
+test('ai-features phase: a failed same-name model inventory is reported without turning the skip into a halt', async () => {
   const spec = makeSpec({ ai: { summaries: { default: 'off', tables: { new_ticket: { enabled: true } } } } });
   const { sdk } = mockSdk();
   sdk.configureRowSummary = async () => { throw modelNotSupported(); };
   sdk.queryRecords = async () => { throw new Error('no read access to msdyn_aimodel'); };
-  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'], warn: () => {} });
+  const warnings = [];
+  const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'], warn: (w) => warnings.push(w) });
   assert.ok(result.ok, 'cleanup is best-effort and must stay non-fatal');
   assert.deepStrictEqual(result.skipped.aiSummaries, ['new_ticket']);
+  assert.ok(warnings.some((w) => /no read access to msdyn_aimodel/.test(w)));
 });
 
-// Distinct from the case above: there the QUERY fails, so the inner per-row catch is never reached.
-// This one finds the row and fails the DELETE, which is the only thing that inner catch guards.
-test('ai-features phase: a failing orphan DELETE is also non-fatal', async () => {
+test('ai-features phase: an unproven model is kept without even attempting its delete', async () => {
   const spec = makeSpec({ ai: { summaries: { default: 'off', tables: { new_ticket: { enabled: true } } } } });
   const { sdk } = mockSdk();
   sdk.configureRowSummary = async () => { throw modelNotSupported(); };
   sdk.queryRecords = async (entity) => (entity === 'msdyn_aimodel' ? [{ msdyn_aimodelid: 'orphan-1' }] : []);
-  sdk.deleteRecord = async () => { throw new Error('HTTP 403: no delete privilege on msdyn_aimodel'); };
+  let deletes = 0;
+  sdk.deleteRecord = async () => { deletes++; throw new Error('HTTP 403: no delete privilege on msdyn_aimodel'); };
   const result = await runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'], warn: () => {} });
   assert.ok(result.ok, 'an undeletable orphan must not fail the build');
   assert.deepStrictEqual(result.skipped.aiSummaries, ['new_ticket']);
+  assert.strictEqual(deletes, 0);
 });
 
-// A later table failing for an UNRELATED reason throws out of the loop. Without a `finally` the
-// orphan already queued by an earlier skipped table is never swept, leaving exactly the duplicate-key
-// residue the sweep exists to remove.
-test('ai-features phase: an orphan queued before a LATER fatal error is still swept', async () => {
+// A later failure must not hide the read-only report for an earlier skipped table.
+test('ai-features phase: same-name models queued before a LATER fatal error are still reported and kept', async () => {
   const spec = makeSpec({ ai: { summaries: { default: 'off', tables: { new_customer: { enabled: true }, new_ticket: { enabled: true } } } } });
   const { sdk, calls } = mockSdk();
   const seen = [];
   sdk.configureRowSummary = async (promptSpec) => {
     seen.push(promptSpec.entityLogicalName);
-    // First table hits the environment gate (queues a sweep); the second dies for another reason.
+    // The first table queues a report; the second fails for another reason.
     if (seen.length === 1) throw modelNotSupported();
     throw new Error('HTTP 500 from .../AIModelPublish: internal server error');
   };
   sdk.queryRecords = async (entity) => (entity === 'msdyn_aimodel' ? [{ msdyn_aimodelid: 'orphan-1' }] : []);
   sdk.deleteRecord = async (entity, id) => { calls.push({ name: 'deleteRecord', args: [entity, id] }); };
+  const warnings = [];
   await assert.rejects(
-    () => runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'], warn: () => {} }),
+    () => runSdkBuild(spec, { sdk, apply: true, phases: ['ai-features'], warn: (w) => warnings.push(w) }),
     /internal server error/,
     'the unrelated failure must still surface',
   );
   const deletes = find(calls, 'deleteRecord').filter((c) => c.args[0] === 'msdyn_aimodel');
-  assert.strictEqual(deletes.length, 1, 'the queued orphan is swept even though the build then failed');
+  assert.strictEqual(deletes.length, 0);
+  assert.ok(warnings.some((w) => /kept same-name AI model orphan-1/.test(w)));
 });
 
 // `tables` keys are documented as case-insensitive, and `selectSummaryTables` honours that when
@@ -4931,13 +4936,15 @@ test('pages: crash-after-create convergence — a manifest id in EXISTENCE but N
   const spec = overviewSpec();
   const appUnique = appUniqueName(spec);
   const appDir = stagePages(spec.pages);
+  const workspaceDir = path.join(appDir, '.maker-workspace');
+  require('../lib/page-ownership-records.js').recordPageCreation(workspaceDir, appUnique, 'overview', GP_O, 'Overview', 'https://x');
   try {
     const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
     // EXISTENCE has GP_O (created + manifested); the SITEMAP is empty (the finalizer died before the subarea).
-    const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: EMPTY_SITEMAP_XML });
+    const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: EMPTY_SITEMAP_XML, pageRows: [{ uxagentprojectid: GP_O, name: 'Overview' }] });
     const uploads = [];
     const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => { uploads.push(o); return { pageId: o.pageId || GP_O }; } };
-    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, workspaceDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
     assert.strictEqual(uploads.length, 1, 'exactly one upload');
     assert.strictEqual(uploads[0].pageId, GP_O, 'UPDATE in place by the existing id, never a duplicate CREATE');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
@@ -5104,7 +5111,7 @@ test('pages: an UNREADABLE other-app sitemap HALTS pages-shared-check-failed (fa
   try {
     const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
     // The other app's sitemap XML is truncated (fails isMalformed) → fetchSitemap ok:false → unreadable.
-    const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: EMPTY_SITEMAP_XML, otherApps: [{ uniquename: 'contoso_badapp', sitemapxml: '<SiteMap><Area' }] });
+    const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: `<SiteMap><SubArea GenPageId="${GP_O}"/></SiteMap>`, pageRows: [{ uxagentprojectid: GP_O, name: 'Overview' }], otherApps: [{ uniquename: 'contoso_badapp', sitemapxml: '<SiteMap><Area' }] });
     const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => ({ pageId: o.pageId || GP_O }) };
     await assert.rejects(
       runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
@@ -5120,7 +5127,7 @@ test('pages: an env app-list failure HALTS pages-shared-check-failed (fail-close
   try {
     const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
     // failAppList: the UNFILTERED appmodule list (fetchAppsForPages) throws; the FILTERED read (membership) still works.
-    const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: EMPTY_SITEMAP_XML, failAppList: true });
+    const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: `<SiteMap><SubArea GenPageId="${GP_O}"/></SiteMap>`, pageRows: [{ uxagentprojectid: GP_O, name: 'Overview' }], failAppList: true });
     const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => ({ pageId: o.pageId || GP_O }) };
     await assert.rejects(
       runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),

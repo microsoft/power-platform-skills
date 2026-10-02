@@ -21,6 +21,9 @@ const APP_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 const SELF_UNIQUE_VALUE = 'c0ffee00-0000-4000-8000-00000000dddd';
 const SELF_SITEMAP_ID = '5111e0f2-0000-4000-8000-0000000000aa';
 const EMPTY_SITEMAP_XML = '<SiteMap><Area><Group></Group></Area></SiteMap>';
+const OVERVIEW_ID = '11111111-0000-4000-8000-000000000001';
+const DETAIL_ID = '22222222-0000-4000-8000-000000000002';
+const pageSitemap = (ids) => `<SiteMap><Area><Group>${ids.map((id) => `<SubArea GenPageId="${id}"/>`).join('')}</Group></Area></SiteMap>`;
 
 function mockSdk(opts = {}) {
   const calls = [];
@@ -57,6 +60,7 @@ function mockSdk(opts = {}) {
       }
       if (e === 'solution') return [];
       if (e === 'webresource') { if (/_pagemanifest'/.test(filter)) return opts.pageManifest ? [{ webresourceid: opts.manifestId || 'wr-manifest', content: opts.pageManifest }] : []; return []; }
+      if (e === 'uxagentproject') return (opts.pageRows || []).filter((r) => filter.includes(r.uxagentprojectid.toLowerCase()));
       if (e === 'systemform') return [];
       if (e === 'savedquery') return [{ savedqueryid: 'defview-x', isdefault: true }];
       return [{ publisherid: 'pub-1' }];
@@ -97,7 +101,7 @@ function mockGenpageCli(live = []) {
     upload: async (o) => {
       let content = '';
       try { content = fs.readFileSync(o.codeFile, 'utf8'); } catch { /* nothing */ }
-      const pageId = o.pageId || `gp-${String(o.name).toLowerCase()}`;
+      const pageId = o.pageId || (o.name === 'Detail' ? DETAIL_ID : OVERVIEW_ID);
       uploads.push({ name: o.name, requestedId: o.pageId, resolvedId: pageId, codeFile: o.codeFile, content });
       return { pageId };
     },
@@ -140,7 +144,7 @@ test('deploy: nav page uploads RESOLVED content (target id, no PAGEREF_); canoni
     const genpageCli = mockGenpageCli();
     await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES });
     const overviewUpload = genpageCli.uploads.find((u) => u.name === 'Overview');
-    assert.ok(overviewUpload.content.includes('gp-detail'), 'uploaded content carries the resolved target id');
+    assert.ok(overviewUpload.content.includes(DETAIL_ID), 'uploaded content carries the resolved target id');
     assert.ok(!/PAGEREF_/.test(overviewUpload.content), 'no PAGEREF_ token remains in the uploaded (staged) bytes');
     assert.ok(fs.readFileSync(path.join(appDir, 'overview.tsx'), 'utf8').includes('"PAGEREF_detail"'), 'canonical .tsx untouched');
     const stagingRoot = path.join(appDir, '.maker-workspace', '.pageref-deploy');
@@ -222,17 +226,17 @@ test('deploy: create-absent-first mints target ids, uploads each page ONCE, reco
     const last = writes[writes.length - 1];
     const content = last.name === 'updateWebResource' ? last.args[1].content : last.args[0].content;
     const byKey = Object.fromEntries(JSON.parse(content).pages.map((p) => [p.key, p.pageId]));
-    assert.strictEqual(byKey.overview, 'gp-overview');
-    assert.strictEqual(byKey.detail, 'gp-detail');
+    assert.strictEqual(byKey.overview, OVERVIEW_ID);
+    assert.strictEqual(byKey.detail, DETAIL_ID);
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
 test('deploy: a rebuild re-binds ids from the live enumeration and issues only UPDATEs (no duplicate CREATE)', async () => {
   const { appDir, spec } = makeTwoPageApp();
   try {
-    const live = [{ pageId: 'gp-overview', name: 'Overview' }, { pageId: 'gp-detail', name: 'Detail' }];
-    const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: 'gp-overview' }, { key: 'detail', name: 'Detail', pageId: 'gp-detail' }] }), 'utf8').toString('base64');
-    const { sdk } = mockSdk({ pageManifest: manifest, manifestId: 'wr-manifest' });
+    const live = [{ pageId: OVERVIEW_ID, name: 'Overview' }, { pageId: DETAIL_ID, name: 'Detail' }];
+    const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: OVERVIEW_ID }, { key: 'detail', name: 'Detail', pageId: DETAIL_ID }] }), 'utf8').toString('base64');
+    const { sdk } = mockSdk({ pageManifest: manifest, manifestId: 'wr-manifest', liveSitemapXml: pageSitemap([OVERVIEW_ID, DETAIL_ID]), pageRows: live.map((p) => ({ uxagentprojectid: p.pageId, name: p.name })) });
     const genpageCli = mockGenpageCli(live);
     await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES });
     assert.ok(genpageCli.uploads.length > 0);
@@ -268,7 +272,7 @@ function makeDupNamePageApp() {
 test('deploy: a STALE duplicate-named page (its pageId absent from live) HALTS before creating a dupe', async () => {
   const { appDir, spec, GA, manifest } = makeDupNamePageApp();
   try {
-    const { sdk } = mockSdk({ pageManifest: manifest, manifestId: 'wr-manifest' });
+    const { sdk } = mockSdk({ pageManifest: manifest, manifestId: 'wr-manifest', liveSitemapXml: pageSitemap([GA]), pageRows: [{ uxagentprojectid: GA, name: 'Supplier Scorecard' }] });
     const genpageCli = mockGenpageCli([{ pageId: GA, name: 'Supplier Scorecard' }]); // only GA exists; GB is stale
     await assert.rejects(
       runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES }),
@@ -281,7 +285,7 @@ test('deploy: a STALE duplicate-named page (its pageId absent from live) HALTS b
 test('deploy: two duplicate-named pages BOTH live (fresh download) build as UPDATEs — no false halt (the repro is safe)', async () => {
   const { appDir, spec, GA, GB, manifest } = makeDupNamePageApp();
   try {
-    const { sdk } = mockSdk({ pageManifest: manifest, manifestId: 'wr-manifest' });
+    const { sdk } = mockSdk({ pageManifest: manifest, manifestId: 'wr-manifest', liveSitemapXml: pageSitemap([GA, GB]), pageRows: [GA, GB].map((id) => ({ uxagentprojectid: id, name: 'Supplier Scorecard' })) });
     const genpageCli = mockGenpageCli([{ pageId: GA, name: 'Supplier Scorecard' }, { pageId: GB, name: 'Supplier Scorecard' }]); // BOTH exist
     await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES });
     assert.strictEqual(genpageCli.uploads.length, 2, 'both dupe-named pages uploaded');
@@ -462,11 +466,11 @@ test('changed-only selectedKeysOnly: uploads ONLY the selected page(s), never cl
       appShell: { areas: [{ label: 'Main', groups: [{ label: 'G', subAreas: [{ page: 'overview', title: 'Overview' }, { page: 'detail', title: 'Detail' }] }] }] },
     };
     // Both pages already exist (seed enumerate + a base64 manifest so reconcile resolves both to live ids).
-    const live = [{ pageId: 'gp-overview', name: 'Overview' }, { pageId: 'gp-detail', name: 'Detail' }];
+    const live = [{ pageId: OVERVIEW_ID, name: 'Overview' }, { pageId: DETAIL_ID, name: 'Detail' }];
     const genpageCli = mockGenpageCli(live);
-    const manifest = { schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: 'gp-overview' }, { key: 'detail', name: 'Detail', pageId: 'gp-detail' }] };
+    const manifest = { schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: OVERVIEW_ID }, { key: 'detail', name: 'Detail', pageId: DETAIL_ID }] };
     const manifestB64 = Buffer.from(JSON.stringify(manifest), 'utf8').toString('base64');
-    const { sdk } = mockSdk({ pageManifest: manifestB64 });
+    const { sdk } = mockSdk({ pageManifest: manifestB64, liveSitemapXml: pageSitemap([OVERVIEW_ID, DETAIL_ID]), pageRows: live.map((p) => ({ uxagentprojectid: p.pageId, name: p.name })) });
     const r = await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PAGES_ONLY, changedOnly: { fastApply: true, resolvedAppId: APP_ID, skipSitemapFinalize: true, selectedKeys: ['overview'] } });
     assert.ok(r.ok);
     const uploaded = genpageCli.uploads.map((u) => u.name);

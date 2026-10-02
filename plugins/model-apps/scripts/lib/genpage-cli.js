@@ -341,9 +341,9 @@ function makeGenpageCli(env, deps = {}) {
   // Env-WIDE EXISTENCE enumeration (NO --app-id): returns the set of ALL generative-page ids that exist
   // in the environment, regardless of which app they belong to or whether they are in any sitemap.
   // `--include-unpublished` ensures a just-created draft counts before it has been finalized into a
-  // sitemap — this is what makes uncertain-CREATE recovery crash-safe (C2): a page created+manifested
-  // but not yet sitemap-finalized still appears here and is reused on a second run instead of being
-  // created again. Reuses classifyListOutput (fail-closed): an unrecognized/incomplete listing NEVER
+  // sitemap, so uncertain results can report their candidates and receipted build creates remain
+  // discoverable before placement. Enumeration itself grants no ownership or update authority.
+  // Reuses classifyListOutput (fail-closed): an unrecognized/incomplete listing NEVER
   // masquerades as an empty environment. `ids` are lower-cased for case-insensitive set membership.
   async function enumerateEnv() {
     let lastErr = '';
@@ -364,16 +364,25 @@ function makeGenpageCli(env, deps = {}) {
     return { ok: false, ids: [], error: `pac genpage list (env-wide) failed after ${attempts} attempt(s): ${lastErr}` };
   }
 
+  async function readPageRow(pageId, select) {
+    if (!GUID_ONLY_RE.test(String(pageId || ''))) throw new Error(`'${pageId}' is not a page id`);
+    const request = deps.request || dataverseRequest;
+    const res = await request(env, 'GET', `uxagentprojects(${pageId})?$select=${select}`);
+    if (!res || !Number.isInteger(res.status) || res.status < 200 || res.status >= 300) {
+      throw new Error(`reading page ${pageId}'s ${select === 'name' ? 'name' : 'creation details'} returned HTTP ${res && res.status}`);
+    }
+    return res.data;
+  }
+
   return {
     // Create (no pageId) or update (with pageId) a page's content. Returns { pageId }. Retries transient
     // pac failures. On an UNCERTAIN CREATE (non-zero, or zero-exit with no Page ID) resolves via a
-    // STRICT ENV-WIDE before/after id diff (C2 — addenda overrides the plan here): the env-wide id set
+    // STRICT ENV-WIDE before/after id diff: the env-wide id set
     // is snapshotted BEFORE the first CREATE so the diff reveals exactly which id appeared.
-    //   newIds.length === 1 → adopt that id (UPDATE it; I7 guard verifies returned id)
+    //   newIds.length >= 1 → report stored details and stop; only the user can confirm ownership
     //   newIds.length === 0 → CREATE did NOT land → safe to retry
-    //   newIds.length > 1   → THROW (ambiguous; concurrent creates or noise — never guess)
-    // NO name matching anywhere in recovery (names are unreliable — app-scoped list misses
-    // pre-sitemap pages; env-wide names drift with sitemap titles). Any enumerateEnv failure → THROW.
+    // Names and dates describe candidates, never establish identity. Read failures also stop,
+    // with the candidate id retained in the diagnostic. No uncertain result changes the command to UPDATE.
     async upload({ appId, pageId, codeFile, compiledCodeFile, name, prompt, agentMessage, dataSources,
       addToSitemap, model, connectors, actions }) {
       // pac REQUIRES both a prompt and an agent-message for a new page. Resolve the effective text
@@ -432,12 +441,8 @@ function makeGenpageCli(env, deps = {}) {
           if (addToSitemap && !pid) args.push('--add-to-sitemap');
           return run(args);
         };
-        let pid = pageId;
+        const pid = pageId;
         let lastErr = '';
-        // Set when a CREATE asked for sitemap placement but recovery adopted an existing page id,
-        // turning the retry into an UPDATE — which cannot carry --add-to-sitemap. The page then
-        // exists but is UNPLACED, and reporting plain success would hide that.
-        let sitemapPending = false;
         // Snapshot taken once (lazily on the first CREATE attempt) so the before/after diff is anchored
         // to the exact env state before this operation. Fail-closed: if we can't snapshot, we can't
         // safely attribute a later uncertain result — halt to prevent a blind duplicate.
@@ -452,13 +457,12 @@ function makeGenpageCli(env, deps = {}) {
             }
             beforeIds = new Set(before.ids);
           }
-          const pidBeforeAttempt = pid;
           const r = await once(pid);
           if (r.status === 0) {
             const id = parsePageId(r.stdout);
             if (id) {
-              // I7 guard: when performing an UPDATE (pid is set — whether caller-provided or adopted after
-              // uncertain-CREATE reconciliation), the returned Page ID MUST equal the pid we used. A mismatch
+              // When performing an explicitly requested UPDATE, the returned Page ID MUST equal
+              // the pid we used. A mismatch
               // means pac silently operated on a different page — halt rather than let a wrong record persist.
               // Case-insensitive: PAC can normalize GUID casing across writes.
               if (pid && id.toLowerCase() !== pid.toLowerCase()) {
@@ -466,15 +470,15 @@ function makeGenpageCli(env, deps = {}) {
                   `pac genpage upload for '${name || '(unnamed)'}': UPDATE returned an unexpected Page ID (got ${id}, expected ${pid}) — refusing to persist a mismatched update`
                 );
               }
-              return sitemapPending ? { pageId: id, sitemapPending: true } : { pageId: id };
+              return { pageId: id };
             }
             lastErr = `returned no Page ID: ${pacDiagnostic(r)}`;
           } else {
             lastErr = pacDiagnostic(r);
           }
           // Uncertain CREATE: no caller pid and result was non-zero or zero-without-Page-ID.
-          // Strict env-wide before/after id diff — never use name matching (names drift; app-scoped
-          // lists miss pre-sitemap pages; a page's list "Name" is its sitemap title, not its identity).
+          // The env-wide diff discovers candidates, not ownership. A concurrent create can have
+          // the same name and date, so even a single candidate cannot authorize an automatic UPDATE.
           if (!pid) {
             const after = await enumerateEnv();
             if (!after.ok) {
@@ -483,34 +487,35 @@ function makeGenpageCli(env, deps = {}) {
               );
             }
             const newIds = after.ids.filter((id) => !beforeIds.has(id));
-            if (newIds.length === 1) {
-              pid = newIds[0]; // CREATE landed → adopt; I7 guard verifies returned id on the UPDATE
-              // The adopted retry runs as an UPDATE, so `--add-to-sitemap` is no longer emitted.
-              // Record that the placement the caller asked for did not happen rather than letting
-              // a successful-looking result imply a page that is actually unreachable from the nav.
-              if (addToSitemap) sitemapPending = true;
-            } else if (newIds.length === 0) {
-              // CREATE did NOT land → safe to retry (pid stays undefined; beforeIds unchanged)
+            if (newIds.length > 0) {
+              const details = [];
+              let readFailure;
+              for (const candidate of newIds) {
+                try {
+                  // uxagentprojects(<id>)?$select=name,createdon, e.g.
+                  // { "name": "Contoso Overview", "createdon": "2026-01-01T00:00:00Z" }.
+                  // These fields are diagnostic data only, not permission to update the row.
+                  const row = await readPageRow(candidate, 'name,createdon');
+                  const storedName = row && typeof row.name === 'string' ? JSON.stringify(unescapePacName(row.name)) : '[unreadable]';
+                  const createdon = row && typeof row.createdon === 'string' ? JSON.stringify(row.createdon) : '[unreadable]';
+                  details.push(`${candidate}: stored name ${storedName}, createdon ${createdon}`);
+                } catch (e) {
+                  readFailure = readFailure || e;
+                  details.push(`${candidate}: stored name [unreadable], createdon [unreadable]; read failed (${(e && e.message) || e})`);
+                }
+              }
+              throw new Error(`pac genpage upload for '${name || '(unnamed)'}' had an uncertain create (ambiguous ownership). Candidates: ${details.join('; ')}. Refusing to adopt or update any candidate. If it is yours, re-run the upload as an update with ${newIds.map((id) => `--page-id ${id}`).join(' or ')}; otherwise leave it and re-run the create.`, readFailure ? { cause: readFailure } : undefined);
             } else {
-              throw new Error(
-                `pac genpage upload for '${name || '(unnamed)'}': ${newIds.length} new pages appeared after an uncertain create — cannot attribute (ambiguous)`
-              );
+              // CREATE did NOT land → safe to retry (pid stays undefined; beforeIds unchanged)
             }
           }
           // A DETERMINISTIC failure will repeat for the same inputs, so retrying it only burns the
           // caller's time and buries the real message under "after 3 attempt(s)". Break out and
           // report it immediately.
           //
-          // The test is "will the NEXT attempt run the SAME command?", not "is this a create?".
-          // Keying on `!pid` got that wrong in one direction: an ordinary update — where the caller
-          // supplied `pageId`, so `pid` is truthy from the very first attempt — sat through all three
-          // attempts on a fault that could never resolve itself. The case the guard must NOT break is
-          // narrower than "pid is set": it is the single attempt in which an uncertain create was
-          // just ADOPTED, because the retry then becomes an update by id and the previous command's
-          // argument fault says nothing about it. Comparing `pid` across the attempt identifies
-          // exactly that transition.
-          const commandChanged = pid !== pidBeforeAttempt;
-          if (!commandChanged && isDeterministic(lastErr)) break;
+          // The next attempt always uses the same explicit id (or remains CREATE); recovery
+          // never changes command identity, so deterministic failures must stop in both modes.
+          if (isDeterministic(lastErr)) break;
           if (i < attempts - 1) await sleep(500 * (i + 1));
         }
         throw new Error(`pac genpage upload failed for '${name || '(unnamed)'}': ${lastErr}`);
@@ -558,11 +563,8 @@ function makeGenpageCli(env, deps = {}) {
     // az token). The row cannot be written there: a PATCH of `name` answers 204 and changes nothing
     // (live-measured), so pac's `--name` is the only way to set it.
     async pageName(pageId) {
-      if (!GUID_ONLY_RE.test(String(pageId || ''))) throw new Error(`'${pageId}' is not a page id`);
-      const request = deps.request || dataverseRequest;
-      const res = await request(env, 'GET', `uxagentprojects(${pageId})?$select=name`);
-      if (!res || res.status < 200 || res.status >= 300) throw new Error(`reading page ${pageId}'s name returned HTTP ${res && res.status}`);
-      return res.data && typeof res.data.name === 'string' ? res.data.name : null;
+      const row = await readPageRow(pageId, 'name');
+      return row && typeof row.name === 'string' ? row.name : null;
     },
     // Why pac, as installed here, cannot be handed `value` as an argument — null when it can. A `pac.cmd` shim
     // (Windows) cannot receive a double quote or `%` unchanged, and the runner refuses such a value rather than

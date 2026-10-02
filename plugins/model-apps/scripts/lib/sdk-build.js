@@ -15,6 +15,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { sha256 } = require('./hash.js');
+const { resolveAppSource } = require('./app-source-path.js');
+const { readPageOwnership, recordPageCreation, creationIds } = require('./page-ownership-records.js');
 // normalizePageSource: read the page source from the discriminated `source` field (v2) or the
 // legacy top-level `codeFile` (pre-migration). PHASES: canonical ordered phase list — imported
 // here so the engine and the stage layer can never drift.
@@ -90,7 +92,7 @@ const {
   cellFitsInRow,
   rowsFromCells,
 } = require('./artifact-intent.js');
-const { makeGenpageCli, suppliedButBlank } = require('./genpage-cli.js');
+const { makeGenpageCli, suppliedButBlank, unescapePacName } = require('./genpage-cli.js');
 const { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsControlOf, claimedByAuthoredName, planOrderMoves } = require('./form-container-match.js');
 const { rowOccupancy, fitsGrid, strandedRows } = require('./form-occupancy.js');
 const { manifestResourceName, buildManifest, serializeManifest, parseManifestBase64, reconcilePageIds } = require('./page-manifest.js');
@@ -429,7 +431,7 @@ function webResourceOpts(wr, appDir) {
   if (wr.description) o.description = wr.description;
   if (wr.contentBase64 !== undefined) o.contentBase64 = wr.contentBase64;
   else if (wr.content !== undefined) o.content = wr.content;
-  else if (wr.contentPath) o.content = fs.readFileSync(path.isAbsolute(wr.contentPath) ? wr.contentPath : path.join(appDir || '.', wr.contentPath), 'utf8');
+  else if (wr.contentPath) o.content = fs.readFileSync(resolveAppSource(appDir, wr.contentPath), 'utf8');
   else o.content = '';
   return o;
 }
@@ -3976,37 +3978,16 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // Definition rows only — see businessRuleFilter. Scoped to the entity as well as the name so
         // a same-named rule on a DIFFERENT table is not mistaken for this one.
         filter: businessRuleFilter(rule.name, entityLogical),
-        // `top: 50` and ORDERED, not `top: 1`. Two reasons, both measured:
-        //  * A previous build (before the SDK's double-write fix) could have left duplicates. With
-        //    `top: 1` this branch reused one and skipped the cleanup entirely, so both rules kept
-        //    firing forever — the sweep below only ever ran after a fresh create.
-        //  * `top: 1` with no ordering returns an ARBITRARY row, so the one adopted as "the" rule
-        //    could be the faulted orphan rather than the good one. Oldest-first makes the survivor
-        //    deterministic and prefers the row that was committed first.
+        // Oldest-first keeps reuse deterministic. Read every matching definition so the warning
+        // names all pre-existing same-name rows; their names do not make them disposable.
         orderBy: 'createdon asc',
-        top: 50,
+        paginate: true,
       });
       const existingId = existing && existing[0] && existing[0].workflowid;
       if (existingId) {
-        // Legacy duplicates: everything beyond the first row is residue from a build that predates
-        // the SDK fix. Remove it here as well as on the create path, so a rebuild repairs an org
-        // instead of preserving the problem. Best-effort — these rows frequently refuse both
-        // deactivate (400 0x80060015) and delete (405 0x80040227), and a failure to clean one must
-        // not fail the build; `--verify` reports the surviving duplicates.
-        const legacyDupes = (existing || []).slice(1);
-        for (const extra of legacyDupes) {
-          try { if (extra.statecode === 1) await provision.updateRecord('workflow', extra.workflowid, { statecode: 0, statuscode: 1 }); } catch { /* try the delete anyway */ }
-          let removed = false;
-          let why = '';
-          // Capture the REAL reason instead of asserting one. A 403 (no delete privilege), a 429, or
-          // a transport failure look identical to the wedged-row case from the outside, and a warning
-          // that names the wrong cause sends the reader to Maker to hand-delete a row they actually
-          // lack rights to touch.
-          try { await provision.deleteRecord('workflow', extra.workflowid); removed = true; } catch (e) { why = (e && e.message) ? String(e.message).replace(/\s+/g, ' ').slice(0, 200) : String(e); }
+        for (const extra of (existing || []).slice(1)) {
           if (typeof opts.warn === 'function') {
-            opts.warn(removed
-              ? `business rule "${rule.name}": removed a duplicate left by an earlier build (${extra.workflowid})`
-              : `business rule "${rule.name}": a duplicate left by an earlier build (${extra.workflowid}) could not be removed (${why}). Only one copy should run — remove it in Maker if the reason above is not transient. See issue #482.`);
+            opts.warn(`business rule "${rule.name}" on ${entityLogical}: kept pre-existing same-name rule ${extra.workflowid}; not attributable to this run. Review any desired cleanup separately.`);
           }
         }
         // Reuse — but a rule that EXISTS is not necessarily a rule that RUNS. A deployed rule left in
@@ -4089,49 +4070,28 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // NOTE: the method name is deliberately NOT written in call form anywhere in this file.
         // `sdk-surface-contract.test.js` scans engine source for `sdk.<method>(` and would read a
         // mention in prose as a live call, then demand it back on the vendored bundle.
+        // Verify discovery before the push; a malformed workflow id set must not be treated as
+        // empty. workflows returns { "workflowid": "<id>" }. This read grants no cleanup authority.
+        const beforeCreate = await provision.queryRecords('workflow', {
+          select: ['workflowid'], filter: businessRuleFilter(rule.name, entityLogical), paginate: true,
+        });
+        if (!Array.isArray(beforeCreate) || beforeCreate.some((w) => !w || typeof w.workflowid !== 'string' || !w.workflowid.trim())) {
+          throw new Error(`business rule "${rule.name}" on ${entityLogical}: before-create id snapshot is unreadable — refusing to push or delete rules without a complete id set`);
+        }
         const pushed = requireSuccessfulPush(await provision.pushArtifact('businessRule', art.id), `business rule ${rule.name}`, opts.warn);
         result.created.businessRules[`${entityLogical}|${rule.name}`] = pushed.id;
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.workflow, solutionUniqueName: sol.uniqueName });
-        // DE-DUPLICATE — legacy repair only.
-        //
-        // The SDK USED to fall back to a classic `workflows` row on a qualifying 400, and that
-        // fallback assumed the 400 meant "nothing was written". Live measurement showed the platform
-        // commits the row and THEN faults generating its UiData, so the fallback wrote a SECOND copy
-        // and both fired. Observed as two rows ~5s apart in one run, one server-assigned and one
-        // carrying the client-generated id. https://github.com/microsoft/power-platform-skills/issues/482
-        //
-        // The fallback no longer exists in the vendored SDK — business rules are written through the
-        // bound member or not at all — so this sweep can no longer find a duplicate THIS build made.
-        // It is KEPT because it still repairs an org that a PREVIOUS build damaged: those rows are
-        // already committed and frequently refuse both deactivate and delete, so they will not
-        // disappear on their own. On a clean org it costs exactly one query and finds nothing.
-        //
-        // Scope is deliberately tight: only rules matching THIS rule's exact name and entity, and
-        // only ones that are not the id the push returned. That cannot touch a rule this build did
-        // not just author.
+        // The SDK returns the primary saved id, which is kept. It supplies no receipts for other
+        // definitions, so a before/after delta cannot distinguish its retries from concurrent creates.
         const dupes = await provision.queryRecords('workflow', {
           select: ['workflowid', 'statecode'],
           filter: businessRuleFilter(rule.name, entityLogical),
-          top: 50,
+          paginate: true,
         });
         const extras = (dupes || []).filter((w) => String(w.workflowid).toLowerCase() !== String(pushed.id).toLowerCase());
         for (const extra of extras) {
-          // Deactivate and delete are attempted INDEPENDENTLY. The orphan is often wedged — the
-          // platform answers "Invalid operation - You cannot activate or deactivate this business
-          // rule" for a row whose UiData generation faulted — and an earlier version wrapped both in
-          // one try, so a failed deactivate meant the delete was never even attempted. Deactivation
-          // is also asynchronous, so a row that refuses it now may become deletable shortly after.
-          try { if (extra.statecode === 1) await provision.updateRecord('workflow', extra.workflowid, { statecode: 0, statuscode: 1 }); } catch { /* try the delete anyway */ }
-          let removed = false;
-          let why = '';
-          // Report the REAL failure rather than asserting the wedged-row cause: a 403, 429 or
-          // transport error is indistinguishable from outside, and naming the wrong one misdirects
-          // whoever reads the warning.
-          try { await provision.deleteRecord('workflow', extra.workflowid); removed = true; } catch (e) { why = (e && e.message) ? String(e.message).replace(/\s+/g, ' ').slice(0, 200) : String(e); }
           if (typeof opts.warn === 'function') {
-            opts.warn(removed
-              ? `business rule "${rule.name}": removed a duplicate left by an earlier build (${extra.workflowid})`
-              : `business rule "${rule.name}": an earlier build left a duplicate (${extra.workflowid}) that could not be removed automatically (${why}). Only one copy should run — remove it in Maker if the reason above is not transient. See issue #482.`);
+            opts.warn(`business rule "${rule.name}" on ${entityLogical}: kept same-name rule ${extra.workflowid}; not attributable to this run. Review any desired cleanup separately.`);
           }
         }
       }, {
@@ -4624,8 +4584,51 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // Reconcile by EXISTENCE (create-vs-reuse) + MEMBERSHIP (spec-pageId provenance, C3). Conflicts (a
       // spec pageId that is not a GUID, a spec/manifest disagreement where both ids are live, or two keys
       // → one live id) HALT — refusing to overwrite/misbind an arbitrary page.
-      const { keyToId, conflicts } = reconcilePageIds(spec.pages, manifest, enumd.ids, sitemapIds);
-      if (conflicts.length) throw new BuildHalt(`generative-page identity conflict(s): ${JSON.stringify(conflicts)} — refusing to overwrite/misbind a page. Resolve the duplicate/mismatched id(s) in the spec/manifest and rebuild.`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
+      const placed = new Set(sitemapIds.map((id) => String(id).toLowerCase()));
+      const live = new Set(enumd.ids.map((id) => String(id).toLowerCase()));
+      const declaredKeys = new Set((spec.pages || []).map((p) => p.key || p.name));
+      let ownership;
+      try { ownership = readPageOwnership(opts.workspaceDir, appUnique, opts.env); } catch (e) {
+        throw new BuildHalt(`could not read local page creation receipts (${e.message}); refusing to bind off-sitemap ids`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
+      }
+      const createdIds = creationIds(ownership);
+      const storedNames = new Map();
+      const nameReadErrors = [];
+      const nameCandidates = [
+        ...((manifest && manifest.pages) || []),
+        ...(spec.pages || []).map((p) => ({ key: p.key || p.name, pageId: p.pageId })),
+        ...ownership.created,
+      ];
+      const nameReads = new Set();
+      for (const mp of nameCandidates) {
+        const id = String(mp.pageId || '').toLowerCase();
+        if (!declaredKeys.has(mp.key) || !live.has(id) || placed.has(id) || nameReads.has(id)) continue;
+        nameReads.add(id);
+        try {
+          // queryRecords returns uxagentprojects rows such as
+          // { "uxagentprojectid": "<id>", "name": "Overview" }; listing/manifest labels
+          // are not stored-name proof. Only interrupted, unplaced creates need this read.
+          const rows = await provision.queryRecords('uxagentproject', {
+            select: ['uxagentprojectid', 'name'], filter: `uxagentprojectid eq ${id}`, top: 1,
+          });
+          const row = (rows || []).find((r) => String(r.uxagentprojectid).toLowerCase() === id);
+          if (!row || typeof row.name !== 'string' || !row.name) throw new Error('stored page name is unreadable');
+          storedNames.set(id, unescapePacName(row.name));
+        } catch (e) {
+          nameReadErrors.push(`${id}: ${(e && e.message) || e}`);
+        }
+      }
+      const { keyToId, conflicts } = reconcilePageIds(spec.pages, manifest, enumd.ids, sitemapIds, storedNames, createdIds);
+      if (conflicts.length) {
+        const recovery = conflicts.filter((c) => c.reason === 'unproven-manifest-id').map((c) => {
+          const name = JSON.stringify(c.storedName || c.requestedName || '(unreadable name)');
+          const proof = c.hasCreationReceipt
+            ? 'its local creation record does not corroborate the stored name'
+            : 'this workspace holds no record that this app created it in this environment';
+          return `page ${c.manifestId} (${name}) is not in this app's navigation and ${proof}: if it is this app's page, add it to the app's navigation in the maker and re-run; if not, remove the stale id from the manifest/spec (or delete the page) and re-run`;
+        });
+        throw new BuildHalt(`generative-page identity conflict(s): ${JSON.stringify(conflicts)}${nameReadErrors.length ? `; stored-name reads failed: ${nameReadErrors.join('; ')}` : ''} — refusing to overwrite/misbind a page. ${recovery.length ? recovery.join('; ') : 'Resolve the duplicate/mismatched id(s) in the spec/manifest and rebuild.'}`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
+      }
 
       // DUPLICATE-NAME MATERIALIZATION GATE (post-reconciliation). validateAppSpec TOLERATES a duplicate
       // page name only when every colliding page is PRE-EXISTING (carries a pageId) — but a spec pageId is a
@@ -4688,9 +4691,19 @@ async function runSdkBuildPhases(spec, opts, owed) {
       }
 
       const persistNow = async () => { const pr = await persistPageManifest(provision, spec, keyToId, sol, appUnique, manifestId, lastManifestContent); manifestId = pr.id; lastManifestContent = pr.content; };
+      const recordCreate = (p, id) => {
+        // No workspace means no durable creation authority. Normal CLI builds always supply one.
+        if (!opts.workspaceDir) {
+          if (typeof opts.warn === 'function') opts.warn(`page "${p.name}" created as ${id}, but no workspace was supplied; an off-sitemap retry will require explicit resolution.`);
+          return;
+        }
+        try { recordPageCreation(opts.workspaceDir, appUnique, p.key || p.name, id, p.name, opts.env); } catch (e) {
+          throw new BuildHalt(`page "${p.name}" was created as ${id}, but its local receipt could not be saved (${e.message}); stopping before manifest or sitemap changes`, { phase: 'pages', code: 'pages-creation-receipt-failed', recoverable: false });
+        }
+      };
 
       const keyOf = (p) => p.key || p.name;
-      const canonicalPath = (p) => path.resolve(opts.appDir || '.', normalizePageSource(p).codeFile);
+      const canonicalPath = (p) => resolveAppSource(opts.appDir, normalizePageSource(p).codeFile);
       const implemented = [];
       // `spec.pages || []` — the phase can run with no spec pages (a removal-only / detach run reaches here
       // for the removal gate + sitemap finalize), so never assume spec.pages is an array.
@@ -4748,6 +4761,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             const key = keyOf(p);
             if (keyToId.has(key) || !navTargets.has(key)) continue; // only ABSENT targets need pre-minting
             const up = await genpageCli.upload({ appId: result.created.app, codeFile: canonicalPath(p), name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources, model: p.model });
+            recordCreate(p, up.pageId);
             keyToId.set(key, up.pageId);
             result.created.pages[key] = up.pageId;
             mintedKeys.add(key);
@@ -4788,6 +4802,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           // `model` rides along because pac stores whatever `--model` an upload sends: re-uploading without it
           // wiped a deployed page's model id to "". A downloaded spec carries it (pages[].model).
           const up = await genpageCli.upload({ appId: result.created.app, pageId: requestedId, codeFile, name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources, model: p.model });
+          if (!requestedId) recordCreate(p, up.pageId);
           // I7: an UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at
           // a stale target. Case-insensitive (Dataverse may echo a differently-cased GUID).
           if (requestedId && String(up.pageId).toLowerCase() !== String(requestedId).toLowerCase()) throw new BuildHalt(`page "${p.name}" UPDATE returned a different id (${up.pageId} != ${requestedId}) — refusing to finalize with an inconsistent target`, { phase: 'pages', code: 'pages-update-identity-mismatch', recoverable: false });
@@ -5048,8 +5063,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // rest of the build finish. Nothing wrong is written — the summary simply does not exist, and the
     // skip is recorded on the result so the run summary reports it instead of implying it was created.
     let aiSummaryGateWarned = false;
-    // Tables whose skipped publish may have left a committed `msdyn_aimodel` row behind.
-    const pendingAiSummarySweeps = [];
+    const pendingAiSummaryReports = [];
     // `tables` keys are documented as entity schemaNames matched CASE-INSENSITIVELY, and
     // `selectSummaryTables` honours that when deciding what to build. Looking the override back up by
     // exact (or merely lower-cased) key therefore selected the table but dropped its `instruction` and
@@ -5076,8 +5090,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       //   'dbo.msdyn_AIModelBase' with unique index 'ndx_Uniquename'. The duplicate key value is
       //   (<table> row summary, ...)
       // on the NEXT build. Without this, skipping the licence gate would make the first build pass
-      // and every rebuild fail — strictly worse than failing consistently. The orphan is also swept
-      // below so the row does not accumulate.
+      // and every rebuild fail. A same-name model is reported below, never deleted by name.
       //
       // The two are reported as DIFFERENT reasons: telling an operator their environment is
       // unlicensed when the real cause is a leftover row sends them to the wrong place entirely.
@@ -5086,31 +5099,25 @@ async function runSdkBuildPhases(spec, opts, owed) {
         ? 'unsupported in this environment'
         : false;
     };
-    // Best-effort sweep of the row the failed publish left behind. The SDK names the model
-    // "<entity> row summary" — which is also the value the platform quotes back in the duplicate-key
-    // error above ("The duplicate key value is (zza_ticket row summary, ...)"), so this matches the
-    // real stored name rather than a guess.
-    //
-    // FILTERED SERVER-SIDE, not fetched-and-scanned. `msdyn_aimodel` is a shared system table written
-    // by AI Builder, Copilot Studio and other features, so a real org can hold far more rows than any
-    // safety cap — an unfiltered page would silently fail to contain the orphan, leaving it forever
-    // and making every rebuild fail on the duplicate key. That is the exact failure this sweep exists
-    // to prevent, so the query must not depend on the orphan happening to land in the first page.
-    //
-    // Failure here is never fatal: the build already decided to skip, and a leftover row degrades the
-    // next run at worst — it must not turn a warn-and-continue back into a halt.
-    const sweepOrphanSummaryModel = async (logical) => {
+    // configureRowSummary can return an existing configuration, and a refused publish throws
+    // without returning its new model id. The SDK's own post-publish rollback uses the exact id
+    // it created; this caller has no such receipt after a throw, so matching names only justify
+    // a read-only report. A remaining model is recoverable; deleting an unproven one is not.
+    const reportKeptSummaryModels = async (logical) => {
       const modelName = `${String(logical).toLowerCase()} row summary`;
       try {
         const rows = await provision.queryRecords('msdyn_aimodel', {
-          select: ['msdyn_aimodelid'],
+          select: ['msdyn_aimodelid', 'msdyn_name'],
           filter: `msdyn_name eq '${odataLit(modelName)}'`,
-          top: 5,
+          paginate: true,
         });
         for (const row of rows || []) {
-          try { await provision.deleteRecord('msdyn_aimodel', row.msdyn_aimodelid); } catch { /* leave it; the next run reports it again */ }
+          if (typeof opts.warn === 'function') opts.warn(`row summary for ${logical}: kept same-name AI model ${row.msdyn_aimodelid}; this attempt returned no created-model id, so cleanup cannot be attributed to this run.`);
         }
-      } catch { /* no read access to msdyn_aimodel is not a build failure */ }
+        if (!(rows && rows.length) && typeof opts.warn === 'function') opts.warn(`row summary for ${logical}: no created-model id was returned; model cleanup was not attempted.`);
+      } catch (e) {
+        if (typeof opts.warn === 'function') opts.warn(`row summary for ${logical}: could not list same-name AI models (${(e && e.message) || e}); no model was deleted because this attempt returned no created-model id.`);
+      }
     };
     try {
       for (const logical of tables) {
@@ -5127,13 +5134,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
             const reason = aiSummaryUnsupported(err);
             if (!reason) return false;
             result.skipped.aiSummaries.push(logical);
-            pendingAiSummarySweeps.push(logical);
+            pendingAiSummaryReports.push(logical);
             // Warn ONCE per build: on a gated environment every table skips for the same reason, and
             // N copies of the same paragraph buries the rest of the output.
             if (!aiSummaryGateWarned && typeof opts.warn === 'function') {
               aiSummaryGateWarned = true;
               opts.warn(reason === DUPLICATE_MODEL_REASON
-                ? `AI row summaries were NOT created: an AI model named "<table> row summary" already exists for a table in this spec, so the platform refused to create another (duplicate key on 'ndx_Uniquename'). This is normally residue from an earlier run whose publish was refused after the model row was committed; the leftover row is removed so the next build can retry. Everything else in the app was built normally.`
+                ? `AI row summaries were NOT created: an AI model named "<table> row summary" already exists for a table in this spec, so the platform refused to create another (duplicate key on 'ndx_Uniquename'). Same-name models are kept because this attempt returned no created-model id. Review the reported ids before any separate cleanup. Everything else in the app was built normally.`
                 : `AI row summaries were NOT created: this environment does not license the row-summary (AI Builder) capability, so there is no supported way to author them here — the org's 'EnableFormInsights' setting can read ON and the publish still be refused. Everything else in the app was built normally. Re-run against a licensed environment, or set ai.summaries.default to "off" (with no per-table enabled:true) to stop requesting them.`);
             }
             return reason;
@@ -5141,13 +5148,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
         });
       }
     } finally {
-      // In a `finally` on purpose: a LATER table failing for an unrelated (non-skippable) reason
-      // throws out of the loop, and without this the orphan already queued by an EARLIER skipped
-      // table would never be swept — leaving exactly the duplicate-key residue this sweep exists to
-      // remove, and making every future rebuild fail on it.
-      //
-      // Swept here rather than inside `skipIf` because `skipIf` is synchronous and cannot await.
-      for (const logical of pendingAiSummarySweeps) await sweepOrphanSummaryModel(logical);
+      // Report earlier skipped tables even if a later one halts. skipIf is synchronous, so its
+      // read-only inventory must be awaited outside that callback.
+      for (const logical of pendingAiSummaryReports) await reportKeptSummaryModels(logical);
     }
   }
 

@@ -2200,6 +2200,10 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
       const row = state.resources.get(name);
       return row ? [row] : [];
     }
+    if (set === 'uxagentproject') {
+      return [...state.pages.values()].filter((p) => filter.includes(`uxagentprojectid eq ${p.pageId.toLowerCase()}`))
+        .map((p) => ({ uxagentprojectid: p.pageId, name: p.name }));
+    }
     if (set === 'publisher') return [{ publisherid: 'publisher-1' }];
     return [];
   };

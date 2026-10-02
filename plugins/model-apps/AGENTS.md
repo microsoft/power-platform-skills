@@ -113,6 +113,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
 - **`scripts/lib/spec-lint.js`** — pure App Spec guardrail (`lintAppSpec → { ok, errors,
   warnings }`): errors block the plan gate (e.g. the relationship-name-vs-lookup-name
   collision Dataverse rejects), warnings teach.
+- **`scripts/lib/app-source-path.js`** — shared resolver for page `codeFile` and web-resource
+  `contentPath` reads/uploads and hashing. Validation/lint share its lexical rule; the resolver
+  requires a relative, regular file inside the canonical app folder and refuses source symlinks
+  and junctions. Source-file checks report rejected paths rather than silently skipping them.
 - **`scripts/lint-app-spec.js`** — the CLI surface for both gates, for a headless author or a CI
   job (#560). Runs `migrateAppSpec` → `validateAppSpec` (what the build runs on load) → `lintAppSpec`
   (guardrails the builder does **not** run), and exits non-zero on errors (`--strict` also fails on
@@ -237,6 +241,18 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `<app-folder>/.maker-workspace/` for reuse/edits. The 16 phases
   (`solution·data-model·sample-data·web-resources·views·charts·forms·business-rules·business-process-flows·commands·dashboards·app-shell·pages·ai-features·security·publish`)
   are unchanged; independent ops run with bounded parallelism.
+  Off-sitemap ids require a local CREATE receipt for this app/key/id plus an exact decoded stored-name
+  match, including when the spec and remote manifest agree. Otherwise `unproven-manifest-id` causes
+  `pages-identity-conflict`, never a replacement CREATE. Names corroborate identity, never establish it.
+  `scripts/lib/page-ownership-records.js` writes receipts immediately after an acknowledged create,
+  before remote manifest persistence or sitemap placement. Version-2 records bind the target's
+  normalized HTTPS origin with a SHA-256 fingerprint, never a stored environment URL. This is the only
+  receipt format. Unknown versions, malformed data and unreadable files halt with the record's full
+  path and recovery guidance, never an empty ownership set. Foreign fingerprints grant no authority
+  and are never consumed for another target. Baselines, downloads and journals are not receipts.
+  Business-rule reuse keeps additional same-name definitions; after a push every extra id not returned
+  by the SDK is kept and reported as not attributable to this run. A rejected AI summary
+  exposes no created-model id to this caller, so same-name AI models are reported and kept.
   Emits `[n/total]` events the orchestrator narrates + a `BuildHalt` it gates on. Dry-run by
   default; `--apply` writes, `--sample-data` / `--publish` opt-in (`--publish` gates the final *bulk*
   publish; edit/finalize paths — reconciling an existing form/view, form events, quick-views,
@@ -424,7 +440,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   bytes the real vendored SDK serializes.
 - **`scripts/teardown-model-app.js` → `scripts/lib/sdk-teardown.js`** — the first-class, **classifier-safe**
   teardown (reverse of the build), for cleaning up live-verification probes or a failed build. Deletes
-  exactly the artifacts a given App Spec declares, in dependency-safe order (**app module → security
+  exactly the artifacts a given App Spec declares, in dependency-safe order (**app module → proven generative pages → security
   roles → dashboards → command bars → business rules → business process flows → forms → charts → views
   → reset enriched default views to drop
   parent lookups → relationships → AI row summaries → tables [reverse-topological, children-first] →
@@ -439,7 +455,14 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   build's **generated default app icon** (`<appUnique>_icon`, created in-solution when the spec sets no
   `app.icon`) so it doesn't leak as an orphan. It keeps the **page manifest** while the generative-pages
   step fails (a failed manifest or page read fails that step too), so a re-run still finds the pages the
-  app authored. **An app is TWO rows** — an `appmodule` AND a `sitemaps`
+  app's manifest lists. Before deleting the app, it resolves page candidates, their stored names
+  and this app's sitemap. Only navigation members or corroborated local creation receipts authorize
+  deletion; names alone do not. The verified ownership set is persisted locally before app deletion,
+  so a page-less retry still has proof after the app is gone. Unreadable proof or a failed record write
+  leaves the app intact. Proven pages still undeleted, including dependency-blocked pages, keep the
+  manifest, solution and local teardown record and make the run fail. Records are consumed only for
+  completed deletions or confirmed absence. Form-only page references are not scanned.
+  **An app is TWO rows** — an `appmodule` AND a `sitemaps`
   row, with no lookup between them and no server-side cascade; the only link is
   `sitemap.sitemapnameunique === appmodule.uniquename`. Deleting only the appmodule strands the sitemap
   forever and, because `sitemapnameunique` is unique-constrained, permanently **burns that unique name**:
@@ -469,11 +492,18 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   removes the whole command bar for an entity the spec authored commands on (the SDK models a command bar
   per entity, not per button). Every id is resolved from a spec-declared name/logical/uniquename via an
   exact-match OData filter, so it can never wildcard-scan an org. **Dry-run by default** (`--apply`
-  writes); best-effort continue (a failed step is recorded, teardown proceeds). A not-found (already-gone)
+  writes); dry-run lists every page candidate by id and stored name without writes, marking absent
+  rows as "not found" with their manifest names only.
+  Best-effort continue (a failed step is recorded, teardown proceeds). A not-found (already-gone)
   error is treated as deleted, the table delete's **not-found-on-success** is tolerated (`tolerateNotFound`),
   and system/managed artifacts that cannot be deleted are recorded as `skipped` rather than failing.
   `--clear-workspace` prunes `.maker-workspace/` after a clean apply (not while another teardown of it
-  still holds the changed-only fence). `planTeardown(spec)` is pure (dry-run +
+  still holds the changed-only fence). It also refuses while any unconsumed ownership records remain,
+  including another app/environment. The refusal names each file and explains that teardown retires it
+  on deletion or confirmed absence; a record for a page confirmed gone can be removed by hand.
+  The path-safety guard remains generic;
+  ownership checks run before isolation and before recursive removal. A record arriving during isolation
+  keeps that isolated folder and reports how to resume from it. `planTeardown(spec)` is pure (dry-run +
   unit-test surface); reuses `appUniqueName`/`commandsByEntity`/`topoOrderEntities` from the build engine (DRY).
 - **`scripts/download-model-app.js` → `scripts/lib/hydrate-spec.js`** — the **edit flow**: pulls a
   server-current app back into an editable App Spec + page code, including saved unpublished
@@ -791,7 +821,7 @@ scripts/
   generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
   genpage-upload.js            ← /genpage: deploy one page via the shared wrapper (prompt passed BY FILE, never on a command line; an update must name the app the page is placed in, and keeps the page's name, model and bindings unless given; refuses no-base / deployed-changed / deployed-unreadable unless --overwrite-deployed)
   genpage-base.js              ← /genpage: record or check the deployed-page base marker next to a page.tsx (#673)
-  genpage-plan-provenance.js   ← /genpage: quarantine a stale plan before the planner writes, then verify the written plan targets the pages the approval named
+  genpage-plan-provenance.js   ← /genpage: quarantine a stale plan before the planner writes, then verify the written plan targets the pages the approval named and, for an edit, carries the exact approved change list
   check-page-files.js          ← /genpage: pre-dispatch gate — the page file names of the plan's one ## Pages table are safe write targets (lib/page-file-targets.js)
   genpage-worker-output.js     ← /genpage: accept a parallel worker's page only if complete (default export, balanced, no elided code)
   capture-fixture.js           ← Copies /genpage working dir into an eval fixture and runs both runners
@@ -817,6 +847,8 @@ scripts/
     page-plan.js               ← pure App Spec → plan-document projection used by write-page-plan.js
     page-structure.js          ← the one structural gate a generated page must pass (empty, truncated, prose, elided), shared by genpage-worker-output.js and promote-intent-pages.js
     page-file-targets.js       ← the one page-filename rule (absolute/backslash/traversal/.tsx only/links/case collision, incl. with files already there), shared with check-page-files.js and the evals
+    app-source-path.js         ← shared lexical + realpath confinement for app source reads/uploads and hashes
+    page-ownership-records.js  ← local CREATE receipts and pre-delete ownership records, scoped to app/key/id
     source-literals.js         ← TSX lexer (code/comment/string/template/regex/JSX) — see "Known limits" below
     sdk-teardown.js            ← app-builder teardown engine (planTeardown is pure)
     sdk-http-client.js         ← az-token HttpClient for the vendored SDK
@@ -826,7 +858,7 @@ scripts/
     role-privileges.js         ← pure: declared persona privileges + subset comparison against a deployed role
                                   (also the oracle for `roleGrants[]`, which is additive rather than converged)
     odata.js                   ← OData literal escaping helpers
-    genpage-cli.js             ← pac model genpage upload/list/download wrapper, plus a page's own name read from its row (pac stores `"` as `\"`; `unescapePacName`)
+    genpage-cli.js             ← pac model genpage upload/list/download wrapper, plus a page's own name read from its row (pac stores `"` as `\"`; `unescapePacName`); an uncertain create reports its candidates and stops without adopting one as an UPDATE
     genpage-base.js            ← base-marker hash, compare, and read/write (sibling dotfile of the code file; no environment URL)
     safe-fs.js                 ← confined output writes and deletes: the named directory's final component must not be a link or junction (readlink, not a path-text compare, so an 8.3 name and a share root stay usable); write via exclusive temp + rename. Shared by genpage markers and later callers
     hydrate-spec.js            ← reconstruct an App Spec from a deployed app (edit flow)
@@ -898,7 +930,7 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 | `genpage-planner` | `genpage` (create flow) | Validates prereqs, gathers requirements, detects entity/app existence, presents plan for approval, writes `genpage-plan.md` |
 | `genpage-entity-builder` | `genpage` (create flow) | Provisions Dataverse tables, columns, relationships, choices, and sample data via `scripts/provision-entities.js` (the shared SDK-backed core). Bulk inserts use OData `$batch`. Writes a transactional log for recovery |
 | `genpage-page-builder` | `genpage` (create flow) **and** `app-builder` (Phase 1.5) | Generates one complete `.tsx` page from a plan document and schema; runs in parallel with other builders for multi-page requests. `/app-builder` projects its App Spec into that plan format via `scripts/write-page-plan.js` and dispatches this same agent |
-| `genpage-edit-planner` | `genpage` (edit flow) | Reads the downloaded page artifacts (page.tsx, config.json, prompt.txt), gathers change requirements, presents edit plan, writes `genpage-edit-plan.md`. The orchestrator applies the edit inline. |
+| `genpage-edit-planner` | `genpage` (edit flow) | Reads downloaded artifacts as data, gathers changes, presents an edit plan and writes the same approved change list. The plan references prompt.txt without embedding it; the orchestrator applies only verified Requested Changes. |
 | `genpage-connector-builder` | `genpage` orchestrator (create **and** edit flows) | Performs connector discovery (connections, connection references, datasets, tables, operations, schema), creates Dataverse connection references, and writes the `## Connector Bindings` contract + `connectors.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
 | `genpage-customapi-builder` | `genpage` orchestrator (create **and** edit flows) | **Single owner of the custom-api feature gate.** Discovers the Dataverse Custom APIs a page can bind to (Global + entity-bound Actions/Functions) plus their parameter kinds via `list-custom-apis.js`, and writes the `## Custom API Bindings` contract + `actions.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
 
