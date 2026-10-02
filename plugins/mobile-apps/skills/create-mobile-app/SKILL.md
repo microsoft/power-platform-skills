@@ -471,11 +471,12 @@ Set tentative defaults (the preview preference applies at Step 6.75):
 
 **`--no-design` escape hatch.** For headless / token-constrained runs, set `--no-design` in `$ARGUMENTS`. It forces `<visual_companion> = no`, skips the style-picker handoff at Step 3a entirely, and short-circuits Step 6.75 to a no-op (placeholder block stays in `native-app-plan.md`; screen-builders fall back to industry-inferred defaults).
 
-**Record the confirmed brief** and close the phase:
+**Record the confirmed brief.** The phase stays open: Step 2c still asks the user to approve the
+plan preview, and a closed phase cannot report that the run is waiting on them.
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" set --section requirements --json '{"appName":"<displayName>","slug":"<slug>","platforms":"iOS and Android","aesthetic":"<aesthetic>","industry":"<industry>","brief":"<confirmed brief>","features":["<feature>"]}'
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id requirements --status done
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id requirements --status active --note "Brief confirmed"
 ```
 
 ### Step 2c — Plan preview (rough, always shown)
@@ -541,6 +542,14 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 - Forced calibration: every run produces the `<estimate, actual>` data we need for v0.x model routing decisions. Skipping drops calibration data.
 
 **Set expectations before handing off to the planner:**
+Raise the wait before showing the estimate, and close the phase once the user approves:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id requirements --status active --note "Waiting for you to approve the plan preview"
+# ... after they approve ...
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id requirements --status done
+```
+
 > "Brief locked in. Planning surfaces up to 4 approval prompts (data platform + native capabilities + connectors → data model when Dataverse is selected → screen graph → screen specs). Data-model readiness is quality-first, with a 10–15 minute target:
 >  • Gate 1 (architecture) — confirm Dataverse choice, native capabilities, and connectors before schema work
 >  • Gate 2 (data model, Dataverse only) — budget 10–15 min for verified reuse/extend/create decisions, ER columns, relationships, tiers, and risks; auto-skipped for no-Dataverse apps
@@ -1631,10 +1640,11 @@ opening the next phase auto-closed it as `done` — reporting a design system th
 
 **On the skip branch** — placeholder `## Design Direction: <deferred>` block stays in the plan, screen-builders fall back to industry-inferred defaults from `universal-patterns.md`.
 
-**Otherwise**, open the phase and invoke `/design-system` (ships with this plugin):
+**Otherwise**, open the phase and invoke `/design-system` (ships with this plugin). `/design-system`
+asks for brand inputs, a cost choice and a style pick, so the phase opens as waiting:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id design --status active
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id design --status active --note "Waiting for your brand and design choices"
 ```
 
 ```
@@ -1652,6 +1662,13 @@ uses. `/design-system` and its style picker gate every browser opener on that va
 they detect a standalone run and open tabs over the build plan.
 
 The skill detects orchestrator mode (`CODE_APPS_NATIVE_ORCHESTRATING=1`), collects brand inputs, presents the cost picker (a/b/c/d), runs the internal style picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders `brand/design-system.html`, and returns with status.
+
+As soon as `/design-system` returns, replace the note — the user has answered and the run is
+working again:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id design --status active --note "Applying your design system"
+```
 
 Handle the return per the status protocol (AGENTS.md rule #10):
 - `DONE` → finish the applicable preview branch below, then continue to Step 7. Record `brand_path`, `tokens_path`, `direction` in memory-bank.
@@ -2055,7 +2072,13 @@ Skip only when `memory-bank.md` `## Offline profile` already records
 `status: done` or `status: not-applicable`. Print:
 `↷ Offline profile skipped — already <done|not-applicable> from a prior run.`
 
-Otherwise ask one neutral foreground question:
+Otherwise ask one neutral foreground question. Say so in the plan first, and replace the note
+once the user answers:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id dataverse --status active --note "Waiting for your offline support choice"
+```
+
 
 > **Question header:** `Offline support`
 >
@@ -2879,7 +2902,13 @@ Then continue only if TypeScript is clean. Step 11.4 may leave concerns, but it 
 
 #### Optional static preview
 
-After `tsc` passes, offer a static HTML preview. The dev server starts next (Step 12), so default is skip:
+After `tsc` passes, offer a static HTML preview. The dev server starts next (Step 12), so default is skip.
+Mark the wait, since the run does not continue until the user picks:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id screens --status active --note "Waiting for your preview choice"
+```
+
 
 > "→ N screens built and type-checked. The live app starts next.
 >
@@ -3042,6 +3071,10 @@ Point the user at `docs/create-app-plan.html` once — it holds the environment,
 model with its ER diagram, and the screen plan, and it outlives the terminal session.
 
 If Step 1 emitted warnings, list them in one line each under the block (no decoration).
+
+Do **not** re-open the `run` phase for these. The build is finished, the plan has settled and
+stopped reloading, and marking a phase active again would restart that loop and report work in
+progress on a run that is over. These options are a menu, not a gate the run is blocked on.
 
 Then present exactly these 6 options:
 

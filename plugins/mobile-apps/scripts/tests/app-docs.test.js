@@ -443,6 +443,66 @@ test('a gate that forgets its note is still not silent', () => {
   assert.match(summarize(state).awaitingInput, /Review the data model/);
 });
 
+test('every step that blocks on the user says so in the plan', () => {
+  const skill = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
+  );
+  const lines = skill.split('\n');
+
+  // Attribute each line to the step it falls under.
+  const headings = [];
+  lines.forEach((line, i) => {
+    const m = /^### Step ([0-9a-z.]+) /.exec(line);
+    if (m) headings.push([i, m[1]]);
+  });
+  const stepAt = (i) => {
+    let name = '(preamble)';
+    for (const [pos, id] of headings) {
+      if (pos <= i) name = id; else break;
+    }
+    return name;
+  };
+
+  // The steps that stop and wait for an answer. Each must raise the banner before asking: the
+  // plan is the surface the user is watching, and a run that blocks silently looks like a run
+  // that is still working. Found by walking the skill's own prompts, not from memory.
+  const BLOCKING = ['2b', '2c', '6.75', '8.5', '11.4'];
+  const waitingIn = new Set();
+  lines.forEach((line, i) => {
+    if (/step --id [a-z-]+ --status active[^\n]*--note "[^"]*(?:[Ww]aiting for|awaiting)/.test(line)) {
+      waitingIn.add(stepAt(i));
+    }
+  });
+
+  for (const step of BLOCKING) {
+    assert.ok(waitingIn.has(step), `Step ${step} asks the user but never raises the waiting banner`);
+  }
+
+  // Step 13's menu is not a gate. The build has finished and the plan has settled, so re-opening
+  // a phase there would restart the reload loop and report work in progress on a finished run.
+  assert.ok(!waitingIn.has('13'), 'the closing menu must not re-open a phase');
+  assert.match(skill, /Do \*\*not\*\* re-open the `run` phase/);
+});
+
+test('every waiting note is taken down by the step that set it', () => {
+  const skill = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
+  );
+  const calls = [...skill.matchAll(/step --id ([a-z-]+) --status ([a-z]+)([^\n]*)/g)].map((m) => ({
+    phase: m[1],
+    status: m[2],
+    waiting: /--note "[^"]*(?:[Ww]aiting for|awaiting)/.test(m[3]),
+  }));
+
+  // A note does not outlive its status, so any later call on the same phase clears it. What
+  // must not happen is a phase left waiting with nothing after it.
+  for (let i = 0; i < calls.length; i += 1) {
+    if (!calls[i].waiting) continue;
+    const cleared = calls.slice(i + 1).some((c) => c.phase === calls[i].phase);
+    assert.ok(cleared, `'${calls[i].phase}' is left waiting with no later call to take it down`);
+  }
+});
+
 test('phase order matches the order the skill actually runs them', () => {
   const order = PHASES.map((phase) => phase.id);
   const at = (id) => order.indexOf(id);
