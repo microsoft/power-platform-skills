@@ -95,6 +95,12 @@ apart deliberately.
 
 ### Forms, views & charts — ✅ verified live
 - Adaptive main forms (auto + explicit tabs/sections), related-record sub-grids (1:N **and** N:N), Notes/timeline section.
+  Explicit edits order tabs and sections, **not existing fields**. New listed fields and relative
+  `fieldOptions[x].after` placement are occupancy-safe; a full row may split, and an unsafe move is
+  skipped with a warning. Stored overflow repair, idempotent rebuilds and middle insertion are
+  **live-verified**. Atomic failure/retry and dependency-ordered anchor chains are covered by
+  offline SDK workspace tests. Verify rejects duplicate cell/control IDs across each form. See the
+  [form-layout contract](../references/app-spec-schema.md) for placement and verification limits.
 - Quick-create + quick-view forms (`forms[].formType`); quick-view **placement** on a host form via a lookup (`forms[].quickViews[]`).
 - **Per-form security roles** (`forms[].securityRoles`) — offer a form to named `personas[]`, or to
   `everyone`, with optional `fallbackForm` and `order`. The roles are **not** a relationship

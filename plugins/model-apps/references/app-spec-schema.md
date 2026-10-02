@@ -805,30 +805,34 @@ correctly; the compiler does not emit one yet. The restriction can be lifted onc
 A **deployed** `rowspan` — one a maker added by hand, which the authored restriction above cannot
 prevent — can make the rows of a section positionally meaningful in the same way: once any cell
 **follows** a row-spanning cell, re-flowing the section by reading order could move that cell into
-the reserved slot. In such a section the build therefore never re-flows. Every fit below counts a
-row's own cells **plus** the columns a row-spanning cell above still reserves in it — the same rule
-`--verify` applies, so the build never writes a layout verify rejects. Narrowing the grid is applied
+the reserved slot. In such a section the build therefore never flattens and re-flows the whole
+section. Every fit below counts a row's own cells **plus** the columns a row-spanning cell above
+still reserves in it — the same occupancy rule `--verify` applies, so placement does not introduce
+row overflow. Narrowing the grid is applied
 only when every row already fits the new width that way; otherwise the section **keeps its current
 grid** and the refusal is reported. A span change that would overflow the rows its cell occupies is
-skipped (and reported), rather than applied without the re-flow. A field added to the section goes
-into the last row if it fits there, otherwise into the first new row with room. Likewise a `rowspan` is never **raised** on a
-deployed cell that other cells follow, even when its row still fits: the build keeps a field where
+skipped (and reported), rather than applied without the re-flow. Before optional positioning, a new
+field is packed into the last row if it fits there, otherwise into the first new row with room.
+Likewise a `rowspan` is never **raised** on a deployed cell that other cells follow, even when its
+row still fits: the build keeps a field where
 the form already has it, so the field you list last is not necessarily last on the form. A section
 whose row spans are all **trailing** — stock Main forms put `rowspan` on the last cell — re-flows
 normally, because nothing comes after the span to land in its reservation. Every refusal is also
-recorded in the build result (`skipped.layout`), and `--verify` reports the divergence for an
-explicit layout.
+recorded in the build result (`skipped.layout`). `--verify` reports declared grid/span/state
+mismatches for an explicit layout, but does not check field order or `after` adjacency.
 
-**Editing an existing form.** An explicit layout is converged onto the deployed form rather than
-flattened into its first section: missing tabs, form-columns and sections are **created** where the
-layout places them, a tab's `label`/`expanded`/`visible`, a form-column's `width` and a section's
+**Editing an existing form.** An explicit layout reconciles containers and field-to-section
+placement, not the order of existing fields. It is not flattened into the form's first section:
+missing tabs, form-columns and sections are **created** where the layout places them, a tab's
+`label`/`expanded`/`visible`, a form-column's `width` and a section's
 `columns`/`label`/`showLabel`/`visible` are **updated in place**, a named section that sits in another
 tab or form-column is **moved** to where the layout places it, the tabs — and the sections of each
 form-column — are **put in the layout's order**, and a field sitting in the wrong section is **moved**
 (never duplicated — the cell keeps its id and any control state a maker edited). Containers are
 matched by `name`, then `label`, then position, so a form built by an earlier `auto` layout — or by
-hand in Maker — converges instead of gaining a duplicate tab. Nothing is renamed, because form scripts
-and business rules can reference a section by name. Every move is reported; only the layout's own
+hand in Maker — reuses its containers instead of gaining a duplicate tab. Nothing is renamed,
+because form scripts and business rules can reference a section by name. Tab/section moves are
+reported; only the layout's own
 containers are ordered — a tab or section it does not mention (a maker's own, the notes timeline)
 keeps its place among them.
 
@@ -863,10 +867,28 @@ removed only when this run empties it — its fields pruned, or moved into anoth
 `prune` is on; anything else it still holds keeps it, and a section it leaves alone is yours to
 remove in Maker.
 
-⚠ **Field order.** A field the form lacks is appended to the end of its section; a field it already
-has stays where it is. So reordering a section's `fields` list on an existing form changes nothing
-(`--verify` does not check field order either — it does check the order of tabs and of sections).
-Position a field explicitly with `fieldOptions[x].after`, below.
+⚠ **Field order.** On a new form, an explicit section's `fields` list sets its initial reading order.
+On an existing form, a field already in its requested section **stays where it is**: changing the
+list does not reorder existing fields. A field in another section is still moved to its declared
+section, without reordering the fields already there.
+
+Only a field **created by this build** takes its listed position: after its listed predecessor, or
+before its listed successor when it starts the list. A leading run of new fields is placed before
+the next existing listed field, then chained in list order. Placement uses the occupancy-safe
+mechanism below. If reservations make insertion unsafe, the new field keeps its safely appended
+position and a warning is recorded; later builds treat it as existing rather than retrying list
+reordering. This does **not** promise the whole list's order when existing neighbours are out of order.
+
+Missing fields and relative positions are planned together on a copy, then persisted in **one
+artifact edit**. A failed write cannot leave an appended-but-unpositioned new field, an overflowing
+intermediate row, or duplicated trailing cells. A retry uses either the prior layout or the complete
+planned layout, preserving existing cell/control identities.
+
+`--verify` checks tab/section order, row occupancy and **cell/control ID uniqueness across each
+whole form**, including headers, footers and unbound controls. Auto forms also require readable
+FormXML for the identity check. Repeated bindings of one field with distinct IDs are allowed.
+It does **not** check field order or `after` adjacency.
+To reposition an existing field, use `fieldOptions[x].after` outside the explicit field list, below.
 
 ⚠ Declaring explicit `tabs` also switches **pruning** on: a field the deployed form carries and the
 layout does not list is removed (never the primary field). Set `"prune": false` to restyle or
@@ -887,11 +909,31 @@ Where both apply to one field the inline entry wins; a plain string entry keeps 
   the API, so "read-only" for it is a form-level statement, not a metadata one.
 - **`hidden: true`** places the field as a hidden control (`visible="false"`) — present for form
   scripts and business rules, not shown to the user.
-- **`after: "<logical>"`** moves the field so it immediately follows the named anchor. This is the
+- **`after: "<logical>"`** moves the field so it immediately follows the named anchor in
+  **section-flat, row-major cell order**, including across a row boundary. This is the
   **non-destructive** way to reposition one control: it works on an already-deployed form and does
-  not require re-declaring the rest of the form. An anchor that is not on the form is ignored.
-  Only valid in `fieldOptions` — inside an explicit `tabs` layout the listed order already positions
-  the field, so `after` there is rejected rather than silently overriding the list.
+  not require re-declaring the rest of the form. Valid, already adjacent fields are not moved again.
+  An overfull row stored by an earlier build can be repacked once without changing that flat order.
+  An anchor that is not on the form is ignored.
+  New listed fields are positioned first; anchors then run in **dependency order**, so an anchor is
+  positioned before its dependents regardless of `fieldOptions` property order. Every remaining
+  adjacency is checked once afterward, and an unsatisfied request is reported rather than silently
+  accepted. Unlisted anchored controls may therefore sit between listed fields; the `after` chain
+  takes precedence over a new field's initial adjacency to its listed predecessor.
+  Placement counts colspans and columns reserved by rowspans above. A full anchor row may have its
+  trailing cells split into new rows immediately below it: `[count|name] [code]` becomes
+  `[count|code] [name]` in a two-column section. If the inserted field cannot fit beside the anchor,
+  it takes the next new row instead. Cells keep their identities and control state. A moved cell
+  wider than its destination section is narrowed to that grid and the narrowing is reported.
+  If a split would disturb a row-spanning reservation, or the resulting rows would overflow,
+  **the move is skipped**, with a warning naming the field, anchor and reason in `skipped.layout`;
+  these constraint-based skips do not fail the build. SDK/storage errors still halt the build, but
+  the placement edit is atomic and can be retried safely. `--verify` checks occupancy and unique
+  identities, not adjacency.
+  Valid only in form-level `fieldOptions`, and only for a field an explicit layout does **not** list.
+  Inline `after`, or a form-level anchor on a listed field, is rejected to avoid combining two
+  placement instructions; that restriction does not imply existing-field list reordering.
+  Use `"prune": false` to keep an unlisted field on an explicit form.
   Two anchor shapes are **rejected**, because neither has a satisfiable answer: only **one** field may
   sit immediately after a given anchor (to place several in sequence, *chain* them — anchor the second
   after the first), and anchors may not form a **cycle**.
@@ -1413,4 +1455,3 @@ same scope.
 
 **Not yet supported** (tracked follow-up): column-level (field) security and access teams / hierarchy
 security. The security surface today is role-per-persona plus `roleGrants[]` (below).
-

@@ -534,7 +534,11 @@ This is the canonical spec for the multi-deliverable build.
 v1 wires exactly ONE convergent shape end-to-end: **page-content re-upload** (a `.tsx` byte edit to an
 existing page). Everything else — view-append, sitemap, form, or any data-model/AI/chart/command/
 dashboard/web-resource change — routes to a **full build** (always safe; a full build converges the first
-four and additive-SKIPS the rest, which then incur sticky debt). The user-facing contract:
+four and additive-SKIPS the rest, which then incur sticky debt).
+For forms, convergence is limited to the [form-layout contract](../references/app-spec-schema.md);
+it does **not** include reordering existing fields from a changed `fields` list.
+
+The user-facing contract:
 - **`--changed-only` bootstraps its baseline from a FRESH build.** The eligible baseline is written only
   when the app did **not** exist when the run started (a first `--apply --changed-only`). Running the
   first build with a plain `--apply` (no snapshot) and *then* `--changed-only` yields an **ineligible**

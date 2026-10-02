@@ -2170,82 +2170,183 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // be found from this number.
   const departingSpan = (form, location) => Number((cellAt(form, location) || {}).rowspan) || 1;
 
-  // Move each anchored field so it immediately follows its anchor (`fieldOptions[x].after`).
-  //
-  // This is the non-destructive alternative to re-declaring a whole form just to move one control
-  // (ADO 6651439). It is a no-op when the field is already in place, so a rebuild converges instead
-  // of shuffling the form on every run.
-  //
-  // "Immediately after" is measured in SECTION-FLAT reading order, because a section is a grid: in a
-  // 2-column section `[a|b] [c|d]` the order is a, b, c, d. Two mechanics, chosen by whether one can
-  // actually reach that position (see the branch comments below) rather than by row shape alone:
-  //   * ROW move — the field is alone in its row AND the anchor is the last cell of its row. The
-  //     field's row is inserted after the anchor's row, which is flat-adjacent only under that
-  //     second condition.
-  //   * CELL move — everything else. The cell is spliced into the anchor's own row directly after
-  //     it, which always satisfies flat adjacency. The anchor's row then holds one extra cell — an
-  //     over-full row for the section's column count. The SDK accepts that (its form validator
-  //     imposes no row/cell cardinality rule, only "a cell control must be an object or null"), and
-  //     Dataverse accepts the push; how UCI lays the overflow out is NOT verified here. A row
-  //     emptied by the move is removed so blank rows cannot accumulate.
-  const applyFieldPositions = async (formId, def, vacated) => {
-    const positions = def.__fieldPositions || {};
-    for (const logical of Object.keys(positions)) {
-      const anchor = positions[logical];
-      // Re-read before every move: moveElement rewrites the artifact and shifts sibling indices.
-      const form = await provision.getArtifact('form', formId) || {};
-      const from = findFieldCellLocation(form, logical);
-      const to = findFieldCellLocation(form, anchor);
-      // A missing field or anchor is not an error: the anchor may be a column this build did not
-      // create, or the field may have been pruned. Positioning is a layout nicety — never fail a
-      // build over it.
+  const applyFieldPositions = async (formId, def, vacated, newCells) => {
+    const original = await provision.getArtifact('form', formId) || {};
+    let planned = JSON.parse(JSON.stringify(original));
+    const affected = new Set();
+    const departed = new Set();
+    const narrowed = [];
+    const newFields = new Set();
+    for (const { logical, sectionPointer, cell } of newCells) {
+      appendCellPacked(planned, sectionPointer, cell);
+      affected.add(sectionPointer);
+      newFields.add(logical);
+    }
+    const place = (logical, anchor, before = false) => {
+      const move = planFieldAdjacent(planned, logical, anchor, def.name, before);
+      if (move.warning) {
+        reportLayoutSkip(move.warning);
+        return false;
+      }
+      if (!move.affected) return true;
+      planned = move.form;
+      for (const pointer of move.affected) affected.add(pointer);
+      if (move.departed) departed.add(move.departed);
+      if (move.narrowed) narrowed.push({ logical, ...move.narrowed });
+      return true;
+    };
+    if (def.__explicitLayout) placeNewFieldsByList(def, newFields, place);
+
+    // An accepted adjacency can be broken when its anchor moves later: [area|code] [notes|name]
+    // plus a new extra must settle code-after-area BEFORE notes-after-code, regardless of key order.
+    const anchors = new Map(Object.entries(def.__fieldPositions || {}));
+    const dependents = new Map();
+    const pending = new Map();
+    for (const [logical, anchor] of anchors) {
+      pending.set(logical, anchors.has(anchor) ? 1 : 0);
+      if (!dependents.has(anchor)) dependents.set(anchor, []);
+      dependents.get(anchor).push(logical);
+    }
+    const order = [...anchors.keys()].filter((logical) => pending.get(logical) === 0);
+    for (let i = 0; i < order.length; i += 1) {
+      for (const child of dependents.get(order[i]) || []) {
+        pending.set(child, pending.get(child) - 1);
+        if (pending.get(child) === 0) order.push(child);
+      }
+    }
+    const skipped = new Set([...anchors.keys()].filter((logical) => pending.get(logical) > 0));
+    if (skipped.size) {
+      // Validation rejects cycles; direct library callers still get a bounded, non-fatal refusal.
+      reportLayoutSkip(`form ${def.name}: 'after' placements were skipped because their anchors contain a cycle: `
+        + [...skipped].map((logical) => `'${logical}' after '${anchors.get(logical)}'`).join(', ') + '.');
+    }
+    for (const logical of order) {
+      if (!place(logical, anchors.get(logical))) skipped.add(logical);
+    }
+    for (const [logical, anchor] of anchors) {
+      if (skipped.has(logical)) continue;
+      const from = findFieldCellLocation(planned, logical);
+      const to = findFieldCellLocation(planned, anchor);
       if (!from || !to) continue;
-
-      // "Already in place" is a SECTION-FLAT question, not a row-local one. A section is a grid: in
-      // a 2-column section `[a|b] [c|d]` the reading order is a, b, c, d, so a field can sit
-      // correctly immediately after its anchor while living in the NEXT row. Testing row adjacency
-      // reported such a field as misplaced and moved it on every rebuild — the auto layout switches
-      // to 2 columns above 6 fields, so this was the common case, not an edge case.
-      if (from.sectionPointer === to.sectionPointer && from.flatIndex === to.flatIndex + 1) continue;
-
-      // A positioning move can CROSS sections (`fieldOptions[x].after` may anchor to a field in
-      // another one), which empties the source just as a layout move does. Recording it here is what
-      // keeps the vacated-section sweep honest: without it, a source section emptied by this pass —
-      // and then stripped of its last field by the prune pass — survived as an orphan, because no
-      // one ever added its name to the set.
-      if (vacated && from.sectionPointer !== to.sectionPointer) {
-        const src = sectionAt(form, from.sectionPointer);
-        if (src && src.name) vacated.add(String(src.name).toLowerCase());
+      if (from.sectionPointer !== to.sectionPointer || from.flatIndex !== to.flatIndex + 1) {
+        reportLayoutSkip(`form ${def.name}: placement of '${logical}' after '${anchor}' remains unsatisfied `
+          + '- the fields are not adjacent in section-flat order. Adjust the layout in the maker.');
       }
+    }
+    if (!affected.size) return;
 
-      // Which mechanic can actually SATISFY that check?
-      //
-      // A ROW move inserts the field's row after the anchor's row, so it lands after the LAST cell
-      // of that row. That is flat-adjacent to the anchor only when the anchor IS the last cell in
-      // its row — always true in a 1-column section, a coin-flip in a 2-column one. When the anchor
-      // sits in a left-hand column the row move overshoots by the rest of the row, the flat check
-      // stays false forever, and the reconcile re-issues a no-op move on every single rebuild.
-      // So the row move is used only where it can succeed; otherwise the cell is moved into the
-      // anchor's own row, directly after it, which always satisfies flat adjacency.
-      const anchorIsLastInRow = to.cellIndex === to.rowCellCount - 1;
-      if (from.rowCellCount === 1 && anchorIsLastInRow) {
-        // moveElement resolves the TARGET ARRAY first, then removes the source, then splices. When
-        // both live in the same array the removal shifts every later index down by one, so a target
-        // computed against the pre-removal array overshoots by one. Compensate explicitly.
-        let index = to.rowIndex + 1;
-        if (from.rowsPointer === to.rowsPointer && from.rowIndex < index) index -= 1;
-        await provision.moveElement('form', formId, from.rowPointer, to.rowsPointer, { index });
-        continue;
+    // moveElement followed by row copies/trimming persisted [area|code|name] [name] on a failed
+    // trim, with the SAME IDs twice. A single SDK mutation persists the complete plan or its prior
+    // state. Cross-section moves replace /tabs once so source removal and destination insertion
+    // cannot be interrupted separately. Existing cell/control IDs and opaque state are copied.
+    if (affected.size === 1) {
+      const [pointer] = affected;
+      await provision.updateElement('form', formId, pointer + '/rows', sectionAt(planned, pointer).rows);
+    } else {
+      await provision.updateElement('form', formId, '/tabs', planned.tabs);
+    }
+    for (const name of departed) vacated.add(name);
+    for (const note of narrowed) warnNarrowedField(def.name, note.logical, note.destination, note.landing);
+  };
+  // One placement path keeps new listed fields and targeted anchors from disagreeing about
+  // carried rowspan capacity.
+  // SECTION-FLAT adjacency, not row-local: [count|name] [code] becomes [count|code] [name].
+  // A splice into a full row must split its trailing cells immediately below, not append them at
+  // the section's end. Plan against a copy first: a rowspan can make that split, or even a whole-row
+  // move, unsafe. A declined layout nicety must leave no half-applied move or overflowing push.
+  const planFieldAdjacent = (form, logical, anchor, formName, before = false) => {
+    const from = findFieldCellLocation(form, logical);
+    const to = findFieldCellLocation(form, anchor);
+    // An absent anchor may simply be a column this layout does not place.
+    if (!from || !to) return {};
+    const alreadyPlaced = from.sectionPointer === to.sectionPointer && from.flatIndex === to.flatIndex + (before ? -1 : 1);
+    const source = sectionAt(form, from.sectionPointer);
+    const destination = sectionAt(form, to.sectionPointer);
+    const span = departingSpan(form, from);
+    const landing = landingSpans(cellAt(form, from), {}, undefined, destination);
+    // Earlier releases could persist an adjacent but overfull row. Repair its width once without
+    // moving the field; a valid adjacent layout remains a true no-op.
+    if (alreadyPlaced && rowOccupancy(destination.rows)[from.rowIndex].used <= landing.gridWidth) return {};
+    const skip = (reason) => ({ warning: `form ${formName}: placement of '${logical}' ${before ? 'before' : 'after'} '${anchor}' `
+      + `was skipped - ${reason}. Adjust the layout in the maker.` });
+    const fits = (candidate) => [from.sectionPointer, to.sectionPointer].every((pointer) => {
+      const section = sectionAt(candidate, pointer);
+      return fitsGrid(section.rows || [], Number(section.columns) || 1);
+    });
+    const project = () => {
+      // getArtifact may return the stored tree itself; preflight must never mutate that live value.
+      const candidate = JSON.parse(JSON.stringify(form));
+      if (landing.narrowed) cellAt(candidate, from).colspan = landing.colspan;
+      return candidate;
+    };
+    let rowMove = false;
+    let index;
+    let candidate;
+    // A reserved source row must stay even after its cell leaves. Moving a row-spanning cell as a
+    // whole row would also leave its formerly covered empty rows behind, so it uses the cell route.
+    if (!alreadyPlaced && !before && from.rowCellCount === 1 && to.cellIndex === to.rowCellCount - 1 && span === 1
+      && rowReservationAt(source.rows, from.rowIndex) === 0) {
+      candidate = project();
+      const sourceRows = sectionAt(candidate, from.sectionPointer).rows;
+      const targetRows = sectionAt(candidate, to.sectionPointer).rows;
+      index = to.rowIndex + 1;
+      // The SDK removes first, then splices into the already-resolved target array.
+      if (from.rowsPointer === to.rowsPointer && from.rowIndex < index) index -= 1;
+      const [row] = sourceRows.splice(from.rowIndex, 1);
+      targetRows.splice(index, 0, row);
+      rowMove = fits(candidate);
+    }
+    if (!rowMove) {
+      candidate = project();
+      const sourceRows = sectionAt(candidate, from.sectionPointer).rows;
+      const targetRows = sectionAt(candidate, to.sectionPointer).rows;
+      if (!alreadyPlaced) {
+        const [cell] = sourceRows[from.rowIndex].cells.splice(from.cellIndex, 1);
+        index = to.cellIndex + (before ? 0 : 1);
+        if (from.cellsPointer === to.cellsPointer && from.cellIndex < index) index -= 1;
+        targetRows[to.rowIndex].cells.splice(index, 0, cell);
+        if (from.rowPointer !== to.rowPointer) {
+          for (const ri of strandedRows(sourceRows, from.rowIndex, span)) sourceRows.splice(ri, 1);
+        }
       }
-
-      let index = to.cellIndex + 1;
-      if (from.cellsPointer === to.cellsPointer && from.cellIndex < index) index -= 1;
-      const span = departingSpan(form, from);
-      await provision.moveElement('form', formId, from.cellPointer, to.cellsPointer, { index });
-      // The rows the move left holding nothing go (see removeStrandedRows). Row indices are unchanged
-      // by a cell move (cells move between rows; the row count does not change), so the source rows
-      // are still where they were.
-      if (from.rowPointer !== to.rowPointer) await removeStrandedRows(formId, from.sectionPointer, from.rowIndex, span);
+      const target = findFieldCellLocation(candidate, alreadyPlaced ? logical : anchor);
+      const row = targetRows[target.rowIndex];
+      const occupancy = rowOccupancy(targetRows)[target.rowIndex];
+      if (occupancy.used > landing.gridWidth) {
+        // rowsFromCells packs WIDTH only. Splitting under a carried span, or moving a cell that
+        // follows a spanning one in this row, would lose the maker's reservation/spacer geometry.
+        if (occupancy.reserved || reflowBreaksReservation([row])) {
+          return skip('splitting the anchor row would disturb a row-spanning reservation');
+        }
+        const packed = rowsFromCells(row.cells, landing.gridWidth);
+        targetRows.splice(target.rowIndex, 1, { ...row, cells: packed[0].cells }, ...packed.slice(1));
+      }
+      if (!fits(candidate)) {
+        return skip('the resulting rows would overflow the section grid after counting colspans and row-spanning reservations');
+      }
+    }
+    // A declined move must keep both the maker's span and the vacated-section sweep unchanged.
+    return {
+      form: candidate,
+      affected: [from.sectionPointer, to.sectionPointer],
+      departed: from.sectionPointer !== to.sectionPointer && source.name ? String(source.name).toLowerCase() : null,
+      narrowed: landing.narrowed ? { destination: destination.name || to.sectionPointer, landing } : null,
+    };
+  };
+  // Only cells CREATED by this reconcile take the listed position. Existing fields keep their
+  // relative order. A leading run of new fields anchors before an established successor first;
+  // anchoring its first cell to another appended new cell would leave the whole run at the end.
+  const placeNewFieldsByList = (def, newFields, place) => {
+    for (const tab of def.tabs || []) for (const column of tab.columns || []) for (const section of column.sections || []) {
+      const fields = formFieldLogicals({ tabs: [{ columns: [{ sections: [section] }] }] });
+      for (let i = 0; i < fields.length; i += 1) {
+        const logical = fields[i];
+        if (!newFields.has(logical)) continue;
+        const previous = fields[i - 1];
+        const next = fields.slice(i + 1).find((field) => !newFields.has(field)) || fields[i + 1];
+        const anchor = previous || next;
+        if (anchor) place(logical, anchor, !previous);
+      }
     }
   };
 
@@ -2659,9 +2760,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // land in its reservation. Stock account and contact Main forms put `rowspan` on the last cell of
   // a section, so treating every rowspan as unsafe refused exactly the commonest real shape.
   //
-  // Shared by BOTH reflow routes (whole-section on a grid narrowing, single-row on a span change).
-  // It does not cover PLACING a new or moved field into such a section: that path predates these
-  // guards and needs spacer-aware placement (#581).
+  // Shared by grid/span reflow and field-position row splits. End-of-section placement separately
+  // counts carried reservations when choosing a row, without flattening the maker's layout.
   const reflowBreaksReservation = (rows) => {
     let spanning = false;
     for (const r of rows || []) {
@@ -2851,28 +2951,17 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // already existed. The effective-capacity check below is the create path's width rule plus
   // any columns still reserved by row-spanning cells above the target row.
   //
-  // MEASURED against the vendored bundle: `addElement` REFUSES a `.../rows/<i>/cells` pointer
-  // ("Path not found in form/<id>"), so a cell cannot be appended to an existing row that way. The
-  // row is rewritten instead — `updateElement` replaces the `cells` array, and re-sending the
-  // existing cell objects carries their `id` and `control.id` through verbatim (measured), so this
-  // neither mints new ids nor drops adapter-derived control state.
-  const appendCellPacked = async (formId, form, sectionPointer, wantCell) => {
+  // Keep the add in copied rows until positioning finishes. Persisting it first would let a failed
+  // insertion become an "existing" appended field that the next run deliberately never reorders.
+  const appendCellPacked = (form, sectionPointer, wantCell) => {
     const section = sectionAt(form, sectionPointer) || {};
     const rows = section.rows || [];
     const rowIndex = firstAppendRowThatFits(rows, wantCell, section.columns);
-    // Counted before any add, and locally: `rows` may alias the stored artifact (then every add grows
-    // it) or be a copy (then none does), so neither its length nor a re-assigned `section.rows` can say
-    // how many rows exist — re-assigning them added a phantom row wherever they alias.
-    const priorRowCount = rows.length;
-    if (rowIndex < priorRowCount) {
-      await provision.updateElement('form', formId, sectionPointer + '/rows/' + rowIndex,
-        { cells: [...(rows[rowIndex].cells || []), wantCell] });
-      return;
-    }
-    for (let rowCount = priorRowCount; rowCount < rowIndex; rowCount += 1) {
-      await provision.addElement('form', formId, sectionPointer + '/rows', { cells: [] });
-    }
-    await provision.addElement('form', formId, sectionPointer + '/rows', { cells: [wantCell] });
+    // This mutates only the copied plan: a failed new-field insertion must not leave an appended
+    // control that the next build mistakes for an existing field and never positions.
+    while (rows.length <= rowIndex) rows.push({ cells: [] });
+    rows[rowIndex].cells.push(wantCell);
+    section.rows = rows;
   };
 
   const placeFieldInSection = async (formId, logical, wantCell, target, vacated, rawSpan, formName) => {
@@ -2894,8 +2983,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         const span = spanForLiveSection(key, wantCell, rawSpan, liveSection);
         if (span === undefined) delete cell[key]; else cell[key] = span;
       }
-      await appendCellPacked(formId, form, sectionPointer, cell);
-      return;
+      return { logical, sectionPointer, cell };
     }
     // Converge the cell SHAPE even when the cell is already where it belongs. `colspan`/`rowspan`
     // used to be create-only on an existing form: an author who widened a field to `colspan: 2` on a
@@ -2976,11 +3064,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // authored narrowing (a narrowing never overflows its row). Reported: the build changed the
       // width of a cell whose width the spec leaves to the maker.
       await convergeCellSpans(formId, settledForm, settled, { ...wantCell, colspan: landing.colspan }, { ...(rawSpan || {}), colspan: landing.colspan });
-      if (typeof opts.warn === 'function') {
-        const destination = (sectionAt(settledForm, settled.sectionPointer) || {}).name || settled.sectionPointer;
-        opts.warn(`form ${formName}: '${logical}' spanned ${landing.liveColspan} columns, wider than the ${landing.gridWidth}-column `
-          + `section '${destination}' the layout moves it to, so it now spans ${landing.colspan}. Declare its colspan to choose the width.`);
-      }
+      const destination = (sectionAt(settledForm, settled.sectionPointer) || {}).name || settled.sectionPointer;
+      warnNarrowedField(formName, logical, destination, landing);
       return;
     }
     await convergeCellSpans(formId, settledForm, settled, wantCell, rawSpan);
@@ -3006,6 +3091,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
     };
   };
 
+  const warnNarrowedField = (formName, logical, destination, landing) => {
+    if (typeof opts.warn === 'function') {
+      opts.warn(`form ${formName}: '${logical}' spanned ${landing.liveColspan} columns, wider than the ${landing.gridWidth}-column `
+        + `section '${destination}' the layout moves it to, so it now spans ${landing.colspan}. Declare its colspan to choose the width.`);
+    }
+  };
   const reconcileForm = async (formId, def) => {
     await provision.fetchArtifact('form', formId);
     // The def's field cells are already push-ready ({ control: { fieldName, isRequired? } }); index by
@@ -3039,12 +3130,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // clamped to the COMPILER's section, which for an auto layout is a synthetic one- or two-column
     // stand-in that reconcile never deploys.
     const rawSpans = def.__fieldSpans || {};
+    const newCells = [];
     for (const logical of want) {
-      await placeFieldInSection(formId, logical, wantCellByLogical[logical], sectionTargets[declaredSection[logical]], vacatedSections, rawSpans[logical], def.name);
+      const created = await placeFieldInSection(formId, logical, wantCellByLogical[logical], sectionTargets[declaredSection[logical]], vacatedSections, rawSpans[logical], def.name);
+      if (created) newCells.push(created);
     }
     await addSubgrids(formId, def.__subgrids);
     // Re-assert per-control attributes (read-only / hidden) on fields that were ALREADY on the form.
-    // The add loop above only reaches fields it creates, so without this an author who marks an
+    // New cells already carry their compiled flags; existing ones need this assertion before the
+    // combined layout plan. Without it an author who marks an
     // existing field `readOnly: true` gets a successful build and no change — the same
     // create-only blind spot that made an existing column's RequiredLevel unchangeable.
     //
@@ -3053,8 +3147,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // value. It does NOT mint ids, which is exactly right here — the cell already has one.
     await applyFieldControlOptions(formId, def, want, wantCellByLogical);
     // Reposition any field the spec anchors after another (`fieldOptions[x].after`). Runs AFTER the
-    // add/attribute passes so a field created in this same run can be positioned in the same run.
-    await applyFieldPositions(formId, def, vacatedSections);
+    // attribute pass; new cells and all anchored moves then persist together in one artifact edit.
+    await applyFieldPositions(formId, def, vacatedSections, newCells);
     // Prune fields the deployed form carries that the spec's EXPLICIT layout dropped, so editing a
     // form to REMOVE a field lands. Gated to an author-controlled layout (explicit `tabs`); an AUTO
     // layout stays additive (never strip a column a user added in Maker). Never remove the primary.

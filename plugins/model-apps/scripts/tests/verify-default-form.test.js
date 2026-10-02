@@ -24,6 +24,7 @@ function readWith(defaultIds, failIds = new Set()) {
     findTable: async () => ({ logicalName: 'new_project' }),
     findColumns: async () => [],
     sitemapXml: async () => '',
+    formTopology: async (_entity, formId) => `<form><DisplayConditions Order="${formId === 'form-manager' ? 0 : 1}"/></form>`,
     queryRecords: async (set, opts) => {
       if (set !== 'systemform') return [];
       for (const [name, id] of Object.entries(ids)) {

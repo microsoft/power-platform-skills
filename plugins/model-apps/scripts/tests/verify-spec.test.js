@@ -19,6 +19,7 @@ test('verifySpec: everything present -> ok', async () => {
     findTable: async () => ({ logicalName: 'new_o' }),
     findColumns: async () => [{ logicalName: 'new_s' }],
     queryRecords: async (set) => [{ [idFor(set)]: 'id-1' }],
+    formTopology: async () => '<form><DisplayConditions Order="0"/></form>',
     sitemapXml: async () => '<SiteMap><Area Icon="a.png"><SubArea Entity="new_o" Icon="ic.png"/></Area></SiteMap>',
   };
   const r = await verifySpec(spec, read);
@@ -800,11 +801,12 @@ test('verifySpec: no default-form check is emitted for a reused or stock table t
     "the solution's own custom table is still checked");
 });
 
-test('verifySpec: default-form check is reader-gated for existence-only callers', async () => {  const spec = { entities: [], views: [], charts: [], appShell: { areas: [] },
+test('verifySpec: default-form flag check remains reader-gated with readable form identities', async () => {  const spec = { entities: [], views: [], charts: [], appShell: { areas: [] },
     forms: [{ entity: 'new_ticket', name: 'Agent Form', formType: 'Main', isDefault: true }] };
   const read = {
     findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',
     queryRecords: async (set) => (set === 'systemform' ? [{ formid: 'agent-form-id' }] : []),
+    formTopology: async () => '<form><DisplayConditions Order="0"/></form>',
   };
 
   const r = await verifySpec(spec, read);
@@ -1838,6 +1840,60 @@ const shapeSpec = (fields, cols = 2) => (spec) => {
   spec.forms[0].tabs = [{ name: 'tab_overview', label: 'Overview', columns: [
     { width: '100%', sections: [{ name: 'sec_left', label: 'L', columns: cols, fields }] }] }];
 };
+
+const identityXml = (secondCellId, secondControlId, suffix = '') =>
+  `<form><DisplayConditions Order="0"/><tabs><tab name="tab_overview"><labels><label description="Overview"/></labels><columns>`
+  + `<column width="100%"><sections><section name="sec_left" columns="11"><labels><label description="L"/></labels><rows>`
+  + `<row><cell id="00000000-0000-4000-8000-000000000001"><control id="new_name" datafieldname="new_name"/></cell>`
+  + `<cell id="${secondCellId}"><control id="${secondControlId}" datafieldname="new_notes"/></cell></row>`
+  + `</rows></section></sections></column></columns></tab></tabs>${suffix}</form>`;
+
+for (const [what, cellId, controlId, detail] of [
+  ['cell', '00000000-0000-4000-8000-000000000001', 'new_notes', /duplicate cell id/i],
+  ['brace-wrapped cell', '{00000000-0000-4000-8000-000000000001}', 'new_notes', /duplicate cell id/i],
+  ['control', '00000000-0000-4000-8000-000000000002', 'new_name', /duplicate control id/i],
+]) {
+  for (const explicit of [true, false]) {
+    test(`form identities: duplicate ${what} ids fail ${explicit ? 'explicit' : 'auto'} verification`, async () => {
+      const spec = TOPO_SPEC();
+      if (explicit) shapeSpec(['new_name', 'new_notes'])(spec);
+      else spec.forms = [{ entity: 'new_ticket', name: 'Ticket Main' }];
+      const result = await verifySpec(spec, topoRead(identityXml(cellId, controlId)));
+      assert.strictEqual(result.ok, false, 'field membership and occupancy cannot excuse a duplicated identity');
+      assert.ok(result.missing.some((c) => detail.test(c.detail)), JSON.stringify(result.checks));
+    });
+  }
+}
+
+test('form identities: header and body controls share the form-wide uniqueness scope', async () => {
+  const spec = TOPO_SPEC();
+  shapeSpec(['new_name', 'new_notes'])(spec);
+  const result = await verifySpec(spec, topoRead(identityXml('00000000-0000-4000-8000-000000000002', 'new_notes',
+    '<header><control id="new_name" datafieldname="new_name"/></header>')));
+  assert.strictEqual(result.ok, false);
+  assert.ok(result.missing.some((c) => /duplicate control id.*new_name/i.test(c.detail)));
+});
+
+test('form identities: repeated field bindings with distinct ids and XML trivia are not duplicates', async () => {
+  const spec = TOPO_SPEC();
+  shapeSpec(['new_name', 'new_notes'])(spec);
+  const xml = identityXml('00000000-0000-4000-8000-000000000002', 'new_notes',
+    '<header><control id="header_new_name" datafieldname="new_name"/></header>'
+    + '<!-- <cell id="00000000-0000-4000-8000-000000000001"><control id="new_name"/></cell> -->'
+    + '<opaque><![CDATA[<control id="new_name"/>]]></opaque>');
+  const result = await verifySpec(spec, topoRead(xml));
+  assert.strictEqual(result.ok, true, JSON.stringify(result.missing));
+});
+
+test('form identities: an auto form without a readable XML source cannot claim verified identities', async () => {
+  const spec = TOPO_SPEC();
+  spec.forms = [{ entity: 'new_ticket', name: 'Ticket Main' }];
+  const read = topoRead(null);
+  delete read.formTopology;
+  const result = await verifySpec(spec, read);
+  assert.strictEqual(result.ok, false);
+  assert.ok(result.missing.some((c) => /identit|layout.*unverified/i.test(c.detail)));
+});
 
 test('verify FAILS when a deployed row carries more content than its grid', async () => {
   // Two colspan-1 cells plus a widened one: 2 + 1 = 3 columns of content in a 2-column section.

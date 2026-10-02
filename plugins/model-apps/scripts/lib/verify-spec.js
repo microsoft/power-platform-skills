@@ -525,8 +525,7 @@ async function verifySpec(spec, read, opts = {}) {
       if (flagsAny) {
         try { autoFlagged = autoLayoutFieldFlags(spec, f); } catch (e) { autoCompileError = (e && e.message) || String(e); }
       }
-      if (!explicit && !autoFlagged.length && !autoCompileError) continue;
-      const kind = explicit ? 'form-topology' : 'form-field-state';
+      const kind = explicit ? 'form-topology' : autoFlagged.length || autoCompileError ? 'form-field-state' : 'form-identities';
       if (autoCompileError) {
         // Only an unvalidated spec reaches this (validation requires every table's primary column), but a
         // layout the compiler cannot read cannot say which fields the build places — so nothing is proven.
@@ -564,6 +563,12 @@ async function verifySpec(spec, read, opts = {}) {
           `could not read the deployed form layout${readError ? `: ${readError}` : ''} — the layout is unverified, not proven correct`);
         continue;
       }
+
+      // A duplicated cell/control ID can bind two otherwise valid rows to one UI identity. Check
+      // the whole form, including header/footer and unbound controls, even for an unshaped auto form.
+      const identityProblems = formIdentityProblems(xml);
+      add('form-identities', `${entity}.${name}`, identityProblems.length === 0, identityProblems.join('; '));
+      if (!explicit && !autoFlagged.length) continue;
 
       const deployed = parseFormTopology(xml);
       const problems = [];
@@ -1739,6 +1744,49 @@ function autoLayoutFieldFlags(spec, formSpec) {
     }
   }
   return out;
+}
+
+// Repeated field bindings are valid (body/header), but duplicated cell/control identities are not.
+// Collect definitions across the whole form, not only the sections an explicit layout declares.
+function formIdentityProblems(xml) {
+  const markup = String(xml || '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '')
+    .replace(/<\?[\s\S]*?\?>/g, '');
+  // Reuse the quote-aware XML token patterns used by the sitemap oracle. A literal <control> in
+  // a comment/CDATA is not a definition, and raw '>' inside a quoted attribute is not a tag end.
+  const tags = [...markup.matchAll(XML_TAG)];
+  if (tags.length !== (markup.match(/</g) || []).length) return ['could not parse the deployed FormXML to verify identities'];
+  const open = [];
+  const seen = { cell: new Set(), control: new Set() };
+  const problems = [];
+  let roots = 0;
+  for (const [, closing, name, body, selfClosing] of tags) {
+    if (closing) {
+      if (open[open.length - 1] !== name) return ['could not parse the deployed FormXML to verify identities'];
+      open.pop();
+      continue;
+    }
+    const kind = name.toLowerCase();
+    if (!open.length && kind === 'form') roots += 1;
+    if (open.length && open[0].toLowerCase() === 'form' && (kind === 'cell' || kind === 'control')) {
+      for (const match of body.matchAll(XML_ATTR)) {
+        if (match[1].toLowerCase() !== 'id') continue;
+        const id = decodeXmlEntities(match[2] !== undefined ? match[2] : match[3]).trim();
+        if (!id) continue;
+        // Cell IDs and GUID-shaped control IDs may arrive as "{ABC...}" or "abc...". Non-GUID
+        // control names remain exact strings; the two ID namespaces are independent.
+        const unwrapped = id.startsWith('{') && id.endsWith('}') ? id.slice(1, -1) : id;
+        const key = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(unwrapped)
+          ? unwrapped.toLowerCase() : id;
+        if (seen[kind].has(key)) problems.push(`duplicate ${kind} id '${id}' in the deployed form`);
+        seen[kind].add(key);
+      }
+    }
+    if (!selfClosing) open.push(name);
+  }
+  if (open.length || roots !== 1) return ['could not parse one deployed FormXML root to verify identities'];
+  return problems;
 }
 
 // Parse a deployed form's FormXml into the container tree `--verify` needs to prove a layout.

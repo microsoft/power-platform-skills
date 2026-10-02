@@ -143,6 +143,13 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   never duplicates a control. A row that a pruned or moved cell leaves holding nothing is removed too
   (`strandedRows` in `lib/form-occupancy.js`, shared by the prune pass and both move paths). A row that
   a row-spanning cell above still reserves is kept, and so is a row that was already empty.
+  Explicit layouts converge **tab/section order**, not existing-field order. Newly created listed
+  fields and `fieldOptions[x].after` share a copied occupancy-checked plan, committed as one artifact
+  edit so an interrupted split cannot persist duplicated cells. Anchors run in dependency order
+  after new-field insertion; remaining unsatisfied requests are warned in `skipped.layout`.
+  Existing fields are not list-reordered. Verify checks form-wide cell/control ID uniqueness,
+  including auto forms, but not field order or anchor adjacency. See the
+  [form-layout contract](references/app-spec-schema.md).
   **Which form a table opens with** (AB#6736948, `lib/form-order.js`) is decided by the table's Main
   Form Set order — each Main form's formxml `<DisplayConditions Order>` — not by `systemform.isdefault`
   (measured: moving the flag reorders nothing, and a table's three new forms, all at the same order,
