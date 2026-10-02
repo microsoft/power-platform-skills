@@ -341,10 +341,14 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
         // a closed socket — so without these the promise never settled. A bounded fan-out that waits
         // for its in-flight writes before reporting a failure (mapLimit) then waited forever.
         // Resolving `{ error }` is the same contract as a request-level failure; a later call is a no-op.
-        res.on('aborted', () => resolve({ error: 'Response aborted before it completed' }));
-        res.on('error', (e) => resolve({ error: `Response failed before it completed: ${e.message}` }));
+        // `incompleteResponse` and the status that already arrived tell the retry loops this is not a
+        // request that never reached the server: the server ANSWERED, so a POST may have been applied
+        // and must not be replayed blindly (see dataverseRequest and sdk-http-client).
+        const cutOff = (error) => resolve({ error, incompleteResponse: true, statusCode: res.statusCode });
+        res.on('aborted', () => cutOff('Response aborted before it completed'));
+        res.on('error', (e) => cutOff(`Response failed before it completed: ${e.message}`));
         res.on('close', () => {
-          if (!res.complete) resolve({ error: 'Connection closed before the response completed' });
+          if (!res.complete) cutOff('Connection closed before the response completed');
         });
       }
     );
@@ -408,6 +412,12 @@ async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {})
     const res = await send({ url, method, headers, body: bodyStr, includeHeaders, timeout });
 
     if (res.error) {
+      // The server answered and the body was then cut off (makeRequest's incompleteResponse). A POST
+      // creates or runs something, so it may already have been applied; re-sending it can create a
+      // second row. Report the uncertain outcome instead — reads and idempotent methods still retry.
+      if (res.incompleteResponse && String(method).toUpperCase() === 'POST') {
+        throw new Error(`Request failed: ${res.error} — the server had already answered ${res.statusCode}, so this POST may have been applied; it was not re-sent. Check the result before running it again.`);
+      }
       if (attempt < maxRetries) continue;
       throw new Error(`Request failed: ${res.error}`);
     }

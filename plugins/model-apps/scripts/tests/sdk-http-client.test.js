@@ -68,6 +68,27 @@ test('refreshes token once on 401 then succeeds', async () => {
 });
 
 
+test('a POST whose response was cut off after the server answered is not re-sent', async () => {
+  // makeRequest reports a body cut off after the status line as incompleteResponse: the server
+  // answered, so the create may already exist and a re-send could make a second row.
+  const { request, calls } = fakeTransport({ error: 'Connection closed before the response completed', incompleteResponse: true, statusCode: 201 });
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+  await assert.rejects(http.post('https://org.crm.dynamics.com/api/data/v9.2/accounts', { name: 'A' }), /already answered 201, so this POST may have been applied; it was not re-sent/);
+  assert.strictEqual(calls.length, 1);
+});
+
+test('a cut-off GET is retried, and a POST that never got an answer keeps its transport retry', async () => {
+  const cut = { error: 'Connection closed before the response completed', incompleteResponse: true, statusCode: 200 };
+  const read = fakeTransport((opts, n) => (n === 1 ? cut : { statusCode: 200, headers: {}, body: '{"value":[]}' }));
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request: read.request, sleep: async () => {} });
+  assert.strictEqual((await http.get('https://org.crm.dynamics.com/api/data/v9.2/accounts')).status, 200);
+  assert.strictEqual(read.calls.length, 2);
+  const write = fakeTransport((opts, n) => (n === 1 ? { error: 'connect ECONNRESET' } : { statusCode: 204, headers: {}, body: '' }));
+  const http2 = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request: write.request, sleep: async () => {} });
+  assert.strictEqual((await http2.post('https://org.crm.dynamics.com/api/data/v9.2/accounts', { name: 'A' })).status, 204);
+  assert.strictEqual(write.calls.length, 2, 'unchanged: a request-level failure is still retried');
+});
+
 test('refreshes token with a fresh acquire on 401, bypassing any process memo', async () => {
   const tokenCalls = [];
   const { request, calls } = fakeTransport(() => {

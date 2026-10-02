@@ -143,9 +143,31 @@ test('makeRequest settles with an error when the connection closes mid-response'
     ]);
     assert.notEqual(settled, 'still pending', 'a truncated response must not leave the request pending');
     assert.match(settled.error, /before (it|the response) completed/);
+    assert.strictEqual(settled.incompleteResponse, true, 'the server answered before the body was cut off');
+    assert.strictEqual(settled.statusCode, 200);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test('dataverseRequest does not replay a POST whose response was cut off, but retries a GET', async () => {
+  const { dataverseRequest } = require('../lib/dataverse-auth.js');
+  const cut = (statusCode) => ({ error: 'Connection closed before the response completed', incompleteResponse: true, statusCode });
+  let posts = 0;
+  await assert.rejects(
+    dataverseRequest('https://contoso.crm.dynamics.com', 'POST', 'accounts', { name: 'A' }, {
+      getToken: () => 'TOK', request: async () => { posts += 1; return cut(201); },
+    }),
+    /already answered 201, so this POST may have been applied; it was not re-sent/,
+  );
+  assert.strictEqual(posts, 1);
+  let gets = 0;
+  const res = await dataverseRequest('https://contoso.crm.dynamics.com', 'GET', 'accounts', null, {
+    getToken: () => 'TOK',
+    request: async () => { gets += 1; return gets === 1 ? cut(200) : { statusCode: 200, body: '{"value":[]}' }; },
+  });
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(gets, 2);
 });
 
 test('getAuthToken reuses a non-empty token per normalized resource URL', () => {
