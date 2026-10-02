@@ -125,6 +125,29 @@ test('makeRequest preserves UTF-8 characters split across response chunks', asyn
   }
 });
 
+test('makeRequest settles with an error when the connection closes mid-response', async () => {
+  const { makeRequest } = require('../lib/dataverse-auth.js');
+  // Headers and part of the body arrive, then the socket closes: no 'end', and the socket timeout
+  // cannot fire on a closed socket. The promise must still settle through the { error } contract.
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': '100' });
+    res.write('{"value":[');
+    setTimeout(() => res.socket.destroy(), 20);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const settled = await Promise.race([
+      makeRequest({ url: `http://127.0.0.1:${port}/cut`, timeout: 60000 }),
+      new Promise((resolve) => setTimeout(() => resolve('still pending'), 2000)),
+    ]);
+    assert.notEqual(settled, 'still pending', 'a truncated response must not leave the request pending');
+    assert.match(settled.error, /before (it|the response) completed/);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('getAuthToken reuses a non-empty token per normalized resource URL', () => {
   const { getAuthToken } = require('../lib/dataverse-auth.js');
   const calls = [];

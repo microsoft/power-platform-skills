@@ -336,6 +336,16 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
           if (includeHeaders) result.headers = res.headers;
           resolve(result);
         });
+        // A response cut off after its headers (the connection reset or closed mid-body) emits
+        // 'aborted' / 'error' / 'close' but never 'end', and the socket timeout above cannot fire on
+        // a closed socket — so without these the promise never settled. A bounded fan-out that waits
+        // for its in-flight writes before reporting a failure (mapLimit) then waited forever.
+        // Resolving `{ error }` is the same contract as a request-level failure; a later call is a no-op.
+        res.on('aborted', () => resolve({ error: 'Response aborted before it completed' }));
+        res.on('error', (e) => resolve({ error: `Response failed before it completed: ${e.message}` }));
+        res.on('close', () => {
+          if (!res.complete) resolve({ error: 'Connection closed before the response completed' });
+        });
       }
     );
     req.on('error', (e) => resolve({ error: e.message }));
