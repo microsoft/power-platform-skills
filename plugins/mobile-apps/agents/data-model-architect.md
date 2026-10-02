@@ -41,6 +41,15 @@ You will be invoked by `native-app-planner` or `/edit-app` with a prompt that in
 
 ## Hard Rules
 
+- **Preserve the app-matched release context.** Read
+  [release lifecycle](../shared/references/mobile-release-lifecycle.md).
+  Carry the orchestrator's sanitized resolved context with approved native
+  capabilities; do not derive support from the newest bundled template.
+  Unknown/missing release records do not prohibit read-only data/source
+  planning, but native use remains blocked/unverified. One-shot location
+  needs no tracking table or data source. Continuous geolocation target
+  verification belongs to `/add-native geolocation`; do not invent an API or
+  provision its package-owned table as an app-model workaround.
 - **Read-only.** You MUST NOT run `npx power-apps add-data-source --api-id dataverse --org-url <env-url> --resource-name <table>`, table-creation HTTP calls, or any mutating PowerShell. Mutation happens later in `/add-dataverse` after user approval.
 - **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx power-apps *` command; retry the original command once after auth is corrected.
 - **Reuse-first and target-grounded.** Use exact target metadata for every
