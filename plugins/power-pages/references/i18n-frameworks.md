@@ -4,27 +4,30 @@ Use this reference from `/power-pages:add-localization` after deterministic
 project inspection. Localization affects only the code-site SPA. It does not
 install or enable languages in the Dataverse environment.
 
-## Supported choices
+## Current availability
 
-| Framework | Recommended mode | Recommended tooling | Alternative |
+| Framework | Available mode | Recommended tooling | Temporarily unavailable |
 |---|---|---|---|
-| React | Runtime | `i18next` + `react-i18next` | Validated compatible runtime package |
-| Vue | Runtime | Stable `vue-i18n` | Validated compatible runtime package |
-| Angular | Static/build-time | Matching `@angular/localize` | `@jsverse/transloco` for runtime switching |
-| Astro | Static locale routes | Built-in Astro i18n routing | No version-1 runtime mode |
+| React | Runtime | `i18next` + `react-i18next` | — |
+| Vue | Runtime | Stable `vue-i18n` | — |
+| Angular | Runtime | `@jsverse/transloco` | Static/build-time localization (`@angular/localize`) |
+| Astro | None | — | Static locale routes (built-in Astro i18n) |
 
 React and Vue use runtime localization because the current Vite templates
 produce one SPA build. Per-locale static output would require a separately
 designed multi-build, routing, output-directory, and asset-path pipeline.
 
-Angular recommends `@angular/localize` because it is Angular's official,
-compiler-integrated localization package. It creates a build per locale.
-Transloco remains available when the maker specifically needs in-place
-language switching.
+Angular currently uses Transloco for in-place runtime switching. Its
+`@angular/localize` static implementation remains documented below but is not
+selectable until the centralized availability registry re-enables it.
 
-Astro uses static locale routes because its built-in i18n routing and
-static-first output naturally produce fully localized HTML and shareable
-locale URLs.
+Astro's built-in static implementation remains documented below but is not
+currently selectable. An Astro invocation stops before configuration or plan
+rendering.
+
+`scripts/lib/localization-config.js` is the source of truth. Workflows,
+package validation, plan rendering, and final validation must consume that
+registry rather than maintaining separate availability lists.
 
 ## Shared implementation rules
 
@@ -108,9 +111,11 @@ Ordinary components using logical CSS need no subscription.
 The language selector calls the coordinator; it must not independently mutate
 the localization library, `lang`, `dir`, or persistence.
 
-## Static locale behavior
+## Dormant static locale behavior
 
-Applies to Angular with `@angular/localize` and Astro.
+This guidance is retained for Angular with `@angular/localize` and Astro so the
+implementations can be re-enabled without reconstruction. Current workflows
+must not execute it while those modes are `temporarily-unavailable`.
 
 - Generate a locale-specific build or route for every configured locale.
 - Include the active locale in the URL/build output.
@@ -146,7 +151,7 @@ Install a stable `vue-i18n` release; never silently use an npm prerelease tag.
 Register the i18n plugin once in the app entry point. Use `$t` or
 `useI18n()` consistently with the existing Composition/Options API style.
 
-## Angular static
+## Angular static (dormant)
 
 Use `@angular/localize` matching the installed Angular major/version.
 
@@ -173,7 +178,7 @@ Use `@jsverse/transloco`.
 - Use Transloco services/directives/pipes consistently.
 - Implement the shared runtime locale behavior above.
 
-## Astro
+## Astro static (dormant)
 
 Use Astro's built-in `i18n` configuration.
 
@@ -213,7 +218,12 @@ Write `.powerpages-localization.json` after implementation using this shape:
   "unavailableLocales": [],
   "bidirectionalReadiness": {
     "status": "ready",
-    "findings": []
+    "localeReadiness": {
+      "en-US": { "status": "ready" },
+      "fr-FR": { "status": "ready" }
+    },
+    "findings": [],
+    "renderedFindings": []
   },
   "adoptedExistingConfiguration": false,
   "lastOperation": "create",
@@ -248,20 +258,69 @@ implementation must expose one managed `localeAvailability` module with an
 `isLocaleAvailable` predicate that rejects the unavailable set. Every selector,
 switch/detection path, alternate-language metadata generator, and static output
 configuration must apply that predicate; recording the array in the manifest
-does not disable a locale by itself. During `pending-remediation`, all
-configured locales opposite to the default locale's direction must remain
-unavailable.
-`bidirectionalReadiness` is optional for same-direction locale sets and required
-when the configured set contains both LTR and RTL:
+does not disable a locale by itself. `unavailableLocales` must exactly match
+the locales whose individual `localeReadiness` status is
+`pending-remediation`. A failure in one locale does not disable another locale
+unless a scoped finding explicitly identifies both as affected.
+`bidirectionalReadiness` is required for every schema-version-1 localization
+manifest. Same-direction locale sets still require pseudo-opposite validation,
+so omitting readiness metadata would expose a new locale before that check:
 
 - `ready` — no unresolved compatibility findings.
 - `approved-with-limitations` — the experience remains functional, readable,
-  accurate, and accessible; the maker explicitly accepted documented limits.
+  accurate, and accessible; the maker explicitly accepted every documented
+  limit.
 - `pending-remediation` — hard compatibility work remains; affected locales
   belong in `unavailableLocales` and managed availability logic.
 
-Each pending finding must preserve the exact scanner result with `file`, `line`, `rule`, and
-`message`.
+`localeReadiness` contains exactly one entry for every configured locale. The
+top-level status is derived from those entries: any pending locale makes it
+`pending-remediation`; otherwise any approved locale makes it
+`approved-with-limitations`; otherwise it is `ready`. The default locale cannot
+be pending because it cannot be safely hidden.
+
+Each pending finding must preserve the exact scanner result with `file`, `line`,
+`rule`, `message`, and `fingerprint`. The fingerprint binds the record to the
+source context and occurrence that produced it, so replacing an item at the
+same line does not inherit the old deferral.
+Keep rendered browser blockers in `renderedFindings` with their `caseId`,
+`rule`, `severity`, `message`, and `selector`. Rendered findings are validation
+evidence and readiness state; they are not used to suppress later source
+scanner findings.
+
+Every static or rendered finding also records a nonempty `affectedLocales`
+array and one scope:
+
+- `"locale"` — one language-specific locale.
+- `"direction"` — every configured locale of the recorded `"ltr"` or `"rtl"`
+  direction.
+- `"shared"` — an explicitly tested subset affected by shared implementation.
+- `"global"` — every configured locale.
+
+An error or undisposed review finding makes every affected locale pending.
+Maker-approved review findings make an otherwise unblocked affected locale
+`approved-with-limitations`; the locale remains pending if another error or
+undisposed review finding still affects it. A ready locale cannot be named by
+an unresolved finding. Existing ready locales keep their status unless
+regression evidence shows the changed implementation affects them.
+
+`ready` must not retain static or rendered findings. For
+`approved-with-limitations`, retain only review-severity findings and add this
+disposition to each one:
+
+```json
+"disposition": {
+  "status": "maker-approved",
+  "impact": "Exact usable degradation and affected component or page",
+  "evidence": "docs/bidirectional-evidence/<run-id>/<screenshot-or-report>",
+  "approvedAt": "2026-09-03T12:00:00.000Z"
+}
+```
+
+The evidence path must identify the report or screenshot the maker reviewed.
+An error finding can never receive this disposition. If the maker saves work
+without accepting a review finding, keep the result `pending-remediation` and
+the affected locale unavailable.
 Only those recorded physical-layout blockers are deferred by lifecycle validation; newly
 introduced findings, invisible bidi controls, and invalid exception directives still block.
 
@@ -302,7 +361,8 @@ Offer repair/reconfiguration when one or more of these conditions apply:
 - Multiple localization packages or runtime/static modes conflict.
 - Package is missing, deprecated, incompatible, or the maker wants to change
   it.
-- Angular maker wants to switch between static and runtime localization.
+- An existing Angular static setup must be explicitly reconfigured to the
+  currently available runtime mode before this skill can modify it.
 - Default locale is missing, invalid, duplicated, conflicting, or explicitly
   being changed.
 - Locale resources/routes or translation keys are missing.

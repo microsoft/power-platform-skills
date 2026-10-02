@@ -17,6 +17,87 @@ const ICON_RATIONALE_DATA = [
   { icon: '&#9881;<img src=x>', title: 'Mixed input', desc: 'Must remain escaped text.' },
   { icon: '&#xZZ;', title: 'Malformed entity', desc: 'Must remain escaped text.' },
 ];
+const CREATE_SITE_PLAN_LABELS = {
+  navigation: {
+    group: 'Plan',
+    overview: 'Overview',
+    design: 'Design',
+    pages: 'Pages and components',
+    deployment: 'Deployment and review',
+  },
+  overview: {
+    title: 'Overview',
+    description: 'Implementation plan for {siteName}',
+    stats: { pages: 'Pages', components: 'Components', routes: 'Routes' },
+    nextSteps: {
+      title: 'Next steps',
+      design: { title: 'Apply design', description: 'Apply the approved design.' },
+      components: {
+        title: 'Build components',
+        descriptionOne: 'Build {count} component.',
+        descriptionOther: 'Build {count} components.',
+      },
+      pages: {
+        title: 'Create pages',
+        descriptionOne: 'Create {count} page.',
+        descriptionOther: 'Create {count} pages.',
+      },
+      verify: { title: 'Verify', description: 'Run verification before handoff.' },
+    },
+  },
+  design: {
+    title: 'Design',
+    description: 'Approved design system',
+    typography: 'Typography',
+    palette: 'Palette',
+    motion: 'Motion',
+    backgrounds: 'Backgrounds',
+    primaryRole: 'Primary',
+    secondaryRole: 'Secondary',
+  },
+  pages: {
+    title: 'Pages and components',
+    description: 'Planned pages and reusable components',
+    pages: 'Pages',
+    components: 'Components',
+    routing: 'Routing',
+    path: 'Path',
+    page: 'Page',
+    content: 'Content',
+    componentsUsed: 'Components used',
+    usedBy: 'Used by',
+    noComponents: 'No components specified.',
+  },
+  bidirectional: {
+    title: 'Bidirectional review',
+    description: 'Direction-aware review coverage',
+    classification: 'Classification',
+    reason: 'Reason',
+    states: 'States',
+    viewports: 'Viewports',
+    checks: 'Checks',
+    classifications: {
+      directionNeutral: 'Direction-neutral',
+      directionAware: 'Direction-aware',
+      directionFixed: 'Direction-fixed',
+      unknownThirdParty: 'Unknown or third-party',
+    },
+    viewport: { desktop: 'Desktop', narrow: 'Narrow' },
+  },
+  deployment: {
+    title: 'Deployment and review',
+    description: 'Verification and deployment options',
+    verify: 'Verify before handoff',
+    agentChecks: 'Agent checks',
+    agentChecksDescription: 'Automated checks performed before handoff.',
+    makerReview: 'Maker review',
+    makerReviewDescription: 'Judgment-based checks for the maker.',
+    options: 'Options',
+    recommended: 'Recommended',
+  },
+  common: { noneSpecified: 'None specified.' },
+  footer: { aiWarning: 'AI-generated content may be incorrect.' },
+};
 
 const DATA_MODEL_DATA = {
   SITE_NAME: 'Contoso Portal',
@@ -118,7 +199,23 @@ class FakeElement {
   }
 
   addEventListener() {}
-  appendChild() {}
+  append(...nodes) {
+    for (const node of nodes) {
+      if (node instanceof FakeElement) {
+        this._textContent += node.textContent;
+        this._innerHTML += node.innerHTML;
+      } else {
+        const textNode = new FakeElement();
+        textNode.textContent = node;
+        this._textContent += textNode.textContent;
+        this._innerHTML += textNode.innerHTML;
+      }
+    }
+  }
+  appendChild(node) {
+    this.append(node);
+    return node;
+  }
   querySelector() { return null; }
   querySelectorAll() { return []; }
   setAttribute() {}
@@ -161,6 +258,11 @@ function executeInlineRenderer(html, { skipMermaid = false, svg = null } = {}) {
     querySelectorAll() { return []; },
     addEventListener() {},
     createElement() { return new FakeElement(); },
+    createTextNode(value) {
+      const node = new FakeElement();
+      node.textContent = value;
+      return node;
+    },
     importNode(node) { return node; },
   };
 
@@ -462,6 +564,7 @@ test('backend and create-site plans allowlist dynamic attributes and escape nest
     AESTHETIC: attack,
     MOOD: attack,
     SUMMARY: attack,
+    PLAN_LABELS: CREATE_SITE_PLAN_LABELS,
     TYPOGRAPHY_DATA: {
       primary: { name: attack, sample: attack, reason: attack },
       secondary: null,
@@ -472,7 +575,18 @@ test('backend and create-site plans allowlist dynamic attributes and escape nest
     PAGES_DATA: [{ name: attack, route: attack, description: attack, content: [attack], components: [attack] }],
     COMPONENTS_DATA: [{ name: attack, purpose: attack, usedBy: [attack] }],
     ROUTES_DATA: [{ path: attack, page: attack }],
-    REVIEW_DATA: [attack],
+    BIDIRECTIONAL_REVIEW_DATA: [{
+      component: attack,
+      classification: 'direction-aware',
+      reason: attack,
+      states: [attack],
+      viewports: ['desktop'],
+      checks: [attack],
+    }],
+    REVIEW_DATA: {
+      agentChecks: [attack],
+      makerReview: [attack],
+    },
     DEPLOYMENT_DATA: [{ title: attack, description: attack, recommended: true }],
   });
   const createSiteElements = executeInlineRenderer(createSiteHtml);
@@ -484,7 +598,9 @@ test('backend and create-site plans allowlist dynamic attributes and escape nest
     'pagesContainer',
     'componentsContainer',
     'routesBody',
-    'reviewContainer',
+    'bidirectionalReviewContainer',
+    'agentChecksContainer',
+    'makerReviewContainer',
     'deploymentContainer',
   ].map(id => createSiteElements.get(id).innerHTML).join('');
   assert.doesNotMatch(createSiteRendered, /<img\b|<script\b|onclick=/i);

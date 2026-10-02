@@ -14,7 +14,9 @@ const {
   detectSiteLanguage,
   detectSiteLanguageForFramework,
   discoverLocalizationImplementation,
+  getFrameworkLocalizationAvailability,
   getLocaleDirection,
+  getLocalizationModeAvailability,
   inspectProject,
   protectedTokenSignature,
   resolveLocale,
@@ -23,7 +25,6 @@ const {
   validateLocales,
 } = require('../lib/localization-config');
 const { createTempProject, writeProjectFile } = require('./test-utils');
-
 const CONFIG_PATH = path.join(__dirname, '..', 'lib', 'localization-config.js');
 
 function writePackage(projectRoot, dependencies) {
@@ -32,6 +33,13 @@ function writePackage(projectRoot, dependencies) {
 
 test('centralizes framework modes, recommendations, packages, and peers', () => {
   assert.deepEqual(LOCALIZATION_CAPABILITIES.frameworks.react.supportedModes, ['runtime']);
+  assert.deepEqual(LOCALIZATION_CAPABILITIES.frameworks.react.availableModes, ['runtime']);
+  assert.deepEqual(
+    LOCALIZATION_CAPABILITIES.frameworks.angular.supportedModes,
+    ['runtime', 'static']
+  );
+  assert.deepEqual(LOCALIZATION_CAPABILITIES.frameworks.angular.availableModes, ['runtime']);
+  assert.equal(LOCALIZATION_CAPABILITIES.frameworks.angular.recommendedMode, 'runtime');
   assert.equal(
     LOCALIZATION_CAPABILITIES.frameworks.angular.recommendedPackages.static,
     '@angular/localize'
@@ -43,6 +51,82 @@ test('centralizes framework modes, recommendations, packages, and peers', () => 
   assert.deepEqual(
     LOCALIZATION_CAPABILITIES.packages['astro-built-in'],
     { framework: 'astro', mode: 'static', builtIn: true }
+  );
+  assert.deepEqual(LOCALIZATION_CAPABILITIES.frameworks.astro.availableModes, []);
+  assert.equal(LOCALIZATION_CAPABILITIES.frameworks.astro.recommendedMode, null);
+});
+
+test('reports centralized localization mode availability and stable reasons', () => {
+  assert.deepEqual(getLocalizationModeAvailability('react', 'runtime'), {
+    framework: 'react',
+    mode: 'runtime',
+    supported: true,
+    available: true,
+    status: 'available',
+    recommendedPackage: 'react-i18next',
+    builtIn: false,
+  });
+
+  const angularStatic = getLocalizationModeAvailability('angular', 'static');
+  assert.equal(angularStatic.supported, true);
+  assert.equal(angularStatic.available, false);
+  assert.equal(angularStatic.status, 'temporarily-unavailable');
+  assert.equal(
+    angularStatic.reasonCode,
+    'angular-static-temporarily-unavailable'
+  );
+  assert.match(angularStatic.reason, /Angular runtime localization is available/);
+  assert.match(angularStatic.reason, /validated runtime alternatives are allowed/);
+
+  const astro = getFrameworkLocalizationAvailability('astro');
+  assert.deepEqual(astro.availableModes, []);
+  assert.equal(astro.modes.static.available, false);
+  assert.equal(astro.modes.static.recommendedPackage, 'astro-built-in');
+  assert.equal(astro.modes.static.builtIn, true);
+  assert.equal(
+    astro.modes.static.reasonCode,
+    'astro-static-temporarily-unavailable'
+  );
+});
+
+test('includes detected framework availability in project inspection', (t) => {
+  const projectRoot = createTempProject(t);
+  writePackage(projectRoot, { astro: '^6.1.0' });
+
+  const inspection = inspectProject(projectRoot);
+  assert.equal(inspection.framework.framework, 'astro');
+  assert.deepEqual(inspection.availability.availableModes, []);
+  assert.equal(
+    inspection.availability.modes.static.reasonCode,
+    'astro-static-temporarily-unavailable'
+  );
+});
+
+test('exposes mode availability through the shared CLI', () => {
+  const frameworkResult = spawnSync(
+    process.execPath,
+    [CONFIG_PATH, 'mode-availability', '--framework', 'astro'],
+    { encoding: 'utf8' }
+  );
+  assert.equal(frameworkResult.status, 0, frameworkResult.stderr);
+  assert.deepEqual(JSON.parse(frameworkResult.stdout).availableModes, []);
+
+  const modeResult = spawnSync(
+    process.execPath,
+    [
+      CONFIG_PATH,
+      'mode-availability',
+      '--framework',
+      'angular',
+      '--mode',
+      'static',
+    ],
+    { encoding: 'utf8' }
+  );
+  assert.equal(modeResult.status, 1);
+  assert.equal(
+    JSON.parse(modeResult.stdout).reasonCode,
+    'angular-static-temporarily-unavailable'
   );
 });
 
@@ -224,7 +308,20 @@ test('validates bidirectional readiness and unavailable locale manifest fields',
     unavailableLocales: ['ar-SA'],
     bidirectionalReadiness: {
       status: 'pending-remediation',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'ar-SA': { status: 'pending-remediation' },
+      },
       findings: [],
+      renderedFindings: [{
+        caseId: 'calendar--open--desktop--ar',
+        rule: 'computed-direction-mismatch',
+        severity: 'error',
+        message: 'Expected rtl but found ltr.',
+        selector: '.calendar',
+        scope: 'locale',
+        affectedLocales: ['ar-SA'],
+      }],
     },
   };
 
@@ -232,17 +329,360 @@ test('validates bidirectional readiness and unavailable locale manifest fields',
   assert.match(
     validateLocalizationManifestShape({
       ...manifest,
-      unavailableLocales: undefined,
+      schemaVersion: 2,
     }).join('\n'),
-    /Pending bidirectional remediation requires at least one unavailable locale/
+    /schemaVersion must be 1/
   );
   assert.match(
     validateLocalizationManifestShape({
       ...manifest,
-      bidirectionalReadiness: { status: 'unknown', findings: [] },
+      unavailableLocales: undefined,
+    }).join('\n'),
+    /unavailableLocales must exactly match/
+  );
+  assert.match(
+    validateLocalizationManifestShape({
+      ...manifest,
+      bidirectionalReadiness: {
+        status: 'unknown',
+        localeReadiness: manifest.bidirectionalReadiness.localeReadiness,
+        findings: [],
+        renderedFindings: [],
+      },
     }).join('\n'),
     /bidirectionalReadiness\.status must be/
   );
+  assert.match(
+    validateLocalizationManifestShape({
+      ...manifest,
+      unavailableLocales: [],
+      bidirectionalReadiness: {
+        status: 'ready',
+        localeReadiness: {
+          'en-US': { status: 'ready' },
+          'ar-SA': { status: 'ready' },
+        },
+        findings: [],
+        renderedFindings: manifest.bidirectionalReadiness.renderedFindings,
+      },
+    }).join('\n'),
+    /requires locale ar-SA to be pending-remediation/
+  );
+  assert.match(
+    validateLocalizationManifestShape({
+      ...manifest,
+      bidirectionalReadiness: {
+        status: 'approved-with-limitations',
+        localeReadiness: {
+          'en-US': { status: 'ready' },
+          'ar-SA': { status: 'approved-with-limitations' },
+        },
+        findings: [],
+        renderedFindings: manifest.bidirectionalReadiness.renderedFindings,
+      },
+    }).join('\n'),
+    /requires locale ar-SA to be pending-remediation/
+  );
+  assert.match(
+    validateLocalizationManifestShape({
+      ...manifest,
+      bidirectionalReadiness: {
+        status: 'pending-remediation',
+        localeReadiness: manifest.bidirectionalReadiness.localeReadiness,
+        findings: [],
+        renderedFindings: [{ severity: 'error' }],
+      },
+    }).join('\n'),
+    /renderedFindings\[0\]\.caseId/
+  );
+});
+
+test('requires explicit maker disposition for approved bidirectional limitations', () => {
+  const base = {
+    schemaVersion: 1,
+    framework: 'react',
+    mode: 'runtime',
+    packageName: 'i18next',
+    packageVersion: '25.0.0',
+    defaultLocale: 'en-US',
+    locales: ['en-US', 'ar-SA'],
+    translationMethod: 'agent',
+    lastOperation: 'add-languages',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    generatedFiles: [],
+    managedFiles: [],
+    resourcePaths: {},
+    adoptedExistingConfiguration: false,
+    packageVerification: {
+      status: 'verified',
+      source: 'known-capability',
+    },
+    unavailableLocales: [],
+  };
+  const limitation = {
+    caseId: 'calendar--open--desktop--ar',
+    rule: 'rendered-semantic-review',
+    severity: 'review',
+    message: 'The vendor calendar uses a culturally neutral next-page icon.',
+    selector: '.calendar',
+    scope: 'locale',
+    affectedLocales: ['ar-SA'],
+  };
+
+  assert.match(
+    validateLocalizationManifestShape({
+      ...base,
+      bidirectionalReadiness: {
+        status: 'approved-with-limitations',
+        localeReadiness: {
+          'en-US': { status: 'ready' },
+          'ar-SA': { status: 'approved-with-limitations' },
+        },
+        findings: [],
+        renderedFindings: [limitation],
+      },
+    }).join('\n'),
+    /requires only maker-approved review findings/
+  );
+
+  assert.deepEqual(validateLocalizationManifestShape({
+    ...base,
+    bidirectionalReadiness: {
+      status: 'approved-with-limitations',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'ar-SA': { status: 'approved-with-limitations' },
+      },
+      findings: [],
+      renderedFindings: [{
+        ...limitation,
+        disposition: {
+          status: 'maker-approved',
+          impact: 'Calendar navigation remains usable; only the icon treatment differs.',
+          evidence: 'docs/bidirectional-evidence/run-1/calendar.png',
+          approvedAt: '2026-01-01T00:00:00.000Z',
+        },
+      }],
+    },
+  }), []);
+
+  assert.deepEqual(validateLocalizationManifestShape({
+    ...base,
+    unavailableLocales: ['ar-SA'],
+    bidirectionalReadiness: {
+      status: 'pending-remediation',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'ar-SA': { status: 'pending-remediation' },
+      },
+      findings: [],
+      renderedFindings: [{
+        ...limitation,
+        disposition: {
+          status: 'maker-approved',
+          impact: 'Calendar navigation remains usable; only the icon treatment differs.',
+          evidence: 'docs/bidirectional-evidence/run-1/calendar.png',
+          approvedAt: '2026-01-01T00:00:00.000Z',
+        },
+      }, {
+        caseId: 'calendar--open--narrow--ar',
+        rule: 'rendered-clipping',
+        severity: 'error',
+        message: 'The calendar clips at narrow width.',
+        selector: '.calendar',
+        scope: 'locale',
+        affectedLocales: ['ar-SA'],
+      }],
+    },
+  }), []);
+
+  assert.match(
+    validateLocalizationManifestShape({
+      ...base,
+      bidirectionalReadiness: {
+        status: 'approved-with-limitations',
+        localeReadiness: {
+          'en-US': { status: 'ready' },
+          'ar-SA': { status: 'approved-with-limitations' },
+        },
+        findings: [],
+        renderedFindings: [{
+          ...limitation,
+          disposition: {
+            status: 'maker-approved',
+            impact: 'Calendar navigation remains usable.',
+            evidence: 'docs/bidirectional-evidence/run-1/calendar.png',
+            approvedAt: '2026-02-30T00:00:00.000Z',
+          },
+        }],
+      },
+    }).join('\n'),
+    /approvedAt must be an ISO date-time/
+  );
+
+  assert.match(
+    validateLocalizationManifestShape({
+      ...base,
+      unavailableLocales: ['ar-SA'],
+      bidirectionalReadiness: {
+        status: 'pending-remediation',
+        localeReadiness: {
+          'en-US': { status: 'ready' },
+          'ar-SA': { status: 'pending-remediation' },
+        },
+        findings: [{
+          severity: 'error',
+          file: 'src/app.tsx',
+          line: 1,
+          rule: 'fixed-direction',
+          message: 'Fixed direction must be remediated.',
+          fingerprint: 'abc123',
+          scope: 'direction',
+          affectedLocales: ['ar-SA'],
+        }],
+        renderedFindings: [],
+      },
+    }).join('\n'),
+    /findings\[0\]\.direction must be/
+  );
+
+  assert.match(
+    validateLocalizationManifestShape({
+      ...base,
+      bidirectionalReadiness: {
+        status: 'ready',
+        localeReadiness: {
+          'en-US': { status: 'ready' },
+          'ar-SA': { status: 'ready' },
+        },
+        findings: [{
+          severity: 'review',
+          file: 'src/styles.css',
+          line: 1,
+          rule: 'horizontal-scroll-review',
+          message: 'Review horizontal scrolling.',
+          fingerprint: 'abc123',
+          scope: 'locale',
+          affectedLocales: ['ar-SA'],
+        }],
+        renderedFindings: [],
+      },
+    }).join('\n'),
+    /Undisposed review finding/
+  );
+
+  assert.match(
+    validateLocalizationManifestShape({
+      ...base,
+      unavailableLocales: ['ar-SA'],
+      bidirectionalReadiness: {
+        status: 'pending-remediation',
+        localeReadiness: {
+          'en-US': { status: 'ready' },
+          'ar-SA': { status: 'pending-remediation' },
+        },
+        findings: [],
+        renderedFindings: [{
+          ...limitation,
+          severity: 'error',
+          disposition: {
+            status: 'maker-approved',
+            impact: 'Attempted override.',
+            evidence: 'docs/bidirectional-evidence/run-1/report.json',
+            approvedAt: '2026-01-01T00:00:00.000Z',
+          },
+        }],
+      },
+    }).join('\n'),
+    /error findings cannot have maker-approved dispositions/
+  );
+});
+
+test('scopes readiness findings to only the locales proven affected', () => {
+  const base = {
+    schemaVersion: 1,
+    framework: 'react',
+    mode: 'runtime',
+    packageName: 'i18next',
+    packageVersion: '25.0.0',
+    defaultLocale: 'en-US',
+    locales: ['en-US', 'he-IL', 'ar-SA'],
+    translationMethod: 'agent',
+    lastOperation: 'add-languages',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    generatedFiles: [],
+    managedFiles: [],
+    resourcePaths: {},
+    adoptedExistingConfiguration: false,
+    packageVerification: {
+      status: 'verified',
+      source: 'known-capability',
+    },
+  };
+  const arabicFinding = {
+    caseId: 'arabic-calendar--open--desktop--ar',
+    rule: 'localized-font-failure',
+    severity: 'error',
+    message: 'The Arabic calendar font is unreadable.',
+    selector: '.calendar',
+    scope: 'locale',
+    affectedLocales: ['ar-SA'],
+  };
+
+  assert.deepEqual(validateLocalizationManifestShape({
+    ...base,
+    unavailableLocales: ['ar-SA'],
+    bidirectionalReadiness: {
+      status: 'pending-remediation',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'he-IL': { status: 'ready' },
+        'ar-SA': { status: 'pending-remediation' },
+      },
+      findings: [],
+      renderedFindings: [arabicFinding],
+    },
+  }), []);
+
+  const directionErrors = validateLocalizationManifestShape({
+    ...base,
+    unavailableLocales: ['ar-SA'],
+    bidirectionalReadiness: {
+      status: 'pending-remediation',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'he-IL': { status: 'ready' },
+        'ar-SA': { status: 'pending-remediation' },
+      },
+      findings: [],
+      renderedFindings: [{
+        ...arabicFinding,
+        scope: 'direction',
+        direction: 'rtl',
+      }],
+    },
+  }).join('\n');
+  assert.match(directionErrors, /must affect every configured rtl locale/);
+
+  assert.deepEqual(validateLocalizationManifestShape({
+    ...base,
+    unavailableLocales: ['he-IL', 'ar-SA'],
+    bidirectionalReadiness: {
+      status: 'pending-remediation',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'he-IL': { status: 'pending-remediation' },
+        'ar-SA': { status: 'pending-remediation' },
+      },
+      findings: [],
+      renderedFindings: [{
+        ...arabicFinding,
+        scope: 'direction',
+        direction: 'rtl',
+        affectedLocales: ['he-IL', 'ar-SA'],
+      }],
+    },
+  }), []);
 });
 
 test('detects the persisted single-site language from document attributes', (t) => {
@@ -484,6 +924,69 @@ test('derives mode, locales, default, and resources for a manifestless existing 
   assert.deepEqual(result.locales, ['en-US', 'fr-FR']);
   assert.equal(result.defaultLocale, 'en-US');
   assert.equal(result.resourcePaths['fr-FR'], 'src/i18n/locales/fr-FR.json');
+});
+
+test('reports unavailable static evidence even when an Angular manifest claims runtime', (t) => {
+  const projectRoot = createTempProject(t);
+  writePackage(projectRoot, {
+    '@angular/core': '^19.1.0',
+    '@angular/compiler': '^19.1.0',
+    '@angular/compiler-cli': '^19.1.0',
+    '@angular/localize': '^19.1.0',
+    '@jsverse/transloco': '^7.6.0',
+  });
+  writeProjectFile(projectRoot, 'angular.json', JSON.stringify({
+    projects: {
+      portal: {
+        i18n: { sourceLocale: 'en-US' },
+      },
+    },
+  }));
+  writeProjectFile(projectRoot, 'src/assets/i18n/en-US.json', '{"home":"Home"}');
+  writeProjectFile(projectRoot, 'src/assets/i18n/fr-FR.json', '{"home":"Accueil"}');
+  writeProjectFile(
+    projectRoot,
+    'src/app/i18n.ts',
+    "provideTransloco({}); setActiveLang('fr-FR'); document.documentElement.lang='fr-FR'; document.documentElement.dir='ltr';"
+  );
+  writeProjectFile(projectRoot, '.powerpages-localization.json', JSON.stringify({
+    schemaVersion: 1,
+    framework: 'angular',
+    mode: 'runtime',
+    packageName: '@jsverse/transloco',
+    packageVersion: '^7.6.0',
+    packageVerification: {
+      status: 'verified',
+      source: 'known-capability',
+    },
+    locales: ['en-US', 'fr-FR'],
+    defaultLocale: 'en-US',
+    translationMethod: 'agent',
+    resourcePaths: {
+      'en-US': 'src/assets/i18n/en-US.json',
+      'fr-FR': 'src/assets/i18n/fr-FR.json',
+    },
+    generatedFiles: [],
+    managedFiles: ['src/app/i18n.ts'],
+    adoptedExistingConfiguration: false,
+    lastOperation: 'create',
+    updatedAt: '2026-07-30T00:00:00.000Z',
+  }));
+
+  const result = detectLocalization(projectRoot);
+  assert.equal(result.mode, 'runtime');
+  assert.deepEqual(
+    result.unavailableModeEvidence.map((entry) => entry.detail).sort(),
+    ['@angular/localize', 'Angular i18n build configuration']
+  );
+  assert.match(
+    result.conflicts.join('\n'),
+    /manifest mode "runtime" conflicts with detected static mode evidence/
+  );
+  assert.match(
+    result.conflicts.join('\n'),
+    /Angular static localization is temporarily unavailable/
+  );
 });
 
 test('scans source files incrementally and stops after all signals are found', (t) => {

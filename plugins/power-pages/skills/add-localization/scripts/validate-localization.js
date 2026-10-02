@@ -11,13 +11,12 @@ const {
 } = require('../../../scripts/lib/validation-helpers');
 const {
   KNOWN_PACKAGES,
-  LOCALIZATION_CAPABILITIES,
   MANIFEST_NAME,
   classifyLocaleDirections,
   detectFramework,
   detectLocalization,
   hasLocaleNavigationSignal,
-  getLocaleDirection,
+  getLocalizationModeAvailability,
   protectedTokenSignature,
   validateLocalizationManifestShape,
   validateLocales,
@@ -25,6 +24,14 @@ const {
 const {
   auditBidirectionalReadiness,
 } = require('../../../scripts/lib/bidirectional-readiness');
+const {
+  partitionDeferredFindings,
+} = require('../../../scripts/lib/bidirectional-finding-disposition');
+const {
+  listVerificationTransactionArtifacts,
+  readLocalizationVerificationTransaction,
+  validateTransactionAgainstManifest,
+} = require('../../../scripts/lib/localization-verification-transaction');
 
 function readJson(filePath) {
   try {
@@ -187,9 +194,27 @@ function compareXlfResources(projectRoot, manifest, errors, options = {}) {
   }
 }
 
-function validateLocalization(projectRoot) {
+function validateLocalization(projectRoot, options = {}) {
   const manifestPath = path.join(projectRoot, MANIFEST_NAME);
+  const transactionResult =
+    readLocalizationVerificationTransaction(projectRoot);
+  const transactionArtifacts = listVerificationTransactionArtifacts(projectRoot);
+  const earlyTransactionErrors = [...transactionResult.errors];
+  for (const artifact of transactionArtifacts) {
+    if (artifact !== '.powerpages-localization-verification.json') {
+      earlyTransactionErrors.push(
+        `Localization verification transaction candidate ${artifact} remains ` +
+        'in the project.'
+      );
+    }
+  }
   if (!fs.existsSync(manifestPath)) {
+    if (transactionResult.transaction || earlyTransactionErrors.length > 0) {
+      return [
+        ...earlyTransactionErrors,
+        'Localization verification cannot continue or complete without a valid manifest.',
+      ];
+    }
     const detected = detectLocalization(projectRoot);
     if (!detected.detected) return [];
     if (detected.valid) {
@@ -221,10 +246,69 @@ function validateLocalization(projectRoot) {
   }
 
   const manifest = readJson(manifestPath);
-  if (!manifest) return [`${MANIFEST_NAME} is not valid JSON.`];
-  const shapeErrors = validateLocalizationManifestShape(manifest);
-  if (shapeErrors.length) return shapeErrors;
+  if (!manifest) {
+    return [
+      ...earlyTransactionErrors,
+      ...(transactionResult.transaction
+        ? ['Localization verification is blocked until the manifest is restored.']
+        : []),
+      `${MANIFEST_NAME} is not valid JSON.`,
+    ];
+  }
   const errors = [];
+  errors.push(...earlyTransactionErrors);
+  const transaction = transactionResult.errors.length === 0
+    ? transactionResult.transaction
+    : null;
+  const allowActiveVerification =
+    options.allowActiveVerification === true &&
+    transaction?.state === 'in-progress';
+  const shapeErrors = validateLocalizationManifestShape(manifest, {
+    verificationLocales: allowActiveVerification
+      ? transaction.targetLocales
+      : [],
+  });
+  if (shapeErrors.length) return [...errors, ...shapeErrors];
+  if (options.allowActiveVerification === true && !transaction) {
+    errors.push(
+      'Phase 6 verification requires an active localization verification transaction.'
+    );
+  } else if (options.allowActiveVerification === true &&
+      transaction?.state !== 'in-progress') {
+    errors.push(
+      'The localization verification transaction requires remediation before testing.'
+    );
+  } else if (transaction &&
+      options.allowActiveVerification !== true &&
+      options.allowTransactionFinalization !== true) {
+    errors.push(
+      'Localization verification is still active. Reconcile the target locales ' +
+      'and finalize the transaction before completing or deploying the site.'
+    );
+  }
+  if (allowActiveVerification) {
+    errors.push(...validateTransactionAgainstManifest(
+      transaction,
+      manifest,
+      { requireExposed: true }
+    ));
+  }
+  for (const finding of [
+    ...(manifest.bidirectionalReadiness?.findings || []),
+    ...(manifest.bidirectionalReadiness?.renderedFindings || []),
+  ]) {
+    const evidence = finding?.disposition?.evidence;
+    if (!evidence) continue;
+    const evidencePath = path.resolve(projectRoot, evidence);
+    const evidenceRoot = path.resolve(projectRoot, 'docs', 'bidirectional-evidence');
+    if (!evidencePath.startsWith(`${evidenceRoot}${path.sep}`) ||
+        !fs.existsSync(evidencePath) ||
+        !fs.statSync(evidencePath).isFile()) {
+      errors.push(
+        `Maker-approved bidirectional limitation evidence does not exist: ${evidence}`
+      );
+    }
+  }
 
   if (manifest.schemaVersion !== 1) errors.push('Manifest schemaVersion must be 1.');
   const frameworkDetection = detectFramework(projectRoot);
@@ -340,56 +424,39 @@ function validateLocalization(projectRoot) {
     : true;
 
   if (Array.isArray(manifest.locales) && manifest.locales.length >= 2) {
-    const directionSet = classifyLocaleDirections(manifest.locales);
-    if (directionSet.classification === 'mixed') {
-      const bidiAudit = auditBidirectionalReadiness(projectRoot);
-      const readinessPending =
-        manifest.bidirectionalReadiness?.status === 'pending-remediation';
-      if (!manifest.bidirectionalReadiness) {
-        errors.push(
-          'Mixed-direction localization requires manifest bidirectionalReadiness metadata.'
-        );
-      }
-      const unavailableLocaleSet = new Set(unavailableLocales);
-      const defaultDirection = getLocaleDirection(manifest.defaultLocale);
-      const oppositeDirectionLocales = manifest.locales.filter(
-        (locale) => getLocaleDirection(locale) !== defaultDirection
+    const bidiAudit = auditBidirectionalReadiness(projectRoot);
+    const { blocking, unmatchedRecorded } = partitionDeferredFindings(
+      bidiAudit.findings,
+      manifest.bidirectionalReadiness?.findings || [],
+      unavailableLocales
+    );
+    for (const finding of unmatchedRecorded) {
+      errors.push(
+        `Recorded bidirectional finding ${finding.file}:${finding.line} ` +
+        `[${finding.rule}] no longer exactly matches the source audit. ` +
+        'Rerun the audit and remove or replace the stale manifest finding.'
       );
-      const allOppositeLocalesUnavailable = oppositeDirectionLocales.every(
-        (locale) => unavailableLocaleSet.has(locale)
+    }
+    for (const finding of blocking) {
+      errors.push(
+        `Bidirectional readiness ${finding.file}:${finding.line} ` +
+        `[${finding.rule}]: ${finding.message}`
       );
-      if (readinessPending && !allOppositeLocalesUnavailable) {
-        errors.push(
-          'Pending bidirectional remediation requires every locale opposite to the ' +
-          'default direction to be unavailable.'
-        );
-      }
-      if (readinessPending && !hasAvailabilityImplementation) {
-        errors.push(
-          'Pending bidirectional remediation requires managed availability logic that ' +
-          'excludes each unavailable opposite-direction locale.'
-        );
-      }
-      const canSuppressReadinessErrors =
-        readinessPending &&
-        allOppositeLocalesUnavailable &&
-        hasAvailabilityImplementation;
-      if (!canSuppressReadinessErrors) {
-        for (const finding of bidiAudit.findings.filter((item) => item.severity === 'error')) {
-          errors.push(
-            `Bidirectional readiness ${finding.file}:${finding.line} ` +
-            `[${finding.rule}]: ${finding.message}`
-          );
-        }
-      }
-      const availableLocales = manifest.locales.filter(
-        (locale) => !unavailableLocaleSet.has(locale)
+    }
+    if (unavailableLocales.length > 0 && !hasAvailabilityImplementation) {
+      errors.push(
+        'Pending bidirectional remediation requires managed availability logic ' +
+        'that excludes each unavailable locale.'
       );
-      const availableDirectionSet = classifyLocaleDirections(availableLocales);
-      if (manifest.mode === 'runtime' &&
-          availableDirectionSet.classification === 'mixed') {
-        validateRuntimeCoordinator(projectRoot, allManagedFiles, errors);
-      }
+    }
+    const unavailableLocaleSet = new Set(unavailableLocales);
+    const availableLocales = manifest.locales.filter(
+      (locale) => !unavailableLocaleSet.has(locale)
+    );
+    const availableDirectionSet = classifyLocaleDirections(availableLocales);
+    if (manifest.mode === 'runtime' &&
+        availableDirectionSet.classification === 'mixed') {
+      validateRuntimeCoordinator(projectRoot, allManagedFiles, errors);
     }
   }
 
@@ -724,8 +791,28 @@ function validateLocaleAvailability(
       source: fs.readFileSync(path.join(projectRoot, relativePath), 'utf8'),
     }))
     .filter(({ source }) => boundaryPattern.test(source));
+  const filteredLocaleCollection =
+    /\.filter\s*\(\s*(?:isLocaleAvailable\b|(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>\s*isLocaleAvailable\s*\()/s;
+  const guardedLocaleCandidate =
+    /if\s*\(\s*!\s*isLocaleAvailable\s*\([^)]+\)\s*\)\s*(?:\{[^}]*\b(?:return|continue)\b|(?:return|continue)\b)/s;
   for (const { relativePath, source } of boundaryFiles) {
-    if (!/\bisLocaleAvailable\s*\(|\bfilter\s*\(\s*isLocaleAvailable\b/.test(source)) {
+    const exposesSelector =
+      /LanguageSelector|language selector|locale-switcher/i.test(source);
+    const filtersEveryUnavailableSelectorLocale = unavailableLocales.every((locale) => {
+      const escaped = locale.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(
+        `\\[[^\\]]*['"]${escaped}['"][^\\]]*\\]\\s*` +
+        '\\.filter\\s*\\(\\s*(?:isLocaleAvailable\\b|' +
+        '(?:\\([^)]*\\)|[A-Za-z_$][\\w$]*)\\s*=>\\s*' +
+        'isLocaleAvailable\\s*\\()',
+        's'
+      ).test(source);
+    });
+    const appliesAvailability = exposesSelector
+      ? filtersEveryUnavailableSelectorLocale
+      : filteredLocaleCollection.test(source) ||
+        guardedLocaleCandidate.test(source);
+    if (!appliesAvailability) {
       errors.push(
         `Locale activation boundary ${relativePath} does not apply isLocaleAvailable.`
       );
@@ -739,6 +826,33 @@ function validateLocaleAvailability(
     valid = false;
   }
   return valid;
+}
+
+function collectProjectFiles(projectRoot, includeFile) {
+  const excludedDirectories = new Set([
+    '.git',
+    '.powerpages-site',
+    'build',
+    'coverage',
+    'dist',
+    'docs',
+    'node_modules',
+  ]);
+  const files = [];
+  const pending = [projectRoot];
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const fullPath = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        if (!excludedDirectories.has(entry.name)) pending.push(fullPath);
+      } else if (entry.isFile() && includeFile(entry)) {
+        files.push(fullPath);
+      }
+    }
+  }
+  return files;
 }
 
 function validateRuntimeCoordinator(projectRoot, allManagedFiles, errors) {
@@ -793,10 +907,23 @@ function validateRuntimeCoordinator(projectRoot, allManagedFiles, errors) {
 }
 
 function validateFrameworkModePackage(projectRoot, manifest, dependencies, detected, errors) {
-  const frameworkCapability = LOCALIZATION_CAPABILITIES.frameworks[manifest.framework];
-  if (frameworkCapability &&
-      !frameworkCapability.supportedModes.includes(manifest.mode)) {
-    errors.push(`${manifest.framework} does not support "${manifest.mode}" mode in this skill.`);
+  const modeAvailability = getLocalizationModeAvailability(
+    manifest.framework,
+    manifest.mode
+  );
+  if (!modeAvailability.available) {
+    errors.push(modeAvailability.reason);
+  }
+  for (const evidence of detected.unavailableModeEvidence || []) {
+    if (evidence.mode === manifest.mode) continue;
+    const availability = getLocalizationModeAvailability(
+      manifest.framework,
+      evidence.mode
+    );
+    errors.push(
+      `${availability.reason} Remove or migrate detected ${evidence.detail} ` +
+      'before validation can pass.'
+    );
   }
 
   const knownPackage = KNOWN_PACKAGES[manifest.packageName];
@@ -841,8 +968,8 @@ function validateFrameworkModePackage(projectRoot, manifest, dependencies, detec
 
 }
 
-function finishValidation(projectRoot) {
-  const errors = validateLocalization(projectRoot);
+function finishValidation(projectRoot, options = {}) {
+  const errors = validateLocalization(projectRoot, options);
   if (errors.length) block(`Localization validation failed:\n- ${errors.join('\n- ')}`);
   approve();
 }
@@ -854,7 +981,9 @@ if (require.main === module && process.argv.includes('--projectRoot')) {
     process.stderr.write('Usage: validate-localization.js --projectRoot <path>\n');
     process.exit(1);
   }
-  finishValidation(path.resolve(projectRoot));
+  finishValidation(path.resolve(projectRoot), {
+    allowActiveVerification: process.argv.includes('--verification'),
+  });
 } else if (require.main === module) {
   runValidation((cwd) => {
     const projectRoot = findProjectRoot(cwd);

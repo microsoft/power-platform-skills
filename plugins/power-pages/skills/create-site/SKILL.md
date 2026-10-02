@@ -670,11 +670,29 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
    <!-- not-a-gate: the locale is validated before it can affect scaffolding -->
 
-   When the content language was not explicit, use `AskUserQuestion`:
+   When the content language was not explicit, get a best-effort suggestion:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/suggest-content-locale.js"
+   ```
+
+   The script returns the selected Dataverse environment's base language as a
+   canonical BCP-47 locale when PAC and Azure CLI authentication are available.
+   It silently returns `en-US` with `"source": "fallback"` when the environment,
+   authentication, API response, or LCID mapping is unavailable. Do not retry,
+   display an error, or block site creation when the lookup falls back.
+
+   Use `AskUserQuestion`:
 
    | Question | Header | Options |
    |----------|--------|---------|
-   | Which language should the site content use?<br><br>Pages, navigation, buttons, forms, and accessibility text will use this language. Dataverse and Power Pages system messages will remain in English. | Site content language | English (`en-US`) (Recommended) |
+   | Which language should the site content use?<br><br>Pages, navigation, buttons, forms, and accessibility text will use this language. Dataverse and Power Pages system messages will remain in English. | Site content language | `<language> (<locale>) (Suggested)`, English (`en-US`) |
+
+   Replace `<language>` and `<locale>` with the script result. If that result is
+   `en-US`, show only `English (United States) (en-US) (Suggested)` rather than
+   adding a duplicate English option. Label the environment-derived choice
+   **Suggested**, not **Recommended**: an environment's base language is useful
+   context but may not match the intended language of a public site.
 
    The question UI's free-text option lets the maker enter another language or
    locale, such as `Spanish (es-ES)`, `Japanese (ja-JP)`, or `Arabic (ar-SA)`.
@@ -950,6 +968,21 @@ Immediately after the dev server starts, verify the scaffold is working:
    | Routes              | 4     | /, /about, /services, /contact |
    ```
 
+   Build `BIDIRECTIONAL_REVIEW_DATA` for every planned visible or interactive
+   component, including page-local controls that are not shared source
+   components. Classify each entry as `direction-neutral`, `direction-aware`,
+   `direction-fixed`, or `unknown-third-party` using the shared bidirectional
+   standard. Record the localized reason, applicable states, applicable
+   `desktop`/`narrow` viewports, and planned checks. Treat anything involving
+   inline placement, text direction, horizontal movement, sequence,
+   directional meaning, mixed-script content, or rendering outside the normal
+   component subtree as a potential bidirectional surface.
+
+   This is the expected review scope, not a project manifest. Phase 5 must
+   reconcile it against the actual source and rendered application, adding
+   components or states discovered during implementation. Do not write a
+   separate component-inventory JSON file.
+
 8. Use best judgement to determine the final color palette based on the chosen aesthetic + mood. These will be written fresh into a new `theme.css` during Implementation (Phase 5) when the scaffold loading screen is completely replaced:
 
    | CSS Variable | Description | Value |
@@ -984,14 +1017,15 @@ Assemble a single JSON object with the following keys. The plan template rejects
 | Key | Type | Content |
 |-----|------|---------|
 | `SITE_NAME` | string | Site/brand name from Phase 1, preserved as entered |
-| `PLAN_TITLE` | string | Always `"Implementation Plan"` |
+| `PLAN_TITLE` | string | Localized equivalent of `"Implementation Plan"` in `SITE_LOCALE` |
 | `FRAMEWORK` | string | `React` / `Vue` / `Angular` / `Astro` |
-| `SITE_LANGUAGE` | string | Readable content-language name from Phase 1 |
+| `SITE_LANGUAGE` | string | Readable content-language name from Phase 1, written in that language when practical |
 | `SITE_LOCALE` | string | Canonical BCP-47 content locale |
 | `SITE_DIRECTION` | string | `ltr` or `rtl` |
 | `AESTHETIC` | string | Chosen aesthetic (e.g., `Minimal & Clean`) |
 | `MOOD` | string | Chosen mood (e.g., `Professional & Trustworthy`) |
-| `SUMMARY` | string | One paragraph describing what the site is and who it serves |
+| `SUMMARY` | string | One localized paragraph describing what the site is and who it serves |
+| `PLAN_LABELS` | object | Complete localized template-label dictionary defined below |
 | `TYPOGRAPHY_DATA` | object | `{ primary: { name, sample, reason }, secondary: { name, sample, reason } }` — `name` must be a real Google Font family |
 | `PALETTE_DATA` | array | `[{ var, hex, description }]` — one entry per CSS variable (primary, secondary, bg, surface, text, text-muted) |
 | `MOTION_DATA` | array | `[{ label, description }]` — page transitions, hover states, etc. |
@@ -999,10 +1033,168 @@ Assemble a single JSON object with the following keys. The plan template rejects
 | `PAGES_DATA` | array | `[{ name, route, description, content: [...], components: [...] }]` — `content` is an outline of what's on the page, `components` is shared component names used |
 | `COMPONENTS_DATA` | array | `[{ name, purpose, usedBy: [...] }]` — shared components with the page names that consume them |
 | `ROUTES_DATA` | array | `[{ path, page }]` — every route the router will register |
-| `REVIEW_DATA` | array of strings | Verification checklist items (e.g., "All pages load without console errors") |
+| `BIDIRECTIONAL_REVIEW_DATA` | array | Every planned visible or interactive component as `{ component, classification, reason, states: [...], viewports: ["desktop" or "narrow"], checks: [...] }`; all maker-facing strings are localized |
+| `REVIEW_DATA` | object | `{ agentChecks: [...], makerReview: [...] }` using the responsibility contract below |
 | `DEPLOYMENT_DATA` | array | `[{ title, description, recommended?: boolean }]` — mark exactly one as `recommended: true` |
 
-**Write the data for the user**, not for internal tooling — phrase `description` and `reason` fields in plain language.
+`PLAN_LABELS` must contain every key below. The English values describe each
+label's meaning; translate every value into `SITE_LOCALE`. Preserve `{siteName}`
+and `{count}` exactly because the renderer substitutes those tokens at runtime.
+Do not omit keys or fall back to English for individual labels.
+
+```json
+{
+  "navigation": {
+    "group": "Plan",
+    "overview": "Overview",
+    "design": "Design",
+    "pages": "Pages & Components",
+    "deployment": "Deployment & Review"
+  },
+  "overview": {
+    "title": "Overview",
+    "description": "Implementation plan for {siteName}",
+    "stats": {
+      "pages": "Pages",
+      "components": "Shared Components",
+      "routes": "Routes"
+    },
+    "nextSteps": {
+      "title": "What happens next",
+      "design": {
+        "title": "Apply design tokens",
+        "description": "Fonts, palette, motion, and backgrounds written into your theme"
+      },
+      "components": {
+        "title": "Build shared components",
+        "descriptionOne": "{count} reusable component used across pages",
+        "descriptionOther": "{count} reusable components used across pages"
+      },
+      "pages": {
+        "title": "Create pages",
+        "descriptionOne": "{count} page with routing and navigation",
+        "descriptionOther": "{count} pages with routing and navigation"
+      },
+      "verify": {
+        "title": "Verify & accessibility",
+        "description": "axe-core audit, Playwright checks, and user review"
+      }
+    }
+  },
+  "design": {
+    "title": "Design",
+    "description": "Typography, palette, motion, and background treatments",
+    "typography": "Typography",
+    "palette": "Color palette",
+    "motion": "Motion & animation",
+    "backgrounds": "Background treatment",
+    "primaryRole": "Primary — body & UI",
+    "secondaryRole": "Secondary — headings"
+  },
+  "pages": {
+    "title": "Pages & Components",
+    "description": "Pages to build, their content outline, and the shared components they rely on",
+    "pages": "Pages",
+    "components": "Shared components",
+    "routing": "Routing",
+    "path": "Path",
+    "page": "Page",
+    "content": "Content",
+    "componentsUsed": "Components used",
+    "usedBy": "Used by",
+    "noComponents": "No shared components planned yet."
+  },
+  "bidirectional": {
+    "title": "Bidirectional review scope",
+    "description": "Planned component, state, and viewport coverage; reconciled with the actual implementation before handoff",
+    "classification": "Classification",
+    "reason": "Reason",
+    "states": "Applicable states",
+    "viewports": "Applicable viewports",
+    "checks": "Planned checks",
+    "classifications": {
+      "directionNeutral": "Direction-neutral",
+      "directionAware": "Direction-aware",
+      "directionFixed": "Direction-fixed",
+      "unknownThirdParty": "Unknown or third-party"
+    },
+    "viewport": {
+      "desktop": "Desktop",
+      "narrow": "Narrow or mobile"
+    }
+  },
+  "deployment": {
+    "title": "Deployment & Review",
+    "description": "Verification checklist and deployment options",
+    "verify": "Before handoff — verify",
+    "agentChecks": "Agent verification",
+    "agentChecksDescription": "The agent will run and report these checks before handoff.",
+    "makerReview": "Maker review",
+    "makerReviewDescription": "Review these judgment-based items in the live preview.",
+    "options": "Deployment options",
+    "recommended": "Recommended"
+  },
+  "common": {
+    "noneSpecified": "None specified."
+  },
+  "footer": {
+    "aiWarning": "AI-generated content may be incorrect"
+  }
+}
+```
+
+**Write all maker-facing plan data in the selected content language.** This
+includes `PLAN_TITLE`, `SUMMARY`, `PLAN_LABELS`, descriptive `AESTHETIC` and
+`MOOD` names, typography reasons/samples, palette descriptions, motion and
+background labels/descriptions, page display names/descriptions/content
+outlines, component display names/purposes, route page labels, review items,
+and deployment titles/descriptions.
+
+Keep technical values unchanged: framework and package names, file paths,
+routes, commands, locale tags, CSS variables, hex colors, identifiers, API
+names, and brand/product names. When a page or component `name` is also the
+planned code identifier, keep it unchanged; localize only human-readable
+display names. Use complete translated phrases rather than joining translated
+fragments in English word order.
+
+Build `REVIEW_DATA` as two non-empty localized string arrays:
+
+```json
+{
+  "agentChecks": [
+    "The root document uses the canonical site locale and resolved writing direction",
+    "The bidirectional-readiness audit reports no errors; layout uses logical CSS and every physical exception is documented and verified",
+    "Every visible or interactive component is classified, and the planned review scope is reconciled with the actual source and rendered application",
+    "Every applicable state and viewport of direction-aware, direction-fixed, and unknown or third-party components has verification evidence",
+    "Localized form labels, placeholders, hints, helper text, validation messages, prefixes, suffixes, and overlays follow the active UI direction; only classified machine-oriented values remain LTR",
+    "Representative routes work in the selected direction and a pseudo-opposite direction at desktop and narrow widths without console errors, broken reading order, or broken focus order",
+    "Unknown-direction content uses bdi or dir=auto, while URLs, email addresses, code, paths, GUIDs, and identifiers are explicitly isolated",
+    "Dates, numbers, currency, percentages, and relative time use locale-aware Intl formatting",
+    "Typography covers the selected script and expanded or opposite-direction text does not clip or overlap",
+    "Directional components, interactions, icons, and assets behave according to their reviewed mirror, preserve, or replace classification",
+    "Every route has zero critical or serious axe-core accessibility violations"
+  ],
+  "makerReview": [
+    "Language, terminology, tone, regional wording, and regulated content are appropriate",
+    "Visual hierarchy and reading flow feel natural in the selected direction and the opposite-direction preview",
+    "Typography remains readable and preserves the intended brand character",
+    "Icon and image direction choices are culturally and semantically appropriate",
+    "Text wrapping, expansion, and narrow-screen layouts remain visually acceptable"
+  ]
+}
+```
+
+Translate these as complete criteria rather than copying the English wording.
+The two groups communicate responsibility:
+
+- `agentChecks` are objective commitments the agent must execute and report
+  during Phases 5–7. They are not instructions for the maker.
+- `makerReview` contains linguistic, cultural, brand, and visual judgments that
+  automation cannot approve. The maker reviews them in the live preview during
+  Phase 7.
+
+Do not move subjective maker judgments into `agentChecks`, and do not ask the
+maker to repeat deterministic source, browser, or accessibility checks.
 
 ### 4.3 Render the HTML Plan
 
@@ -1135,10 +1327,23 @@ The scaffold is a temporary loading screen — it must be **completely replaced*
 - For every locale, use logical CSS properties and preserve meaningful DOM
   reading/focus order. Do not reverse arrays or use `row-reverse` to simulate
   RTL. Initial RTL sites must also be visually verified in RTL.
+- Treat each form field as one compound direction surface: localized labels,
+  placeholders, hints, helper text, validation messages, prefixes, suffixes,
+  icons, and open menus follow the active UI direction and use logical
+  alignment. Native free-form inputs and textareas use adaptive `dir`: the
+  active UI direction while empty, `auto` while populated, and the active UI
+  direction again after clearing. Preserve or add `dirname` where submitted
+  direction metadata is appropriate. Keep only
+  classified machine-oriented values such as email addresses, telephone
+  numbers, URLs, code, paths, GUIDs, and identifiers LTR; add the adjacent
+  `/* bidi-fixed: <specific reason>; verify=ltr,rtl */` or equivalent HTML
+  directive required by the shared standard. Their surrounding field UI
+  remains direction-aware.
 - Wrap independently inserted unknown-direction content (names, comments,
   titles, search queries) with `<bdi>` or `dir="auto"`. Keep URLs, email,
   code, file paths, GUIDs, and other machine values explicitly isolated,
-  normally LTR. Use `dir="auto"` for free-form multilingual inputs.
+  normally LTR. Free-form native controls must not use permanent `dir="auto"`;
+  bind their native direction to value emptiness and the active UI direction.
 - Format dates, numbers, currency, percentages, and relative time with `Intl`
   APIs rather than concatenating locale-sensitive punctuation or symbols.
 - Classify directional icons and assets as unchanged, mirrored, or replaced.
@@ -1213,18 +1418,85 @@ Run the deterministic readiness audit after all pages and components exist:
 node "${PLUGIN_ROOT}/scripts/audit-bidirectional-readiness.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
-Fix every `error` finding. Review every physical-geometry finding in the live
-site. For an intentionally physical product requirement, keep the declaration,
-add the validated adjacent `bidi-physical` directive, and verify that component
-in both LTR and RTL. Use pseudo-opposite-direction content to check wrapping,
-navigation, forms, mixed names/identifiers, icons, calendars, and narrow/mobile
-layout even when no second real locale exists yet.
+The command prints structured JSON and exits nonzero when deterministic errors
+exist; parse the JSON even on that expected failure path. Fix every `error`
+finding. Review every geometry, scrolling, visual-order, and content-expansion
+finding in the live site. For an intentionally physical product requirement,
+keep the declaration, add the validated adjacent `bidi-physical` directive,
+and verify that component in both LTR and RTL. For intentionally fixed
+machine-oriented text, add the adjacent `bidi-fixed` directive and verify the
+surrounding UI in both directions. Use pseudo-opposite-direction content to
+check wrapping, navigation, forms, mixed names/identifiers, icons, calendars,
+and narrow/mobile layout even when no second real locale exists yet. For every
+free-form native input or textarea, verify empty, RTL-valued, LTR-valued,
+clear-after-RTL, and clear-after-LTR states under both UI directions. Each
+clear state must enter the corresponding value before clearing it; empty and
+cleared states follow the UI locale, while populated states follow the entered
+value.
+
+Reconcile `BIDIRECTIONAL_REVIEW_DATA` against the completed source and rendered
+routes. Add every implemented visible or interactive component that was not
+known during planning, and add every applicable state or viewport discovered
+during implementation. Verify the selected direction and pseudo-opposite
+direction for every site: LTR sites receive pseudo-RTL coverage, and RTL sites
+receive pseudo-LTR coverage. Direction-neutral components need an inheritance
+check; direction-aware components need all applicable states in both
+directions; direction-fixed components need a semantic reason plus surrounding
+UI checks; unknown/third-party components need rendered checks including
+dialogs, menus, autocomplete panels, tooltips, teleports, portals, overlays,
+Shadow DOM, or iframes they open.
+
+Build the ephemeral rendered-verification specification described in
+`${PLUGIN_ROOT}/references/rendered-bidirectional-verification.md`. Derive it
+from the reconciled component scope and actual selectors; do not commit it as a
+component manifest. Give unstable but important verification surfaces a
+`data-bidi-id` attribute. Include every applicable state and viewport, compound
+form parts, body-mounted overlays, explicit focus sequences, non-overlap pairs,
+and direction-specific computed-style expectations. Use the real configured
+LTR and RTL locales when both exist; otherwise add a browser-only
+pseudo-opposite locale. Real locales must be activated through the application
+and prove representative localized content; only pseudo locales may use the
+browser-only `set-document` action. If runtime localization was added, include both
+default -> locale -> default and locale -> default -> locale transition
+sequences for every real non-default locale, with route, form-state,
+application-state, and focus preservation checks. Pseudo locales do not
+participate in application-switch transitions. Every real locale, including
+the default, needs a reusable application activation action; `use-current`
+cannot restore a locale during a round trip. For a newly added runtime locale,
+use the localization verification transaction defined by add-localization:
+temporarily expose only the recorded target through the normal selector, run
+Playwright against a loopback dev server, keep it available on success, and
+restore fail-closed availability on failure. Exclude pre-existing unavailable
+locales from activation and declare them in `unavailableLocaleChecks`. Do not
+complete creation or offer deployment while the verification transaction
+exists. Bare `preserve` selectors are only for form controls; use explicit
+text, attribute, or property preservation entries for tabs, panels, counters,
+and other application state.
+
+Retain evidence for every applicable `REVIEW_DATA.agentChecks` item: audit
+result, routes/viewports exercised, direction used, mixed-content fixtures,
+font/text-expansion observations, component/asset classifications, console
+result, and any remediations. Do not mark an agent-owned criterion complete
+based only on visual inspection by the maker.
 
 ### 5.6 Clean Up the Live Status File
 
 Once the scaffold loader is gone, `public/scaffold-status.json` is just dead weight that would ship with the deployed site. Delete the file from `<PROJECT_ROOT>/public/` and commit the removal alongside the final implementation.
 
 ### 5.7 Offer Additional Languages
+
+Query the centralized add-localization availability before offering the child
+workflow:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/lib/localization-config.js" mode-availability --framework "<react|vue|angular|astro>"
+```
+
+If `availableModes` is empty, explain that localization is temporarily
+unavailable for the selected framework using the returned reason, set
+`LOCALIZATION_REQUESTED=false`, and do not ask the additional-languages
+question. This currently applies to Astro. Do not hardcode a separate
+framework availability list in create-site.
 
 Ask whether more languages should be added now:
 
@@ -1293,6 +1565,71 @@ Parse the returned JSON array of per-route results. Each result contains `violat
 
 Parse the JSON output and record all violations.
 
+### 6.2b Run Rendered Bidirectional Audit
+
+Read `${PLUGIN_ROOT}/references/rendered-bidirectional-verification.md`. If
+add-localization returned a successful report, first validate and reuse it:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/audit-rendered-bidirectional-readiness.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --reuse-report "<ADD_LOCALIZATION_REPORT_PATH>"
+```
+
+This succeeds only while source, resources, dependencies, build configuration,
+and locale availability match the child report. Readiness-only metadata does
+not invalidate it. If reuse succeeds, do not rebuild the specification or
+repeat the matrix. If reuse is stale—such as after accessibility remediation
+changed relevant source—rebuild the component/state/viewport specification
+from the current implementation and run it:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/audit-rendered-bidirectional-readiness.js" \
+  --url "<DEV_SERVER_URL>" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --spec "<TEMP_SPEC_PATH>" \
+  --evidence-dir "<PROJECT_ROOT>/docs/bidirectional-evidence/<RUN_ID>" \
+  --output "<PROJECT_ROOT>/docs/bidirectional-evidence/<RUN_ID>/report.json"
+```
+
+The command prints JSON and exits `1` when blocking rendered findings exist;
+parse stdout on that expected path. Exit `2` is a runner/specification failure
+and must be fixed before continuing. Delete the temporary specification after
+the report is written.
+
+Fix every rendered `error` and rerun the complete affected matrix. Review
+findings require screenshot-backed disposition; they are not automatic passes.
+The audit must cover computed `lang`/`dir`, component and compound-field
+direction, clipping, page overflow, viewport escape, declared non-overlap,
+focus order, portals/overlays, unknown/third-party surfaces, and runtime
+round-trip preservation when applicable. A visible opaque external surface is
+blocking unless it is replaced or intentionally unavailable for the affected
+locale.
+
+Use the rendered-verification reference's grouped execution model:
+`maxConcurrency: 3` by default, `reload` state isolation unless a deterministic
+reset exists, `resettable` only with explicit reset actions, and `isolated`
+for global or destructive state. Independent route/viewport/locale groups may
+run concurrently; locale-transition sequences remain serial.
+
+> **GATE: Do NOT proceed to Phase 7 while the create-site report contains an
+> error affecting an available locale or the available site experience, or an
+> untriaged review finding.** Every review item must have evidence and a
+> proposed resolution, judgment-based pass, or usable-limitation disposition
+> for maker review. An add-localization blocker may continue only when its
+> affected locale is verifiably unavailable at every activation boundary; keep
+> that child report as pending evidence and audit the remaining available
+> experience with a real locale plus pseudo-opposite direction. A screenshot
+> documents what rendered; it does not override a deterministic failure.
+
+For each review finding, record whether it was resolved, accepted as a
+judgment-based pass, or proposed as a usable limitation. A usable limitation
+must name the affected component/page, user impact, and report or screenshot
+evidence. Never offer an error finding for maker override. If the
+add-localization child returned `pending-remediation`, verify that every
+affected locale remains excluded from selectors, detection, metadata, and
+production output before continuing with the available site experience.
+
 ### 6.3 Fix Accessibility Violations
 
 For each violation found, identify the source file and apply the fix:
@@ -1335,6 +1672,10 @@ Present a summary table to the user:
 
 > **GATE: Do NOT proceed to Phase 7 until all pages pass axe-core with zero `critical` and `serious` violations.** Minor and moderate violations should also be fixed where possible, but are not blocking.
 
+Record the final axe-core result against the corresponding
+`REVIEW_DATA.agentChecks` item. Accessibility remains agent-owned; the maker is
+not asked to reproduce the automated audit.
+
 **Output**: Accessibility-verified site with zero critical/serious axe-core violations
 
 ---
@@ -1345,7 +1686,7 @@ Present a summary table to the user:
 
 <!-- gate: create-site:7.review | category=plan | cancel-leaves=nothing -->
 
-> 🚦 **Gate (plan · create-site:7.review):** Live-site review — last chance to request changes before the deploy prompt. Cancel branch lets the user keep iterating. Fires at step 4 of the action list below.
+> 🚦 **Gate (plan · create-site:7.review):** Live-site review — last chance to request changes before the deploy prompt. Cancel branch lets the user keep iterating. Fires at step 5 of the action list below.
 >
 > **Trigger:** Phase 7 has verified all pages render via Playwright.
 > **Why we ask:** User loses the chance to spot UI issues before deploy; broken pages get pushed.
@@ -1365,15 +1706,56 @@ Present a summary table to the user:
    | Git Commits         | 7     | scaffold + 6 feature commits |
    ```
 
-   Include `SITE_LANGUAGE`, `SITE_LOCALE`, and `SITE_DIRECTION`. Ask the maker
-   to review linguistic correctness, terminology, tone, regional wording, and
-   any legal, medical, financial, or regulated text; automated checks cannot
-   validate language quality.
+   Include `SITE_LANGUAGE`, `SITE_LOCALE`, and `SITE_DIRECTION`.
+
+   Present the reconciled bidirectional review scope with each component's
+   classification and the applicable states/viewports exercised. Report
+   direction-aware, direction-fixed, and unknown/third-party evidence
+   separately; do not treat the pre-implementation plan as proof that the
+   implemented component was verified.
+
+   Link each scope entry to its rendered report cases and any captured
+   screenshots. Show case totals for passed, review, and failed. Do not expose
+   temporary specification internals as project configuration.
+
+   Then report the `REVIEW_DATA.agentChecks` criteria separately with the
+   evidence gathered in Phases 5–6. Every criterion must be reported as
+   **Passed** or **Blocked**, never as maker verification. Fix blocked
+   technical criteria before requesting approval.
+
+   Present `REVIEW_DATA.makerReview` as the maker's live-preview checklist.
+   Ask the maker to assess linguistic correctness, terminology, tone, regional
+   wording, regulated content, visual hierarchy and reading flow, brand
+   typography, directional imagery/icons, and text expansion. Automated checks
+   cannot approve these judgment-based criteria.
 
 3. Share the dev server URL with the user and list all available routes
-4. Ask the user to review using `AskUserQuestion`:
+4. Classify bidirectional readiness as:
+   - **Ready** when no unresolved static or rendered findings remain.
+   - **Ready with proposed limitations** only when all remaining findings are
+     review-severity, the site remains functional/readable/accessible, and
+     each finding has exact impact plus evidence.
+   - **Blocked** when a deterministic error affects an available locale or the
+     available site experience. Return to Phases 5–6; do not ask the maker to
+     accept the defect.
+   - **Ready for available locales; localization pending** when every remaining
+     error belongs only to an add-localization locale that is excluded from all
+     activation boundaries. Show the unavailable locale and blocker, and do
+     not offer that locale for approval or enablement.
+5. Ask the user to review using `AskUserQuestion`:
    > "The site is ready for review at `<dev server URL>`. Please check it out in your browser. Would you like any changes?"
-5. If the user requests changes, apply them and re-verify by browsing via `browser_snapshot`
+
+   For **Ready**, offer **Accept changes** and **Request revisions**. For
+   proposed usable limitations, offer **Fix before handoff**, **Accept with
+   documented limitations**, and **Request revisions**. Acceptance applies
+   only to review-severity limitations; record the approval timestamp, impact,
+   and evidence path in the final summary. If localization is configured,
+   finalize the same disposition in `.powerpages-localization.json`, update
+   every selector, detection, metadata, and static-output availability
+   boundary, then rerun the localization validator, project build, and affected
+   real-locale activation cases before proceeding.
+6. If the user requests changes, apply them and repeat the applicable static,
+   rendered, accessibility, and browser checks before returning to this gate.
 
 **Output**: User-approved site ready for deployment
 
@@ -1413,10 +1795,16 @@ Present a summary table to the user:
    - Components created (X pages, Y components, Z design elements)
    - Key files and their purposes
    - Total file count and git commit count
+   - Final bidirectional readiness status, static/rendered finding totals, and
+     rendered evidence path
+   - Every maker-approved limitation with exact impact and evidence
+   - When localization is configured, available and unavailable locales from
+     the final manifest; never describe an unavailable locale as enabled
 6. Suggest optional enhancement skills:
    - `/setup-datamodel` — Create Dataverse tables for dynamic content
    - `/add-localization` — Add or extend SPA languages (suggest only when
-     `LOCALIZATION_REQUESTED=false`)
+     `LOCALIZATION_REQUESTED=false` and the centralized availability result
+     contains at least one available mode)
    - `/add-seo` — Add meta tags, robots.txt, sitemap.xml, favicon
    - `/add-tests` — Add unit tests (Vitest) and E2E tests (Playwright)
    - `/add-ai-webapi` — Add generative-AI summaries (Search Summary and Data Summarization). **Recommend first when `AI_SUMMARY_PLACEMENTS` from Phase 3 is non-empty** — the pages already carry `POWERPAGES:AI-SLOT` comment markers at the intended insertion points, so the follow-up skill's explore step finds them deterministically and the user gets the AI surface they picked during discovery without any page redesign.

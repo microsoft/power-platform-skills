@@ -30,7 +30,10 @@ site changes.
 ## Core principles
 
 - Detect framework and existing localization from project evidence.
-- Preserve valid package, mode, default locale, and non-empty translations.
+- Read mode availability only from `localization-config.js`; never plan or
+  preserve a mode that is currently unavailable.
+- Preserve valid available package/mode choices, the default locale, and
+  non-empty translations.
 - Ask questions in the fixed order below; skip only documented conditional
   questions.
 - Validate language tags and package alternatives with deterministic scripts.
@@ -41,13 +44,13 @@ site changes.
 - Treat `[FROM_CREATE_SITE]` in `$ARGUMENTS` as invocation context. It suppresses
   this skill's deploy prompt so create-site remains deployment owner.
 - Generate a locale coordinator only for React, Vue, and runtime Angular.
-  Single-language, Angular static, and Astro static sites do not receive it.
+  Single-language and dormant static implementations do not receive it.
 
 ## Workflow
 
 1. Detect project and existing localization.
 2. Gather and validate configuration.
-3. Present and approve the implementation plan.
+3. Render, open, and approve the implementation plan.
 4. Configure localization infrastructure.
 5. Extract and localize content.
 6. Verify localization independently.
@@ -100,6 +103,34 @@ If inspection returns no supported framework and no evidence-backed candidate
 can be selected, stop without making changes. Do not use root-document language
 attributes from an unsupported project as localization evidence.
 
+After resolving one evidence-backed framework, use the inspection result's
+`availability` object. If framework ambiguity required a maker selection, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/lib/localization-config.js" mode-availability --framework "<SELECTED_FRAMEWORK>"
+```
+
+This centralized result is the source of truth for selectable modes.
+
+If `availableModes` is empty, show each centralized temporarily-unavailable
+reason and stop without gathering configuration, rendering a plan, installing
+dependencies, or editing files. This currently applies to Astro.
+
+If `localization.unavailableModeEvidence` is non-empty, do not offer
+add-languages while preserving that evidence, even when the manifest claims an
+available mode:
+
+- Angular static: explain that static localization is temporarily unavailable
+  and use `AskUserQuestion` with **Reconfigure to Angular runtime localization**
+  and **Stop without changes**. Continue only when the maker explicitly selects
+  reconfiguration; set `OPERATION=reconfigure`. Phase 2.4 then offers the
+  recommended `@jsverse/transloco` package or a validated runtime alternative.
+- Any framework with no available alternative: stop without changes and show
+  the centralized reason.
+
+Never render a plan for a temporarily unavailable mode. The renderer and final
+validator enforce the same registry as a backstop.
+
 When no localization is detected and this is a direct invocation, display:
 
 > **Localization scope**
@@ -133,6 +164,11 @@ When localization is detected, display package, mode, locales, default locale,
 resource paths, and conflicts.
 
 <!-- not-a-gate: choosing add/repair/stop selects workflow scope before any write -->
+
+Skip the generic existing-localization question when Phase 1 already forced
+`OPERATION=reconfigure` because unavailable mode evidence was detected; the
+maker already chose reconfiguration instead of stopping, and add-languages
+must not be offered again.
 
 Use `AskUserQuestion`:
 
@@ -183,14 +219,16 @@ mode, ask only when missing, invalid, conflicting, or explicitly being changed.
 
 <!-- not-a-gate: mode selection shapes the upcoming plan and writes nothing -->
 
-- React: runtime; state the decision without asking.
-- Vue: runtime; state the decision without asking.
-- Angular new setup: use `AskUserQuestion` with **Static locale builds with
-  @angular/localize (Recommended)** and **Runtime switching with Transloco**.
-- Astro: static locale routes; state the decision without asking.
-- Add-languages mode: preserve the detected mode without asking.
-- Repair mode: ask only when Angular mode is changing or mode evidence
-  conflicts.
+- If `availableModes` contains one mode, select it and state the decision
+  without asking.
+- If a future registry change exposes multiple modes, use `AskUserQuestion`
+  with only those modes and identify `recommendedMode` as recommended.
+- Use the selected mode's centralized `recommendedPackage`; do not reconstruct
+  framework-specific mode/package mappings in this workflow.
+- Add-languages mode: preserve the detected mode without asking only when its
+  registry availability is `available`.
+- Repair/reconfigure mode: allow only modes listed in
+  `availability.availableModes`.
 
 ### 2.4 Package
 
@@ -202,9 +240,9 @@ For new setup or relevant repair, use `AskUserQuestion`:
 |---|---|---|
 | Which localization package should be used? | Package | Framework recommendation (Recommended), Suggest a different package, Cancel |
 
-Skip this question for Astro built-in i18n and add-languages mode. For every
-npm-backed package selected during a new setup or repair, including the
-framework recommendation and any alternative, run:
+Skip this question for add-languages mode or when the selected mode reports
+`builtIn: true`. For every npm-backed package selected during a new setup or
+repair, including the framework recommendation and any alternative, run:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/validate-i18n-package.js" --projectRoot "<PROJECT_ROOT>" --framework "<FRAMEWORK>" --package "<PACKAGE>" --version "<VERSION_OR_RANGE>" --mode "<runtime|static>" --telemetryLocales "<CANONICAL_RESULTING_LOCALES>" --telemetryOperation "<create|add-languages|repair|reconfigure>" --telemetryPackageSelection "<recommended|alternative|preserved>"
@@ -280,17 +318,58 @@ When this operation first changes an LTR-only or RTL-only site to `mixed`, run:
 node "${PLUGIN_ROOT}/scripts/audit-bidirectional-readiness.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
-Add every finding to the Phase 3 plan. Include logical-CSS remediation,
+The command prints structured JSON and exits nonzero when deterministic errors
+exist; parse the JSON even on that expected failure path. Add every finding to
+the Phase 3 plan. Include logical-CSS remediation,
 validated physical exceptions, mixed/user content, localized formatting,
 script font coverage, directional assets, calendars/date-pickers, gestures,
 drawers, breadcrumbs, tables, charts, carousels, overlays, SVG/canvas, and
 third-party components. Do not modify files before plan approval.
 
+For every localization plan, build `READINESS_DATA.componentScope` from the
+existing implementation. Include
+every visible or interactive shared or page-local component and classify it as
+`direction-neutral`, `direction-aware`, `direction-fixed`, or
+`unknown-third-party`. For each entry, record the localized reason, every
+applicable state, applicable `desktop`/`narrow` viewports, and planned checks.
+Treat anything involving inline placement, text direction, horizontal
+movement, sequence, directional meaning, mixed-script content, or rendering
+outside the normal component subtree as a potential bidirectional surface.
+
+Treat a form as a compound surface: include its labels, values, placeholders,
+hints, helper text, validation messages, prefixes, suffixes, icons, autofill,
+select/autocomplete panels, and validation summary when applicable. Include
+portals, teleports, overlay containers, Shadow DOM, iframes, and other
+third-party open states. This scope is plan data retained in workflow context
+and the human-readable HTML; do not persist a separate component-inventory
+JSON file.
+
 ---
 
 ## Phase 3: Plan and approve
 
-Present:
+Read
+`${PLUGIN_ROOT}/skills/add-localization/references/plan-data-contract.md`, then
+build and render the localization plan before asking for approval.
+
+### 3.1 Determine the plan language
+
+Render the artifact in the site's current source locale:
+
+- Existing valid localization: the existing pre-change default locale.
+- New setup with a valid detected root language: the detected locale.
+- New setup with missing/invalid root language: the Phase 2 locale selected to
+  represent the existing UI.
+
+Keep that source locale as the plan language even if this operation changes the
+resulting default. Resolve its canonical locale and direction with
+`localization-config.js`; use them as `SOURCE_LOCALE` and `SOURCE_DIRECTION`.
+Do not choose one of the added target locales merely because it is being added.
+
+### 3.2 Build the plan data
+
+Follow the exact contract in `references/plan-data-contract.md`. The artifact
+must include:
 
 - Framework evidence and invocation context.
 - Existing setup and conflicts.
@@ -305,17 +384,49 @@ Present:
 - Language-selector placement and runtime/static behavior.
 - Build, validator, browser, RTL, and token checks.
 - Direction-set transition, readiness findings, proposed remediations, physical
-  exceptions, script-font changes, and whether any locale may remain
-  unavailable pending remediation.
+  exceptions, script-font changes, the classified component/state/viewport
+  review scope, and whether any locale may remain unavailable pending
+  remediation.
 - Known limitations and any approved translation replacements.
 
-<!-- gate: add-localization:3.plan-approval | category=plan | cancel-leaves=nothing -->
+Write maker-facing plan text in `SOURCE_LOCALE`; preserve technical values
+unchanged. The renderer rejects malformed locale roles, default/source
+inconsistency, invalid actions/statuses, incomplete labels, and incorrect
+source direction.
+
+### 3.3 Render and open the plan
+
+Pick an output path under `<PROJECT_ROOT>/docs/`. Use
+`add-localization-plan.html` when available; otherwise choose a descriptive
+variant such as `add-localization-plan-v2.html`. Never overwrite an earlier
+plan.
+
+```bash
+node "${PLUGIN_ROOT}/scripts/render-add-localization-plan.js" --output "<PROJECT_ROOT>/docs/add-localization-plan.html" --data-inline '<json-string>'
+```
+
+Use `--data-inline` so no plan-data JSON file is persisted. If the command is
+too large, use a temporary JSON file with `--data`, then delete that temporary
+file after rendering. Capture the renderer's returned output path and open that
+exact HTML file in the user's default browser.
+
+The HTML is a durable human-reference artifact only. Do not parse it during
+implementation or treat it as workflow state. Before implementation, retain
+the approved configuration in context; after implementation,
+`.powerpages-localization.json` and the site files are authoritative.
+
+Present a brief terminal summary with the artifact path, source/default/target
+locales, package/mode, file counts by action, readiness blockers, unavailable
+locales, and known limitations. Keep the terminal approval gate below; the HTML
+does not contain an approve button and opening it does not imply approval.
+
+<!-- gate: add-localization:3.plan-approval | category=plan | cancel-leaves=rendered-plan -->
 
 > 🚦 **Gate (plan · add-localization:3.plan-approval):** Approves the complete localization delta before dependencies or site files change.
 >
-> **Trigger:** The deterministic plan and file inventory have been presented.
+> **Trigger:** The deterministic plan and file inventory have been rendered to `docs/add-localization-plan*.html`, opened in the browser, and summarized in the terminal.
 > **Why we ask:** A wrong package, mode, default locale, or extraction scope can touch most visible UI files.
-> **Cancel leaves:** Nothing — discovery and validation were read-only.
+> **Cancel leaves:** The rendered HTML plan remains under `docs/` for reference; no dependencies, site implementation files, or external state changed.
 
 Use `AskUserQuestion`:
 
@@ -323,7 +434,9 @@ Use `AskUserQuestion`:
 |---|---|---|
 | How should the localization plan proceed? | Plan | Approve and implement (Recommended), Revise configuration, Cancel |
 
-Loop through Phase 2 for revisions. Do not install or edit before approval.
+Loop through Phase 2 for revisions. Render revisions to a new descriptive HTML
+filename and reopen the latest artifact. Do not install or edit before
+approval.
 
 After approval, emit the final configuration before Phase 4 changes any files:
 
@@ -349,6 +462,10 @@ Adopt valid existing conventions rather than creating a second initialization
 or resource hierarchy. In repair mode, apply only the approved delta. Never
 remove a package, switch Angular mode, or replace custom initialization unless
 the approved plan names that change.
+
+The Angular static and Astro static implementation guidance remains documented
+for future re-enablement, but current runs must never execute those dormant
+paths.
 
 For runtime mode, create or adopt exactly one locale coordinator at the path
 defined in the framework reference. The language selector must call
@@ -391,8 +508,47 @@ machine values, `Intl` formatting for locale-sensitive data, and script-aware
 font profiles only where the configured scripts need them. Preserve brand
 character across font profiles.
 
-Write `.powerpages-localization.json` using reference schema version 1
-after the approved implementation is complete. Record `packageVerification`
+For an existing site, this is a targeted bidirectional adaptation rather than
+an unrelated visual redesign. Preserve branding, routes, features, and visual
+character while replacing direction-specific assumptions. Reconcile the
+approved component scope against the files and components actually changed,
+adding any visible or interactive surface or state discovered during
+implementation.
+
+Localized form labels, placeholders, hints, helper text, validation messages,
+prefixes, suffixes, icons, and open menus follow the active UI direction and
+use logical alignment. Native free-form inputs and textareas use adaptive
+`dir`: active UI direction while empty, `auto` while populated, and active UI
+direction again after clearing. Preserve or add `dirname` where submitted
+direction metadata is appropriate; do not remove existing mixed-direction
+submission metadata.
+Machine-oriented email addresses, telephone numbers, URLs, code, paths, GUIDs,
+and identifiers may remain LTR only when classified as direction-fixed and
+accompanied by the adjacent
+`bidi-fixed: <specific reason>; verify=ltr,rtl` directive required by the
+shared standard; their surrounding field UI remains direction-aware.
+Verify empty, RTL-valued, LTR-valued, clear-after-RTL, and clear-after-LTR
+free-form states under both UI directions. Each clear state must first enter
+the corresponding non-empty value. Populated direction must follow the entered
+value rather than the active locale.
+
+For unknown or third-party components, prefer the package's public locale and
+direction API. If none exists, use a documented wrapper or supported theme
+override and verify the rendered integration, including body-mounted portals
+or overlays. Do not edit `node_modules`. If an externally owned surface cannot
+be adapted or verified and the impact is blocking, keep the affected locale
+unavailable.
+
+Write `.powerpages-localization.json` using reference schema version 1 before
+Phase 6 validation. At this point it is a provisional safety state, not a
+readiness claim: set `bidirectionalReadiness.status` to
+`pending-remediation`, create one `localeReadiness` entry for every configured
+locale, record the current static findings, leave `renderedFindings` empty,
+and keep every newly added or otherwise affected locale unavailable until
+verification and disposition finish. Mark those locale entries
+`pending-remediation`. Preserve the readiness and availability of existing
+locales unless current regression evidence shows they are affected. Record
+`packageVerification`
 from the package-validator result. For an unverified alternative, record
 `status: unverified`, `source: user-approved`, and the official evidence URL
 when one was supplied. Record `initializationEvidence` when deterministic
@@ -411,7 +567,9 @@ For Astro built-in i18n, no npm package-validator result exists. Record
 }
 ```
 
-For mixed-direction sets, also record `bidirectionalReadiness`. Keep a locale
+Record `bidirectionalReadiness` for every new or changed localization setup,
+including same-direction sets whose pseudo-opposite audit can still find a
+future compatibility defect. Keep a locale
 in `unavailableLocales` when technical blockers remain. It must be excluded
 from selectors, browser auto-detection, alternate-language metadata, and
 production static output. Its resources may remain available in development
@@ -419,14 +577,38 @@ for remediation. Generate one managed `localeAvailability` module that exports
 `isLocaleAvailable`, rejects entries in `unavailableLocales`, and is applied
 by every selector, locale switch/detection path, alternate-language metadata
 generator, and static locale output configuration. The manifest alone does not
-disable a locale. While readiness is `pending-remediation`, every configured
-locale whose direction is opposite to the default locale remains unavailable.
-Record each pending scanner finding with its exact `file`, `line`, `rule`, and `message`
-so lifecycle validation can defer known work without allowing new regressions.
+disable a locale. `unavailableLocales` must exactly match locale entries whose
+individual readiness is `pending-remediation`.
+
+Assign every static and rendered finding a `scope` and explicit
+`affectedLocales`:
+
+- `locale` for a language-specific problem affecting one locale.
+- `direction` for a shared LTR or RTL problem; include every configured locale
+  of that direction and record `direction`.
+- `shared` for a shared implementation problem affecting an explicitly tested
+  subset.
+- `global` for a problem affecting every configured locale.
+
+Do not infer that all locales of one direction are affected merely because a
+new locale of that direction fails. Regression-test an existing locale when
+shared direction-sensitive implementation changed, and include it only when
+the evidence shows it is affected. If impact cannot be isolated safely,
+include every potentially affected locale. Record each pending scanner finding
+with its exact `file`, `line`, `rule`, `message`, and `fingerprint` so lifecycle
+validation can defer the same known source item only while all explicitly
+affected locales remain unavailable, without allowing a replacement or newly
+introduced regression.
 
 ---
 
 ## Phase 6: Verify localization
+
+If `.powerpages-localization-verification.json` already exists, treat it as an
+interrupted run. Invoke `manage-localization-verification.js --fail`, restore
+every recorded target locale to fail-closed `pending-remediation` availability,
+and finalize that transaction before beginning another one. Never delete or
+overwrite the transaction file to bypass recovery.
 
 Run the independent validator:
 
@@ -435,26 +617,165 @@ node "${PLUGIN_ROOT}/skills/add-localization/scripts/validate-localization.js" -
 ```
 Fix all reported errors.
 
-Run the project's existing build. Start or reuse its dev server and verify
-with Playwright:
+Before exposing newly added pending locales, begin an exclusive verification
+transaction while they are still listed in `unavailableLocales`:
 
-- Default locale and one target locale.
+```bash
+node "${PLUGIN_ROOT}/scripts/manage-localization-verification.js" \
+  --begin \
+  --profile standard \
+  --projectRoot "<PROJECT_ROOT>" \
+  --locales "<NEW_LOCALE[,NEW_LOCALE]>"
+```
+
+Then remove only those transaction target locales from `unavailableLocales`
+and from the managed availability module. Leave their readiness entries
+`pending-remediation` until verification succeeds. This is the only permitted
+temporary mismatch: the transaction records the prior fail-closed state,
+blocks completion and deployment, and allows the Phase 6 validator to
+distinguish deliberate local verification from an accidentally exposed
+pending locale. Do not change the availability of any non-target locale.
+
+Run the transaction-aware validator:
+
+```bash
+node "${PLUGIN_ROOT}/skills/add-localization/scripts/validate-localization.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --verification
+```
+
+Run the project's existing build. Start a loopback-only dev server. Read
+`${PLUGIN_ROOT}/references/rendered-bidirectional-verification.md` and build an
+ephemeral run specification from the reconciled `componentScope` and actual
+implementation. Do not persist the specification as a component manifest.
+Use stable semantic selectors or add focused `data-bidi-id` verification
+anchors where necessary.
+
+Set `maxConcurrency: 3` unless project evidence requires a lower value.
+Classify each component state as `reload`, `resettable`, or `isolated`.
+`reload` is the safe default. Use `resettable` only when the specification can
+provide deterministic `reset` actions that restore the same baseline while
+preserving route, locale, localized content, and unavailable-locale
+boundaries. Use `isolated` for authentication, destructive submission,
+reload-sensitive initialization, or global state. Grouping then reuses one
+page per route/viewport/locale, and independent groups run concurrently;
+runtime transition sequences remain serial.
+
+Reuse the project's Playwright dependency. If neither `playwright` nor
+`playwright-core` is installed, add `playwright` as a development dependency;
+do not download a separate bundled browser when a supported system browser is
+available.
+
+Set `verificationProfile: "standard"`. The specification must include every
+currently available real locale, including every transaction target, because
+each receives a locale smoke check. Exclude pre-existing unavailable locales
+from activation and list them in `unavailableLocaleChecks` with every selector
+surface that must remain hidden. The CLI reconciles both sets with
+`.powerpages-localization.json`.
+
+Select one representative LTR locale and one representative RTL locale for
+the component matrix. Prefer newly added real locales, then the target with
+the greatest measured text expansion, then the default/existing locale. Use a
+pseudo direction only when no real locale exists. Record optional
+`textExpansion` ratios and any explicit `representativeLocaleIds` override in
+the temporary specification. The specification must cover:
+
+- The default locale and every newly added locale independently.
+- Application-driven activation plus representative localized-content
+  assertions for every real locale; `set-document` is pseudo-only.
 - Selector behavior or equivalent static locale navigation.
 - Representative translated content.
 - `html[lang]` and `html[dir]`.
 - Browser console has no localization errors.
 - One RTL locale when configured.
-- Every representative route in one LTR and one RTL locale at desktop and
-  narrow/mobile viewports when the configured set is mixed.
+- Every representative route in the selected LTR and RTL locales.
+- Risk-based component coverage. Direction-neutral components default to low
+  risk and use the primary state/viewport. Direction-aware components default
+  to medium risk and use all applicable states/viewports in both directions.
+  Direction-fixed and unknown/third-party components default to high risk and
+  use all applicable states/viewports in both directions, including supported
+  open states and out-of-subtree overlays. Escalate uncertain components; do
+  not lower risk merely to reduce the matrix.
 - Script font loading, mixed-direction names/comments/URLs/identifiers,
   locale-aware dates/numbers/percentages, directional icons, calendars, and
   any audited complex component.
+- Existing locales on every shared or direction-sensitive surface changed by
+  this operation, so a regression is assigned only to locales proven affected.
 
-For static modes, verify equivalent locale URLs/builds. For runtime modes,
-verify persisted selection, browser-language matching, invalid saved-value
-fallback, no page reload, and both LTR -> RTL -> LTR and RTL -> LTR -> RTL
-round trips. Preserve route, form state, focus, and application state. Verify
-that stale resource requests cannot overwrite a newer selection.
+Use real configured locales for both directions when the resulting locale set
+is mixed. For a same-direction set, add a browser-only pseudo-opposite locale
+so this localization change cannot introduce a future LTR/RTL regression.
+
+For static modes, verify equivalent locale URLs/builds. For runtime modes, set
+`runtimeSwitching: true`, set `defaultLocaleId`, include default -> locale ->
+default for every real non-default locale, and include locale -> default ->
+locale for the representative real locales. Extensive verification adds the
+reverse sequence for every real non-default locale. Do not require every
+possible locale pair, and do not use pseudo locales for application-switch
+transitions. Preserve route, form state, focus, and application state without
+page reload. Use bare `preserve`
+selectors only for form controls; declare text, attribute, or property
+preservation evidence for tabs, panels, counters, and other non-form state.
+Every real locale, including the default, needs a reusable application
+activation action. Do not use `use-current` for a real runtime locale because
+the round trip must be able to restore it after switching away.
+Separately verify persisted selection, browser-language matching, invalid
+saved-value fallback, and that stale resource requests cannot overwrite a
+newer selection.
+
+Activate every transaction target through the site's real selector or
+locale-navigation control using one locale-bound `activate-locale` action with
+`method: click` or `method: select`. Allow only optional waits beside that
+action. Do not add an exported bypass, test-only locale function, or arbitrary
+browser JavaScript. The target is locally available only while the transaction
+blocks completion and deployment.
+Pre-existing unavailable locales remain excluded from selector, switching,
+detection, metadata, and production output, and their selectors are checked
+through `unavailableLocaleChecks`.
+
+Run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/audit-rendered-bidirectional-readiness.js" \
+  --url "<DEV_SERVER_URL>" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --spec "<TEMP_SPEC_PATH>" \
+  --evidence-dir "<PROJECT_ROOT>/docs/bidirectional-evidence/<RUN_ID>" \
+  --output "<PROJECT_ROOT>/docs/bidirectional-evidence/<RUN_ID>/report.json"
+```
+
+Parse stdout even when the expected blocking exit code is `1`. Exit code `2`
+means the runner or specification failed. Either outcome moves the transaction
+to `remediation-required`; immediately restore each target to
+`unavailableLocales` and the managed availability module before retrying.
+Delete the temporary specification after the report is written. A blocking
+error fails the new-locale transaction and restores fail-closed availability;
+after fixing it, begin a new standard transaction because targeted evidence
+alone cannot approve a new locale. For repair or reconfiguration of already
+available locales, rerun affected cases with
+`verificationProfile: "targeted"` and exact `targetCaseIds` instead of an
+unchanged full matrix. Give every review finding explicit evidence and a
+proposed disposition for the Phase 7 maker decision.
+
+Re-run the static audit after remediation and reconcile its exact current
+findings with the rendered report. Update each locale's provisional readiness before Phase 7, then derive the
+overall status: any pending locale makes the overall status
+`pending-remediation`; otherwise any locale approved with limitations makes it
+`approved-with-limitations`; otherwise it is `ready`.
+
+- With any static or rendered error, retain the unresolved finding and mark
+  every locale in its `affectedLocales` as `pending-remediation`.
+- With review findings but no errors, keep each affected locale
+  `pending-remediation` until the maker disposes every review item.
+- For a locale with no unresolved findings, set its entry to `ready`. Remove it
+  from `unavailableLocales` and update every managed availability boundary.
+- Do not change an existing ready locale merely because another locale remains
+  pending.
+
+A known usable limitation may become `approved-with-limitations` only after
+maker approval in Phase 7. A visible opaque third-party surface, unreadable or
+clipped text, incorrect direction, unreachable control, broken focus order,
+or state-losing locale switch cannot be approved as ready.
 
 For an explicitly unverified package, all build, initialization, switching or
 route navigation, resource loading, `lang`/`dir`, and console checks are
@@ -470,9 +791,18 @@ Repeat the AI translation warning when applicable.
 Present files as **Created**, **Updated**, **Preserved**, or **Skipped**, each
 with a one-line reason. Include locale/key counts, blank/stale values,
 translation warning, build result, browser checks, and RTL areas needing
-manual visual review.
+manual visual review. Present the reconciled component scope with each
+classification and the applicable states/viewports exercised. The
+pre-implementation plan is scope, not evidence; report the implementation and
+rendered checks that satisfied each direction-aware, direction-fixed, and
+unknown/third-party entry.
+Include the rendered report path, passed/review/failed case totals, and
+failure/review screenshots. State the verification profile, representative
+LTR/RTL locales, locale-smoke count, component-case count, and generated
+manual-review checklist. The run specification is temporary workflow input,
+not a new project inventory.
 
-Classify the result as:
+Classify each newly added or regression-tested locale as:
 
 - **Ready** — the new locale may be enabled.
 - **Approved with limitations** — only usable degradation remains; show the
@@ -480,6 +810,37 @@ Classify the result as:
 - **Pending remediation** — build/runtime failure, incorrect `lang`/`dir`,
   unreadable text, unreachable critical controls, or serious accessibility
   failure remains; keep the affected locale unavailable.
+
+<!-- not-a-gate: verification-depth selection configures evidence collection within the already approved implementation scope -->
+After standard verification passes, always offer the verification-depth
+choice before transaction finalization. When the report contains manual-review
+items for high-risk components in non-representative locales, first show each
+locale, route, component, states, and viewports. Use `AskUserQuestion` with:
+
+- **Continue with standard verification (Recommended)** — when a manual
+  checklist exists, require the maker to confirm that they completed it and
+  checked translated labels/values, expansion, formatting, clipping, and
+  usability.
+- **Run extensive automated verification** — first return each transaction
+  target's provisional readiness entry to `pending-remediation`; keep it
+  exposed only because the transaction still blocks completion and
+  deployment. Then invoke:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/manage-localization-verification.js" \
+  --extend --profile extensive --projectRoot "<PROJECT_ROOT>"
+```
+
+Then rebuild the temporary specification with
+`verificationProfile: "extensive"` and rerun the rendered audit. Extensive
+verification covers every declared locale, component, state, and viewport and
+requires both runtime round trips for every real non-default locale. Any
+extensive error returns the transaction to fail-closed remediation.
+
+In repair or reconfiguration mode, use targeted verification for a known
+affected case set, standard verification for normal completion, and extensive
+verification only when the maker explicitly requests the full regression
+matrix. Targeted verification alone cannot approve a newly added locale.
 
 <!-- gate: add-localization:7.review | category=plan | cancel-leaves=localized-site-files -->
 
@@ -500,8 +861,49 @@ Use `AskUserQuestion`:
 Explicit acceptance applies only to usable degradation. It cannot override a
 build/runtime failure, incorrect direction, unreadable content, unreachable
 critical control, or serious accessibility failure. Apply requested revisions,
-then repeat Phase 6 and this gate. If the maker saves a pending locale, do not
-offer deployment in Phase 8.
+then repeat Phase 6 and this gate. Before repeating after a verified or failed
+run, invoke `manage-localization-verification.js --fail`, restore every target
+to pending unavailable state, finalize the old transaction, and begin a new
+transaction. Each rendered run must have its own fail-closed starting point and
+cannot reuse a prior verified result.
+
+After the maker's choice, finalize `.powerpages-localization.json`:
+
+- **Accept changes:** set the reviewed locale entries to `ready` and remove
+  findings that affected only those locales.
+- **Enable with documented limitations:** retain only the accepted
+  review-severity findings, set each affected locale entry to
+  `approved-with-limitations`, remove those locales from
+  `unavailableLocales`, and add a `disposition` to every retained finding with
+  `status: maker-approved`, the exact component/page impact, the report or
+  screenshot evidence path, and an ISO `approvedAt` timestamp. Accepted review
+  checks that are not limitations are removed from the unresolved finding
+  arrays.
+- **Save but keep locale unavailable:** keep the affected locale entries
+  `pending-remediation`, retain the undisposed findings, and keep only those
+  affected locales unavailable.
+
+Never add a maker-approved disposition to an error finding. After changing
+status or availability, finalize the transaction:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/manage-localization-verification.js" \
+  --finalize \
+  [--manual-review-completed] \
+  --projectRoot "<PROJECT_ROOT>"
+```
+
+Pass `--manual-review-completed` only after the maker chose that standard-path
+option and completed the generated checklist. Extensive runs do not use it.
+Finalization succeeds only when the normal manifest invariant and all
+localization checks pass. Rebuild only when source, resources, dependencies,
+build configuration, or locale availability changed after the successful
+build; readiness status and finding-disposition metadata alone do not require
+another build. Rerun only locale activation cases affected by final
+availability changes. Do not complete the workflow until the transaction file
+is gone and the final manifest, selector/detection boundaries, and actual
+rendered availability agree. If the maker saves a pending locale, do not offer
+deployment in Phase 8.
 
 ---
 
@@ -510,6 +912,12 @@ offer deployment in Phase 8.
 > Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`
 
 Record usage with skill name `AddLocalization`.
+
+Present a final localization summary before returning or offering deployment.
+Include the final readiness status, available and unavailable locales, static
+and rendered finding totals, the rendered report path, every maker-approved
+limitation with its impact/evidence, and the manifest path. Do not describe a
+locale as enabled when it remains in `unavailableLocales`.
 
 If `$ARGUMENTS` contains `[FROM_CREATE_SITE]`, return control to create-site
 without asking about deployment.

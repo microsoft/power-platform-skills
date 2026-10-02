@@ -8,6 +8,7 @@
       "files": [],
       "expectations": [
         "Discovery phase asks for site name, framework, purpose, audience, and project location via AskUserQuestion",
+        "Because no content language was explicit, runs suggest-content-locale.js and offers its Dataverse base-language result as Suggested, silently falling back to en-US when unavailable",
         "Site naming values are derived: __SITE_NAME__ = 'Contoso Solutions Portal', __SITE_SLUG__ = 'contoso-solutions-portal'",
         "React template is copied from the assets/react/ directory and all __PLACEHOLDER__ tokens are replaced",
         "gitignore file is renamed to .gitignore in the project root",
@@ -19,7 +20,10 @@
         "Design aesthetics reference is read from ${PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md",
         "A component plan table is presented showing pages, shared components, design elements, and routes",
         "Color palette is determined with 6 CSS variables (--color-primary, --color-secondary, --color-bg, --color-surface, --color-text, --color-text-muted)",
-        "Implementation plan is presented with Section A (Design & Pages) and Section B (Review & Deployment) and user approval is requested",
+        "Implementation plan is rendered in the selected content language with a complete PLAN_LABELS dictionary, correct lang/dir metadata, RTL-safe layout, unchanged technical values, and user approval is requested",
+        "Implementation plan separates REVIEW_DATA.agentChecks from REVIEW_DATA.makerReview, includes create-stage bidirectional-readiness criteria, and makes clear that the agent executes technical checks while the maker reviews linguistic, cultural, brand, and visual quality",
+        "Native free-form inputs and textareas use adaptive direction: active UI direction while empty or cleared and dir=auto only while populated; dirname metadata is preserved where appropriate",
+        "Rendered form checks cover empty, RTL-valued, LTR-valued, clear-after-RTL, and clear-after-LTR free-form states under both UI directions, while machine-oriented controls remain documented bidi-fixed LTR",
         "Design foundations are applied first: distinctive Google Fonts (not Inter/Roboto/Arial), CSS variables for colors, motion/animation utilities, and background treatments",
         "The scaffold loading screen is completely replaced — no trace of Power Pages branded animation remains",
         "Real Unsplash images are sourced via WebSearch and used in hero sections, feature cards, and content areas",
@@ -86,6 +90,7 @@
         "Images use appropriate sizing (w=1600 for heroes, w=800 for cards) with descriptive alt text",
         "Each page gets its own dedicated git commit; each component gets its own commit",
         "Playwright browser_snapshot verifies each page (no screenshots taken)",
+        "Checks centralized localization availability and does not offer the add-localization child workflow because Astro has no currently available mode",
         "axe-core audit script runs with --routes flag covering all site routes",
         "All critical/serious accessibility violations are fixed, committed, and re-verified",
         "Accessibility summary table shows per-page violations found vs fixed",
@@ -141,16 +146,45 @@
     {
       "id": 6,
       "prompt": "Create an Astro Power Pages site called Local Bakery. Keep it English-only.",
-      "expected_output": "The workflow builds the site, asks the fixed localization question in Phase 5.7, records the opt-out, and continues without invoking add-localization. It may suggest the skill later as an optional enhancement.",
+      "expected_output": "The workflow builds the site, reads centralized localization availability in Phase 5.7, explains that Astro localization is temporarily unavailable, and continues without invoking or suggesting add-localization.",
       "files": [],
       "expectations": [
-        "Asks the localization question only after the real pages are built",
-        "Shows the localization scope subtext",
-        "Offers exactly 'Yes — configure localization now' and 'No — keep this site single-language'",
+        "Checks mode availability only after the real pages are built",
+        "Uses the centralized Astro temporarily-unavailable reason",
+        "Does not ask the additional-languages question",
         "Records LOCALIZATION_REQUESTED=false",
         "Does not invoke add-localization during implementation",
         "Continues normal accessibility, review, and deployment phases",
-        "May list add-localization as an optional next step"
+        "Does not list add-localization as an available optional next step"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Create a Hebrew React Power Pages customer portal with a contact form, autocomplete address field, mobile navigation drawer, and a third-party date picker.",
+      "expected_output": "The workflow plans every visible or interactive component using language-agnostic bidirectional classifications, treats form states and viewports as separate surfaces, and records rendered checks for the third-party date picker without creating a component-inventory manifest.",
+      "files": [],
+      "expectations": [
+        "Resolves the Hebrew locale direction from its writing script rather than a hardcoded language-only allowlist",
+        "Builds BIDIRECTIONAL_REVIEW_DATA for shared and page-local visible or interactive components before plan approval",
+        "Classifies the contact form, address autocomplete, mobile drawer, and third-party date picker as direction-neutral, direction-aware, direction-fixed, or unknown-third-party with localized reasons",
+        "Records only applicable component states, including form validation, autocomplete-open, drawer-open, and date-picker-open states",
+        "Records desktop and/or narrow viewports independently for each component",
+        "Treats form labels, placeholders, hints, validation messages, prefixes, suffixes, icons, and open panels as one compound direction surface",
+        "Requires rendered checks for third-party open states and portal or overlay content",
+        "Plans actual RTL and pseudo-LTR coverage because every new site receives selected and opposite-direction verification",
+        "Runs the expanded static audit, fixes deterministic fixed-direction, physical-utility, shorthand, and unicode-bidi errors, and records raw horizontal scrolling assumptions for review and remediation when required",
+        "Builds an ephemeral rendered-verification specification from the reconciled scope and runs every applicable component state and viewport in actual RTL and pseudo-LTR",
+        "The rendered audit checks computed direction, page overflow, clipping, viewport escape, declared overlap, focus order, portals, and the third-party date-picker open state",
+        "Blocks Phase 7 for rendered errors, triages every review finding with evidence and a proposed outcome, and never offers a deterministic error for maker override",
+        "Allows only review-severity usable limitations to be accepted at the final maker gate and records their exact impact, evidence path, and approval time",
+        "Consumes per-locale readiness from the localization workflow, keeps only locales with pending findings unavailable, and does not disable an unaffected locale merely because it shares a writing direction",
+        "Reuses a successful add-localization rendered report when its source, resource, dependency, build-configuration, and availability fingerprint remains current",
+        "Uses bounded concurrent route, viewport, and locale groups and reuses navigation only for states with a verified deterministic reset",
+        "Persists only the rendered evidence report and failure or review screenshots, not a second authoritative component manifest",
+        "Uses a narrowly scoped bidi-fixed directive only for intentional machine-oriented LTR values, never for localized form UI",
+        "Does not create a separate persistent component-inventory JSON file",
+        "Requires Phase 5 to reconcile the planned review scope with the actual source and rendered application",
+        "Final summary reports bidirectional readiness, static and rendered finding totals, evidence, approved limitations, and any localization locales that remain unavailable"
       ]
     }
   ]

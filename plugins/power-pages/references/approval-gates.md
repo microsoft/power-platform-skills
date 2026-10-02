@@ -176,6 +176,7 @@ Required, normalized vocabulary:
 | Value | Meaning |
 |---|---|
 | `nothing` | Clean exit. No Dataverse write, no filesystem write, no state change anywhere. |
+| `rendered-plan` | A human-readable HTML plan remains under `docs/`; no implementation files, dependencies, or external state changed. |
 | `localized-site-files` | Localization changes remain in the site files but are not deployed. |
 | `validated-stage-run` | A `deploymentstageruns` row remains on the host in validated-but-not-deployed state. |
 | `partial-manifest` | `.solution-manifest.json` written but not all components added to Dataverse. |
@@ -477,7 +478,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | `create-site:1.5.creation-path` | not-a-gate | - | 1.5 | Route preference before catalog fetch; no project directory, Dataverse write, or durable skill state exists | - |
 | `create-site:1.5.template-choice` | not-a-gate | — | 1.5 | Read-only route selection after template preview; only disposable temp preview files exist, with no project directory, Dataverse write, or durable skill state | — |
 | `create-site:1.5.from-scratch-setup` | not-a-gate | — | 1.5 | Deferred framework and directory data-gathering before any scaffold files are written | — |
-| `create-site:1.5.content-language` | not-a-gate | — | 1.5 | *"Which language should the site content use?"* — validates the single SPA content locale for the from-scratch path; Dataverse and Power Pages system messages remain English | — |
+| `create-site:1.5.content-language` | not-a-gate | — | 1.5 | *"Which language should the site content use?"* — offers the Dataverse organization base language as Suggested when available, then validates the single SPA content locale for the from-scratch path; Dataverse and Power Pages system messages remain English | — |
 | `create-site:1.5.confirm-environment` | gate | consent | 1.5 | Target environment resolved from PAC/Azure auth — confirm before any environment preflight or import mutation | template-cache |
 | `create-site:1.5.unblock-js` | gate | consent | 1.5 | Target environment blocks `.js` in `blockedattachments` — remove only `js` before uploading website code | attachment-block-modified |
 | `create-site:1.5.language-requirement` | not-a-gate | - | 1.5 | Route selection after blocking template-declared Dataverse language preflight; no override option exists and no org mutation has happened | - |
@@ -492,7 +493,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | `create-site:1.5.import-failed` | gate | progress | 1.5 | Import failed or partial — choose retry, from-scratch fallback, or stop; fires per failed solution iteration | partial-unmanaged-template-import |
 | `create-site:5.7.localization` | not-a-gate | — | 5.7 | *"Would you like to add more languages now?"* — selects whether to enter the child localization workflow after implementation; the child workflow preserves the detected document locale as its source/default | — |
 | `create-site:3.requirements` | gate | plan | 3 | *"Which features? / Aesthetic / Mood"* — three sub-prompts sharing this gate; shape the rendered Phase 4 plan | nothing |
-| `create-site:4.7.plan-approval` | gate | plan | 4.7 | HTML plan rendered — *"Approve and start building / I'd like to make changes"* | nothing |
+| `create-site:4.7.plan-approval` | gate | plan | 4.7 | Localized HTML plan rendered with agent verification separated from maker review — *"Approve and start building / I'd like to make changes"* | nothing |
 | `create-site:7.review` | gate | plan | 7 | Live site ready — *"Would you like any changes?"* | nothing |
 | `create-site:8.deploy` | gate | plan | 8 | *"Deploy now (Recommended) / Skip for now"* — invokes `/deploy-site` on Yes | nothing |
 
@@ -749,7 +750,7 @@ Most prompts gather validated configuration before the Phase 3 plan gate.
 | `add-localization:2.package` | not-a-gate | — | 2.4 | Use recommendation, propose a validated alternative, or cancel | — |
 | `add-localization:2.prerelease` | not-a-gate | — | 2.4 | Explicitly acknowledge an npm prerelease before it may enter the plan | — |
 | `add-localization:2.translation` | not-a-gate | — | 2.5 | Agent-generated translations, blank targets, or cancel | — |
-| `add-localization:3.plan-approval` | gate | plan | 3 | Approve exact package/mode/locale/file delta before installation or edits | nothing |
+| `add-localization:3.plan-approval` | gate | plan | 3 | Review the opened source-language `docs/add-localization-plan*.html`, then approve the exact package/mode/locale/file delta before installation or edits | rendered-plan |
 | `add-localization:7.review` | gate | plan | 7 | Accept verified localization or request revisions | localized-site-files |
 | `add-localization:8.deploy` | gate | plan | 8 | Direct invocation only — deploy now or skip; create-site child invocation suppresses this prompt | localized-site-files |
 

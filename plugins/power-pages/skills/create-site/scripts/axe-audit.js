@@ -13,7 +13,7 @@
 // Exit code: 1 if critical/serious violations found, 0 otherwise.
 
 const path = require('path');
-const { detectBrowser } = require('../../../scripts/lib/detect-browser');
+const { detectBrowserLaunchOptions } = require('../../../scripts/lib/detect-browser');
 
 const AXE_CDN_URL = 'https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.10.3/axe.min.js';
 
@@ -49,9 +49,10 @@ function loadPlaywright(projectRoot) {
 async function main() {
   const { url, routes, projectRoot } = parseArgs();
   const { chromium } = loadPlaywright(projectRoot);
-  const channel = detectBrowser();
-
-  const browser = await chromium.launch({ channel, headless: true });
+  const browser = await chromium.launch({
+    ...detectBrowserLaunchOptions(),
+    headless: true,
+  });
   const page = await browser.newPage();
   const results = [];
 

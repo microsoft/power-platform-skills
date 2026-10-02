@@ -11,6 +11,7 @@
         "Uses runtime i18next plus react-i18next",
         "Displays the Dataverse scope notice and AI translation warning",
         "Validates en-US, fr-FR, and de-DE before implementation",
+        "Renders and opens docs/add-localization-plan.html in the en-US source language before retaining the terminal approval gate",
         "Adds selector persistence, fallback, lang, and dir behavior"
       ]
     },
@@ -30,40 +31,42 @@
     {
       "id": 3,
       "prompt": "Add localization to this Angular 19.1 Power Pages site. Support en-US and fr-FR. I am fine with the recommended option.",
-      "expected_output": "Recommend Angular's official matching @angular/localize package and static locale builds, then create XLF catalogs and locale build configuration.",
+      "expected_output": "Use the currently available Angular runtime mode with Transloco and do not offer or plan the temporarily unavailable static mode.",
       "files": [],
       "expectations": [
-        "Recommends static @angular/localize rather than Transloco",
-        "Uses a package version compatible with Angular 19.1",
-        "Configures Angular i18n locale builds and XLF resources",
-        "Adds navigation between equivalent locale builds",
-        "Does not add runtime browser persistence"
+        "Reads Angular mode availability from the centralized localization capability registry",
+        "Selects Angular runtime localization and recommends @jsverse/transloco while allowing a validated runtime alternative",
+        "Does not offer or plan @angular/localize static builds",
+        "Adds in-place language switching with browser-local persistence",
+        "Validates the runtime implementation and manifest"
       ]
     },
     {
       "id": 4,
       "prompt": "Our Angular site must switch language instantly without a reload. Add English and Arabic localization.",
-      "expected_output": "Offer the official static recommendation but allow the explicit runtime requirement to select Transloco, including persisted selection and RTL handling.",
+      "expected_output": "Use the available Angular runtime mode, recommend Transloco while allowing validated runtime alternatives, and include persisted selection and RTL handling.",
       "files": [],
       "expectations": [
         "Chooses Transloco only because runtime switching was explicitly requested",
         "Configures runtime selection without page reload",
         "Persists only the browser-local locale preference",
         "Sets lang and rtl direction for Arabic",
+        "Repairs native free-form inputs and textareas so empty, clear-after-RTL, and clear-after-LTR controls follow the active UI direction while populated controls use automatic value direction, preserving dirname metadata",
+        "Keeps email, telephone, URL, path, code, GUID, and identifier controls explicitly LTR with adjacent bidi-fixed documentation while their surrounding field UI follows the locale",
         "Flags RTL layout areas for manual visual review"
       ]
     },
     {
       "id": 5,
       "prompt": "Make my Astro Power Pages site available at English and Japanese locale URLs.",
-      "expected_output": "Use Astro built-in i18n static routes and navigate between locale-specific URLs.",
+      "expected_output": "Explain that Astro static localization is temporarily unavailable and stop before configuration, plan rendering, or file changes.",
       "files": [],
       "expectations": [
-        "Uses Astro built-in i18n without an npm localization package",
-        "Creates static locale routes",
-        "Uses equivalent-route navigation in the selector",
-        "Configures explicit default-locale routing and fallback",
-        "Does not add client-side locale persistence"
+        "Reads Astro availability from the centralized localization capability registry",
+        "Shows the stable temporarily-unavailable reason",
+        "Does not gather locale or package configuration",
+        "Does not render an add-localization plan",
+        "Does not install dependencies or change project files"
       ]
     },
     {
@@ -82,14 +85,15 @@
     {
       "id": 7,
       "prompt": "Repair localization in this Angular project. The manifest says Transloco runtime but angular.json and dependencies use @angular/localize static builds.",
-      "expected_output": "Surface the conflict, enter repair/reconfigure flow, ask which evidence-backed mode should remain, and change only the approved delta.",
+      "expected_output": "Surface the conflict and static-mode availability block, then allow only explicit reconfiguration to the available Transloco runtime mode or a clean stop.",
       "files": [],
       "expectations": [
-        "Does not guess which conflicting mode is authoritative",
-        "Shows manifest, dependency, and angular.json evidence",
+        "Reports the manifest, dependency, and angular.json conflict",
+        "Explains that Angular static localization is temporarily unavailable",
+        "Offers reconfiguration to Angular runtime localization or Stop without changes",
+        "Does not allow static mode to enter the plan",
         "Requires a new plan approval before replacement",
-        "Preserves translations unless replacement is explicitly approved",
-        "Rewrites the manifest to match the repaired implementation"
+        "Preserves translations unless replacement is explicitly approved"
       ]
     },
     {
@@ -177,8 +181,12 @@
         "Canonicalizes ar and he",
         "Sets documentElement.dir to rtl for both",
         "Restores ltr for non-RTL locales",
-        "Browser-tests at least one RTL locale",
-        "Flags directional icons and fixed left/right styling for review"
+        "Runs real activation, localized content, script-font, formatting, lang/dir, resource, and console smoke checks independently for Arabic and Hebrew",
+        "Chooses one newly added RTL locale as the representative for the full component-state and viewport matrix and puts the other locale's complex components in the maker review checklist",
+        "Runs default-to-locale-to-default for every real non-default locale and requires the reverse round trip for representative locales in standard verification",
+        "Offers extensive verification before finalization when the maker wants the full component matrix and both round trips repeated for every locale",
+        "Groups compatible component states by route, viewport, and locale, uses explicit reset actions before navigation reuse, and runs independent groups with bounded concurrency while keeping locale transitions serial",
+        "Flags directional icons, fixed direction, physical utility classes, asymmetric shorthands, and raw horizontal scrolling assumptions for remediation or review"
       ]
     },
     {
@@ -228,6 +236,7 @@
       "expectations": [
         "Does not treat this as add-languages mode",
         "Asks for the new default only because change was explicit",
+        "Keeps the rendered localization plan in the existing pre-change source/default language even though the resulting default changes to fr-FR",
         "Shows affected fallback and route behavior",
         "Preserves locale resources",
         "Updates and validates the manifest default"
@@ -254,9 +263,74 @@
       "expectations": [
         "Recognizes FROM_CREATE_SITE context",
         "Runs the same localization implementation and verification path",
+        "Renders and opens the dedicated source-language localization plan artifact before terminal approval",
         "Records AddLocalization usage",
         "Does not ask to deploy from add-localization",
         "Returns control to create-site"
+      ]
+    },
+    {
+      "id": 21,
+      "prompt": "Add Hebrew to our existing English React customer portal. It has a contact form with helper text, a mobile drawer, an autocomplete menu rendered in a portal, and a third-party scheduling widget. Keep the existing brand and layout style.",
+      "expected_output": "The workflow treats the first LTR-only to mixed-direction change as a targeted bidirectional adaptation, inventories and classifies the existing components and their applicable states/viewports before approval, preserves unrelated design choices, and keeps Hebrew unavailable if blocking remediation remains.",
+      "files": [],
+      "expectations": [
+        "Detects the transition from LTR-only to mixed direction and runs the readiness audit before plan approval",
+        "Builds a non-empty READINESS_DATA.componentScope from the actual existing implementation",
+        "Classifies every visible or interactive shared and page-local component using the four language-agnostic classifications",
+        "Plans separate applicable states and desktop or narrow viewports for the form, drawer, autocomplete, and scheduling widget",
+        "Treats form labels, placeholders, hints, helper text, errors, prefixes, suffixes, values, and open panels as one compound direction surface",
+        "Requires rendered checks for the portal-mounted autocomplete and third-party scheduling widget",
+        "Builds an ephemeral rendered-verification specification and executes every applicable state and viewport in English LTR and Hebrew RTL",
+        "Requires English to Hebrew to English and Hebrew to English to Hebrew runtime sequences without reload, route loss, form-state loss, or focus loss",
+        "Records computed-direction, overflow, clipping, overlap, focus-order, portal, and third-party evidence with screenshots for failures or review findings",
+        "Runs the expanded static audit before approval and parses its structured findings even when deterministic errors produce a nonzero exit",
+        "Requires an adjacent bidi-fixed reason for intentional machine-oriented LTR values and does not permit that exception for localized labels, placeholders, hints, or errors",
+        "Describes remediation as a targeted bidirectional adaptation that preserves branding, routes, features, and visual character",
+        "Does not create a separate persistent component-inventory JSON file",
+        "Keeps Hebrew unavailable when an externally owned or existing component has a blocking unremediated defect",
+        "Records unresolved rendered blockers separately from static scanner findings and does not offer locale enablement while they remain",
+        "Writes a provisional pending-remediation manifest before validation, keeping affected locales unavailable until static and rendered verification are complete",
+        "Requires the approved review scope to be reconciled with components and states discovered during implementation",
+        "Finalizes the manifest only after the maker decision: ready has no findings, approved limitations retain only review findings with maker-approved impact/evidence/timestamp, and unresolved work remains pending",
+        "Reruns validation and affected locale activation checks after changing readiness or availability",
+        "Final summary reports the manifest path, readiness status, available and unavailable locales, finding totals, rendered report, and every approved limitation"
+      ]
+    },
+    {
+      "id": 22,
+      "prompt": "Add Arabic to our English React site. The third-party booking widget works in RTL, but its vendor-owned calendar arrow remains visually unchanged. If testing proves it is still understandable and usable, I may accept that limitation.",
+      "expected_output": "The workflow verifies the widget in its open state, treats any deterministic functional or readability failure as blocking, and permits only an evidence-backed review-severity limitation to be explicitly approved after testing.",
+      "files": [],
+      "expectations": [
+        "Plans the booking widget as unknown-third-party with its open state, desktop and narrow coverage, portal or iframe target, and exact rendered checks",
+        "Begins from fail-closed Arabic availability, records an exclusive verification transaction, and tests Arabic through the real selector while completion and deployment remain blocked",
+        "Does not treat the user's advance willingness as approval and asks again only after showing the rendered evidence and exact impact",
+        "Does not offer approval if the widget is unreadable, clipped, unreachable, incorrectly directed, or otherwise has an error-severity finding",
+        "If the remaining issue is review-severity usable degradation, offers Fix before enabling, Enable with documented limitations, Save but keep locale unavailable, and Request revisions",
+        "On enablement, records only the accepted review finding with maker-approved disposition, impact, report or screenshot evidence, and ISO approval timestamp",
+        "Keeps the verification transaction active through maker disposition, then finalizes Arabic as approved-with-limitations and available only after recording the approved evidence",
+        "Reports the final readiness and limitation consistently in the manifest and final summary"
+      ]
+    },
+    {
+      "id": 23,
+      "prompt": "Our English React portal already has Hebrew enabled and verified. Add Arabic now. Arabic has a serious language-specific font failure in its calendar, but Hebrew still passes regression testing. Save the Arabic work so we can fix it later without disabling Hebrew.",
+      "expected_output": "The workflow tests Arabic independently, preserves Hebrew as ready and available because regression evidence shows it is unaffected, and keeps only Arabic pending and unavailable.",
+      "files": [],
+      "expectations": [
+        "Starts Arabic fail-closed, then temporarily exposes only Arabic under an exclusive verification transaction without changing the previously ready Hebrew locale",
+        "Runs Arabic resource, activation, lang and dir, font, formatting, wrapping, console, and accessibility checks and selects Arabic as the RTL component-matrix representative",
+        "Runs Hebrew locale smoke coverage and places its high-risk complex components in the maker review checklist instead of automatically repeating the full RTL matrix",
+        "Records the calendar font failure with locale scope and affectedLocales containing only ar-SA",
+        "Keeps he-IL ready and available because current evidence does not identify it as affected",
+        "Sets only ar-SA to pending-remediation and makes unavailableLocales exactly [ar-SA]",
+        "Derives the overall bidirectional readiness status as pending-remediation while retaining per-locale readiness",
+        "Applies the Arabic exclusion to selectors, automatic detection, alternate-language metadata, and production output",
+        "Exercises Arabic through the real selector and public locale coordinator, then restores Arabic to unavailable after the failure",
+        "Does not require all RTL locales to be unavailable merely because Arabic failed",
+        "Runs English to Arabic to English and Arabic to English to Arabic because Arabic is the RTL representative; pseudo locales are not used for application switching",
+        "Final summary clearly reports Hebrew as available and Arabic as unavailable"
       ]
     }
   ]

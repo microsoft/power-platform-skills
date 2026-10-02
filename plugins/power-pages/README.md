@@ -54,7 +54,15 @@ Starts a complete code site either from a curated SPA template or from a fresh f
 
 - Start from a curated SPA template or scaffold from scratch
 - Choose from React, Vue, Angular, or Astro
-- Direction-neutral layouts work with LTR and RTL writing systems from the start
+- Suggests the selected Dataverse environment's base language for site content,
+  with a silent `en-US` fallback when the environment cannot be queried
+- Renders the implementation plan in the selected content language, including
+  correct `lang`/`dir` metadata and an RTL-safe layout
+- Separates deterministic agent verification from linguistic, cultural, brand,
+  and visual checks that require maker review
+- Every visible or interactive component is classified for bidirectional
+  behavior, with applicable states and desktop/narrow viewports planned
+  separately; direction-neutral layouts work with LTR and RTL from the start
 - Script-aware fonts, locale-aware formatting, and mixed-direction content safety
 - Real images from Unsplash (no placeholders)
 - Live browser preview during development
@@ -90,6 +98,15 @@ Runtime-tests a deployed, activated site using a real browser (via the bundled P
 - Network request verification for Web API / Server Logic / Cloud Flow endpoints
 - Console and network error capture
 - Screenshots on failure
+
+Create-site and add-localization also run a component-scoped rendered
+bidirectional audit against their development preview. It verifies computed
+direction, overflow, clipping, focus order, portals/overlays, applicable
+states and viewports, and runtime locale round trips. The run report is
+validation evidence rather than a second component manifest. Deterministic
+errors keep affected locales unavailable. Only usable review-severity
+limitations can be enabled after the maker sees the exact impact and evidence;
+that approval is recorded in the localization manifest.
 
 ### Data modeling
 
@@ -389,23 +406,29 @@ Surfaces PAC CLI upload errors and Dataverse async operation errors, pattern-mat
 
 > "Add French and German to my site"
 
-Adds or extends multilingual localization for React, Vue, Angular, and Astro
-Power Pages code-site SPAs.
+Adds or extends multilingual localization for React, Vue, and Angular runtime
+Power Pages code-site SPAs. Astro and Angular static localization are
+temporarily unavailable.
 
 - Detects and preserves existing localization configuration and translations
+- Renders and opens a persistent `docs/add-localization-plan.html` in the
+  site's current source language before the terminal approval gate
 - Validates canonical BCP-47 language tags against the bundled IANA registry
-- Recommends runtime localization for React/Vue, official static localization
-  for Angular, and built-in static locale routes for Astro
+- Centralizes mode availability: React, Vue, and Angular runtime are active;
+  Angular static and Astro static remain dormant for future re-enablement
 - Generates translations with the agent or creates blank values for manual
   completion
 - Resolves direction from each locale's writing script, including languages
   written in multiple scripts
-- Audits the first opposite-direction locale and remediates blocking layout,
-  component, asset, mixed-content, and font issues
+- Audits every added locale independently, classifies the existing components
+  and their applicable states/viewports, and regression-tests shared
+  direction-sensitive changes without redesigning unrelated branding or
+  behavior
 - Adds an accessible language selector with fallback and safe runtime LTR/RTL
   switching; runtime React, Vue, and Angular sites use a locale coordinator
-- Keeps an unsafe new locale unavailable for later remediation, or records
-  explicit approval for usable non-blocking limitations
+- Keeps only proven affected locales unavailable for later remediation while
+  preserving previously verified locales, or records explicit approval for
+  usable non-blocking limitations
 - Revalidates localization resources, bidirectional source rules, and text-expansion risks after
   later UI-modifying skills and again before deployment
 - Localizes only the SPA UI; it does not enable Dataverse environment languages

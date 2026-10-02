@@ -13,38 +13,86 @@ function hasLocaleNavigationSignal(text) {
   return LOCALE_NAVIGATION_PATTERN.test(String(text || ''));
 }
 
+function defineFrameworkCapability({
+  modes,
+  recommendedMode,
+  recommendedPackages,
+  frameworkPeers,
+}) {
+  const frozenModes = Object.freeze(Object.fromEntries(
+    Object.entries(modes).map(([mode, availability]) => [
+      mode,
+      Object.freeze({ ...availability }),
+    ])
+  ));
+  const supportedModes = Object.freeze(Object.keys(frozenModes));
+  const availableModes = Object.freeze(supportedModes.filter(
+    (mode) => frozenModes[mode].status === 'available'
+  ));
+  return Object.freeze({
+    modes: frozenModes,
+    supportedModes,
+    availableModes,
+    recommendedMode,
+    recommendedPackages: Object.freeze(recommendedPackages),
+    frameworkPeers: Object.freeze(frameworkPeers),
+  });
+}
+
 const LOCALIZATION_CAPABILITIES = Object.freeze({
   frameworks: Object.freeze({
-    react: Object.freeze({
-      supportedModes: Object.freeze(['runtime']),
+    react: defineFrameworkCapability({
+      modes: {
+        runtime: { status: 'available' },
+      },
       recommendedMode: 'runtime',
-      recommendedPackages: Object.freeze({ runtime: 'react-i18next' }),
-      frameworkPeers: Object.freeze(['react', 'react-dom']),
+      recommendedPackages: { runtime: 'react-i18next' },
+      frameworkPeers: ['react', 'react-dom'],
     }),
-    vue: Object.freeze({
-      supportedModes: Object.freeze(['runtime']),
+    vue: defineFrameworkCapability({
+      modes: {
+        runtime: { status: 'available' },
+      },
       recommendedMode: 'runtime',
-      recommendedPackages: Object.freeze({ runtime: 'vue-i18n' }),
-      frameworkPeers: Object.freeze(['vue']),
+      recommendedPackages: { runtime: 'vue-i18n' },
+      frameworkPeers: ['vue'],
     }),
-    angular: Object.freeze({
-      supportedModes: Object.freeze(['runtime', 'static']),
-      recommendedMode: 'static',
-      recommendedPackages: Object.freeze({
+    angular: defineFrameworkCapability({
+      modes: {
+        runtime: { status: 'available' },
+        static: {
+          status: 'temporarily-unavailable',
+          reasonCode: 'angular-static-temporarily-unavailable',
+          reason:
+            'Angular static localization is temporarily unavailable in this release. ' +
+            'Angular runtime localization is available; @jsverse/transloco is recommended, ' +
+            'and compatible validated runtime alternatives are allowed.',
+        },
+      },
+      recommendedMode: 'runtime',
+      recommendedPackages: {
         runtime: '@jsverse/transloco',
         static: '@angular/localize',
-      }),
-      frameworkPeers: Object.freeze([
+      },
+      frameworkPeers: [
         '@angular/core',
         '@angular/compiler',
         '@angular/compiler-cli',
-      ]),
+      ],
     }),
-    astro: Object.freeze({
-      supportedModes: Object.freeze(['static']),
-      recommendedMode: 'static',
-      recommendedPackages: Object.freeze({ static: 'astro-built-in' }),
-      frameworkPeers: Object.freeze(['astro']),
+    astro: defineFrameworkCapability({
+      modes: {
+        static: {
+          status: 'temporarily-unavailable',
+          reasonCode: 'astro-static-temporarily-unavailable',
+          reason:
+            'Astro static localization is temporarily unavailable in this release. ' +
+            'No Astro localization mode is currently available.',
+        },
+      },
+      recommendedMode: null,
+      recommendedPackages: { static: 'astro-built-in' },
+      frameworkPeers: ['astro'],
     }),
   }),
   packages: Object.freeze({
@@ -57,6 +105,70 @@ const LOCALIZATION_CAPABILITIES = Object.freeze({
   }),
 });
 const KNOWN_PACKAGES = LOCALIZATION_CAPABILITIES.packages;
+
+function getLocalizationModeAvailability(framework, mode) {
+  const capability = LOCALIZATION_CAPABILITIES.frameworks[framework];
+  if (!capability) {
+    return {
+      framework,
+      mode,
+      supported: false,
+      available: false,
+      status: 'unsupported',
+      recommendedPackage: null,
+      builtIn: false,
+      reasonCode: 'unsupported-framework',
+      reason: `Framework "${framework}" is not supported by add-localization.`,
+    };
+  }
+  const availability = capability.modes[mode];
+  if (!availability) {
+    return {
+      framework,
+      mode,
+      supported: false,
+      available: false,
+      status: 'unsupported',
+      recommendedPackage: null,
+      builtIn: false,
+      reasonCode: 'unsupported-mode',
+      reason: `${framework} does not support "${mode}" mode in add-localization.`,
+    };
+  }
+  const recommendedPackage = capability.recommendedPackages[mode] || null;
+  return {
+    framework,
+    mode,
+    supported: true,
+    available: availability.status === 'available',
+    recommendedPackage,
+    builtIn: Boolean(KNOWN_PACKAGES[recommendedPackage]?.builtIn),
+    ...availability,
+  };
+}
+
+function getFrameworkLocalizationAvailability(framework) {
+  const capability = LOCALIZATION_CAPABILITIES.frameworks[framework];
+  if (!capability) {
+    return {
+      framework,
+      supported: false,
+      availableModes: [],
+      recommendedMode: null,
+      modes: {},
+    };
+  }
+  return {
+    framework,
+    supported: true,
+    availableModes: [...capability.availableModes],
+    recommendedMode: capability.recommendedMode,
+    modes: Object.fromEntries(capability.supportedModes.map((mode) => [
+      mode,
+      getLocalizationModeAvailability(framework, mode),
+    ])),
+  };
+}
 const DEFAULT_SOURCE_SCAN_LIMITS = Object.freeze({
   maxFileBytes: 1024 * 1024,
   maxTotalBytes: 10 * 1024 * 1024,
@@ -85,13 +197,53 @@ function readJson(filePath) {
   }
 }
 
-function validateLocalizationManifestShape(manifest) {
+function validateFindingDisposition(finding, prefix, errors, required) {
+  const disposition = finding?.disposition;
+  if (!required && disposition === undefined) return;
+  if (!disposition || typeof disposition !== 'object' || Array.isArray(disposition)) {
+    errors.push(`${prefix}.disposition must record the maker-approved limitation.`);
+    return;
+  }
+  if (disposition.status !== 'maker-approved') {
+    errors.push(`${prefix}.disposition.status must be "maker-approved".`);
+  }
+  for (const field of ['impact', 'evidence', 'approvedAt']) {
+    if (typeof disposition[field] !== 'string' || !disposition[field].trim()) {
+      errors.push(`${prefix}.disposition.${field} must be a non-empty string.`);
+    }
+  }
+  if (typeof disposition.evidence === 'string' &&
+      (!disposition.evidence.startsWith('docs/bidirectional-evidence/') ||
+       disposition.evidence.includes('..') ||
+       path.isAbsolute(disposition.evidence))) {
+    errors.push(
+      `${prefix}.disposition.evidence must be a repository-relative ` +
+      'docs/bidirectional-evidence/ path.'
+    );
+  }
+  if (typeof disposition.approvedAt === 'string' &&
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(
+        disposition.approvedAt
+      )) {
+    const normalized = disposition.approvedAt.includes('.')
+      ? disposition.approvedAt
+      : disposition.approvedAt.replace(/Z$/, '.000Z');
+    if (!Number.isFinite(Date.parse(disposition.approvedAt)) ||
+        new Date(disposition.approvedAt).toISOString() !== normalized) {
+      errors.push(`${prefix}.disposition.approvedAt must be an ISO date-time.`);
+    }
+  } else if (typeof disposition.approvedAt === 'string') {
+    errors.push(`${prefix}.disposition.approvedAt must be an ISO date-time.`);
+  }
+}
+
+function validateLocalizationManifestShape(manifest, options = {}) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     return ['Localization manifest must be a JSON object.'];
   }
   const errors = [];
-  if (typeof manifest.schemaVersion !== 'number') {
-    errors.push('Manifest schemaVersion must be a number.');
+  if (manifest.schemaVersion !== 1) {
+    errors.push('Manifest schemaVersion must be 1.');
   }
   for (const field of [
     'framework',
@@ -200,32 +352,246 @@ function validateLocalizationManifestShape(manifest) {
       }
     }
   }
-  if (manifest.bidirectionalReadiness !== undefined) {
-    const readiness = manifest.bidirectionalReadiness;
-    if (!readiness || typeof readiness !== 'object' || Array.isArray(readiness)) {
-      errors.push('Manifest bidirectionalReadiness must be an object.');
+  if (manifest.bidirectionalReadiness === undefined) {
+    errors.push(
+      'Schema version 1 manifests require bidirectionalReadiness metadata.'
+    );
+  } else if (manifest.bidirectionalReadiness !== undefined) {
+    validateBidirectionalReadiness(manifest, errors, options);
+  }
+  return errors;
+}
+
+function validateBidirectionalReadiness(manifest, errors, options = {}) {
+  const readiness = manifest.bidirectionalReadiness;
+  const statuses = new Set([
+    'ready',
+    'approved-with-limitations',
+    'pending-remediation',
+  ]);
+  if (!readiness || typeof readiness !== 'object' || Array.isArray(readiness)) {
+    errors.push('Manifest bidirectionalReadiness must be an object.');
+    return;
+  }
+  if (!statuses.has(readiness.status)) {
+    errors.push(
+      'Manifest bidirectionalReadiness.status must be "ready", ' +
+      '"approved-with-limitations", or "pending-remediation".'
+    );
+  }
+
+  const localeReadiness = readiness.localeReadiness;
+  if (!localeReadiness || typeof localeReadiness !== 'object' ||
+      Array.isArray(localeReadiness)) {
+    errors.push('Manifest bidirectionalReadiness.localeReadiness must be an object.');
+  }
+  const locales = Array.isArray(manifest.locales) ? manifest.locales : [];
+  const localeSet = new Set(locales);
+  const readinessLocales = localeReadiness &&
+    typeof localeReadiness === 'object' &&
+    !Array.isArray(localeReadiness)
+    ? Object.keys(localeReadiness)
+    : [];
+  const missingLocales = locales.filter((locale) => !readinessLocales.includes(locale));
+  const extraLocales = readinessLocales.filter((locale) => !localeSet.has(locale));
+  if (missingLocales.length || extraLocales.length) {
+    errors.push(
+      'Manifest bidirectionalReadiness.localeReadiness keys must exactly match locales.'
+    );
+  }
+
+  const localeStatuses = new Map();
+  for (const locale of readinessLocales) {
+    const entry = localeReadiness[locale];
+    const prefix = `Manifest bidirectionalReadiness.localeReadiness["${locale}"]`;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      errors.push(`${prefix} must be an object.`);
+      continue;
+    }
+    if (!statuses.has(entry.status)) {
+      errors.push(
+        `${prefix}.status must be "ready", "approved-with-limitations", ` +
+        'or "pending-remediation".'
+      );
     } else {
-      if (!['ready', 'approved-with-limitations', 'pending-remediation'].includes(
-        readiness.status
-      )) {
+      localeStatuses.set(locale, entry.status);
+    }
+  }
+  if (localeStatuses.get(manifest.defaultLocale) === 'pending-remediation') {
+    errors.push('The default locale cannot be pending remediation.');
+  }
+
+  const staticFindings = validateReadinessFindings(
+    readiness.findings,
+    'findings',
+    manifest,
+    errors,
+    true
+  );
+  const renderedFindings = validateReadinessFindings(
+    readiness.renderedFindings,
+    'renderedFindings',
+    manifest,
+    errors,
+    false
+  );
+  const allFindings = [...staticFindings, ...renderedFindings];
+
+  for (const finding of allFindings) {
+    for (const locale of finding.affectedLocales || []) {
+      const status = localeStatuses.get(locale);
+      if (finding.severity === 'error' && status !== 'pending-remediation') {
         errors.push(
-          'Manifest bidirectionalReadiness.status must be "ready", ' +
-          '"approved-with-limitations", or "pending-remediation".'
+          `Bidirectional error "${finding.rule}" requires locale ${locale} ` +
+          'to be pending-remediation.'
         );
       }
-      if (readiness.findings !== undefined && !Array.isArray(readiness.findings)) {
-        errors.push('Manifest bidirectionalReadiness.findings must be an array.');
-      }
-      if (readiness.status === 'pending-remediation' &&
-          (!Array.isArray(manifest.unavailableLocales) ||
-           manifest.unavailableLocales.length === 0)) {
+      if (finding.severity === 'review' && finding.disposition &&
+          !['approved-with-limitations', 'pending-remediation'].includes(status)) {
         errors.push(
-          'Pending bidirectional remediation requires at least one unavailable locale.'
+          `Maker-approved limitation "${finding.rule}" requires locale ${locale} ` +
+          'to be approved-with-limitations or pending-remediation.'
+        );
+      }
+      if (finding.severity === 'review' && !finding.disposition &&
+          status !== 'pending-remediation') {
+        errors.push(
+          `Undisposed review finding "${finding.rule}" requires locale ${locale} ` +
+          'to be pending-remediation.'
         );
       }
     }
   }
-  return errors;
+
+  for (const [locale, status] of localeStatuses) {
+    const localeFindings = allFindings.filter(
+      (finding) => finding.affectedLocales?.includes(locale)
+    );
+    if (status === 'ready' && localeFindings.length > 0) {
+      errors.push(`Ready locale ${locale} cannot have unresolved findings.`);
+    }
+    if (status === 'approved-with-limitations' &&
+        (localeFindings.length === 0 ||
+         localeFindings.some(
+           (finding) => finding.severity !== 'review' || !finding.disposition
+         ))) {
+      errors.push(
+        `Approved-with-limitations locale ${locale} requires only ` +
+        'maker-approved review findings.'
+      );
+    }
+  }
+
+  const expectedOverall = [...localeStatuses.values()].includes('pending-remediation')
+    ? 'pending-remediation'
+    : [...localeStatuses.values()].includes('approved-with-limitations')
+      ? 'approved-with-limitations'
+      : 'ready';
+  if (localeStatuses.size > 0 && readiness.status !== expectedOverall) {
+    errors.push(
+      `Manifest bidirectionalReadiness.status must be "${expectedOverall}" ` +
+      'to summarize localeReadiness.'
+    );
+  }
+
+  const verificationLocales = new Set(options.verificationLocales || []);
+  const expectedUnavailable = [...localeStatuses.entries()]
+    .filter(([, status]) => status === 'pending-remediation')
+    .map(([locale]) => locale)
+    .filter((locale) => !verificationLocales.has(locale))
+    .sort();
+  const actualUnavailable = Array.isArray(manifest.unavailableLocales)
+    ? [...manifest.unavailableLocales].sort()
+    : [];
+  if (JSON.stringify(expectedUnavailable) !== JSON.stringify(actualUnavailable)) {
+    errors.push(
+      'Manifest unavailableLocales must exactly match locales whose readiness ' +
+      'is pending-remediation.'
+    );
+  }
+}
+
+function validateReadinessFindings(value, field, manifest, errors, isStatic) {
+  if (!Array.isArray(value)) {
+    errors.push(`Manifest bidirectionalReadiness.${field} must be an array.`);
+    return [];
+  }
+  const valid = [];
+  for (const [index, finding] of value.entries()) {
+    const prefix = `Manifest bidirectionalReadiness.${field}[${index}]`;
+    if (!finding || typeof finding !== 'object' || Array.isArray(finding)) {
+      errors.push(`${prefix} must be an object.`);
+      continue;
+    }
+    const requiredFields = isStatic
+      ? ['file', 'rule', 'message', 'fingerprint']
+      : ['caseId', 'rule', 'message', 'selector'];
+    for (const requiredField of requiredFields) {
+      if (typeof finding[requiredField] !== 'string' ||
+          !finding[requiredField].trim()) {
+        errors.push(`${prefix}.${requiredField} must be a non-empty string.`);
+      }
+    }
+    if (isStatic && (!Number.isInteger(finding.line) || finding.line < 1)) {
+      errors.push(`${prefix}.line must be a positive integer.`);
+    }
+    if (!['error', 'review'].includes(finding.severity)) {
+      errors.push(`${prefix}.severity must be "error" or "review".`);
+    }
+    validateFindingScope(finding, prefix, manifest, errors);
+    if (finding.severity === 'error' && finding.disposition !== undefined) {
+      errors.push(`${prefix} error findings cannot have maker-approved dispositions.`);
+    } else {
+      validateFindingDisposition(finding, prefix, errors, false);
+    }
+    valid.push(finding);
+  }
+  return valid;
+}
+
+function validateFindingScope(finding, prefix, manifest, errors) {
+  const scopes = new Set(['locale', 'direction', 'shared', 'global']);
+  if (!scopes.has(finding.scope)) {
+    errors.push(`${prefix}.scope must be locale, direction, shared, or global.`);
+  }
+  const locales = Array.isArray(manifest.locales) ? manifest.locales : [];
+  if (!Array.isArray(finding.affectedLocales) ||
+      finding.affectedLocales.length === 0 ||
+      finding.affectedLocales.some(
+        (locale) => typeof locale !== 'string' || !locales.includes(locale)
+      ) ||
+      new Set(finding.affectedLocales).size !== finding.affectedLocales.length) {
+    errors.push(
+      `${prefix}.affectedLocales must contain unique configured locale tags.`
+    );
+    return;
+  }
+  if (finding.scope === 'global') {
+    const expected = [...locales].sort();
+    const actual = [...finding.affectedLocales].sort();
+    if (JSON.stringify(expected) !== JSON.stringify(actual)) {
+      errors.push(`${prefix} global findings must affect every configured locale.`);
+    }
+  }
+  if (finding.scope === 'locale' && finding.affectedLocales.length !== 1) {
+    errors.push(`${prefix} locale findings must affect exactly one locale.`);
+  }
+  if (finding.scope === 'direction') {
+    if (!['ltr', 'rtl'].includes(finding.direction)) {
+      errors.push(`${prefix}.direction must be ltr or rtl for direction scope.`);
+      return;
+    }
+    const expected = locales
+      .filter((locale) => getLocaleDirection(locale) === finding.direction)
+      .sort();
+    const actual = [...finding.affectedLocales].sort();
+    if (JSON.stringify(expected) !== JSON.stringify(actual)) {
+      errors.push(
+        `${prefix} direction findings must affect every configured ` +
+        `${finding.direction} locale.`
+      );
+    }
+  }
 }
 
 function verifyInitializationEvidence(projectRoot, packageName, evidence) {
@@ -652,6 +1018,46 @@ function detectLocalization(projectRoot) {
     if (modes.size > 1) conflicts.push('runtime and static localization packages are both installed');
   }
 
+  // Preserve every source rather than only the inferred winner. A manifest can
+  // claim runtime mode while stale @angular/localize/angular.json evidence
+  // still leaves a dormant static implementation in the project.
+  const modeEvidence = [];
+  if (manifestMode) {
+    modeEvidence.push({
+      mode: manifestMode,
+      source: MANIFEST_NAME,
+      detail: `manifest mode "${manifestMode}"`,
+    });
+  }
+  for (const packageName of packages) {
+    modeEvidence.push({
+      mode: KNOWN_PACKAGES[packageName].mode,
+      source: 'package',
+      detail: packageName,
+    });
+  }
+  if (angularI18n) {
+    modeEvidence.push({
+      mode: 'static',
+      source: 'angular.json',
+      detail: 'Angular i18n build configuration',
+    });
+  }
+  if (astroConfig) {
+    modeEvidence.push({
+      mode: 'static',
+      source: astroConfig,
+      detail: 'Astro i18n configuration',
+    });
+  }
+  const detectedEvidenceModes = [...new Set(modeEvidence.map((entry) => entry.mode))];
+  if (manifestMode && detectedEvidenceModes.some((mode) => mode !== manifestMode)) {
+    conflicts.push(
+      `manifest mode "${manifestMode}" conflicts with detected ` +
+      `${detectedEvidenceModes.filter((mode) => mode !== manifestMode).join('/')} mode evidence`
+    );
+  }
+
   const inferredMode = manifestMode || inferMode(packages, angularI18n, astroConfig);
   const inferredPackage = manifestPackage || inferPrimaryPackage(packages, astroConfig);
   const inferredResources = manifestResources ||
@@ -703,6 +1109,19 @@ function detectLocalization(projectRoot) {
       frameworkDetection.candidates.includes(manifestObject?.framework)
       ? manifestObject.framework
       : null);
+  const unavailableModeEvidence = implementationFramework
+    ? modeEvidence.filter((entry) =>
+        !getLocalizationModeAvailability(implementationFramework, entry.mode).available
+      )
+    : [];
+  for (const mode of [...new Set(unavailableModeEvidence.map((entry) => entry.mode))]) {
+    const availability = getLocalizationModeAvailability(implementationFramework, mode);
+    const sources = unavailableModeEvidence
+      .filter((entry) => entry.mode === mode)
+      .map((entry) => entry.detail)
+      .join(', ');
+    conflicts.push(`${availability.reason} Detected evidence: ${sources}.`);
+  }
   const implementation = discoverLocalizationImplementation(
     projectRoot,
     implementationFramework,
@@ -761,6 +1180,8 @@ function detectLocalization(projectRoot) {
     resourceDirectories: resourceCandidates,
     angularI18n,
     astroConfig: astroConfig || null,
+    modeEvidence,
+    unavailableModeEvidence,
     implementation,
     conflicts,
   };
@@ -1061,6 +1482,9 @@ function inspectProject(projectRoot) {
   return {
     projectRoot: resolvedRoot,
     framework,
+    availability: framework.framework
+      ? getFrameworkLocalizationAvailability(framework.framework)
+      : null,
     siteLanguage: framework.framework
       ? detectSiteLanguage(resolvedRoot, framework.framework)
       : unresolvedSiteLanguage(
@@ -1261,11 +1685,22 @@ function runCli() {
     process.exitCode = result.valid ? 0 : 1;
     return;
   }
+  if (args.command === 'mode-availability' && args.framework !== undefined) {
+    const result = args.mode === undefined
+      ? getFrameworkLocalizationAvailability(args.framework)
+      : getLocalizationModeAvailability(args.framework, args.mode);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    process.exitCode = args.mode === undefined
+      ? (result.supported ? 0 : 1)
+      : (result.available ? 0 : 1);
+    return;
+  }
   process.stderr.write(
     'Usage: localization-config.js inspect --projectRoot <path> | ' +
     'detect-site-language --projectRoot <path> --framework <framework> | ' +
     'validate-locales --locales <comma-separated-tags> | ' +
-    'resolve-locale --locale <language-tag>\n'
+    'resolve-locale --locale <language-tag> | ' +
+    'mode-availability --framework <framework> [--mode <runtime|static>]\n'
   );
   process.exitCode = 1;
 }
@@ -1283,8 +1718,10 @@ module.exports = {
   detectLocalization,
   detectSiteLanguage,
   detectSiteLanguageForFramework,
+  getFrameworkLocalizationAvailability,
   getLocaleDirection,
   getLocaleMetadata,
+  getLocalizationModeAvailability,
   inspectProject,
   loadRegistry,
   resolveLocale,
