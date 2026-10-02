@@ -24,6 +24,7 @@ const { resolveAuthoringLanguage } = require('./lib/entity-provision.js');
 const { createAzHttpClient, SQL_DEADLOCK_VICTIM } = require('./lib/sdk-http-client.js');
 const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages, preflightAuth, dataverseOrigin } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
+const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe } = require('./lib/safe-fs.js');
 const { diffPhases, summarizeDiff } = require('./lib/phase-diff.js');
 const { annotateContentHashes, pageSourceFileErrors } = require('./lib/content-hash.js');
 const { baselinePath, confinedReader, writeBaseline, readBaseline } = require('./lib/deployed-baseline.js');
@@ -50,6 +51,12 @@ const { makeGenpageCli } = require('./lib/genpage-cli.js');
 //                  (views/charts/forms/app) lands here, so the app folder accumulates the
 //                  metadata for reuse/edits. Construction is offline (no token until first call).
 async function makeSdk(env, spec, workspaceDir, languageCode) {
+  // A link at the workspace root would make the provision SDK's storage follow it. Refuse
+  // before either constructor: the first SDK does not use this directory, but once the
+  // directory has been refused the factory must not run at all. An explicit real directory
+  // is created if missing and then re-checked — mkdir on an existing junction succeeds, so
+  // the re-check is what refuses it.
+  assertSafeOutputDir(workspaceDir, { create: true });
   const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
   const httpClient = createAzHttpClient(env);
   const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-'));
@@ -81,7 +88,6 @@ async function makeSdk(env, spec, workspaceDir, languageCode) {
       // (undefined) means the SDK's own DEFAULT_LCID, which preserves the previous behaviour exactly.
       ...(languageCode ? { languageCode } : {}),
     });
-    fs.mkdirSync(workspaceDir, { recursive: true });
     provisionSdk = createMakerSdk({
       workspaceStorage: createNodeWorkspaceStorage(workspaceDir),
       instanceUrl: env,
@@ -266,15 +272,11 @@ function approvalFingerprint(workspaceDir) {
 function writeApprovalRecord(workspaceDir, removals, runId) {
   const file = destructiveApprovalPath(workspaceDir);
   if (!file) return null;
-  fs.mkdirSync(workspaceDir, { recursive: true });
+  // Same rule as the workspace check above: a link at the workspace, or at the approval
+  // file name, must not be followed. writeFileSafe replaces a plain file and refuses a link.
+  assertSafeOutputDir(workspaceDir, { create: true });
   const text = JSON.stringify({ schemaVersion: 1, generatedAt: new Date().toISOString(), ...removals, runId }, null, 2) + '\n';
-  const tmp = path.join(workspaceDir, `.${DESTRUCTIVE_APPROVAL_FILE}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`);
-  try {
-    fs.writeFileSync(tmp, text, 'utf8');
-    fs.renameSync(tmp, file);
-  } finally {
-    try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch { /* best-effort cleanup only */ }
-  }
+  writeFileSafe(file, text);
   return sha256(text);
 }
 
@@ -932,6 +934,29 @@ async function main() {
   const specPath = path.resolve(specArg.startsWith('@') ? specArg.slice(1) : specArg);
   const spec = migrateAppSpec(readJsonArg('@' + specPath));
   const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
+  // Before auth, language resolution, and SDK construction. A link planted as the workspace
+  // root is refused here so the factory below is never called; a real directory is allowed.
+  try {
+    assertSafeOutputDir(workspaceDir, { create: true });
+  } catch (err) {
+    emitResult(false, err instanceof Error ? err : new Error(String(err)));
+    return;
+  }
+  // The journal is apply-only and best-effort. A LINK at its log name must still be refused
+  // before auth and before the SDK factory, or the throwaway SDK directory is created and then
+  // stranded when the journal later refuses the write. Any other reason the log cannot be used —
+  // a folder at that name, an unreadable entry — is the journal's ordinary best-effort case:
+  // openJournal disables journaling with a warning, and the build goes on.
+  if (flags.apply === true) {
+    try {
+      assertPlainFileTarget(path.join(workspaceDir, 'build-log.jsonl'));
+    } catch (err) {
+      if (err && (err.reason === 'link' || err.reason === 'hard-link')) {
+        emitResult(false, err instanceof Error ? err : new Error(String(err)));
+        return;
+      }
+    }
+  }
   const languageCode = parseLanguageCode(readLanguageFlag(flags));
   const phases = stagePhasesOrResolve({ stage: flags.stage, only: list(flags.only), skip: list(flags.skip), from: flags.from, to: flags.to });
   // Phases that stamp an authoring language onto something. `data-model` writes Dataverse label
@@ -1009,9 +1034,17 @@ async function main() {
   const { sdk, provisionSdk, cleanup, isolatedReader } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
-  const journal = opts.apply
-    ? openJournal(workspaceDir, { app: spec.app && spec.app.name, solution: spec.solution && spec.solution.uniqueName, apply: true, phases: opts.phases })
-    : null;
+  // Opened here, after the SDK exists, so a refusal still runs cleanup. The preflight above
+  // is what keeps a link present at the start from constructing the SDK at all.
+  let journal = null;
+  try {
+    journal = opts.apply
+      ? openJournal(workspaceDir, { app: spec.app && spec.app.name, solution: spec.solution && spec.solution.uniqueName, apply: true, phases: opts.phases })
+      : null;
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
   // Surface the live-progress files so a long build is observable even if this process's stdout is
   // buffered by the launching shell (e.g. piping through Select-Object). `build-status.json` holds the
   // current step; `build-log.jsonl` is the full trace.

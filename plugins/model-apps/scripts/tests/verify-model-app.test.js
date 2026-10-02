@@ -300,8 +300,25 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
   const events = [];
   const stderr = [];
   const mod = { exports: {} };
+  const made = new Set();
   const fakeFs = {
-    mkdirSync: (dir, opts) => events.push({ type: 'mkdirSync', dir, opts }),
+    mkdirSync: (dir, opts) => { made.add(dir); events.push({ type: 'mkdirSync', dir, opts }); },
+    // The workspace check inspects the final component, then creates a missing directory and
+    // inspects it again. A double that only records mkdir would throw here and hide the call.
+    lstatSync: (dir) => {
+      if (!made.has(dir)) {
+        const err = new Error('ENOENT');
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return { isSymbolicLink: () => false, isDirectory: () => true, isFile: () => false };
+    },
+    readlinkSync: () => {
+      const err = new Error('EINVAL');
+      err.code = 'EINVAL';
+      throw err;
+    },
+    realpathSync: Object.assign((p) => p, { native: (p) => p }),
   };
   const customRequire = (id) => {
     if (id === 'node:fs') return fakeFs;

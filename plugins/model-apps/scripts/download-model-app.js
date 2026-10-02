@@ -10,6 +10,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe } = require('./lib/safe-fs.js');
 const { parseArgs, validateFlags, emitResult, preflightAuth, dataverseOrigin } = require('./lib/dataverse-auth.js');
 const { writeBaseline } = require('./lib/deployed-baseline.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
@@ -1882,7 +1883,58 @@ async function recoverAppSolution(sdk, appId) {
 // dashboardReconstructionError } or { ok:false, error }.
 // Logical failures (no sitemap, enumeration down, missing download) return { ok:false } without
 // throwing. Unexpected I/O errors propagate as thrown exceptions (caught by main().catch).
+// A link already under pages/ must be refused before the tree is replaced. rm of a real
+// parent drops the link name; that is not the same as leaving the other name untouched.
+function assertNoPlantedPageLinks(pagesRoot) {
+  let entries = [];
+  try { entries = fs.readdirSync(pagesRoot); } catch (e) {
+    if (e && e.code === 'ENOENT') return;
+    throw e;
+  }
+  for (const entry of entries) {
+    const child = path.join(pagesRoot, entry);
+    let st;
+    try { st = fs.lstatSync(child); } catch (e) {
+      if (e && e.code === 'ENOENT') continue;
+      throw e;
+    }
+    if (st.isSymbolicLink() || st.isDirectory()) {
+      assertSafeOutputDir(child);
+      if (st.isDirectory() && !st.isSymbolicLink()) {
+        for (const name of fs.readdirSync(child)) assertPlainFileTarget(path.join(child, name));
+      }
+    } else {
+      assertPlainFileTarget(child);
+    }
+  }
+}
+
+// pac writes the page tree itself and follows a link left at the destination name. The
+// download therefore lands in a private directory; each file is then copied, raw, into the
+// directory the caller named. A link at pages/<id> or at a file under it is refused first.
+function installDownloadedPages(stagingRoot, pagesRoot) {
+  assertSafeOutputDir(pagesRoot, { create: true });
+  assertNoPlantedPageLinks(pagesRoot);
+  fs.rmSync(pagesRoot, { recursive: true, force: true });
+  assertSafeOutputDir(pagesRoot, { create: true });
+  for (const entry of fs.readdirSync(stagingRoot)) {
+    const srcDir = path.join(stagingRoot, entry);
+    if (!fs.statSync(srcDir).isDirectory()) continue;
+    const destDir = path.join(pagesRoot, entry);
+    assertSafeOutputDir(destDir, { create: true });
+    for (const name of fs.readdirSync(srcDir)) {
+      const srcFile = path.join(srcDir, name);
+      if (!fs.statSync(srcFile).isFile()) continue;
+      // Raw bytes: pac's BOM and CRLF are content, not something to re-encode.
+      writeFileSafe(path.join(destDir, name), fs.readFileSync(srcFile));
+    }
+  }
+}
+
 async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLossy = false }) {
+  // The caller named this directory. A link at its final component would make every page and
+  // the spec land outside it. Ancestors are the caller's choice and are not inspected.
+  assertSafeOutputDir(outDir);
   // `fetchArtifact('app')` FAILS CLOSED when the app's sitemap cannot be resolved, read, or proven to
   // still belong to this app (SDK code `APP_SITEMAP_UNRESOLVED`) — rather than returning an app whose
   // navigation is untrustworthy. That is a LOGICAL failure of exactly the class this function's
@@ -1941,13 +1993,26 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     // Download EXACTLY the sitemap's pages (by id — headless-free, no env-wide over-pull). The
     // sitemap is the MEMBERSHIP authority: we pull precisely this app's pages, no more, no less.
     const pagesRoot = path.join(outDir, 'pages');
-    fs.rmSync(pagesRoot, { recursive: true, force: true });
-    fs.mkdirSync(pagesRoot, { recursive: true });
-    const sitemapIds = smPages.map((p) => p.pageId);
+    // Refuse a link already at pages/ before removing it or creating children through it.
     try {
-      await genpageCli.download({ appId, outputDir: pagesRoot, pageIds: sitemapIds });
+      fs.lstatSync(pagesRoot);
+      assertSafeOutputDir(pagesRoot);
     } catch (e) {
-      return { ok: false, error: `pac genpage download failed: ${e.message}` };
+      if (e && e.code === 'UNSAFE_OUTPUT') throw e;
+      if (!(e && e.code === 'ENOENT')) throw e;
+    }
+    const sitemapIds = smPages.map((p) => p.pageId);
+    // pac follows a link at the output name. Stage in a private directory, then copy.
+    const stagingRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-download-pages-'));
+    try {
+      try {
+        await genpageCli.download({ appId, outputDir: stagingRoot, pageIds: sitemapIds });
+      } catch (e) {
+        return { ok: false, error: `pac genpage download failed: ${e.message}` };
+      }
+      installDownloadedPages(stagingRoot, pagesRoot);
+    } finally {
+      try { fs.rmSync(stagingRoot, { recursive: true, force: true }); } catch { /* leave the temp dir */ }
     }
 
     // Name resolver: env-wide name (real, stable) primary; sitemap title (XML-entity-decoded) as
@@ -2013,9 +2078,10 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     // Reverse-resolve nav pageId literals → symbolic PAGEREF_<key> tokens (structural, oracle-safe).
     for (const p of pages) {
       const abs = path.join(outDir, p.codeFile);
+      assertPlainFileTarget(abs);                         // FAIL on a planted link (no swallow, no write)
       const src = fs.readFileSync(abs, 'utf8');           // FAIL on a read error (no swallow)
       const rev = reverseResolveNavIds(src, idToKey);     // structural — nav pageId literals only
-      if (rev !== src) fs.writeFileSync(abs, rev, 'utf8'); // FAIL on a write error (no swallow)
+      if (rev !== src) writeFileSafe(abs, rev, { encoding: 'utf8' }); // FAIL on a write error (no swallow)
     }
 
     // Warn about manifest pages no longer in the sitemap (Maker-deleted in the live app). The
@@ -2346,7 +2412,14 @@ async function main(deps = {}) {
     return;
   }
   const outDir = path.resolve(outArg || '.');
-  fs.mkdirSync(outDir, { recursive: true });
+  // Before auth and before the SDK. A link at --out would make the spec and the pages land
+  // outside the directory that was named; a real directory is created if it is missing.
+  try {
+    assertSafeOutputDir(outDir, { create: true });
+  } catch (e) {
+    io.emitResult(false, { ok: false, error: (e && e.message) || String(e) });
+    return;
+  }
   // AB#6686427 — prove the ambient Azure CLI identity can actually reach this org BEFORE any read.
   // Every read below is best-effort by design (a tenant without a setting definition, or a caller
   // without access to one artifact class, must still produce a usable spec), so an auth failure does
@@ -2426,15 +2499,21 @@ async function main(deps = {}) {
     }
     const specPath = path.join(outDir, 'app-spec.json');
     preserveAuthoredLanguageCode(spec, specPath);
-    fs.writeFileSync(specPath, JSON.stringify(spec, null, 2));
+    writeFileSafe(specPath, JSON.stringify(spec, null, 2));
     // AB#6726727: the spec just written IS this app's deployed state, so it is the baseline a later build
     // lines the live sitemap up against — a nav change made in the designer after this download is then
     // kept, not reverted by the now-stale spec. Its dashboard and page ids were read from this
     // environment, so they are recorded as its deployed ids. Best-effort: a spec with no baseline still
     // builds, and the build then reports each nav change it makes.
     try {
-      writeBaseline(path.join(outDir, '.maker-workspace'), spec, { appDir: outDir, environment: dataverseOrigin(env), appUniqueName: appUnique, fromSpec: true });
-    } catch { /* non-fatal */ }
+      // Best-effort, like the baseline write itself: a missing snapshot does not fail the
+      // download. A link at .maker-workspace must still be named, not followed.
+      const baselineDir = path.join(outDir, '.maker-workspace');
+      assertSafeOutputDir(baselineDir, { create: true });
+      writeBaseline(baselineDir, spec, { appDir: outDir, environment: dataverseOrigin(env), appUniqueName: appUnique, fromSpec: true });
+    } catch (e) {
+      if (e && e.code === 'UNSAFE_OUTPUT') io.stderr.write(`WARNING: ${e.message}\n`);
+    }
     finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) });
   } finally {
     try { if (session) session.cleanup(); } catch { /* best-effort: the result below matters more */ }

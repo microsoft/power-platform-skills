@@ -31,9 +31,12 @@ const UNSAFE = 'UNSAFE_OUTPUT';
 const RENAME_RETRY_MS = [25, 50, 100, 200, 400];
 const RENAME_LOCK_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
 
-function unsafe(message) {
+// `reason` is how a caller tells a link (must halt) from a resolution or create failure
+// (often best-effort). Messages stay human-readable; do not branch on their text.
+function unsafe(message, reason) {
   const e = new Error(message);
   e.code = UNSAFE;
+  e.reason = reason;
   throw e;
 }
 
@@ -85,7 +88,7 @@ function readlinkSaysLink(p, fsImpl) {
 
 function assertSafeOutputDir(dir, { create = false, fs: fsImpl = fs } = {}) {
   if (typeof dir !== 'string' || !dir.trim()) {
-    unsafe('refusing to use an output directory: no path was given');
+    unsafe('refusing to use an output directory: no path was given', 'uninspectable');
   }
   const resolved = path.resolve(dir);
   return inspectOutputDir(resolved, { create, fs: fsImpl, created: false });
@@ -100,38 +103,49 @@ function inspectOutputDir(resolved, { create, fs: fsImpl, created }) {
       try {
         fsImpl.mkdirSync(resolved, { recursive: true });
       } catch (mkdirErr) {
-        unsafe(`refusing to use ${resolved} as an output directory: it could not be created (${(mkdirErr && mkdirErr.code) || mkdirErr})`);
+        unsafe(`refusing to use ${resolved} as an output directory: it could not be created (${(mkdirErr && mkdirErr.code) || mkdirErr})`, 'create-failed');
       }
       // Re-check after create. mkdir succeeds on a junction that is already there, and that
       // re-check is what refuses it — a created name is not trusted just because mkdir returned.
       return inspectOutputDir(resolved, { create, fs: fsImpl, created: true });
     }
-    unsafe(`refusing to use ${resolved} as an output directory: it could not be inspected (${(e && e.code) || e})`);
+    unsafe(`refusing to use ${resolved} as an output directory: it could not be inspected (${(e && e.code) || e})`, 'uninspectable');
   }
   if (st.isSymbolicLink()) {
-    unsafe(`refusing to use ${resolved} as an output directory: its final component is a symbolic link or junction, and a write there would land outside the directory that was named`);
+    unsafe(`refusing to use ${resolved} as an output directory: its final component is a symbolic link or junction, and a write there would land outside the directory that was named`, 'link');
   }
   if (!st.isDirectory()) {
-    unsafe(`refusing to use ${resolved} as an output directory: it is not a directory`);
+    unsafe(`refusing to use ${resolved} as an output directory: it is not a directory`, 'not-directory');
   }
   if (readlinkSaysLink(resolved, fsImpl)) {
-    unsafe(`refusing to use ${resolved} as an output directory: its final component is a junction, and a write there would land outside the directory that was named`);
+    unsafe(`refusing to use ${resolved} as an output directory: its final component is a junction, and a write there would land outside the directory that was named`, 'link');
   }
   try {
     return realpathNative(fsImpl, resolved);
   } catch (e) {
-    unsafe(`refusing to use ${resolved} as an output directory: it could not be resolved (${(e && e.code) || e})`);
+    unsafe(`refusing to use ${resolved} as an output directory: it could not be resolved (${(e && e.code) || e})`, 'unresolvable');
   }
 }
 
 // Why a write or append must not touch this existing name. null when it is a regular file with
 // one name. A hard link is a regular file, but writing it changes every other name too.
-function plantedFileReason(filePath, st, fsImpl) {
-  if (st.isSymbolicLink()) return 'a symbolic link or junction';
-  if (readlinkSaysLink(filePath, fsImpl)) return 'a junction';
-  if (!st.isFile()) return 'not a regular file';
-  if (st.nlink > 1) return `a hard link (${st.nlink} names share this file)`;
+// Stable codes, not phrases: a caller that must halt only for a link cannot parse the sentence.
+function plantedFileCode(filePath, st, fsImpl) {
+  if (st.isSymbolicLink() || readlinkSaysLink(filePath, fsImpl)) return 'link';
+  if (!st.isFile()) return 'not-file';
+  if (st.nlink > 1) return 'hard-link';
   return null;
+}
+
+function plantedFilePhrase(code, st) {
+  if (code === 'link') return 'a symbolic link or junction';
+  if (code === 'hard-link') return `a hard link (${st.nlink} names share this file)`;
+  return 'not a regular file';
+}
+
+function plantedFileReason(filePath, st, fsImpl) {
+  const code = plantedFileCode(filePath, st, fsImpl);
+  return code ? plantedFilePhrase(code, st) : null;
 }
 
 function existingTarget(filePath, fsImpl) {
@@ -139,7 +153,7 @@ function existingTarget(filePath, fsImpl) {
     return fsImpl.lstatSync(filePath);
   } catch (e) {
     if (e && e.code === 'ENOENT') return null;
-    unsafe(`refusing to write ${filePath}: it could not be inspected (${(e && e.code) || e})`);
+    unsafe(`refusing to write ${filePath}: it could not be inspected (${(e && e.code) || e})`, 'uninspectable');
   }
   return null;
 }
@@ -147,22 +161,44 @@ function existingTarget(filePath, fsImpl) {
 function assertWritableTarget(filePath, fsImpl) {
   const st = existingTarget(filePath, fsImpl);
   if (!st) return null;
-  const reason = plantedFileReason(filePath, st, fsImpl);
-  if (reason) {
-    unsafe(`refusing to write ${filePath}: it is ${reason}, and writing it would change the file it points at`);
+  const code = plantedFileCode(filePath, st, fsImpl);
+  if (code) {
+    unsafe(`refusing to write ${filePath}: it is ${plantedFilePhrase(code, st)}, and writing it would change the file it points at`, code);
   }
   // A read-only file is a deliberate "do not modify". Replacing the directory entry needs write
   // access to the directory, not the file, so a rename would ignore the bit an in-place write honored.
   if (!(st.mode & 0o200)) {
     const e = new Error(`refusing to write ${filePath}: it is read-only`);
     e.code = 'IO_ERROR';
+    e.reason = 'read-only';
     throw e;
   }
   return st;
 }
 
+// Inspect only. Missing is allowed — the caller is about to create the name. A link, a junction,
+// a non-file, or a hard link is refused without opening or replacing it, so a later look that
+// sees one name cannot turn this refusal into a write.
+function assertPlainFileTarget(filePath, opts) {
+  if (typeof filePath !== 'string' || !filePath.trim()) unsafe('refusing to write: no path was given', 'uninspectable');
+  const fsImpl = (opts && opts.fs) || fs;
+  const resolved = path.resolve(filePath);
+  let st;
+  try {
+    st = fsImpl.lstatSync(resolved);
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return resolved;
+    unsafe(`refusing to write ${resolved}: it could not be inspected (${(e && e.code) || e})`, 'uninspectable');
+  }
+  const code = plantedFileCode(resolved, st, fsImpl);
+  if (code) {
+    unsafe(`refusing to write ${resolved}: it is ${plantedFilePhrase(code, st)}, and writing it would change the file it points at`, code);
+  }
+  return resolved;
+}
+
 function writeFileSafe(filePath, data, opts) {
-  if (typeof filePath !== 'string' || !filePath.trim()) unsafe('refusing to write: no path was given');
+  if (typeof filePath !== 'string' || !filePath.trim()) unsafe('refusing to write: no path was given', 'uninspectable');
   const fsImpl = (opts && opts.fs) || fs;
   const resolved = path.resolve(filePath);
   const realDir = assertSafeOutputDir(path.dirname(resolved), { fs: fsImpl });
@@ -201,7 +237,7 @@ function writeFileSafe(filePath, data, opts) {
 }
 
 function appendFileSafe(filePath, data, opts) {
-  if (typeof filePath !== 'string' || !filePath.trim()) unsafe('refusing to append: no path was given');
+  if (typeof filePath !== 'string' || !filePath.trim()) unsafe('refusing to append: no path was given', 'uninspectable');
   const fsImpl = (opts && opts.fs) || fs;
   const resolved = path.resolve(filePath);
   const realDir = assertSafeOutputDir(path.dirname(resolved), { fs: fsImpl });
@@ -216,7 +252,7 @@ function appendFileSafe(filePath, data, opts) {
 }
 
 function removeFileSafe(filePath, opts) {
-  if (typeof filePath !== 'string' || !filePath.trim()) unsafe('refusing to remove: no path was given');
+  if (typeof filePath !== 'string' || !filePath.trim()) unsafe('refusing to remove: no path was given', 'uninspectable');
   const fsImpl = (opts && opts.fs) || fs;
   const resolved = path.resolve(filePath);
   // A parent that does not exist holds no file to remove: the same answer as a missing file.
@@ -234,16 +270,16 @@ function removeFileSafe(filePath, opts) {
     st = fsImpl.lstatSync(target);
   } catch (e) {
     if (e && e.code === 'ENOENT') return false;
-    unsafe(`refusing to remove ${target}: it could not be inspected (${(e && e.code) || e})`);
+    unsafe(`refusing to remove ${target}: it could not be inspected (${(e && e.code) || e})`, 'uninspectable');
   }
   if (st.isSymbolicLink()) {
-    unsafe(`refusing to remove ${target}: it is a symbolic link or junction, and removing it is not the same as removing a file this tool wrote`);
+    unsafe(`refusing to remove ${target}: it is a symbolic link or junction, and removing it is not the same as removing a file this tool wrote`, 'link');
   }
   if (readlinkSaysLink(target, fsImpl)) {
-    unsafe(`refusing to remove ${target}: it is a junction, and removing it would affect the directory it points at`);
+    unsafe(`refusing to remove ${target}: it is a junction, and removing it would affect the directory it points at`, 'link');
   }
   if (!st.isFile()) {
-    unsafe(`refusing to remove ${target}: it is not a regular file`);
+    unsafe(`refusing to remove ${target}: it is not a regular file`, 'not-file');
   }
   // A hard link is unlinked by name: that drops this name and leaves the other names' bytes alone.
   // A write through it would not, which is why write and append refuse nlink > 1 and remove does not.
@@ -253,6 +289,7 @@ function removeFileSafe(filePath, opts) {
 
 module.exports = {
   assertSafeOutputDir,
+  assertPlainFileTarget,
   writeFileSafe,
   appendFileSafe,
   removeFileSafe,

@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { assertSafeOutputDir, writeFileSafe, appendFileSafe, removeFileSafe } = require('../lib/safe-fs.js');
+const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe, appendFileSafe, removeFileSafe } = require('../lib/safe-fs.js');
 
 const dirs = [];
 test.after(() => {
@@ -46,6 +46,25 @@ test('a missing directory is refused, and create:true makes it then re-checks', 
   assert.ok(fs.statSync(created).isDirectory());
   // Already there: create is a no-op, not a second refusal.
   assert.strictEqual(assertSafeOutputDir(missing, { create: true }).toLowerCase(), created.toLowerCase());
+});
+
+test('a refusal names why, so a caller can tell a link from a resolution failure', () => {
+  const file = tmp('file.txt');
+  fs.writeFileSync(file, 'x');
+  assert.throws(() => assertSafeOutputDir(file), (e) => e.reason === 'not-directory');
+  const missing = tmp('gone.txt');
+  assert.equal(assertPlainFileTarget(missing), path.resolve(missing));
+  const outside = tmp('outside.txt');
+  fs.writeFileSync(outside, 'keep');
+  const link = tmp('link.txt');
+  try { fs.symlinkSync(outside, link, 'file'); } catch (e) {
+    if (e && e.code === 'EPERM') return;
+    throw e;
+  }
+  assert.throws(() => assertPlainFileTarget(link), (e) => e.reason === 'link' && e.code === 'UNSAFE_OUTPUT');
+  const hard = tmp('hard.txt');
+  fs.linkSync(outside, hard);
+  assert.throws(() => assertPlainFileTarget(hard), (e) => e.reason === 'hard-link');
 });
 
 test('a file, an empty path, and a directory that cannot be resolved are refused', () => {

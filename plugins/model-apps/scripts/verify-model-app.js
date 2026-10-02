@@ -20,6 +20,7 @@ const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
 const { readRelationshipsOf, findRelationshipHolder } = require('./lib/relationship-metadata.js');
 const { odataLit } = require('./lib/odata.js');
 const { makeGenpageCli } = require('./lib/genpage-cli.js');
+const { assertSafeOutputDir } = require('./lib/safe-fs.js');
 const { depthFromMask } = require('./lib/role-privileges.js');
 
 // A throwaway SDK workspace for ONE dashboard read (readerFor's dashboardComponents), deleted after it. The tiles
@@ -46,8 +47,11 @@ function isolatedReaderFor(env, opts = {}) {
 }
 
 async function makeProvision(env, workspaceDir, httpClient = createAzHttpClient(env)) {
+  // A link at the workspace root would make the SDK storage follow it. Refuse before the
+  // factory runs. An explicit real directory is created if missing, then re-checked.
+  // The module's own fs, not a second copy: a caller that replaced fs must see the same create.
+  assertSafeOutputDir(workspaceDir, { create: true, fs });
   const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
-  fs.mkdirSync(workspaceDir, { recursive: true });
   const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
   await sdk.initWorkspace();
   // Only the SDK is returned. The raw `httpClient` used to come back with it because the role
@@ -485,20 +489,24 @@ function readerFor(sdk, appUnique, opts) {
       const key = String(pageId).toLowerCase();
       if (codeById.has(key)) return codeById.get(key);
       const id = await appId();
-      // Per-id output dir so parallel/sequential calls for different ids don't clobber each other.
-      const outDir = path.join(workspaceDir, 'verify-pages', key);
-      fs.rmSync(outDir, { recursive: true, force: true });
-      fs.mkdirSync(outDir, { recursive: true });
-      // Fail-closed: genpageCli.download throws on pac exit != 0 (design §13.1).
-      await genpageCli.download({ appId: id, outputDir: outDir, pageIds: [pageId] });
-      // pac writes to <outDir>/<pageId>/page.tsx; scan subdirs to be case-tolerant (pac may differ in casing).
-      let code = '';
-      for (const entry of fs.readdirSync(outDir)) {
-        const tsx = path.join(outDir, entry, 'page.tsx');
-        if (fs.existsSync(tsx)) { code = fs.readFileSync(tsx, 'utf8'); break; }
+      // A fixed name under the workspace (verify-pages/<id>) is a place a link can be left.
+      // pac follows links, and removing that name would delete through the link. The download
+      // therefore goes to a private temp directory this call creates and always removes.
+      const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-page-'));
+      try {
+        // Fail-closed: genpageCli.download throws on pac exit != 0 (design §13.1).
+        await genpageCli.download({ appId: id, outputDir: outDir, pageIds: [pageId] });
+        // pac writes to <outDir>/<pageId>/page.tsx; scan subdirs to be case-tolerant (pac may differ in casing).
+        let code = '';
+        for (const entry of fs.readdirSync(outDir)) {
+          const tsx = path.join(outDir, entry, 'page.tsx');
+          if (fs.existsSync(tsx)) { code = fs.readFileSync(tsx, 'utf8'); break; }
+        }
+        codeById.set(key, code);
+        return code;
+      } finally {
+        try { fs.rmSync(outDir, { recursive: true, force: true }); } catch { /* leave the temp dir */ }
       }
-      codeById.set(key, code);
-      return code;
     };
   }
   return base;
@@ -535,6 +543,14 @@ async function main() {
   if (!v.ok) { emitResult(false, { ok: false, errors: v.errors }); return; }
   for (const w of v.warnings || []) process.stderr.write(`WARNING: ${w}\n`);
   const workspaceDir = workspaceArg || path.join(path.dirname(specPath), '.maker-workspace');
+  // Before the SDK. A link planted as the workspace root is refused here so the factory
+  // is never called; a real directory is allowed.
+  try {
+    assertSafeOutputDir(workspaceDir, { create: true, fs });
+  } catch (err) {
+    emitResult(false, err instanceof Error ? err : new Error(String(err)));
+    return;
+  }
   const httpClient = createAzHttpClient(env);
   const sdk = await makeProvision(env, workspaceDir, httpClient);
   const genpageCli = makeGenpageCli(env);
