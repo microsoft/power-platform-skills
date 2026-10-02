@@ -1,8 +1,8 @@
 # Approval Gates — Power Pages Skill Catalog (v3)
 
-> **Status: v3 — extended to non-ALM skills.** v2 introduced the marker/lint design and catalogued the 12 ALM skills (§6.1–§6.12). v3 extends coverage to the 12 non-ALM skills (§6.13–§6.24), flips lint severity from warn-only to hard-fail across the plugin, and updates `AGENTS.md` so any new skill must add its gates here in the same PR.
+> **Status: v3 — extended to non-ALM skills.** v2 introduced the marker/lint design and catalogued the 12 ALM skills (§6.1–§6.12). v3 extends coverage to non-ALM skills as well (currently catalogued through §6.33), flips lint severity from warn-only to hard-fail across the plugin, and updates `AGENTS.md` so any new skill must add its gates here in the same PR.
 >
-> **Scope: all power-pages skills.** §6 enumerates every `AskUserQuestion` across the 24 user-invocable skills (12 ALM + 12 non-ALM). `report-issue` is a cross-plugin shared workflow — its wrapper SKILL.md contains no prompts (the workflow file at `shared/skills/report-issue/report-issue-workflow.md` lives outside the per-plugin lint scope) and is excluded from this catalog.
+> **Scope: all power-pages skills.** §6 enumerates every `AskUserQuestion` prompt that is in per-plugin lint scope across the Power Pages skill set. `report-issue` is a cross-plugin shared workflow — its wrapper SKILL.md contains no prompts (the workflow file at `shared/skills/report-issue/report-issue-workflow.md` lives outside the per-plugin lint scope) and is excluded from this catalog.
 >
 > **Markers applied across all SKILL.md files.** Each gate has both a machine-readable `<!-- gate: ID | category=X | cancel-leaves=Y -->` HTML comment and a human-readable `> 🚦 **Gate (...)**` block. Each pure data-gathering prompt has a `<!-- not-a-gate: <reason> -->` comment.
 >
@@ -730,6 +730,20 @@ Reviews traditional and SPA sites for deprecated Web API wildcard fields setting
 | `migrate-webapi-selectall:7.smoke-test` | gate | progress | 7 | Approves the listed read-path smoke test against the deployed site. Write, file, and image paths are never issued. | deployed migration unverified |
 
 ---
+
+### 6.33 `perf-checker` (1 loop-style gate + 1 plan gate)
+
+Static performance-analysis skill. Scans the local codebase for performance anti-patterns (FetchXML/Web API over-fetching, disabled output caching, tracking, volume/asset issues), reports them, and offers safe auto-fixes with per-fix consent. Read-only until the Phase 4 loop, which mutates only the site-setting/tracking findings the user explicitly approves.
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `perf-checker:4.auto-fix` | gate | consent | 4 | Per-finding: each `autoFixAvailable` finding loops through this prompt template surfacing the tag and the exact change (site setting or YAML field). User answers Yes / No / Skip-all per finding. | nothing |
+| `perf-checker:6.next-action` | gate | plan | 6 (`### Step 5.3`) | Post-report prompt — *"Walk me through the manual fixes / Re-scan / Done"*. Drives whether the FetchXML/Web API code-fix walkthrough runs next. Reviewing and re-scanning are read-only. | nothing |
+
+The `perf-checker:4.auto-fix` template fires once per finding with `autoFixAvailable: true` (the output-cache and tracking findings), mirroring the `diagnose-deployment:6.auto-fix` loop-style pattern — one gate ID, content varies per finding. FetchXML/Web API findings are never auto-fixed (they need human judgment), so they are excluded from the loop and surfaced via the plan gate instead.
+
+---
+
 ### Cross-plugin shared skills — out of catalog scope
 
 `report-issue` — Its prompts are cross-plugin, not power-pages-specific, so they are not catalogued here. If the shared workflow is ever governed by per-plugin approval-gate linting, add a `report-issue:*` section to this catalog.
@@ -738,7 +752,7 @@ Reviews traditional and SPA sites for deprecated Web API wildcard fields setting
 
 ## 8. Plugin-wide enforcement (was: non-ALM deferral)
 
-> **v3 update.** This section previously listed 13 deferred non-ALM skills. Those skills are now catalogued in §6.13–§6.24 above (plus the security skills introduced by PR #151 in §6.25–§6.28) and the lint runs hard-fail across the whole plugin.
+> **v3 update.** This section previously listed deferred non-ALM skills. Those skills are now catalogued in §6 alongside the ALM skills and the lint runs hard-fail across the whole plugin.
 
 The lint rules in §5 fire at `error` severity for **every** SKILL.md under `plugins/power-pages/skills/`. There is no skill-class carve-out. When you add a new skill:
 
