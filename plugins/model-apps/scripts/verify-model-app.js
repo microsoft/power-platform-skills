@@ -22,6 +22,7 @@ const { odataLit } = require('./lib/odata.js');
 const { makeGenpageCli } = require('./lib/genpage-cli.js');
 const { assertSafeOutputDir } = require('./lib/safe-fs.js');
 const { depthFromMask } = require('./lib/role-privileges.js');
+const { appEntityComponentsFor, appMainFormsFor, appComponentRows } = require('./lib/app-components.js');
 
 // A throwaway SDK workspace for ONE dashboard read (readerFor's dashboardComponents), deleted after it. The tiles
 // verify checks must be the server's: read through the build's own workspace, a copy holding unpushed edits — or
@@ -68,7 +69,7 @@ async function sitemapXmlFor(sdk, appUnique) {
   const apps = await sdk.queryRecords('appmodule', { select: ['appmoduleid', 'appmoduleidunique'], filter: `uniquename eq '${odataLit(appUnique)}'`, top: 1 });
   const app = apps && apps[0];
   if (!app) return '';
-  const comps = await sdk.queryRecords('appmodulecomponent', { select: ['objectid', 'componenttype'], filter: `_appmoduleidunique_value eq ${app.appmoduleidunique} and componenttype eq 62`, top: 1 });
+  const comps = await appComponentRows(sdk, app.appmoduleidunique, 62, { top: 1 });
   const smId = comps && comps[0] && comps[0].objectid;
   if (!smId) return '';
   const sms = await sdk.queryRecords('sitemap', { select: ['sitemapxml'], filter: `sitemapid eq ${smId}`, top: 1 });
@@ -105,67 +106,6 @@ async function appRoleIdsFor(sdk, appUnique) {
   }
 }
 
-// Which of `wanted` (table logical names) are real TABLE components of the app
-// (`appmodulecomponent` componenttype 1), plus whether the app carries an `entity` PLACEHOLDER row.
-//
-// Returns `{ ok: true, present, placeholder }` or `{ ok: false, reason }`. The caller fails the check
-// on `ok: false` rather than passing, because "we could not look" and "the app is fine" must never be
-// the same answer here.
-//
-// Direction matters, and an earlier version had it backwards. Resolving every COMPONENT id to a
-// logical name meant: a read per component (unbounded by anything the spec controls), a whole-answer
-// failure whenever one foreign id would not resolve — reported as an opaque GUID an operator cannot
-// act on — and a cap on the component query. This resolves only the tables the SPEC asks about, so
-// the cost is bounded by the spec (LIVE-MEASURED ~100 ms per table), a component pointing at a
-// deleted table is simply not one of ours, and every message names a table.
-//
-// `paginate: true`, never `top`. Dataverse honours `$top` as a HARD cap and omits
-// `@odata.nextLink`, so a capped page silently truncates — and for a membership check a row that
-// fell off the end reads as NOT PRESENT, i.e. verify reports a correctly built app as broken. The
-// same trap was already found live on `roleprivileges` in this file (see `rolePrivileges` below);
-// using `top` here would have reintroduced it, and would additionally have hidden the placeholder
-// rows this check exists to find, since those are exactly what accumulates in a corrupted app.
-//
-// An EMPTY component list is returned as `ok: true` with nothing present, NOT as a read failure:
-// that is the reported defect itself (a sitemap naming tables the app does not contain). It cannot
-// mask a permissions problem, because the sitemap is read from the SAME `appmodulecomponent` table
-// (componenttype 62) and would fail visibly first.
-async function appEntityComponentsFor(sdk, appUnique, wanted) {
-  try {
-    const apps = await sdk.queryRecords('appmodule', { select: ['appmoduleid', 'appmoduleidunique'], filter: `uniquename eq '${odataLit(appUnique)}'`, top: 1 });
-    const app = apps && apps[0];
-    if (!app || !app.appmoduleidunique) return { ok: false, reason: `app '${appUnique}' could not be resolved` };
-    const rows = await sdk.queryRecords('appmodulecomponent', {
-      select: ['objectid', 'componenttype'],
-      filter: `_appmoduleidunique_value eq ${app.appmoduleidunique} and componenttype eq 1`,
-      paginate: true,
-    });
-    const ids = new Set((rows || []).map((r) => r && r.objectid).filter(Boolean).map((s) => String(s).toLowerCase()));
-    // A type-1 `objectid` is a table's MetadataId, not a row id. `fetchEntityMetadata` resolves by
-    // LOGICAL NAME and is a disk-cached projection, so this goes through the raw client instead.
-    // A 404 means the table does not exist at all, which the separate `entity` existence check
-    // already reports — so it is "not a component", not a read failure.
-    const metadataId = async (logical) => {
-      const res = await sdk.dataverse.get(`/EntityDefinitions(LogicalName='${odataLit(logical)}')?$select=MetadataId`);
-      if (res && res.status === 404) return null;
-      if (!res || res.status < 200 || res.status >= 300 || !res.body || !res.body.MetadataId) {
-        throw new Error(`could not resolve table '${logical}' (HTTP ${res && res.status})`);
-      }
-      return String(res.body.MetadataId).toLowerCase();
-    };
-    const present = [];
-    for (const logical of wanted || []) {
-      const id = await metadataId(logical);
-      if (id && ids.has(id)) present.push(logical);
-    }
-    // The known corruption: a table pinned as an `entity` INSTANCE pins the `entity` METADATA table.
-    const entityId = await metadataId('entity');
-    return { ok: true, present, placeholder: !!(entityId && ids.has(entityId)) };
-  } catch (err) {
-    return { ok: false, reason: (err && err.message) ? String(err.message).slice(0, 200) : 'read failed' };
-  }
-}
-
 function readerFor(sdk, appUnique, opts) {
   opts = opts || {};
   const genpageCli = opts.genpageCli;
@@ -182,6 +122,7 @@ function readerFor(sdk, appUnique, opts) {
   const memoSitemap = () => (sitemapP || (sitemapP = _fetchSitemap(sdk, appUnique)));
   // Memoized app TABLE components — one live read per verify run, keyed by the wanted-table set.
   const appComponentsP = new Map();
+  const appMainFormsP = new Map();
   // The user running verify, read once: servedMainForms asks the platform what THIS user is served. The id
   // is interpolated into the function's `User` alias, so only a canonical GUID is accepted.
   let callerIdP;
@@ -414,6 +355,11 @@ function readerFor(sdk, appUnique, opts) {
       const key = (wanted || []).join(',');
       if (!appComponentsP.has(key)) appComponentsP.set(key, appEntityComponentsFor(sdk, appUnique, wanted));
       return appComponentsP.get(key);
+    },
+    appMainForms: (unique, tables) => {
+      const key = JSON.stringify([unique, tables]);
+      if (!appMainFormsP.has(key)) appMainFormsP.set(key, appMainFormsFor(sdk, unique || appUnique, tables));
+      return appMainFormsP.get(key);
     },
     appRoleIds: () => appRoleIdsFor(sdk, appUnique),
   };

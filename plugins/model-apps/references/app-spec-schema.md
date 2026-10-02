@@ -37,6 +37,8 @@ to read the SDK, the lint, or the engine to author a spec. Common asks → how t
 | A command **drop-down menu** of buttons | `commands[].type: "FlyoutAnchor"` + `children[]` | commands |
 | A dashboard of chart/list tiles | `dashboards[]` (`tiles[]` reference declared `views`/`charts`) | dashboards |
 | A dashboard in the app nav | a `dashboard` sitemap subarea in `appShell` (auto-pins it) | appShell |
+| A table in the app but not its navigation | `app.tables` (logical names; additive membership) | app |
+| Only selected Main forms offered by this app | `app.mainForms` (table → Main form names) | app / forms |
 
 The builder is **idempotent** and runs everything in one pass (no post-build scripts): tables,
 columns, relationships, web resources, views, charts, forms (+ sub-grids + JS handlers), commands, dashboards, the app,
@@ -104,6 +106,64 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   **existing** app by identity — even after you **rename** the display `app.name` — instead of creating a
   **duplicate** app. You normally never hand-author this: an authored create-fresh spec omits it, and the
   build derives the uniquename deterministically from `solution.publisherPrefix` + `app.name`.
+  Download recovers the immutable name from the fetched SDK artifact, including an unpublished
+  GUID-addressed app, and refuses when it cannot resolve identity; it never derives one from display name.
+- **`app.tables`** *(optional)* — additional app table membership, independent of navigation:
+  `["task", "email"]`. It is an array of non-empty logical names with no case-insensitive duplicates.
+  A table need not be declared in `entities[]`, but must exist by the app-shell phase; an unresolved
+  name stops the build before any app write. A navigation table is already included, so listing it
+  here is harmless but lint warns. Membership is **additive**: removing a name from the spec never
+  removes an existing app component.
+  Download emits hidden type-1 members here, sorted. A custom hidden table also goes to `entities[]`;
+  a known non-custom hidden type-1 member does not, **even when a view/chart/form references it**, so
+  rebuilding does not copy another solution's custom columns or relationships. Tables discovered
+  **only** through view/chart/form components retain their existing schema-capture behavior.
+  Membership-only stock tables do not need a primary-name column.
+  A hidden type-1 table with unknown custom/stock status is also reference-only, with a loss note;
+  schema is adopted only on an explicit `IsCustomEntity === true`, even with companion assets.
+- **`app.mainForms`** *(optional)* — a per-navigation-table **Main-form allow-list**, by name:
+  ```json
+  {
+    "minimumPluginVersion": "2.13.0",
+    "app": {
+      "name": "Work Items",
+      "tables": ["task", "email"],
+      "mainForms": { "contoso_workitem": ["Work Item"] }
+    }
+  }
+  ```
+  Each key must name an `Entity` table in this app's sitemap, ignoring case; a hidden `app.tables`
+  reference alone is not eligible. Each value is a non-empty array of distinct names, compared
+  ignoring case and accents. A name resolves within **(table, Main)** to a declared form or an
+  existing **active** Main form; missing, inactive or ambiguous names stop the build before an app
+  write. A same-named QuickView/QuickCreate is a different identity and does not shadow a valid Main.
+  A known `forms[].formId` does not bypass active-name ambiguity; a newly created/reused id counts
+  as a candidate even before the catalog reports it.
+  `{}` restricts nothing. Empty lists are refused: an app with no Main member offers every form.
+  **Create is exact; existing-app updates only stop widening.** Listed forms are added, other Main
+  forms are not added, and **none are removed**. Existing extras produce a warning and fail
+  `--verify`: remove them in Maker (**app designer → table → Forms**) or include them in the list.
+  Every later app push re-supplies the directive; it is not stored as a server-side allow-list.
+  Quick Create, Quick View and card forms, dashboards, views and charts are unaffected.
+  This does **not** choose a default, an order or security roles. Lint warns when the list excludes
+  the explicit default or first `entities[].mainFormOrder` form. A user's remembered Main form is
+  **per table**, not per app. **Measured:** membership changes after first publish did not reach
+  the runtime form list within 89 minutes, even after validation and republishing; do not promise
+  immediate runtime changes for an existing app.
+  Download emits a list only for a non-empty strict subset of the table's active Main catalog whose
+  member names are unique among its Main forms. Inactive or unclassifiable pins are named in
+  not-round-tripped notes; an encodable active restriction is still preserved. Empty/full active
+  membership is omitted, with a note for the empty case. Form layouts themselves are not reconstructed.
+  **Download is a server-current edit snapshot**, including saved unpublished app/sitemap changes.
+  Navigation, table classification and Main membership use that same current layer; `--verify`
+  instead checks the published layer that users consume.
+  All modeled navigation targets (entity, generative page, URL, dashboard and custom page) and
+  their occurrence counts must match. If those multisets disagree, or the SDK sitemap is missing,
+  download refuses the mixed snapshot: publish the app, then download again.
+- **Capability floor:** set **`minimumPluginVersion: "2.13.0"` or newer** whenever using `app.tables`
+  or `app.mainForms`; lint warns without it. Download adds that floor when it emits either field and
+  retains a higher authored floor. The 2.12 consumer's existing version gate refuses such a spec
+  instead of silently ignoring membership instructions it cannot build.
 - **`app.aiDescription`** *(optional)* — the app's **routing description**: what an agent or router
   reads to decide whether *this* app is the right place for a request. It is **separate from
   `app.description`**, the text on the app tile, and maps to the platform's
@@ -736,9 +796,10 @@ at the same order, as every new form is — were served with the `isdefault` for
   hand: the build leaves its order alone, and the spec cannot also give it `mainFormOrder`.
 - **Also deciding what a user sees:** their security roles — a form restricted by `securityRoles` is
   served only to those roles, and everyone else opens the next form they may open — and their
-  remembered form, which is per user, not configuration (they change it by switching forms). An app
-  offers **every** active Main form of its tables, including forms the spec does not declare (the
-  stock "Information" form among them); a spec cannot leave one out today.
+  remembered form, which is per user **and table**, not configuration (they change it by switching
+  forms). Without `app.mainForms`, an app offers **every** active Main form of its navigation tables,
+  including undeclared forms such as stock "Information". Use `app.mainForms` to restrict additions
+  for this app; creating an app is exact, but existing members are never removed automatically.
 - **`--verify`** checks the stored order (`form-order`) and the order the platform serves the user
   running verify (`form-order-served`, read with the public `RetrieveFilteredForms` function). When
   that user may not open the first form, the check is reported as not applicable, not as a pass.

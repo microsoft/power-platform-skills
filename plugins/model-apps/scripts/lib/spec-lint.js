@@ -2,7 +2,7 @@
 // Pure App Spec guardrail. Returns { ok, errors, warnings }. errors block the plan
 // gate; warnings teach. Bakes in the modeling lessons hit live — notably the
 // relationship schema-name vs lookup-name collision Dataverse rejects.
-const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens, isPlatformIconRef, labelText } = require('./app-spec.js');
+const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens, isPlatformIconRef, labelText, appMembershipWarnings } = require('./app-spec.js');
 const { compileFormIntent, formFieldLogicals, NON_FORM_RENDERABLE_TYPES } = require('./artifact-intent.js');
 const { normalizeSpecShape } = require('./spec-shape.js');
 const { resolveSurfaces, unresolvedSurfaceMessage } = require('./surface-resolver.js');
@@ -93,6 +93,7 @@ function lintAppSpec(spec) {
   const shape = normalizeSpecShape(spec);
   for (const m of shape.errors) E(m);
   spec = shape.spec;
+  warnings.push(...appMembershipWarnings(spec));
 
   const prefix = spec.solution && spec.solution.publisherPrefix;
   const entityNames = new Set();

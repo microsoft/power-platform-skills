@@ -32,6 +32,7 @@ const {
   quickCreateEnabledFor,
   isPlatformIconRef,
   FORM_TYPE_CODE,
+  formIdentityKey,
   FORM_GUID_RE,
   canonicalPersonaName,
   BUSINESS_RULE_VALUELESS_OPERATORS,
@@ -106,6 +107,7 @@ const { DASHBOARD_LAUNCHER_URL, adoptLiveSitemap, chromeByTargetKey, describeSit
 const { buildPromptSpec } = require('./ai-prompt.js');
 const { odataLit } = require('./odata.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
+const { tableRefs, pinAppTables, publishAppComponents, resolveMainForms, appComponentsFor, applyAppMainForms, explainAppPushWarnings } = require('./app-components.js');
 
 // Re-export from entity-provision so the export surface stays unchanged
 const BuildHalt = _BuildHalt;
@@ -1031,7 +1033,7 @@ function appDef(spec, result, opts = {}) {
     // #583: the routing description, only when the spec sets one (see applyAppAiDescription).
     ...(spec.app.aiDescription ? { aiDescription: spec.app.aiDescription } : {}),
     ...(opts.iconWebResourceId ? { iconWebResourceId: opts.iconWebResourceId } : {}),
-    components: { forms: Object.values(result.forms || {}).filter(Boolean), views: Object.values(result.views || {}).filter(Boolean), charts: Object.values(result.charts || {}).filter(Boolean) } };
+    components: appComponentsFor(result, opts.mainFormsByTable) };
 }
 
 // #583: set the routing description (`app.aiDescription` → `appmodule.aiappdescription`) on the FETCHED
@@ -1102,10 +1104,12 @@ async function haltOnUnpublishedAppHeader(provision, appId, pushed, name) {
 // that means "publish first" — thrown or returned — goes through haltOnUnpublishedAppHeader; everything
 // else is exactly the plain push (the result is still for requireSuccessfulPush to judge) — except that a
 // FAILED push first resets the workspace copy (discardUnrecordedEdits).
-async function pushAppHeader(provision, appId, name, headerChanged) {
+async function pushAppHeader(provision, appId, name, headerChanged, mainFormsByTable) {
   let pushed;
   try {
+    await applyAppMainForms(provision, appId, mainFormsByTable);
     pushed = await provision.pushArtifact('app', appId);
+    pushed = await explainAppPushWarnings(provision.dataverse, pushed, name);
   } catch (e) {
     if (headerChanged) await haltOnUnpublishedAppHeader(provision, appId, { saved: false, error: e }, name);
     await discardUnrecordedEdits(provision, appId, e, true);
@@ -1219,17 +1223,6 @@ function bpfDef(flow) {
   return def;
 }
 
-
-// The (entity, formType, name) triple the App Spec uses to identify a form. Used to address a form
-// from a LATER phase: `forms[].securityRoles` is applied during `security`, because a persona's role
-// does not exist until then, and by that point the forms phase has finished and only the entity's
-// Main form is reachable through `created.forms`.
-//
-// `name` is included because one entity may declare several forms of the same type, and the id must
-// bind to the form the author annotated rather than to whichever sibling was built last.
-function formIdentityKey(f) {
-  return `${String(f.entity).toLowerCase()}|${f.formType || 'Main'}|${f.name || ''}`;
-}
 
 // Map one App Spec business rule to the SDK's BusinessRuleArtifact shape.
 //
@@ -4465,6 +4458,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // the spec dropped — Imp6); (2) for an existing app the sitemap write is DEFERRED entirely to the pages
   // finalizer (below), so the finalizer must run for an existing app regardless of page subareas.
   let appWasExisting = false;
+  let mainFormsP;
+  const resolvedMainForms = () => mainFormsP || (mainFormsP = resolveMainForms(provision.dataverse, spec, result.created.formIds));
 
   // 7. App module + sitemap. When the app has generative-page subareas, create it WITHOUT them
   //    (they can't resolve until pages upload); the pages phase then rewrites the sitemap.
@@ -4473,12 +4468,22 @@ async function runSdkBuildPhases(spec, opts, owed) {
   //    Fetch it into this session's workspace (also required before push/publish on a cross-session
   //    edit) and rewrite the sitemap + components from the current spec so edits land idempotently.
   if (has('app-shell')) {
+    // Resolve authored membership before any app write, so a typo cannot leave a partial app. Form ids
+    // are now available; partial/changed-only runs resolve undeclared forms from the active Main catalog.
+    const mainFormsByTable = await resolvedMainForms();
+    const appTables = (spec.app && spec.app.tables) || [];
+    const refs = appTables.length ? await tableRefs(provision.dataverse, appTables) : null;
+    const pinTables = async (appId, alreadyPublished) => {
+      if (!refs) return;
+      const pinned = await pinAppTables(provision.dataverse, appId, appTables, { refs });
+      if (pinned.added.length && alreadyPublished) await publishAppComponents(provision.dataverse, appId);
+    };
     // Self-contained app-tile icon: a web resource IN this solution (default generated, or the
     // author's spec.app.icon). Resolved BEFORE appDef so the id is embedded at create time — the
     // reliable path (an appmodule's webresourceid is effectively write-once). This replaces the
     // SDK's arbitrary external/managed icon fallback that broke import into a fresh environment.
     const iconWebResourceId = await ensureAppIcon(spec, result.created, { provision, sol, runner });
-    const def = appDef(spec, result.created, { omitUnbuiltPages: true, iconWebResourceId });
+    const def = appDef(spec, result.created, { omitUnbuiltPages: true, iconWebResourceId, mainFormsByTable });
     result.created.app = await runner.run('app-shell', `app "${def.name}"`, async () => {
       const existingId = await provision.findArtifact('app', { uniqueName: def.uniqueName });
       if (existingId) {
@@ -4491,6 +4496,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
           ? !(opts.changedOnly && opts.changedOnly.skipSitemapFinalize)
           : (!appHasPageSubareas(spec) || routingSet);
         if (pushesApp) await refuseUnpushedAppCopy(provision, existingId, def.name);
+        // Existing-app app-shell often makes NO SDK push: its sitemap commit is in the pages finalizer.
+        // Pin now, independently, and let that normal publish make the proven current layer live.
+        await pinTables(existingId, false);
         // #583: the routing description rides an app push this run ALREADY makes — never a second push from
         // the same fetch (the push is If-Match). With the pages phase in the run — every CLI apply, since
         // --apply refuses a partial range that includes app-shell — the finalizer is the sole existing-app
@@ -4502,10 +4510,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // the workspace copy for the re-run's plain fetch to refuse.
         // Update the nav tree via the generic surface. On push the adapter re-derives the app's
         // ENTITY + DashBoard components from the sitemap, so a sitemap edit's tables and dashboards
-        // stay pinned. Explicit forms/views/charts component pins are applied at CREATE only (below):
-        // a FETCHED app exposes no `components` path for updateElement, and the generic surface can't
-        // add a missing top-level object, so the retired setAppDefinition's edit-time re-pin is not
-        // reproducible here. This is acceptable because a table's forms/views are auto-available once
+        // stay pinned. Explicit authored forms/views/charts are applied at CREATE only (below); the
+        // Main-form directive is separately re-applied through root addElement after every fetch.
+        // This is acceptable because a table's forms/views are auto-available once
         // the table is in the app, and every chart is independently added to the SOLUTION
         // (charts-phase addSolutionComponent) and shows on its table's chart pane. Preview limitation:
         // a NEW chart added to an ALREADY-DEPLOYED app on an edit rebuild is NOT re-pinned as an
@@ -4533,7 +4540,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           await assertAuthorizedSitemapRewrite(provision, existingId, def.siteMap, opts.authorizedSitemapRemovals, 'app-shell');
           await provision.updateElement('app', existingId, '/siteMap', await siteMapOverLive(provision, existingId, def.siteMap, opts, result.created));
           const aiDescriptionChanged = await applyAppAiDescription(provision, spec, existingId);
-          requireSuccessfulPush(await pushAppHeader(provision, existingId, def.name, aiDescriptionChanged), `app ${def.name}`, opts.warn);
+          requireSuccessfulPush(await pushAppHeader(provision, existingId, def.name, aiDescriptionChanged, mainFormsByTable), `app ${def.name}`, opts.warn);
           reportPartialPush(await provision.publishArtifact('app', existingId), `app ${def.name}`, opts.warn);
         } else if (!has('pages') && typeof (spec.app && spec.app.aiDescription) === 'string' && spec.app.aiDescription.trim()) {
           // Reached only WITHOUT the pages phase (a programmatic partial run — the CLI refuses one on
@@ -4546,7 +4553,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           const current = await provision.getArtifact('app', existingId) || {};
           await assertAuthorizedSitemapRewrite(provision, existingId, current.siteMap || {}, opts.authorizedSitemapRemovals, 'app-shell');
           if (await applyAppAiDescription(provision, spec, existingId)) {
-            requireSuccessfulPush(await pushAppHeader(provision, existingId, def.name, true), `app ${def.name} routing description`, opts.warn);
+            requireSuccessfulPush(await pushAppHeader(provision, existingId, def.name, true, mainFormsByTable), `app ${def.name} routing description`, opts.warn);
             reportPartialPush(await provision.publishArtifact('app', existingId), `app ${def.name}`, opts.warn);
           }
         }
@@ -4556,7 +4563,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // Create: the full def (siteMap + explicit components + iconWebResourceId) serializes unchanged
       // through createArtifact, and push emits appmodule -> sitemap -> AddAppComponents -> publish.
       const art = await provision.createArtifact('app', def);
-      const pushed = requireSuccessfulPush(await provision.pushArtifact('app', art.id), `app ${def.name}`, opts.warn);
+      const pushed = requireSuccessfulPush(await explainAppPushWarnings(provision.dataverse, await provision.pushArtifact('app', art.id), def.name), `app ${def.name}`, opts.warn);
+      await pinTables(pushed.id, true);
       await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.app, solutionUniqueName: sol.uniqueName });
       // The app module and its sitemap are DISTINCT solution components — adding the appmodule does
       // NOT pull the sitemap in (it lands only in the Default solution), so export/import from the
@@ -4816,14 +4824,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
       if (!skipSitemapFinalize && (appHasPageSubareas(spec) || appWasExisting)) {
         await runner.run('pages', 'finalize sitemap (genpage subareas)', async () => {
           await provision.fetchArtifact('app', result.created.app);
-          const full = appDef(spec, result.created);
+          const mainFormsByTable = await resolvedMainForms();
+          const full = appDef(spec, result.created, { mainFormsByTable });
           await assertAuthorizedSitemapRewrite(provision, result.created.app, full.siteMap, opts.authorizedSitemapRemovals, 'pages');
           await provision.updateElement('app', result.created.app, '/siteMap', await siteMapOverLive(provision, result.created.app, full.siteMap, opts, result.created));
           // #583: the routing description rides THIS push whenever the pages phase runs (the app-shell
           // branch defers it here). A fresh app already carries it from its create, so this is a no-op there.
           const headerChanged = await applyAppAiDescription(provision, spec, result.created.app);
           const appName = (spec.app && spec.app.name) || result.created.app;
-          requireSuccessfulPush(await pushAppHeader(provision, result.created.app, appName, headerChanged), 'app sitemap finalize', opts.warn);
+          requireSuccessfulPush(await pushAppHeader(provision, result.created.app, appName, headerChanged, mainFormsByTable), 'app sitemap finalize', opts.warn);
           reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${appName}`, opts.warn);
           return result.created.app;
         });

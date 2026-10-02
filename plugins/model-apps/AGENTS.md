@@ -385,8 +385,28 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   general rule this bug taught: **assert what you PRODUCED, not what you intended** — "some table
   component exists" was true of the corrupt apps too, and `ValidateApp` reported success on them.
   Pinned by `scripts/tests/app-entity-components-real-bundle.test.js`.
+  **Hidden table membership is explicit via `app.tables`** (AB#6603388), not inferred from
+  `entities[]`. `scripts/lib/app-components.js` is the one home for component inventory, pin/proof
+  and layer reads. It resolves `MetadataId,EntitySetName` before any app write, pins only missing
+  tables right after app identity exists on both create and reuse, then re-resolves the CURRENT
+  layer and proves the rows. An SDK create already publishes, so a fresh app's new pins are
+  published again even without `--publish`; an existing app's normal finalizer/publish includes
+  them. Dropping a table from the list never unpins it.
+  **`app.mainForms` is a name-based Main-form allow-list for sitemap Entity tables.** Names resolve
+  after forms exist, within `(table, Main, normalized name)`; a same-named QuickView does not reject
+  a stock Main. Even a known `forms[].formId` must pass the active Main catalog's name-ambiguity
+  check before any app write; a created/reused id counts once if metadata has not caught up.
+  Every app push carries the SDK's `components.mainFormsByTable`, after every fetch,
+  and excludes conflicting explicit Main pins by ID. Create is exact; update adds only listed forms
+  and never removes old ones. SDK extras are surfaced by name with the Maker remedy, and verify
+  fails them. This does not set a default/order/security roles. Measured: changing membership after
+  first publish did not reach the runtime list within 89 minutes; remembered forms are per table.
+  Both fields require a `minimumPluginVersion` floor of at least `2.13.0` (lint advisory;
+  download-emitted). `app-main-forms-real-bundle.test.js` proves the serialized create excludes a
+  disallowed Main ID and the SDK refuses an explicit conflicting pin.
   `--verify` now asserts the same membership INDEPENDENTLY of the write path: it resolves the app's
-  `componenttype: 1` rows and fails, by table name, when a sitemap-visible table is not among them,
+  PUBLISHED `componenttype: 1` rows and fails, by table name, when a sitemap table or `app.tables`
+  reference is not among them,
   fails closed when that list cannot be read, and reports any leftover `entity` placeholder row. The
   SDK's read-back only covers what a build intended to pin, so an app that drifted afterwards (or was
   edited elsewhere) still verified clean — the sitemap named the table and the table existed, which
@@ -456,11 +476,17 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   still holds the changed-only fence). `planTeardown(spec)` is pure (dry-run +
   unit-test surface); reuses `appUniqueName`/`commandsByEntity`/`topoOrderEntities` from the build engine (DRY).
 - **`scripts/download-model-app.js` → `scripts/lib/hydrate-spec.js`** — the **edit flow**: pulls a
-  *deployed* app back into an editable App Spec + page code (sitemap → `appShell` with icons, **every**
+  server-current app back into an editable App Spec + page code, including saved unpublished
+  Maker changes (sitemap → `appShell` with icons, **every**
   generative page via `pac model genpage download`, referenced entities/tables, icon web resources,
   dashboards, solution). It reads through a throwaway SDK workspace, never the folder's
   `.maker-workspace` — a copy an interrupted build left there made the download fail, or describe edits
-  that were never deployed — and writes only the baseline (`last-applied.json`) into it.
+  that were never saved to Dataverse — and writes only the baseline (`last-applied.json`) into it.
+  The fetched SDK navigation must agree with the selected current XML's full target multiset:
+  entities, generative pages, URLs, dashboards and custom pages, including repeated shortcuts.
+  A missing SDK sitemap or a mismatch is refused with publish-then-download guidance, never emitted
+  as hidden-table membership or lost Main restrictions. The immutable name is recovered from the
+  fetched `uniqueName`/`uniquename` before manifest/prefix lookup; an unresolved identity is refused.
   **Round-trip scope (be precise — do not claim "complete"):** tables, sitemap/appShell, generative pages,
   classic dashboards, icons, and solution round-trip; **forms, views, charts, and commands do NOT yet
   round-trip.** (View hydration was tried and reverted — LIVE-verified that the deployed savedquery set
@@ -480,34 +506,40 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   has forms and views, so failing the download would break every download, and the omission is not
   destructive in the environment the app came from. Do not "fix" this by reconstructing `forms[]`
   without also solving the lossy-layout problem above.
-  **Entities are the sitemap's tables UNIONED with the entities owned by the app's VIEW / CHART /
-  FORM components** (`appComponentEntities`) — a maker-built app can include tables reachable only via
-  a lookup/sub-grid/related view, with no sitemap entry of their own, and reconstructing from the
-  sitemap alone drops them. Note `componenttype eq 1` (Entities) rows are deliberately NOT used, but
-  the REASON changed: apps built before the entity-component fix carry junk rows that all share one
-  `objectid` (the `entity` metadata table's own id), so on those apps the row identifies the
-  component *kind*, not which table. Newly built apps now carry CORRECT per-table objectids (see the
-  build note below), so reading them is viable — it is not done yet because a legacy app's junk rows
-  would resolve to the table literally named `entity` and have to be filtered.
-  **Scope caveat:** `/app-builder` itself never creates a hidden component — a table
-  with no sitemap subarea does not become an app component at all (LIVE-verified: declaring `task` in
-  `entities[]` without nav left the app's component set unchanged), so for an app-builder-built app
-  the sitemap set already IS the complete set. This union therefore only adds tables for apps built
-  or edited in the maker. **Download does not recover an entity component that has no sitemap subarea**
-  (ADO 6603388), and a live attempt to construct the hidden component it describes did not succeed:
-  pinning `task` via `AddAppComponents` with the
-  now-correct reference shape returned 204 but wrote no row, before or after publish. So the
-  download-side fix cannot currently be verified end to end — do not implement it speculatively.
-  The component read is best-effort: a failure degrades
-  to the sitemap-derived set rather than failing the download. Each entity's **`primaryAttribute` comes from
+  **Table membership also comes from type-1 components**, in addition to the sitemap and the app's
+  VIEW / CHART / FORM owners. Hidden type-1 members emit sorted `app.tables`; custom hidden tables
+  hydrate into `entities[]` only when `IsCustomEntity === true`. A non-custom or unclassified hidden
+  type-1 member remains a reference even when a view/chart/form also references it; unknown status
+  gets a classification loss note, never schema-authoring instructions. Tables found
+  ONLY through view/chart/form components keep their prior hydration behavior.
+  Corrupt `entity` placeholder rows and deleted/unresolvable metadata IDs are
+  omitted with named not-round-tripped notes, not silently treated as valid tables.
+  **Measured: hidden-table pinning works, and layers matter** (AB#6603388). Adding a hidden `task`
+  with `{ '@odata.id': 'tasks(<MetadataId>)' }` returned 204 and created a new unpublished layer
+  (`componentstate: 1`, new `appmoduleidunique`) containing it. The plain published app row still
+  pointed at the old layer without it; after app `PublishXml`, the published row carried the new
+  layer and table. The earlier “204 but no row before/after publish” note read the wrong layer.
+  Never cache `appmoduleidunique` across a write/publish: build proof reads
+  `RetrieveUnpublishedMultiple` (one row, or the single unpublished row when several). Download uses
+  that same CURRENT layer for navigation, table inventory and Main membership because the vendored
+  SDK fetch reads the current app/sitemap; verify describes the PUBLISHED layer.
+  An `entities[]` entry alone still does not request membership.
+  **Main membership round-trips separately from form layout.** Download emits `app.mainForms` for a
+  non-empty strict active Main subset with unambiguous names. Inactive/unclassifiable pins are named
+  in `notRoundTripped.appMembership`, preserving an encodable active restriction even when those
+  extra pins cannot be authored. It shares the component inventory with description capture.
+  Both membership fields raise `minimumPluginVersion` to `2.13.0`, retaining a higher authored floor.
+  Component reads remain best-effort with explicit loss notes rather than failing the download.
+  Each schema-hydrated entity's **`primaryAttribute` comes from
   real Dataverse metadata** (`primaryNameAttribute`) and is **never synthesized**. The old
   `<entity>_name` guess was wrong for most OOB tables (`account` → `name`,
   `contact` → `fullname`) while looking plausible on custom ones, which is why it went unnoticed.
   Because validation *requires* `primaryAttribute`, a table without one cannot simply be emitted: a
   **sitemap** table missing it FAILS the download (actionable — the user asked for that table), while a
-  **component-only** table missing it is dropped with a warning (it arrived via a best-effort read and
+  **schema-hydrated component-only** table missing it is dropped with a warning (it arrived via a best-effort read and
   was absent from the spec entirely before this change, so aborting over it would regress a previously
-  working download with no override flag).
+  working download with no override flag). A membership-only stock table never needs this read;
+  its `app.tables` reference survives even when it has no primary-name column.
   The **solution** is recovered as the app's one *real* unmanaged solution — `recoverAppSolution` enumerates
   the app's solution memberships and excludes the built-in `Active`/`Default`/`Basic` system solutions the
   app is also a member of (see `scripts/lib/system-solutions.js`), so the downloaded spec can cleanly tear
@@ -577,7 +609,12 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   a same-named dashboard of another app sorted first and failed a correctly wired nav entry. When the reader supplies `dashboardComponents`, every chart tile's
   visualization and view must belong to the tile's `TargetEntityType` — the cross-wiring a same-named
   chart on another table produced. A tile whose owner rows cannot be read is reported unverified, not
-  passed. It also reconciles
+  passed. **App membership is checked on the published layer:** sitemap tables union `app.tables`
+  must have type-1 rows; each `app.mainForms` table gets an `app-main-forms` check comparing resolved
+  active Main IDs with classified type-60 members. Missing members fail with “re-run the build”,
+  extras fail with the Maker Forms remedy, and unreadable/unclassifiable membership is unverified,
+  never passed. Dashboards (systemform type 0) and other non-Main forms are not Main members.
+  It also reconciles
   **AI app features**: for every `ai.appFeatures` entry it proves an APP-SCOPE OVERRIDE ROW exists in
   `appsettings` holding the requested value. Verify previously had no awareness of `spec.ai` at all, so
   a run whose every AI feature was skipped (admin gate off) or silently not persisted still reported a
@@ -768,6 +805,7 @@ scripts/
     supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
     feature-flags.js           ← Default-OFF feature flag probe + Custom API script backstop
     sdk-build.js               ← app-builder build engine (idempotent; incl. the pages phase)
+    app-components.js          ← shared current/published app layers, component inventory, hidden-table pin/proof, Main-form resolution/membership and push directives
     stages.js                  ← stage→phase-range mapping + PHASES/STAGES constants
     op-diff.js                 ← destructive-op diff + --allow-destructive / --non-interactive gating
     artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)

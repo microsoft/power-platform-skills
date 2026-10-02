@@ -23,6 +23,12 @@ function isSafeHttpUrl(u) {
 // https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/systemform#type-choicesoptions
 const FORM_TYPE_CODE = { Main: 2, QuickView: 6, QuickCreate: 7, Card: 11 };
 
+// Later phases must address the same type-scoped identity as the forms phase, not whichever
+// same-named Main/QuickView sibling happened to be built last.
+function formIdentityKey(f) {
+  return `${String(f.entity).toLowerCase()}|${f.formType || 'Main'}|${f.name || ''}`;
+}
+
 // A canonical GUID (used to validate an author-pinned forms[].formId, which is interpolated UNQUOTED into
 // an Edm.Guid OData filter). Anchored so it can neither over-match nor be an injection seam.
 const FORM_GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -1447,6 +1453,103 @@ function compareVersions(a, b) {
   return 0;
 }
 
+const APP_MEMBERSHIP_MIN_VERSION = '2.13.0';
+const isPluginVersion = (value) => typeof value === 'string' && /^\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?$/.test(value);
+
+function sitemapEntityTables(spec) {
+  const tables = new Set();
+  for (const area of (spec.appShell && spec.appShell.areas) || []) {
+    for (const group of area.groups || []) {
+      for (const sub of group.subAreas || []) {
+        if (sub && typeof sub.entity === 'string' && !sub.page && !sub.dashboard && !sub.url) {
+          tables.add(sub.entity.toLowerCase());
+        }
+      }
+    }
+  }
+  return [...tables];
+}
+
+function validateAppMembership(spec, errors) {
+  const app = spec.app || {};
+  if (app.tables !== undefined) {
+    if (!Array.isArray(app.tables) || app.tables.some((name) => typeof name !== 'string' || !name.trim())) {
+      errors.push('app.tables must be an array of non-empty table logical names');
+    } else {
+      const seen = new Set();
+      for (const table of app.tables) {
+        const key = table.toLowerCase();
+        if (seen.has(key)) errors.push(`app.tables lists table '${table}' more than once (logical names compare case-insensitively)`);
+        seen.add(key);
+      }
+    }
+  }
+  if (app.mainForms === undefined) return;
+  if (!app.mainForms || typeof app.mainForms !== 'object' || Array.isArray(app.mainForms)) {
+    errors.push('app.mainForms must be an object mapping a sitemap table to a non-empty list of Main form names');
+    return;
+  }
+  const navigated = new Set(sitemapEntityTables(spec));
+  const seenTables = new Set();
+  for (const [table, names] of Object.entries(app.mainForms)) {
+    const key = table.toLowerCase();
+    const label = `app.mainForms['${table}']`;
+    if (seenTables.has(key)) errors.push(`${label}: table is listed more than once (logical names compare case-insensitively)`);
+    seenTables.add(key);
+    if (!navigated.has(key)) {
+      errors.push(`${label}: '${table}' is not a sitemap Entity table (sitemap tables: ${[...navigated].join(', ') || 'none'})`);
+    }
+    if (!Array.isArray(names) || !names.length || names.some((name) => typeof name !== 'string' || !name.trim())) {
+      errors.push(`${label}: must be a non-empty array of Main form names; an app with no Main form offers every form of the table`);
+      continue;
+    }
+    const seenNames = new Set();
+    const mains = (spec.forms || []).filter((form) => isMainForm(form) && String(form.entity || '').toLowerCase() === key);
+    for (const name of names) {
+      const normalized = dashboardNameKey(name);
+      if (seenNames.has(normalized)) errors.push(`${label}: Main form '${name}' is listed more than once (names compare ignoring case and accents)`);
+      seenNames.add(normalized);
+      if (mains.filter((form) => dashboardNameKey(form.name) === normalized).length > 1) {
+        errors.push(`${label}: '${name}' is ambiguous among the declared Main forms of this table — rename one`);
+      }
+      // A declared QuickView named "Information" can coexist with an undeclared stock Main of that
+      // name. Only the active Main catalog can prove a wrong type, so resolution makes that decision.
+    }
+  }
+}
+
+function appMembershipWarnings(spec) {
+  const warnings = [];
+  const app = spec.app || {};
+  if (app.tables === undefined && app.mainForms === undefined) return warnings;
+  const floor = spec.minimumPluginVersion;
+  if (!isPluginVersion(floor) || compareVersions(floor, APP_MEMBERSHIP_MIN_VERSION) < 0) {
+    warnings.push(`set minimumPluginVersion to '${APP_MEMBERSHIP_MIN_VERSION}' or newer when using app.tables or app.mainForms — older plugins ignore these fields`);
+  }
+  const navigated = new Set(sitemapEntityTables(spec));
+  for (const table of Array.isArray(app.tables) ? app.tables : []) {
+    if (typeof table === 'string' && navigated.has(table.toLowerCase())) {
+      warnings.push(`app.tables: '${table.toLowerCase()}' is already in the navigation; listing it again is redundant`);
+    }
+  }
+  if (!app.mainForms || typeof app.mainForms !== 'object' || Array.isArray(app.mainForms)) return warnings;
+  for (const [table, names] of Object.entries(app.mainForms)) {
+    if (!Array.isArray(names)) continue;
+    const allowed = new Set(names.filter((name) => typeof name === 'string').map(dashboardNameKey));
+    const key = table.toLowerCase();
+    const flagged = (spec.forms || []).find((form) => isMainForm(form) && String(form.entity || '').toLowerCase() === key && form.isDefault === true);
+    const entity = (spec.entities || []).find((entry) => entry && String(entry.schemaName || '').toLowerCase() === key);
+    const ordered = entity && Array.isArray(entity.mainFormOrder) && entity.mainFormOrder[0];
+    const defaults = new Set([flagged && flagged.name, ordered].filter(Boolean));
+    for (const name of defaults) {
+      if (!allowed.has(dashboardNameKey(name))) {
+        warnings.push(`app.mainForms['${table}'] excludes '${name}', the explicit default or first mainFormOrder form — the app cannot offer that form`);
+      }
+    }
+  }
+  return warnings;
+}
+
 // Keys an author reasonably reaches for that FormXml has no place for. Naming the real mechanism is
 // the difference between an actionable error and a scavenger hunt — the SDK's own refusal reports a
 // JSON pointer into the compiled intent, which an author who wrote a spec cannot map back to a key.
@@ -1903,7 +2006,7 @@ function validateAppSpec(spec, opts = {}) {
     // and compareVersions' `parseInt(n, 10) || 0` then read the empty component as 0 and enforced
     // 2.0.9 — a different floor than the author wrote, with no error. The optional `-pre`/`+build`
     // suffix is permitted because compareVersions deliberately compares the release CORE.
-    if (typeof want !== 'string' || !/^\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?$/.test(want)) {
+    if (!isPluginVersion(want)) {
       errors.push(`minimumPluginVersion must be a dotted version string like '2.9.0', got ${JSON.stringify(want)}`);
     } else {
       const have = pluginVersion();
@@ -1955,6 +2058,7 @@ function validateAppSpec(spec, opts = {}) {
     errors.push('app.headerNavigationRefresh must be a boolean');
   }
   validateAiDescription(spec.app && spec.app.aiDescription, errors);
+  if (profile !== 'structural') validateAppMembership(spec, errors);
   if (spec.languageCode !== undefined && normalizeLanguageCode(spec.languageCode) === null) {
     // Keep the leading clause stable — the CLI flag and two test suites match on it. The appended
     // guidance exists because the bare message named the mistake without naming the fix, and a
@@ -3833,6 +3937,11 @@ module.exports = {
   rejectLocalizedGlobalChoice,
   sampleKeyIdentity,
   dashboardNameKey,
+  compareVersions,
+  APP_MEMBERSHIP_MIN_VERSION,
+  isPluginVersion,
+  sitemapEntityTables,
+  appMembershipWarnings,
   generatedTabName,
   generatedSectionName,
   formColumnsOf,
@@ -3854,6 +3963,7 @@ module.exports = {
   isPlatformIconRef,
   webResourceNameFromRef,
   FORM_TYPE_CODE,
+  formIdentityKey,
   FORM_GUID_RE,
   PAGE_MODEL_RE,
   ACCESS_LEVELS,

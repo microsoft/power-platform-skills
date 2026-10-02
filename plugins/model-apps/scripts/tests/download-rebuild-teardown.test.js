@@ -12,6 +12,7 @@ const { teardownModelApp } = require('../teardown-model-app.js');
 const snapshot = require('../lib/apply-snapshot.js');
 const snapshotStore = require('../lib/apply-snapshot-store.js');
 const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
+const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
 
 const ENV = 'https://contoso.crm.dynamics.com';
 const APP_ID = '11111111-0000-4000-8000-000000000001';
@@ -125,7 +126,8 @@ function recordingLifecycleSdk({ systemOnly = false } = {}) {
       if (!app) return [];
       const entries = app.siteMap.areas.flatMap((a) => a.groups.flatMap((g) => g.subAreas || []));
       return [{ sitemapid: app.sitemapId, sitemapxml: `<SiteMap><Area><Group>${entries.map((s) =>
-        s.genPageId ? `<SubArea GenPageId="${s.genPageId}"/>` : s.entity ? `<SubArea Entity="${s.entity}"/>` : '').join('')}</Group></Area></SiteMap>` }];
+        s.genPageId ? `<SubArea GenPageId="${s.genPageId}"/>` : s.entity ? `<SubArea Entity="${s.entity}"/>`
+          : s.url ? `<SubArea Url="${s.url}"/>` : '').join('')}</Group></Area></SiteMap>` }];
     }
     if (set === 'solutioncomponent') {
       if (!filter.startsWith('objectid eq ')) return [];
@@ -231,7 +233,11 @@ test('downloaded ownership survives rebuild and teardown planning', async () => 
     const fixture = recordingLifecycleSdk({ systemOnly });
     // runDownload invokes the real hydrateSpec. Serialize and migrate that output exactly as a
     // subsequent build loads it, so ownership cannot be rescued by a separately hand-authored spec.
-    const downloaded = await runDownload({ sdk: fixture.sdk, genpageCli: fixture.genpageCli, outDir, appId: APP_ID, appUnique: APP_UNIQUE });
+    const sitemap = await fixture.sdk.queryRecords('sitemap', { filter: `sitemapid eq ${SITEMAP_ID}`, top: 1 });
+    const downloaded = await runDownload({
+      sdk: currentReadSdk(fixture.sdk, { appId: APP_ID, layerId: APP_LOOKUP, sitemapXml: sitemap[0].sitemapxml }),
+      genpageCli: fixture.genpageCli, outDir, appId: APP_ID, appUnique: APP_UNIQUE,
+    });
     assert.strictEqual(downloaded.ok, true, JSON.stringify(downloaded));
     assert.deepStrictEqual(downloaded.relationshipsSkipped, []);
     const specFile = path.join(outDir, 'app-spec.json');

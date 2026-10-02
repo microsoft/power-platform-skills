@@ -13,6 +13,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { runSdkBuild } = require('../lib/sdk-build.js');
+const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
 
 // Real GUIDs for the three-authority sitemap mock (Imp9). SELF_* resolve THIS app's appmodule + sitemap so
 // fetchSitemap(appUnique) returns opts.liveSitemapXml; a page-less EMPTY sitemap is the default membership.
@@ -548,7 +549,7 @@ test('lexical navigation variants survive deploy-download-rebuild', async () => 
     fs.writeFileSync(path.join(appDir, 'overview.tsx'), canonical, 'utf8');
     spec.pages[0].pageId = overviewId;
     spec.pages[1].pageId = detailId;
-    const xml = `<SiteMap><Area><Group><SubArea GenPageId="${overviewId}" Title="Overview"/><SubArea GenPageId="${detailId}" Title="Detail"/></Group></Area></SiteMap>`;
+    const xml = `<SiteMap><Area><Group><SubArea GenPageId="${overviewId}" Title="Overview"/><SubArea GenPageId="${detailId}" Title="Detail"/><SubArea Entity="contoso_item"/></Group></Area></SiteMap>`;
     const { sdk, calls } = mockSdk({ liveSitemapXml: xml });
     const genpageCli = mockGenpageCli(live);
     await runSdkBuild(spec, { sdk, apply: true, env: 'https://contoso.crm.dynamics.com', appDir, genpageCli, phases: PHASES });
@@ -589,7 +590,10 @@ test('lexical navigation variants survive deploy-download-rebuild', async () => 
       }
       return true;
     };
-    const downloaded = await runDownload({ sdk: downloadSdk, genpageCli, outDir: downloadDir, appId: APP_ID, appUnique: 'contoso_deployapp' });
+    const downloaded = await runDownload({
+      sdk: currentReadSdk(downloadSdk, { appId: APP_ID, layerId: SELF_UNIQUE_VALUE, sitemapXml: xml }),
+      genpageCli, outDir: downloadDir, appId: APP_ID, appUnique: 'contoso_deployapp',
+    });
     assert.ok(downloaded.ok, JSON.stringify(downloaded));
     const overview = downloaded.spec.pages.find((p) => p.key === 'overview');
     assert.deepStrictEqual(overview.navigatesTo, [{ targetKey: 'detail' }]);

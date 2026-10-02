@@ -7,7 +7,10 @@
 const { odataLit } = require('./odata.js');
 const { matchContainer, isEngineOwnedSection, isEngineHostSection, claimedByAuthoredName } = require('./form-container-match.js');
 const { authoredSectionNames, authoredTabNames } = require('./app-spec.js');
-const { decodeXmlEntities } = require('./sitemap-pages.js');
+const { sitemapEntityTables } = require('./app-spec.js');
+// XML_TAG / XML_ATTR are the one tag and attribute grammar for FormXML and SiteMap XML; they live with
+// liveNavEntries in sitemap-pages.js so the form-identity scan and the navigation reader cannot drift.
+const { decodeXmlEntities, liveNavEntries, XML_TAG, XML_ATTR } = require('./sitemap-pages.js');
 const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf } = require('./app-spec.js');
 const { sameRelationship, describeRelationship } = require('./relationship-metadata.js');
 const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef, dashboardsInSolution, findDashboardsByName, findPinnedDashboard } = require('./sdk-build.js');
@@ -1028,28 +1031,26 @@ async function verifySpec(spec, read, opts = {}) {
   // check above passes, because the table EXISTS and the sitemap DOES name it. Verify reported PASS
   // on exactly that app, which is what made the divergence invisible.
   //
-  // Scoped to SITEMAP-VISIBLE entities on purpose. A spec entity with no subarea is a legitimate
-  // data-model-only/supporting table that the build does not pin, so requiring it would fail every
-  // app that declares one.
+  // Navigation tables and explicit app.tables are membership instructions. A data-model-only entity
+  // with neither is not: requiring every entities[] entry would incorrectly pin supporting tables.
   //
   // Optional capability: verify-spec is also driven by minimal readers, and an optional reader must
   // never become a TypeError for them (same rule as `columnVisualization`).
-  if (typeof read.appEntityComponents === 'function') {
-    const sitemapEntities = [];
-    for (const a of (spec.appShell && spec.appShell.areas) || []) {
-      for (const g of a.groups || []) {
-        for (const sa of g.subAreas || []) {
-          const logical = sa && sa.entity ? String(sa.entity).toLowerCase() : null;
-          if (logical && !sitemapEntities.includes(logical)) sitemapEntities.push(logical);
-        }
-      }
-    }
+  const hiddenTables = Array.isArray(spec.app && spec.app.tables) ? spec.app.tables : [];
+  if (typeof read.appEntityComponents === 'function' || hiddenTables.length) {
+    const sitemapEntities = [...new Set([...sitemapEntityTables(spec), ...hiddenTables.map((name) => String(name).toLowerCase())])];
     if (sitemapEntities.length) {
-      const res = await read.appEntityComponents(sitemapEntities);
+      let res;
+      try {
+        res = typeof read.appEntityComponents === 'function' ? await read.appEntityComponents(sitemapEntities)
+          : { ok: false, reason: 'app table membership reader is unavailable' };
+      } catch (error) {
+        res = { ok: false, reason: (error && error.message) || String(error) };
+      }
       if (!res || res.ok !== true) {
         // Fail closed. "We could not look" must never read as "the app is fine" — that is the exact
         // shape of the bug this check exists to catch.
-        add('app-table-component', 'app tables', false, `could not be read: ${(res && res.reason) || 'unknown'}`);
+        add('app-table-component', 'app tables', false, `could not be read: ${(res && res.reason) || 'unknown'} — unverified, not proven correct`);
       } else {
         // Case-insensitive: Dataverse does not guarantee the casing of a resolved logical name.
         const present = new Set((res.present || []).map((n) => String(n).toLowerCase()));
@@ -1063,6 +1064,36 @@ async function verifySpec(spec, read, opts = {}) {
             'the app module contains component(s) pointing at the `entity` metadata table rather than a real table — remove them.');
         }
       }
+    }
+  }
+
+  const mainForms = spec.app && spec.app.mainForms;
+  if (mainForms && Object.keys(mainForms).length) {
+    let membership;
+    try {
+      membership = typeof read.appMainForms === 'function'
+        ? await read.appMainForms(appUniqueName(spec), mainForms)
+        : { kind: 'inconclusive', reason: 'app Main-form membership reader is unavailable' };
+    } catch (error) {
+      membership = { kind: 'inconclusive', reason: (error && error.message) || String(error) };
+    }
+    for (const rawTable of Object.keys(mainForms)) {
+      const table = rawTable.toLowerCase();
+      const result = membership && membership.kind === 'read' && Array.isArray(membership.tables)
+        && membership.tables.find((entry) => entry && String(entry.table).toLowerCase() === table);
+      if (!result || !Array.isArray(result.extras) || !Array.isArray(result.missing)) {
+        add('app-main-forms', table, false,
+          `Main-form membership could not be read: ${(membership && membership.reason) || `no complete result for '${table}'`} — unverified, not proven correct`);
+        continue;
+      }
+      const names = (ids) => ids.map((id) => `'${(membership.formNames && membership.formNames[id]) || id}'`).join(', ');
+      const problems = [];
+      if (result.missing.length) problems.push(`Main form(s) ${names(result.missing)} are missing; re-run the build`);
+      if (result.extras.length) {
+        problems.push(`Main form(s) ${names(result.extras)} are outside the list; an existing app keeps forms it already offered — `
+          + `remove them in Maker (app designer -> ${table} -> Forms) or list them`);
+      }
+      add('app-main-forms', table, problems.length === 0, problems.join('; '));
     }
   }
 
@@ -1967,58 +1998,6 @@ function subareaDashboardHasLauncher(xml, dashId) {
   return dashboardNavEntries(xml, dashId).some((e) => isDashboardLauncherUrl(e.url));
 }
 
-// The live nav entries in sitemap XML, by navigation target (subAreaTargetKey, sitemap-merge.js) — the
-// identity a rebuild matches live entries by — each with its icons and Url. For example
-//   <SubArea Id="ops" Url="/workplace/home_dashboards.aspx" DefaultDashboard="{280948EC-…}" VectorIcon="$webresource:new_ops.svg">
-// becomes 'DashBoard:280948ec-…' → [{ icon: undefined, vectorIcon: '$webresource:new_ops.svg', url: '/workplace/home_dashboards.aspx' }].
-// An entry's type is read the way the vendored SDK reads it — GenPageId, then Entity, then Page, then
-// DefaultDashboard, else it is a URL entry — so the two agree on what an entry targets.
-// Only ELEMENTS count, and only where the vendored SDK models navigation: a `SubArea` element (that exact
-// name — not `SubArea-Archived`, not `SubAreaÜ`) directly under `SiteMap/Area/Group`. A SubArea anywhere
-// else is kept by the SDK as opaque XML and is no nav entry, and a `<SubArea …>` inside a comment, a CDATA
-// section or a processing instruction is text — so those three are removed first, and the remaining tags
-// are walked with an element stack. A name is read whole, whatever its characters (XML names may be
-// Unicode), so every element boundary is on the stack. A value may hold a raw `>`, so a tag is matched
-// quote by quote. Values are fully XML-decoded (`&amp;`, and numeric references such as `&#38;`), in
-// either quote style, before they are compared with the spec's.
-//
-// FAIL-CLOSED: the answer is null — no entries, so verify grants no "kept" exemption and the icon check
-// stands as it would without a baseline — for anything this walk cannot account for completely: a `<`
-// that starts no element tag (which is also how a document type declaration, whose entities could expand
-// into elements, is turned away), or a closing tag that does not close the innermost open element.
-const NAV_PATH = ['SiteMap', 'Area', 'Group'];
-const XML_TAG = /<(\/?)([^\s/>"'=!?]+)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>/g;
-const XML_ATTR = /\s([^\s/>"'=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
-function liveNavEntries(xml) {
-  const markup = String(xml || '')
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '')
-    .replace(/<\?[\s\S]*?\?>/g, '');
-  const tags = [...markup.matchAll(XML_TAG)];
-  // In well-formed XML every remaining `<` starts a tag: text escapes it, and an attribute value cannot hold one.
-  if (tags.length !== (markup.match(/</g) || []).length) return null;
-  const byKey = new Map();
-  const open = [];
-  for (const [, closing, name, body, selfClosing] of tags) {
-    if (closing) {
-      if (open[open.length - 1] !== name) return null;
-      open.pop();
-      continue;
-    }
-    if (name === 'SubArea' && open.length === NAV_PATH.length && NAV_PATH.every((n, i) => open[i] === n)) {
-      const attrs = Object.create(null);
-      for (const m of body.matchAll(XML_ATTR)) attrs[m[1]] = decodeXmlEntities(m[2] !== undefined ? m[2] : m[3]);
-      const type = attrs.GenPageId ? 'GenPage' : attrs.Entity ? 'Entity' : attrs.Page ? 'CustomPage' : attrs.DefaultDashboard ? 'DashBoard' : 'URL';
-      const key = subAreaTargetKey({ type, entity: attrs.Entity, url: attrs.Url, dashboardId: attrs.DefaultDashboard, page: attrs.Page, genPageId: attrs.GenPageId });
-      if (key) {
-        if (!byKey.has(key)) byKey.set(key, []);
-        byKey.get(key).push({ icon: attrs.Icon, vectorIcon: attrs.VectorIcon, url: attrs.Url });
-      }
-    }
-    if (!selfClosing) open.push(name);
-  }
-  return open.length ? null : byKey;
-}
 // True when some sitemap `<SubArea GenPageId="<id>">` in the XML binds this page id. Generative-page
 // subareas store the id in the GenPageId attribute SPECIFICALLY (vendor cds-maker-sdk.cjs:50 parses
 // /GenPageId="([0-9a-fA-F-]{36})"/), so match THAT attribute only — a decoy id elsewhere on the

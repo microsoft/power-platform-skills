@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { untypedColumnNames, collectGlobalChoices, finalizeGlobalChoices, resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, preserveAuthoredLanguageCode } = require('../download-model-app.js');
+const { currentReadSdk, APP: COMPONENT_APP_ID, CURRENT: COMPONENT_LAYER_ID } = require('./helpers/app-membership-sdk.js');
 
 test('resolveAppId returns a guid as-is, else resolves by uniquename', async () => {
   const guid = '11111111-2222-3333-4444-555555555555';
@@ -897,7 +898,9 @@ test('readDescriptionInventory captures view, chart, form, business-rule, and gl
     },
   };
 
-  const inv = await readDescriptionInventory(sdk, 'app-1', 'ContosoSolution');
+  const inv = await readDescriptionInventory(currentReadSdk(sdk, {
+    appId: COMPONENT_APP_ID, layerId: APP_UNIQ_VALUE,
+  }), COMPONENT_APP_ID, 'ContosoSolution');
 
   assert.deepStrictEqual(inv.views[0], { id: VIEW_ID, name: 'Active Orders', entity: 'new_order', description: 'Work queue.' });
   assert.strictEqual('description' in inv.charts[0], false, 'null chart descriptions are omitted');
@@ -1220,7 +1223,7 @@ test('lexical navigation variants survive deploy-download-rebuild', async () => 
   const deployed = overviewCode(detailId);
   const canonical = overviewCode('PAGEREF_detail');
   const detailCode = 'export default function Detail() { const text = "left\u2028right\u2029"; return null; }\r\n';
-  const xml = `<SiteMap><Area><Group><SubArea GenPageId="${overviewId}" Title="Navigation A"/><SubArea GenPageId="${detailId}" Title="Navigation B"/></Group></Area></SiteMap>`;
+  const xml = `<SiteMap><Area><Group><SubArea GenPageId="${overviewId}" Title="Navigation A"/><SubArea GenPageId="${detailId}" Title="Navigation B"/><SubArea Entity="contoso_item"/></Group></Area></SiteMap>`;
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'download-lexical-'));
   try {
     const sdk = {
@@ -1255,7 +1258,10 @@ test('lexical navigation variants survive deploy-download-rebuild', async () => 
         return true;
       },
     };
-    const downloaded = await runDownload({ sdk, genpageCli, outDir: out, appId, appUnique });
+    const downloaded = await runDownload({
+      sdk: currentReadSdk(sdk, { appId, layerId: appUniqueId, sitemapXml: xml }),
+      genpageCli, outDir: out, appId, appUnique,
+    });
     assert.ok(downloaded.ok, JSON.stringify(downloaded));
     const validation = validateAppSpec(downloaded.spec);
     assert.ok(validation.ok, validation.errors.join('; '));
@@ -1336,7 +1342,7 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
   const APP_UNIQ_VALUE = 'c0ffee00-0000-4000-8000-00000000dddd'; // appmoduleidunique lookup GUID
   const SM_ID    = '5111e0f2-0000-4000-8000-0000000000aa';
   const APP_UNIQUE = 'test_roundtrip';
-  const SM_XML = `<SiteMap><Area><Group><SubArea GenPageId="${GP_A}" Title="Sitemap A"/><SubArea GenPageId="${GP_B}" Title="Sitemap B"/></Group></Area></SiteMap>`;
+  const SM_XML = `<SiteMap><Area><Group><SubArea GenPageId="${GP_A}" Title="Sitemap A"/><SubArea GenPageId="${GP_B}" Title="Sitemap B"/><SubArea Entity="contoso_item"/></Group></Area></SiteMap>`;
 
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-rt-'));
   try {
@@ -1387,7 +1393,10 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
       },
     };
 
-    const result = await runDownload({ sdk: mockSdk, genpageCli: mockGenpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
+    const result = await runDownload({
+      sdk: currentReadSdk(mockSdk, { appId: APP_ID, layerId: APP_UNIQ_VALUE, sitemapXml: SM_XML }),
+      genpageCli: mockGenpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE,
+    });
     assert.ok(result.ok, JSON.stringify(result));
     const { spec } = result;
     // Full spec validates (profile:'plan' enforces every page is a sitemap subarea)
@@ -1424,7 +1433,7 @@ test('download writes page names without pac\'s \\" escaping, from the env-wide 
   const GP_B = '5c0a4889-45fd-46ea-91a8-ff876914d644';
   const APP_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
   const SM_XML = `<SiteMap><Area><Group><SubArea GenPageId="${GP_A}" Title="Plain A"/>`
-    + `<SubArea GenPageId="${GP_B}" Title="Title \\&quot;B\\&quot; \\\\path"/></Group></Area></SiteMap>`;
+    + `<SubArea GenPageId="${GP_B}" Title="Title \\&quot;B\\&quot; \\\\path"/><SubArea Entity="contoso_item"/></Group></Area></SiteMap>`;
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-esc-'));
   try {
     const sdk = {
@@ -1467,7 +1476,10 @@ test('download writes page names without pac\'s \\" escaping, from the env-wide 
     process.stderr.write = (chunk, ...rest) => { warned.push(String(chunk)); return true; };
     let result;
     try {
-      result = await runDownload({ sdk, genpageCli, outDir: out, appId: APP_ID, appUnique: 'test_roundtrip' });
+      result = await runDownload({
+        sdk: currentReadSdk(sdk, { appId: APP_ID, layerId: 'c0ffee00-0000-4000-8000-00000000dddd', sitemapXml: SM_XML }),
+        genpageCli, outDir: out, appId: APP_ID, appUnique: 'test_roundtrip',
+      });
     } finally {
       process.stderr.write = write;
     }
@@ -1613,7 +1625,7 @@ test('recoverAppSolution never picks between several unmanaged solutions, whatev
 function ambiguousAppSdk(APP_ID, APP_UNIQUE, { members, prefixOf = () => 'contoso', manyToMany = [], order = ['a', 'b'] } = {}) {
   const base = twoSolutionSdk(order, prefixOf);
   const RULE = '5111e0f2-0000-4000-8000-0000000000d9';
-  return {
+  return currentReadSdk({
     fetchArtifact: async () => ({ name: 'Ambig', description: '', siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'Entity', entity: 'contoso_item' }] }] }] } }),
     queryRecords: async (logical, opts) => {
       const filter = (opts && opts.filter) || '';
@@ -1637,7 +1649,8 @@ function ambiguousAppSdk(APP_ID, APP_UNIQUE, { members, prefixOf = () => 'contos
     getSolution: base.getSolution,
     fetchEntityMetadata: async (logical) => ({ schemaName: logical, displayName: 'Item', primaryNameAttribute: 'contoso_name', attributes: [] }),
     dataverse: { get: async (url) => ({ status: 200, headers: {}, body: { value: /ManyToManyRelationships/.test(url) ? manyToMany : [] } }) },
-  };
+  }, { appId: APP_ID, layerId: 'c0ffee00-0000-4000-8000-0000000000d3',
+    sitemapXml: '<SiteMap><Area><Group><SubArea Entity="contoso_item"/></Group></Area></SiteMap>' });
 }
 
 async function runCapturing(sdk, APP_ID, APP_UNIQUE) {
@@ -1823,8 +1836,8 @@ test('recoverAppSolution reports no prefix when none can be used, and names a pu
 
 // The nine entities from the filed repro: an app on account/contact also carries activity, user and
 // note tables that have no sitemap entry of their own. Their membership is recovered from the app's
-// VIEW/CHART/FORM components — componenttype 1 (Entities) is unusable because every such row carries
-// the same objectid (the `entity` metadata table's own id), LIVE-verified.
+// VIEW/CHART/FORM components in this legacy fixture. Correct type-1 rows are an additional source;
+// a row that resolves to the `entity` metadata table is corruption and is filtered separately.
 const NINE = ['account', 'contact', 'task', 'email', 'appointment', 'phonecall', 'systemuser', 'team', 'annotation'];
 const componentSdk = (opts = {}) => {
   const entities = opts.entities || NINE;
@@ -1832,16 +1845,17 @@ const componentSdk = (opts = {}) => {
   const viewId = (n) => `1000${NINE.indexOf(n)}000-0000-4000-8000-000000000001`;
   const chartId = (n) => `2000${NINE.indexOf(n)}000-0000-4000-8000-000000000002`;
   const formId = (n) => `3000${NINE.indexOf(n)}000-0000-4000-8000-000000000003`;
+  const tableId = (n) => `4000${NINE.indexOf(n)}000-0000-4000-8000-000000000004`;
   return {
     queryRecords: async (set, o) => {
       const filter = (o && o.filter) || '';
-      if (set === 'appmodule') return [{ appmoduleidunique: 'appuniq-1' }];
+      if (set === 'appmodule') return [{ appmoduleidunique: COMPONENT_LAYER_ID }];
       if (set === 'appmodulecomponent') {
-        assert.match(filter, /_appmoduleidunique_value eq appuniq-1/);
+        assert.ok(filter.startsWith(`_appmoduleidunique_value eq ${COMPONENT_LAYER_ID} and componenttype eq `));
         if (/componenttype eq 26/.test(filter)) return entities.map((n) => ({ objectid: viewId(n), componenttype: 26 }));
         if (/componenttype eq 59/.test(filter)) return entities.map((n) => ({ objectid: chartId(n), componenttype: 59 }));
         if (/componenttype eq 60/.test(filter)) return entities.map((n) => ({ objectid: formId(n), componenttype: 60 }));
-        // componenttype 1 must NOT be consulted — it cannot identify a table.
+        if (/componenttype eq 1$/.test(filter)) return (opts.type1Entities || []).map((n) => ({ objectid: tableId(n), componenttype: 1 }));
         assert.fail(`unexpected componenttype filter: ${filter}`);
       }
       // Resolve each component id back to its owning entity via that table's own entity field.
@@ -1850,21 +1864,38 @@ const componentSdk = (opts = {}) => {
       if (set === 'systemform') return entities.filter((n) => filter.includes(formId(n))).map((n) => ({ formid: formId(n), objecttypecode: n }));
       return [];
     },
+    dataverse: { get: async (url) => {
+      if (url.startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) {
+        return { status: 200, body: { value: [{ appmoduleid: COMPONENT_APP_ID, appmoduleidunique: COMPONENT_LAYER_ID, componentstate: 1 }] } };
+      }
+      const name = (opts.type1Entities || []).find((logical) => url.includes(`EntityDefinitions(${tableId(logical)})`));
+      return name ? { status: 200, body: { LogicalName: name, IsCustomEntity: false } } : { status: 404, body: null };
+    } },
   };
 };
 
 test('appComponentEntities recovers ALL app entity components, not just sitemap-visible ones', async () => {
-  const got = await appComponentEntities(componentSdk(), 'app-1');
+  const got = await appComponentEntities(componentSdk(), COMPONENT_APP_ID);
   assert.deepStrictEqual(got.slice().sort(), NINE.slice().sort());
 });
 
+test('appComponentEntities also recovers hidden tables found only through correct type-1 components', async () => {
+  const got = await appComponentEntities(componentSdk({ entities: [], type1Entities: ['task', 'team'] }), COMPONENT_APP_ID);
+  assert.deepStrictEqual(got.slice().sort(), ['task', 'team']);
+});
 test('appComponentEntities is best-effort — every failure path yields [] so download still works', async () => {
   assert.deepStrictEqual(await appComponentEntities(componentSdk(), null), []);
-  assert.deepStrictEqual(await appComponentEntities({ queryRecords: async () => { throw new Error('x'); } }, 'app-1'), []);
+  assert.deepStrictEqual(await appComponentEntities({
+    dataverse: { get: async () => { throw new Error('x'); } },
+    queryRecords: async () => assert.fail('a failed layer lookup must not query component rows'),
+  }, COMPONENT_APP_ID), []);
   // An app whose components resolve to nothing.
-  assert.deepStrictEqual(await appComponentEntities(componentSdk({ entities: [] }), 'app-1'), []);
+  assert.deepStrictEqual(await appComponentEntities(componentSdk({ entities: [] }), COMPONENT_APP_ID), []);
   // An app row without appmoduleidunique (the lookup parent) cannot be queried.
-  assert.deepStrictEqual(await appComponentEntities({ queryRecords: async () => [{}] }, 'app-1'), []);
+  assert.deepStrictEqual(await appComponentEntities({
+    dataverse: { get: async () => ({ status: 200, body: { value: [{ appmoduleid: COMPONENT_APP_ID }] } }) },
+    queryRecords: async () => assert.fail('an unresolved layer must not query component rows'),
+  }, COMPONENT_APP_ID), []);
 });
 
 test('runDownload: a sitemap table with no primary name HARD-FAILS naming it; a component-only one is dropped', async () => {
@@ -1880,7 +1911,7 @@ test('runDownload: a sitemap table with no primary name HARD-FAILS naming it; a 
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-pn-'));
   // `account` is in the sitemap; `annotation` is reachable ONLY as a view component. Neither has a
   // primary name, so they must take different branches.
-  const mkSdk = () => ({
+  const mkSdk = () => currentReadSdk({
     fetchArtifact: async () => ({
       name: 'PN App', description: '',
       siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'Entity', entity: 'account' }] }] }] },
@@ -1904,7 +1935,7 @@ test('runDownload: a sitemap table with no primary name HARD-FAILS naming it; a 
     },
     // Both report an EMPTY PrimaryNameAttribute (the shape the SDK really returns).
     fetchEntityMetadata: async (logical) => ({ logicalName: logical, schemaName: logical, displayName: logical, primaryNameAttribute: '' }),
-  });
+  }, { appId: APP_ID, layerId: APP_UNIQ_VALUE, sitemapXml: SM_XML });
   const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), download: async () => true };
   try {
     const failed = await runDownload({ sdk: mkSdk(), genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
@@ -2175,7 +2206,10 @@ test('runDownload WARNS on stderr about a role-restricted form, naming it', asyn
   process.stderr.write = (chunk, ...rest) => { written.push(String(chunk)); return origWrite(chunk, ...rest); };
   let res;
   try {
-    res = await runDownload({ sdk, genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
+    res = await runDownload({
+      sdk: currentReadSdk(sdk, { appId: APP_ID, layerId: APP_ID, sitemapXml: SM_XML }),
+      genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE,
+    });
   } finally {
     process.stderr.write = origWrite;
     fs.rmSync(out, { recursive: true, force: true });
@@ -2219,6 +2253,7 @@ test('runDownload stays SILENT when no form is role-restricted', async () => {
   const APP_ID = '6333e0f2-0000-4000-8000-000000000001';
   const SM_ID = '6333e0f2-0000-4000-8000-000000000002';
   const FORM_ID = '6333e0f2-0000-4000-8000-000000000003';
+  const SM_XML = '<SiteMap><Area Id="A"><Group Id="G"><SubArea Id="S" Entity="new_order" /></Group></Area></SiteMap>';
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-nowarn-'));
   const sdk = {
     fetchArtifact: async () => ({
@@ -2233,7 +2268,7 @@ test('runDownload stays SILENT when no form is role-restricted', async () => {
         if (/componenttype eq 62/.test(filter)) return [{ objectid: SM_ID, componenttype: 62 }];
         return [];
       }
-      if (logical === 'sitemap') return [{ sitemapxml: '<SiteMap><Area Id="A"><Group Id="G"><SubArea Id="S" Entity="new_order" /></Group></Area></SiteMap>' }];
+      if (logical === 'sitemap') return [{ sitemapxml: SM_XML }];
       if (logical === 'systemform') return [{ formid: FORM_ID, name: 'Main', objecttypecode: 'new_order', description: '', formxml: '<form><tabs /></form>' }];
       return [];
     },
@@ -2249,7 +2284,11 @@ test('runDownload stays SILENT when no form is role-restricted', async () => {
   const written = [];
   process.stderr.write = (chunk, ...rest) => { written.push(String(chunk)); return origWrite(chunk, ...rest); };
   try {
-    await runDownload({ sdk, genpageCli, outDir: out, appId: APP_ID, appUnique: 'new_nowarn' });
+    const result = await runDownload({
+      sdk: currentReadSdk(sdk, { appId: APP_ID, layerId: APP_ID, sitemapXml: SM_XML }),
+      genpageCli, outDir: out, appId: APP_ID, appUnique: 'new_nowarn',
+    });
+    assert.strictEqual(result.ok, true, JSON.stringify(result));
   } finally {
     process.stderr.write = origWrite;
     fs.rmSync(out, { recursive: true, force: true });
@@ -2822,7 +2861,11 @@ test('REVIEW-C runDownload emits ONLY referenced globalChoices (drives the real 
       },
     };
     const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), download: async () => true };
-    const res = await runDownload({ sdk, genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
+    const res = await runDownload({
+      sdk: currentReadSdk(sdk, { appId: APP_ID, layerId: 'c0ffee00-0000-4000-8000-0000000000c3',
+        sitemapXml: '<SiteMap><Area><Group><SubArea Entity="contoso_item"/></Group></Area></SiteMap>' }),
+      genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE,
+    });
     assert.ok(res.ok, JSON.stringify(res));
     assert.deepStrictEqual((res.spec.globalChoices || []).map((g) => g.name), ['bound_set'],
       'a set bound only by a filtered SYSTEM attribute must not be declared — the build writes every declaration into the target org');
@@ -3151,7 +3194,7 @@ test('runDownload REFUSES to emit a spec when a page config is unreadable, unles
   const SM_XML = `<SiteMap><Area><Group><SubArea GenPageId="${GP}" Title="Sitemap Page"/><SubArea Entity="contoso_item"/></Group></Area></SiteMap>`;
 
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-gate-'));
-  const mkSdk = () => ({
+  const mkSdk = () => currentReadSdk({
     fetchArtifact: async () => ({
       name: 'Gate App', description: '',
       siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [
@@ -3173,7 +3216,7 @@ test('runDownload REFUSES to emit a spec when a page config is unreadable, unles
     fetchEntityMetadata: async (logical) => ({
       schemaName: logical, displayName: 'Item', primaryNameAttribute: `${String(logical).split('_')[0]}_name`,
     }),
-  });
+  }, { appId: APP_ID, layerId: APP_UNIQ_VALUE, sitemapXml: SM_XML });
   // pac downloads the page, but its config.json is unreadable — the live BOM case before the fix,
   // and any future pac format change after it.
   const genpageCli = {
@@ -3334,7 +3377,7 @@ test('complete reads use SDK pagination where truncation would change download d
   const sdk = {
     queryRecords: async (set, opts) => {
       calls.push({ set, opts });
-      if (set === 'appmodule') return [{ appmoduleidunique: 'app-unique' }];
+      if (set === 'appmodule') return [{ appmoduleidunique: COMPONENT_LAYER_ID }];
       if (set === 'appmodulecomponent') return [];
       if (set === 'solution') return [{ solutionid: 'sol-1' }];
       if (set === 'solutioncomponent') return [];
@@ -3343,8 +3386,9 @@ test('complete reads use SDK pagination where truncation would change download d
     dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
   };
 
-  await appComponentEntities(sdk, 'app-1');
-  await readDescriptionInventory(sdk, 'app-1', 'ContosoSolution', new Set());
+  const current = currentReadSdk(sdk, { appId: COMPONENT_APP_ID, layerId: COMPONENT_LAYER_ID });
+  await appComponentEntities(current, COMPONENT_APP_ID);
+  await readDescriptionInventory(current, COMPONENT_APP_ID, 'ContosoSolution', new Set());
 
   const appComponentReads = calls.filter((c) => c.set === 'appmodulecomponent');
   assert.ok(appComponentReads.length >= 4, 'component reads should be exercised');

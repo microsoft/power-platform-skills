@@ -463,7 +463,19 @@ function pageSdk(fetchCalls) {
       return [];
     },
     fetchEntityMetadata: async () => ({ schemaName: 'contoso_item', displayName: 'Item', primaryNameAttribute: 'contoso_name', attributes: [], relationships: [] }),
-    dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
+    // Download reads the app's CURRENT layer for its navigation, components and Main forms (the
+    // same state the SDK fetch reads), so answer those two projections with the published row.
+    dataverse: {
+      get: async (p) => {
+        if (String(p).startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) {
+          return { status: 200, body: { value: [{ appmoduleid: APP_ID, appmoduleidunique: 'cccccccc-0000-4000-8000-000000000004', componentstate: 0 }] } };
+        }
+        if (String(p).startsWith('/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) {
+          return { status: 200, body: { value: [{ sitemapxml: xml, componentstate: 0 }] } };
+        }
+        return { status: 200, body: { value: [] } };
+      },
+    },
   };
 }
 

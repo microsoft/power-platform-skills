@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 'use strict';
-// download-model-app: pull a DEPLOYED app back into an editable app-spec + page codeFiles (the edit
-// flow's "pull everything" step). Reconstructs the app (sitemap -> appShell), ALL its generative
+// download-model-app: pull the SERVER-CURRENT app (including saved unpublished edits) into an
+// editable app-spec + page codeFiles. The vendored appApi.get uses RetrieveUnpublishedMultiple for
+// both header and sitemap, so membership must use that same current state, not the published layer.
+// Reconstructs the app (sitemap -> appShell), ALL its generative
 // pages (via pac list+download, incl. Maker-authored), its entities (minimal — the build reuses
 // existing tables idempotently), the icon web resources, and its solution, via hydrate-spec.
 //
@@ -18,10 +20,11 @@ const { hydrateSpec, descriptionFromDataverse, withDescription } = require('./li
 const { makeGenpageCli, unescapePacName } = require('./lib/genpage-cli.js');
 const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require('./lib/page-manifest.js');
 const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
-const { fetchSitemap, sitemapGenPages } = require('./lib/sitemap-pages.js');
+const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
-const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE } = require('./lib/app-spec.js');
+const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE, sitemapEntityTables } = require('./lib/app-spec.js');
 const { odataGuid } = require('./lib/ai-app-settings.js');
+const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, currentAppLayer, readAppComponentInventory, downloadAppMainForms, setAppMembershipFloor } = require('./lib/app-components.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
 const WR_TYPE = { 1: 'html', 2: 'css', 3: 'js', 4: 'xml', 5: 'png', 6: 'jpg', 7: 'gif', 8: 'xap', 9: 'xsl', 10: 'ico', 11: 'svg', 12: 'resx' };
@@ -461,74 +464,9 @@ function collectSitemap(app) {
 // the sitemap alone silently dropped those (ADO 6603388), so the download→edit→rebuild round trip
 // lost hidden app dependencies.
 //
-// The entity is derived from the app's VIEW / CHART / FORM components rather than from its
-// `componenttype eq 1` (Entities) rows.
-//
-// CORRECTED (re-measured live): an earlier note here claimed the type-1 rows were
-// UNUSABLE because "every row carries the same objectid — the MetadataId of the `entity` metadata
-// table". That observation was real, but it was made against an app corrupted by the defect where every
-// table had been pinned as an `entity` INSTANCE, pinning the `entity` metadata table itself. On a
-// HEALTHY app the rows carry the REAL table
-// MetadataIds — re-measured on a 3-table app, which returned three distinct ids resolving to its
-// three tables — and `RetrieveAppComponents` answers 200, not the 0 rows previously recorded.
-// `verify-spec` now relies on exactly that, so the old claim must not be left standing.
-//
-// The view/chart/form derivation is KEPT regardless, because it is not merely a workaround for that
-// stale claim: it is the source that recovers tables reachable only through a lookup, sub-grid or
-// related view, which is the gap this function exists to close. Type-1 rows are a
-// legitimate additional source for a future change; they are simply not needed here.
-//   componenttype 26 → savedquery.returnedtypecode
-//   componenttype 59 → savedqueryvisualization.primaryentitytypecode
-//   componenttype 60 → systemform.objecttypecode
-// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodulecomponent
-//
-// `appId` is the appmoduleid; the parent lookup targets `appmoduleidunique`, so that is resolved
-// first. Best-effort by design: any failure returns an empty list so the caller keeps today's
-// sitemap-derived behavior rather than losing the download entirely.
-const APP_COMPONENT_ENTITY_SOURCES = [
-  { componentType: 26, set: 'savedquery', idField: 'savedqueryid', entityField: 'returnedtypecode' },
-  { componentType: 59, set: 'savedqueryvisualization', idField: 'savedqueryvisualizationid', entityField: 'primaryentitytypecode' },
-  { componentType: 60, set: 'systemform', idField: 'formid', entityField: 'objecttypecode' },
-];
 // Dataverse entity set -> the App Spec artifact class it inventories, so a failed read is reported
 // in the author's vocabulary ("forms could not be inventoried") rather than Dataverse's.
 const INVENTORY_KIND_BY_SET = { savedquery: 'views', savedqueryvisualization: 'charts', systemform: 'forms' };
-async function appComponentEntities(sdk, appId) {
-  if (!appId) return [];
-  try {
-    const appRows = await sdk.queryRecords('appmodule', { select: ['appmoduleidunique'], filter: `appmoduleid eq ${appId}`, top: 1 });
-    const appUniqueId = appRows && appRows[0] && appRows[0].appmoduleidunique;
-    if (!appUniqueId) return [];
-    const parent = String(appUniqueId).replace(/[{}]/g, '');
-    const found = new Set();
-    for (const src of APP_COMPONENT_ENTITY_SOURCES) {
-      const rows = await sdk.queryRecords('appmodulecomponent', {
-        select: ['objectid', 'componenttype'],
-        filter: `_appmoduleidunique_value eq ${parent} and componenttype eq ${src.componentType}`,
-        paginate: true,
-      });
-      // The component list decides which hidden tables belong in the downloaded spec, so a capped
-      // read would silently drop tables reachable only through forms/views/charts. Page the whole
-      // list and then batch only the follow-up id lookups to keep URLs bounded.
-      const ids = [...new Set((rows || []).map((r) => r && r.objectid).filter(Boolean).map((id) => String(id).replace(/[{}]/g, '')))];
-      // Chunk the OR-batched id lookups so a many-component app cannot build an over-long URL.
-      for (let i = 0; i < ids.length; i += 20) {
-        const filter = ids.slice(i, i + 20).map((id) => `${src.idField} eq ${id}`).join(' or ');
-        const recs = await sdk.queryRecords(src.set, { select: [src.idField, src.entityField], filter, paginate: true });
-        // A dashboard is a `systemform` row too, and its `objecttypecode` is NOT an entity logical
-        // name ('none' / ''). Filtering it here keeps a bogus name out of the metadata fetch loop
-        // instead of relying on that fetch 404-ing into a bare catch.
-        for (const r of recs || []) {
-          const logical = r && r[src.entityField] ? String(r[src.entityField]).toLowerCase() : '';
-          if (logical && logical !== 'none') found.add(logical);
-        }
-      }
-    }
-    return [...found];
-  } catch {
-    return []; // best-effort — never break the download over the component read
-  }
-}
 
 async function rowsByIds(sdk, set, idField, ids, select, mapRow) {
   const out = [];
@@ -602,7 +540,7 @@ async function readAppShellSettings(sdk, appId) {
   return out;
 }
 
-async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlobalChoices) {
+async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlobalChoices, componentInventory) {
   // `incomplete[]` records an artifact class whose read FAILED. Without it the whole app-component
   // block shared one broad catch, so a 403 on `systemform` left `forms: []` — indistinguishable from
   // an app with no forms, which is EXACTLY the reported bug (AB#6686423) reappearing inside the fix
@@ -611,19 +549,18 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
   const inventory = { views: [], charts: [], forms: [], businessRules: [], globalChoices: [], roleRestrictedForms: [], incomplete: [] };
   const fail = (kind, err) => inventory.incomplete.push({ kind, reason: (err && err.message) ? String(err.message).slice(0, 200) : 'read failed' });
   try {
-    const appRows = await sdk.queryRecords('appmodule', { select: ['appmoduleidunique'], filter: `appmoduleid eq ${appId}`, top: 1 });
-    const appUniqueId = appRows && appRows[0] && appRows[0].appmoduleidunique;
-    const parent = appUniqueId ? String(appUniqueId).replace(/[{}]/g, '') : null;
+    const layer = componentInventory ? componentInventory.layer : await currentAppLayer(sdk.dataverse, appId);
+    const parent = layer.ok ? layer.appModuleIdUnique : null;
     if (parent) {
       // Caught PER ARTIFACT CLASS, not once around the loop: one failed query must not hide the
       // other two, and the caller has to be told WHICH class it cannot vouch for.
       for (const src of APP_COMPONENT_ENTITY_SOURCES) {
         try {
-          const rows = await sdk.queryRecords('appmodulecomponent', {
-            select: ['objectid', 'componenttype'],
-            filter: `_appmoduleidunique_value eq ${parent} and componenttype eq ${src.componentType}`,
-            paginate: true,
-          });
+          const problem = componentInventory && componentInventory.componentProblems.get(src.componentType);
+          if (problem) throw new Error(problem);
+          const rows = componentInventory
+            ? componentInventory.components.get(src.componentType) || []
+            : await appComponentRows(sdk, parent, src.componentType);
           // This inventory feeds the not-round-tripped report; a capped component read would turn
           // "unknown tail" into a smaller authoritative count. Page completely instead.
           const ids = (rows || []).map((r) => r && r.objectid).filter(Boolean);
@@ -1285,6 +1222,9 @@ function notRoundTrippedWarning(summary) {
     );
     for (const i of summary.incomplete) lines.push(`    ${i.kind} — ${i.reason}`);
     lines.push('  Treat an empty list for those classes as UNKNOWN, not as "the app has none".');
+  }
+  for (const note of summary.appMembership || []) {
+    lines.push(`NOTE: app membership not round-tripped${note.table ? ` (${note.table})` : ''}: ${note.reason}`);
   }
   return `${lines.join('\n')}\n`;
 }
@@ -1951,18 +1891,32 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     }
     throw e;
   }
-  const { entities: entityLogicals, icons, customRefs, navRefs } = collectSitemap(app);
+  // SDK artifacts use uniqueName, while older readers return uniquename. A GUID lookup on the
+  // published projection can return no row for a draft, so resolve the immutable identity here
+  // BEFORE manifest/publisher lookup; the mutable display name must never stand in for it.
+  const resolvedUnique = [app && app.uniqueName, app && app.uniquename, appUnique]
+    .find((value) => typeof value === 'string' && value.trim());
+  if (!resolvedUnique) {
+    return { ok: false, error: `the app's immutable unique name could not be resolved (${appId}) — refusing to emit a rebuildable spec without its identity` };
+  }
+  appUnique = resolvedUnique.trim();
+  const componentInventory = await readAppComponentInventory(sdk, appId);
 
   // MEMBERSHIP: the authoritative set of pages owned by this app, from its SITEMAP XML (fail-closed,
   // discriminated). The app-scoped `pac genpage list --app-id` is sitemap-scoped anyway but returns
   // SITEMAP TITLES (not page names), misses headless nav-target pages, and cannot be trusted as the
   // "real names" source. The raw sitemap XML is the single authoritative membership record.
-  const smResult = appUnique
-    ? await fetchSitemap(sdk, appUnique)
-    : { ok: false, reason: 'app-unique-unresolved' };
+  const smResult = await fetchSitemap(sdk, appUnique, { currentLayer: componentInventory.layer });
   if (!smResult.ok) {
     return { ok: false, error: `could not read the app sitemap during download (${smResult.reason}) — refusing to write a spec without the authoritative page set` };
   }
+  // The SDK takes the first unpublished-aware row ($top=1), not the componentstate=1 row.
+  // No tested XML -> appShell converter preserves its bags/icons/titles, so refuse a mixed
+  // snapshot instead of turning a missed draft subarea into a hidden table or lost restriction.
+  if (!appNavigationMatchesSitemap(app, smResult.xml)) {
+    return { ok: false, error: "the app's sitemap has an unpublished change the SDK could not read consistently — publish the app, then download again" };
+  }
+  const { entities: entityLogicals, icons, customRefs, navRefs } = collectSitemap(app);
   // [{ pageId, title? }] — deduped by id; membership-only (title is the XML-decoded subarea label,
   // NOT the page's real name — the real name comes from the env-wide list below).
   const smPages = sitemapGenPages(smResult.xml);
@@ -2095,12 +2049,24 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     }
   }
 
-  // Entities: the sitemap's navigable tables UNIONED with the app's real entity components. The
-  // sitemap alone misses tables reachable only via lookup/sub-grid/related view (ADO 6603388); the
-  // component read is best-effort, so a failure degrades to exactly today's sitemap-derived set.
-  const componentLogicals = await appComponentEntities(sdk, appId);
+  // A hidden STOCK type-1 member must not adopt another solution's schema, even when one of its
+  // views/charts/forms is also referenced. Asset ownership is not table ownership (AB#6603388).
+  // Custom hidden tables and tables discovered ONLY via asset components still hydrate their schema.
   const sitemapSet = new Set(entityLogicals);
-  const allLogicals = [...new Set([...entityLogicals, ...componentLogicals])];
+  const appTables = [...componentInventory.tables.keys()].filter((logical) => !sitemapSet.has(logical)).sort();
+  const assetTables = new Set(componentInventory.assetTables);
+  const schemaComponents = componentInventory.logicalNames.filter((logical) => {
+    const table = componentInventory.tables.get(logical);
+    if (table && !sitemapSet.has(logical)) return table.isCustomEntity === true;
+    return assetTables.has(logical) || (table && table.isCustomEntity === true);
+  });
+  const allLogicals = [...new Set([...entityLogicals, ...schemaComponents])];
+  for (const logical of appTables) {
+    if (typeof componentInventory.tables.get(logical).isCustomEntity !== 'boolean') {
+      componentInventory.notes.push({ kind: 'tables', table: logical,
+        reason: `the custom/stock status of '${logical}' could not be read; app.tables preserves its membership without adopting its schema` });
+    }
+  }
   const entities = [];
   const noPrimaryName = [];   // sitemap tables — a hard failure (the user asked for these)
   const droppedComponents = []; // component-only tables — dropped with a warning (best-effort input)
@@ -2309,11 +2275,10 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   // without making a second query.
   let capturedInventory;
   const read = {
-    // Ensure the app's REAL uniquename reaches hydrateSpec (→ spec.app.uniqueName) even if the artifact
-    // read didn't surface it: `appUnique` is the authoritative value (from the appmodule query) and is
-    // guaranteed present here (the sitemap gate above bails when it's falsy). This is what lets a rebuild
+    // Normalize both SDK identity spellings to hydrateSpec's uniquename input. appUnique was resolved
+    // immediately after fetch, before any manifest or prefix lookup. This is what lets a rebuild
     // resolve the EXISTING app by identity after a display-name rename instead of creating a duplicate.
-    app: async () => ({ ...app, uniquename: (app && app.uniquename) || appUnique, ...(await readAppShellSettings(sdk, appId)) }),
+    app: async () => ({ ...app, uniquename: appUnique, ...(await readAppShellSettings(sdk, appId)) }),
     pages: async () => pages,
     entities: async () => entities,
     relationships: async () => relationships,
@@ -2342,11 +2307,23 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
       const scope = solutionUnreadable
         ? new Error(`the solutions this app belongs to could not be read (${solutionUnreadable})`)
         : (solutionCandidates || solution.uniqueName);
-      capturedInventory = await readDescriptionInventory(sdk, appId, scope, referenced);
+      capturedInventory = await readDescriptionInventory(sdk, appId, scope, referenced, componentInventory);
       return capturedInventory;
     },
   };
   const spec = await hydrateSpec(read);
+  if (appTables.length) spec.app.tables = appTables;
+  const mainFormMembership = componentInventory.layer.ok
+    ? await downloadAppMainForms(sdk.dataverse, componentInventory.layer.appModuleIdUnique, sitemapEntityTables(spec), {
+      components: componentInventory.components.get(60),
+      componentError: componentInventory.componentProblems.get(60),
+    })
+    : { mainForms: {}, notes: [] };
+  if (Object.keys(mainFormMembership.mainForms).length) spec.app.mainForms = mainFormMembership.mainForms;
+  setAppMembershipFloor(spec);
+  if (spec.app.tables !== undefined || spec.app.mainForms !== undefined) {
+    preserveAuthoredLanguageCode(spec, path.join(outDir, 'app-spec.json'));
+  }
 
   // A form restricted to particular security roles. `forms[]` is not reconstructed by this download,
   // so nothing carries the restriction forward: rebuilding into a FRESH environment regenerates the
@@ -2366,7 +2343,11 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   // dropped table. Subtracting those hid a set the spec never re-declares: a silent loss in the one
   // report whose job is naming them.
   const declaredGlobalChoices = new Set((spec.globalChoices || []).map((g) => String(g && g.name).toLowerCase()));
-  const notRoundTripped = notRoundTrippedSummary(roundTrippedAware(capturedInventory, declaredGlobalChoices));
+  let notRoundTripped = notRoundTrippedSummary(roundTrippedAware(capturedInventory, declaredGlobalChoices));
+  const membershipNotes = [...componentInventory.notes, ...mainFormMembership.notes];
+  if (membershipNotes.length) {
+    notRoundTripped = { ...(notRoundTripped || { classes: [], total: 0, entities: [] }), appMembership: membershipNotes };
+  }
   if (notRoundTripped) process.stderr.write(notRoundTrippedWarning(notRoundTripped));
   if (relationshipsSkipped.length) process.stderr.write(relationshipsSkippedWarning(relationshipsSkipped));
   const droppedSubareas = typeof spec.droppedSubareas === 'number' ? spec.droppedSubareas : droppedSubareaCount(app, spec);
@@ -2480,6 +2461,9 @@ async function main(deps = {}) {
     // `reconstructed: true` — this spec was rebuilt from a DEPLOYED app, not authored. Authoring-only
     // rules become warnings, because refusing to write a description of an app that already exists
     // leaves the author with no artifact at all (see the pageInput producer rule).
+    const specPath = path.join(outDir, 'app-spec.json');
+    // Preserve the author's higher capability floor BEFORE validation, never after the version gate.
+    preserveAuthoredLanguageCode(spec, specPath);
     const validation = io.validateAppSpec(spec, { profile: 'plan', reconstructed: true });
     if (!validation.ok) {
       finish(false, { ok: false, error: 'downloaded App Spec failed validation', errors: validation.errors });
@@ -2497,10 +2481,8 @@ async function main(deps = {}) {
         + '  Review each: change to "selector" if opening the page from the navigation should show a record picker.\n'
       );
     }
-    const specPath = path.join(outDir, 'app-spec.json');
-    preserveAuthoredLanguageCode(spec, specPath);
     writeFileSafe(specPath, JSON.stringify(spec, null, 2));
-    // AB#6726727: the spec just written IS this app's deployed state, so it is the baseline a later build
+    // AB#6726727: the spec just written is this app's server-current edit snapshot, so it is the baseline a later build
     // lines the live sitemap up against — a nav change made in the designer after this download is then
     // kept, not reverted by the now-stale spec. Its dashboard and page ids were read from this
     // environment, so they are recorded as its deployed ids. Best-effort: a spec with no baseline still
@@ -2541,7 +2523,9 @@ async function main(deps = {}) {
 function preserveAuthoredLanguageCode(spec, specPath, deps = {}) {
   const readFileSync = deps.readFileSync || fs.readFileSync;
   const existsSync = deps.existsSync || fs.existsSync;
-  if (!spec || spec.languageCode !== undefined) return spec;
+  if (!spec) return spec;
+  const membership = spec.app && (spec.app.tables !== undefined || spec.app.mainForms !== undefined);
+  if (spec.languageCode !== undefined && !membership) return spec;
   try {
     if (!existsSync(specPath)) return spec;
     const prior = JSON.parse(readFileSync(specPath, 'utf8'));
@@ -2550,8 +2534,16 @@ function preserveAuthoredLanguageCode(spec, specPath, deps = {}) {
     // whitespace or string form back out makes the file's diff noisy and its type inconsistent with
     // every other numeric field the download emits.
     const lcid = prior ? normalizeLanguageCode(prior.languageCode) : null;
-    if (lcid !== null) spec.languageCode = lcid;
-  } catch { /* no previous spec, or not parseable — nothing to preserve */ }
+    if (spec.languageCode === undefined && lcid !== null) spec.languageCode = lcid;
+    // Retain the established API name, but read both authored options once. A lower generated floor
+    // must not weaken a newer capability requirement the author already wrote.
+    if (membership) setAppMembershipFloor(spec, prior && prior.minimumPluginVersion);
+  } catch (error) {
+    if (membership && error.code !== 'ENOENT') {
+      const warn = deps.warn || ((message) => process.stderr.write(`WARNING: ${message}\n`));
+      warn(`previous app-spec.json options could not be read (${(error && error.message) || error}); a higher authored minimumPluginVersion could not be preserved`);
+    }
+  }
   return spec;
 }
 

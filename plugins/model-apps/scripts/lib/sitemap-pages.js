@@ -7,6 +7,8 @@
 // existence check — a page can exist env-wide yet not be in this app's sitemap (see genpage-cli.enumerateEnv).
 
 const { odataLit } = require('./odata.js');
+const { appComponentRows } = require('./app-components.js');
+const { subAreaTargetKey } = require('./sitemap-merge.js');
 
 // Match a <SubArea …> START TAG carrying a GenPageId, capturing the id and (optionally) the Title.
 // Attributes are order-independent, so scan each start tag and pull GenPageId + Title separately.
@@ -31,6 +33,72 @@ function decodeXmlEntities(s) {
     const cp = hex !== undefined ? parseInt(hex, 16) : parseInt(dec, 10);
     return cp <= 0x10ffff && !(cp >= 0xd800 && cp <= 0xdfff) ? String.fromCodePoint(cp) : ref;
   });
+}
+
+// The live nav entries in sitemap XML, by navigation target (subAreaTargetKey, sitemap-merge.js).
+// For example
+//   <SubArea Id="ops" Url="/workplace/home_dashboards.aspx" DefaultDashboard="{280948EC-…}" VectorIcon="$webresource:new_ops.svg">
+// becomes 'DashBoard:280948ec-…' → [{ icon: undefined, vectorIcon: '$webresource:new_ops.svg', url: '/workplace/home_dashboards.aspx' }].
+// An entry's type is read the way the SDK reads it — GenPageId, Entity, Page, DefaultDashboard, URL.
+// Only ELEMENTS count: a SubArea (not SubArea-Archived or SubAreaÜ) directly under SiteMap/Area/Group.
+// Other locations are opaque XML. Comments, CDATA and processing instructions are text, so remove
+// them first and walk whole element names (including Unicode) with a stack. A value can contain '>',
+// so match tags quote by quote. Fully decode attributes in either quote style, including &#38;.
+// Return null for markup this walk cannot account for completely: an unmatched '<' (including a
+// document type declaration whose entities could expand into elements), or a mismatched closing tag.
+// That gives neither verify a kept-icon exemption nor download a smaller authoritative target set.
+const NAV_PATH = ['SiteMap', 'Area', 'Group'];
+const XML_TAG = /<(\/?)([^\s/>"'=!?]+)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>/g;
+const XML_ATTR = /\s([^\s/>"'=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+function liveNavEntries(xml) {
+  const markup = String(xml || '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '')
+    .replace(/<\?[\s\S]*?\?>/g, '');
+  const tags = [...markup.matchAll(XML_TAG)];
+  // In well-formed XML every remaining '<' starts a tag; text and attributes escape it.
+  if (tags.length !== (markup.match(/</g) || []).length) return null;
+  const byKey = new Map();
+  const open = [];
+  for (const [, closing, name, body, selfClosing] of tags) {
+    if (closing) {
+      if (open[open.length - 1] !== name) return null;
+      open.pop();
+      continue;
+    }
+    if (name === 'SubArea' && open.length === NAV_PATH.length && NAV_PATH.every((n, i) => open[i] === n)) {
+      const attrs = Object.create(null);
+      for (const m of body.matchAll(XML_ATTR)) attrs[m[1]] = decodeXmlEntities(m[2] !== undefined ? m[2] : m[3]);
+      const type = attrs.GenPageId ? 'GenPage' : attrs.Entity ? 'Entity' : attrs.Page ? 'CustomPage' : attrs.DefaultDashboard ? 'DashBoard' : 'URL';
+      const key = subAreaTargetKey({ type, entity: attrs.Entity, url: attrs.Url, dashboardId: attrs.DefaultDashboard, page: attrs.Page, genPageId: attrs.GenPageId });
+      if (key) {
+        if (!byKey.has(key)) byKey.set(key, []);
+        byKey.get(key).push({ icon: attrs.Icon, vectorIcon: attrs.VectorIcon, url: attrs.Url });
+      }
+    }
+    if (!selfClosing) open.push(name);
+  }
+  return open.length ? null : byKey;
+}
+
+function appNavigationMatchesSitemap(app, xml) {
+  const siteMap = app && app.siteMap;
+  if (!siteMap || !Array.isArray(siteMap.areas) || !siteMap.areas.length) return false;
+  const selected = liveNavEntries(xml);
+  if (!selected) return false;
+  // All modeled targets matter: losing a URL, dashboard, custom page or repeated shortcut is
+  // silent navigation loss too. The XML reader preserves occurrences, so compare their counts.
+  const fetchedTargets = new Map();
+  for (const area of siteMap.areas) {
+    for (const group of area.groups || []) {
+      for (const sub of group.subAreas || []) {
+        const key = subAreaTargetKey(sub);
+        if (key) fetchedTargets.set(key, (fetchedTargets.get(key) || 0) + 1);
+      }
+    }
+  }
+  return selected.size === fetchedTargets.size
+    && [...selected].every(([key, entries]) => fetchedTargets.get(key) === entries.length);
 }
 
 function sitemapGenPages(xml) {
@@ -97,29 +165,32 @@ function isMalformed(xml) {
 //
 // componenttype 62 == sitemap:
 //   https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/appmodulecomponent
-async function fetchSitemap(sdk, appUnique) {
-  let apps;
-  try {
-    apps = await sdk.queryRecords('appmodule', {
-      select: ['appmoduleid', 'appmoduleidunique'],
-      filter: `uniquename eq '${odataLit(appUnique)}'`,
-      top:    1,
-    });
-  } catch (e) {
-    return { ok: false, reason: 'appmodule-query-failed', detail: String((e && e.message) || e) };
+async function fetchSitemap(sdk, appUnique, { currentLayer } = {}) {
+  let app;
+  if (currentLayer !== undefined) {
+    // Download supplies the SAME current layer as its table/form inventory. Default callers
+    // (verify and live-page safety checks) retain their published snapshot; never fall back to it.
+    if (!currentLayer.ok) return { ok: false, reason: 'appmodule-query-failed', detail: currentLayer.reason };
+    app = { appmoduleidunique: currentLayer.appModuleIdUnique };
+  } else {
+    try {
+      const apps = await sdk.queryRecords('appmodule', {
+        select: ['appmoduleid', 'appmoduleidunique'],
+        filter: `uniquename eq '${odataLit(appUnique)}'`,
+        top:    1,
+      });
+      app = apps && apps[0];
+    } catch (e) {
+      return { ok: false, reason: 'appmodule-query-failed', detail: String((e && e.message) || e) };
+    }
   }
-  const app = apps && apps[0];
   if (!app) return { ok: false, reason: 'app-not-found' };
 
   let comps;
   try {
     // _appmoduleidunique_value is a lookup GUID — it must be UNQUOTED in the OData filter (quoting it 400s
     // because the SDK/Dataverse expects a raw GUID literal for navigation property filters).
-    comps = await sdk.queryRecords('appmodulecomponent', {
-      select: ['objectid', 'componenttype'],
-      filter: `_appmoduleidunique_value eq ${app.appmoduleidunique} and componenttype eq 62`,
-      top:    1,
-    });
+    comps = await appComponentRows(sdk, app.appmoduleidunique, 62, { top: 1 });
   } catch (e) {
     return { ok: false, reason: 'sitemap-component-query-failed', detail: String((e && e.message) || e) };
   }
@@ -128,11 +199,25 @@ async function fetchSitemap(sdk, appUnique) {
 
   let sms;
   try {
-    sms = await sdk.queryRecords('sitemap', {
-      select: ['sitemapxml'],
-      filter: `sitemapid eq ${smId}`,
-      top:    1,
-    });
+    if (currentLayer !== undefined) {
+      const id = String(smId).replace(/[{}]/g, '');
+      if (!GUID_36.test(id)) throw new Error(`current sitemap component '${smId}' has no valid GUID`);
+      const response = await sdk.dataverse.get(
+        `/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=sitemapxml,componentstate&$filter=sitemapid eq ${id}`);
+      if (!response || response.status < 200 || response.status >= 300) throw new Error(`current sitemap read returned HTTP ${response && response.status}`);
+      const rows = response.body && response.body.value;
+      if (!Array.isArray(rows)) throw new Error('current sitemap read returned no readable result set');
+      // A projection can return { value: [{ componentstate: 0, sitemapxml: "old" },
+      // { componentstate: 1, sitemapxml: "draft" }] }; only the authored row is current.
+      sms = rows.length <= 1 ? rows : rows.filter((row) => row && Number(row.componentstate) === 1);
+      if (sms.length > 1 || (rows.length > 1 && sms.length !== 1)) throw new Error('current sitemap read returned no single current row');
+    } else {
+      sms = await sdk.queryRecords('sitemap', {
+        select: ['sitemapxml'],
+        filter: `sitemapid eq ${smId}`,
+        top:    1,
+      });
+    }
   } catch (e) {
     return { ok: false, reason: 'sitemap-query-failed', detail: String((e && e.message) || e) };
   }
@@ -229,4 +314,4 @@ async function fetchAppsForPages(sdk, pageIds, opts) {
   return { ok: true, byId, unreadable };
 }
 
-module.exports = { sitemapGenPages, sitemapGenPageIds, decodeXmlEntities, fetchSitemap, fetchAppsForPages };
+module.exports = { liveNavEntries, appNavigationMatchesSitemap, sitemapGenPages, sitemapGenPageIds, decodeXmlEntities, fetchSitemap, fetchAppsForPages, XML_TAG, XML_ATTR };
