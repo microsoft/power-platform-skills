@@ -204,8 +204,11 @@ for (const issue of ['corrupt JSON', 'unknown version', 'unreadable file']) {
     }
     if (issue === 'unreadable file') {
       const read = fs.readFileSync;
+      // The record is read through its canonical path (resolveAppSource returns the realpath), which differs
+      // from `file` where the temp folder has an alias (macOS /var -> /private/var, a Windows 8.3 name).
+      const target = fs.realpathSync.native(file);
       t.mock.method(fs, 'readFileSync', (p, ...args) => {
-        if (String(p) === file) throw Object.assign(new Error('record read refused'), { code: 'EACCES' });
+        if (String(p) === file || String(p) === target) throw Object.assign(new Error('record read refused'), { code: 'EACCES' });
         return read(p, ...args);
       });
     }

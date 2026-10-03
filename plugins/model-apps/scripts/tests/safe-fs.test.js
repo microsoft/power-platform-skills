@@ -36,7 +36,9 @@ test('a real directory is accepted and its realpath is returned', () => {
   const d = tmp('out');
   fs.mkdirSync(d);
   const real = assertSafeOutputDir(d);
-  assert.strictEqual(path.resolve(real).toLowerCase(), path.resolve(d).toLowerCase());
+  // Compare canonical forms: CI temp folders are reached through an alias (macOS /var -> /private/var,
+  // a Windows 8.3 user folder such as RUNNER~1), and the helper returns the canonical spelling.
+  assert.strictEqual(path.resolve(real).toLowerCase(), fs.realpathSync.native(d).toLowerCase());
 });
 
 test('a missing directory is refused, and create:true makes it then re-checks', () => {

@@ -65,7 +65,9 @@ for (const [name, app, env] of [
     assert.match(log, new RegExp(app));
     assert.match(log, new RegExp(ID));
     assert.match(log, /original.*environment|resume|reconcile/i);
-    assert.ok(log.includes(path.join(dir, file)), 'each remaining record file must be named');
+    // The CLI names the record by its canonical path; a temp folder reached through an alias (macOS
+    // /var -> /private/var, a Windows 8.3 name or junction) spells the same file differently.
+    assert.ok(log.includes(path.join(dir, file)) || log.includes(path.join(fs.realpathSync.native(dir), file)), 'each remaining record file must be named');
     assert.match(log, /teardown consumes.*deletes.*confirms.*absence/i);
     assert.match(log, /confirmed.*gone.*deleted by hand/i);
   });
