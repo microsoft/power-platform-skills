@@ -71,7 +71,12 @@ function readRecord(root, file) {
     return r;
   } catch (cause) {
     const error = new Error(`${target} is not a readable page-ownership record (${cause.code || cause.message}) - inspect it; delete it only if no page it names still exists`, { cause });
-    if (cause.code) error.code = cause.code;
+    // resolveAppSource re-inspects the record after the lstat above and wraps a file that vanished
+    // in between as APP_SOURCE_PATH with the original ENOENT as its cause. That is the same
+    // retirement readAllRecords skips, so report it as ENOENT; every other refusal keeps its code.
+    const vanished = cause.code === 'ENOENT' || (cause.code === 'APP_SOURCE_PATH' && cause.cause && cause.cause.code === 'ENOENT');
+    if (vanished) error.code = 'ENOENT';
+    else if (cause.code) error.code = cause.code;
     throw error;
   }
 }

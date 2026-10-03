@@ -35,6 +35,52 @@ test('a JSON-named backup beside the records is not a record, and a record retir
   assert.deepEqual(lib().readPageOwnership(dir, APP, ENV_A), { created: [], teardown: [] });
 });
 
+test('a record retired while the source resolver re-inspects it is skipped; other refusals still halt', (t) => {
+  const dir = workspace(t);
+  lib().recordPageCreation(dir, APP, 'overview', ID, 'Overview', ENV_A);
+  lib().recordPageCreation(dir, APP, 'detail', OTHER, 'Detail', ENV_A);
+  const [retired, kept] = fs.readdirSync(dir).map((f) => path.join(dir, f));
+  const keptRecord = JSON.parse(fs.readFileSync(kept, 'utf8'));
+
+  // readRecord's own lstat succeeds; the record is then unlinked, so resolveAppSource's walk meets a
+  // real ENOENT, which it wraps as APP_SOURCE_PATH. That is still a retirement, not a malformed record.
+  const realLstat = fs.lstatSync;
+  let armed = true;
+  const mock = t.mock.method(fs, 'lstatSync', function lstatSync(p, ...rest) {
+    const st = realLstat.call(fs, p, ...rest);
+    if (armed && String(p) === retired) { armed = false; fs.unlinkSync(retired); }
+    return st;
+  });
+  const state = lib().readPageOwnership(dir, APP, ENV_A);
+  assert.equal(armed, false, 'the record was unlinked after the first stat');
+  assert.deepEqual(state.created.map((r) => r.pageId), [keptRecord.pageId]);
+  mock.mock.restore();
+
+  // A second name for the surviving record is not a retirement: it still halts with its file name.
+  fs.linkSync(kept, path.join(dir, 'hard-link-elsewhere.json'));
+  assert.throws(() => lib().readPageOwnership(dir, APP, ENV_A), (e) => e.message.includes(kept) && e.code !== 'ENOENT');
+  assert.equal(lib().checkPageOwnershipClearable(dir).ok, false);
+});
+
+test('a record the source resolver cannot inspect still halts rather than reading as retired', (t) => {
+  const dir = workspace(t);
+  lib().recordPageCreation(dir, APP, 'overview', ID, 'Overview', ENV_A);
+  const file = path.join(dir, fs.readdirSync(dir)[0]);
+  const realLstat = fs.lstatSync;
+  let calls = 0;
+  // Call 1 is readRecord's own lstat; call 2 is resolveAppSource's re-inspection of the same name.
+  t.mock.method(fs, 'lstatSync', function lstatSync(p, ...rest) {
+    if (String(p) === file && ++calls === 2) throw Object.assign(new Error('inspection refused'), { code: 'EACCES' });
+    return realLstat.call(fs, p, ...rest);
+  });
+  assert.throws(() => lib().readPageOwnership(dir, APP, ENV_A), (e) => e.message.includes(file) && e.code === 'APP_SOURCE_PATH');
+  calls = 0;
+  assert.equal(lib().checkPageOwnershipClearable(dir).ok, false);
+  calls = 0;
+  assert.throws(() => lib().completePageDeletions(dir, APP, [ID], ENV_A), (e) => e.code === 'APP_SOURCE_PATH');
+  assert.ok(fs.existsSync(file), 'an uninspectable record is never consumed');
+});
+
 test('foreign-environment creation and teardown records supply no authority and are not consumed', (t) => {
   const dir = workspace(t);
   lib().recordPageCreation(dir, APP, 'overview', ID, 'Overview', ENV_A);
