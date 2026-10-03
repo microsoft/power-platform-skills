@@ -71,6 +71,20 @@ test('rejects an invalid spec before any build', async () => {
   assert.strictEqual(calls.length, 0, 'no SDK writes on a bad spec');
 });
 
+// The web-resources phase reads contentPath files after the solution and tables are written, so a
+// missing source must be caught here, with the page sources, before the first SDK call.
+test('a web resource whose contentPath file is missing halts before any SDK call', async (t) => {
+  const { sdk, calls } = mockSdk();
+  const appDir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'contoso-wr-source-'));
+  t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
+  const spec = jclone(desk);
+  spec.webResources = [...(spec.webResources || []), { name: 'new_missing.js', displayName: 'Missing', type: 'js', contentPath: 'scripts/missing.js' }];
+  const r = await buildModelApp(spec, { apply: true, env: 'https://x', appDir }, { sdk });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /^webResource 'new_missing\.js': contentPath 'scripts\/missing\.js' does not exist or is not a file/.test(e)), JSON.stringify(r.errors));
+  assert.strictEqual(calls.length, 0, 'no SDK writes before the source check');
+});
+
 test('dry-run returns the plan and never touches the SDK', async () => {
   const { sdk, calls } = mockSdk();
   const r = await buildModelApp(desk, { apply: false, env: 'https://x' }, { sdk });

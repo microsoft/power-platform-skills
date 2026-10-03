@@ -7,7 +7,7 @@ const path = require('node:path');
 const { validateAppSpec } = require('../lib/app-spec.js');
 const { lintAppSpec } = require('../lib/spec-lint.js');
 const { webResourceOpts, runSdkBuild } = require('../lib/sdk-build.js');
-const { pageSourceFileErrors } = require('../lib/content-hash.js');
+const { pageSourceFileErrors, webResourceSourceFileErrors, appSourceFileErrors } = require('../lib/content-hash.js');
 const { confinedReader } = require('../lib/deployed-baseline.js');
 const { resolveAppSource } = require('../lib/app-source-path.js');
 
@@ -135,6 +135,7 @@ test('all source readers refuse a file link to outside the app folder', (t) => {
   assert.throws(() => webResourceOpts({ name: 'contoso_source.js', contentPath: 'linked.tsx' }, appDir), /link|outside/);
   assert.equal(confinedReader(appDir)('linked.tsx'), null);
   assert.match(pageSourceFileErrors(specWithSource('linked.tsx'), appDir)[0], /link|outside/);
+  assert.match(webResourceSourceFileErrors(specWithSource('linked.tsx'), appDir)[0], /^webResource 'contoso_source\.js': contentPath 'linked\.tsx' .*(link|outside)/);
 });
 
 test('source readers refuse a directory junction to outside the app folder', (t) => {
@@ -146,6 +147,7 @@ test('source readers refuse a directory junction to outside the app folder', (t)
   assert.throws(() => webResourceOpts({ name: 'contoso_source.js', contentPath: 'linked/page.tsx' }, appDir), /link|outside/);
   assert.equal(confinedReader(appDir)('linked/page.tsx'), null);
   assert.match(pageSourceFileErrors(specWithSource('linked/page.tsx'), appDir)[0], /link|outside/);
+  assert.match(webResourceSourceFileErrors(specWithSource('linked/page.tsx'), appDir)[0], /^webResource 'contoso_source\.js': contentPath 'linked\/page\.tsx' .*(link|outside)/);
 });
 
 test('source readers refuse an in-folder link instead of accepting a second source identity', (t) => {
@@ -154,6 +156,7 @@ test('source readers refuse an in-folder link instead of accepting a second sour
   assert.throws(() => webResourceOpts({ name: 'contoso_source.js', contentPath: 'alias.tsx' }, appDir), /link/);
   assert.equal(confinedReader(appDir)('alias.tsx'), null);
   assert.match(pageSourceFileErrors(specWithSource('alias.tsx'), appDir)[0], /link/);
+  assert.match(webResourceSourceFileErrors(specWithSource('alias.tsx'), appDir)[0], /contentPath 'alias\.tsx' .*link/);
 });
 
 test('source readers accept regular hard-linked files inside the app folder', (t) => {
@@ -163,6 +166,7 @@ test('source readers accept regular hard-linked files inside the app folder', (t
   assert.equal(webResourceOpts({ name: 'contoso_source.js', contentPath: 'linked.tsx' }, appDir).content, content);
   assert.equal(String(confinedReader(appDir)('linked.tsx')), content);
   assert.deepEqual(pageSourceFileErrors(specWithSource('linked.tsx'), appDir), []);
+  assert.deepEqual(webResourceSourceFileErrors(specWithSource('linked.tsx'), appDir), []);
 });
 
 test('a canonical source alias is not a link merely because realpath expands its spelling', () => {
@@ -211,7 +215,16 @@ test('source reads retain inline content and ordinary in-folder files', (t) => {
   assert.equal(webResourceOpts({ name: 'contoso_source.js', contentPath: './page.tsx' }, appDir).content, content);
   assert.equal(String(confinedReader(appDir)('page.tsx')), content);
   assert.deepEqual(pageSourceFileErrors(specWithSource('page.tsx'), appDir), []);
+  assert.deepEqual(appSourceFileErrors(specWithSource('page.tsx'), appDir), []);
   assert.equal(webResourceOpts({ name: 'contoso_inline.js', content: 'inline', contentPath: '../unused' }, appDir).content, 'inline');
+  const inlineOnly = { ...specWithSource('page.tsx'), webResources: [{ name: 'contoso_inline.js', type: 'js', content: 'inline' }] };
+  assert.deepEqual(webResourceSourceFileErrors(inlineOnly, appDir), [], 'inline content needs no file');
+  // Inline content wins over contentPath in webResourceOpts, so a contentPath the build never reads is not refused.
+  for (const inline of [{ content: 'inline' }, { content: '' }, { contentBase64: 'aGk=' }]) {
+    const spec = { ...specWithSource('page.tsx'), webResources: [{ name: 'contoso_inline.js', type: 'js', contentPath: 'missing.js', ...inline }] };
+    assert.deepEqual(webResourceSourceFileErrors(spec, appDir), [], JSON.stringify(inline));
+    assert.equal(webResourceOpts(spec.webResources[0], appDir).contentPath, undefined);
+  }
 });
 
 test('source-file checks report missing files and directory sources', (t) => {
@@ -219,6 +232,19 @@ test('source-file checks report missing files and directory sources', (t) => {
   fs.mkdirSync(path.join(appDir, 'folder'));
   for (const file of ['missing.tsx', 'folder']) {
     assert.match(pageSourceFileErrors(specWithSource(file), appDir)[0], /does not exist or is not a file/);
+    assert.match(webResourceSourceFileErrors(specWithSource(file), appDir)[0], new RegExp(`^webResource 'contoso_source\\.js': contentPath '${file.replace('.', '\\.')}' does not exist or is not a file`));
+  }
+  // appSourceFileErrors is the gate the build and lint run: both kinds, pages first.
+  const both = appSourceFileErrors(specWithSource('missing.tsx'), appDir);
+  assert.equal(both.length, 2);
+  assert.match(both[0], /^page 'overview'/);
+  assert.match(both[1], /^webResource 'contoso_source\.js'/);
+});
+
+test('an unconfined contentPath is a schema error only, not reported again by the file check', (t) => {
+  const { appDir } = files(t);
+  for (const file of externalPaths) {
+    assert.deepEqual(webResourceSourceFileErrors(specWithSource(file), appDir), [], file);
   }
 });
 

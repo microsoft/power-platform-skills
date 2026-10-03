@@ -26,7 +26,7 @@ const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, data
 const { openJournal } = require('./lib/build-journal.js');
 const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe } = require('./lib/safe-fs.js');
 const { diffPhases, summarizeDiff } = require('./lib/phase-diff.js');
-const { annotateContentHashes, pageSourceFileErrors } = require('./lib/content-hash.js');
+const { annotateContentHashes, appSourceFileErrors } = require('./lib/content-hash.js');
 const { baselinePath, confinedReader, writeBaseline, readBaseline } = require('./lib/deployed-baseline.js');
 const { runChangedOnlyApply, resolveLiveIdentity } = require('./lib/changed-only-flow.js');
 const applySnapshotStore = require('./lib/apply-snapshot-store.js');
@@ -348,7 +348,7 @@ async function buildModelApp(spec, opts, deps) {
   if (!v.ok) {
     return { ok: false, errors: v.errors };
   }
-  const fileErrors = pageSourceFileErrors(spec, opts.appDir);
+  const fileErrors = appSourceFileErrors(spec, opts.appDir);
   if (fileErrors.length) return { ok: false, errors: fileErrors };
   const log = deps.log || (() => undefined);
   // Surface non-blocking validation advisories (e.g. a PRE-EXISTING duplicate page name the build does

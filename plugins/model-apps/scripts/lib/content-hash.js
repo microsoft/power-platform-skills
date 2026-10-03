@@ -22,7 +22,7 @@
 
 const { sha256 } = require('./hash.js');
 const { normalizePageSource } = require('./app-spec.js');
-const { resolveAppSource } = require('./app-source-path.js');
+const { isAppSourcePath, resolveAppSource } = require('./app-source-path.js');
 
 // Resolve the on-disk source path a page's content lives at, or null for an intent (design-only) page
 // that has nothing on disk to hash. Delegates to the canonical page-source normalizer so the legacy
@@ -91,4 +91,35 @@ function pageSourceFileErrors(spec, appDir, deps = {}) {
   return errors;
 }
 
-module.exports = { annotateContentHashes, pageContentPath, pageSourceFileErrors };
+// The same on-disk check for a web resource read from `contentPath`. Schema validation proves only
+// that the path TEXT stays in the app folder; the filesystem decides whether it names a regular file
+// that does not leave the folder through a link or junction. Without this, the build found out in its
+// web-resources phase — after the solution and tables were already written — and halted half-built.
+function webResourceSourceFileErrors(spec, appDir, deps = {}) {
+  if (!spec || !Array.isArray(spec.webResources) || !appDir) return [];
+  const sourceDeps = typeof deps === 'function' ? { isFile: deps, realpath: (p) => p } : deps;
+  const errors = [];
+  for (const wr of spec.webResources) {
+    if (!wr || typeof wr !== 'object') continue;
+    // Same precedence as sdk-build.js webResourceOpts: inline `contentBase64`, then inline `content`, and only
+    // then `contentPath`. A file the build will never read is not this check's to refuse.
+    if (wr.contentBase64 !== undefined || wr.content !== undefined) continue;
+    const rel = wr.contentPath;
+    // An unconfined path is already a schema error from validateAppSpec, so it is not reported a
+    // second time here.
+    if (typeof rel !== 'string' || !isAppSourcePath(rel)) continue;
+    try {
+      resolveAppSource(appDir, rel, sourceDeps);
+    } catch (e) {
+      errors.push(`webResource '${wr.name}': contentPath '${rel}' ${e.message}`);
+    }
+  }
+  return errors;
+}
+
+// Every app source the build reads from disk: page code files and web resource contentPath files.
+function appSourceFileErrors(spec, appDir, deps = {}) {
+  return [...pageSourceFileErrors(spec, appDir, deps), ...webResourceSourceFileErrors(spec, appDir, deps)];
+}
+
+module.exports = { annotateContentHashes, pageContentPath, pageSourceFileErrors, webResourceSourceFileErrors, appSourceFileErrors };

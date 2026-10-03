@@ -34,6 +34,8 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   app folder at build time), or `contentBase64` (for binary types).
 - `contentPath` must name a regular file inside the app folder. Absolute, rooted,
   drive-relative and alternate-stream paths, parent escapes, symlinks and junctions are refused.
+  The build and `lint-app-spec.js` check the file before anything is written, alongside page
+  `codeFile` sources.
 - Built **before** forms and added to the solution; reference one from a form `events[]` handler.
 - **Content edits are NOT applied on rebuild.** Like commands, the phase is discover-then-skip: a web
   resource that already exists is reused as-is, so changing `content` and rebuilding deploys nothing
