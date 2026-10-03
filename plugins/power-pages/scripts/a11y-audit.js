@@ -31,6 +31,10 @@ const { ariaSnapshot, collectInventory } = require('./lib/a11y/checks/inventory'
 const NETWORK_IDLE_MS = 10000;
 const SETTLE_MS = 500;
 
+// A guarded page couldn't be ended without running its own script (see
+// retireGuardedPage). Aborts the run instead of closing anything gracefully.
+class UnsafeRetireError extends Error {}
+
 // Power Pages sends anonymous users to its sign-in page on the same origin, e.g.
 //   /SignIn?returnUrl=%2Fmy-cases      (code sites)
 //   /Account/Login/ExternalLogin?...   (Entra ID handoff)
@@ -112,11 +116,16 @@ async function newPage(context, opts) {
   return page;
 }
 
+// How long to wait for Playwright to confirm a crash. The renderer stops running script
+// within milliseconds of Page.crash, but the browser can take seconds to report it
+// (1.5–12 s measured with Edge on Windows), so a short wait would abort healthy runs.
+const CRASH_CONFIRM_MS = 30000;
+
 // Ends a page's renderer process so none of its script runs again: no timer callback,
 // no pagehide/unload handler, no beacon. Uses the Chromium DevTools Protocol, which the
 // audit's Chromium always provides. Page.crash never answers (the renderer it would
 // answer from is gone), so the send isn't awaited; Playwright's 'crash' event confirms
-// it. Resolves false if the page couldn't be crashed within waitMs.
+// it. Resolves false if the crash wasn't confirmed within waitMs.
 // See: https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-crash
 async function crashPage(context, page, waitMs) {
   let cdp;
@@ -150,16 +159,39 @@ async function crashPage(context, page, waitMs) {
 // one exit that runs none of the page's script. So, while the guard is still installed,
 // every page in the context (the checked page and any popup it opened, which can share
 // its renderer) is crashed, then closed, and a fresh page in the same context, which
-// keeps the signed-in session, is returned for the next route. A page that couldn't be
-// crashed is still closed: that runs its unload handlers, so the guard records anything
-// they send through the routes it can see.
-async function retireGuardedPage(context, page, opts) {
+// keeps the signed-in session, is returned for the next route.
+//
+// Pages are crashed together, so a popup doesn't add its own confirmation wait.
+//
+// Fails closed: if any crash isn't confirmed, no page is closed (closing runs unload
+// handlers) and UnsafeRetireError is thrown. The caller must then leave the guard,
+// context and browser up and end the process, which makes Playwright force-kill the
+// browser (taskkill /T /F on Windows, SIGKILL on POSIX) without running page script.
+async function retireGuardedPage(context, page, opts, { confirmMs = CRASH_CONFIRM_MS } = {}) {
   const pages = [page, ...context.pages().filter((p) => p !== page)];
-  for (const p of pages) {
-    if (!p.isClosed()) await crashPage(context, p, Math.min(opts.timeoutMs, 5000));
+  const confirmed = await Promise.all(pages.map((p) => p.isClosed() || crashPage(context, p, confirmMs)));
+  const survivors = confirmed.filter((ok) => !ok).length;
+  if (survivors) {
+    throw new UnsafeRetireError(`couldn't stop ${survivors} page(s) without running their unload handlers, so the audit stopped to avoid sending a write to the site`);
   }
   for (const p of pages) await p.close().catch(() => {});
   return newPage(context, opts);
+}
+
+// Retires the page, then removes the guard. On UnsafeRetireError the guard stays
+// installed, since the browser is about to be killed.
+async function retireAndUnguard(context, page, guard, opts) {
+  const fresh = await retireGuardedPage(context, page, opts);
+  await guard.dispose();
+  return fresh;
+}
+
+// Closes a viewport's context, unless a page couldn't be retired safely: closing it
+// would run that page's unload handlers. A close failure never hides the error that
+// ended the viewport.
+async function closeContext(context, failure) {
+  if (failure instanceof UnsafeRetireError) return;
+  await context.close().catch(() => {});
 }
 
 // Runs one extended check and records (not throws) its failure, so one flaky check
@@ -181,6 +213,8 @@ async function runCheck(name, fn, checkErrors) {
 // controls: a mobile-only navigation toggle or dialog trigger never appears in the
 // desktop pass, so a desktop-only discovery could never propose the mobile states.
 // The first viewport crawls; later viewports inventory exactly that route list.
+// Each page is guarded from its first request, like an audited page: a script that
+// writes on load must not reach the site just because the run only explores.
 async function runDiscover(browser, opts, log) {
   const origin = opts.url.origin;
   const queue = new CrawlQueue({ origin, maxPages: opts.maxPages, exclude: opts.exclude });
@@ -190,7 +224,10 @@ async function runDiscover(browser, opts, log) {
   const urls = [];
   const pages = [];
   for (const [vi, viewport] of opts.viewports.entries()) {
-    const { context, page } = await newContext(browser, viewport, opts);
+    const { context, page: firstPage } = await newContext(browser, viewport, opts);
+    // Replaced after every route (see retireGuardedPage).
+    let page = firstPage;
+    let failure;
     try {
       for (let i = 0; ; i++) {
         const url = vi === 0 ? queue.next() : urls[i];
@@ -198,9 +235,12 @@ async function runDiscover(browser, opts, log) {
         if (vi === 0) urls.push(url);
         const route = routeOf(url);
         log(`(${i + 1}) discover ${viewport} ${route}`);
-        const nav = await visit(page, url, { origin, timeoutMs: opts.timeoutMs });
-        const entry = { url: displayUrl(url), route, viewport, title: nav.title || null, status: nav.status || null, error: nav.error || null };
-        if (!nav.error) {
+        const guard = await guardMutations(page, { allowFormSubmit: false, origin });
+        try {
+          const nav = await visit(page, url, { origin, timeoutMs: opts.timeoutMs });
+          const entry = { url: displayUrl(url), route, viewport, title: nav.title || null, status: nav.status || null, error: nav.error || null, blockedRequests: guard.blocked };
+          pages.push(entry);
+          if (nav.error) continue;
           if (vi === 0 && opts.crawl) for (const href of await extractLinks(page)) queue.add(href, page.url());
           const inventory = await collectInventory(page);
           entry.controls = inventory.controls;
@@ -213,11 +253,15 @@ async function runDiscover(browser, opts, log) {
               entry.snapshotFile = file;
             }
           }
+        } finally {
+          page = await retireAndUnguard(context, page, guard, opts);
         }
-        pages.push(entry);
       }
+    } catch (err) {
+      failure = err;
+      throw err;
     } finally {
-      await context.close();
+      await closeContext(context, failure);
     }
   }
   const report = { mode: 'discover', baseUrl: opts.url.toString(), viewports: opts.viewports, pages, crawl: queue.summary() };
@@ -246,8 +290,9 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
   const titles = [];
   for (const [vi, viewport] of opts.viewports.entries()) {
     const { context, page: firstPage } = await newContext(browser, viewport, opts);
-    // Replaced after every guarded block (see retireGuardedPage).
+    // Replaced after every route and state (see retireGuardedPage).
     let page = firstPage;
+    let failure;
     try {
       const list = vi === 0 ? null : [...urls];
       let i = 0;
@@ -260,33 +305,31 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
         const total = vi === 0 ? `${i}` : `${i}/${list.length}`;
         log(`(${total}) ${viewport} ${route}`);
 
-        const nav = await visit(page, url, { origin, timeoutMs: opts.timeoutMs });
-        const checkErrors = [];
-        if (nav.error) {
-          builder.addPage({ route, viewport, url: displayUrl(url), key: url, title: nav.title || null, status: nav.status || null, error: nav.error });
-          continue;
-        }
-        if (vi === 0 && opts.crawl) for (const href of await extractLinks(page)) queue.add(href, page.url());
-
-        const ctx = { route, viewport };
-        let pageError = null;
-        if (checks.has('axe')) {
-          try {
-            const axeResult = await runAxe(page, axeSource, { bestPractice: opts.bestPractice });
-            if (axeResult.axeVersion) builder.meta.tool.axeVersion = axeResult.axeVersion;
-            builder.addFindings(axeResult.findings, ctx);
-          } catch (err) {
-            pageError = `axe failed: ${errorLine(err)}`;
-          }
-        }
-        if (viewport === primary && checks.has('titles')) titles.push({ route, title: nav.title });
-        // The checks below synthesize focus, blur, Tab, resize, and media events, and a
-        // page's own handlers can POST on any of them (autosave on blur, analytics that
-        // write a record). Guard them like a state, never allowing form submission:
-        // there's no per-page consent. Installed after axe so the page's own load-time
-        // reads (list-grid POSTs) finish unguarded, as they do for states.
+        // Guarded from the first request, never allowing form submission (there's no
+        // per-page consent): a page's own script can write on load, and the checks
+        // below synthesize focus, blur, Tab, resize, and media events that it can POST
+        // on (autosave on blur, analytics that write a record). Load-time list-grid
+        // reads still work: that read-only POST is exempt on the audited origin.
         const guard = await guardMutations(page, { allowFormSubmit: false, origin });
+        const checkErrors = [];
+        let nav;
+        let pageError = null;
         try {
+          nav = await visit(page, url, { origin, timeoutMs: opts.timeoutMs });
+          if (nav.error) continue;
+          if (vi === 0 && opts.crawl) for (const href of await extractLinks(page)) queue.add(href, page.url());
+
+          const ctx = { route, viewport };
+          if (checks.has('axe')) {
+            try {
+              const axeResult = await runAxe(page, axeSource, { bestPractice: opts.bestPractice });
+              if (axeResult.axeVersion) builder.meta.tool.axeVersion = axeResult.axeVersion;
+              builder.addFindings(axeResult.findings, ctx);
+            } catch (err) {
+              pageError = `axe failed: ${errorLine(err)}`;
+            }
+          }
+          if (viewport === primary && checks.has('titles')) titles.push({ route, title: nav.title });
           // The remaining checks are layout-dependent — mobile navigation has its own
           // focus order and traps, and text can clip or animate differently at a narrow
           // width — so they run on every selected viewport. Nodes are grouped per
@@ -311,13 +354,13 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
             if (r) builder.addFindings(r.findings, ctx);
           }
         } finally {
-          try {
-            page = await retireGuardedPage(context, page, opts);
-          } finally {
-            await guard.dispose();
+          page = await retireAndUnguard(context, page, guard, opts);
+          // Recorded here so a page that failed to load is listed too (the `continue`
+          // above still runs this block), with any on-load write the guard stopped.
+          if (nav) {
+            builder.addPage({ route, viewport, url: displayUrl(url), key: url, title: nav.title || null, status: nav.status || null, error: nav.error || pageError, checkErrors, blockedRequests: guard.blocked });
           }
         }
-        builder.addPage({ route, viewport, url: displayUrl(url), key: url, title: nav.title || null, status: nav.status || null, error: pageError, checkErrors, blockedRequests: guard.blocked });
       }
 
       for (const state of states.filter((s) => (s.viewport || primary) === viewport)) {
@@ -332,22 +375,22 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
           builder.addState({ label: state.label, route, viewport, error: 'route resolves outside the audited site' });
           continue;
         }
-        const nav = await visit(page, url, { origin, timeoutMs: opts.timeoutMs });
-        if (nav.error) {
-          builder.addState({ label: state.label, route, viewport, error: nav.error });
-          continue;
-        }
-        // Installed after the page load on purpose: classic Power Pages list grids
-        // fetch their rows with a POST, so the guard only covers what the replayed
-        // steps trigger. Form submission needs two consents: the run-wide
-        // --allow-form-submit switch and the state's own "allowFormSubmit": true, so
-        // approving one submitting state never unguards the others.
+        // Guarded from the first request, like a crawled page. Form submission needs two
+        // consents: the run-wide --allow-form-submit switch and the state's own
+        // "allowFormSubmit": true, so approving one submitting state never unguards the
+        // others. Classic Power Pages list grids fetch their rows with a POST; that
+        // read is exempt on the audited origin, so a grid still loads under the guard.
         const allowFormSubmit = Boolean(opts.allowFormSubmit && state.allowFormSubmit);
         const guard = await guardMutations(page, { allowFormSubmit, origin });
         const checkErrors = [];
         const ctx = { route, viewport, state: state.label };
         const stateInfo = { label: state.label, route, viewport, formSubmitAllowed: allowFormSubmit };
         try {
+          const nav = await visit(page, url, { origin, timeoutMs: opts.timeoutMs });
+          if (nav.error) {
+            builder.addState({ ...stateInfo, error: nav.error, blockedRequests: guard.blocked });
+            continue;
+          }
           await applyState(page, state, { allowFormSubmit, timeoutMs: Math.min(opts.timeoutMs, 10000) });
           await ensureHelpers(page);
           if (checks.has('axe')) {
@@ -364,15 +407,14 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
         } catch (err) {
           builder.addState({ ...stateInfo, error: errorLine(err), checkErrors, blockedRequests: guard.blocked });
         } finally {
-          try {
-            page = await retireGuardedPage(context, page, opts);
-          } finally {
-            await guard.dispose();
-          }
+          page = await retireAndUnguard(context, page, guard, opts);
         }
       }
+    } catch (err) {
+      failure = err;
+      throw err;
     } finally {
-      await context.close();
+      await closeContext(context, failure);
     }
   }
 
@@ -395,7 +437,7 @@ function writeOutput(report, opts, stdout) {
   }
 }
 
-async function main(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
+async function main(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, onAbandonBrowser = null } = {}) {
   let opts;
   let states = [];
   try {
@@ -433,6 +475,7 @@ async function main(argv = process.argv.slice(2), { stdout = process.stdout, std
 
   const log = (msg) => stderr.write(`[a11y] ${msg}\n`);
   let browser;
+  let abandoned = false;
   try {
     const roots = candidateRoots({ depsDir: opts.depsDir });
     const { chromium } = loadPlaywright(roots);
@@ -450,15 +493,37 @@ async function main(argv = process.argv.slice(2), { stdout = process.stdout, std
       stderr.write(`${err.message}\n`);
       return EXIT.MISSING_DEPS;
     }
+    if (err instanceof UnsafeRetireError) {
+      // No report: the run stopped part-way. browser.close() would close the page
+      // that's still alive and run its unload handlers, so the browser is left for
+      // the caller to kill (the CLI exits the process; see below).
+      abandoned = true;
+      stderr.write(`Accessibility audit stopped: ${err.message}. Re-run the audit.\n`);
+      return EXIT.LOAD_FAILURE;
+    }
     stderr.write(`Accessibility audit failed: ${errorLine(err)}\n`);
     return EXIT.LOAD_FAILURE;
   } finally {
-    if (browser) await browser.close().catch(() => {});
+    if (abandoned) {
+      if (onAbandonBrowser) onAbandonBrowser();
+    } else if (browser) {
+      await browser.close().catch(() => {});
+    }
   }
 }
 
 if (require.main === module) {
-  main().then((code) => { process.exitCode = code; });
+  let abandoned = false;
+  main(undefined, { onAbandonBrowser: () => { abandoned = true; } }).then((code) => {
+    if (!abandoned) {
+      process.exitCode = code;
+      return;
+    }
+    // Ending the process makes Playwright's own 'exit' handler force-kill the browser
+    // (taskkill /T /F on Windows, SIGKILL to the process group on POSIX), so no page
+    // script runs. Exit only after stderr flushes; Windows pipes write asynchronously.
+    process.stderr.write('', () => process.exit(code));
+  });
 }
 
-module.exports = { main, slugForRoute };
+module.exports = { UnsafeRetireError, main, retireGuardedPage, slugForRoute };

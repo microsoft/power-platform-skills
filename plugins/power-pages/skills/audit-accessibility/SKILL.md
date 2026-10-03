@@ -240,6 +240,7 @@ Build the shared flags once and reuse them in Phase 5 so both phases cover the s
 - `--url "<SITE_URL>"`
 - `--routes "<comma-separated REQUESTED_ROUTES>"` when set
 - `--crawl --max-pages <n>` when `CRAWL=true`
+- `--viewports <approved layouts>` (for example `desktop,mobile` or `desktop`), so discovery loads only the layouts the user approved
 - `--auth-state "<AUTH_STATE>"` when set
 
 ```bash
@@ -247,10 +248,10 @@ node "${PLUGIN_ROOT}/scripts/a11y-audit.js" <shared flags> --mode discover --sna
 ```
 
 - **Exit 0**: All pages loaded on every layout.
-- **Exit 3**: First check that `<RUN_DIR>/discover.json` exists and parses as JSON. If it doesn't, the script stopped on an unexpected error before writing results: show its stderr, and offer to re-run discovery or continue with a quick audit (skip to Phase 5 with `AUDIT_STATES=false`). If it does, some pages failed: read `pages[].error`. A redirect to sign-in means the page needs a signed-in session; note it as a coverage gap.
+- **Exit 3**: First check that `<RUN_DIR>/discover.json` exists and parses as JSON. If it doesn't, the script stopped before writing results (for example, it couldn't safely close a page that might send a write): show its stderr, and offer to re-run discovery or continue with a quick audit (skip to Phase 5 with `AUDIT_STATES=false`). If it does, some pages failed: read `pages[].error`. A redirect to sign-in means the page needs a signed-in session; note it as a coverage gap.
 - **Exit 2 or 4**: Fix the arguments or tools, as in Phase 2.
 
-Discovery explores every layout in scope, so `pages[]` has one entry per page and layout (`viewport`). Pages listed with `--routes` skip the crawl filters and page limit, but sign-out links, platform endpoints such as `/_api/`, and file downloads are never visited; they're listed in `crawl.excluded`.
+Discovery explores every layout in scope, so `pages[]` has one entry per page and layout (`viewport`). Discovery blocks write requests the same way the audit does, so a page that saves data on load can't change the site; `pages[].blockedRequests` shows what was stopped. Pages listed with `--routes` skip the crawl filters and page limit, but sign-out links, platform endpoints such as `/_api/`, and file downloads are never visited; they're listed in `crawl.excluded`.
 
 #### 4.2 Review the inventory and propose states
 
@@ -319,7 +320,7 @@ Add these flags when they apply:
 
 - `--states "<RUN_DIR>/states.json"` when `AUDIT_STATES=true`. Each state runs axe-core and the keyboard check. While a state replays, the audit blocks requests that would write data (see [`references/states-guide.md`](references/states-guide.md#form-submission-safety)).
 - `--allow-form-submit` only when `ALLOW_FORM_SUBMIT=true`. It's a run-wide switch: the submit-step guard and the request blocking turn off only for states that also set `"allowFormSubmit": true`. Each state reports this as `states[].formSubmitAllowed`.
-- `--viewports`, `--checks`, or `--no-best-practice` when the user changed them in Phase 3
+- `--checks` or `--no-best-practice` when the user changed them in Phase 3 (`--viewports` is already in the shared flags)
 
 The audit takes roughly 5–15 seconds per page and layout. Keyboard, reflow, 200% text, and motion checks run on every layout, so a mobile-only problem is caught; page titles are checked once per page. Tell the user it's running and how many pages are in scope.
 
@@ -330,10 +331,10 @@ The audit takes roughly 5–15 seconds per page and layout. Keyboard, reflow, 20
 | 0 | No blocking violations | Continue to Phase 6 |
 | 1 | Blocking violations found (critical or serious WCAG issues) | Continue to Phase 6 |
 | 2 | Usage error (bad flag or states file) | Fix the input and re-run |
-| 3 | Audit incomplete: a page or state failed to load, a check errored, or the script stopped on an unexpected error | Check that `<RUN_DIR>/audit.json` exists and parses as JSON. If it doesn't, no results were written: show the script's stderr and offer to re-run; don't write a report or a `Completed` marker. If it does, continue to Phase 6 and report the gaps from `pages[].error`, `states[].error`, and `checkErrors`; the rest of the report is valid |
+| 3 | Audit incomplete: a page or state failed to load, a check errored, or the script stopped early (an unexpected error, or a page it couldn't close without risking a write to the site) | Check that `<RUN_DIR>/audit.json` exists and parses as JSON. If it doesn't, no results were written: show the script's stderr and offer to re-run; don't write a report or a `Completed` marker. If it does, continue to Phase 6 and report the gaps from `pages[].error`, `states[].error`, and `checkErrors`; the rest of the report is valid |
 | 4 | Tools or browser missing | Return to Phase 2 |
 
-Exit 3 takes priority over exit 1, so always check `summary.blocking` in the report too. If `summary.blockedRequests` is above 0, mention in the report that some page checks or state interactions were stopped before they could write data, so those pages or states may differ on the live site. `pages[].blockedRequests` and `states[].blockedRequests` show where.
+Exit 3 takes priority over exit 1, so always check `summary.blocking` in the report too. If `summary.blockedRequests` is above 0, mention in the report that some page loads, page checks, or state interactions were stopped before they could write data, so those pages or states may differ on the live site. `pages[].blockedRequests` and `states[].blockedRequests` show where.
 
 #### Session cleanup
 

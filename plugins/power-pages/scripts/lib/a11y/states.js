@@ -214,8 +214,8 @@ function isMutatingRequest(method, url, origin) {
 // guarded too. Requests from service workers bypass routing, so the audit context is
 // created with serviceWorkers: 'block'. Routing also misses a write the page defers
 // past dispose() (a timer) or sends while unloading (keepalive fetch, sendBeacon), so
-// callers must end the page's renderer before dispose() — see retireGuardedPage() in
-// a11y-audit.js.
+// callers install the guard before navigation and end the page's renderer before
+// dispose() — see retireGuardedPage() in a11y-audit.js.
 // https://playwright.dev/docs/api/class-browsercontext#browser-context-route
 async function guardMutations(page, { allowFormSubmit = false, origin = null } = {}) {
   const blocked = { count: 0, requests: [] };

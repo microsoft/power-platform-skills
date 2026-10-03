@@ -12,7 +12,10 @@
 // marked heuristic and never fails the run on its own.
 //
 // The walk stops when focus wraps back to the start, leaves the document, or sticks on
-// one element. If it reaches MAX_TABS first, the controls after that point were never
+// one element. An iframe is the exception to sticking: while Tab moves through the
+// frame's own controls, the top document's activeElement stays the iframe, so repeats
+// there are expected and the walk keeps pressing Tab until focus leaves the frame.
+// If it reaches MAX_TABS first, the controls after that point were never
 // checked, so the result carries an `incomplete` reason and the audit reports a check
 // error (exit 3) instead of passing on partial coverage. The cap is generous because a
 // Power Pages header with a large navigation menu can easily hold 100+ tab stops.
@@ -89,8 +92,13 @@ async function walkFocus(page, { maxTabs = MAX_TABS } = {}) {
       return { sequence, complete: true };
     }
     sequence.push(info);
+    // Stopping on an iframe would skip every control after it and, because iframe
+    // repeats aren't reported as traps, hide that gap. Keep walking instead: focus
+    // either leaves the frame or the cap marks the walk incomplete.
     const tail = sequence.slice(-TRAP_REPEAT);
-    if (tail.length === TRAP_REPEAT && tail.every((s) => s.selector === info.selector)) return { sequence, complete: true };
+    if (!info.inIframe && tail.length === TRAP_REPEAT && tail.every((s) => s.selector === info.selector)) {
+      return { sequence, complete: true };
+    }
   }
   // A page with no focusable element never moves focus off the body: nothing was missed.
   return { sequence, complete: sequence.length === 0 };

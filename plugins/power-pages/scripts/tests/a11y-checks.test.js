@@ -69,6 +69,20 @@ test('runKeyboardCheck reports an incomplete walk when the Tab limit runs out fi
   assert.equal(empty.incomplete, null, 'a page with nothing focusable is fully covered');
 });
 
+test('runKeyboardCheck keeps walking while focus is inside an iframe', async () => {
+  // e0, then 8 presses inside the iframe, then e2: the controls after the frame count.
+  // The fake numbers Tab presses from 1.
+  const order = (i) => (i === 1 ? focusInfo(0) : i <= 9 ? { ...focusInfo(1), tag: 'iframe', inIframe: true } : i === 10 ? focusInfo(2) : focusInfo(0));
+  const r = await runKeyboardCheck(fakeFocusPage(order), { maxTabs: 50 });
+  assert.equal(r.incomplete, null);
+  assert.ok(r.focusOrder.some((s) => s.selector === '#e2'), 'the control after the iframe was reached');
+  assert.ok(!r.findings.some((f) => f.id === 'pp-keyboard-trap'));
+
+  // Focus that never leaves the frame isn't reported as covered.
+  const stuck = await runKeyboardCheck(fakeFocusPage((i) => (i === 1 ? focusInfo(0) : { ...focusInfo(1), inIframe: true })), { maxTabs: 20 });
+  assert.match(stuck.incomplete, /within 20 Tab presses/);
+});
+
 test('analyzeReflow flags a horizontally scrolling container even when the page fits', () => {
   const findings = analyzeReflow({
     overflow: false, scrollWidth: 320, viewportWidth: 320, offenders: [],

@@ -6,7 +6,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { spawn, spawnSync } = require('node:child_process');
 
-const { slugForRoute } = require('../a11y-audit');
+const { UnsafeRetireError, retireGuardedPage, slugForRoute } = require('../a11y-audit');
 
 const SCRIPT = path.join(__dirname, '..', 'a11y-audit.js');
 
@@ -80,6 +80,49 @@ test('slugForRoute makes stable, safe snapshot file names', () => {
   assert.equal(slugForRoute('/../../etc', 2), '03-etc');
 });
 
+// A fake page that crashes (or not) when the CDP session sends Page.crash.
+function fakeRetirePage(name, { crashes, log }) {
+  const handlers = {};
+  let closed = false;
+  return {
+    name,
+    isClosed: () => closed,
+    once: (event, fn) => { handlers[event] = fn; },
+    close: async () => { closed = true; log.push(`close ${name}`); },
+    setDefaultTimeout: () => {},
+    crash: () => { if (crashes && handlers.crash) handlers.crash(); },
+  };
+}
+
+function fakeRetireContext(pages, log) {
+  return {
+    pages: () => pages,
+    newCDPSession: async (page) => ({ send: async () => { log.push(`crash ${page.name}`); page.crash(); } }),
+    newPage: async () => { log.push('new page'); return fakeRetirePage('fresh', { crashes: true, log }); },
+  };
+}
+
+test('retireGuardedPage crashes every page before closing any, then opens a fresh page', async () => {
+  const log = [];
+  const main = fakeRetirePage('main', { crashes: true, log });
+  const popup = fakeRetirePage('popup', { crashes: true, log });
+  const fresh = await retireGuardedPage(fakeRetireContext([main, popup], log), main, { timeoutMs: 1000 });
+  assert.equal(fresh.name, 'fresh');
+  assert.deepEqual(log, ['crash main', 'crash popup', 'close main', 'close popup', 'new page']);
+});
+
+test('retireGuardedPage fails closed: a page that will not crash is never closed', async () => {
+  const log = [];
+  const main = fakeRetirePage('main', { crashes: true, log });
+  const stuck = fakeRetirePage('popup', { crashes: false, log });
+  await assert.rejects(
+    retireGuardedPage(fakeRetireContext([main, stuck], log), main, { timeoutMs: 1000 }, { confirmMs: 50 }),
+    (err) => err instanceof UnsafeRetireError && /couldn't stop 1 page/.test(err.message),
+  );
+  assert.ok(!log.some((l) => l.startsWith('close')), `closing would run unload handlers: ${log.join(', ')}`);
+  assert.ok(!log.includes('new page'));
+});
+
 // Real-browser test. CI has no browser and no audit dependencies, so this runs only
 // when explicitly enabled after `node scripts/install-a11y-deps.js`:
 //   POWER_PAGES_A11Y_LIVE=1 node --test plugins/power-pages/scripts/tests/a11y-audit-cli.test.js
@@ -118,6 +161,11 @@ button.nofocus:focus{outline:none}.low{color:#aaa;background:#fff}</style></head
 <label for="n">Name</label> <input id="n"> <a href="/">Home</a>
 <script>n.addEventListener('blur',function(){setTimeout(function(){fetch('/api/later',{method:'POST',body:'x'}).catch(function(){})},1500)});
 addEventListener('pagehide',function(){fetch('/api/unload',{method:'POST',body:'x',keepalive:true}).catch(function(){})})</script>
+</main></body></html>`,
+  // Not linked from "/". Writes as soon as it loads, before any check runs; a
+  // read-only list-grid POST on the same origin must still go through.
+  '/onload': `<!doctype html><html lang="en"><head><title>On load</title></head><body><main><h1>On load</h1><a href="/">Home</a>
+<script>fetch('/api/visit',{method:'POST',body:'x'}).catch(function(){});fetch('/_services/entity-grid-data.json/abc',{method:'POST',body:'{}'}).catch(function(){})</script>
 </main></body></html>`,
   // Not linked from "/". The page fits at 320px, but one wrapper scrolls plain text
   // sideways; the other scrolls a data table, which 1.4.10 exempts.
@@ -285,6 +333,32 @@ test('live: writes a page defers past its checks (timer or unload) are still blo
     assert.deepEqual(server.posts, [], 'no deferred write reached the site');
   } finally {
     server.close();
+  }
+});
+
+test('live: a write sent while the page loads is blocked in audit, state, and discover runs', { skip: !LIVE && 'set POWER_PAGES_A11Y_LIVE=1 to run' }, async () => {
+  const server = await startFixture();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-a11y-live-'));
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const grid = 'POST /_services/entity-grid-data.json/abc';
+    const statesFile = path.join(dir, 'states.json');
+    fs.writeFileSync(statesFile, JSON.stringify({ states: [{ route: '/onload', label: 'Loaded', steps: [{ action: 'wait', ms: 100 }] }] }));
+    const r = await runAsync(['--url', base, '--routes', '/onload', '--viewports', 'desktop', '--checks', 'axe', '--states', statesFile]);
+    assert.ok([0, 1].includes(r.status), r.stderr);
+    assert.deepEqual(server.posts, [grid, grid], 'only the read-only grid POST reached the site, once per load');
+    const report = JSON.parse(r.stdout);
+    assert.deepEqual(report.pages[0].blockedRequests.requests, [{ method: 'POST', url: `${base}/api/visit` }]);
+    assert.equal(report.states[0].blockedRequests.count, 1);
+
+    server.posts.length = 0;
+    const disc = await runAsync(['--url', base, '--routes', '/onload', '--viewports', 'desktop', '--mode', 'discover']);
+    assert.equal(disc.status, 0, disc.stderr);
+    assert.deepEqual(server.posts, [grid]);
+    assert.equal(JSON.parse(disc.stdout).pages[0].blockedRequests.count, 1);
+  } finally {
+    server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
