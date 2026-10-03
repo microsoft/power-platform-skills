@@ -1,0 +1,529 @@
+#!/usr/bin/env node
+'use strict';
+
+// Accessibility audit for Power Pages sites: opens each page in a real browser
+// (system Edge/Chrome), runs axe-core plus checks axe cannot do (keyboard walk,
+// reflow at 320px, 200% text, reduced motion, page titles), optionally replays
+// interaction states, and writes one aggregated JSON report.
+//
+// Standalone on purpose: it works against a local dev server or a deployed site and
+// does not depend on create-site or test-site. create-site's own
+// skills/create-site/scripts/axe-audit.js is unchanged and still used by that skill.
+//
+// Run with --help for options and exit codes (see lib/a11y/args.js).
+
+const fs = require('node:fs');
+const path = require('node:path');
+const { EXIT, USAGE, UsageError, VIEWPORTS, parseArgs } = require('./lib/a11y/args');
+const { CrawlQueue, displayUrl, normalizeUrl, routeOf } = require('./lib/a11y/crawl');
+const { MissingDependencyError, candidateRoots, launchBrowser, loadAxeSource, loadPlaywright } = require('./lib/a11y/deps');
+const { ensureHelpers, errorLine } = require('./lib/a11y/page-helpers');
+const { runAxe } = require('./lib/a11y/axe-runner');
+const { ReportBuilder, exitCodeFor } = require('./lib/a11y/report');
+const { StatesFileError, applyState, guardMutations, loadStatesFile } = require('./lib/a11y/states');
+const { runKeyboardCheck } = require('./lib/a11y/checks/keyboard');
+const { runReflowCheck } = require('./lib/a11y/checks/reflow');
+const { runZoomCheck } = require('./lib/a11y/checks/zoom');
+const { runMotionCheck } = require('./lib/a11y/checks/motion');
+const { analyzeTitles } = require('./lib/a11y/checks/titles');
+const { ariaSnapshot, collectInventory } = require('./lib/a11y/checks/inventory');
+
+const NETWORK_IDLE_MS = 10000;
+const SETTLE_MS = 500;
+
+// A guarded page couldn't be ended without running its own script (see
+// retireGuardedPage). Aborts the run instead of closing anything gracefully.
+class UnsafeRetireError extends Error {}
+
+// Power Pages sends anonymous users to its sign-in page on the same origin, e.g.
+//   /SignIn?returnUrl=%2Fmy-cases      (code sites)
+//   /Account/Login/ExternalLogin?...   (Entra ID handoff)
+// so a 200 response alone does not mean the requested page was audited.
+const SIGN_IN_PATH = /^\/(signin|account\/login)/i;
+
+// Load a page and decide whether it is auditable. Never return a URL's query string
+// in errors: sign-in redirects carry state and nonce parameters, and Playwright's own
+// navigation errors quote the full URL (errorLine redacts it).
+async function visit(page, url, { origin, timeoutMs }) {
+  let response;
+  try {
+    response = await page.goto(url, { waitUntil: 'load', timeout: timeoutMs });
+  } catch (err) {
+    return { error: `Navigation failed: ${errorLine(err)}` };
+  }
+  // SPAs keep fetching after load; wait for quiet but do not fail if it never comes
+  // (long-polling, analytics beacons).
+  await page.waitForLoadState('networkidle', { timeout: NETWORK_IDLE_MS }).catch(() => {});
+  await page.waitForTimeout(SETTLE_MS);
+
+  const status = response ? response.status() : null;
+  const final = new URL(page.url());
+  const requested = new URL(url);
+  const title = await page.title().catch(() => '');
+  if (status !== null && status >= 400) return { status, title, error: `HTTP ${status}` };
+  if (final.origin !== origin) {
+    return { status, title, error: `Redirected to ${final.origin} — the page likely requires sign-in (use --auth-state)` };
+  }
+  if (SIGN_IN_PATH.test(final.pathname) && !SIGN_IN_PATH.test(requested.pathname)) {
+    return { status, title, error: `Redirected to the sign-in page (${final.pathname}) — use --auth-state to audit signed-in pages` };
+  }
+  await ensureHelpers(page);
+  return { status, title };
+}
+
+async function extractLinks(page) {
+  return page.evaluate(() => Array.from(document.querySelectorAll('a[href]'), (a) => a.href));
+}
+
+function slugForRoute(route, index) {
+  const slug = route.replace(/[?#].*$/, '').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'home';
+  return `${String(index + 1).padStart(2, '0')}-${slug.slice(0, 60)}`;
+}
+
+// Named routes skip --exclude and the page cap, but never the built-in safety
+// exclusions (sign-out, platform endpoints, files). Say so on stderr; the refused
+// route is also listed in crawl.excluded.
+function queueRoutes(queue, opts, log) {
+  for (const r of opts.routes) {
+    const url = new URL(r, opts.url).toString();
+    if (!queue.addExplicit(url) && queue.excluded.has(normalizeUrl(url))) {
+      log(`skipping ${r}: ${queue.excluded.get(normalizeUrl(url))} URLs are never audited`);
+    }
+  }
+}
+
+async function newContext(browser, viewportName, opts) {
+  const v = VIEWPORTS[viewportName];
+  const context = await browser.newContext({
+    viewport: { width: v.width, height: v.height },
+    isMobile: v.isMobile,
+    hasTouch: v.hasTouch,
+    // Lets the inline axe script run even when the site's Content-Security-Policy
+    // forbids inline scripts. Affects only this audit browser, never the site.
+    bypassCSP: true,
+    // A service worker can issue fetches that page.route() never sees, which would
+    // let a replayed state slip a write past guardMutations(). Power Pages does not
+    // need one to render, so block registration for the whole audit.
+    serviceWorkers: 'block',
+    storageState: opts.authState || undefined,
+  });
+  return { context, page: await newPage(context, opts) };
+}
+
+async function newPage(context, opts) {
+  const page = await context.newPage();
+  page.setDefaultTimeout(opts.timeoutMs);
+  return page;
+}
+
+// How long to wait for Playwright to confirm a crash. The renderer stops running script
+// within milliseconds of Page.crash, but the browser can take seconds to report it
+// (1.5–12 s measured with Edge on Windows), so a short wait would abort healthy runs.
+const CRASH_CONFIRM_MS = 30000;
+
+// Ends a page's renderer process so none of its script runs again: no timer callback,
+// no pagehide/unload handler, no beacon. Uses the Chromium DevTools Protocol, which the
+// audit's Chromium always provides. Page.crash never answers (the renderer it would
+// answer from is gone), so the send isn't awaited; Playwright's 'crash' event confirms
+// it. Resolves false if the crash wasn't confirmed within waitMs.
+// See: https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-crash
+async function crashPage(context, page, waitMs) {
+  let cdp;
+  try {
+    cdp = await context.newCDPSession(page);
+  } catch {
+    return false;
+  }
+  let timer;
+  const crashed = new Promise((resolve) => {
+    page.once('crash', () => resolve(true));
+    page.once('close', () => resolve(true));
+    timer = setTimeout(() => resolve(false), waitMs);
+  });
+  cdp.send('Page.crash').catch(() => {});
+  try {
+    return await crashed;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// A page's own handlers can defer a write past the guarded checks: a blur handler that
+// schedules a POST with setTimeout, or a pagehide/unload handler that fires when the
+// page is left. Either would reach the live site without consent. Routing can't be
+// relied on to catch them: a timer can fire after guard.dispose(), and Chromium sends an
+// unload-time keepalive fetch or sendBeacon() outside the interception that
+// page.route() and context.route() use, so it escapes even while the guard is installed
+// (verified live: navigating to about:blank, going offline, Network.setBlockedURLs and
+// Emulation.setScriptExecutionDisabled all let it through). Ending the renderer is the
+// one exit that runs none of the page's script. So, while the guard is still installed,
+// every page in the context (the checked page and any popup it opened, which can share
+// its renderer) is crashed, then closed, and a fresh page in the same context, which
+// keeps the signed-in session, is returned for the next route.
+//
+// Pages are crashed together, so a popup doesn't add its own confirmation wait.
+//
+// Fails closed: if any crash isn't confirmed, no page is closed (closing runs unload
+// handlers) and UnsafeRetireError is thrown. The caller must then leave the guard,
+// context and browser up and end the process, which makes Playwright force-kill the
+// browser (taskkill /T /F on Windows, SIGKILL on POSIX) without running page script.
+async function retireGuardedPage(context, page, opts, { confirmMs = CRASH_CONFIRM_MS } = {}) {
+  const pages = [page, ...context.pages().filter((p) => p !== page)];
+  const confirmed = await Promise.all(pages.map((p) => p.isClosed() || crashPage(context, p, confirmMs)));
+  const survivors = confirmed.filter((ok) => !ok).length;
+  if (survivors) {
+    throw new UnsafeRetireError(`couldn't stop ${survivors} page(s) without running their unload handlers, so the audit stopped to avoid sending a write to the site`);
+  }
+  for (const p of pages) await p.close().catch(() => {});
+  return newPage(context, opts);
+}
+
+// Retires the page, then removes the guard. On UnsafeRetireError the guard stays
+// installed, since the browser is about to be killed.
+async function retireAndUnguard(context, page, guard, opts) {
+  const fresh = await retireGuardedPage(context, page, opts);
+  await guard.dispose();
+  return fresh;
+}
+
+// Closes a viewport's context, unless a page couldn't be retired safely: closing it
+// would run that page's unload handlers. A close failure never hides the error that
+// ended the viewport.
+async function closeContext(context, failure) {
+  if (failure instanceof UnsafeRetireError) return;
+  await context.close().catch(() => {});
+}
+
+// Runs one extended check and records (not throws) its failure, so one flaky check
+// on one page does not discard everything else audited on that page. A check that
+// finished but couldn't cover the whole page returns an `incomplete` reason: its
+// findings are kept, and the reason is recorded as a check error so the run can't pass.
+async function runCheck(name, fn, checkErrors) {
+  try {
+    const result = await fn();
+    if (result && result.incomplete) checkErrors.push({ check: name, message: result.incomplete });
+    return result;
+  } catch (err) {
+    checkErrors.push({ check: name, message: errorLine(err) });
+    return null;
+  }
+}
+
+// Discovery visits every selected viewport because the inventory keeps only rendered
+// controls: a mobile-only navigation toggle or dialog trigger never appears in the
+// desktop pass, so a desktop-only discovery could never propose the mobile states.
+// The first viewport crawls; later viewports inventory exactly that route list.
+// Each page is guarded from its first request, like an audited page: a script that
+// writes on load must not reach the site just because the run only explores.
+async function runDiscover(browser, opts, log) {
+  const origin = opts.url.origin;
+  const queue = new CrawlQueue({ origin, maxPages: opts.maxPages, exclude: opts.exclude });
+  queueRoutes(queue, opts, log);
+  if (opts.snapshotDir) fs.mkdirSync(opts.snapshotDir, { recursive: true });
+
+  const urls = [];
+  const pages = [];
+  for (const [vi, viewport] of opts.viewports.entries()) {
+    const { context, page: firstPage } = await newContext(browser, viewport, opts);
+    // Replaced after every route (see retireGuardedPage).
+    let page = firstPage;
+    let failure;
+    try {
+      for (let i = 0; ; i++) {
+        const url = vi === 0 ? queue.next() : urls[i];
+        if (!url) break;
+        if (vi === 0) urls.push(url);
+        const route = routeOf(url);
+        log(`(${i + 1}) discover ${viewport} ${route}`);
+        const guard = await guardMutations(page, { allowFormSubmit: false, origin });
+        try {
+          const nav = await visit(page, url, { origin, timeoutMs: opts.timeoutMs });
+          const entry = { url: displayUrl(url), route, viewport, title: nav.title || null, status: nav.status || null, error: nav.error || null, blockedRequests: guard.blocked };
+          pages.push(entry);
+          if (nav.error) continue;
+          if (vi === 0 && opts.crawl) for (const href of await extractLinks(page)) queue.add(href, page.url());
+          const inventory = await collectInventory(page);
+          entry.controls = inventory.controls;
+          entry.stateCandidates = inventory.stateCandidates.map((c) => ({ ...c, viewport }));
+          if (opts.snapshotDir) {
+            const snap = await ariaSnapshot(page);
+            if (snap) {
+              const file = path.join(opts.snapshotDir, `${slugForRoute(route, i)}.${viewport}.aria.yml`);
+              fs.writeFileSync(file, snap);
+              entry.snapshotFile = file;
+            }
+          }
+        } finally {
+          page = await retireAndUnguard(context, page, guard, opts);
+        }
+      }
+    } catch (err) {
+      failure = err;
+      throw err;
+    } finally {
+      await closeContext(context, failure);
+    }
+  }
+  const report = { mode: 'discover', baseUrl: opts.url.toString(), viewports: opts.viewports, pages, crawl: queue.summary() };
+  return { report, code: pages.some((p) => p.error) ? EXIT.LOAD_FAILURE : EXIT.PASS };
+}
+
+async function runAudit(browser, opts, { axeSource, states }, log) {
+  const origin = opts.url.origin;
+  const checks = new Set(opts.checks);
+  // Title analysis compares titles across routes, so it runs once (titles do not
+  // change with the layout). States without a viewport also replay here.
+  const primary = opts.viewports.includes('desktop') ? 'desktop' : opts.viewports[0];
+  const builder = new ReportBuilder({
+    baseUrl: opts.url.toString(),
+    viewports: opts.viewports,
+    checks: opts.checks,
+    bestPractice: opts.bestPractice,
+    tool: { name: 'power-pages a11y-audit', axeVersion: null },
+  });
+  const queue = new CrawlQueue({ origin, maxPages: opts.maxPages, exclude: opts.exclude });
+  queueRoutes(queue, opts, log);
+
+  // The first viewport drives discovery; later viewports audit exactly that list so
+  // results are comparable across viewports.
+  const urls = [];
+  const titles = [];
+  for (const [vi, viewport] of opts.viewports.entries()) {
+    const { context, page: firstPage } = await newContext(browser, viewport, opts);
+    // Replaced after every route and state (see retireGuardedPage).
+    let page = firstPage;
+    let failure;
+    try {
+      const list = vi === 0 ? null : [...urls];
+      let i = 0;
+      for (;;) {
+        const url = vi === 0 ? queue.next() : list[i];
+        if (!url) break;
+        i++;
+        if (vi === 0) urls.push(url);
+        const route = routeOf(url);
+        const total = vi === 0 ? `${i}` : `${i}/${list.length}`;
+        log(`(${total}) ${viewport} ${route}`);
+
+        // Guarded from the first request, never allowing form submission (there's no
+        // per-page consent): a page's own script can write on load, and the checks
+        // below synthesize focus, blur, Tab, resize, and media events that it can POST
+        // on (autosave on blur, analytics that write a record). Load-time list-grid
+        // reads still work: that read-only POST is exempt on the audited origin.
+        const guard = await guardMutations(page, { allowFormSubmit: false, origin });
+        const checkErrors = [];
+        let nav;
+        let pageError = null;
+        try {
+          nav = await visit(page, url, { origin, timeoutMs: opts.timeoutMs });
+          if (nav.error) continue;
+          if (vi === 0 && opts.crawl) for (const href of await extractLinks(page)) queue.add(href, page.url());
+
+          const ctx = { route, viewport };
+          if (checks.has('axe')) {
+            try {
+              const axeResult = await runAxe(page, axeSource, { bestPractice: opts.bestPractice });
+              if (axeResult.axeVersion) builder.meta.tool.axeVersion = axeResult.axeVersion;
+              builder.addFindings(axeResult.findings, ctx);
+            } catch (err) {
+              pageError = `axe failed: ${errorLine(err)}`;
+            }
+          }
+          if (viewport === primary && checks.has('titles')) titles.push({ route, title: nav.title });
+          // The remaining checks are layout-dependent — mobile navigation has its own
+          // focus order and traps, and text can clip or animate differently at a narrow
+          // width — so they run on every selected viewport. Nodes are grouped per
+          // element, so a barrier shared by both layouts is still reported once with an
+          // occurrence per viewport.
+          // Order matters: each check restores what it changes, and the keyboard walk
+          // runs last because moving focus can open menus that would skew the others.
+          if (checks.has('motion')) {
+            const r = await runCheck('motion', () => runMotionCheck(page), checkErrors);
+            if (r) builder.addFindings(r.findings, ctx);
+          }
+          if (checks.has('zoom')) {
+            const r = await runCheck('zoom', () => runZoomCheck(page), checkErrors);
+            if (r) builder.addFindings(r.findings, ctx);
+          }
+          if (checks.has('reflow')) {
+            const r = await runCheck('reflow', () => runReflowCheck(page), checkErrors);
+            if (r) builder.addFindings(r.findings, ctx);
+          }
+          if (checks.has('keyboard')) {
+            const r = await runCheck('keyboard', () => runKeyboardCheck(page), checkErrors);
+            if (r) builder.addFindings(r.findings, ctx);
+          }
+        } finally {
+          page = await retireAndUnguard(context, page, guard, opts);
+          // Recorded here so a page that failed to load is listed too (the `continue`
+          // above still runs this block), with any on-load write the guard stopped.
+          if (nav) {
+            builder.addPage({ route, viewport, url: displayUrl(url), key: url, title: nav.title || null, status: nav.status || null, error: nav.error || pageError, checkErrors, blockedRequests: guard.blocked });
+          }
+        }
+      }
+
+      for (const state of states.filter((s) => (s.viewport || primary) === viewport)) {
+        const url = new URL(state.route, opts.url).toString();
+        // Output gets the same query-value redaction as crawled routes; navigation
+        // uses the full URL.
+        const route = routeOf(url);
+        log(`state ${viewport} ${route} "${state.label}"`);
+        // validateStates() already rejects off-site route shapes; this second check
+        // keeps a signed-in browser from ever navigating away if that rule regresses.
+        if (new URL(url).origin !== origin) {
+          builder.addState({ label: state.label, route, viewport, error: 'route resolves outside the audited site' });
+          continue;
+        }
+        // Guarded from the first request, like a crawled page. Form submission needs two
+        // consents: the run-wide --allow-form-submit switch and the state's own
+        // "allowFormSubmit": true, so approving one submitting state never unguards the
+        // others. Classic Power Pages list grids fetch their rows with a POST; that
+        // read is exempt on the audited origin, so a grid still loads under the guard.
+        const allowFormSubmit = Boolean(opts.allowFormSubmit && state.allowFormSubmit);
+        const guard = await guardMutations(page, { allowFormSubmit, origin });
+        const checkErrors = [];
+        const ctx = { route, viewport, state: state.label };
+        const stateInfo = { label: state.label, route, viewport, formSubmitAllowed: allowFormSubmit };
+        try {
+          const nav = await visit(page, url, { origin, timeoutMs: opts.timeoutMs });
+          if (nav.error) {
+            builder.addState({ ...stateInfo, error: nav.error, blockedRequests: guard.blocked });
+            continue;
+          }
+          await applyState(page, state, { allowFormSubmit, timeoutMs: Math.min(opts.timeoutMs, 10000) });
+          await ensureHelpers(page);
+          if (checks.has('axe')) {
+            const { findings } = await runAxe(page, axeSource, { bestPractice: opts.bestPractice });
+            builder.addFindings(findings, ctx);
+          }
+          // Only checks that leave the page as it is: reflow and zoom resize or
+          // restyle the page, which closes most menus and dialogs (see STATE_CHECKS).
+          if (checks.has('keyboard')) {
+            const r = await runCheck('keyboard', () => runKeyboardCheck(page), checkErrors);
+            if (r) builder.addFindings(r.findings, ctx);
+          }
+          builder.addState({ ...stateInfo, checkErrors, blockedRequests: guard.blocked });
+        } catch (err) {
+          builder.addState({ ...stateInfo, error: errorLine(err), checkErrors, blockedRequests: guard.blocked });
+        } finally {
+          page = await retireAndUnguard(context, page, guard, opts);
+        }
+      }
+    } catch (err) {
+      failure = err;
+      throw err;
+    } finally {
+      await closeContext(context, failure);
+    }
+  }
+
+  // When axe ran, its document-title rule already reports an empty <title>.
+  for (const { route, finding } of analyzeTitles(titles, { includeMissing: !checks.has('axe') })) {
+    builder.addFindings([finding], { route, viewport: primary });
+  }
+
+  const report = { mode: 'audit', ...builder.build({ crawl: queue.summary() }) };
+  return { report, code: exitCodeFor(report) };
+}
+
+function writeOutput(report, opts, stdout) {
+  const json = `${JSON.stringify(report, null, 2)}\n`;
+  if (opts.output) {
+    fs.mkdirSync(path.dirname(path.resolve(opts.output)), { recursive: true });
+    fs.writeFileSync(opts.output, json);
+  } else {
+    stdout.write(json);
+  }
+}
+
+async function main(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, onAbandonBrowser = null } = {}) {
+  let opts;
+  let states = [];
+  try {
+    opts = parseArgs(argv);
+    if (opts.help) {
+      stdout.write(`${USAGE}\n`);
+      return EXIT.PASS;
+    }
+    if (opts.statesFile) states = loadStatesFile(opts.statesFile);
+    // A state pinned to a layout that isn't selected would never replay. Refuse it
+    // rather than finish "successfully" without auditing an approved state (common
+    // when a saved desktop state is reused with --viewports mobile).
+    const unreachable = states.filter((s) => s.viewport && !opts.viewports.includes(s.viewport));
+    if (opts.mode === 'audit' && unreachable.length) {
+      throw new UsageError(`States target a viewport that --viewports doesn't include: ${unreachable.map((s) => `"${s.label}" (${s.viewport})`).join(', ')}. Add the viewport or remove the state.`);
+    }
+    // Both consents are required for a state to submit. Say so when only one is
+    // present, so a missing flag is not mistaken for a passing submit flow.
+    const marked = states.filter((s) => s.allowFormSubmit).map((s) => `"${s.label}"`);
+    if (marked.length && !opts.allowFormSubmit) {
+      stderr.write(`[a11y] ${marked.join(', ')} set allowFormSubmit, but --allow-form-submit was not passed; they stay guarded.\n`);
+    } else if (opts.allowFormSubmit && !marked.length) {
+      stderr.write('[a11y] --allow-form-submit has no effect: no state sets "allowFormSubmit": true.\n');
+    }
+    if (opts.authState && !fs.existsSync(opts.authState)) {
+      throw new UsageError(`--auth-state file not found: ${opts.authState}`);
+    }
+  } catch (err) {
+    if (err instanceof UsageError || err instanceof StatesFileError) {
+      stderr.write(`${err.message}\n\n${USAGE}\n`);
+      return EXIT.USAGE;
+    }
+    throw err;
+  }
+
+  const log = (msg) => stderr.write(`[a11y] ${msg}\n`);
+  let browser;
+  let abandoned = false;
+  try {
+    const roots = candidateRoots({ depsDir: opts.depsDir });
+    const { chromium } = loadPlaywright(roots);
+    let axe = { source: null };
+    if (opts.mode === 'audit' && opts.checks.includes('axe')) axe = loadAxeSource(roots);
+    browser = await launchBrowser(chromium, { headless: !opts.headed });
+
+    const { report, code } = opts.mode === 'discover'
+      ? await runDiscover(browser, opts, log)
+      : await runAudit(browser, opts, { axeSource: axe.source, states }, log);
+    writeOutput(report, opts, stdout);
+    return code;
+  } catch (err) {
+    if (err instanceof MissingDependencyError) {
+      stderr.write(`${err.message}\n`);
+      return EXIT.MISSING_DEPS;
+    }
+    if (err instanceof UnsafeRetireError) {
+      // No report: the run stopped part-way. browser.close() would close the page
+      // that's still alive and run its unload handlers, so the browser is left for
+      // the caller to kill (the CLI exits the process; see below).
+      abandoned = true;
+      stderr.write(`Accessibility audit stopped: ${err.message}. Re-run the audit.\n`);
+      return EXIT.LOAD_FAILURE;
+    }
+    stderr.write(`Accessibility audit failed: ${errorLine(err)}\n`);
+    return EXIT.LOAD_FAILURE;
+  } finally {
+    if (abandoned) {
+      if (onAbandonBrowser) onAbandonBrowser();
+    } else if (browser) {
+      await browser.close().catch(() => {});
+    }
+  }
+}
+
+if (require.main === module) {
+  let abandoned = false;
+  main(undefined, { onAbandonBrowser: () => { abandoned = true; } }).then((code) => {
+    if (!abandoned) {
+      process.exitCode = code;
+      return;
+    }
+    // Ending the process makes Playwright's own 'exit' handler force-kill the browser
+    // (taskkill /T /F on Windows, SIGKILL to the process group on POSIX), so no page
+    // script runs. Exit only after stderr flushes; Windows pipes write asynchronously.
+    process.stderr.write('', () => process.exit(code));
+  });
+}
+
+module.exports = { UnsafeRetireError, main, retireGuardedPage, slugForRoute };
