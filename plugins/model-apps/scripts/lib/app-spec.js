@@ -2271,7 +2271,12 @@ function validateAppSpec(spec, opts = {}) {
     if (wr.content === undefined && wr.contentBase64 === undefined && !wr.contentPath) {
       errors.push(`webResource ${wr.name}: needs content, contentBase64, or contentPath`);
     }
-    if (wr.contentPath !== undefined && !isAppSourcePath(wr.contentPath)) {
+    // The path is read only when it is the effective source (sdk-build.js webResourceOpts takes
+    // contentBase64, then content, then contentPath) and only by a profile that builds or verifies.
+    // Teardown's structural profile reads no source, so a spec an earlier release accepted with an
+    // unconfined path can still be torn down; build and verify refuse it until the path is fixed.
+    const readsContentPath = wr.contentBase64 === undefined && wr.content === undefined && wr.contentPath !== undefined;
+    if (readsContentPath && profile !== 'structural' && !isAppSourcePath(wr.contentPath)) {
       errors.push(`webResource ${wr.name}: contentPath must be an app-folder-confined relative path (no parent escape, rooted or drive path, or alternate stream)`);
     }
   }

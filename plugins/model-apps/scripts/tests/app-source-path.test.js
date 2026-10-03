@@ -46,9 +46,25 @@ const externalPaths = [
 
 for (const file of externalPaths) {
   test(`validation confines web-resource contentPath ${JSON.stringify(file)}`, () => {
-    for (const profile of ['design', 'plan', 'deploy', 'structural']) {
+    for (const profile of ['design', 'plan', 'deploy']) {
       const result = validateAppSpec(specWithSource(file), { profile });
       assert.ok(result.errors.some((e) => /contentPath/.test(e)), `${profile}: ${JSON.stringify(result.errors)}`);
+    }
+  });
+
+  // Teardown reads no source, so a spec an earlier release accepted must still tear down; and a path behind
+  // inline content is never read (webResourceOpts precedence), so it is not the build's to refuse either.
+  test(`teardown's structural profile and inline content leave an unread contentPath ${JSON.stringify(file)} alone`, () => {
+    const structural = validateAppSpec(specWithSource(file), { profile: 'structural' });
+    assert.ok(!structural.errors.some((e) => /contentPath/.test(e)), JSON.stringify(structural.errors));
+    for (const inline of [{ content: 'var a;' }, { content: '' }, { contentBase64: 'aGk=' }]) {
+      const spec = specWithSource(file);
+      Object.assign(spec.webResources[0], inline);
+      for (const profile of ['design', 'plan', 'deploy']) {
+        const result = validateAppSpec(spec, { profile });
+        assert.ok(!result.errors.some((e) => /contentPath/.test(e)), `${profile} ${JSON.stringify(inline)}: ${JSON.stringify(result.errors)}`);
+      }
+      assert.ok(!lintAppSpec(spec).errors.some((e) => /contentPath/.test(e)), `lint ${JSON.stringify(inline)}`);
     }
   });
 

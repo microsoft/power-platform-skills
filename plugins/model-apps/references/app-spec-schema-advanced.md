@@ -35,7 +35,9 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
 - `contentPath` must name a regular file inside the app folder. Absolute, rooted,
   drive-relative and alternate-stream paths, parent escapes, symlinks and junctions are refused.
   The build and `lint-app-spec.js` check the file before anything is written, alongside page
-  `codeFile` sources.
+  `codeFile` sources. Inline `content` or `contentBase64` takes precedence, so a `contentPath`
+  beside it is never read and not checked. Teardown reads no source, so a spec with an older
+  unconfined path can still be torn down.
 - Built **before** forms and added to the solution; reference one from a form `events[]` handler.
 - **Content edits are NOT applied on rebuild.** Like commands, the phase is discover-then-skip: a web
   resource that already exists is reused as-is, so changing `content` and rebuilding deploys nothing
