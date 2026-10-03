@@ -62,6 +62,31 @@ test('a pin proof failure halts rather than reporting a completed app', async ()
   await assert.rejects(runSdkBuild(membershipSpec(), { sdk: fake.sdk, apply: true, phases: ['app-shell'] }), /task.*missing/i);
 });
 
+// componenttype 80 is appmodule, 62 sitemap:
+// https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solutioncomponent
+const APP_MODULE = 80;
+const SITEMAP_COMPONENT = 62;
+
+test('a fresh app joins its solution before the hidden-table pin can fail', async () => {
+  const fake = membershipSdk({ dropPin: true });
+  const joins = [];
+  fake.sdk.addSolutionComponent = async (o) => { joins.push(o.componentType); fake.events.push(['join', o.componentType, o.componentId]); };
+  await assert.rejects(runSdkBuild(membershipSpec(), { sdk: fake.sdk, apply: true, phases: ['app-shell'] }), /task.*missing/i);
+  const join = fake.events.findIndex(([event, type, id]) => event === 'join' && type === APP_MODULE && id === APP);
+  const pin = fake.events.findIndex(([event, action]) => event === 'post' && action === '/AddAppComponents');
+  assert.ok(join >= 0 && join < pin, `the app module joined before the pin: ${JSON.stringify(fake.events)}`);
+  assert.ok(joins.includes(SITEMAP_COMPONENT), 'and its sitemap with it');
+});
+
+test('a re-run that reuses the app re-asserts its solution membership', async () => {
+  const fake = membershipSdk({ existing: true });
+  const joins = [];
+  fake.sdk.addSolutionComponent = async (o) => { joins.push([o.componentType, o.componentId, o.solutionUniqueName]); };
+  await runSdkBuild(membershipSpec(), { sdk: fake.sdk, apply: true, phases: ['app-shell'] });
+  const sol = membershipSpec().solution.uniqueName;
+  assert.ok(joins.some(([type, id, s]) => type === APP_MODULE && id === APP && s === sol), JSON.stringify(joins));
+});
+
 test('existing page-less app-shell push re-supplies the map after fetch and preserves other components', async () => {
   const fake = membershipSdk({ existing: true });
   const get = fake.sdk.getArtifact;

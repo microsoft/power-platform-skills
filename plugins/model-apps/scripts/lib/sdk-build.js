@@ -4456,6 +4456,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
           ? !(opts.changedOnly && opts.changedOnly.skipSitemapFinalize)
           : (!appHasPageSubareas(spec) || routingSet);
         if (pushesApp) await refuseUnpushedAppCopy(provision, existingId, def.name);
+        // Re-assert the app module's own solution membership on every reuse, as the page manifest's is. A
+        // create that failed after its push (a pin, its read-back, a publish) left the app outside the
+        // solution, and a re-run lands here: without this add, a later green build exported a solution
+        // without its app. Adding a component that is already a member is a no-op. Teardown deletes the
+        // app by its unique name, never by this membership, so the add changes nothing it removes.
+        await provision.addSolutionComponent({ componentId: existingId, componentType: COMPONENT_TYPE.app, solutionUniqueName: sol.uniqueName });
         // Existing-app app-shell often makes NO SDK push: its sitemap commit is in the pages finalizer.
         // Pin now, independently, and let that normal publish make the proven current layer live.
         await pinTables(existingId, false);
@@ -4524,12 +4530,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // through createArtifact, and push emits appmodule -> sitemap -> AddAppComponents -> publish.
       const art = await provision.createArtifact('app', def);
       const pushed = requireSuccessfulPush(await explainAppPushWarnings(provision.dataverse, await provision.pushArtifact('app', art.id), def.name), `app ${def.name}`, opts.warn);
-      await pinTables(pushed.id, true);
+      // Join the solution straight after the push, before the hidden-table pin, its read-back and the
+      // publish that follows it can fail. A re-run finds the app and takes the reuse branch above, which
+      // re-asserts the membership too, so a create interrupted here never leaves a solution without its app.
       await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.app, solutionUniqueName: sol.uniqueName });
       // The app module and its sitemap are DISTINCT solution components — adding the appmodule does
       // NOT pull the sitemap in (it lands only in the Default solution), so export/import from the
       // app's own solution would be incomplete. Add the sitemap (componenttype 62) explicitly.
       await ensureSitemapInSolution(provision, sol, def.uniqueName);
+      await pinTables(pushed.id, true);
       return pushed.id;
     });
   }
