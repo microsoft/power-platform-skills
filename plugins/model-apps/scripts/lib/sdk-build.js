@@ -4595,15 +4595,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // → one live id) HALT — refusing to overwrite/misbind an arbitrary page.
       const live = new Set(enumd.ids.map((id) => String(id).toLowerCase()));
       const declaredKeys = new Set((spec.pages || []).map((p) => p.key || p.name));
-      // Ownership proof is this app's navigation in EITHER layer: a page saved into the app designer's
-      // navigation, and written by a download that reads the current layer, is this app's before it is
-      // published (navigationProof). The removal gate below keeps the published `sitemapIds`.
-      const proofCandidates = [
-        ...((manifest && manifest.pages) || []),
-        ...(spec.pages || []).map((p) => ({ key: p.key || p.name, pageId: p.pageId })),
-      ].filter((mp) => declaredKeys.has(mp.key) && live.has(String(mp.pageId || '').toLowerCase())).map((mp) => String(mp.pageId).toLowerCase());
-      const proof = await navigationProof(provision, appUnique, membership, proofCandidates);
-      const placed = new Set(proof.ids.map((id) => String(id).toLowerCase()));
+      // Ownership proof for an UPDATE is this app's PUBLISHED navigation or a local creation receipt. A page
+      // that is only in the app's saved but unpublished navigation is not bound: the shared-page scan below
+      // reads other apps' published navigation only, so binding it could overwrite a page another app has
+      // also saved into its navigation. Such a page halts as unproven, with advice to publish first
+      // (navigationProof reads the saved layer for that message).
+      const placed = new Set(sitemapIds.map((id) => String(id).toLowerCase()));
       let ownership;
       try { ownership = readPageOwnership(opts.workspaceDir, appUnique, opts.env); } catch (e) {
         throw new BuildHalt(`could not read local page creation receipts (${e.message}); refusing to bind off-sitemap ids`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
@@ -4635,17 +4632,26 @@ async function runSdkBuildPhases(spec, opts, owed) {
           nameReadErrors.push(`${id}: ${(e && e.message) || e}`);
         }
       }
-      const { keyToId, conflicts } = reconcilePageIds(spec.pages, manifest, enumd.ids, proof.ids, storedNames, createdIds);
+      const { keyToId, conflicts } = reconcilePageIds(spec.pages, manifest, enumd.ids, sitemapIds, storedNames, createdIds);
       if (conflicts.length) {
-        const unreadDraft = proof.currentNavigation && !proof.currentNavigation.ok
-          ? ` (its saved but unpublished navigation could not be read: ${proof.currentNavigation.reason} — re-run)`
+        const unproven = conflicts.filter((c) => c.reason === 'unproven-manifest-id');
+        // Say WHY each one is unproven. "Add it to the app's navigation" is no help for a page the maker has
+        // already saved there without publishing, so read the saved layer and name that case.
+        const saved = unproven.length ? await navigationProof(provision, appUnique, membership, unproven.map((c) => c.manifestId)) : null;
+        const savedNav = saved && saved.currentNavigation;
+        const inSavedNav = new Set(savedNav && savedNav.ok ? savedNav.ids.map((id) => String(id).toLowerCase()) : []);
+        const unreadDraft = savedNav && !savedNav.ok
+          ? ` (its saved but unpublished navigation could not be read: ${savedNav.reason} — re-run)`
           : '';
-        const recovery = conflicts.filter((c) => c.reason === 'unproven-manifest-id').map((c) => {
+        const recovery = unproven.map((c) => {
           const name = JSON.stringify(c.storedName || c.requestedName || '(unreadable name)');
+          if (inSavedNav.has(String(c.manifestId).toLowerCase())) {
+            return `page ${c.manifestId} (${name}) is only in this app's saved but unpublished navigation: publish the app in the maker, then re-run. The build updates a page only when the app's published navigation or a local creation record proves it is this app's, so that other apps' navigation is checked before an update`;
+          }
           const proofText = c.hasCreationReceipt
             ? 'its local creation record does not corroborate the stored name'
             : 'this workspace holds no record that this app created it in this environment';
-          return `page ${c.manifestId} (${name}) is not in this app's navigation${unreadDraft} and ${proofText}: if it is this app's page, add it to the app's navigation in the maker and re-run; if not, remove the stale id from the manifest/spec (or delete the page) and re-run`;
+          return `page ${c.manifestId} (${name}) is not in this app's navigation${unreadDraft} and ${proofText}: if it is this app's page, add it to the app's navigation in the maker, publish the app and re-run; if not, remove the stale id from the manifest/spec (or delete the page) and re-run`;
         });
         throw new BuildHalt(`generative-page identity conflict(s): ${JSON.stringify(conflicts)}${nameReadErrors.length ? `; stored-name reads failed: ${nameReadErrors.join('; ')}` : ''} — refusing to overwrite/misbind a page. ${recovery.length ? recovery.join('; ') : 'Resolve the duplicate/mismatched id(s) in the spec/manifest and rebuild.'}`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
       }

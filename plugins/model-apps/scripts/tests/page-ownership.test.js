@@ -133,7 +133,8 @@ function sdkForPages(opts = {}) {
   };
   // The app's CURRENT (saved, unpublished) layer, read through the Dataverse client as download reads it:
   // appmodules and sitemaps by RetrieveUnpublishedMultiple, e.g. { value: [{ appmoduleidunique, componentstate: 1 }] }.
-  if (opts.draftMembership !== undefined || opts.draftError) {
+  // By default it equals the published navigation (nothing pending), as on an environment with no unpublished edit.
+  if (!opts.noDataverse) {
     sdk.dataverse = {
       get: async (url) => {
         state.draftReads += 1;
@@ -142,7 +143,8 @@ function sdkForPages(opts = {}) {
           return { status: 200, body: { value: [{ appmoduleid: APP, appmoduleidunique: DRAFT_LAYER, componentstate: 1 }] } };
         }
         if (url.startsWith('/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple')) {
-          const xml = `<SiteMap>${opts.draftMembership.map((id) => `<SubArea GenPageId="${id}" />`).join('')}</SiteMap>`;
+          const ids = opts.draftMembership !== undefined ? opts.draftMembership : membership;
+          const xml = `<SiteMap>${ids.map((id) => `<SubArea GenPageId="${id}" />`).join('')}</SiteMap>`;
           return { status: 200, body: { value: [{ sitemapxml: xml, componentstate: 1 }] } };
         }
         throw new Error(`unexpected test read: ${url}`);
@@ -197,11 +199,28 @@ test("teardown deletes a page proven only by the app's saved but unpublished nav
   assert.ok(state.draftReads > 0);
 });
 
-test('an unreadable unpublished navigation keeps the unproven page and says why', async () => {
-  const { sdk, state } = sdkForPages({ draftError: true });
+test('an unreadable unpublished navigation keeps the app intact, and a re-run once it reads completes the cleanup', async () => {
+  const opts = { draftError: true };
+  const { sdk, state } = sdkForPages(opts);
+  const workspaceDir = workspace();
+  const first = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk });
+  assert.equal(first.ok, false);
+  assert.deepEqual(state.deletes, [], 'nothing is deleted while a candidate can be neither proven nor ruled out');
+  assert.equal(state.app, true, 'the app, its navigation and the manifest stay for the re-run');
+  assert.match(first.errors.map((e) => e.message).join('\n'), new RegExp(`${OTHER}: cannot be proven or ruled out while the app's saved but unpublished navigation is unreadable`));
+  opts.draftError = false;
+  opts.draftMembership = [OWN, OTHER];
+  const second = await runTeardown(spec(), { apply: true, workspaceDir }, { sdk });
+  assert.equal(second.ok, true, JSON.stringify(second.errors));
+  assert.deepEqual(state.deletes.map((d) => d.id).sort(), [OWN, OTHER].sort());
+});
+
+test('a page in neither navigation layer is kept without stopping the teardown when both layers read', async () => {
+  const { sdk, state } = sdkForPages({ draftMembership: [OWN] });
   const r = await runTeardown(spec(), { apply: true }, { sdk });
-  assert.deepEqual(state.deletes, [{ entity: 'uxagentproject', id: OWN }], 'the published proof still stands');
-  assert.match(r.skipped.join('\n'), new RegExp(`${OTHER}[^\\n]*saved but unpublished navigation could not be read`));
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.deepEqual(state.deletes, [{ entity: 'uxagentproject', id: OWN }]);
+  assert.match(r.skipped.join('\n'), new RegExp(`${OTHER}[^\\n]*not proven`));
 });
 
 test('teardown reads no unpublished navigation when the published one proves every page', async () => {
@@ -211,37 +230,37 @@ test('teardown reads no unpublished navigation when the published one proves eve
   assert.equal(state.draftReads, 0);
 });
 
-for (const draft of ['proves', 'unreadable']) {
-  test(`a manifest page only in the saved but unpublished navigation: build ${draft === 'proves' ? 'binds it' : 'halts and says why'}`, async (t) => {
+for (const draft of ['saved', 'unreadable']) {
+  test(`a manifest page only in the saved but unpublished navigation: build halts ${draft === 'saved' ? 'and says to publish the app first' : 'and says the layer was unreadable'}`, async (t) => {
     const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'contoso-draft-navigation-'));
     t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
     fs.writeFileSync(path.join(appDir, 'overview.tsx'), 'export default () => null;');
     const { sdk, state } = sdkForPages({
       candidates: manifest(OWN).pages, membership: [], rows: [{ uxagentprojectid: OWN, name: 'Overview' }],
-      ...(draft === 'proves' ? { draftMembership: [OWN] } : { draftError: true }),
+      ...(draft === 'saved' ? { draftMembership: [OWN] } : { draftError: true }),
     });
     const s = spec();
     s.pages[0].source = { kind: 'tsx', codeFile: 'overview.tsx' };
-    const run = runSdkBuild(s, {
+    // The build binds by the published navigation or a receipt only: the shared-page scan reads other
+    // apps' published navigation, so a page bound through the saved layer could be another app's too.
+    await assert.rejects(runSdkBuild(s, {
       sdk, apply: true, appDir, workspaceDir: path.join(appDir, '.maker-workspace'), env: ENV, phases: ['pages'],
       changedOnly: { resolvedAppId: APP, skipSitemapFinalize: true },
       genpageCli: {
         enumerateEnv: async () => ({ ok: true, ids: [OWN], pages: [] }),
         upload: async (o) => { state.uploads.push(o); return { pageId: OWN }; },
       },
-    });
-    if (draft === 'proves') {
-      await run;
-      assert.equal(state.uploads.length, 1);
-      assert.equal(String(state.uploads[0].pageId).toLowerCase(), OWN, 'an UPDATE of the proven page, never a new one');
-    } else {
-      await assert.rejects(run, (e) => {
-        assert.equal(e.code, 'pages-identity-conflict');
+    }), (e) => {
+      assert.equal(e.code, 'pages-identity-conflict');
+      if (draft === 'saved') {
+        assert.match(e.message, /only in this app's saved but unpublished navigation: publish the app in the maker, then re-run/);
+        assert.doesNotMatch(e.message, /add it to the app's navigation/, 'it is already there');
+      } else {
         assert.match(e.message, /saved but unpublished navigation could not be read/);
-        return true;
-      });
-      assert.deepEqual(state.uploads, []);
-    }
+      }
+      return true;
+    });
+    assert.deepEqual(state.uploads, []);
   });
 }
 
@@ -304,7 +323,7 @@ test('an environment A creation receipt cannot authorize an off-sitemap build up
     assert.equal(e.code, 'pages-identity-conflict');
     assert.ok(e.message.includes(OWN));
     assert.match(e.message, /this workspace holds no record that this app created it/);
-    assert.match(e.message, /add it to the app's navigation in the maker and re-run/);
+    assert.match(e.message, /add it to the app's navigation in the maker, publish the app and re-run/);
     assert.match(e.message, /remove the stale id from the manifest\/spec/);
     return true;
   });

@@ -458,7 +458,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   app's manifest lists. Before deleting the app, it resolves page candidates, their stored names
   and this app's sitemap. Only navigation members or corroborated local creation receipts authorize
   deletion; names alone do not. Navigation is either layer: the published sitemap, and the saved but
-  unpublished one when the published layer leaves a page unproven (`navigationProof`, the layer a download reads). The verified ownership set is persisted locally before app deletion,
+  unpublished one when the published layer leaves a page unproven (`navigationProof`, the layer a download reads);
+  when that saved layer cannot be read and a page stays unproven, the app is left intact for a re-run. The BUILD
+  binds a page by its published navigation or a receipt only, because its shared-page scan reads other apps'
+  published navigation; a page only in the saved layer halts with advice to publish the app first. The verified ownership set is persisted locally before app deletion,
   so a page-less retry still has proof after the app is gone. Unreadable proof or a failed record write
   leaves the app intact. Proven pages still undeleted, including dependency-blocked pages, keep the
   manifest, solution and local teardown record and make the run fail. Records are consumed only for

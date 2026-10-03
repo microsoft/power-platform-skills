@@ -357,9 +357,12 @@ const KIND_HANDLERS = {
       const published = target.appUnique ? await fetchSitemap(sdk, target.appUnique) : { ok: false, reason: 'app identity unavailable' };
       // Proof is this app's navigation in either layer: a page saved into the app designer's navigation is
       // this app's before it is published, and a download writes it from that layer (navigationProof). The
-      // current layer is read only when the published one leaves a present page unproven.
+      // current layer is read only when the published one leaves a present page unproven. Unlike the build,
+      // teardown may take the saved layer as proof: a DELETE of a page another app's saved navigation still
+      // references is refused by the platform (see isDependencyBlocked), and that refusal is a skip here.
       const membership = await navigationProof(sdk, target.appUnique, published, present.map((p) => p.id));
-      const unreadDraft = membership.currentNavigation && !membership.currentNavigation.ok
+      const savedNavUnread = !!(membership.currentNavigation && !membership.currentNavigation.ok);
+      const unreadDraft = savedNavUnread
         ? ` (the app's saved but unpublished navigation could not be read: ${membership.currentNavigation.reason})`
         : '';
       // Confirmed app absence permits only local proof, never a name-only substitute for navigation.
@@ -385,6 +388,11 @@ const KIND_HANDLERS = {
           items.push(item);
         } else {
           kept.push({ ...item, reason: `not proven to belong to this app: no navigation membership or corroborated local creation receipt${unreadDraft}; inspect this id and remove it manually only if it is yours` });
+          // Unproven only because the saved navigation could not be read: it may be this app's page, and
+          // deleting the app now would remove both the navigation that can prove it and the manifest that
+          // lists it. That is unreadable proof, so the app is left intact for a re-run (runTeardown stops
+          // before app deletion on a readError), as an unreadable published sitemap already is.
+          if (savedNavUnread) errors.push(`page ${p.id}: cannot be proven or ruled out while the app's saved but unpublished navigation is unreadable (${membership.currentNavigation.reason})`);
         }
       }
       if (!sitemapReadable) errors.push(`app sitemap unreadable (${membership.reason}${membership.detail ? `: ${membership.detail}` : ''})`);
