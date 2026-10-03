@@ -37,6 +37,8 @@ to read the SDK, the lint, or the engine to author a spec. Common asks → how t
 | A command **drop-down menu** of buttons | `commands[].type: "FlyoutAnchor"` + `children[]` | commands |
 | A dashboard of chart/list tiles | `dashboards[]` (`tiles[]` reference declared `views`/`charts`) | dashboards |
 | A dashboard in the app nav | a `dashboard` sitemap subarea in `appShell` (auto-pins it) | appShell |
+| A table in the app but not its navigation | `app.tables` (logical names; additive membership) | app |
+| Only selected Main forms offered by this app | `app.mainForms` (table → Main form names) | app / forms |
 
 The builder is **idempotent** and runs everything in one pass (no post-build scripts): tables,
 columns, relationships, web resources, views, charts, forms (+ sub-grids + JS handlers), commands, dashboards, the app,
@@ -104,6 +106,64 @@ sample data (incl. multi-parent junction links + status reasons), and publish.
   **existing** app by identity — even after you **rename** the display `app.name` — instead of creating a
   **duplicate** app. You normally never hand-author this: an authored create-fresh spec omits it, and the
   build derives the uniquename deterministically from `solution.publisherPrefix` + `app.name`.
+  Download recovers the immutable name from the fetched SDK artifact, including an unpublished
+  GUID-addressed app, and refuses when it cannot resolve identity; it never derives one from display name.
+- **`app.tables`** *(optional)* — additional app table membership, independent of navigation:
+  `["task", "email"]`. It is an array of non-empty logical names with no case-insensitive duplicates.
+  A table need not be declared in `entities[]`, but must exist by the app-shell phase; an unresolved
+  name stops the build before any app write. A navigation table is already included, so listing it
+  here is harmless but lint warns. Membership is **additive**: removing a name from the spec never
+  removes an existing app component.
+  Download emits hidden type-1 members here, sorted. A custom hidden table also goes to `entities[]`;
+  a known non-custom hidden type-1 member does not, **even when a view/chart/form references it**, so
+  rebuilding does not copy another solution's custom columns or relationships. Tables discovered
+  **only** through view/chart/form components retain their existing schema-capture behavior.
+  Membership-only stock tables do not need a primary-name column.
+  A hidden type-1 table with unknown custom/stock status is also reference-only, with a loss note;
+  schema is adopted only on an explicit `IsCustomEntity === true`, even with companion assets.
+- **`app.mainForms`** *(optional)* — a per-navigation-table **Main-form allow-list**, by name:
+  ```json
+  {
+    "minimumPluginVersion": "2.13.0",
+    "app": {
+      "name": "Work Items",
+      "tables": ["task", "email"],
+      "mainForms": { "contoso_workitem": ["Work Item"] }
+    }
+  }
+  ```
+  Each key must name an `Entity` table in this app's sitemap, ignoring case; a hidden `app.tables`
+  reference alone is not eligible. Each value is a non-empty array of distinct names, compared
+  ignoring case and accents. A name resolves within **(table, Main)** to a declared form or an
+  existing **active** Main form; missing, inactive or ambiguous names stop the build before an app
+  write. A same-named QuickView/QuickCreate is a different identity and does not shadow a valid Main.
+  A known `forms[].formId` does not bypass active-name ambiguity; a newly created/reused id counts
+  as a candidate even before the catalog reports it.
+  `{}` restricts nothing. Empty lists are refused: an app with no Main member offers every form.
+  **Create is exact; existing-app updates only stop widening.** Listed forms are added, other Main
+  forms are not added, and **none are removed**. Existing extras produce a warning and fail
+  `--verify`: remove them in Maker (**app designer → table → Forms**) or include them in the list.
+  Every later app push re-supplies the directive; it is not stored as a server-side allow-list.
+  Quick Create, Quick View and card forms, dashboards, views and charts are unaffected.
+  This does **not** choose a default, an order or security roles. Lint warns when the list excludes
+  the explicit default or first `entities[].mainFormOrder` form. A user's remembered Main form is
+  **per table**, not per app. **Measured:** membership changes after first publish did not reach
+  the runtime form list within 89 minutes, even after validation and republishing; do not promise
+  immediate runtime changes for an existing app.
+  Download emits a list only for a non-empty strict subset of the table's active Main catalog whose
+  member names are unique among its Main forms. Inactive or unclassifiable pins are named in
+  not-round-tripped notes; an encodable active restriction is still preserved. Empty/full active
+  membership is omitted, with a note for the empty case. Form layouts themselves are not reconstructed.
+  **Download is a server-current edit snapshot**, including saved unpublished app/sitemap changes.
+  Navigation, table classification and Main membership use that same current layer; `--verify`
+  instead checks the published layer that users consume.
+  All modeled navigation targets (entity, generative page, URL, dashboard and custom page) and
+  their occurrence counts must match. If those multisets disagree, or the SDK sitemap is missing,
+  download refuses the mixed snapshot: publish the app, then download again.
+- **Capability floor:** set **`minimumPluginVersion: "2.13.0"` or newer** whenever using `app.tables`
+  or `app.mainForms`; lint warns without it. Download adds that floor when it emits either field and
+  retains a higher authored floor. The 2.12 consumer's existing version gate refuses such a spec
+  instead of silently ignoring membership instructions it cannot build.
 - **`app.aiDescription`** *(optional)* — the app's **routing description**: what an agent or router
   reads to decide whether *this* app is the right place for a request. It is **separate from
   `app.description`**, the text on the app tile, and maps to the platform's
@@ -502,6 +562,10 @@ run the lint, so an unlinted spec hits the failure at build time instead).
   `contoso_teammember` → `contoso_systemuser_teammember`), so you don't need to set `schemaName`.
   If you *do* supply an explicit `schemaName`, it **must** start with `<publisherPrefix>_` — the
   lint errors otherwise (an unprefixed relationship name is a build-time 400).
+- Two relationships may not share a schema name. Dataverse allows one relationship per name, so
+  the second would not be created. A 1:N and an N:N between the same pair, two 1:N relationships
+  on one pair (different lookups), and a self-referential 1:N plus an N:N on that table all derive
+  the same default name — give one of them an explicit `schemaName`.
 
 **Many-to-many:**
 ```jsonc
@@ -516,9 +580,11 @@ run the lint, so an unlinted spec hits the failure at build time instead).
 
 **What a download reconstructs.** `download-model-app.js` rebuilds `relationships[]` from live
 metadata, keeping the lookup's deployed casing (`new_CustomerId`, not `new_customerid`) and its
-label. It emits an explicit `schemaName` only when the deployed name differs from the generated
-default, so a rebuild into the **same** environment matches the existing relationship instead of
-creating a second one beside it. Three cases it **cannot** express are reported by name and reason
+label. It emits an explicit `schemaName` whenever the deployed name is not the one this
+solution's prefix would generate, including a name that uses another publisher's prefix. Omitting
+that name would make a rebuild into the **same** environment create under a different name and
+fail on the lookup that already exists. A foreign-prefix name is a lint warning: a new environment
+cannot create it under this publisher, so rename it explicitly there. Three cases it **cannot** express are reported by name and reason
 rather than silently dropped:
 - a **polymorphic** lookup — one column targeting several tables (Dataverse surfaces it as several
   relationships sharing one lookup attribute), where `relationships[]` declares exactly one
@@ -730,9 +796,10 @@ at the same order, as every new form is — were served with the `isdefault` for
   hand: the build leaves its order alone, and the spec cannot also give it `mainFormOrder`.
 - **Also deciding what a user sees:** their security roles — a form restricted by `securityRoles` is
   served only to those roles, and everyone else opens the next form they may open — and their
-  remembered form, which is per user, not configuration (they change it by switching forms). An app
-  offers **every** active Main form of its tables, including forms the spec does not declare (the
-  stock "Information" form among them); a spec cannot leave one out today.
+  remembered form, which is per user **and table**, not configuration (they change it by switching
+  forms). Without `app.mainForms`, an app offers **every** active Main form of its navigation tables,
+  including undeclared forms such as stock "Information". Use `app.mainForms` to restrict additions
+  for this app; creating an app is exact, but existing members are never removed automatically.
 - **`--verify`** checks the stored order (`form-order`) and the order the platform serves the user
   running verify (`form-order-served`, read with the public `RetrieveFilteredForms` function). When
   that user may not open the first form, the check is reported as not applicable, not as a pass.
@@ -799,30 +866,34 @@ correctly; the compiler does not emit one yet. The restriction can be lifted onc
 A **deployed** `rowspan` — one a maker added by hand, which the authored restriction above cannot
 prevent — can make the rows of a section positionally meaningful in the same way: once any cell
 **follows** a row-spanning cell, re-flowing the section by reading order could move that cell into
-the reserved slot. In such a section the build therefore never re-flows. Every fit below counts a
-row's own cells **plus** the columns a row-spanning cell above still reserves in it — the same rule
-`--verify` applies, so the build never writes a layout verify rejects. Narrowing the grid is applied
+the reserved slot. In such a section the build therefore never flattens and re-flows the whole
+section. Every fit below counts a row's own cells **plus** the columns a row-spanning cell above
+still reserves in it — the same occupancy rule `--verify` applies, so placement does not introduce
+row overflow. Narrowing the grid is applied
 only when every row already fits the new width that way; otherwise the section **keeps its current
 grid** and the refusal is reported. A span change that would overflow the rows its cell occupies is
-skipped (and reported), rather than applied without the re-flow. A field added to the section goes
-into the last row if it fits there, otherwise into the first new row with room. Likewise a `rowspan` is never **raised** on a
-deployed cell that other cells follow, even when its row still fits: the build keeps a field where
+skipped (and reported), rather than applied without the re-flow. Before optional positioning, a new
+field is packed into the last row if it fits there, otherwise into the first new row with room.
+Likewise a `rowspan` is never **raised** on a deployed cell that other cells follow, even when its
+row still fits: the build keeps a field where
 the form already has it, so the field you list last is not necessarily last on the form. A section
 whose row spans are all **trailing** — stock Main forms put `rowspan` on the last cell — re-flows
 normally, because nothing comes after the span to land in its reservation. Every refusal is also
-recorded in the build result (`skipped.layout`), and `--verify` reports the divergence for an
-explicit layout.
+recorded in the build result (`skipped.layout`). `--verify` reports declared grid/span/state
+mismatches for an explicit layout, but does not check field order or `after` adjacency.
 
-**Editing an existing form.** An explicit layout is converged onto the deployed form rather than
-flattened into its first section: missing tabs, form-columns and sections are **created** where the
-layout places them, a tab's `label`/`expanded`/`visible`, a form-column's `width` and a section's
+**Editing an existing form.** An explicit layout reconciles containers and field-to-section
+placement, not the order of existing fields. It is not flattened into the form's first section:
+missing tabs, form-columns and sections are **created** where the layout places them, a tab's
+`label`/`expanded`/`visible`, a form-column's `width` and a section's
 `columns`/`label`/`showLabel`/`visible` are **updated in place**, a named section that sits in another
 tab or form-column is **moved** to where the layout places it, the tabs — and the sections of each
 form-column — are **put in the layout's order**, and a field sitting in the wrong section is **moved**
 (never duplicated — the cell keeps its id and any control state a maker edited). Containers are
 matched by `name`, then `label`, then position, so a form built by an earlier `auto` layout — or by
-hand in Maker — converges instead of gaining a duplicate tab. Nothing is renamed, because form scripts
-and business rules can reference a section by name. Every move is reported; only the layout's own
+hand in Maker — reuses its containers instead of gaining a duplicate tab. Nothing is renamed,
+because form scripts and business rules can reference a section by name. Tab/section moves are
+reported; only the layout's own
 containers are ordered — a tab or section it does not mention (a maker's own, the notes timeline)
 keeps its place among them.
 
@@ -857,10 +928,28 @@ removed only when this run empties it — its fields pruned, or moved into anoth
 `prune` is on; anything else it still holds keeps it, and a section it leaves alone is yours to
 remove in Maker.
 
-⚠ **Field order.** A field the form lacks is appended to the end of its section; a field it already
-has stays where it is. So reordering a section's `fields` list on an existing form changes nothing
-(`--verify` does not check field order either — it does check the order of tabs and of sections).
-Position a field explicitly with `fieldOptions[x].after`, below.
+⚠ **Field order.** On a new form, an explicit section's `fields` list sets its initial reading order.
+On an existing form, a field already in its requested section **stays where it is**: changing the
+list does not reorder existing fields. A field in another section is still moved to its declared
+section, without reordering the fields already there.
+
+Only a field **created by this build** takes its listed position: after its listed predecessor, or
+before its listed successor when it starts the list. A leading run of new fields is placed before
+the next existing listed field, then chained in list order. Placement uses the occupancy-safe
+mechanism below. If reservations make insertion unsafe, the new field keeps its safely appended
+position and a warning is recorded; later builds treat it as existing rather than retrying list
+reordering. This does **not** promise the whole list's order when existing neighbours are out of order.
+
+Missing fields and relative positions are planned together on a copy, then persisted in **one
+artifact edit**. A failed write cannot leave an appended-but-unpositioned new field, an overflowing
+intermediate row, or duplicated trailing cells. A retry uses either the prior layout or the complete
+planned layout, preserving existing cell/control identities.
+
+`--verify` checks tab/section order, row occupancy and **cell/control ID uniqueness across each
+whole form**, including headers, footers and unbound controls. Auto forms also require readable
+FormXML for the identity check. Repeated bindings of one field with distinct IDs are allowed.
+It does **not** check field order or `after` adjacency.
+To reposition an existing field, use `fieldOptions[x].after` outside the explicit field list, below.
 
 ⚠ Declaring explicit `tabs` also switches **pruning** on: a field the deployed form carries and the
 layout does not list is removed (never the primary field). Set `"prune": false` to restyle or
@@ -881,11 +970,31 @@ Where both apply to one field the inline entry wins; a plain string entry keeps 
   the API, so "read-only" for it is a form-level statement, not a metadata one.
 - **`hidden: true`** places the field as a hidden control (`visible="false"`) — present for form
   scripts and business rules, not shown to the user.
-- **`after: "<logical>"`** moves the field so it immediately follows the named anchor. This is the
+- **`after: "<logical>"`** moves the field so it immediately follows the named anchor in
+  **section-flat, row-major cell order**, including across a row boundary. This is the
   **non-destructive** way to reposition one control: it works on an already-deployed form and does
-  not require re-declaring the rest of the form. An anchor that is not on the form is ignored.
-  Only valid in `fieldOptions` — inside an explicit `tabs` layout the listed order already positions
-  the field, so `after` there is rejected rather than silently overriding the list.
+  not require re-declaring the rest of the form. Valid, already adjacent fields are not moved again.
+  An overfull row stored by an earlier build can be repacked once without changing that flat order.
+  An anchor that is not on the form is ignored.
+  New listed fields are positioned first; anchors then run in **dependency order**, so an anchor is
+  positioned before its dependents regardless of `fieldOptions` property order. Every remaining
+  adjacency is checked once afterward, and an unsatisfied request is reported rather than silently
+  accepted. Unlisted anchored controls may therefore sit between listed fields; the `after` chain
+  takes precedence over a new field's initial adjacency to its listed predecessor.
+  Placement counts colspans and columns reserved by rowspans above. A full anchor row may have its
+  trailing cells split into new rows immediately below it: `[count|name] [code]` becomes
+  `[count|code] [name]` in a two-column section. If the inserted field cannot fit beside the anchor,
+  it takes the next new row instead. Cells keep their identities and control state. A moved cell
+  wider than its destination section is narrowed to that grid and the narrowing is reported.
+  If a split would disturb a row-spanning reservation, or the resulting rows would overflow,
+  **the move is skipped**, with a warning naming the field, anchor and reason in `skipped.layout`;
+  these constraint-based skips do not fail the build. SDK/storage errors still halt the build, but
+  the placement edit is atomic and can be retried safely. `--verify` checks occupancy and unique
+  identities, not adjacency.
+  Valid only in form-level `fieldOptions`, and only for a field an explicit layout does **not** list.
+  Inline `after`, or a form-level anchor on a listed field, is rejected to avoid combining two
+  placement instructions; that restriction does not imply existing-field list reordering.
+  Use `"prune": false` to keep an unlisted field on an explicit form.
   Two anchor shapes are **rejected**, because neither has a satisfiable answer: only **one** field may
   sit immediately after a given anchor (to place several in sequence, *chain* them — anchor the second
   after the first), and anchors may not form a **cycle**.
@@ -1005,7 +1114,8 @@ custom control), but the spec validator emits a warning.
   `navigatesTo[].targetKey`, the `PAGEREF_<key>` navigation placeholder, and the `page` sitemap
   subarea. Renaming a page never changes its key. It must match `^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`,
   be unique across all pages in the spec, and (for an implemented page) its `codeFile` path must be
-  unique and workspace-confined (no `..` or absolute-path escape).
+  unique and workspace-confined: a relative path to a regular file inside the app folder.
+  Rooted, drive-relative and alternate-stream paths, parent escapes, symlinks and junctions are refused.
 - **`navigatesTo`**: `[{ "targetKey": "<page key>", "data": { … } }]` — declared page-to-page
   navigation (custom ids travel in `data`, read as `pageInput?.data?.<key>` on the target).
 - **Page-name uniqueness** is enforced **only on pages this run creates**. A page carrying a `pageId`
@@ -1034,11 +1144,45 @@ custom control), but the spec validator emits a warning.
      (downloaded from a live app), the spec's own `pages[].pageId` is the highest authority and
      outranks the manifest.
   2. **EXISTENCE** — env-wide `pac model genpage list` (no `--app-id`). This set alone decides
-     create-vs-reuse (crash-safe: a page present in the env but not yet in the sitemap is reused,
-     never re-created). A read failure HALTs (`pages-existence-failed`).
+     whether an id is still live. An unplaced id needs a local creation receipt for this app/key/id
+     and a decoded stored name exactly equal to the spec page name; otherwise `unproven-manifest-id` halts,
+     never requests a replacement CREATE. The build takes this app's PUBLISHED navigation as proof: a page
+     that is only in its saved but unpublished navigation halts with advice to publish the app first, so
+     other apps' navigation is checked before the page is updated. If it is this app's page, add it to the
+     app's navigation in the maker, publish the app and re-run; otherwise remove the stale id from the manifest/spec (or delete the
+     page) and re-run. A read failure HALTs (`pages-existence-failed`).
+     An uncertain CLI CREATE stops and reports each new candidate's id, stored name and `createdon`.
+     No candidate is automatically adopted, even with a matching name/date. If the candidate is yours,
+     re-run the upload explicitly with `--page-id`; otherwise leave it and re-run the create.
   3. **MEMBERSHIP** — the app's sitemap `GenPageId` set (read via `fetchSitemap` —
      fail-closed, discriminated). This set alone decides placement, download enumeration, and verify
      coverage. A read failure HALTs (`pages-sitemap-read-failed`).
+- **Teardown page scope.** The manifest supplies candidates, not permission to delete. A candidate
+  is deleted only when it is in this app's sitemap (published, or saved but unpublished — a page another app's
+  saved navigation still references is refused by the platform and kept) or a local app/key/id creation receipt proves it,
+  with its stored name corroborating the receipt. Other candidates are kept with a manual-removal hint.
+  The build writes `page-ownership.created.<hash>.json` in its workspace after an acknowledged create,
+  before manifest persistence/placement. Version-2 records include an opaque SHA-256 fingerprint of
+  the normalized target HTTPS origin (lower-case host, no path or trailing slash), not its URL.
+  Lookup and consumption require that same fingerprint; another target's records stay untouched.
+  There is only this environment-bound format. An unknown version, malformed or unreadable file
+  halts with its path: inspect it; delete it only if no page it names still exists.
+  These records contain no environment routing; copied
+  baselines, downloaded ids, remote manifests and diagnostic journals cannot substitute for them.
+  Without a workspace, off-sitemap ids are kept or halted. Dry-run lists
+  every candidate without writes; absent rows are labeled "not found" with their manifest name only.
+  Before app removal, the verified set is saved as local `page-ownership.teardown.<hash>.json` records.
+  An unreadable proof or failed record write leaves the app intact. A retry uses those records even
+  when `pages[]` is empty and the app has already gone. Proven pages still undeleted keep their records,
+  manifest and solution and prevent a successful result. Only completed deletion or confirmed absence
+  consumes the records. Form-only references are not scanned; platform sitemap dependencies remain an
+  additional safeguard, not proof that no form embeds the page.
+- **Workspace clearing preserves ownership.** `--clear-workspace` refuses while any unconsumed local
+  ownership record remains, including other apps/environments. The refusal names each record file.
+  Teardown consumes a record when it deletes or confirms the page's absence; a record whose page
+  you have confirmed gone may be deleted by hand. Resume in the original app/environment before
+  clearing; do not relabel receipts.
+  A record arriving while the workspace is isolated keeps that isolated directory and reports its path.
 - **Every page must be in the sitemap.** Validation rejects a page that is not referenced by a
   `page` subarea in `appShell`. Navigation-only (headless) pages — reachable only by a `PAGEREF_`
   call but absent from the sitemap — are not supported; they are not owned by the app. A "detail"
@@ -1062,7 +1206,7 @@ custom control), but the spec validator emits a warning.
 - **Safety HALTs (pages phase).** The build halts on identity/safety violations rather than
   proceeding with potentially wrong state:
   - `pages-identity-conflict` — spec `pageId` and manifest disagree on a key, or a duplicate id is
-    detected across two keys. Manual resolution required.
+    detected across two keys, or an off-sitemap id lacks a corroborated local creation receipt. Manual resolution required.
   - `pages-manifest-corrupt` — the manifest web resource cannot be parsed (two keys mapping to the
     same id). Fix or delete the manifest and rebuild.
   - `pages-shared-across-apps` — a page appears in another app's sitemap. Detach it in Maker first.
@@ -1305,6 +1449,8 @@ auto-selects tables that are good row-summary candidates and skips those that ar
 - `ai.appFeatures` keys must be one of `formFill · formFillSuggestions · formFillSmartPaste · formFillFiles · nlSearch · nlChart · m365`; values must be a boolean or an integer between `0` and `1000000` (hard error) — the same range the SDK enforces, so an out-of-range value is rejected here rather than aborting the build half-applied. The boolean spelling is **not** a flat `1`/`0`: `true` writes `2` (*On*) for every feature, and `false` writes that setting's *Off* — `1` for most, but **`0` for `nlChart`**, whose `1` means *Auto*. `0` means *Default* (defer to the platform) everywhere except `nlChart`. Use an explicit integer for any other state, such as the platform default.
 - **`false` is not "leave alone".** It writes an app-scope override that beats the org value, and unlike enabling it is **not** gated — so `false` on a feature the org has enabled will turn that feature off for this app. To defer a feature to the platform, give it the setting's platform-default value instead (`0`, or `1` for `nlChart`).
 - Omitting `ai.appFeatures` does **not** mean "no AI features": a spec carrying any `ai` block gets the defaults `formFill · nlSearch · nlChart` on (`2`) and `m365` left at its platform default (`0`), and `--verify` reconciles that whole resolved set.
+- A rejected row-summary publish does not authorize name-based cleanup. Same-name AI models are
+  kept and reported because the failed SDK call returns no created-model id to the build.
 - `ai.summaries.default` must be `"auto"` or `"off"` (hard error).
 - `ai.summaries.tables` keys must match a declared entity `schemaName` (case-insensitive, hard error).
 - `columns[]` entries must be declared column `schemaName` values on that entity (hard error in both validate and lint).
@@ -1407,4 +1553,3 @@ same scope.
 
 **Not yet supported** (tracked follow-up): column-level (field) security and access teams / hierarchy
 security. The security surface today is role-per-persona plus `roleGrants[]` (below).
-

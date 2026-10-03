@@ -32,6 +32,12 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   should be named with a `.js` extension).
 - Source comes from **one** of: `content` (inline text), `contentPath` (a file read relative to the
   app folder at build time), or `contentBase64` (for binary types).
+- `contentPath` must name a regular file inside the app folder. Absolute, rooted,
+  drive-relative and alternate-stream paths, parent escapes, symlinks and junctions are refused.
+  The build and `lint-app-spec.js` check the file before anything is written, alongside page
+  `codeFile` sources. Inline `content` or `contentBase64` takes precedence, so a `contentPath`
+  beside it is never read and not checked. Teardown reads no source, so a spec with an older
+  unconfined path can still be torn down.
 - Built **before** forms and added to the solution; reference one from a form `events[]` handler.
 - **Content edits are NOT applied on rebuild.** Like commands, the phase is discover-then-skip: a web
   resource that already exists is reused as-is, so changing `content` and rebuilding deploys nothing
@@ -120,6 +126,10 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   **skips** `businessRules[]`, warns once naming the member, and builds everything else normally —
   so you get a working app without the rules, not a half-built one. `--verify` will report those
   rules as not deployed, which is the truth.
+- **Same-name definitions are not automatically disposable.** Rebuild reuses the oldest matching
+  definition and keeps additional pre-existing ids with a warning. After a create, the SDK's returned
+  definition is kept. Every other same-name id is reported as not attributable to this run, including
+  ids that appeared concurrently; a snapshot delta never authorizes deactivation or deletion.
 - **Operators**, all of which the SDK's own table defines:
   `Equals` · `DoesNotEqual` · `IsGreaterThan` · `IsGreaterThanEqualTo` · `IsLessThan` ·
   `IsLessThanEqualTo` · `Contains` · `DoesNotContain` · `BeginsWith` · `DoesNotBeginWith` ·

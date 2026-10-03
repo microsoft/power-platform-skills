@@ -8,7 +8,8 @@
 // contract is two-part:
 //   1. `prepare` quarantines the old authoritative file BEFORE the planner is re-invoked, so the file
 //      existing afterwards means this invocation wrote it.
-//   2. `verify` proves the written file targets exactly what the approved plan named.
+//   2. `verify` proves the written file targets exactly what the approved plan named and,
+//      for an edit, contains the same ordered change list.
 //
 // Why not a hash of the whole approved body: the planner hands back a PREVIEW for approval and then
 // writes a DIFFERENT document. The preview is
@@ -17,8 +18,8 @@
 //   # Genpage Plan / ## User Requirements / … / ## Pages / … / ## Per-Page Specifications   (suffixes)
 // (agents/genpage-planner.md Steps 5 and 6; the edit planner likewise, Steps 3 and 4). No two such
 // documents hash equal, so a hash gate halted every approved run. What both documents DO state is
-// what the run will touch — the page files of a create, the page id of an edit — and that is what is
-// compared: a stale plan from an earlier run, or one the planner re-derived, targets other pages.
+// what the run will touch — the page files of a create, the page id and proposed changes of an edit.
+// Compare those structured fields, not contextual text or the whole document.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -37,16 +38,16 @@ const { sha256 } = require('./lib/hash.js');
 // truncated to its first 36 characters and certified.
 //
 // The written edit plan states the id ONCE, structurally, in `## File Being Edited`
-// (agents/genpage-edit-planner.md), and only that section is read: the plan also copies the page's
-// earlier prompts in full (`## Original Page Context`), and a label quoted there — "(**Page ID:** …)",
+// (agents/genpage-edit-planner.md), and only that section is read. Earlier plans copied page context
+// into `## Original Page Context`, and a label quoted there — "(**Page ID:** …)",
 // "Show the **Page ID:** in the footer" — blocked every later edit of that page. Within the section every
 // label must hold the same well-formed id: a malformed one makes the plan name NOTHING and is never
 // rescued by an id found elsewhere, since the edit worker reads that very label.
 //
 // The approval PREVIEW has no such section. It names its page in its own `- **File:** <guid>/page.tsx`
-// line under `### Current State` and quotes the first ~100 characters of the page's prompt a few lines
-// later (`- **Original prompt:** …`), so a label read anywhere came out of that quote and decided the
-// approved target — the same page halting on every edit, since its first prompt never changes. So a
+// line under `### Current State`. Earlier previews quoted a prompt snippet there, so a label read
+// anywhere came out of that quote and decided the approved target — the same page halting on every
+// edit. Context is still untrusted even without that snippet, so a
 // preview is read by the File line in its Current State block ALONE: a block whose File line is missing
 // or names another file is a broken preview, and reading on found a label or a path quoted from the
 // prompt, which approved another page. Only a document with neither section nor block is read by a File
@@ -76,9 +77,9 @@ const PAGE_END = `(?!${NAME_GOES_ON}|[.:]+${NAME_GOES_ON})`;
 // come after a path (`D:\work\edit\<guid>\page.tsx`, `./<guid>/page.tsx`), which a planner writing the
 // plan's absolute path beside it can easily carry over: only the GUID is compared, so it changes nothing.
 const FILE_LINE = new RegExp(`^[ \\t]*[-*+][ \\t]+\\*\\*File:\\*\\*[ \\t]*\`?(?:[^\\r\\n\`]*[\\\\/])?(${GUID})[\\\\/]page\\.tsx${PAGE_END}`, 'imu');
-// The preview's own block, or null when there is none. Its File line is read there only: the preview also
-// quotes the page's prompt, and a `- **File:** <other>/page.tsx` bullet in that quote, placed ahead of the
-// block, decided the target.
+// The preview's own block, or null when there is none. Its File line is read there only: older previews
+// quoted the page's prompt, and a `- **File:** <other>/page.tsx` bullet in that quote, placed ahead of
+// the block, decided the target.
 function currentStateBlock(src) {
   const state = /^###[ \t]+Current State[ \t]*$/im.exec(src);
   if (!state) return null;
@@ -112,7 +113,7 @@ function planTargets(text, { kind = null, doc = null } = {}) {
   // folder directly before `page.tsx`, which both the preview's `- **File:** <guid>/page.tsx` and the
   // written plan's `- **Absolute path:** <working-dir>/<guid>/page.tsx` carry.
   //
-  // The approval preview names its page in its own Current State block, and nowhere else: its prompt snippet
+  // The approval preview names its page in its own Current State block, and nowhere else: contextual text
   // may quote anything — a `## File Being Edited` section included, which, read first, named another page.
   if (doc === 'preview') {
     const state = currentStateBlock(src);
@@ -141,6 +142,34 @@ function planTargets(text, { kind = null, doc = null } = {}) {
   const folder = scope.match(new RegExp(`(?<![\\w-])(${GUID})[\\\\/]page\\.tsx${PAGE_END}`, 'u'));
   if (folder) return { kind: 'edit', targets: [folder[1].toLowerCase()] };
   return null;
+}
+
+// The approval preview uses `### Proposed Changes`, while the written plan uses
+// `## Requested Changes`, each followed by `1. Add a filter` (or `- Add a filter`).
+// Ignore list markers, line wrapping and whitespace only; wording and order carry approval.
+// Duplicate headings or unlisted prose make the list unreadable, never an empty approval.
+function editChanges(text, doc) {
+  const level = doc === 'preview' ? 3 : 2;
+  const title = doc === 'preview' ? 'Proposed Changes' : 'Requested Changes';
+  const src = String(text || '').replace(/\r\n/g, '\n');
+  const headings = [...src.matchAll(new RegExp(`^#{${level}}[ \\t]+${title}[ \\t]*$`, 'gim'))];
+  if (headings.length !== 1) return null;
+  const rest = src.slice(headings[0].index + headings[0][0].length);
+  const next = new RegExp(`^#{1,${level}}[ \\t]+\\S`, 'm').exec(rest);
+  const body = next ? rest.slice(0, next.index) : rest;
+  const changes = [];
+  for (const line of body.split('\n')) {
+    if (!line.trim()) continue;
+    const bullet = /^[ \t]{0,3}(?:\d+[.)]|[-*+])[ \t]+(\S.*)$/.exec(line);
+    if (bullet) {
+      changes.push(bullet[1]);
+    } else if (/^[ \t]+\S/.test(line) && changes.length) {
+      changes[changes.length - 1] += ` ${line.trim()}`;
+    } else {
+      return null;
+    }
+  }
+  return changes.length ? changes.map((change) => change.replace(/\s+/g, ' ').trim().normalize('NFC')) : null;
 }
 
 // What is AT `p` — lstat, not existsSync. existsSync follows a link and answers false for a DANGLING
@@ -215,10 +244,10 @@ function preparePlanProvenance({ planPath }) {
 
 // Which kind of plan a path holds is the flow's choice, not the document's: /genpage writes a create plan to
 // `genpage-plan.md` and an edit plan to `genpage-edit-plan.md` (skills/genpage/SKILL.md and edit-flow.md), and
-// neither the planner nor the maker's text names the file. The document cannot say it reliably: an edit plan
-// quotes the page's earlier prompts, and a Pages table quoted there — in the preview's prompt snippet and the
-// written plan's `## Original Page Context` alike — read both as the same create, so an edit of ANOTHER page
-// was certified. null for any other name, which is then read from the document as before.
+// neither the planner nor the maker's text names the file. Context cannot decide the kind reliably:
+// earlier edit plans embedded prompts, and a Pages table quoted in their preview or written context
+// read both as the same create, so an edit of ANOTHER page was certified. Keep that boundary even
+// though current plans only reference the prompt file. null for any other name reads the document as before.
 function planKindOf(planPath) {
   const name = path.basename(String(planPath || '')).toLowerCase();
   if (name === 'genpage-edit-plan.md') return 'edit';
@@ -275,7 +304,23 @@ function verifyPlanProvenance({ planPath, approvedPlan }) {
       error: `the written plan targets ${actual ? actual.targets.join(', ') || 'nothing' : 'no pages'}, but the approved plan named ${approved.targets.join(', ')}`,
     };
   }
-  return { ok: true, action: 'verify', planPath: absPlanPath, kind: approved.kind, targets: approved.targets, writtenHash };
+  let changesHash;
+  if (approved.kind === 'edit') {
+    const approvedChanges = editChanges(approvedPlan, 'preview');
+    const writtenChanges = editChanges(written, 'written');
+    const sameChanges = approvedChanges && writtenChanges
+      && approvedChanges.length === writtenChanges.length
+      && approvedChanges.every((change, i) => change === writtenChanges[i]);
+    if (!sameChanges) {
+      return {
+        ok: false, action: 'verify', planPath: absPlanPath, approvedTargets: approved.targets,
+        writtenTargets: actual.targets, writtenHash, approvedChanges, writtenChanges,
+        error: 'the written Requested Changes do not match the approved Proposed Changes; both must contain one non-empty list with the same wording and order',
+      };
+    }
+    changesHash = sha256(JSON.stringify(approvedChanges));
+  }
+  return { ok: true, action: 'verify', planPath: absPlanPath, kind: approved.kind, targets: approved.targets, writtenHash, ...(changesHash ? { changesHash } : {}) };
 }
 
 function parseArgv(argv) {

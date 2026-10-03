@@ -125,6 +125,90 @@ test('makeRequest preserves UTF-8 characters split across response chunks', asyn
   }
 });
 
+test('makeRequest settles with an error when the connection closes mid-response', async () => {
+  const { makeRequest } = require('../lib/dataverse-auth.js');
+  // Headers and part of the body arrive, then the socket closes: no 'end', and the socket timeout
+  // cannot fire on a closed socket. The promise must still settle through the { error } contract.
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': '100' });
+    res.write('{"value":[');
+    setTimeout(() => res.socket.destroy(), 20);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const settled = await Promise.race([
+      makeRequest({ url: `http://127.0.0.1:${port}/cut`, timeout: 60000 }),
+      new Promise((resolve) => setTimeout(() => resolve('still pending'), 2000)),
+    ]);
+    assert.notEqual(settled, 'still pending', 'a truncated response must not leave the request pending');
+    assert.match(settled.error, /before (it|the response) completed/);
+    assert.strictEqual(settled.incompleteResponse, true, 'the server answered before the body was cut off');
+    assert.strictEqual(settled.statusCode, 200);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('makeRequest marks a timeout after the headers arrived as an incomplete response', async () => {
+  const { makeRequest } = require('../lib/dataverse-auth.js');
+  // The server answers, sends part of the body, then stalls. The request timeout fires on the
+  // request, not the response, but the answer had arrived: a POST may already have been applied.
+  const sockets = new Set();
+  const server = http.createServer((req, res) => {
+    res.writeHead(201, { 'Content-Type': 'application/json', 'Content-Length': '100' });
+    res.write('{"id":');
+  });
+  server.on('connection', (s) => { sockets.add(s); s.on('close', () => sockets.delete(s)); });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const answered = await makeRequest({ url: `http://127.0.0.1:${port}/stall`, method: 'POST', body: '{}', timeout: 150 });
+    assert.strictEqual(answered.incompleteResponse, true);
+    assert.strictEqual(answered.statusCode, 201);
+    assert.match(answered.error, /timed out before the response completed/);
+  } finally {
+    for (const s of sockets) s.destroy();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('makeRequest keeps a timeout with no answer as a plain request failure', async () => {
+  const { makeRequest } = require('../lib/dataverse-auth.js');
+  const sockets = new Set();
+  const server = http.createServer(() => { /* never answers */ });
+  server.on('connection', (s) => { sockets.add(s); s.on('close', () => sockets.delete(s)); });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const silent = await makeRequest({ url: `http://127.0.0.1:${port}/silent`, method: 'POST', body: '{}', timeout: 150 });
+    assert.deepStrictEqual(silent, { error: 'Request timed out' });
+  } finally {
+    for (const s of sockets) s.destroy();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('dataverseRequest does not replay a POST whose response was cut off, but retries a GET', async () => {
+  const { dataverseRequest } = require('../lib/dataverse-auth.js');
+  const cut = (statusCode) => ({ error: 'Connection closed before the response completed', incompleteResponse: true, statusCode });
+  let posts = 0;
+  await assert.rejects(
+    dataverseRequest('https://contoso.crm.dynamics.com', 'POST', 'accounts', { name: 'A' }, {
+      getToken: () => 'TOK', request: async () => { posts += 1; return cut(201); },
+    }),
+    /already answered 201, so this POST may have been applied; it was not re-sent/,
+  );
+  assert.strictEqual(posts, 1);
+  let gets = 0;
+  const res = await dataverseRequest('https://contoso.crm.dynamics.com', 'GET', 'accounts', null, {
+    getToken: () => 'TOK',
+    request: async () => { gets += 1; return gets === 1 ? cut(200) : { statusCode: 200, body: '{"value":[]}' }; },
+  });
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(gets, 2);
+});
+
 test('getAuthToken reuses a non-empty token per normalized resource URL', () => {
   const { getAuthToken } = require('../lib/dataverse-auth.js');
   const calls = [];
@@ -271,6 +355,30 @@ test('AB#6686427: preflight passes and reports the identity when WhoAmI succeeds
   });
   assert.strictEqual(r.ok, true, JSON.stringify(r));
   assert.match(r.identity.user, /maker@contoso\.com/);
+});
+
+test('preflight: identityOnSuccess:false skips the identity read on success but keeps it for a 401', async () => {
+  let reads = 0;
+  const azIdentity = () => { reads += 1; return { user: 'maker@contoso.com', tenantId: 'aaaaaaaa-0000-0000-0000-000000000000' }; };
+  const ok = await preflightAuth('https://contoso.crm.dynamics.com', {
+    getToken: () => 'token',
+    request: async () => ({ status: 200, data: { UserId: '00000000-0000-0000-0000-000000000001' } }),
+    azIdentity,
+    identityOnSuccess: false,
+  });
+  assert.strictEqual(ok.ok, true);
+  assert.strictEqual(ok.userId, '00000000-0000-0000-0000-000000000001');
+  assert.strictEqual('identity' in ok, false, 'no identity on a verdict-only success');
+  assert.strictEqual(reads, 0, 'no `az account show` for a value nobody reads');
+  const denied = await preflightAuth('https://contoso.crm.dynamics.com', {
+    getToken: () => 'token',
+    request: async () => ({ status: 401, headers: {} }),
+    azIdentity,
+    identityOnSuccess: false,
+  });
+  assert.strictEqual(denied.ok, false);
+  assert.strictEqual(reads, 1, 'a 401 still names the identity it rejected');
+  assert.match(denied.error, /maker@contoso\.com/);
 });
 
 test('dataverseRequest USES a preset token and skips the CLI entirely', async () => {

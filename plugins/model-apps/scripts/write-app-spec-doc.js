@@ -15,8 +15,8 @@
 // the orchestrator can surface them in chat rather than leaving them buried in a file the user may
 // not open.
 
-const fs = require('node:fs');
 const path = require('node:path');
+const { assertSafeOutputDir, writeFileSafe } = require('./lib/safe-fs.js');
 const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { migrateAppSpec } = require('./lib/app-spec.js');
 const { renderAppSpecDoc } = require('./lib/app-spec-doc.js');
@@ -82,8 +82,15 @@ function main() {
   const warnings = designGaps(spec);
   // Default next to the spec, which is the working directory the skill created in Phase 0.
   const docPath = flags.out ? path.resolve(flags.out) : path.join(path.dirname(specPath), 'model-app-plan.md');
-  fs.mkdirSync(path.dirname(docPath), { recursive: true });
-  fs.writeFileSync(docPath, markdown, 'utf8');
+  // A link at the document directory, or at the document name, would put the plan wherever
+  // it points. Refuse that instead of following it. A normal directory is created if missing.
+  try {
+    assertSafeOutputDir(path.dirname(docPath), { create: true });
+    writeFileSafe(docPath, markdown, { encoding: 'utf8' });
+  } catch (e) {
+    emitResult(false, e instanceof Error ? e : new Error(String(e)));
+    return;
+  }
 
   emitResult(true, { ok: true, docPath, bytes: Buffer.byteLength(markdown, 'utf8'), warnings });
 }

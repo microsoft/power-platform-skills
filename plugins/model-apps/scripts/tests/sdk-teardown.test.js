@@ -6,9 +6,17 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
-const { planTeardown, runTeardown, deleteStep, odataStr, KIND_HANDLERS } = require(path.join(__dirname, '..', 'lib', 'sdk-teardown.js'));
+const { planTeardown, runTeardown: engineTeardown, deleteStep, odataStr, KIND_HANDLERS } = require(path.join(__dirname, '..', 'lib', 'sdk-teardown.js'));
+const runTeardown = (spec, opts, deps) => engineTeardown(spec, { env: 'https://contoso.crm.dynamics.com', ...opts }, deps);
 const { appUniqueName } = require(path.join(__dirname, '..', 'lib', 'sdk-build.js'));
 const { SDK_ROLE_MARKER } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
+const pageWorkspaces = [];
+function pageWorkspace() {
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'contoso-page-teardown-'));
+  pageWorkspaces.push(dir);
+  return dir;
+}
+test.after(() => { for (const dir of pageWorkspaces) fs.rmSync(dir, { recursive: true, force: true }); });
 
 const desk = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json'), 'utf8'));
 
@@ -1598,7 +1606,7 @@ function genpageSdk({ manifestPages = [], livePages = [], files = {} } = {}) {
         return [{ content: Buffer.from(manifestJson, 'utf8').toString('base64') }];
       }
       if (entity === 'uxagentproject') {
-        return livePages.filter((id) => filter.toLowerCase().includes(id.toLowerCase())).map((id) => ({ uxagentprojectid: id }));
+        return livePages.filter((id) => filter.toLowerCase().includes(id.toLowerCase())).map((id) => ({ uxagentprojectid: id, name: id === PAGE_1 ? 'Overview' : 'Contoso Other' }));
       }
       if (entity === 'uxagentprojectfile') {
         const owner = (/_uxagentprojectid_value eq ([0-9a-f-]+)/i.exec(filter) || [])[1] || '';
@@ -1615,13 +1623,14 @@ function genpageSdk({ manifestPages = [], livePages = [], files = {} } = {}) {
 const PAGE_1 = '11111111-1111-4111-8111-111111111111';
 const PAGE_2 = '22222222-2222-4222-8222-222222222222';
 
-test('genpage resolve returns only pages the manifest says WE authored', async () => {
+test('genpage resolve keeps a matching-name manifest candidate without navigation or a local receipt', async () => {
   const { sdk } = genpageSdk({
     manifestPages: [{ key: 'overview', name: 'Overview', pageId: PAGE_1 }],
     livePages: [PAGE_1, PAGE_2], // PAGE_2 exists but is not ours
   });
-  const items = await KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' });
-  assert.deepStrictEqual(items.map((i) => i.id), [PAGE_1]);
+  const { items, kept } = await KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest', appUnique: 'new_app', pageNames: ['Overview'] });
+  assert.deepStrictEqual(items, []);
+  assert.deepStrictEqual(kept.map((i) => i.id), [PAGE_1]);
 });
 
 // Deleting the project cascades to its files (the uxagentproject -> uxagentprojectfile
@@ -1712,8 +1721,8 @@ test('genpage resolve ignores live pages the manifest does not claim', async () 
     manifestPages: [{ key: 'overview', name: 'Overview', pageId: PAGE_1 }],
     livePages: [PAGE_1, PAGE_2],
   });
-  const items = await KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' });
-  assert.deepStrictEqual(items.map((i) => i.id), [PAGE_1]);
+  const { items, kept } = await KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest', appUnique: 'new_app', pageNames: ['Overview'] });
+  assert.deepStrictEqual([...items, ...kept].map((i) => i.id), [PAGE_1]);
 });
 
 test('genpage deletes nothing when the live-existence query fails, and FAILS the step (cannot prove what is ours)', async () => {
@@ -1737,8 +1746,9 @@ test('genpage skips a page the manifest claims but that no longer exists', async
     manifestPages: [{ key: 'gone', name: 'Gone', pageId: PAGE_1 }],
     livePages: [], // already deleted by hand
   });
-  const items = await KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' });
+  const { items, candidates } = await KIND_HANDLERS.genpage.resolve(sdk, { manifestName: 'new_app_pagemanifest' });
   assert.deepStrictEqual(items, []);
+  assert.deepStrictEqual(candidates, [{ id: PAGE_1, key: 'gone', name: 'Gone', absent: true }]);
 });
 
 test('genpage deletes nothing when the manifest is absent (the app never recorded a page)', async () => {
@@ -1762,6 +1772,7 @@ test('genpage deletes nothing when the manifest cannot be read, and FAILS the st
 // it well after the pages step. Deleting it after a failed pages step left the retry nothing to find
 // the pages by: it resolved none, reported ok, and the pages stayed behind for good.
 function pageTeardownRun({ pageDelete, manifestRead, liveQuery, declareManifest = false } = {}) {
+  const workspaceDir = pageWorkspace();
   const spec = { solution: { uniqueName: 'PgSln', publisherPrefix: 'new' }, app: { name: 'Pages App' } };
   const manifestName = `${appUniqueName(spec)}_pagemanifest`;
   if (declareManifest) spec.webResources = [{ name: manifestName.toUpperCase(), type: 'Data' }];
@@ -1791,8 +1802,11 @@ function pageTeardownRun({ pageDelete, manifestRead, liveQuery, declareManifest 
       }
       if (entity === 'uxagentproject') {
         if (liveQuery) liveQuery();
-        return [...state.pages].map((id) => ({ uxagentprojectid: id }));
+        return [...state.pages].map((id) => ({ uxagentprojectid: id, name: 'Overview' }));
       }
+      if (entity === 'appmodule') return state.app ? [{ appmoduleid: 'app-1', appmoduleidunique: 'app-u-1' }] : [];
+      if (entity === 'appmodulecomponent') return [{ objectid: 'sitemap-1', componenttype: 62 }];
+      if (entity === 'sitemap') return [{ sitemapxml: `<SiteMap><SubArea GenPageId="${PAGE_1}" /></SiteMap>` }];
       return [];
     },
     deleteRecord: async (entity, id) => {
@@ -1807,8 +1821,34 @@ function pageTeardownRun({ pageDelete, manifestRead, liveQuery, declareManifest 
     },
     deleteSolution: async () => { state.deletes.push('solution'); state.solution = false; },
   };
-  return { spec, sdk, state, manifestName };
+  return { spec, sdk, state, manifestName, workspaceDir };
 }
+
+test('page-less teardown retries a transient page delete without losing verified ownership', async (t) => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'contoso-teardown-proof-'));
+  t.after(() => fs.rmSync(workspaceDir, { recursive: true, force: true }));
+  let fails = true;
+  const run = pageTeardownRun({ pageDelete: () => { if (fails) throw new Error('HTTP 503'); } });
+  assert.strictEqual(run.spec.pages, undefined);
+  const first = await runTeardown(run.spec, { apply: true, workspaceDir }, { sdk: run.sdk });
+  assert.strictEqual(first.ok, false);
+  assert.strictEqual(run.state.app, false);
+  assert.ok(run.state.pages.has(PAGE_1));
+  assert.ok(run.state.resources.has(run.manifestName.toLowerCase()));
+  assert.ok(run.state.solution);
+  assert.ok(fs.readdirSync(workspaceDir).some((name) => name.startsWith('page-ownership.teardown.')), 'pre-delete proof must be durable');
+  fails = false;
+  const retry = await runTeardown(run.spec, { apply: true, workspaceDir }, { sdk: run.sdk });
+  assert.strictEqual(retry.ok, true);
+  assert.deepStrictEqual(retry.deleted.genpage, [PAGE_1]);
+  assert.strictEqual(run.state.pages.size, 0);
+  assert.ok(!run.state.resources.has(run.manifestName.toLowerCase()));
+  assert.strictEqual(run.state.solution, false);
+  assert.ok(!fs.readdirSync(workspaceDir).some((name) => name.startsWith('page-ownership.')), 'only completed page deletions consume proof');
+});
 
 for (const [label, fault] of [
   ['the page delete fails', { pageDelete: () => { throw new Error('HTTP 503 Service Unavailable'); } }],
@@ -1824,35 +1864,38 @@ for (const [label, fault] of [
       liveQuery: () => faults.liveQuery && faults.liveQuery(),
     });
     const events = [];
-    const failed = await runTeardown(run.spec, { apply: true }, { sdk: run.sdk, emit: (e) => events.push(e) });
+    const failed = await runTeardown(run.spec, { apply: true, workspaceDir: run.workspaceDir }, { sdk: run.sdk, emit: (e) => events.push(e) });
     assert.strictEqual(failed.ok, false);
-    assert.deepStrictEqual(failed.errors.map((e) => e.step), ['generative pages authored by this app']);
+    assert.deepStrictEqual(failed.errors.map((e) => e.step), ['generative pages proven for this app']);
     assert.ok(run.state.pages.has(PAGE_1), 'the page is still there');
     assert.ok(run.state.resources.has(run.manifestName.toLowerCase()), 'the manifest naming the page survives for the re-run');
-    assert.ok(!run.state.resources.has(`${appUniqueName(run.spec)}_icon`.toLowerCase()), 'other app-owned web resources are still cleaned up');
+    assert.strictEqual(run.state.resources.has(`${appUniqueName(run.spec)}_icon`.toLowerCase()), !fault.pageDelete,
+      'only a page DELETE failure follows app removal; unreadable proof leaves the whole app intact');
+    assert.strictEqual(run.state.app, !fault.pageDelete);
     assert.ok(run.state.solution, 'the solution is kept while a step failed');
-    const kept = events.find((e) => e.status === 'skip' && e.skip === 'kept' && e.label.includes('(page manifest)'));
+    const kept = events.find((e) => e.status === 'skip' && e.label.includes('(page manifest)'));
     assert.ok(kept, 'the kept manifest is reported as kept on purpose, not as not-found');
-    assert.match(kept.label, /kept — the generative pages step failed, and a re-run needs this manifest/);
+    assert.match(kept.label, /kept|not attempted/);
     assert.ok(failed.skipped.some((s) => s === kept.label));
 
     for (const k of Object.keys(faults)) faults[k] = null;
     run.state.deletes.length = 0;
-    const retry = await runTeardown(run.spec, { apply: true }, { sdk: run.sdk, emit: () => {} });
+    const retry = await runTeardown(run.spec, { apply: true, workspaceDir: run.workspaceDir }, { sdk: run.sdk, emit: () => {} });
     assert.strictEqual(retry.ok, true, JSON.stringify(retry.errors));
     assert.deepStrictEqual(retry.deleted.genpage, [PAGE_1]);
     assert.strictEqual(run.state.pages.size, 0, 'the retry finds the page through the kept manifest and deletes it');
-    assert.deepStrictEqual(run.state.deletes, [`page:${PAGE_1}`, 'wr-manifest', 'solution'], 'then the manifest, then the solution');
+    assert.deepStrictEqual(run.state.deletes.filter((id) => !['app', 'wr-icon'].includes(id)), [`page:${PAGE_1}`, 'wr-manifest', 'solution'], 'then the manifest, then the solution');
   });
 }
 
-test('teardown deletes the page manifest when the pages step succeeds or a page is only still referenced', async () => {
+test('teardown retains the page manifest and solution while a proven page is still referenced', async () => {
   const run = pageTeardownRun({ pageDelete: () => { throw new Error('The uxagentproject(x) component cannot be deleted because it is referenced by 1 other components.'); } });
-  const r = await runTeardown(run.spec, { apply: true }, { sdk: run.sdk, emit: () => {} });
-  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  const r = await runTeardown(run.spec, { apply: true, workspaceDir: run.workspaceDir }, { sdk: run.sdk, emit: () => {} });
+  assert.strictEqual(r.ok, false);
   assert.ok(run.state.pages.has(PAGE_1), 'a page another consumer holds is left to it');
-  assert.ok(!run.state.resources.has(run.manifestName.toLowerCase()), 'a skip is not a failure: the manifest goes');
-  assert.ok(!run.state.solution);
+  assert.ok(run.state.resources.has(run.manifestName.toLowerCase()), 'proven outstanding pages keep their inventory');
+  assert.ok(run.state.solution);
+  assert.match(JSON.stringify(r.errors), /proven pages remain undeleted/);
 });
 
 test('teardown keeps a DECLARED web resource that carries the page manifest name (any case) when the pages step fails', async () => {
@@ -1860,7 +1903,7 @@ test('teardown keeps a DECLARED web resource that carries the page manifest name
   const plan = planTeardown(run.spec);
   assert.strictEqual(plan.filter((s) => s.kind === 'webResource' && s.target.name.toLowerCase() === run.manifestName.toLowerCase()).length, 1,
     'the declared entry replaces the derived manifest step');
-  const r = await runTeardown(run.spec, { apply: true }, { sdk: run.sdk, emit: () => {} });
+  const r = await runTeardown(run.spec, { apply: true, workspaceDir: run.workspaceDir }, { sdk: run.sdk, emit: () => {} });
   assert.strictEqual(r.ok, false);
   assert.ok(run.state.resources.has(run.manifestName.toLowerCase()), 'the declared manifest-named resource is kept');
 });
@@ -1872,7 +1915,7 @@ test('a failure in a step OTHER than the pages step still deletes the page manif
     if (id === 'wr-icon') throw new Error('HTTP 500 icon delete failed');
     return originalDelete(id);
   };
-  const r = await runTeardown(run.spec, { apply: true }, { sdk: run.sdk, emit: () => {} });
+  const r = await runTeardown(run.spec, { apply: true, workspaceDir: run.workspaceDir }, { sdk: run.sdk, emit: () => {} });
   assert.strictEqual(r.ok, false);
   assert.deepStrictEqual(r.errors.map((e) => e.step), [`web resource ${appUniqueName(run.spec)}_icon (generated app icon)`]);
   assert.strictEqual(run.state.pages.size, 0);

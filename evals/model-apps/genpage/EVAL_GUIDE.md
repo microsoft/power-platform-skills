@@ -73,6 +73,7 @@ Layers 1 and 2 are automated. Layer 3 is human judgment by design — visual qua
 - Auth results belong to their commands; the latest successful applicable gate precedes mutations, final failures halt, and timeout retry/advice is bounded
 - Failed connection discovery is not an empty success and cannot authorize setup
 - Current upload commands use `genpage-upload.js` with file transport; the preservation fixture compares exact approved/forwarded text and before/after name, model and binding sets
+- A divergence refusal (`no-base`, `deployed-changed`, `deployed-unreadable`) stops an update before PAC writes (`ok: false`, no PAC write, no forwarded args). `--overwrite-deployed` needs the `Choice:` line that upload command consumes to be exactly `Choice: Overwrite the deployed changes`. Each `genpage-upload.js` line consumes the pending choice, so one approval does not cover a later upload
 - Custom API discovery/gates/bindings/runtime/update stages agree; optional packaging names every deployed page and preserves failures/read-back evidence
 - Prefix discipline holds across plan, entity-creation log, and resolved names
 

@@ -641,7 +641,8 @@ function releaseTombstone(workspaceDir, teardownId, deps = {}) {
 // second teardown's fresh tombstone went with it; a rename is one step, and afterwards the path is simply
 // absent, for whoever comes next to start afresh (the lock went with the folder). A rename refused — a file
 // held open on Windows, say — clears nothing. `target` is the folder checkWorkspaceClearable approved;
-// `deps.beforeRename` is a test seam, called under the lease just before the rename. Returns
+// `deps.beforeRename` is an optional guard/test seam under the lease; `deps.beforeRemove` checks
+// the atomically isolated contents before removal. A refused post-isolation guard retains the folder. Returns
 // { ok, reason?, leftover? }.
 function clearWorkspace(target, deps = {}) {
   let lease;
@@ -674,6 +675,23 @@ function clearWorkspace(target, deps = {}) {
       if (reserved) { try { fs.rmSync(claim, { force: true }); } catch { /* best-effort: it names itself (acquireLease) */ } }
       releaseLease(lease);
     }
+  }
+  try {
+    if (typeof deps.beforeRemove === 'function') deps.beforeRemove(aside);
+  } catch (e) {
+    // Unlike a folder about to be deleted, this retained one must be immediately usable.
+    // The lock/claim moved with it; release only our tokens at their new paths.
+    const movedLease = { ...lease, path: path.join(aside, path.basename(lease.path)) };
+    const movedClaim = path.join(aside, path.basename(claim));
+    let cleanupNote = '';
+    try {
+      if (fs.readFileSync(movedClaim, 'utf8') === lease.token) fs.rmSync(movedClaim, { force: true });
+    } catch (ce) {
+      if (ce.code !== 'ENOENT') cleanupNote = `; its clear claim could not be released (${ce.message})`;
+    } finally {
+      releaseLease(movedLease);
+    }
+    return { ok: false, leftover: aside, reason: `the workspace was isolated at '${aside}' but retained (${(e && e.message) || e})${cleanupNote}; resume with --workspace '${aside}' in the relevant original app/environment before clearing it` };
   }
   try {
     fs.rmSync(aside, { recursive: true, force: true });

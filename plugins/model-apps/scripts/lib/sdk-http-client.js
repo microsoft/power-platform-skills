@@ -346,6 +346,13 @@ function createAzHttpClient(orgUrl, deps = {}) {
         if (conditional) {
           throw new Error(`Request failed: ${res.error} — this conditional ${method_} was not re-sent, because it may still commit and a re-send could only be refused as a false version conflict`);
         }
+        // The server ANSWERED (status and headers arrived) and the body was then cut off. A POST may
+        // already have been applied — re-sending a create here made a second row — so it is reported
+        // as an uncertain outcome rather than replayed. The idempotent rebuild adopts whatever landed.
+        // Reads, PATCH/PUT and metadata deletes keep the retry below.
+        if (res.incompleteResponse && method_ === 'POST') {
+          throw new Error(`Request failed: ${res.error} — the server had already answered ${res.statusCode}, so this POST may have been applied; it was not re-sent. Re-run to reconcile.`);
+        }
         if (last || noRetry) throw new Error(`Request failed: ${res.error}`);
         await sleep(backoffMs(attempt));
         continue;

@@ -5,7 +5,94 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [Unreleased] — 2.12.0
+## [Unreleased] — 2.13.0
+
+An app's hidden tables and its list of Main forms now survive a download and rebuild, and
+relationships that share a name are caught. A generative page edited in the maker portal is no longer
+overwritten silently, and page cleanup removes only pages this workspace can prove it created. Spec
+sources and output files stay inside the folders you name, and a few transient platform responses
+are now retried without risking a duplicate.
+
+### Added
+
+- **`app.tables`** — tables that belong to the app outside its navigation (AB#6603388). A download
+  writes them, so a rebuild keeps them. A build adds them as app components, and `--verify` checks
+  the published app. A hidden table owned by another solution is listed here only, never in
+  `entities[]`.
+- **`app.mainForms`** — for each navigation table, the Main forms the app offers, by name. The build
+  resolves each name before any app write, and refuses one that is ambiguous, inactive or missing. The
+  platform only adds forms to an app, so an existing app keeps a form it already offered: the build
+  warns, and `--verify` names the form and the Maker step that removes it. A download writes the list
+  when the app offers only some of a table's forms.
+- A download that writes either field sets `minimumPluginVersion` to 2.13.0, and lint warns when a
+  spec uses one without that floor.
+
+### Changed
+
+- **A generative page update checks the deployed page first** ([#673]). An upload records a base
+  marker beside the code file (hashes and ids only). An update stops when there is no base, when the
+  deployed page changed since the base (it writes a copy and a line summary), or when the deployed
+  page cannot be read. Pass `--overwrite-deployed` only after choosing to replace the maker's changes;
+  `/genpage` asks first and stops when nobody can answer.
+- **Page cleanup acts only on pages this app can prove are its own**: a local receipt written when
+  the build created the page, or the app's navigation, published or saved. A page that only the stored
+  page manifest lists is kept and reported; when the proof cannot be read, the app is left intact for a
+  re-run. `--clear-workspace` refuses while a receipt remains. A rebuild updates a page only when the
+  app's published navigation or a receipt proves it; a page only in the saved navigation asks you to
+  publish the app first.
+- **An uncertain page create stops.** When a create fails or reports no page id but a new page
+  appeared, the build lists each candidate's name and creation time instead of adopting one. A create
+  that left no page is retried as before.
+- **A business rule or AI model that only shares a name is reported, not deleted.** Cleanup removes
+  only the records this build created.
+- **Edit plans treat earlier prompts as data.** The edit planner no longer copies them into the plan,
+  and the written plan must carry the same ordered change list the user approved.
+- **Navigation tokens are accepted in fewer, exact forms.** A `navigateTo` options object is rewritten
+  only when it is the whole first argument, and the casts allowed after a `PAGEREF_` literal are
+  `as const`, `as Name` and `satisfies Name`. Anything else halts as stray or malformed with the rule
+  quoted, instead of being rewritten. Write the options object inline in the call.
+- **Build and download skip an unused identity read** after a successful sign-in check: one cold
+  Azure CLI start less per run.
+
+### Fixed
+
+- **Relationships that share a schema name are caught.** A 1:N and an N:N between the same two tables
+  derived the same name, so the N:N was skipped as if it existed and `--verify` passed. Validation now
+  asks for an explicit `schemaName`. The build reuses an existing name only for the same type, ends and
+  lookup, and `--verify` checks a relationship's type and ends. A download keeps a deployed name that
+  differs from the default.
+- **A field placed with `fieldOptions.after` no longer overflows its row.** A row that would be too
+  wide moves its trailing cells to rows directly below, and a row an earlier release left overfull is
+  repaired once. A new field lands at its listed position. All moves of one placement are written in
+  one update, so a failure leaves the old layout, never half of the new one. `--verify` fails a form
+  that repeats a cell or control id.
+- **A view rejected for a lookup the build just created is retried.** Right after a relationship is
+  created, a view that uses its lookup can be refused for a column the server cannot see yet. The build
+  now retries that, but only for columns it creates; an undeclared column still stops at once.
+- **A parallel phase that fails waits for its other writes** before it reports. The retry used to run
+  while a write was still pending, created the same view again, and then stopped on the duplicate.
+- **A response cut off mid-way is never re-sent as a create.** It used to leave the request waiting
+  forever, or be retried; a create in that state is now reported as possibly applied rather than sent
+  again and duplicated.
+- **Output files stay in the folders you name.** Download, build, verify and the spec document refuse
+  a link or junction at an output name and write through a temporary file and a rename.
+- **Spec sources stay in the app folder.** A web resource's `contentPath` and a page's code file must
+  be a regular file inside the app folder; a link that leads out is refused before anything is written.
+  A `contentPath` behind inline content is not read, so it is not checked, and teardown accepts an
+  older spec's path.
+- **An app missing from its solution is re-added.** A build that stopped after creating its app left
+  the app outside its solution, and a re-run did not add it back. The app now joins its solution right
+  after it is created, and every rebuild re-adds it.
+- **Connector discovery refuses more output it cannot read**: a line before the table header other than
+  PAC's sign-in banner, and a row whose id is not a connection id, no longer read as an empty or extra
+  connection.
+- **Nested navigation values use linear memory.** A deeply nested malformed value held a copy of
+  every token below it — 193 MiB at depth 8192, now under 1 MiB.
+- Samples 9 and 10 use the double-quoted `PAGEREF_` form the build accepts.
+
+[#673]: https://github.com/microsoft/power-platform-skills/issues/673
+
+## [2.12.0]
 
 Fixes from a retest of 2.11.0: an existing form converges to its layout's order and `--verify` checks
 more of it, a generative page keeps its name and model on update, and several readers refuse output

@@ -10,6 +10,7 @@ const { validateProvisionInput } = require('../lib/provision-input.js');
 const { phaseInputs } = (() => { const m = require('../lib/phase-diff.js'); return { phaseInputs: m.PHASE_INPUTS || m.phaseInputs }; })();
 const { runSdkBuild, subgridLabel, viewDef } = require('../lib/sdk-build.js');
 const { notRoundTrippedSummary, notRoundTrippedWarning } = require('../download-model-app.js');
+const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
 
 function base() {
   return {
@@ -288,7 +289,7 @@ test('#6a readDescriptionInventory RECORDS a per-class read failure', async () =
     },
     dataverse: { get: async () => ({ status: 404, headers: {}, body: {} }) },
   };
-  const inv = await readDescriptionInventory(sdk, APP, null, new Set(['contoso_status']));
+  const inv = await readDescriptionInventory(currentReadSdk(sdk, { appId: APP, layerId: APP }), APP, null, new Set(['contoso_status']));
   // `globalChoices` is now reported too: the stub answers that metadata read with a 404, and a
   // non-2xx is no longer coerced to an empty list. Before, it read as "this environment has no
   // global choices" — a positive claim made from a failed read. (A column binding `contoso_status`
@@ -367,7 +368,7 @@ test('#6a5 app component inventory reads are paginated, not capped and undercoun
     },
   };
 
-  const inv = await readDescriptionInventory(sdk, APP, null);
+  const inv = await readDescriptionInventory(currentReadSdk(sdk, { appId: APP, layerId: APP }), APP, null);
   assert.ok(!(inv.incomplete || []).some((i) => i.kind === 'views'), JSON.stringify(inv.incomplete));
   const componentReads = calls.filter((c) => c.logical === 'appmodulecomponent');
   assert.ok(componentReads.length >= 3, `expected reads for views/charts/forms, got ${JSON.stringify(componentReads)}`);
