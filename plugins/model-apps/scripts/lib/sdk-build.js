@@ -99,7 +99,7 @@ const { manifestResourceName, buildManifest, serializeManifest, parseManifestBas
 // MEMBERSHIP authority (the app's live sitemap) + the cross-app shared-page scan. fetchSitemap is
 // fail-closed & discriminated (C4); fetchAppsForPages is the only way to prove a generative page is not
 // shared, since a genpage has no appmodulecomponent row (Imp5 — grounded live probe).
-const { fetchSitemap, fetchAppsForPages } = require('./sitemap-pages.js');
+const { fetchSitemap, navigationProof, fetchAppsForPages } = require('./sitemap-pages.js');
 // Structural nav oracle — used in the §9 PAGEREF_ scan/parity/resolve pipeline. `extractNavTargets`
 // classifies every generative navigateTo pageId at a REAL call site (never a decoy string / comment GUID).
 const { extractNavTargets, navReferencedKeys, navMalformedRefs, resolvePageRefs, navTargetParity } = require('./pageref-resolver.js');
@@ -4593,9 +4593,17 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // Reconcile by EXISTENCE (create-vs-reuse) + MEMBERSHIP (spec-pageId provenance, C3). Conflicts (a
       // spec pageId that is not a GUID, a spec/manifest disagreement where both ids are live, or two keys
       // → one live id) HALT — refusing to overwrite/misbind an arbitrary page.
-      const placed = new Set(sitemapIds.map((id) => String(id).toLowerCase()));
       const live = new Set(enumd.ids.map((id) => String(id).toLowerCase()));
       const declaredKeys = new Set((spec.pages || []).map((p) => p.key || p.name));
+      // Ownership proof is this app's navigation in EITHER layer: a page saved into the app designer's
+      // navigation, and written by a download that reads the current layer, is this app's before it is
+      // published (navigationProof). The removal gate below keeps the published `sitemapIds`.
+      const proofCandidates = [
+        ...((manifest && manifest.pages) || []),
+        ...(spec.pages || []).map((p) => ({ key: p.key || p.name, pageId: p.pageId })),
+      ].filter((mp) => declaredKeys.has(mp.key) && live.has(String(mp.pageId || '').toLowerCase())).map((mp) => String(mp.pageId).toLowerCase());
+      const proof = await navigationProof(provision, appUnique, membership, proofCandidates);
+      const placed = new Set(proof.ids.map((id) => String(id).toLowerCase()));
       let ownership;
       try { ownership = readPageOwnership(opts.workspaceDir, appUnique, opts.env); } catch (e) {
         throw new BuildHalt(`could not read local page creation receipts (${e.message}); refusing to bind off-sitemap ids`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
@@ -4627,14 +4635,17 @@ async function runSdkBuildPhases(spec, opts, owed) {
           nameReadErrors.push(`${id}: ${(e && e.message) || e}`);
         }
       }
-      const { keyToId, conflicts } = reconcilePageIds(spec.pages, manifest, enumd.ids, sitemapIds, storedNames, createdIds);
+      const { keyToId, conflicts } = reconcilePageIds(spec.pages, manifest, enumd.ids, proof.ids, storedNames, createdIds);
       if (conflicts.length) {
+        const unreadDraft = proof.currentNavigation && !proof.currentNavigation.ok
+          ? ` (its saved but unpublished navigation could not be read: ${proof.currentNavigation.reason} — re-run)`
+          : '';
         const recovery = conflicts.filter((c) => c.reason === 'unproven-manifest-id').map((c) => {
           const name = JSON.stringify(c.storedName || c.requestedName || '(unreadable name)');
-          const proof = c.hasCreationReceipt
+          const proofText = c.hasCreationReceipt
             ? 'its local creation record does not corroborate the stored name'
             : 'this workspace holds no record that this app created it in this environment';
-          return `page ${c.manifestId} (${name}) is not in this app's navigation and ${proof}: if it is this app's page, add it to the app's navigation in the maker and re-run; if not, remove the stale id from the manifest/spec (or delete the page) and re-run`;
+          return `page ${c.manifestId} (${name}) is not in this app's navigation${unreadDraft} and ${proofText}: if it is this app's page, add it to the app's navigation in the maker and re-run; if not, remove the stale id from the manifest/spec (or delete the page) and re-run`;
         });
         throw new BuildHalt(`generative-page identity conflict(s): ${JSON.stringify(conflicts)}${nameReadErrors.length ? `; stored-name reads failed: ${nameReadErrors.join('; ')}` : ''} — refusing to overwrite/misbind a page. ${recovery.length ? recovery.join('; ') : 'Resolve the duplicate/mismatched id(s) in the spec/manifest and rebuild.'}`, { phase: 'pages', code: 'pages-identity-conflict', recoverable: false });
       }

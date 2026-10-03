@@ -26,6 +26,7 @@ const OTHER = '22222222-2222-4222-8222-222222222222';
 const APP = '33333333-3333-4333-8333-333333333333';
 const LAYER = '44444444-4444-4444-8444-444444444444';
 const SITEMAP = '55555555-5555-4555-8555-555555555555';
+const DRAFT_LAYER = '66666666-6666-4666-8666-666666666666';
 const ENV = 'https://contoso.crm.dynamics.com';
 const OTHER_ENV = 'https://fabrikam.crm.dynamics.com';
 
@@ -97,7 +98,7 @@ function sdkForPages(opts = {}) {
     { uxagentprojectid: OWN, name: 'Overview' },
     { uxagentprojectid: OTHER, name: 'Contoso Draft' },
   ];
-  const state = { app: opts.appPresent !== false, deletes: [], reads: [], resources: [], uploads: [] };
+  const state = { app: opts.appPresent !== false, deletes: [], reads: [], resources: [], uploads: [], draftReads: 0 };
   const membership = opts.membership || [OWN];
   const sdk = {
     resolveArtifact: async (kind, identity) => {
@@ -130,6 +131,24 @@ function sdkForPages(opts = {}) {
     updateWebResource: async () => {},
     addSolutionComponent: async () => {},
   };
+  // The app's CURRENT (saved, unpublished) layer, read through the Dataverse client as download reads it:
+  // appmodules and sitemaps by RetrieveUnpublishedMultiple, e.g. { value: [{ appmoduleidunique, componentstate: 1 }] }.
+  if (opts.draftMembership !== undefined || opts.draftError) {
+    sdk.dataverse = {
+      get: async (url) => {
+        state.draftReads += 1;
+        if (opts.draftError) return { status: 503, body: null };
+        if (url.startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple')) {
+          return { status: 200, body: { value: [{ appmoduleid: APP, appmoduleidunique: DRAFT_LAYER, componentstate: 1 }] } };
+        }
+        if (url.startsWith('/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple')) {
+          const xml = `<SiteMap>${opts.draftMembership.map((id) => `<SubArea GenPageId="${id}" />`).join('')}</SiteMap>`;
+          return { status: 200, body: { value: [{ sitemapxml: xml, componentstate: 1 }] } };
+        }
+        throw new Error(`unexpected test read: ${url}`);
+      },
+    };
+  }
   return { sdk, state };
 }
 
@@ -167,6 +186,64 @@ test('teardown keeps a same-name unplaced page nominated only by a remote manife
   assert.match(r.skipped.join('\n'), /not proven|no local.*receipt/i);
   assert.match(r.skipped.join('\n'), /manual|remove.*yourself/i);
 });
+
+// A page a maker saved into the app's navigation, but has not published, is this app's page: a download
+// reads that layer and writes it, so the rebuild and the teardown must accept the same proof.
+test("teardown deletes a page proven only by the app's saved but unpublished navigation", async () => {
+  const { sdk, state } = sdkForPages({ membership: [OWN], draftMembership: [OWN, OTHER] });
+  const r = await runTeardown(spec(), { apply: true }, { sdk });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  assert.deepEqual(state.deletes.map((d) => d.id).sort(), [OWN, OTHER].sort());
+  assert.ok(state.draftReads > 0);
+});
+
+test('an unreadable unpublished navigation keeps the unproven page and says why', async () => {
+  const { sdk, state } = sdkForPages({ draftError: true });
+  const r = await runTeardown(spec(), { apply: true }, { sdk });
+  assert.deepEqual(state.deletes, [{ entity: 'uxagentproject', id: OWN }], 'the published proof still stands');
+  assert.match(r.skipped.join('\n'), new RegExp(`${OTHER}[^\\n]*saved but unpublished navigation could not be read`));
+});
+
+test('teardown reads no unpublished navigation when the published one proves every page', async () => {
+  const { sdk, state } = sdkForPages({ candidates: manifest(OWN).pages, draftMembership: [OWN], rows: [{ uxagentprojectid: OWN, name: 'Overview' }] });
+  await runTeardown(spec(), { apply: true }, { sdk });
+  assert.deepEqual(state.deletes, [{ entity: 'uxagentproject', id: OWN }]);
+  assert.equal(state.draftReads, 0);
+});
+
+for (const draft of ['proves', 'unreadable']) {
+  test(`a manifest page only in the saved but unpublished navigation: build ${draft === 'proves' ? 'binds it' : 'halts and says why'}`, async (t) => {
+    const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'contoso-draft-navigation-'));
+    t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
+    fs.writeFileSync(path.join(appDir, 'overview.tsx'), 'export default () => null;');
+    const { sdk, state } = sdkForPages({
+      candidates: manifest(OWN).pages, membership: [], rows: [{ uxagentprojectid: OWN, name: 'Overview' }],
+      ...(draft === 'proves' ? { draftMembership: [OWN] } : { draftError: true }),
+    });
+    const s = spec();
+    s.pages[0].source = { kind: 'tsx', codeFile: 'overview.tsx' };
+    const run = runSdkBuild(s, {
+      sdk, apply: true, appDir, workspaceDir: path.join(appDir, '.maker-workspace'), env: ENV, phases: ['pages'],
+      changedOnly: { resolvedAppId: APP, skipSitemapFinalize: true },
+      genpageCli: {
+        enumerateEnv: async () => ({ ok: true, ids: [OWN], pages: [] }),
+        upload: async (o) => { state.uploads.push(o); return { pageId: OWN }; },
+      },
+    });
+    if (draft === 'proves') {
+      await run;
+      assert.equal(state.uploads.length, 1);
+      assert.equal(String(state.uploads[0].pageId).toLowerCase(), OWN, 'an UPDATE of the proven page, never a new one');
+    } else {
+      await assert.rejects(run, (e) => {
+        assert.equal(e.code, 'pages-identity-conflict');
+        assert.match(e.message, /saved but unpublished navigation could not be read/);
+        return true;
+      });
+      assert.deepEqual(state.uploads, []);
+    }
+  });
+}
 
 test('a corroborated local creation receipt permits off-sitemap deletion', async () => {
   const workspaceDir = workspace();

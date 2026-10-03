@@ -1146,7 +1146,8 @@ custom control), but the spec validator emits a warning.
   2. **EXISTENCE** — env-wide `pac model genpage list` (no `--app-id`). This set alone decides
      whether an id is still live. An unplaced id needs a local creation receipt for this app/key/id
      and a decoded stored name exactly equal to the spec page name; otherwise `unproven-manifest-id` halts,
-     never requests a replacement CREATE. If it is this app's page, add it to the app's navigation
+     never requests a replacement CREATE. Ownership proof counts this app's navigation in either layer —
+     published, or saved but not yet published. If it is this app's page, add it to the app's navigation
      in the maker and re-run; otherwise remove the stale id from the manifest/spec (or delete the
      page) and re-run. A read failure HALTs (`pages-existence-failed`).
      An uncertain CLI CREATE stops and reports each new candidate's id, stored name and `createdon`.
@@ -1156,7 +1157,7 @@ custom control), but the spec validator emits a warning.
      fail-closed, discriminated). This set alone decides placement, download enumeration, and verify
      coverage. A read failure HALTs (`pages-sitemap-read-failed`).
 - **Teardown page scope.** The manifest supplies candidates, not permission to delete. A candidate
-  is deleted only when it is in this app's sitemap or a local app/key/id creation receipt proves it,
+  is deleted only when it is in this app's sitemap (published, or saved but unpublished) or a local app/key/id creation receipt proves it,
   with its stored name corroborating the receipt. Other candidates are kept with a manual-removal hint.
   The build writes `page-ownership.created.<hash>.json` in its workspace after an acknowledged create,
   before manifest persistence/placement. Version-2 records include an opaque SHA-256 fingerprint of

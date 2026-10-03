@@ -457,7 +457,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   step fails (a failed manifest or page read fails that step too), so a re-run still finds the pages the
   app's manifest lists. Before deleting the app, it resolves page candidates, their stored names
   and this app's sitemap. Only navigation members or corroborated local creation receipts authorize
-  deletion; names alone do not. The verified ownership set is persisted locally before app deletion,
+  deletion; names alone do not. Navigation is either layer: the published sitemap, and the saved but
+  unpublished one when the published layer leaves a page unproven (`navigationProof`, the layer a download reads). The verified ownership set is persisted locally before app deletion,
   so a page-less retry still has proof after the app is gone. Unreadable proof or a failed record write
   leaves the app intact. Proven pages still undeleted, including dependency-blocked pages, keep the
   manifest, solution and local teardown record and make the run fail. Records are consumed only for
@@ -870,7 +871,7 @@ scripts/
     schema-facts.js            ← pure data-model provisioning fact extractor for evals
     pageref-resolver.js        ← PAGEREF_<key> → GenPageId nav resolver
     page-manifest.js           ← durable <app>_pagemanifest read/write
-    sitemap-pages.js           ← pure GenPageId extractors + fail-closed fetchSitemap MEMBERSHIP reader + cross-app scan
+    sitemap-pages.js           ← pure GenPageId extractors + fail-closed fetchSitemap MEMBERSHIP reader + navigationProof (page ownership proof from either app layer) + cross-app scan
     sitemap-merge.js           ← pure: re-attach an existing app's rewritten sitemap to its live nodes (ids + everything the spec cannot describe), keep designer nav edits the spec did not make
     deployed-baseline.js       ← `.maker-workspace/last-applied.json`: the spec last applied or downloaded, stamped with its environment + app and the dashboard/page ids deployed there
     ai-candidates.js           ← selects good-candidate tables for auto row-summary mode

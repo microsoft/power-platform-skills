@@ -7,7 +7,7 @@
 // existence check — a page can exist env-wide yet not be in this app's sitemap (see genpage-cli.enumerateEnv).
 
 const { odataLit } = require('./odata.js');
-const { appComponentRows } = require('./app-components.js');
+const { appComponentRows, currentAppLayer } = require('./app-components.js');
 const { subAreaTargetKey } = require('./sitemap-merge.js');
 
 // Match a <SubArea …> START TAG carrying a GenPageId, capturing the id and (optionally) the Title.
@@ -314,4 +314,45 @@ async function fetchAppsForPages(sdk, pageIds, opts) {
   return { ok: true, byId, unreadable };
 }
 
-module.exports = { liveNavEntries, appNavigationMatchesSitemap, sitemapGenPages, sitemapGenPageIds, decodeXmlEntities, fetchSitemap, fetchAppsForPages, XML_TAG, XML_ATTR };
+// This app's navigation as OWNERSHIP PROOF for page ids. `published` is a fetchSitemap result for the
+// published app; when some candidate id is not already among its pages, the ids of the app's CURRENT
+// sitemap are added too — the layer the app designer saves to, and the one a download reads. Both layers
+// are this app's own navigation: a page saved into it belongs to this app before anyone publishes, and a
+// download that wrote such a page must not be refused by the rebuild or kept by the teardown.
+//
+// Proof only. The destructive-removal gate and verify keep the published layer, which is what the
+// approval preview and the published app show. The current layer is read only when it can prove
+// something the published one did not, so an app whose pages are all published costs no extra read.
+// Not being able to read it is not a failure: the published proof stands, so nothing is proven that
+// was not before, and `currentNavigation: { ok:false, reason }` says why for the message that refuses
+// or keeps an unproven page. Ids are lower-cased, as sitemapGenPageIds returns them.
+//   -> published unchanged | { ...published, ids: <union>, currentNavigation: { ok:true, ids } | { ok:false, reason } }
+async function navigationProof(sdk, appUnique, published, candidateIds = []) {
+  if (!published || !published.ok) return published;
+  const ids = new Set(published.ids.map((id) => String(id).toLowerCase()));
+  if (![...candidateIds].some((id) => !ids.has(String(id).toLowerCase()))) return published;
+  const current = await currentNavigation(sdk, appUnique);
+  if (!current.ok) return { ...published, currentNavigation: current };
+  for (const id of current.ids) ids.add(String(id).toLowerCase());
+  return { ...published, ids: [...ids].sort(), currentNavigation: current };
+}
+
+// The genpage ids of the app's CURRENT sitemap, or { ok:false, reason }. appmodules by unique name gives the
+// app id; RetrieveUnpublishedMultiple gives its current layer (currentAppLayer); fetchSitemap reads that
+// layer's sitemap, exactly as download does.
+async function currentNavigation(sdk, appUnique) {
+  if (!sdk || !sdk.dataverse || typeof sdk.dataverse.get !== 'function') return { ok: false, reason: 'no Dataverse client to read it' };
+  let appId;
+  try {
+    const rows = await sdk.queryRecords('appmodule', { select: ['appmoduleid'], filter: `uniquename eq '${odataLit(appUnique)}'`, top: 1 });
+    appId = rows && rows[0] && rows[0].appmoduleid;
+  } catch (e) {
+    return { ok: false, reason: `appmodule-query-failed: ${(e && e.message) || e}` };
+  }
+  if (!appId) return { ok: false, reason: 'app-not-found' };
+  const layer = await currentAppLayer(sdk.dataverse, String(appId).replace(/[{}]/g, ''));
+  const r = await fetchSitemap(sdk, appUnique, { currentLayer: layer });
+  return r.ok ? { ok: true, ids: r.ids } : { ok: false, reason: `${r.reason}${r.detail ? `: ${r.detail}` : ''}` };
+}
+
+module.exports = { liveNavEntries, appNavigationMatchesSitemap, sitemapGenPages, sitemapGenPageIds, decodeXmlEntities, fetchSitemap, navigationProof, fetchAppsForPages, XML_TAG, XML_ATTR };

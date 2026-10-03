@@ -35,7 +35,7 @@ are now retried without risking a duplicate.
   page cannot be read. Pass `--overwrite-deployed` only after choosing to replace the maker's changes;
   `/genpage` asks first and stops when nobody can answer.
 - **Page cleanup acts only on pages this app can prove are its own**: a local receipt written when
-  the build created the page, or the app's navigation. A page that only the stored page manifest lists
+  the build created the page, or the app's navigation, published or saved. A page that only the stored page manifest lists
   is kept and reported. `--clear-workspace` refuses while a receipt remains.
 - **An uncertain page create stops.** When a create fails or reports no page id but a new page
   appeared, the build lists each candidate's name and creation time instead of adopting one. A create

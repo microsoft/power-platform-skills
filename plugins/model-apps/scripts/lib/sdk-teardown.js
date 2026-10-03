@@ -60,7 +60,7 @@ const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor, SDK_ROLE
 const { selectSummaryTables } = require('./ai-candidates.js');
 const { specOptsIntoAi } = require('./ai-app-settings.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
-const { fetchSitemap } = require('./sitemap-pages.js');
+const { fetchSitemap, navigationProof } = require('./sitemap-pages.js');
 const { unescapePacName } = require('./genpage-cli.js');
 const { readPageOwnership, recordPageTeardown, completePageDeletions } = require('./page-ownership-records.js');
 
@@ -354,7 +354,14 @@ const KIND_HANDLERS = {
       const present = candidates.filter((p) => byId.has(p.id.toLowerCase()));
       const absent = candidates.filter((p) => !byId.has(p.id.toLowerCase())).map((p) => ({ ...p, absent: true }));
       if (!present.length) return { items: [], kept: [], candidates: absent };
-      const membership = target.appUnique ? await fetchSitemap(sdk, target.appUnique) : { ok: false, reason: 'app identity unavailable' };
+      const published = target.appUnique ? await fetchSitemap(sdk, target.appUnique) : { ok: false, reason: 'app identity unavailable' };
+      // Proof is this app's navigation in either layer: a page saved into the app designer's navigation is
+      // this app's before it is published, and a download writes it from that layer (navigationProof). The
+      // current layer is read only when the published one leaves a present page unproven.
+      const membership = await navigationProof(sdk, target.appUnique, published, present.map((p) => p.id));
+      const unreadDraft = membership.currentNavigation && !membership.currentNavigation.ok
+        ? ` (the app's saved but unpublished navigation could not be read: ${membership.currentNavigation.reason})`
+        : '';
       // Confirmed app absence permits only local proof, never a name-only substitute for navigation.
       const sitemapReadable = membership.ok || membership.reason === 'app-not-found';
       const placed = new Set(membership.ok ? membership.ids : []);
@@ -377,7 +384,7 @@ const KIND_HANDLERS = {
         } else if (placed.has(p.id.toLowerCase()) || pending.has(p.id.toLowerCase()) || (receipt && expectedName === item.name)) {
           items.push(item);
         } else {
-          kept.push({ ...item, reason: "not proven to belong to this app: no navigation membership or corroborated local creation receipt; inspect this id and remove it manually only if it is yours" });
+          kept.push({ ...item, reason: `not proven to belong to this app: no navigation membership or corroborated local creation receipt${unreadDraft}; inspect this id and remove it manually only if it is yours` });
         }
       }
       if (!sitemapReadable) errors.push(`app sitemap unreadable (${membership.reason}${membership.detail ? `: ${membership.detail}` : ''})`);
