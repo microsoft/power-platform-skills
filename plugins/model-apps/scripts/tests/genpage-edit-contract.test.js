@@ -73,9 +73,12 @@ test('edit provenance does not accept a different word merely because whitespace
   assert.equal(verify(t, written('1. Add a status filter\n2. Keep the current filter')).ok, false);
 });
 
-const planner = fs.readFileSync(path.join(PLUGIN, 'agents', 'genpage-edit-planner.md'), 'utf8');
-const flow = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'edit-flow.md'), 'utf8');
-const skill = fs.readFileSync(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'), 'utf8');
+// Read as LF: a Windows checkout with core.autocrlf=true stores these docs CRLF, and the paragraph
+// lookahead below (`\n\n`) then never matched, so the boundary rule read as empty there only.
+const readDoc = (...rel) => fs.readFileSync(path.join(PLUGIN, ...rel), 'utf8').replace(/\r\n?/g, '\n');
+const planner = readDoc('agents', 'genpage-edit-planner.md');
+const flow = readDoc('skills', 'genpage', 'edit-flow.md');
+const skill = readDoc('skills', 'genpage', 'SKILL.md');
 const phase5 = flow.split('## Edit Phase 5: Apply the Edit')[1]?.split('## Edit Phase 6:')[0] || '';
 const boundary = skill.match(/^\*\*Edit data boundary:\*\*[\s\S]*?(?=\n\n)/m)?.[0] || '';
 
