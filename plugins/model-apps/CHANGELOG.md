@@ -35,8 +35,11 @@ are now retried without risking a duplicate.
   page cannot be read. Pass `--overwrite-deployed` only after choosing to replace the maker's changes;
   `/genpage` asks first and stops when nobody can answer.
 - **Page cleanup acts only on pages this app can prove are its own**: a local receipt written when
-  the build created the page, or the app's navigation, published or saved. A page that only the stored page manifest lists
-  is kept and reported. `--clear-workspace` refuses while a receipt remains.
+  the build created the page, or the app's navigation, published or saved. A page that only the stored
+  page manifest lists is kept and reported; when the proof cannot be read, the app is left intact for a
+  re-run. `--clear-workspace` refuses while a receipt remains. A rebuild updates a page only when the
+  app's published navigation or a receipt proves it; a page only in the saved navigation asks you to
+  publish the app first.
 - **An uncertain page create stops.** When a create fails or reports no page id but a new page
   appeared, the build lists each candidate's name and creation time instead of adopting one. A create
   that left no page is retried as before.
@@ -75,6 +78,11 @@ are now retried without risking a duplicate.
   a link or junction at an output name and write through a temporary file and a rename.
 - **Spec sources stay in the app folder.** A web resource's `contentPath` and a page's code file must
   be a regular file inside the app folder; a link that leads out is refused before anything is written.
+  A `contentPath` behind inline content is not read, so it is not checked, and teardown accepts an
+  older spec's path.
+- **An app missing from its solution is re-added.** A build that stopped after creating its app left
+  the app outside its solution, and a re-run did not add it back. The app now joins its solution right
+  after it is created, and every rebuild re-adds it.
 - **Connector discovery refuses more output it cannot read**: a line before the table header other than
   PAC's sign-in banner, and a row whose id is not a connection id, no longer read as an empty or extra
   connection.
