@@ -11,18 +11,16 @@ const {
   KNOWN_PACKAGES,
   LOCALIZATION_CAPABILITIES,
   MAX_MODE_EVIDENCE_ENTRIES,
-  detectFramework,
   resolveProjectRelativePath,
 } = require('./lib/localization-config');
+const { detectFramework } = require('./lib/framework-detection');
+const {
+  AUTOMATICALLY_ACCEPTED_LICENSES,
+  assessPackageLicense,
+  normalizeLicense,
+} = require('./lib/package-license-policy');
 
 const MAX_EVIDENCE_TEXT_CHARS = 200000;
-const ALLOWED_LICENSES = new Set([
-  'MIT',
-  'Apache-2.0',
-  'BSD-2-Clause',
-  'BSD-3-Clause',
-  'ISC',
-]);
 function fetchJson(url, request = https.get) {
   return new Promise((resolve, reject) => {
     const req = request(url, { headers: { Accept: 'application/json' } }, (response) => {
@@ -226,12 +224,6 @@ async function fetchText(
       req.destroy(new Error('Package documentation request timed out'))
     );
   });
-}
-
-function normalizeLicense(license) {
-  if (typeof license === 'string') return license;
-  if (license && typeof license.type === 'string') return license.type;
-  return '';
 }
 
 function isPrerelease(version) {
@@ -541,25 +533,55 @@ function evaluatePackage(metadata, options) {
     }[framework]]: frameworkVersion,
   };
   const failures = [];
+  const failureCodes = [];
   const warnings = [];
-  const license = normalizeLicense(metadata.license);
+  const licenseAssessment = assessPackageLicense(metadata.license);
+  const license = licenseAssessment.license;
+  const licenseReviewConfirmed = Boolean(options.confirmLicenseReview);
   const publishedAt = metadata.time?.[version] || metadata.publishedAt;
   const ageLimit = new Date(now);
   ageLimit.setUTCMonth(ageLimit.getUTCMonth() - 24);
 
-  if (!version) failures.push('No resolvable package version was returned.');
-  if (metadata.deprecated) failures.push(`Package version is deprecated: ${metadata.deprecated}`);
-  if (isPrerelease(version) && !options.allowPrerelease) {
-    failures.push('Selected version is a prerelease and requires explicit confirmation.');
+  function addFailure(code, message) {
+    failureCodes.push(code);
+    failures.push(message);
   }
-  if (!ALLOWED_LICENSES.has(license)) {
-    failures.push(`License "${license || 'unknown'}" is not in the approved permissive-license list.`);
+
+  const licenseAccepted =
+    licenseAssessment.automaticallyAccepted ||
+    licenseReviewConfirmed;
+
+  if (!version) {
+    addFailure('package-not-resolvable', 'No resolvable package version was returned.');
+  }
+  if (metadata.deprecated) {
+    addFailure('package-deprecated', `Package version is deprecated: ${metadata.deprecated}`);
+  }
+  if (isPrerelease(version) && !options.allowPrerelease) {
+    addFailure(
+      'prerelease-not-approved',
+      'Selected version is a prerelease and requires explicit confirmation.'
+    );
+  }
+  if (!licenseAssessment.automaticallyAccepted && !licenseReviewConfirmed) {
+    failureCodes.push(
+      licenseAssessment.classification === 'unknown'
+        ? 'license-unknown'
+        : 'license-review-required'
+    );
+    warnings.push(licenseAssessment.reason);
   }
   if (!publishedAt || new Date(publishedAt) < ageLimit) {
-    failures.push('Selected package has not published this version within the previous 24 months.');
+    addFailure(
+      'package-stale',
+      'Selected package has not published this version within the previous 24 months.'
+    );
   }
   if (!packageSupportsFramework(packageName, framework, peerDependencies)) {
-    failures.push(`Package metadata does not demonstrate ${framework} framework support.`);
+    addFailure(
+      'framework-not-supported',
+      `Package metadata does not demonstrate ${framework} framework support.`
+    );
   }
   const relevantPeers =
     LOCALIZATION_CAPABILITIES.frameworks[framework]?.frameworkPeers || [];
@@ -568,7 +590,8 @@ function evaluatePackage(metadata, options) {
     const projectVersion = frameworkVersions[peerName];
     if (!projectVersion ||
         !rangeSatisfies(peerName, projectVersion, peerDependencies[peerName])) {
-      failures.push(
+      addFailure(
+        'framework-peer-incompatible',
         `Peer dependency ${peerName} "${peerDependencies[peerName]}" ` +
         `does not support project version "${projectVersion || 'not installed'}".`
       );
@@ -577,13 +600,17 @@ function evaluatePackage(metadata, options) {
   if (framework === 'angular') {
     const projectMajor = majorOf(frameworkVersion);
     if (packageName.startsWith('@angular/') && majorOf(version) !== projectMajor) {
-      failures.push(
+      addFailure(
+        'angular-major-mismatch',
         `Official Angular package major ${majorOf(version)} must match project major ${projectMajor}.`
       );
     }
   }
   if (!metadata.homepage && !metadata.repository) {
-    failures.push('Package metadata does not provide official documentation or a repository.');
+    addFailure(
+      'documentation-missing',
+      'Package metadata does not provide official documentation or a repository.'
+    );
   }
   const modeEvidence = assessModeSupport(
     packageName,
@@ -592,21 +619,27 @@ function evaluatePackage(metadata, options) {
     options.modeEvidenceClassification
   );
   if (modeEvidence.status === 'unsupported') {
-    failures.push(modeEvidence.detail);
+    addFailure('mode-unsupported', modeEvidence.detail);
   } else if (modeEvidence.status === 'inconclusive') {
+    failureCodes.push('mode-inconclusive');
     warnings.push(modeEvidence.detail);
   }
   if (options.modeEvidenceError) {
+    failureCodes.push('documentation-fetch-failed');
     warnings.push(`Official mode evidence could not be read: ${options.modeEvidenceError}`);
   }
   const approvedUnverified = failures.length === 0 &&
+    licenseAccepted &&
     modeEvidence.status === 'inconclusive' &&
     Boolean(options.allowUnverifiedMode);
   const viable = failures.length === 0 &&
+    licenseAccepted &&
     (modeEvidence.status === 'supported' || approvedUnverified);
   const status = failures.length || modeEvidence.status === 'unsupported'
     ? 'unsupported'
-    : modeEvidence.status;
+    : !licenseAccepted || modeEvidence.status === 'inconclusive'
+      ? 'inconclusive'
+      : 'supported';
 
   return {
     viable,
@@ -616,15 +649,27 @@ function evaluatePackage(metadata, options) {
       : approvedUnverified
         ? 'unverified'
         : 'not-approved',
-    requiresConfirmation: failures.length === 0 &&
-      modeEvidence.status === 'inconclusive' &&
-      !options.allowUnverifiedMode,
+    requiresConfirmation: failures.length === 0 && (
+      !licenseAccepted ||
+      (modeEvidence.status === 'inconclusive' && !options.allowUnverifiedMode)
+    ),
+    requiresLicenseReview: !licenseAssessment.automaticallyAccepted &&
+      !licenseReviewConfirmed,
     packageName,
     version,
     framework,
     frameworkVersion,
     mode,
     license,
+    licenseAssessment: {
+      classification: licenseAssessment.classification,
+      status: licenseAssessment.automaticallyAccepted
+        ? 'automatically-accepted'
+        : licenseReviewConfirmed
+          ? 'user-confirmed'
+          : 'review-required',
+      reason: licenseAssessment.reason,
+    },
     publishedAt,
     prerelease: isPrerelease(version),
     modeEvidence: {
@@ -638,6 +683,7 @@ function evaluatePackage(metadata, options) {
       ),
       document: options.modeEvidenceDocument || null,
     },
+    failureCodes: [...new Set(failureCodes)],
     failures,
     warnings,
   };
@@ -691,7 +737,8 @@ function parseArgs(argv) {
   const args = {};
   for (let index = 0; index < argv.length; index += 1) {
     const key = argv[index];
-    if (key === '--allowPrerelease' || key === '--allowUnverifiedMode') {
+    if (key === '--allowPrerelease' || key === '--allowUnverifiedMode' ||
+        key === '--confirmLicenseReview') {
       args[key.slice(2)] = true;
       continue;
     }
@@ -711,7 +758,8 @@ async function runCli() {
       '[--framework <detected-candidate>] [--version <range>] ' +
       '--mode <runtime|static> [--modeEvidenceUrl <official-https-url>] ' +
       '[--modeEvidenceClassificationFile <project-relative-json-path>] ' +
-      '[--allowPrerelease] [--allowUnverifiedMode]'
+      '[--allowPrerelease] [--allowUnverifiedMode] ' +
+      '[--confirmLicenseReview]'
     );
   }
   const projectRoot = path.resolve(args.projectRoot);
@@ -802,6 +850,7 @@ async function runCli() {
     mode: args.mode,
     allowPrerelease: args.allowPrerelease,
     allowUnverifiedMode: args.allowUnverifiedMode,
+    confirmLicenseReview: args.confirmLicenseReview,
     modeEvidenceClassification,
     modeEvidenceDocument,
     modeEvidenceUrl,
@@ -820,7 +869,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  ALLOWED_LICENSES,
+  AUTOMATICALLY_ACCEPTED_LICENSES,
   assessModeSupport,
   evaluatePackage,
   extractEvidenceText,

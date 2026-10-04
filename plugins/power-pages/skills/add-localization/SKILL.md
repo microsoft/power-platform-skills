@@ -168,15 +168,39 @@ node "${PLUGIN_ROOT}/scripts/validate-i18n-package.js" --projectRoot "<PROJECT_R
 
 Interpret the JSON result as follows:
 
+- `requiresLicenseReview: true`: stop before mode-evidence handling and show
+  `license`, `licenseAssessment.classification`, and its reason.
 - `status: supported`: continue and preserve `modeEvidence` for the manifest.
 - `status: unsupported`: show every hard failure and the framework
-  recommendation. Hard compatibility, maintenance, license, and known-package
+  recommendation. Hard compatibility, maintenance, and known-package
   conflicts cannot be overridden.
 - `status: inconclusive`: explain that package health and framework
-  compatibility passed but the requested localization mode has not been
-  verified from official documentation.
+  compatibility passed but license review or requested-mode verification is
+  still required.
 
-For an inconclusive package, use `AskUserQuestion`:
+<!-- not-a-gate: license review acknowledgement still precedes the approved plan and any install -->
+
+When `requiresLicenseReview` is true, use `AskUserQuestion`:
+
+| Question | Header | Options |
+|---|---|---|
+| The package license is not automatically accepted. How should this proceed? | License review | Use the framework recommendation (Recommended), Explicitly accept the reported license, Cancel |
+
+Show the npm license value, but do not interpret license obligations or claim
+legal approval. For review and acceptance, require explicit maker confirmation,
+then rerun with:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-i18n-package.js" --projectRoot "<PROJECT_ROOT>" --framework "<FRAMEWORK>" --package "<PACKAGE>" --version "<VERSION_OR_RANGE>" --mode "<runtime|static>" --confirmLicenseReview
+```
+
+Preserve the same telemetry arguments from the original command. This
+confirmation overrides only the license criterion. Missing evidence,
+deprecation, maintenance, compatibility, mode, and package-health failures
+continue to block.
+
+After license review is satisfied, handle a remaining inconclusive
+mode-evidence result with `AskUserQuestion`:
 
 | Question | Header | Options |
 |---|---|---|
@@ -339,10 +363,14 @@ from the package-validator result. For an alternative verified from official
 documentation, record `status: verified`, `source: official-documentation`,
 the accepted URL, requested mode, `classification: supported`, explanation,
 exact evidence entries, and all satisfied support conditions. For an
-unverified alternative, record `status: unverified`, `source: user-approved`,
-and the official evidence URL when one was supplied. Record
-`initializationEvidence` when deterministic framework patterns do not
-recognize the selected package. Set `lastOperation` to `create`,
+unverified alternative, record
+`status: unverified`, `source: user-approved`, and the official evidence URL
+when one was supplied. For every npm-backed package, record the normalized
+`license` and `licenseReview`. Use
+`licenseReview.status: automatically-accepted` for the documented unattended
+list, or `user-confirmed` after explicit maker approval. Record
+`initializationEvidence` when deterministic
+framework patterns do not recognize the selected package. Set `lastOperation` to `create`,
 `add-languages`, `repair`, or `reconfigure`, and set `translationMethod` to
 `agent` or `blank`.
 

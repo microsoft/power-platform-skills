@@ -3,6 +3,13 @@
 
 const fs = require('fs');
 const path = require('path');
+const {
+  detectFramework,
+  packageDependencies,
+} = require('./framework-detection');
+const {
+  AUTOMATICALLY_ACCEPTED_LICENSES,
+} = require('./package-license-policy');
 
 const MANIFEST_NAME = '.powerpages-localization.json';
 const MAX_MODE_EVIDENCE_ENTRIES = 10;
@@ -217,6 +224,35 @@ function validateLocalizationManifestShape(manifest, projectRoot) {
         errors.push('Manifest packageVerification.evidenceUrl must be an HTTPS URL.');
       }
     }
+    if (verification.licenseReview !== undefined) {
+      const licenseReview = verification.licenseReview;
+      if (!licenseReview || typeof licenseReview !== 'object' ||
+          Array.isArray(licenseReview)) {
+        errors.push('Manifest packageVerification.licenseReview must be an object.');
+      } else {
+        if (typeof verification.license !== 'string' ||
+            !verification.license.trim() ||
+            verification.license.length > 200) {
+          errors.push(
+            'Manifest packageVerification.license must be a non-empty string of at most 200 characters.'
+          );
+        }
+        if (!['automatically-accepted', 'user-confirmed'].includes(
+          licenseReview.status
+        )) {
+          errors.push(
+            'Manifest packageVerification.licenseReview.status must be ' +
+            '"automatically-accepted" or "user-confirmed".'
+          );
+        }
+        if (licenseReview.status === 'automatically-accepted' &&
+            !AUTOMATICALLY_ACCEPTED_LICENSES.has(verification.license)) {
+          errors.push(
+            'Automatically accepted package licenses must use the documented license list.'
+          );
+        }
+      }
+    }
     if (verification.status === 'unverified' && verification.source !== 'user-approved') {
       errors.push(
         'Unverified packages must use packageVerification.source "user-approved".'
@@ -377,59 +413,6 @@ function verifyInitializationEvidence(projectRoot, packageName, evidence) {
     valid: true,
     file: evidence.file,
     marker: evidence.marker,
-  };
-}
-
-function packageDependencies(projectRoot) {
-  const packageJson = readJson(path.join(projectRoot, 'package.json')) || {};
-  return {
-    ...packageJson.dependencies,
-    ...packageJson.devDependencies,
-  };
-}
-
-function detectFramework(projectRoot) {
-  const dependencies = packageDependencies(projectRoot);
-  const evidence = [];
-  const candidates = [];
-
-  if (dependencies.react && dependencies['react-dom']) {
-    candidates.push('react');
-    evidence.push({ framework: 'react', kind: 'primary', detail: 'react and react-dom dependencies' });
-  }
-  if (dependencies.vue) {
-    candidates.push('vue');
-    evidence.push({ framework: 'vue', kind: 'primary', detail: 'vue dependency' });
-  }
-  if (dependencies['@angular/core']) {
-    candidates.push('angular');
-    evidence.push({ framework: 'angular', kind: 'primary', detail: '@angular/core dependency' });
-  }
-  if (dependencies.astro) {
-    candidates.push('astro');
-    evidence.push({ framework: 'astro', kind: 'primary', detail: 'astro dependency' });
-  }
-
-  const primaryConfigChecks = [
-    ['angular', 'angular.json'],
-    ['astro', 'astro.config.mjs'],
-    ['astro', 'astro.config.js'],
-    ['astro', 'astro.config.ts'],
-  ];
-  for (const [framework, relativePath] of primaryConfigChecks) {
-    if (fs.existsSync(path.join(projectRoot, relativePath))) {
-      candidates.push(framework);
-      evidence.push({ framework, kind: 'primary', detail: relativePath });
-    }
-  }
-
-  const uniqueCandidates = [...new Set(candidates)];
-  return {
-    framework: uniqueCandidates.length === 1 ? uniqueCandidates[0] : null,
-    candidates: uniqueCandidates,
-    ambiguous: uniqueCandidates.length > 1,
-    unsupported: uniqueCandidates.length === 0,
-    evidence,
   };
 }
 

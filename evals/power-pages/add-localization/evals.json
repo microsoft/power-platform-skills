@@ -149,12 +149,14 @@
     {
       "id": 12,
       "prompt": "Use a GPL-licensed i18n library for this React site.",
-      "expected_output": "Reject the alternative because its license is outside the approved permissive list.",
+      "expected_output": "Do not accept the package automatically. Show the reported license, require explicit maker confirmation, or recommend react-i18next.",
       "files": [],
       "expectations": [
         "Checks package license metadata",
-        "Names the rejected license",
-        "Lists the approved-license criterion",
+        "Names the license requiring review",
+        "Explains that the automatic-acceptance list is a narrow automation policy rather than a legal conclusion",
+        "Requires explicit maker confirmation before accepting the license",
+        "Does not let license confirmation bypass package health, compatibility, or mode checks",
         "Recommends react-i18next"
       ]
     },

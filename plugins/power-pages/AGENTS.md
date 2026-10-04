@@ -46,6 +46,7 @@ agents/
   ai-webapi-settings-architect.md ← Agent: proposes Summarization/* site settings (read-only)
 scripts/
   generate-uuid.js             ← Shared UUID v4 generator (used by multiple skills)
+  detect-framework.js          ← Reports explicit-project framework evidence without guessing ambiguous projects
   validate-i18n-package.js      ← Validates npm localization package compatibility, stability, maintenance, mode, docs, and license
   check-activation-status.js   ← Checks if site is already activated (used by deploy-site, activate-site)
   poll-async-operation.js      ← Polls Dataverse asyncoperations until terminal state (used by export-solution, import-solution)
@@ -214,11 +215,14 @@ Shared utility scripts live at `scripts/` and are referenced by multiple skills 
 - `poll-async-operation.js`: Polls a Dataverse `asyncoperations` record until it reaches a terminal state (Succeeded/Failed/Canceled) or times out. Args: `--asyncJobId`, `--envUrl`, `--intervalMs` (default 5000), `--maxAttempts` (default 60). It acquires Azure CLI tokens internally so credentials never appear in process arguments. Outputs JSON status. Used by `export-solution` and `import-solution`.
 - `encode-solution-file.js`: Base64-encodes a solution zip file for use in Dataverse OData request bodies (`ImportSolutionAsync`, `StageSolution`). Args: `--zipPath`. Outputs `{ encoded, fileSizeBytes, fileName }`. Used by `import-solution`.
 - `parse-deployment-errors.js`: Parses PAC CLI stderr output or OData error JSON into structured findings array. Each finding has `{ patternId, type, severity, message, rawMatch, autoFixAvailable, suggestedFix }`. Reads from `--input`, `--file`, or stdin. Used by `diagnose-deployment`.
-- `validate-i18n-package.js`: Validates an npm localization package/version against the detected framework, selected runtime/static mode, peer range, stable-release requirement, 24-month maintenance window, approved permissive licenses, and documentation metadata. Used by `add-localization`.
+- `detect-framework.js`: Reports React, Vue, Angular, or Astro evidence for an explicit project root through the shared framework detector. Returns all candidates and does not guess when evidence is ambiguous.
+- `validate-i18n-package.js`: Validates an npm localization package/version against the detected framework, selected runtime/static mode, peer range, stable-release requirement, 24-month maintenance window, documented automatic license policy, and documentation metadata. Non-listed, compound, custom, or missing license metadata requires explicit maker confirmation; license confirmation never bypasses other validation failures. Returns stable `failureCodes`. Used by `add-localization`.
 
 Shared lib modules live at `scripts/lib/` and are imported by other scripts via `require('./validation-helpers')` or sibling requires. Never inline their logic in skill scripts — always require from `scripts/lib/`.
 
-- `scripts/lib/localization-config.js`: Detects supported frameworks and existing localization, validates/canonicalizes BCP-47 tags against `references/bcp47-subtags.json`, visibly deduplicates locales, and extracts protected translation tokens. Used by `add-localization` and its validator.
+- `scripts/lib/framework-detection.js`: Detects React, Vue, Angular, or Astro for an explicit project root from dependency declarations and primary configuration markers. Use this module as the single source of truth for explicit-project framework detection. It is intentionally separate from telemetry's workspace-oriented `detect-site-framework.js`.
+- `scripts/lib/localization-config.js`: Detects existing localization, validates/canonicalizes BCP-47 tags against `references/bcp47-subtags.json`, visibly deduplicates locales, and extracts protected translation tokens. It consumes and temporarily re-exports the shared framework detector for compatibility; do not add generic framework-detection logic here.
+- `scripts/lib/package-license-policy.js`: Owns normalization and classification for localization-package license metadata. Keep the unattended acceptance list here and require explicit maker confirmation for every other classification.
 
 #### ALM Prerequisites & Context
 

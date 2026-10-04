@@ -243,6 +243,40 @@ test('resource comparison refuses traversal paths even when the outside file exi
   assert.match(errors[1], /path must be repository-relative and remain inside the project root/);
 });
 
+test('resource comparison rejects arrays, null, and primitive JSON catalogs', (t) => {
+  const projectRoot = createTempProject(t);
+  const invalidResources = {
+    array: ['Hello'],
+    null: null,
+    string: 'Hello',
+    number: 42,
+    boolean: true,
+  };
+  const resourcePaths = {};
+  for (const [locale, value] of Object.entries(invalidResources)) {
+    const relativePath = `locales/${locale}.json`;
+    writeProjectFile(projectRoot, relativePath, JSON.stringify(value));
+    resourcePaths[locale] = relativePath;
+  }
+  const errors = [];
+
+  compareJsonResources(projectRoot, {
+    locales: Object.keys(resourcePaths),
+    defaultLocale: 'array',
+    translationMethod: 'agent',
+    resourcePaths,
+  }, errors);
+
+  assert.equal(errors.length, Object.keys(invalidResources).length);
+  for (const relativePath of Object.values(resourcePaths)) {
+    assert.ok(
+      errors.includes(
+        `Locale resource must contain a top-level JSON object: ${relativePath}`
+      )
+    );
+  }
+});
+
 test('approves a complete runtime localization setup', (t) => {
   const projectRoot = createLocalizedReactProject(t);
   const result = runValidator(projectRoot);

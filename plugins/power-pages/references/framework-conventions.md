@@ -28,9 +28,9 @@ Read `package.json` to determine the framework by checking dependencies:
 
 When a workflow must reject ambiguous multi-framework evidence rather than
 perform a simple lookup, use
-`${PLUGIN_ROOT}/scripts/lib/localization-config.js inspect --projectRoot
-"<PROJECT_ROOT>"`. It returns all primary evidence and does not guess when
-multiple supported framework dependencies are present.
+`${PLUGIN_ROOT}/scripts/detect-framework.js --projectRoot "<PROJECT_ROOT>"`.
+It returns all primary evidence and does not guess when multiple supported
+framework dependencies or configuration markers are present.
 
 ## Route Discovery
 

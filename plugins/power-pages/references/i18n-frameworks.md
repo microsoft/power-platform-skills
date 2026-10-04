@@ -218,6 +218,34 @@ intentional empty targets from broken translations.
 
 Schema version 1 includes `packageVerification`:
 
+- Every npm-backed package records the normalized `license` and
+  `licenseReview`. The automatic list is deliberately narrow and permits
+  unattended selection; it is not a legal conclusion about every other
+  license:
+
+  ```json
+  {
+    "license": "MIT",
+    "licenseReview": {
+      "status": "automatically-accepted"
+    }
+  }
+  ```
+
+  Missing, custom, compound, and non-listed licenses require explicit maker
+  confirmation:
+
+  ```json
+  {
+    "license": "MPL-2.0",
+    "licenseReview": {
+      "status": "user-confirmed"
+    }
+  }
+  ```
+
+  License confirmation overrides only this policy check and cannot bypass
+  compatibility, maintenance, deprecation, or mode verification.
 - Known recommendations use `status: "verified"` and
   `source: "known-capability"`.
 - Do not infer an alternative package's runtime/static capability from npm

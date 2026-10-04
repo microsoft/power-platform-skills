@@ -745,7 +745,7 @@ Read-only design review of an existing site from a URL or a project folder. It r
 
 ---
 
-### 6.34 `add-localization` (11 calls)
+### 6.34 `add-localization` (12 calls)
 
 Adds or extends localization for React, Vue, Angular, and Astro code-site SPAs.
 Most prompts gather validated configuration before the Phase 3 plan gate.
@@ -759,6 +759,7 @@ Most prompts gather validated configuration before the Phase 3 plan gate.
 | `add-localization:2.mode` | not-a-gate | — | 2.3 | Angular only — official static localization or runtime Transloco | — |
 | `add-localization:2.package` | not-a-gate | — | 2.4 | Use recommendation, propose a validated alternative, or cancel | — |
 | `add-localization:2.prerelease` | not-a-gate | — | 2.4 | Explicitly acknowledge an npm prerelease before it may enter the plan | — |
+| `add-localization:2.license-review` | not-a-gate | — | 2.4 | Use the recommendation, explicitly accept the reported package license, or cancel | — |
 | `add-localization:2.translation` | not-a-gate | — | 2.5 | Agent-generated translations, blank targets, or cancel | — |
 | `add-localization:3.plan-approval` | gate | plan | 3 | Approve exact package/mode/locale/file delta before installation or edits | nothing |
 | `add-localization:7.review` | gate | plan | 7 | Accept verified localization or request revisions | localized-site-files |

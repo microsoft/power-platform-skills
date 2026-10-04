@@ -51,6 +51,12 @@ test('accepts a stable, maintained, compatible runtime package', () => {
   const result = evaluatePackage(metadata(), evaluationOptions());
 
   assert.equal(result.viable, true, result.failures.join('\n'));
+  assert.deepEqual(result.licenseAssessment, {
+    classification: 'automatically-accepted',
+    status: 'automatically-accepted',
+    reason:
+      'The package uses a documented low-restriction license accepted for unattended selection.',
+  });
 });
 
 test('uses shared package capabilities for known framework support', () => {
@@ -69,7 +75,7 @@ test('rejects prereleases without explicit confirmation', () => {
   assert.match(result.failures.join('\n'), /prerelease/);
 });
 
-test('rejects stale, deprecated, incompatible, or disallowed-license packages', () => {
+test('reports license review alongside hard package failures', () => {
   const result = evaluatePackage(metadata({
     deprecated: 'Use another package',
     license: 'GPL-3.0',
@@ -80,9 +86,65 @@ test('rejects stale, deprecated, incompatible, or disallowed-license packages', 
   const failures = result.failures.join('\n');
   assert.equal(result.viable, false);
   assert.match(failures, /deprecated/);
-  assert.match(failures, /License/);
   assert.match(failures, /previous 24 months/);
   assert.match(failures, /does not support project version/);
+  assert.equal(result.requiresLicenseReview, true);
+  assert.match(result.warnings.join('\n'), /requires explicit review/);
+  assert.deepEqual(result.failureCodes, [
+    'package-deprecated',
+    'license-review-required',
+    'package-stale',
+    'framework-peer-incompatible',
+  ]);
+});
+
+test('requires explicit review for non-listed and compound licenses', () => {
+  for (const license of ['MPL-2.0', 'MIT OR Apache-2.0']) {
+    const result = evaluatePackage(metadata({ license }), evaluationOptions());
+
+    assert.equal(result.viable, false, license);
+    assert.equal(result.status, 'inconclusive', license);
+    assert.equal(result.requiresLicenseReview, true, license);
+    assert.equal(result.licenseAssessment.classification, 'review-required');
+    assert.deepEqual(result.failureCodes, ['license-review-required']);
+  }
+});
+
+test('requires explicit review when license metadata is unknown', () => {
+  const result = evaluatePackage(metadata({ license: '' }), evaluationOptions());
+
+  assert.equal(result.viable, false);
+  assert.equal(result.status, 'inconclusive');
+  assert.equal(result.requiresLicenseReview, true);
+  assert.equal(result.license, 'unknown');
+  assert.equal(result.licenseAssessment.classification, 'unknown');
+  assert.deepEqual(result.failureCodes, ['license-unknown']);
+});
+
+test('accepts explicit license review without requiring evidence', () => {
+  const result = evaluatePackage(metadata({ license: 'MPL-2.0' }), evaluationOptions({
+    confirmLicenseReview: true,
+  }));
+
+  assert.equal(result.viable, true, result.failures.join('\n'));
+  assert.equal(result.status, 'supported');
+  assert.equal(result.requiresLicenseReview, false);
+  assert.deepEqual(result.licenseAssessment, {
+    classification: 'review-required',
+    status: 'user-confirmed',
+    reason:
+      'The package license is not in the automatic-acceptance list and requires explicit review.',
+  });
+});
+
+test('accepts explicit review when license metadata is unknown', () => {
+  const result = evaluatePackage(metadata({ license: '' }), evaluationOptions({
+    confirmLicenseReview: true,
+  }));
+
+  assert.equal(result.viable, true, result.failures.join('\n'));
+  assert.equal(result.license, 'unknown');
+  assert.equal(result.licenseAssessment.status, 'user-confirmed');
 });
 
 test('understands common peer dependency ranges', () => {
@@ -184,18 +246,23 @@ test('keeps an unavailable official evidence URL in the inconclusive flow', () =
   assert.match(result.warnings.join('\n'), /could not be read: request timed out/);
 });
 
-test('does not let an unverified override bypass hard failures', () => {
+test('does not let license confirmation bypass hard failures', () => {
   const result = evaluatePackage(metadata({
     description: 'A React formatting helper',
     license: 'GPL-3.0',
+    deprecated: 'No longer maintained',
   }), evaluationOptions({
     packageName: 'unknown-react-helper',
-    allowUnverifiedMode: true,
+    confirmLicenseReview: true,
+    modeEvidenceClassification: {
+      classification: 'supported',
+      explanation: 'Runtime support was verified.',
+    },
   }));
 
   assert.equal(result.viable, false);
   assert.equal(result.status, 'unsupported');
-  assert.match(result.failures.join('\n'), /License/);
+  assert.match(result.failures.join('\n'), /deprecated/);
 });
 
 test('treats a known package mode mismatch as unsupported', () => {

@@ -13,7 +13,6 @@ const {
   KNOWN_PACKAGES,
   LOCALIZATION_CAPABILITIES,
   MANIFEST_NAME,
-  detectFramework,
   detectLocalization,
   hasLocaleNavigationSignal,
   protectedTokenSignature,
@@ -21,6 +20,9 @@ const {
   validateLocalizationManifestShape,
   validateLocales,
 } = require('../../../scripts/lib/localization-config');
+const {
+  detectFramework,
+} = require('../../../scripts/lib/framework-detection');
 
 const MAX_REPORTED_STALE_KEYS = 20;
 const MAX_DIAGNOSTIC_KEY_CHARS = 200;
@@ -46,7 +48,7 @@ function readJson(filePath) {
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));
   } catch {
-    return null;
+    return undefined;
   }
 }
 
@@ -135,8 +137,14 @@ function compareJsonResources(projectRoot, manifest, errors, options = {}) {
     );
     if (!fullPath) continue;
     const value = readJson(fullPath);
-    if (!value) {
+    if (value === undefined) {
       errors.push(`Locale resource is not valid JSON: ${relativePath}`);
+      continue;
+    }
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      errors.push(
+        `Locale resource must contain a top-level JSON object: ${relativePath}`
+      );
       continue;
     }
     parsed[locale] = flattenJson(value);

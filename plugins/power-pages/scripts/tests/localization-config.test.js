@@ -90,6 +90,10 @@ test('accepts structured official-documentation package verification evidence', 
         explanation: 'This explicitly confirms runtime support.',
       }],
       supportConditions: ['Requires version 2 or later.'],
+      license: 'MPL-2.0',
+      licenseReview: {
+        status: 'user-confirmed',
+      },
     },
     locales: ['en-US', 'fr-FR'],
     defaultLocale: 'en-US',
@@ -124,6 +128,10 @@ test('rejects incomplete official-documentation package verification evidence', 
       explanation: '',
       evidence: [],
       supportConditions: 'none',
+      license: 'MPL-2.0',
+      licenseReview: {
+        status: 'automatically-accepted',
+      },
     },
     locales: ['en-US', 'fr-FR'],
     defaultLocale: 'en-US',
@@ -145,24 +153,10 @@ test('rejects incomplete official-documentation package verification evidence', 
   assert.match(output, /explanation must be a non-empty string/);
   assert.match(output, /evidence must contain 1-10/);
   assert.match(output, /supportConditions must contain/);
+  assert.match(output, /Automatically accepted package licenses/);
 });
 
-test('detects each supported framework from primary dependency evidence', (t) => {
-  const cases = [
-    ['react', { react: '^19.0.0', 'react-dom': '^19.0.0' }],
-    ['vue', { vue: '^3.5.0' }],
-    ['angular', { '@angular/core': '^19.1.0' }],
-    ['astro', { astro: '^6.1.0' }],
-  ];
-
-  for (const [expected, dependencies] of cases) {
-    const projectRoot = createTempProject(t);
-    writePackage(projectRoot, dependencies);
-    assert.equal(detectFramework(projectRoot).framework, expected);
-  }
-});
-
-test('uses development dependencies but ignores peer-only installation evidence', (t) => {
+test('ignores peer-only localization installation evidence', (t) => {
   const projectRoot = createTempProject(t);
   writeProjectFile(projectRoot, 'package.json', JSON.stringify({
     devDependencies: {
@@ -175,40 +169,9 @@ test('uses development dependencies but ignores peer-only installation evidence'
     },
   }, null, 2));
 
-  const framework = detectFramework(projectRoot);
-  assert.equal(framework.framework, 'astro');
-  assert.deepEqual(framework.candidates, ['astro']);
-
   const localization = detectLocalization(projectRoot);
   assert.equal(localization.detected, false);
   assert.deepEqual(localization.packages, []);
-});
-
-test('reports ambiguous primary framework evidence instead of guessing', (t) => {
-  const projectRoot = createTempProject(t);
-  writePackage(projectRoot, {
-    react: '^19.0.0',
-    'react-dom': '^19.0.0',
-    vue: '^3.5.0',
-  });
-
-  const result = detectFramework(projectRoot);
-  assert.equal(result.framework, null);
-  assert.equal(result.ambiguous, true);
-  assert.deepEqual(result.candidates, ['react', 'vue']);
-});
-
-test('treats conflicting primary configuration markers as ambiguous', (t) => {
-  const projectRoot = createTempProject(t);
-  writePackage(projectRoot, {
-    react: '^19.0.0',
-    'react-dom': '^19.0.0',
-  });
-  writeProjectFile(projectRoot, 'angular.json', '{}');
-
-  const result = detectFramework(projectRoot);
-  assert.equal(result.ambiguous, true);
-  assert.deepEqual(result.candidates, ['react', 'angular']);
 });
 
 test('canonicalizes, visibly deduplicates, and validates registry subtags', () => {
