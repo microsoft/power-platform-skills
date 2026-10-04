@@ -19,14 +19,50 @@ const {
   assessPackageLicense,
   normalizeLicense,
 } = require('./lib/package-license-policy');
+const {
+  sanitizeUntrustedText,
+} = require('./lib/safe-untrusted-text');
 
 const MAX_EVIDENCE_TEXT_CHARS = 200000;
+const MAX_NPM_METADATA_BYTES = 10 * 1024 * 1024;
+const OFFICIAL_NPM_REGISTRY = 'https://registry.npmjs.org/';
+// Deny every IPv4 block in the IANA special-purpose registries rather than
+// adding only familiar private ranges. Documentation fetches must use ordinary
+// globally routable addresses, not benchmarking, protocol, relay, multicast,
+// documentation, or future-use space.
+// See: https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml
+const NON_PUBLIC_IPV4_CIDRS = Object.freeze([
+  ['0.0.0.0', 8],
+  ['10.0.0.0', 8],
+  ['100.64.0.0', 10],
+  ['127.0.0.0', 8],
+  ['169.254.0.0', 16],
+  ['172.16.0.0', 12],
+  ['192.0.0.0', 24],
+  ['192.0.2.0', 24],
+  ['192.31.196.0', 24],
+  ['192.52.193.0', 24],
+  ['192.88.99.0', 24],
+  ['192.168.0.0', 16],
+  ['192.175.48.0', 24],
+  ['198.18.0.0', 15],
+  ['198.51.100.0', 24],
+  ['203.0.113.0', 24],
+  ['224.0.0.0', 4],
+  ['240.0.0.0', 4],
+]);
+
 function fetchJson(url, request = https.get) {
   return new Promise((resolve, reject) => {
     const req = request(url, { headers: { Accept: 'application/json' } }, (response) => {
       let body = '';
       response.setEncoding('utf8');
-      response.on('data', (chunk) => { body += chunk; });
+      response.on('data', (chunk) => {
+        body += chunk;
+        if (Buffer.byteLength(body, 'utf8') > MAX_NPM_METADATA_BYTES) {
+          req.destroy(new Error('npm registry metadata exceeds the 10 MiB limit'));
+        }
+      });
       response.on('end', () => {
         if (response.statusCode < 200 || response.statusCode >= 300) {
           reject(new Error(`npm registry returned HTTP ${response.statusCode}`));
@@ -50,6 +86,23 @@ function parseIpv4(address) {
     parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)
     ? parts
     : null;
+}
+
+function ipv4ToInteger(parts) {
+  return (
+    ((parts[0] << 24) >>> 0) +
+    (parts[1] << 16) +
+    (parts[2] << 8) +
+    parts[3]
+  ) >>> 0;
+}
+
+function matchesIpv4Prefix(parts, prefix, bits) {
+  const prefixParts = parseIpv4(prefix);
+  if (!prefixParts) return false;
+  const mask = bits === 0 ? 0 : (0xFFFFFFFF << (32 - bits)) >>> 0;
+  return (ipv4ToInteger(parts) & mask) ===
+    (ipv4ToInteger(prefixParts) & mask);
 }
 
 function parseIpv6(address) {
@@ -92,21 +145,8 @@ function isPublicIpAddress(address) {
   const family = net.isIP(address);
   if (family === 4) {
     const parts = parseIpv4(address);
-    const [a, b, c] = parts;
-    return !(
-      a === 0 ||
-      a === 10 ||
-      a === 127 ||
-      (a === 100 && b >= 64 && b <= 127) ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 0 && c === 0) ||
-      (a === 192 && b === 0 && c === 2) ||
-      (a === 192 && b === 168) ||
-      (a === 198 && (b === 18 || b === 19)) ||
-      (a === 198 && b === 51 && c === 100) ||
-      (a === 203 && b === 0 && c === 113) ||
-      a >= 224
+    return !NON_PUBLIC_IPV4_CIDRS.some(([prefix, bits]) =>
+      matchesIpv4Prefix(parts, prefix, bits)
     );
   }
   if (family !== 6) return false;
@@ -236,7 +276,13 @@ function majorOf(versionRange) {
 }
 
 function resolveVersionsWithNpm(packageName, versionSpec = 'latest', execute = execFileSync) {
-  const npmArgs = ['view', `${packageName}@${versionSpec}`, 'version', '--json'];
+  const npmArgs = [
+    'view',
+    `${packageName}@${versionSpec}`,
+    'version',
+    '--json',
+    `--registry=${OFFICIAL_NPM_REGISTRY}`,
+  ];
   // Keep both executable names as fixed literals so package input can only
   // populate argv. Windows resolves npm through npm.cmd; other platforms use npm.
   const output = process.platform === 'win32'
@@ -308,7 +354,7 @@ function extractEvidenceText(content) {
     .replace(/&#x([0-9a-f]+);/gi, (_, code) => decodeNumericEntity(code, 16));
   const normalized = decoded.replace(/\s+/g, ' ').trim();
   return {
-    text: normalized.slice(0, MAX_EVIDENCE_TEXT_CHARS),
+    text: sanitizeUntrustedText(normalized, MAX_EVIDENCE_TEXT_CHARS),
     truncated: normalized.length > MAX_EVIDENCE_TEXT_CHARS,
   };
 }
@@ -380,20 +426,21 @@ function validateModeEvidenceClassification(
       );
     }
     return {
-      quote: normalizedQuote,
-      explanation: entry.explanation.trim(),
+      quote: sanitizeUntrustedText(normalizedQuote, 2000),
+      explanation: sanitizeUntrustedText(entry.explanation.trim(), 2000),
     };
   });
 
   return {
     requestedMode: mode,
     classification: classification.classification,
-    explanation: classification.explanation.trim(),
+    explanation: sanitizeUntrustedText(classification.explanation.trim(), 2000),
     evidence,
     supportConditions: classification.supportConditions.map((condition) =>
-      condition.trim()
+      sanitizeUntrustedText(condition.trim(), 500)
     ),
     evidenceUrl,
+    untrustedData: true,
   };
 }
 
@@ -555,7 +602,10 @@ function evaluatePackage(metadata, options) {
     addFailure('package-not-resolvable', 'No resolvable package version was returned.');
   }
   if (metadata.deprecated) {
-    addFailure('package-deprecated', `Package version is deprecated: ${metadata.deprecated}`);
+    addFailure(
+      'package-deprecated',
+      'Package version is marked as deprecated in npm metadata.'
+    );
   }
   if (isPrerelease(version) && !options.allowPrerelease) {
     addFailure(
@@ -626,7 +676,11 @@ function evaluatePackage(metadata, options) {
   }
   if (options.modeEvidenceError) {
     failureCodes.push('documentation-fetch-failed');
-    warnings.push(`Official mode evidence could not be read: ${options.modeEvidenceError}`);
+    warnings.push(
+      `Official mode evidence could not be read: ${
+        sanitizeUntrustedText(options.modeEvidenceError, 500)
+      }`
+    );
   }
   const approvedUnverified = failures.length === 0 &&
     licenseAccepted &&
@@ -655,8 +709,8 @@ function evaluatePackage(metadata, options) {
     ),
     requiresLicenseReview: !licenseAssessment.automaticallyAccepted &&
       !licenseReviewConfirmed,
-    packageName,
-    version,
+    packageName: sanitizeUntrustedText(packageName, 214),
+    version: sanitizeUntrustedText(version, 100),
     framework,
     frameworkVersion,
     mode,
@@ -670,7 +724,12 @@ function evaluatePackage(metadata, options) {
           : 'review-required',
       reason: licenseAssessment.reason,
     },
-    publishedAt,
+    artifactProvenance: options.artifactProvenance || null,
+    lockfileProvenance: options.lockfileProvenance || {
+      present: false,
+      verified: false,
+    },
+    publishedAt: publishedAt ? sanitizeUntrustedText(publishedAt, 100) : null,
     prerelease: isPrerelease(version),
     modeEvidence: {
       ...modeEvidence,
@@ -682,10 +741,12 @@ function evaluatePackage(metadata, options) {
         !options.modeEvidenceClassification
       ),
       document: options.modeEvidenceDocument || null,
+      untrustedData: true,
     },
     failureCodes: [...new Set(failureCodes)],
     failures,
     warnings,
+    untrustedData: true,
   };
 }
 
@@ -702,11 +763,72 @@ async function resolvePackage(
   if (!versionMetadata) {
     throw new Error(`npm metadata is missing resolved version ${resolvedVersion}.`);
   }
+  const artifactProvenance = validateOfficialArtifactMetadata(versionMetadata);
   return {
     ...versionMetadata,
     readme: packageMetadata.readme,
     time: packageMetadata.time,
+    artifactProvenance,
   };
+}
+
+function validateOfficialArtifactMetadata(metadata) {
+  const integrity = metadata.dist?.integrity;
+  const tarball = metadata.dist?.tarball;
+  if (typeof integrity !== 'string' ||
+      !/^sha(?:256|384|512)-[A-Za-z0-9+/]+={0,2}$/.test(integrity)) {
+    throw new Error('Official npm metadata does not provide a supported artifact integrity.');
+  }
+  let tarballUrl;
+  try {
+    tarballUrl = new URL(tarball);
+  } catch {
+    throw new Error('Official npm metadata does not provide a valid tarball URL.');
+  }
+  if (tarballUrl.protocol !== 'https:' ||
+      tarballUrl.hostname !== 'registry.npmjs.org' ||
+      tarballUrl.username ||
+      tarballUrl.password) {
+    throw new Error('Package tarball must be hosted by the official npm registry.');
+  }
+  return {
+    registry: OFFICIAL_NPM_REGISTRY,
+    tarballUrl: tarballUrl.toString(),
+    integrity,
+  };
+}
+
+function validatePackageLockProvenance(projectRoot, packageName, metadata) {
+  const lockPath = path.join(projectRoot, 'package-lock.json');
+  if (!fs.existsSync(lockPath)) return { present: false, verified: false };
+  let lock;
+  try {
+    lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+  } catch {
+    throw new Error('package-lock.json must contain valid JSON.');
+  }
+  const entry = lock.packages?.[`node_modules/${packageName}`] ||
+    lock.dependencies?.[packageName];
+  if (!entry) return { present: false, verified: false };
+  if (entry.version !== metadata.version) {
+    throw new Error('The selected package lock entry does not match the validated version.');
+  }
+  if (entry.integrity !== metadata.artifactProvenance.integrity) {
+    throw new Error('The selected package lock entry does not match official npm integrity.');
+  }
+  let resolved;
+  try {
+    resolved = new URL(entry.resolved);
+  } catch {
+    throw new Error('The selected package lock entry has no valid resolved URL.');
+  }
+  if (resolved.protocol !== 'https:' ||
+      resolved.hostname !== 'registry.npmjs.org' ||
+      resolved.username ||
+      resolved.password) {
+    throw new Error('The selected package lock entry must resolve from the official npm registry.');
+  }
+  return { present: true, verified: true };
 }
 
 function resolveInstalledVersion(projectRoot, packageName, versionSpec) {
@@ -855,6 +977,12 @@ async function runCli() {
     modeEvidenceDocument,
     modeEvidenceUrl,
     modeEvidenceError,
+    artifactProvenance: metadata.artifactProvenance,
+    lockfileProvenance: validatePackageLockProvenance(
+      projectRoot,
+      args.package,
+      metadata
+    ),
     rangeSatisfies: versionSatisfiesRangeWithNpm,
   });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
@@ -862,8 +990,10 @@ async function runCli() {
 }
 
 if (require.main === module) {
-  runCli().catch((error) => {
-    process.stderr.write(`${error.message}\n`);
+  runCli().catch(() => {
+    process.stderr.write(
+      'Localization package validation failed before a result could be produced.\n'
+    );
     process.exitCode = 1;
   });
 }
@@ -883,6 +1013,8 @@ module.exports = {
   packageSupportsFramework,
   peerRangeAllowsMajor,
   resolveInstalledVersion,
+  validateOfficialArtifactMetadata,
+  validatePackageLockProvenance,
   resolvePublicHostname,
   resolveVersionsWithNpm,
   resolveVersionWithNpm,

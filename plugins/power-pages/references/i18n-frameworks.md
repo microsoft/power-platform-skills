@@ -179,7 +179,17 @@ Write `.powerpages-localization.json` after implementation using this shape:
   "packageVersion": "^16.0.0",
   "packageVerification": {
     "status": "verified",
-    "source": "known-capability"
+    "source": "known-capability",
+    "license": "MIT",
+    "licenseReview": {
+      "status": "automatically-accepted"
+    },
+    "artifact": {
+      "version": "16.0.0",
+      "registry": "https://registry.npmjs.org/",
+      "tarballUrl": "https://registry.npmjs.org/react-i18next/-/react-i18next-16.0.0.tgz",
+      "integrity": "sha512-<official npm SRI>"
+    }
   },
   "locales": ["en-US", "fr-FR"],
   "defaultLocale": "en-US",
@@ -218,6 +228,13 @@ intentional empty targets from broken translations.
 
 Schema version 1 includes `packageVerification`:
 
+- Every npm-backed package records the exact artifact accepted before
+  installation. `artifact.version`, `registry`, `tarballUrl`, and `integrity`
+  come from the package-validator result, not from project configuration. The
+  installation must use that exact version with the official npm registry,
+  and the post-install validator must report a matching verified
+  `package-lock.json` entry. Yarn and pnpm lockfile provenance is not currently
+  supported; do not create a second lockfile to bypass that limitation.
 - Every npm-backed package records the normalized `license` and
   `licenseReview`. The automatic list is deliberately narrow and permits
   unattended selection; it is not a legal conclusion about every other

@@ -10,6 +10,10 @@ const {
 const {
   AUTOMATICALLY_ACCEPTED_LICENSES,
 } = require('./package-license-policy');
+const {
+  isSafeBoundedText,
+  sanitizeUntrustedText,
+} = require('./safe-untrusted-text');
 
 const MANIFEST_NAME = '.powerpages-localization.json';
 const MAX_MODE_EVIDENCE_ENTRIES = 10;
@@ -69,6 +73,48 @@ const DEFAULT_SOURCE_SCAN_LIMITS = Object.freeze({
   maxFileBytes: 1024 * 1024,
   maxTotalBytes: 10 * 1024 * 1024,
 });
+const MANIFEST_FIELDS = Object.freeze(new Set([
+  'schemaVersion',
+  'framework',
+  'mode',
+  'packageName',
+  'packageVersion',
+  'packageVerification',
+  'locales',
+  'defaultLocale',
+  'translationMethod',
+  'resourcePaths',
+  'generatedFiles',
+  'managedFiles',
+  'unavailableLocales',
+  'bidirectionalReadiness',
+  'adoptedExistingConfiguration',
+  'lastOperation',
+  'updatedAt',
+  'initializationEvidence',
+]));
+const PACKAGE_VERIFICATION_FIELDS = Object.freeze(new Set([
+  'status',
+  'source',
+  'evidenceUrl',
+  'requestedMode',
+  'classification',
+  'explanation',
+  'evidence',
+  'supportConditions',
+  'license',
+  'licenseReview',
+  'artifact',
+]));
+const MODE_EVIDENCE_FIELDS = Object.freeze(new Set(['quote', 'explanation']));
+const PACKAGE_ARTIFACT_FIELDS = Object.freeze(new Set([
+  'version',
+  'registry',
+  'tarballUrl',
+  'integrity',
+]));
+const NPM_PACKAGE_NAME_PATTERN =
+  /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/;
 
 let cachedRegistry;
 
@@ -125,18 +171,23 @@ function resolveProjectRelativePath(projectRoot, relativePath) {
     };
   }
 
-  // Existing symlinks can escape even when the lexical path is contained.
-  // Resolve them before any caller reads the file.
-  if (fs.existsSync(resolvedPath)) {
-    const canonicalRoot = fs.realpathSync(resolvedRoot);
-    const canonicalPath = fs.realpathSync(resolvedPath);
-    if (!isPathInside(canonicalRoot, canonicalPath)) {
-      return {
-        valid: false,
-        reason: 'must not resolve outside the project root',
-        path: null,
-      };
-    }
+  // A missing final path can still escape through an existing symlinked
+  // ancestor (for example, src -> C:\outside followed by src\new.json).
+  // Resolve the nearest existing ancestor before callers read or create it.
+  const canonicalRoot = fs.realpathSync(resolvedRoot);
+  let existingAncestor = resolvedPath;
+  while (!fs.existsSync(existingAncestor)) {
+    const parent = path.dirname(existingAncestor);
+    if (parent === existingAncestor) break;
+    existingAncestor = parent;
+  }
+  const canonicalAncestor = fs.realpathSync(existingAncestor);
+  if (!isPathInside(canonicalRoot, canonicalAncestor)) {
+    return {
+      valid: false,
+      reason: 'must not resolve outside the project root',
+      path: null,
+    };
   }
 
   return { valid: true, reason: null, path: resolvedPath };
@@ -148,10 +199,14 @@ function validateManifestPath(errors, field, relativePath, projectRoot) {
     : { valid: !repositoryRelativePathError(relativePath) };
   if (!result.valid) {
     errors.push(
-      `Manifest ${field} path "${relativePath}" must be repository-relative ` +
+      `Manifest ${field} path must be repository-relative ` +
       'and remain inside the project root.'
     );
   }
+}
+
+function hasOnlyAllowedProperties(value, allowed) {
+  return Object.keys(value).every((key) => allowed.has(key));
 }
 
 function validateLocalizationManifestShape(manifest, projectRoot) {
@@ -159,27 +214,41 @@ function validateLocalizationManifestShape(manifest, projectRoot) {
     return ['Localization manifest must be a JSON object.'];
   }
   const errors = [];
+  if (!hasOnlyAllowedProperties(manifest, MANIFEST_FIELDS)) {
+    errors.push('Localization manifest contains unsupported top-level properties.');
+  }
   if (typeof manifest.schemaVersion !== 'number') {
     errors.push('Manifest schemaVersion must be a number.');
   }
-  for (const field of [
-    'framework',
-    'mode',
-    'packageName',
-    'packageVersion',
-    'defaultLocale',
-    'translationMethod',
-    'lastOperation',
-    'updatedAt',
-  ]) {
-    if (typeof manifest[field] !== 'string' || !manifest[field].trim()) {
-      errors.push(`Manifest ${field} must be a non-empty string.`);
+  for (const [field, maxChars] of Object.entries({
+    framework: 50,
+    mode: 20,
+    packageName: 214,
+    packageVersion: 200,
+    defaultLocale: 100,
+    translationMethod: 20,
+    lastOperation: 50,
+    updatedAt: 100,
+  })) {
+    if (!isSafeBoundedText(manifest[field], maxChars)) {
+      errors.push(
+        `Manifest ${field} must be a non-empty string of at most ${maxChars} ` +
+        'characters without control characters.'
+      );
     }
+  }
+  if (isSafeBoundedText(manifest.packageName, 214) &&
+      manifest.packageName !== 'astro-built-in' &&
+      !NPM_PACKAGE_NAME_PATTERN.test(manifest.packageName)) {
+    errors.push('Manifest packageName must be a valid lowercase npm package name.');
   }
   for (const field of ['locales', 'generatedFiles', 'managedFiles']) {
     if (!Array.isArray(manifest[field]) ||
-        manifest[field].some((value) => typeof value !== 'string' || !value.trim())) {
-      errors.push(`Manifest ${field} must be an array of non-empty strings.`);
+        manifest[field].some((value) => !isSafeBoundedText(value, 500))) {
+      errors.push(
+        `Manifest ${field} must be an array of non-empty strings of at most 500 ` +
+        'characters without control characters.'
+      );
     } else if (field !== 'locales') {
       for (const relativePath of manifest[field]) {
         validateManifestPath(errors, field, relativePath, projectRoot);
@@ -189,9 +258,12 @@ function validateLocalizationManifestShape(manifest, projectRoot) {
   if (!manifest.resourcePaths || typeof manifest.resourcePaths !== 'object' ||
       Array.isArray(manifest.resourcePaths) ||
       Object.values(manifest.resourcePaths).some(
-        (value) => typeof value !== 'string' || !value.trim()
+        (value) => !isSafeBoundedText(value, 500)
       )) {
-    errors.push('Manifest resourcePaths must be an object whose values are non-empty file paths.');
+    errors.push(
+      'Manifest resourcePaths must be an object whose values are non-empty paths ' +
+      'of at most 500 characters without control characters.'
+    );
   } else {
     for (const relativePath of Object.values(manifest.resourcePaths)) {
       validateManifestPath(errors, 'resourcePaths', relativePath, projectRoot);
@@ -204,6 +276,9 @@ function validateLocalizationManifestShape(manifest, projectRoot) {
   if (!verification || typeof verification !== 'object' || Array.isArray(verification)) {
     errors.push('Manifest packageVerification must be an object.');
   } else {
+    if (!hasOnlyAllowedProperties(verification, PACKAGE_VERIFICATION_FIELDS)) {
+      errors.push('Manifest packageVerification contains unsupported properties.');
+    }
     if (!['verified', 'unverified'].includes(verification.status)) {
       errors.push('Manifest packageVerification.status must be "verified" or "unverified".');
     }
@@ -224,17 +299,75 @@ function validateLocalizationManifestShape(manifest, projectRoot) {
         errors.push('Manifest packageVerification.evidenceUrl must be an HTTPS URL.');
       }
     }
+    if (manifest.packageName !== 'astro-built-in' &&
+        (verification.license === undefined ||
+         verification.licenseReview === undefined ||
+         verification.artifact === undefined)) {
+      errors.push(
+        'npm-backed packages require packageVerification license, licenseReview, and artifact provenance.'
+      );
+    }
+    if (verification.artifact !== undefined) {
+      const artifact = verification.artifact;
+      if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
+        errors.push('Manifest packageVerification.artifact must be an object.');
+      } else {
+        if (!hasOnlyAllowedProperties(artifact, PACKAGE_ARTIFACT_FIELDS)) {
+          errors.push(
+            'Manifest packageVerification.artifact contains unsupported properties.'
+          );
+        }
+        if (!isSafeBoundedText(artifact.version, 100) ||
+            !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(
+              artifact.version || ''
+            )) {
+          errors.push(
+            'Manifest packageVerification.artifact.version must be an exact semantic version.'
+          );
+        }
+        if (artifact.registry !== 'https://registry.npmjs.org/') {
+          errors.push(
+            'Manifest packageVerification.artifact.registry must be the official npm registry.'
+          );
+        }
+        let tarballUrl;
+        try {
+          tarballUrl = new URL(artifact.tarballUrl);
+        } catch {
+          tarballUrl = null;
+        }
+        if (!tarballUrl || tarballUrl.protocol !== 'https:' ||
+            tarballUrl.hostname !== 'registry.npmjs.org' ||
+            tarballUrl.username || tarballUrl.password) {
+          errors.push(
+            'Manifest packageVerification.artifact.tarballUrl must use the official npm registry.'
+          );
+        }
+        if (!isSafeBoundedText(artifact.integrity, 500) ||
+            !/^sha(?:256|384|512)-[A-Za-z0-9+/]+={0,2}$/.test(
+              artifact.integrity || ''
+            )) {
+          errors.push(
+            'Manifest packageVerification.artifact.integrity must be a supported SRI value.'
+          );
+        }
+      }
+    }
     if (verification.licenseReview !== undefined) {
       const licenseReview = verification.licenseReview;
       if (!licenseReview || typeof licenseReview !== 'object' ||
           Array.isArray(licenseReview)) {
         errors.push('Manifest packageVerification.licenseReview must be an object.');
       } else {
-        if (typeof verification.license !== 'string' ||
-            !verification.license.trim() ||
-            verification.license.length > 200) {
+        if (!hasOnlyAllowedProperties(licenseReview, new Set(['status']))) {
           errors.push(
-            'Manifest packageVerification.license must be a non-empty string of at most 200 characters.'
+            'Manifest packageVerification.licenseReview contains unsupported properties.'
+          );
+        }
+        if (!isSafeBoundedText(verification.license, 200)) {
+          errors.push(
+            'Manifest packageVerification.license must be a non-empty string of at most ' +
+            '200 characters without control characters.'
           );
         }
         if (!['automatically-accepted', 'user-confirmed'].includes(
@@ -307,6 +440,7 @@ function validateLocalizationManifestShape(manifest, projectRoot) {
           verification.evidence.length > MAX_MODE_EVIDENCE_ENTRIES ||
           verification.evidence.some((entry) =>
             !entry || typeof entry !== 'object' || Array.isArray(entry) ||
+            !hasOnlyAllowedProperties(entry, MODE_EVIDENCE_FIELDS) ||
             typeof entry.quote !== 'string' || !entry.quote.trim() ||
             entry.quote.length > 2000 ||
             typeof entry.explanation !== 'string' || !entry.explanation.trim() ||
@@ -601,7 +735,7 @@ function detectLocalization(projectRoot) {
     : null;
   if (manifestPackage && !dependencies[manifestPackage] &&
       manifestPackage !== 'astro-built-in') {
-    conflicts.push(`manifest package "${manifestPackage}" is not installed`);
+    conflicts.push('manifest package is not installed');
   }
   if (manifestLocales) {
     const validation = validateLocales(manifestLocales);
@@ -907,10 +1041,71 @@ function discoverLocalizationImplementation(
 
 function inspectProject(projectRoot) {
   const resolvedRoot = path.resolve(projectRoot);
+  const localization = detectLocalization(resolvedRoot);
+  const safeLocalization = {
+    detected: localization.detected,
+    valid: localization.valid,
+    manifestPresent: Boolean(localization.manifestPath),
+    packages: localization.packages.map((value) => sanitizeUntrustedText(value, 214)),
+    packageName: localization.packageName
+      ? sanitizeUntrustedText(localization.packageName, 214)
+      : null,
+    mode: localization.mode ? sanitizeUntrustedText(localization.mode, 20) : null,
+    locales: localization.locales.map((value) => sanitizeUntrustedText(value, 100)),
+    defaultLocale: localization.defaultLocale
+      ? sanitizeUntrustedText(localization.defaultLocale, 100)
+      : null,
+    resourcePaths: Object.fromEntries(
+      Object.entries(localization.resourcePaths).map(([locale, relativePath]) => [
+        sanitizeUntrustedText(locale, 100),
+        sanitizeUntrustedText(relativePath, 500),
+      ])
+    ),
+    resourceDirectories: localization.resourceDirectories.map(
+      (value) => sanitizeUntrustedText(value, 500)
+    ),
+    angularI18n: localization.angularI18n,
+    astroConfig: localization.astroConfig
+      ? sanitizeUntrustedText(localization.astroConfig, 500)
+      : null,
+    implementation: {
+      initialization: localization.implementation.initialization,
+      selector: localization.implementation.selector,
+      lang: localization.implementation.lang,
+      dir: localization.implementation.dir,
+      files: localization.implementation.files.map(
+        (value) => sanitizeUntrustedText(value, 500)
+      ),
+      initializationEvidence: {
+        provided: localization.implementation.initializationEvidence.provided,
+        valid: localization.implementation.initializationEvidence.valid,
+        reason: localization.implementation.initializationEvidence.reason
+          ? sanitizeUntrustedText(
+            localization.implementation.initializationEvidence.reason,
+            500
+          )
+          : null,
+      },
+      scan: {
+        bytesRead: localization.implementation.scan.bytesRead,
+        maxFileBytes: localization.implementation.scan.maxFileBytes,
+        maxTotalBytes: localization.implementation.scan.maxTotalBytes,
+        skippedFiles: localization.implementation.scan.skippedFiles.map(
+          (value) => sanitizeUntrustedText(value, 500)
+        ),
+        limitReached: localization.implementation.scan.limitReached,
+        stoppedEarly: localization.implementation.scan.stoppedEarly,
+      },
+    },
+    conflicts: localization.conflicts.map(
+      (value) => sanitizeUntrustedText(value, 500)
+    ),
+    untrustedProjectData: true,
+  };
   return {
-    projectRoot: resolvedRoot,
+    projectRoot: sanitizeUntrustedText(resolvedRoot, 1000),
     framework: detectFramework(resolvedRoot),
-    localization: detectLocalization(resolvedRoot),
+    localization: safeLocalization,
   };
 }
 

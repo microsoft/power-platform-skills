@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('fs');
+const crypto = require('crypto');
 const path = require('path');
 const {
   approve,
@@ -24,50 +25,158 @@ const {
   detectFramework,
 } = require('../../../scripts/lib/framework-detection');
 
-const MAX_REPORTED_STALE_KEYS = 20;
-const MAX_DIAGNOSTIC_KEY_CHARS = 200;
+const MAX_REPORTED_RESOURCE_IDS = 20;
+const MAX_RESOURCE_FILE_BYTES = 1024 * 1024;
+const MAX_RESOURCE_ENTRIES = 10000;
+const MAX_RESOURCE_DEPTH = 50;
+const MAX_PACKAGE_LOCK_BYTES = 10 * 1024 * 1024;
+const MAX_PROJECT_SEARCH_DEPTH = 4;
+const MAX_PROJECT_SEARCH_DIRECTORIES = 500;
 
-function quoteDiagnosticKey(value) {
-  const text = String(value);
-  const bounded = text.length > MAX_DIAGNOSTIC_KEY_CHARS
-    ? `${text.slice(0, MAX_DIAGNOSTIC_KEY_CHARS)}...`
-    : text;
-  return JSON.stringify(bounded).replace(
-    /[\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g,
-    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`
-  );
+function diagnosticResourceId(value, prefix = 'entry') {
+  const digest = crypto
+    .createHash('sha256')
+    .update(String(value))
+    .digest('hex')
+    .slice(0, 12);
+  return `${prefix}#${digest}`;
 }
 
-function formatDiagnosticKeys(keys) {
-  const reported = keys.slice(0, MAX_REPORTED_STALE_KEYS).map(quoteDiagnosticKey);
+function findLocalizationProjectRoot(cwd) {
+  const ancestorRoot = findProjectRoot(cwd);
+  if (ancestorRoot &&
+      fs.existsSync(path.join(ancestorRoot, 'powerpages.config.json'))) {
+    return ancestorRoot;
+  }
+  const candidates = [];
+  const pending = [{ directory: path.resolve(cwd), depth: 0 }];
+  let visited = 0;
+  while (pending.length && visited < MAX_PROJECT_SEARCH_DIRECTORIES) {
+    const { directory, depth } = pending.shift();
+    visited += 1;
+    if (fs.existsSync(path.join(directory, 'powerpages.config.json')) &&
+        fs.existsSync(path.join(directory, MANIFEST_NAME))) {
+      candidates.push(directory);
+      if (candidates.length > 1) return null;
+    }
+    if (depth >= MAX_PROJECT_SEARCH_DEPTH) continue;
+    let entries;
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.isSymbolicLink() ||
+          ['.git', 'node_modules'].includes(entry.name)) {
+        continue;
+      }
+      pending.push({
+        directory: path.join(directory, entry.name),
+        depth: depth + 1,
+      });
+    }
+  }
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+function validatePackageArtifactLock(projectRoot, manifest, errors) {
+  if (!manifest.packageName || manifest.packageName === 'astro-built-in') return;
+  const artifact = manifest.packageVerification.artifact;
+  const lockPath = path.join(projectRoot, 'package-lock.json');
+  if (!fs.existsSync(lockPath)) {
+    errors.push(
+      'npm-backed localization packages require a verified package-lock.json entry.'
+    );
+    return;
+  }
+  let lock;
+  try {
+    const stat = fs.lstatSync(lockPath);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_PACKAGE_LOCK_BYTES) {
+      throw new Error('unsupported package lock');
+    }
+    lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+  } catch {
+    errors.push(
+      'package-lock.json must be a regular JSON file no larger than 10 MiB.'
+    );
+    return;
+  }
+  const entry = lock.packages?.[`node_modules/${manifest.packageName}`] ||
+    lock.dependencies?.[manifest.packageName];
+  if (!entry) {
+    errors.push(
+      'package-lock.json is missing the configured localization package entry.'
+    );
+    return;
+  }
+  if (entry.version !== artifact.version ||
+      entry.integrity !== artifact.integrity ||
+      entry.resolved !== artifact.tarballUrl) {
+    errors.push(
+      'The localization package lock entry does not match its validated artifact provenance.'
+    );
+  }
+}
+
+function formatDiagnosticIds(keys, prefix = 'entry') {
+  const reported = keys
+    .slice(0, MAX_REPORTED_RESOURCE_IDS)
+    .map((key) => diagnosticResourceId(key, prefix));
   const omitted = keys.length - reported.length;
   return `${reported.join(', ')}${omitted > 0 ? `, ... and ${omitted} more` : ''}`;
 }
 
 function readJson(filePath) {
   try {
+    if (fs.statSync(filePath).size > MAX_RESOURCE_FILE_BYTES) return undefined;
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));
   } catch {
     return undefined;
   }
 }
 
-function flattenJson(value, prefix = '', output = {}) {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    for (const [key, child] of Object.entries(value)) {
-      const childKey = prefix ? `${prefix}.${key}` : key;
-      flattenJson(child, childKey, output);
+function flattenJson(value, prefix = '', output = Object.create(null)) {
+  const stack = [{ value, prefix, depth: 0 }];
+  let entryCount = 0;
+  while (stack.length) {
+    const current = stack.pop();
+    if (current.value && typeof current.value === 'object' &&
+        !Array.isArray(current.value)) {
+      if (current.depth >= MAX_RESOURCE_DEPTH) {
+        throw new Error('locale resource exceeds the maximum nesting depth');
+      }
+      const entries = Object.entries(current.value);
+      for (let index = entries.length - 1; index >= 0; index -= 1) {
+        const [key, child] = entries[index];
+        const childKey = current.prefix ? `${current.prefix}.${key}` : key;
+        stack.push({
+          value: child,
+          prefix: childKey,
+          depth: current.depth + 1,
+        });
+      }
+      continue;
     }
-    return output;
+    entryCount += 1;
+    if (entryCount > MAX_RESOURCE_ENTRIES) {
+      throw new Error('locale resource exceeds the maximum entry count');
+    }
+    output[current.prefix] = current.value;
   }
-  output[prefix] = value;
   return output;
 }
 
 function extractXlfMessages(content) {
-  const messages = {};
+  const messages = Object.create(null);
+  let messageCount = 0;
   const unitPattern = /<trans-unit\b[^>]*\bid=(?:"([^"]+)"|'([^']+)')[^>]*>([\s\S]*?)<\/trans-unit>/gi;
   for (const match of content.matchAll(unitPattern)) {
+    messageCount += 1;
+    if (messageCount > MAX_RESOURCE_ENTRIES) {
+      throw new Error('XLIFF resource exceeds the maximum message count');
+    }
     const body = match[3];
     const source = body.match(/<source(?:\s[^>]*)?>([\s\S]*?)<\/source>/i)?.[1] || '';
     const target = body.match(/<target(?:\s[^>]*)?>([\s\S]*?)<\/target>/i)?.[1] || '';
@@ -78,6 +187,10 @@ function extractXlfMessages(content) {
     const unitId = match[1] || match[2];
     const segments = [...match[3].matchAll(/<segment\b([^>]*)>([\s\S]*?)<\/segment>/gi)];
     for (const [index, segment] of segments.entries()) {
+      messageCount += 1;
+      if (messageCount > MAX_RESOURCE_ENTRIES) {
+        throw new Error('XLIFF resource exceeds the maximum message count');
+      }
       const segmentId = segment[1].match(/\bid=(?:"([^"]+)"|'([^']+)')/i);
       const key = segments.length === 1
         ? unitId
@@ -109,7 +222,9 @@ function resolveManifestFile(projectRoot, relativePath, label, errors) {
     return null;
   }
   if (!fs.existsSync(resolved.path) || !fs.statSync(resolved.path).isFile()) {
-    errors.push(`Missing ${label}: ${relativePath}`);
+    errors.push(
+      `Missing required localization file ${diagnosticResourceId(relativePath, 'file')}.`
+    );
     return null;
   }
   return resolved.path;
@@ -124,30 +239,42 @@ function compareJsonResources(projectRoot, manifest, errors, options = {}) {
 
   const parsed = {};
   for (const locale of manifest.locales) {
+    const localeId = diagnosticResourceId(locale, 'locale');
     const relativePath = resources[locale];
     if (!relativePath) {
-      errors.push(`No resource path is configured for locale ${locale}.`);
+      errors.push(`No resource path is configured for ${localeId}.`);
       continue;
     }
     const fullPath = resolveManifestFile(
       projectRoot,
       relativePath,
-      `locale resource for ${locale}`,
+      `locale resource ${localeId}`,
       errors
     );
     if (!fullPath) continue;
     const value = readJson(fullPath);
     if (value === undefined) {
-      errors.push(`Locale resource is not valid JSON: ${relativePath}`);
+      errors.push(
+        `Locale resource ${diagnosticResourceId(relativePath, 'file')} is invalid ` +
+        `or exceeds ${MAX_RESOURCE_FILE_BYTES} bytes.`
+      );
       continue;
     }
     if (value === null || typeof value !== 'object' || Array.isArray(value)) {
       errors.push(
-        `Locale resource must contain a top-level JSON object: ${relativePath}`
+        `Locale resource ${diagnosticResourceId(relativePath, 'file')} must ` +
+        'contain a top-level JSON object.'
       );
       continue;
     }
-    parsed[locale] = flattenJson(value);
+    try {
+      parsed[locale] = flattenJson(value);
+    } catch {
+      errors.push(
+        `Locale resource ${diagnosticResourceId(relativePath, 'file')} exceeds ` +
+        'the supported nesting or entry limits.'
+      );
+    }
   }
 
   const source = parsed[manifest.defaultLocale];
@@ -155,17 +282,19 @@ function compareJsonResources(projectRoot, manifest, errors, options = {}) {
   const sourceKeys = Object.keys(source).sort();
   for (const locale of manifest.locales) {
     if (locale === manifest.defaultLocale || !parsed[locale]) continue;
+    const localeId = diagnosticResourceId(locale, 'locale');
     const target = parsed[locale];
     const targetKeys = Object.keys(target).sort();
     const missing = sourceKeys.filter((key) => !Object.hasOwn(target, key));
     const extra = targetKeys.filter((key) => !Object.hasOwn(source, key));
     if (missing.length) {
-      errors.push(`${locale}: missing translation keys: ${formatDiagnosticKeys(missing)}`);
+      errors.push(
+        `${localeId}: missing translation entries: ${formatDiagnosticIds(missing)}`
+      );
     }
     if (extra.length) {
       const message =
-        `${locale}: stale translation keys (untrusted project data): ` +
-        formatDiagnosticKeys(extra);
+        `${localeId}: stale translation entries: ${formatDiagnosticIds(extra)}`;
       if (options.staleIsError === false) {
         options.warnings?.push(message);
       } else {
@@ -178,7 +307,7 @@ function compareJsonResources(projectRoot, manifest, errors, options = {}) {
       if (manifest.translationMethod === 'blank' && target[key] === '') continue;
       if (JSON.stringify(sourceTokens) !== JSON.stringify(targetTokens)) {
         errors.push(
-          `${locale}:${quoteDiagnosticKey(key)}: protected interpolation/markup tokens ` +
+          `${localeId}:${diagnosticResourceId(key)}: protected interpolation/markup tokens ` +
           'do not match the default locale.'
         );
       }
@@ -194,19 +323,34 @@ function compareXlfResources(projectRoot, manifest, errors, options = {}) {
   }
   const parsed = {};
   for (const locale of manifest.locales) {
+    const localeId = diagnosticResourceId(locale, 'locale');
     const relativePath = resources[locale];
     if (!relativePath) {
-      errors.push(`No resource path is configured for locale ${locale}.`);
+      errors.push(`No resource path is configured for ${localeId}.`);
       continue;
     }
     const fullPath = resolveManifestFile(
       projectRoot,
       relativePath,
-      `locale resource for ${locale}`,
+      `locale resource ${localeId}`,
       errors
     );
     if (!fullPath) continue;
-    parsed[locale] = extractXlfMessages(fs.readFileSync(fullPath, 'utf8'));
+    if (fs.statSync(fullPath).size > MAX_RESOURCE_FILE_BYTES) {
+      errors.push(
+        `XLIFF resource ${diagnosticResourceId(relativePath, 'file')} exceeds ` +
+        `${MAX_RESOURCE_FILE_BYTES} bytes.`
+      );
+      continue;
+    }
+    try {
+      parsed[locale] = extractXlfMessages(fs.readFileSync(fullPath, 'utf8'));
+    } catch {
+      errors.push(
+        `XLIFF resource ${diagnosticResourceId(relativePath, 'file')} exceeds ` +
+        'the supported message limit.'
+      );
+    }
   }
 
   const source = parsed[manifest.defaultLocale];
@@ -218,16 +362,16 @@ function compareXlfResources(projectRoot, manifest, errors, options = {}) {
   }
   for (const locale of manifest.locales) {
     if (locale === manifest.defaultLocale || !parsed[locale]) continue;
+    const localeId = diagnosticResourceId(locale, 'locale');
     const targetKeys = Object.keys(parsed[locale]);
     if (targetKeys.length === 0) {
-      errors.push(`${locale}: XLF catalog contains no recognized messages.`);
+      errors.push(`${localeId}: XLF catalog contains no recognized messages.`);
       continue;
     }
     const extra = targetKeys.filter((key) => !Object.hasOwn(source, key));
     if (extra.length) {
       const message =
-        `${locale}: stale XLF messages (untrusted project data): ` +
-        formatDiagnosticKeys(extra);
+        `${localeId}: stale XLIFF messages: ${formatDiagnosticIds(extra, 'message')}`;
       if (options.staleIsError === false) {
         options.warnings?.push(message);
       } else {
@@ -237,14 +381,17 @@ function compareXlfResources(projectRoot, manifest, errors, options = {}) {
     for (const key of sourceKeys) {
       const target = parsed[locale][key];
       if (!target) {
-        errors.push(`${locale}: missing XLF message ${quoteDiagnosticKey(key)}.`);
+        errors.push(
+          `${localeId}: missing XLIFF ${diagnosticResourceId(key, 'message')}.`
+        );
         continue;
       }
       if (manifest.translationMethod === 'blank' && target.target === '') continue;
       if (JSON.stringify(protectedTokenSignature(source[key].source)) !==
           JSON.stringify(protectedTokenSignature(target.target))) {
         errors.push(
-          `${locale}:${quoteDiagnosticKey(key)}: protected interpolation/markup tokens ` +
+          `${localeId}:${diagnosticResourceId(key, 'message')}: ` +
+          'protected interpolation/markup tokens ' +
           'do not match the source.'
         );
       }
@@ -257,31 +404,9 @@ function validateLocalization(projectRoot, warnings = []) {
   if (!fs.existsSync(manifestPath)) {
     const detected = detectLocalization(projectRoot);
     if (!detected.detected) return [];
-    if (detected.valid) {
-      const framework = detectFramework(projectRoot);
-      const inferredManifest = {
-        framework: framework.framework,
-        mode: detected.mode,
-        packageName: detected.packageName,
-        locales: detected.locales,
-        defaultLocale: detected.defaultLocale,
-        translationMethod: 'agent',
-        resourcePaths: detected.resourcePaths,
-      };
-      const resourceErrors = [];
-      const paths = Object.values(detected.resourcePaths);
-      const usesXlf = paths.some((relativePath) => /\.xlf\d?$/i.test(relativePath));
-      if (usesXlf) compareXlfResources(projectRoot, inferredManifest, resourceErrors);
-      else compareJsonResources(projectRoot, inferredManifest, resourceErrors);
-      if (!resourceErrors.length) return [];
-      return [
-        `Localization evidence exists but ${MANIFEST_NAME} is missing and the resources are not safe to adopt.`,
-        ...resourceErrors,
-      ];
-    }
     return [
-      `Localization evidence exists but ${MANIFEST_NAME} is missing and the setup is incomplete.`,
-      ...detected.conflicts,
+      `Localization evidence exists but ${MANIFEST_NAME} is missing. ` +
+      'Adoption is incomplete until a validated manifest records package approvals and provenance.',
     ];
   }
 
@@ -301,9 +426,7 @@ function validateLocalization(projectRoot, warnings = []) {
   if (!selectedFramework) {
     errors.push('Project framework is ambiguous or unsupported.');
   } else if (selectedFramework !== manifest.framework) {
-    errors.push(
-      `Manifest framework "${manifest.framework}" does not match detected framework "${selectedFramework}".`
-    );
+    errors.push('Manifest framework does not match the detected project framework.');
   }
   if (!['runtime', 'static'].includes(manifest.mode)) {
     errors.push('Manifest mode must be "runtime" or "static".');
@@ -332,8 +455,9 @@ function validateLocalization(projectRoot, warnings = []) {
   };
   if (manifest.packageName && manifest.packageName !== 'astro-built-in' &&
       !dependencies[manifest.packageName]) {
-    errors.push(`Configured localization package "${manifest.packageName}" is not installed.`);
+    errors.push('The configured localization package is not installed.');
   }
+  validatePackageArtifactLock(projectRoot, manifest, errors);
   validateFrameworkModePackage(
     projectRoot,
     manifest,
@@ -408,16 +532,13 @@ function validateFrameworkModePackage(projectRoot, manifest, dependencies, detec
   const frameworkCapability = LOCALIZATION_CAPABILITIES.frameworks[manifest.framework];
   if (frameworkCapability &&
       !frameworkCapability.supportedModes.includes(manifest.mode)) {
-    errors.push(`${manifest.framework} does not support "${manifest.mode}" mode in this skill.`);
+    errors.push('The manifest framework does not support the configured localization mode.');
   }
 
   const knownPackage = KNOWN_PACKAGES[manifest.packageName];
   if (knownPackage && (knownPackage.framework !== manifest.framework ||
       knownPackage.mode !== manifest.mode)) {
-    errors.push(
-      `Package "${manifest.packageName}" is for ${knownPackage.framework} ` +
-      `${knownPackage.mode} localization, not ${manifest.framework} ${manifest.mode}.`
-    );
+    errors.push('The configured package does not match the manifest framework and mode.');
   }
 
   if (manifest.packageName === 'react-i18next' && !dependencies.i18next) {
@@ -428,7 +549,7 @@ function validateFrameworkModePackage(projectRoot, manifest, dependencies, detec
   }
   if (detected.implementation.initializationEvidence.provided &&
       !detected.implementation.initializationEvidence.valid) {
-    errors.push(detected.implementation.initializationEvidence.reason);
+    errors.push('Configured localization initialization evidence is invalid.');
   }
   if (manifest.framework === 'angular' && manifest.mode === 'static' && !detected.angularI18n) {
     errors.push('Angular static localization is missing angular.json i18n configuration.');
@@ -465,6 +586,16 @@ function finishValidation(projectRoot) {
   approve();
 }
 
+function finishValidationFailClosed(projectRoot) {
+  try {
+    finishValidation(projectRoot);
+  } catch {
+    block(
+      'Localization validation failed unexpectedly and must be reviewed before continuing.'
+    );
+  }
+}
+
 if (require.main === module && process.argv.includes('--projectRoot')) {
   const index = process.argv.indexOf('--projectRoot');
   const projectRoot = process.argv[index + 1];
@@ -472,12 +603,20 @@ if (require.main === module && process.argv.includes('--projectRoot')) {
     process.stderr.write('Usage: validate-localization.js --projectRoot <path>\n');
     process.exit(1);
   }
-  finishValidation(path.resolve(projectRoot));
+  finishValidationFailClosed(path.resolve(projectRoot));
 } else if (require.main === module) {
   runValidation((cwd) => {
-    const projectRoot = findProjectRoot(cwd);
-    if (!projectRoot) approve();
-    finishValidation(projectRoot);
+    const projectRoot = findLocalizationProjectRoot(cwd);
+    if (!projectRoot) {
+      block(
+        'Localization validation could not identify exactly one target project.'
+      );
+    }
+    finishValidationFailClosed(projectRoot);
+  }, {
+    failClosed: true,
+    failureMessage:
+      'Localization validation failed unexpectedly and must be reviewed before continuing.',
   });
 }
 

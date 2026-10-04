@@ -1,5 +1,7 @@
 'use strict';
 
+const { sanitizeUntrustedText } = require('./safe-untrusted-text');
+
 // This is deliberately an automatic-acceptance list, not a legal conclusion
 // about every other license. Simple, common low-restriction SPDX identifiers
 // can proceed unattended; missing, custom, compound, or other licenses require
@@ -13,8 +15,12 @@ const AUTOMATICALLY_ACCEPTED_LICENSES = Object.freeze(new Set([
 ]));
 
 function normalizeLicense(license) {
-  if (typeof license === 'string') return license.trim();
-  if (license && typeof license.type === 'string') return license.type.trim();
+  if (typeof license === 'string') {
+    return sanitizeUntrustedText(license.trim(), 200);
+  }
+  if (license && typeof license.type === 'string') {
+    return sanitizeUntrustedText(license.type.trim(), 200);
+  }
   return '';
 }
 

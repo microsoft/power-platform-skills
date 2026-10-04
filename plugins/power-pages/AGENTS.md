@@ -223,6 +223,7 @@ Shared lib modules live at `scripts/lib/` and are imported by other scripts via 
 - `scripts/lib/framework-detection.js`: Detects React, Vue, Angular, or Astro for an explicit project root from dependency declarations and primary configuration markers. Use this module as the single source of truth for explicit-project framework detection. It is intentionally separate from telemetry's workspace-oriented `detect-site-framework.js`.
 - `scripts/lib/localization-config.js`: Detects existing localization, validates/canonicalizes BCP-47 tags against `references/bcp47-subtags.json`, visibly deduplicates locales, and extracts protected translation tokens. It consumes and temporarily re-exports the shared framework detector for compatibility; do not add generic framework-detection logic here.
 - `scripts/lib/package-license-policy.js`: Owns normalization and classification for localization-package license metadata. Keep the unattended acceptance list here and require explicit maker confirmation for every other classification.
+- `scripts/lib/safe-untrusted-text.js`: Bounds and neutralizes control and bidirectional characters in project- or network-controlled values before they reach agent-visible output. Reuse it instead of adding one-off diagnostic escaping.
 
 #### ALM Prerequisites & Context
 
