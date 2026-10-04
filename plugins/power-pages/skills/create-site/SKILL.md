@@ -852,7 +852,7 @@ Immediately after the dev server starts, verify the scaffold is working:
    The `marker` string is the comment tag Phase 5 emits into the page source as a reserved anchor that `/add-ai-webapi` later finds. Keep the shape uniform — one marker per placement, always the same tag, so the follow-up skill's explore step can grep for them deterministically.
 
 5. Read the design aesthetics reference: `${PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md`
-6. **Map aesthetic + mood to design choices** using the Aesthetic x Mood Mapping table from the design reference. Record the chosen font direction, color direction, and motion direction.
+6. **Map aesthetic + mood to design choices** using the Aesthetic x Mood Mapping table from the design reference. Record the chosen font direction, color direction, and motion direction. Then create a perception brief for every important page: five-second purpose, audience cue, primary doubt, truthful proof, focal point, primary CTA, incoming/outgoing journey, and peak or ending. For the home-page hero, explicitly define headline, context, proof, and action. Never invent testimonials, customers, certifications, or metrics when real proof is unavailable.
 7. Analyze requirements and determine needed components. If `AI_SUMMARY_PLACEMENTS` from step 4 implies a page that wasn't already in the plan (e.g., a `CaseDetail` page for a data-summarization pick on the support-case table), add it to the page list now. Present the component plan to the user as a table:
 
    ```
@@ -860,7 +860,7 @@ Immediately after the dev server starts, verify the scaffold is working:
    |---------------------|-------|---------|
    | Pages               | 4     | Home, About, Services, Contact |
    | Shared Components   | 3     | Navbar, Footer, ContactForm |
-   | Design Elements     | 4     | Google Fonts (Playfair Display + Source Sans Pro), Color palette (6 CSS vars), Page transitions, Gradient backgrounds |
+   | Design Elements     | 6     | Hero message hierarchy, proof placement, Google Fonts (Playfair Display + Source Sans Pro), restrained color palette, purposeful motion, strong success states |
    | Routes              | 4     | /, /about, /services, /contact |
    ```
 
@@ -903,14 +903,16 @@ Assemble a single JSON object with the following keys. The plan template rejects
 | `AESTHETIC` | string | Chosen aesthetic (e.g., `Minimal & Clean`) |
 | `MOOD` | string | Chosen mood (e.g., `Professional & Trustworthy`) |
 | `SUMMARY` | string | One paragraph describing what the site is and who it serves |
+| `DESIGN_STRATEGY_DATA` | array | Site-wide experience decisions as `[{ label, question, decision, rationale }]`. Include five-second clarity, intended-audience cue, trust strategy, attention/scan path, CTA hierarchy, cognitive ease, and the memorable peak/ending. Explain concrete choices rather than repeating generic principles. |
+| `PAGE_DESIGN_DATA` | array | One perception brief per important page: `[{ page, purpose, audienceCue, focalPoint, primaryDoubt, proof, primaryAction, journey, peakOrEnd }]`. Proof must be truthful; use product evidence, transparent process details, or a clearly labeled content slot when real social proof is unavailable. |
 | `TYPOGRAPHY_DATA` | object | `{ primary: { name, sample, reason }, secondary: { name, sample, reason } }` — `name` must be a real Google Font family |
 | `PALETTE_DATA` | array | `[{ var, hex, description }]` — one entry per CSS variable (primary, secondary, bg, surface, text, text-muted) |
 | `MOTION_DATA` | array | `[{ label, description }]` — page transitions, hover states, etc. |
 | `BACKGROUNDS_DATA` | array | `[{ label, description }]` — hero backgrounds, section treatments, patterns |
-| `PAGES_DATA` | array | `[{ name, route, description, content: [...], components: [...] }]` — `content` is an outline of what's on the page, `components` is shared component names used |
+| `PAGES_DATA` | array | `[{ name, route, description, content: [...], components: [...] }]` — make `description` state the page purpose, audience, focal point, primary action, and journey role; order `content` around user questions and place proof near the doubt it resolves; `components` is shared component names used |
 | `COMPONENTS_DATA` | array | `[{ name, purpose, usedBy: [...] }]` — shared components with the page names that consume them |
 | `ROUTES_DATA` | array | `[{ path, page }]` — every route the router will register |
-| `REVIEW_DATA` | array of strings | Verification checklist items (e.g., "All pages load without console errors") |
+| `REVIEW_DATA` | array of strings | Verification checklist items covering the four-question test, one dominant focal point, proof placement, cognitive load, CTA clarity, journey continuity, strong success/end states, accessibility, and technical correctness |
 | `DEPLOYMENT_DATA` | array | `[{ title, description, recommended?: boolean }]` — mark exactly one as `recommended: true` |
 
 **Write the data for the user**, not for internal tooling — phrase `description` and `reason` fields in plain language.
@@ -992,7 +994,7 @@ Use `AskUserQuestion`:
 - **One todo per shared component** — e.g., "Create ContactForm component", "Create DataTable component"
 - **One todo for routing** — "Update router with all new routes"
 - **One todo for navigation** — "Update Layout/Header with navigation links"
-- **One todo for design foundations** — "Apply design tokens (fonts, colors, motion, backgrounds)"
+- **One todo for design foundations** — "Engineer page hierarchy and apply design tokens (fonts, colors, motion, backgrounds)"
 
 Each todo should have a clear `subject`, `activeForm`, and `description` that includes the file path and what the page/component does. Then work through the todos in order, marking each `in_progress` → `completed`.
 
@@ -1002,7 +1004,7 @@ The scaffold is a temporary loading screen — it must be **completely replaced*
 
 > **Narrate progress in the loader**: Before each of the steps below, update `<PROJECT_ROOT>/public/scaffold-status.json` so the user — who may still be watching the Home page loader — sees what's actually happening instead of the hardcoded placeholder cycle. Use a short present-participle `message` (e.g., `"Creating Navbar component"`, `"Creating Contact page"`). Include any useful grouping context inline in the message itself. The loader picks up changes within ~1.5 seconds. Updates become no-ops once step 4 replaces the Home page.
 
-1. **Design foundations** — **Completely rewrite** `theme.css` (or `styles.css` for Angular) from scratch with the chosen color palette as CSS custom properties, Google Fonts, motion/animation utilities, and background treatments. The scaffold's loading screen CSS is discarded entirely. Commit after this step. *Before starting, set the loader status to `{ "message": "Applying design tokens" }`.*
+1. **Design foundations** — Use the approved perception briefs to establish section order, focal points, CTA hierarchy, proof placement, journey transitions, and strong completion states. Then **completely rewrite** `theme.css` (or `styles.css` for Angular) from scratch with the chosen color palette as CSS custom properties, Google Fonts, motion/animation utilities, and selective background treatments. The scaffold's loading screen CSS is discarded entirely. Commit after this step. *Before starting, set the loader status to `{ "message": "Engineering hierarchy and design tokens" }`.*
 2. **Layout** — **Rewrite** the Layout component (and Header/Footer for Astro) with proper navigation, header, and footer that reflect the chosen design. The scaffold's passthrough Layout is replaced with a real layout structure. *Set status to `{ "message": "Rewriting Layout" }`.*
 3. **Shared components** — Build reusable components (Navbar, Footer, ContactForm, etc.) that pages will use. *For each component, set status to `{ "message": "Creating <Component> component" }`.*
 4. **Pages** — Create route components for each requested page, **replacing** the scaffold Home page and About placeholder entirely. Each page component must update `document.title` on mount to reflect the current page (e.g., `"Contact — Contoso Portal"`). Use the framework's idiomatic lifecycle hook: `useEffect` (React), `onMounted` (Vue), `ngOnInit` (Angular), or a `<title>` tag in the frontmatter (Astro). Format: `"<Page Name> — <Site Name>"`, with the home page using just `"<Site Name>"`. *For each page, set status to `{ "message": "Creating <Page> page" }` before writing the file. The loader disappears when the Home page itself is replaced — no further status updates are needed after that.*
@@ -1028,7 +1030,7 @@ The scaffold is a temporary loading screen — it must be **completely replaced*
 
    One marker per placement, exactly as defined in the `marker` field of the `AI_SUMMARY_PLACEMENTS` record. Do NOT add stub components (`<CopilotSummaryCard />`, etc.), CSS classes, or empty `<aside>` elements — the slot is just a comment. The site must ship as if AI is not a consideration; the follow-up skill does the real work.
 
-**Important**: Build real, functional UI with distinctive design applied — not placeholder "coming soon" pages, and not generic unstyled markup. Every page and component should reflect the chosen aesthetic from the moment it's created. The scaffold loading screen should be completely gone after this phase — no trace of the Power Pages branded animation should remain.
+**Important**: Build real, functional UI with distinctive design applied — not placeholder "coming soon" pages, and not generic unstyled markup. Every page and component should answer what it is, who it is for, why it is trustworthy, and what the user should do next. Preserve one dominant focal point per section, place truthful proof at the point of doubt, and remove decorative elements that do not improve understanding or action. The scaffold loading screen should be completely gone after this phase — no trace of the Power Pages branded animation should remain.
 
 ### 5.3 Source Real Images
 
@@ -1188,7 +1190,8 @@ Present a summary table to the user:
 **Actions**:
 
 1. Browse through each page via Playwright (`browser_navigate` + `browser_snapshot`) to verify all pages load correctly — do NOT take screenshots
-2. Present a summary of what was built:
+2. Run the **Pre-Ship Design Review** from `${PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md` across every page. Fix unclear purpose, competing focal points, misplaced or invented proof, excessive choices, weak CTA hierarchy, disconnected journeys, and generic success states before presenting the site.
+3. Present a summary of what was built:
 
    ```
    | Component Type      | Count | Details |
@@ -1199,10 +1202,10 @@ Present a summary table to the user:
    | Git Commits         | 7     | scaffold + 6 feature commits |
    ```
 
-3. Share the dev server URL with the user and list all available routes
-4. Ask the user to review using `AskUserQuestion`:
+4. Share the dev server URL with the user and list all available routes
+5. Ask the user to review using `AskUserQuestion`:
    > "The site is ready for review at `<dev server URL>`. Please check it out in your browser. Would you like any changes?"
-5. If the user requests changes, apply them and re-verify by browsing via `browser_snapshot`
+6. If the user requests changes, apply them and re-verify by browsing via `browser_snapshot`
 
 **Output**: User-approved site ready for deployment
 

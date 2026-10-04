@@ -59,6 +59,16 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .chip-accent{background:var(--accent-bg);border-color:var(--accent-border);color:var(--accent);}
 
 /* Design tab */
+.strategy-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;}
+.strategy-card{background:var(--surface);border:1px solid var(--border);border-top:3px solid var(--accent);border-radius:var(--radius);padding:17px 18px;box-shadow:var(--shadow-4);}
+.strategy-question{font-size:11px;color:var(--accent);font-weight:700;margin-bottom:5px;}
+.strategy-decision{font-size:13px;color:var(--text-bright);font-weight:700;line-height:1.45;margin-bottom:6px;}
+.strategy-rationale{font-size:12px;color:var(--text-dim);line-height:1.55;}
+.perception-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;margin-bottom:10px;box-shadow:var(--shadow-4);}
+.perception-title{font-size:15px;font-weight:800;color:var(--text-bright);margin-bottom:12px;}
+.perception-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px;}
+.perception-field{min-width:0;}
+.perception-value{font-size:12px;color:var(--text);line-height:1.55;}
 .type-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
 .type-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px 22px;box-shadow:var(--shadow-4);}
 .type-role{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;}
@@ -121,6 +131,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   .nav-btn.active{border-left:none;border-bottom-color:var(--accent);}
   .content{padding:20px;}
   .type-grid{grid-template-columns:1fr;}
+  .perception-grid{grid-template-columns:1fr;}
   .stats-grid{grid-template-columns:repeat(3,1fr);}
 }
 </style>
@@ -175,7 +186,13 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     <!-- Design Tab -->
     <div class="section" id="tab-design">
       <h2>Design</h2>
-      <p class="section-desc">Typography, palette, motion, and background treatments</p>
+      <p class="section-desc">How the experience creates clarity, trust, attention, action, and a memorable ending</p>
+
+      <h3>Experience strategy</h3>
+      <div class="strategy-grid" id="designStrategyContainer"></div>
+
+      <h3>Page-by-page design intent</h3>
+      <div id="pageDesignContainer"></div>
 
       <h3>Typography</h3>
       <div class="type-grid" id="typographyContainer"></div>
@@ -222,6 +239,8 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   </div>
 </div>
 
+<script id="designStrategyData" type="application/json">__JSON_DESIGN_STRATEGY_DATA__</script>
+<script id="pageDesignData" type="application/json">__JSON_PAGE_DESIGN_DATA__</script>
 <script id="typographyData" type="application/json">__JSON_TYPOGRAPHY_DATA__</script>
 <script id="paletteData" type="application/json">__JSON_PALETTE_DATA__</script>
 <script id="motionData" type="application/json">__JSON_MOTION_DATA__</script>
@@ -238,6 +257,8 @@ function readJsonData(id){
   return node ? JSON.parse(node.textContent) : null;
 }
 
+const DESIGN_STRATEGY = readJsonData('designStrategyData');
+const PAGE_DESIGN = readJsonData('pageDesignData');
 const TYPOGRAPHY = readJsonData('typographyData');
 const PALETTE = readJsonData('paletteData');
 const MOTION = readJsonData('motionData');
@@ -295,6 +316,37 @@ const nextSteps = [
 ];
 document.getElementById('nextStepsList').innerHTML = nextSteps.map(s =>
   '<div class="list-item"><div class="list-item-icon">'+s.icon+'</div><div><div class="list-item-label">'+s.label+'</div><div class="list-item-desc">'+s.desc+'</div></div></div>'
+).join('');
+
+// --- Design: experience strategy ---
+document.getElementById('designStrategyContainer').innerHTML = DESIGN_STRATEGY.map(item =>
+  '<div class="strategy-card">'
+  + '<div class="field-label">'+esc(item.label || '')+'</div>'
+  + '<div class="strategy-question">'+esc(item.question || '')+'</div>'
+  + '<div class="strategy-decision">'+esc(item.decision || '')+'</div>'
+  + '<div class="strategy-rationale">'+esc(item.rationale || '')+'</div>'
+  + '</div>'
+).join('');
+
+// --- Design: page perception briefs ---
+function perceptionField(label, value) {
+  if(!value) return '';
+  return '<div class="perception-field"><div class="field-label">'+esc(label)+'</div>'
+    + '<div class="perception-value">'+esc(value)+'</div></div>';
+}
+document.getElementById('pageDesignContainer').innerHTML = PAGE_DESIGN.map(page =>
+  '<div class="perception-card">'
+  + '<div class="perception-title">'+esc(page.page || '')+'</div>'
+  + '<div class="perception-grid">'
+  + perceptionField('Five-second purpose', page.purpose)
+  + perceptionField('Audience cue', page.audienceCue)
+  + perceptionField('Dominant focal point', page.focalPoint)
+  + perceptionField('Primary doubt', page.primaryDoubt)
+  + perceptionField('Proof at that point', page.proof)
+  + perceptionField('Primary action', page.primaryAction)
+  + perceptionField('Journey', page.journey)
+  + perceptionField('Peak or ending', page.peakOrEnd)
+  + '</div></div>'
 ).join('');
 
 // --- Design: typography ---

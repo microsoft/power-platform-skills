@@ -14,6 +14,33 @@ const SAMPLE_DATA = {
   AESTHETIC: 'Minimal & Clean',
   MOOD: 'Professional & Trustworthy',
   SUMMARY: 'An internal portal for Contoso consultants with directory, announcements, and docs.',
+  DESIGN_STRATEGY_DATA: [
+    {
+      label: 'Five-second clarity',
+      question: 'What is this, and is it for me?',
+      decision: 'Open with a consultant portal value proposition and role-specific context.',
+      rationale: 'Users should recognize the portal purpose before scanning navigation.',
+    },
+    {
+      label: 'Trust and proof',
+      question: 'Can I trust it?',
+      decision: 'Use current directory data and transparent announcement timestamps as product evidence.',
+      rationale: 'Operational evidence is more credible than invented testimonials.',
+    },
+  ],
+  PAGE_DESIGN_DATA: [
+    {
+      page: 'Home',
+      purpose: 'Orient consultants and expose their most common tasks.',
+      audienceCue: 'Consultant-specific welcome copy and shortcuts.',
+      focalPoint: 'The task launcher directly below the welcome heading.',
+      primaryDoubt: 'Is the information current and relevant to my role?',
+      proof: 'Recent announcements with source and publication date.',
+      primaryAction: 'Open the consultant directory.',
+      journey: 'Arrives after sign-in and leads into directory or documents.',
+      peakOrEnd: 'A personalized task launcher; actions end with clear confirmations.',
+    },
+  ],
   TYPOGRAPHY_DATA: {
     primary: { name: 'DM Sans', sample: 'Aa Bb Cc', reason: 'Neutral sans for body and UI' },
     secondary: { name: 'Space Grotesk', sample: 'Headings', reason: 'Geometric display for headings' },
@@ -82,6 +109,10 @@ test('render-createsite-plan renders HTML from --data file', () => {
   assert.match(html, /Implementation Plan/);
   assert.match(html, /React/);
   assert.match(html, /Minimal &amp; Clean|Minimal & Clean/);
+  assert.match(html, /Five-second clarity/);
+  assert.match(html, /What is this, and is it for me\?/);
+  assert.match(html, /Page-by-page design intent/);
+  assert.match(html, /Recent announcements with source and publication date/);
   assert.match(html, /DM Sans/);
   assert.match(html, /#1E3A5F/);
   assert.match(html, /Directory/);

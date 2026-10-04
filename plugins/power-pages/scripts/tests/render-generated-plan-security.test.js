@@ -459,6 +459,18 @@ test('backend and create-site plans allowlist dynamic attributes and escape nest
     AESTHETIC: attack,
     MOOD: attack,
     SUMMARY: attack,
+    DESIGN_STRATEGY_DATA: [{ label: attack, question: attack, decision: attack, rationale: attack }],
+    PAGE_DESIGN_DATA: [{
+      page: attack,
+      purpose: attack,
+      audienceCue: attack,
+      focalPoint: attack,
+      primaryDoubt: attack,
+      proof: attack,
+      primaryAction: attack,
+      journey: attack,
+      peakOrEnd: attack,
+    }],
     TYPOGRAPHY_DATA: {
       primary: { name: attack, sample: attack, reason: attack },
       secondary: null,
@@ -474,6 +486,8 @@ test('backend and create-site plans allowlist dynamic attributes and escape nest
   });
   const createSiteElements = executeInlineRenderer(createSiteHtml);
   const createSiteRendered = [
+    'designStrategyContainer',
+    'pageDesignContainer',
     'typographyContainer',
     'paletteContainer',
     'motionContainer',

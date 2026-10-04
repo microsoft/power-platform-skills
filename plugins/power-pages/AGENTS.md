@@ -55,7 +55,7 @@ skills/
   create-site/
     SKILL.md                   ← Skill definition with frontmatter (model, allowed-tools)
     assets/{react,vue,angular,astro}/  ← Framework templates with __PLACEHOLDER__ tokens
-    references/design-aesthetics.md  ← Design principles, font/color/motion guidance for inline design step
+    references/design-aesthetics.md  ← Perception psychology, hierarchy, trust, font/color/motion guidance
     scripts/validate-site.js   ← Node script validating generated sites
   deploy-site/
     SKILL.md                   ← Deployment skill definition
