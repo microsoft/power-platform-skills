@@ -170,7 +170,24 @@ If the user provides a specific inspiration reference, adapt the design choices 
 
 ## Design Application Steps
 
-Apply design decisions in this order. Build the hierarchy and journey before polishing visual details. After each subsection, verify via `browser_snapshot` and fix structural or interaction issues before proceeding.
+Apply design decisions in this order. Build the hierarchy and journey before polishing visual details. Use `browser_snapshot` after each subsection for structure and interaction. Use temporary screenshots only at the combined visual checkpoints below, where several choices can be judged together.
+
+### Visual Review Protocol
+
+Accessibility snapshots and visual screenshots serve different purposes:
+
+- Use `browser_snapshot` to inspect semantic structure, reading order, accessible names, content, and available interactions.
+- Use `browser_take_screenshot` to inspect hierarchy, spacing, balance, typography, color relationships, imagery, density, and focal-point dominance.
+
+Prefer screenshots returned directly by the tool without specifying `filename`. If the host requires a file, save it to a uniquely named session-temporary location outside the site project, review it, and delete that exact file immediately. Never commit or retain visual-review screenshots.
+
+Capture at these checkpoints:
+
+1. **Design system + hero** — typography, palette, spacing, background, navigation, hero message, proof, and CTA are visible together.
+2. **Representative content layout** — the first dashboard, form, table, search, detail, or similarly distinct layout is complete.
+3. **Final routes** — one screenshot for each visually distinct page layout before handoff; pages sharing the same composition can use a representative capture.
+
+After each capture, state what the image demonstrates and list concrete visual defects before editing. Re-capture once after fixes to confirm the defects are resolved. Continue to use `browser_snapshot` for follow-up actions because screenshots are not an interaction surface.
 
 ### Perception Brief
 
@@ -219,7 +236,7 @@ For a home-page hero, explicitly record the headline, context, proof, and action
 
 3. **Apply to elements** — Update `body`, `h1`-`h6`, `code`, and any component-specific typography. Use extreme weight contrasts and large size jumps.
 
-4. **Verify via `browser_snapshot`**
+4. **Verify structure via `browser_snapshot`**. Defer screenshot review until typography, palette, spacing, layout, and the hero can be judged together.
 
 ### Color Palette
 
@@ -240,7 +257,7 @@ For a home-page hero, explicitly record the headline, context, proof, and action
 
 2. **Update component references** — Replace any hardcoded colors with the CSS variables. Use `Edit` with `replace_all: true` for bulk replacements.
 
-3. **Verify via `browser_snapshot`**
+3. **Verify structure via `browser_snapshot`**. Review the palette visually at the Design system + hero checkpoint.
 
 ### Backgrounds & Atmosphere
 
@@ -253,7 +270,7 @@ Add depth and atmosphere only to key sections. Choose techniques matching the ae
 
 Apply selectively to the main layout container, hero, or a peak moment. Do not automatically decorate every card and section.
 
-**Verify via `browser_snapshot`**
+**Verify structure via `browser_snapshot`** and review the effect as part of the next visual checkpoint.
 
 ### Motion & Animation
 
@@ -291,7 +308,7 @@ Add CSS animations for useful state changes and selected high-impact moments. Pr
 
 4. **Apply animation classes selectively** to the hero sequence, interactive controls, and the journey's peak or completion state. Do not animate every card or navigation item.
 
-**Verify via `browser_snapshot`**
+**Verify behavior via `browser_snapshot`** and review motion at runtime without creating extra still-image captures solely for animation.
 
 ### Layout & Spacing Refinement
 
@@ -304,7 +321,7 @@ Refine the overall visual rhythm:
 - Check that each viewport has one obvious focal point and the primary CTA remains dominant
 - Remove anything that creates a competing focal point without supporting the current decision
 
-**Verify via `browser_snapshot`**
+**Verify via `browser_snapshot`, then complete the Design system + hero screenshot checkpoint.** Review the five-second message, scan path, CTA dominance, proof placement, whitespace, alignment, image crop, and visual cohesion. Fix concrete issues and re-capture once.
 
 ### Trust, Action & Ending Review
 
@@ -317,7 +334,7 @@ For each page:
 5. Confirm loading, empty, error, and success states preserve trust through clear language and polished feedback.
 6. Confirm no customer, security, performance, or adoption claim was invented.
 
-**Verify via `browser_snapshot`**
+**Verify via `browser_snapshot`.** At the Representative content or Final routes checkpoint, use temporary screenshots to confirm the page also passes visually.
 
 ---
 

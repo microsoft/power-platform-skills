@@ -8,7 +8,7 @@ description: >-
   template for, or scaffold a new Power Pages website or portal.
 user-invocable: true
 argument-hint: Optional site description
-allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click
+allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_take_screenshot, mcp__plugin_power-pages_playwright__browser_click
 model: opus
 ---
 
@@ -23,7 +23,8 @@ Guide the user through creating a complete, production-quality Power Pages code 
 - **Use best judgement for design details**: Once the user picks an aesthetic direction and mood, make confident decisions about specific fonts, colors, page layouts, and component behavior. Do not ask the user to specify every detail — use the design reference and your own taste to make creative, distinctive choices.
 - **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the path-agnostic upfront tasks first, then append branch-specific tasks after the creation path is selected.
 - **Scaffold early, design with intention**: Get the dev server running immediately after discovery so the user has something to look at. Then plan the design and features while the scaffold is live — apply the chosen aesthetic during implementation.
-- **Live preview feedback loop**: The dev server MUST be running before any customization begins. Browse the site via Playwright (`browser_navigate` + `browser_snapshot`) to verify every significant change. Do NOT take screenshots — only use accessibility snapshots to check page structure and content.
+- **Live preview feedback loop**: The dev server MUST be running before any customization begins. Use `browser_navigate` + `browser_snapshot` after every significant change to verify structure and interaction. At the visual checkpoints defined below, also use `browser_take_screenshot` to review hierarchy, spacing, balance, imagery, color, and focal-point dominance.
+- **Temporary screenshot discipline**: Prefer calling `browser_take_screenshot` without `filename` so the image remains a host-managed tool artifact rather than a project file. If the host requires a persistent file, write only to a uniquely named session-temporary location outside `<PROJECT_ROOT>`, review it, and delete that exact file immediately afterward. Never commit screenshots, leave them in the site, or recursively clean a broad temp directory.
 - **Keep the scaffold loader in sync with reality**: The scaffold loader polls `public/scaffold-status.json`. Update this file before every `AskUserQuestion` (to raise the "waiting for your input" banner so the user doesn't miss a terminal prompt) and before each implementation step in Phase 5 (so the progress-bar label matches what you're actually doing while the decorative spinner continues its default cycle). See [Live Preview Status Protocol](#live-preview-status-protocol).
 - **Use real images**: Source high-quality photos from Unsplash wherever pages need visual content — hero sections, feature cards, about pages, backgrounds, etc. Use `https://images.unsplash.com/photo-{id}?w={width}&h={height}&fit=crop` URLs with specific photo IDs found via `WebSearch`. Never leave image placeholders or broken `<img>` tags pointing to nonexistent files.
 - **Git checkpoints**: Commit after every individual page and component — each gets its own commit so breaking changes can be reverted.
@@ -761,7 +762,7 @@ Run `npm run dev` in the background using `Bash` with `run_in_background: true`.
 Immediately after the dev server starts, verify the scaffold is working:
 
 1. Use `mcp__plugin_power-pages_playwright__browser_navigate` to open the dev server URL
-2. Use `mcp__plugin_power-pages_playwright__browser_snapshot` to verify the page loaded correctly (do NOT take screenshots — only use accessibility snapshots)
+2. Use `mcp__plugin_power-pages_playwright__browser_snapshot` to verify the scaffold loaded correctly. A screenshot is unnecessary here because the scaffold is temporary and has not received the approved design.
 3. **Share the dev server URL with the user** so they can preview the site in their own browser (e.g., "Your site is running at `http://localhost:5173` — open it in your browser to follow along as I build.")
 
 > **GATE: Do NOT proceed to Phase 3 until ALL of the following are true:**
@@ -1085,8 +1086,21 @@ git revert HEAD
 After each significant change (new page or component), browse the site via Playwright to ensure everything is up to the mark:
 
 1. Use `mcp__plugin_power-pages_playwright__browser_navigate` to reload or navigate to the updated page
-2. Use `mcp__plugin_power-pages_playwright__browser_snapshot` to verify the page structure and content are correct — do NOT take screenshots
+2. Use `mcp__plugin_power-pages_playwright__browser_snapshot` to verify the page structure, content, accessible names, and interactions are correct
 3. If something looks wrong in the snapshot, fix it before proceeding
+
+Use `mcp__plugin_power-pages_playwright__browser_take_screenshot` only at these visual checkpoints:
+
+1. **Design system + hero checkpoint** — after the final typography, palette, spacing, backgrounds, main layout, and home-page hero are visible together. Review the five-second message, focal point, CTA dominance, proof placement, whitespace, image crop, alignment, and whether the result feels intentional rather than templated.
+2. **Representative content checkpoint** — after the first visually distinct content-heavy or interactive page is complete (for example, a dashboard, form, table, search results, or detail page). Review information density, grouping, scan path, control prominence, empty space, and consistency with the home page.
+3. **Final route checkpoint** — during Phase 7, capture each visually distinct page layout at least once. Pages that share the same layout and differ only in content can use one representative screenshot. Review the complete Pre-Ship Design Review before user handoff.
+
+For each checkpoint:
+
+- Prefer omitting `filename` so the screenshot remains in the tool response or host-managed output.
+- If a file is required, use a unique session-temp path outside `<PROJECT_ROOT>`. Delete that exact file immediately after completing the review.
+- Use `browser_snapshot` for any follow-up actions; screenshots are visual evidence, not an interaction surface.
+- Record issues as concrete fixes, such as "primary CTA competes with three accent cards" or "hero proof falls below the first viewport," then re-capture once after fixing. Do not create repeated screenshots when nothing changed.
 
 The user is previewing in their own browser via the dev server URL shared in Phase 2.7.
 
@@ -1189,8 +1203,8 @@ Present a summary table to the user:
 
 **Actions**:
 
-1. Browse through each page via Playwright (`browser_navigate` + `browser_snapshot`) to verify all pages load correctly — do NOT take screenshots
-2. Run the **Pre-Ship Design Review** from `${PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md` across every page. Fix unclear purpose, competing focal points, misplaced or invented proof, excessive choices, weak CTA hierarchy, disconnected journeys, and generic success states before presenting the site.
+1. Browse through each page via Playwright (`browser_navigate` + `browser_snapshot`) to verify all pages load correctly.
+2. Complete the **Final route checkpoint** from Phase 5.5 using temporary screenshots for each visually distinct layout. Run the **Pre-Ship Design Review** from `${PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md` against those images and the accessibility snapshots. Fix unclear purpose, competing focal points, misplaced or invented proof, excessive choices, weak CTA hierarchy, disconnected journeys, generic success states, poor spacing, weak balance, and inconsistent imagery before presenting the site. Delete any screenshot files created outside the tool response immediately after review.
 3. Present a summary of what was built:
 
    ```
@@ -1268,9 +1282,9 @@ Present a summary table to the user:
 - **Ask for user confirmation** at key decision points (see list below)
 - **Use best judgement** for design details — make confident, creative choices based on the user's aesthetic + mood selection without asking for every specific font, color, or layout decision
 - **Apply design from the start** — never build neutral then restyle
-- **Verify via Playwright** after every significant change
+- **Verify via Playwright** after every significant change: accessibility snapshots for structure and interaction, temporary screenshots at the defined visual checkpoints
 - **Commit after every page and component** — each gets its own dedicated commit, never batch multiple together
-- **No screenshots** — only use `browser_snapshot` (accessibility snapshots) to verify pages; never use `browser_take_screenshot` as it clutters the user's directory. Give the user the dev server URL for visual preview.
+- **No persistent screenshots** — prefer screenshots returned by the tool; otherwise use a unique session-temp path outside the project and delete the exact file immediately after review. Never commit screenshots or leave them in the user's project.
 
 ### Key Decision Points (Wait for User)
 
