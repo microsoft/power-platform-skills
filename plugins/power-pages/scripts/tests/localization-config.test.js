@@ -11,6 +11,7 @@ const {
   detectLocalization,
   discoverLocalizationImplementation,
   protectedTokenSignature,
+  resolveProjectRelativePath,
   verifyInitializationEvidence,
   validateLocalizationManifestShape,
   validateLocales,
@@ -68,6 +69,82 @@ test('accepts the documented Astro built-in manifest package metadata', () => {
     ),
     []
   );
+});
+
+test('accepts structured official-documentation package verification evidence', () => {
+  const errors = validateLocalizationManifestShape({
+    schemaVersion: 1,
+    framework: 'react',
+    mode: 'runtime',
+    packageName: 'custom-react-i18n',
+    packageVersion: '^2.0.0',
+    packageVerification: {
+      status: 'verified',
+      source: 'official-documentation',
+      evidenceUrl: 'https://docs.example.com/runtime',
+      requestedMode: 'runtime',
+      classification: 'supported',
+      explanation: 'The documentation confirms runtime language switching.',
+      evidence: [{
+        quote: 'Runtime localization is supported in version 2 and later.',
+        explanation: 'This explicitly confirms runtime support.',
+      }],
+      supportConditions: ['Requires version 2 or later.'],
+    },
+    locales: ['en-US', 'fr-FR'],
+    defaultLocale: 'en-US',
+    translationMethod: 'agent',
+    resourcePaths: {
+      'en-US': 'src/i18n/en-US.json',
+      'fr-FR': 'src/i18n/fr-FR.json',
+    },
+    generatedFiles: ['src/components/LanguageSelector.tsx'],
+    managedFiles: ['src/i18n/index.ts'],
+    adoptedExistingConfiguration: false,
+    lastOperation: 'create',
+    updatedAt: '2026-10-02T00:00:00.000Z',
+  });
+
+  assert.deepEqual(errors, []);
+});
+
+test('rejects incomplete official-documentation package verification evidence', () => {
+  const errors = validateLocalizationManifestShape({
+    schemaVersion: 1,
+    framework: 'react',
+    mode: 'runtime',
+    packageName: 'custom-react-i18n',
+    packageVersion: '^2.0.0',
+    packageVerification: {
+      status: 'verified',
+      source: 'official-documentation',
+      evidenceUrl: 'https://docs.example.com/runtime',
+      requestedMode: 'static',
+      classification: 'inconclusive',
+      explanation: '',
+      evidence: [],
+      supportConditions: 'none',
+    },
+    locales: ['en-US', 'fr-FR'],
+    defaultLocale: 'en-US',
+    translationMethod: 'agent',
+    resourcePaths: {
+      'en-US': 'src/i18n/en-US.json',
+      'fr-FR': 'src/i18n/fr-FR.json',
+    },
+    generatedFiles: ['src/components/LanguageSelector.tsx'],
+    managedFiles: ['src/i18n/index.ts'],
+    adoptedExistingConfiguration: false,
+    lastOperation: 'create',
+    updatedAt: '2026-10-02T00:00:00.000Z',
+  });
+
+  const output = errors.join('\n');
+  assert.match(output, /requestedMode must match manifest mode/);
+  assert.match(output, /classification must be "supported"/);
+  assert.match(output, /explanation must be a non-empty string/);
+  assert.match(output, /evidence must contain 1-10/);
+  assert.match(output, /supportConditions must contain/);
 });
 
 test('detects each supported framework from primary dependency evidence', (t) => {
@@ -216,6 +293,65 @@ test('reports malformed manifest field types during inspection instead of throwi
   assert.equal(result.valid, false);
   assert.match(result.conflicts.join('\n'), /locales must be an array of non-empty strings/);
   assert.match(result.conflicts.join('\n'), /resourcePaths must be an object/);
+});
+
+test('rejects POSIX and Windows manifest paths outside the project root', (t) => {
+  const projectRoot = createTempProject(t);
+  const errors = validateLocalizationManifestShape({
+    schemaVersion: 1,
+    framework: 'react',
+    mode: 'runtime',
+    packageName: 'react-i18next',
+    packageVersion: '^16.0.0',
+    packageVerification: {
+      status: 'verified',
+      source: 'known-capability',
+    },
+    locales: ['en-US', 'fr-FR'],
+    defaultLocale: 'en-US',
+    translationMethod: 'agent',
+    resourcePaths: {
+      'en-US': '../outside.json',
+      'fr-FR': 'src/i18n/locales/fr-FR.json',
+    },
+    generatedFiles: ['..\\outside.ts'],
+    managedFiles: ['C:\\outside.ts'],
+    initializationEvidence: {
+      file: '/outside.ts',
+      marker: 'initialize(',
+    },
+    adoptedExistingConfiguration: false,
+    lastOperation: 'create',
+    updatedAt: '2026-10-02T00:00:00.000Z',
+  }, projectRoot);
+
+  assert.match(errors.join('\n'), /Manifest resourcePaths path.*repository-relative/);
+  assert.match(errors.join('\n'), /Manifest generatedFiles path.*repository-relative/);
+  assert.match(errors.join('\n'), /Manifest managedFiles path.*repository-relative/);
+  assert.match(errors.join('\n'), /Manifest initializationEvidence\.file path.*repository-relative/);
+});
+
+test('resolves safe project-relative paths and rejects traversal before file access', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'src/i18n/locales/en-US.json', '{}');
+
+  const safe = resolveProjectRelativePath(
+    projectRoot,
+    'src/i18n/locales/en-US.json'
+  );
+  assert.equal(safe.valid, true);
+  assert.equal(safe.path, path.join(projectRoot, 'src', 'i18n', 'locales', 'en-US.json'));
+
+  for (const unsafePath of [
+    '../outside.json',
+    '..\\outside.json',
+    '/outside.json',
+    'C:\\outside.json',
+  ]) {
+    const result = resolveProjectRelativePath(projectRoot, unsafePath);
+    assert.equal(result.valid, false, unsafePath);
+    assert.equal(result.path, null, unsafePath);
+  }
 });
 
 test('derives mode, locales, default, and resources for a manifestless existing setup', (t) => {

@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 const MANIFEST_NAME = '.powerpages-localization.json';
+const MAX_MODE_EVIDENCE_ENTRIES = 10;
 const REGISTRY_PATH = path.join(__dirname, '..', '..', 'references', 'bcp47-subtags.json');
 const LOCALE_NAVIGATION_PATTERN =
   /LanguageSelector|language selector|locale-switcher|switchLanguage|changeLanguage|setActiveLang|setLocale|getRelativeLocaleUrl|hreflang/i;
@@ -72,7 +73,81 @@ function readJson(filePath) {
   }
 }
 
-function validateLocalizationManifestShape(manifest) {
+function isPathInside(rootPath, candidatePath) {
+  const relative = path.relative(rootPath, candidatePath);
+  return relative === '' ||
+    (!relative.startsWith(`..${path.sep}`) &&
+      relative !== '..' &&
+      !path.isAbsolute(relative));
+}
+
+function repositoryRelativePathError(relativePath) {
+  if (typeof relativePath !== 'string' || !relativePath.trim()) {
+    return 'must be a non-empty path';
+  }
+  if (relativePath.includes('\0')) {
+    return 'must not contain null bytes';
+  }
+  // Treat both separator styles as path syntax on every platform. Otherwise,
+  // a Windows-style traversal can look like a harmless filename on Linux CI.
+  const portablePath = relativePath.replace(/\\/g, '/');
+  if (path.posix.isAbsolute(portablePath) || path.win32.isAbsolute(relativePath)) {
+    return 'must be repository-relative';
+  }
+  const normalized = path.posix.normalize(portablePath);
+  if (normalized === '.' || normalized === '..' || normalized.startsWith('../')) {
+    return 'must remain inside the project root';
+  }
+  return null;
+}
+
+function resolveProjectRelativePath(projectRoot, relativePath) {
+  const syntaxError = repositoryRelativePathError(relativePath);
+  if (syntaxError) {
+    return { valid: false, reason: syntaxError, path: null };
+  }
+
+  const resolvedRoot = path.resolve(projectRoot);
+  const portablePath = relativePath.replace(/[\\/]/g, path.sep);
+  const resolvedPath = path.resolve(resolvedRoot, portablePath);
+  if (!isPathInside(resolvedRoot, resolvedPath)) {
+    return {
+      valid: false,
+      reason: 'must remain inside the project root',
+      path: null,
+    };
+  }
+
+  // Existing symlinks can escape even when the lexical path is contained.
+  // Resolve them before any caller reads the file.
+  if (fs.existsSync(resolvedPath)) {
+    const canonicalRoot = fs.realpathSync(resolvedRoot);
+    const canonicalPath = fs.realpathSync(resolvedPath);
+    if (!isPathInside(canonicalRoot, canonicalPath)) {
+      return {
+        valid: false,
+        reason: 'must not resolve outside the project root',
+        path: null,
+      };
+    }
+  }
+
+  return { valid: true, reason: null, path: resolvedPath };
+}
+
+function validateManifestPath(errors, field, relativePath, projectRoot) {
+  const result = projectRoot
+    ? resolveProjectRelativePath(projectRoot, relativePath)
+    : { valid: !repositoryRelativePathError(relativePath) };
+  if (!result.valid) {
+    errors.push(
+      `Manifest ${field} path "${relativePath}" must be repository-relative ` +
+      'and remain inside the project root.'
+    );
+  }
+}
+
+function validateLocalizationManifestShape(manifest, projectRoot) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     return ['Localization manifest must be a JSON object.'];
   }
@@ -98,6 +173,10 @@ function validateLocalizationManifestShape(manifest) {
     if (!Array.isArray(manifest[field]) ||
         manifest[field].some((value) => typeof value !== 'string' || !value.trim())) {
       errors.push(`Manifest ${field} must be an array of non-empty strings.`);
+    } else if (field !== 'locales') {
+      for (const relativePath of manifest[field]) {
+        validateManifestPath(errors, field, relativePath, projectRoot);
+      }
     }
   }
   if (!manifest.resourcePaths || typeof manifest.resourcePaths !== 'object' ||
@@ -106,6 +185,10 @@ function validateLocalizationManifestShape(manifest) {
         (value) => typeof value !== 'string' || !value.trim()
       )) {
     errors.push('Manifest resourcePaths must be an object whose values are non-empty file paths.');
+  } else {
+    for (const relativePath of Object.values(manifest.resourcePaths)) {
+      validateManifestPath(errors, 'resourcePaths', relativePath, projectRoot);
+    }
   }
   if (typeof manifest.adoptedExistingConfiguration !== 'boolean') {
     errors.push('Manifest adoptedExistingConfiguration must be a boolean.');
@@ -164,6 +247,52 @@ function validateLocalizationManifestShape(manifest) {
         !verification.evidenceUrl) {
       errors.push('Official-documentation package verification requires evidenceUrl.');
     }
+    if (verification.source === 'official-documentation' &&
+        verification.status === 'verified') {
+      if (verification.requestedMode !== manifest.mode) {
+        errors.push(
+          'Official-documentation package verification requestedMode must match manifest mode.'
+        );
+      }
+      if (verification.classification !== 'supported') {
+        errors.push(
+          'Verified official-documentation package verification classification must be "supported".'
+        );
+      }
+      if (typeof verification.explanation !== 'string' ||
+          !verification.explanation.trim() ||
+          verification.explanation.length > 2000) {
+        errors.push(
+          'Official-documentation package verification explanation must be a non-empty string of at most 2000 characters.'
+        );
+      }
+      if (!Array.isArray(verification.evidence) ||
+          verification.evidence.length === 0 ||
+          verification.evidence.length > MAX_MODE_EVIDENCE_ENTRIES ||
+          verification.evidence.some((entry) =>
+            !entry || typeof entry !== 'object' || Array.isArray(entry) ||
+            typeof entry.quote !== 'string' || !entry.quote.trim() ||
+            entry.quote.length > 2000 ||
+            typeof entry.explanation !== 'string' || !entry.explanation.trim() ||
+            entry.explanation.length > 2000
+          )) {
+        errors.push(
+          `Official-documentation package verification evidence must contain 1-${MAX_MODE_EVIDENCE_ENTRIES} ` +
+          'quote/explanation entries of at most 2000 characters.'
+        );
+      }
+      if (!Array.isArray(verification.supportConditions) ||
+          verification.supportConditions.length > 20 ||
+          verification.supportConditions.some((condition) =>
+            typeof condition !== 'string' ||
+            !condition.trim() ||
+            condition.length > 500
+          )) {
+        errors.push(
+          'Official-documentation package verification supportConditions must contain at most 20 non-empty strings of at most 500 characters.'
+        );
+      }
+    }
   }
   if (manifest.initializationEvidence !== undefined) {
     const evidence = manifest.initializationEvidence;
@@ -172,6 +301,8 @@ function validateLocalizationManifestShape(manifest) {
     } else {
       if (typeof evidence.file !== 'string' || !evidence.file.trim()) {
         errors.push('Manifest initializationEvidence.file must be a non-empty path.');
+      } else {
+        validateManifestPath(errors, 'initializationEvidence.file', evidence.file, projectRoot);
       }
       if (typeof evidence.marker !== 'string' || !evidence.marker.trim()) {
         errors.push('Manifest initializationEvidence.marker must be a non-empty string.');
@@ -193,24 +324,15 @@ function verifyInitializationEvidence(projectRoot, packageName, evidence) {
       reason: 'initialization evidence is missing its package, file, or marker',
     };
   }
-  if (path.isAbsolute(evidence.file)) {
+  const resolvedEvidence = resolveProjectRelativePath(projectRoot, evidence.file);
+  if (!resolvedEvidence.valid) {
     return {
       provided: true,
       valid: false,
-      reason: 'initialization evidence file must be repository-relative',
+      reason: `initialization evidence file ${resolvedEvidence.reason}`,
     };
   }
-
-  const resolvedRoot = path.resolve(projectRoot);
-  const evidencePath = path.resolve(resolvedRoot, evidence.file);
-  const rootPrefix = `${resolvedRoot}${path.sep}`;
-  if (evidencePath !== resolvedRoot && !evidencePath.startsWith(rootPrefix)) {
-    return {
-      provided: true,
-      valid: false,
-      reason: 'initialization evidence file must remain inside the project root',
-    };
-  }
+  const evidencePath = resolvedEvidence.path;
   if (!fs.existsSync(evidencePath) || !fs.statSync(evidencePath).isFile()) {
     return {
       provided: true,
@@ -475,7 +597,7 @@ function detectLocalization(projectRoot) {
   const manifestObject = manifest && typeof manifest === 'object' && !Array.isArray(manifest)
     ? manifest
     : null;
-  if (manifest) conflicts.push(...validateLocalizationManifestShape(manifest));
+  if (manifest) conflicts.push(...validateLocalizationManifestShape(manifest, projectRoot));
   const manifestPackage = typeof manifestObject?.packageName === 'string'
     ? manifestObject.packageName
     : null;
@@ -1002,12 +1124,14 @@ module.exports = {
   DEFAULT_SOURCE_SCAN_LIMITS,
   LOCALIZATION_CAPABILITIES,
   MANIFEST_NAME,
+  MAX_MODE_EVIDENCE_ENTRIES,
   KNOWN_PACKAGES,
   hasLocaleNavigationSignal,
   detectFramework,
   detectLocalization,
   inspectProject,
   loadRegistry,
+  resolveProjectRelativePath,
   validateLocalizationManifestShape,
   validateLocales,
   verifyInitializationEvidence,

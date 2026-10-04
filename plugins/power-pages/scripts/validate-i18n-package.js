@@ -2,6 +2,7 @@
 'use strict';
 
 const https = require('https');
+const dns = require('dns');
 const fs = require('fs');
 const net = require('net');
 const path = require('path');
@@ -9,9 +10,12 @@ const { execFileSync } = require('child_process');
 const {
   KNOWN_PACKAGES,
   LOCALIZATION_CAPABILITIES,
+  MAX_MODE_EVIDENCE_ENTRIES,
   detectFramework,
+  resolveProjectRelativePath,
 } = require('./lib/localization-config');
 
+const MAX_EVIDENCE_TEXT_CHARS = 200000;
 const ALLOWED_LICENSES = new Set([
   'MIT',
   'Apache-2.0',
@@ -42,14 +46,148 @@ function fetchJson(url, request = https.get) {
   });
 }
 
-function fetchText(
+function parseIpv4(address) {
+  const parts = address.split('.').map(Number);
+  return parts.length === 4 &&
+    parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)
+    ? parts
+    : null;
+}
+
+function parseIpv6(address) {
+  let normalized = address.toLowerCase().split('%')[0];
+  if (normalized.includes('.')) {
+    const lastColon = normalized.lastIndexOf(':');
+    const ipv4 = parseIpv4(normalized.slice(lastColon + 1));
+    if (!ipv4) return null;
+    normalized = normalized.slice(0, lastColon) +
+      `:${((ipv4[0] << 8) | ipv4[1]).toString(16)}` +
+      `:${((ipv4[2] << 8) | ipv4[3]).toString(16)}`;
+  }
+  const halves = normalized.split('::');
+  if (halves.length > 2) return null;
+  const left = halves[0] ? halves[0].split(':') : [];
+  const right = halves[1] ? halves[1].split(':') : [];
+  const missing = 8 - left.length - right.length;
+  if ((halves.length === 1 && missing !== 0) ||
+      (halves.length === 2 && missing < 1)) {
+    return null;
+  }
+  const words = [...left, ...Array(missing).fill('0'), ...right];
+  if (words.length !== 8 ||
+      words.some((word) => !/^[0-9a-f]{1,4}$/.test(word))) {
+    return null;
+  }
+  return words.reduce(
+    (value, word) => (value << 16n) | BigInt(Number.parseInt(word, 16)),
+    0n
+  );
+}
+
+function matchesIpv6Prefix(value, prefix, bits) {
+  const prefixValue = parseIpv6(prefix);
+  const shift = BigInt(128 - bits);
+  return prefixValue !== null && (value >> shift) === (prefixValue >> shift);
+}
+
+function isPublicIpAddress(address) {
+  const family = net.isIP(address);
+  if (family === 4) {
+    const parts = parseIpv4(address);
+    const [a, b, c] = parts;
+    return !(
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 0 && c === 0) ||
+      (a === 192 && b === 0 && c === 2) ||
+      (a === 192 && b === 168) ||
+      (a === 198 && (b === 18 || b === 19)) ||
+      (a === 198 && b === 51 && c === 100) ||
+      (a === 203 && b === 0 && c === 113) ||
+      a >= 224
+    );
+  }
+  if (family !== 6) return false;
+
+  const value = parseIpv6(address);
+  if (value === null || value === 0n || value === 1n) return false;
+  // IPv4-mapped IPv6 addresses inherit the IPv4 address classification.
+  if ((value >> 32n) === 0xFFFFn) {
+    const ipv4 = Number(value & 0xFFFFFFFFn);
+    return isPublicIpAddress([
+      (ipv4 >>> 24) & 0xFF,
+      (ipv4 >>> 16) & 0xFF,
+      (ipv4 >>> 8) & 0xFF,
+      ipv4 & 0xFF,
+    ].join('.'));
+  }
+  return !(
+    matchesIpv6Prefix(value, '::', 96) ||
+    matchesIpv6Prefix(value, '100::', 64) || // discard-only
+    matchesIpv6Prefix(value, 'fc00::', 7) ||
+    matchesIpv6Prefix(value, 'fe80::', 10) ||
+    matchesIpv6Prefix(value, 'fec0::', 10) || // deprecated site-local
+    matchesIpv6Prefix(value, 'ff00::', 8) ||
+    matchesIpv6Prefix(value, '2001::', 23) || // IETF protocol assignments
+    matchesIpv6Prefix(value, '2001:db8::', 32) || // documentation
+    matchesIpv6Prefix(value, '2002::', 16) || // 6to4
+    matchesIpv6Prefix(value, '3fff::', 20) || // documentation
+    matchesIpv6Prefix(value, '5f00::', 16) || // segment-routing local-use
+    matchesIpv6Prefix(value, '64:ff9b::', 96) || // NAT64
+    matchesIpv6Prefix(value, '64:ff9b:1::', 48) // local-use NAT64
+  );
+}
+
+async function resolvePublicHostname(hostname, lookup = dns.promises.lookup) {
+  const resolved = await lookup(hostname, { all: true, verbatim: true });
+  const addresses = Array.isArray(resolved) ? resolved : [resolved];
+  if (!addresses.length ||
+      addresses.some(({ address, family }) =>
+        !isPublicIpAddress(address) || ![4, 6].includes(family)
+      )) {
+    throw new Error(
+      'Package documentation hostname must resolve only to public IP addresses.'
+    );
+  }
+  return addresses;
+}
+
+function createPinnedLookup(addresses) {
+  return (_hostname, options, callback) => {
+    if (options?.all) {
+      callback(null, addresses.map(({ address, family }) => ({ address, family })));
+      return;
+    }
+    const requestedFamily = typeof options === 'number' ? options : options?.family;
+    const selected = addresses.find(({ family }) =>
+      !requestedFamily || family === requestedFamily
+    );
+    if (!selected) {
+      callback(new Error('No validated public address matches the requested family.'));
+      return;
+    }
+    callback(null, selected.address, selected.family);
+  };
+}
+
+async function fetchText(
   url,
   request = https.get,
   redirectsRemaining = 3,
-  allowedHostname = new URL(url).hostname
+  allowedHostname = new URL(url).hostname,
+  lookup = dns.promises.lookup
 ) {
+  const parsedUrl = new URL(url);
+  const addresses = await resolvePublicHostname(parsedUrl.hostname, lookup);
   return new Promise((resolve, reject) => {
-    const req = request(url, { headers: { Accept: 'text/html,text/plain' } }, (response) => {
+    const req = request(url, {
+      headers: { Accept: 'text/html,text/plain' },
+      lookup: createPinnedLookup(addresses),
+    }, (response) => {
       if (response.statusCode >= 300 && response.statusCode < 400 &&
           response.headers.location && redirectsRemaining > 0) {
         response.resume();
@@ -64,7 +202,8 @@ function fetchText(
           redirectUrl,
           request,
           redirectsRemaining - 1,
-          allowedHostname
+          allowedHostname,
+          lookup
         ).then(resolve, reject);
         return;
       }
@@ -151,7 +290,122 @@ function peerRangeAllowsMajor(range, major) {
   });
 }
 
-function assessModeSupport(packageName, mode, metadata, additionalEvidence = '') {
+function extractEvidenceText(content) {
+  const decodeNumericEntity = (rawCode, radix) => {
+    const codePoint = Number.parseInt(rawCode, radix);
+    return Number.isInteger(codePoint) &&
+      codePoint >= 0 &&
+      codePoint <= 0x10FFFF &&
+      !(codePoint >= 0xD800 && codePoint <= 0xDFFF)
+      ? String.fromCodePoint(codePoint)
+      : '\uFFFD';
+  };
+  const withoutActiveContent = String(content || '')
+    .replace(/<script\b[^>]*>[\s\S]*?(?:<\/script>|$)/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?(?:<\/style>|$)/gi, ' ')
+    .replace(/<noscript\b[^>]*>[\s\S]*?(?:<\/noscript>|$)/gi, ' ');
+  const decoded = withoutActiveContent
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&#(\d+);/g, (_, code) => decodeNumericEntity(code, 10))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => decodeNumericEntity(code, 16));
+  const normalized = decoded.replace(/\s+/g, ' ').trim();
+  return {
+    text: normalized.slice(0, MAX_EVIDENCE_TEXT_CHARS),
+    truncated: normalized.length > MAX_EVIDENCE_TEXT_CHARS,
+  };
+}
+
+function validateModeEvidenceClassification(
+  classification,
+  { mode, evidenceUrl, documentText }
+) {
+  if (!classification || typeof classification !== 'object' ||
+      Array.isArray(classification)) {
+    throw new Error('Mode evidence classification must be a JSON object.');
+  }
+  if (classification.requestedMode !== mode) {
+    throw new Error(`Mode evidence classification requestedMode must be "${mode}".`);
+  }
+  if (!['supported', 'unsupported', 'inconclusive'].includes(
+    classification.classification
+  )) {
+    throw new Error(
+      'Mode evidence classification must be supported, unsupported, or inconclusive.'
+    );
+  }
+  if (typeof classification.explanation !== 'string' ||
+      !classification.explanation.trim() ||
+      classification.explanation.length > 2000) {
+    throw new Error(
+      'Mode evidence classification explanation must be a non-empty string of at most 2000 characters.'
+    );
+  }
+  if (!Array.isArray(classification.evidence) ||
+      classification.evidence.length > MAX_MODE_EVIDENCE_ENTRIES) {
+    throw new Error(
+      `Mode evidence classification evidence must be an array of at most ${MAX_MODE_EVIDENCE_ENTRIES} entries.`
+    );
+  }
+  if (!Array.isArray(classification.supportConditions) ||
+      classification.supportConditions.length > 20 ||
+      classification.supportConditions.some((condition) =>
+        typeof condition !== 'string' ||
+        !condition.trim() ||
+        condition.length > 500
+      )) {
+    throw new Error(
+      'Mode evidence classification supportConditions must contain at most 20 non-empty strings of at most 500 characters.'
+    );
+  }
+  if (classification.classification !== 'inconclusive' &&
+      classification.evidence.length === 0) {
+    throw new Error(
+      'Supported or unsupported mode evidence classifications require an exact quotation.'
+    );
+  }
+
+  const normalizedDocument = String(documentText || '').replace(/\s+/g, ' ').trim();
+  const evidence = classification.evidence.map((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry) ||
+        typeof entry.quote !== 'string' || !entry.quote.trim() ||
+        entry.quote.length > 2000 ||
+        typeof entry.explanation !== 'string' || !entry.explanation.trim() ||
+        entry.explanation.length > 2000) {
+      throw new Error(
+        'Each mode evidence entry must contain a non-empty quote and explanation of at most 2000 characters.'
+      );
+    }
+    const normalizedQuote = entry.quote.replace(/\s+/g, ' ').trim();
+    if (!normalizedDocument.includes(normalizedQuote)) {
+      throw new Error(
+        'Mode evidence quotation was not found in the fetched official documentation.'
+      );
+    }
+    return {
+      quote: normalizedQuote,
+      explanation: entry.explanation.trim(),
+    };
+  });
+
+  return {
+    requestedMode: mode,
+    classification: classification.classification,
+    explanation: classification.explanation.trim(),
+    evidence,
+    supportConditions: classification.supportConditions.map((condition) =>
+      condition.trim()
+    ),
+    evidenceUrl,
+  };
+}
+
+function assessModeSupport(packageName, mode, metadata, classification = null) {
   const known = KNOWN_PACKAGES[packageName];
   if (known) {
     if (known.mode === mode) {
@@ -167,28 +421,30 @@ function assessModeSupport(packageName, mode, metadata, additionalEvidence = '')
       detail: `${packageName} is registered for ${known.mode}, not ${mode}, localization.`,
     };
   }
-  const searchable = [
-    ...(metadata.keywords || []),
-    metadata.description || '',
-    metadata.readme || '',
-    additionalEvidence,
-  ].join(' ').toLowerCase();
-  const supported = mode === 'runtime'
-    ? /runtime|language switch|change language|dynamic locale/.test(searchable)
-    : /build[- ]time|compile[- ]time|static localization|localized build/.test(searchable);
-  if (supported) {
+  if (classification?.classification === 'supported') {
     return {
       status: 'supported',
-      source: additionalEvidence ? 'official-documentation' : 'package-documentation',
-      detail: `Package documentation contains evidence of ${mode} localization support.`,
+      source: 'official-documentation',
+      detail: classification.explanation,
+      classification,
+    };
+  }
+  if (classification?.classification === 'unsupported') {
+    return {
+      status: 'unsupported',
+      source: 'official-documentation',
+      detail: classification.explanation,
+      classification,
     };
   }
   return {
     status: 'inconclusive',
-    source: 'none',
+    source: classification ? 'official-documentation' : 'none',
     detail:
-      `Package health and compatibility can be checked, but the available documentation ` +
-      `does not establish ${mode} localization support.`,
+      classification?.explanation ||
+      `Package health and compatibility can be checked, but ${mode} localization ` +
+      'requires agent classification of official documentation.',
+    classification,
   };
 }
 
@@ -225,6 +481,7 @@ function validateModeEvidenceUrl(evidenceUrl, metadata) {
   // is not enough to make a documentation fetch safe. Reject address literals,
   // single-label hosts, and reserved/internal DNS suffixes before any request.
   const reservedSuffixes = [
+    '.localhost',
     '.local',
     '.internal',
     '.lan',
@@ -233,9 +490,12 @@ function validateModeEvidenceUrl(evidenceUrl, metadata) {
     '.invalid',
     '.example',
   ];
-  if (parsed.hostname === 'localhost' || !parsed.hostname.includes('.') ||
-      reservedSuffixes.some((suffix) => parsed.hostname.endsWith(suffix)) ||
-      net.isIP(parsed.hostname)) {
+  // URL normalizes host casing, and the trailing-dot removal also rejects the
+  // fully-qualified loopback spelling `localhost.`.
+  const hostname = parsed.hostname.replace(/\.$/, '');
+  if (hostname === 'localhost' || !hostname.includes('.') ||
+      reservedSuffixes.some((suffix) => hostname.endsWith(suffix)) ||
+      net.isIP(hostname)) {
     throw new Error('Mode evidence URL must use a public documentation hostname.');
   }
   const officialUrls = [
@@ -329,7 +589,7 @@ function evaluatePackage(metadata, options) {
     packageName,
     mode,
     metadata,
-    options.modeEvidenceText
+    options.modeEvidenceClassification
   );
   if (modeEvidence.status === 'unsupported') {
     failures.push(modeEvidence.detail);
@@ -371,6 +631,12 @@ function evaluatePackage(metadata, options) {
       ...modeEvidence,
       evidenceUrl: options.modeEvidenceUrl || null,
       fetchError: options.modeEvidenceError || null,
+      classificationRequired: Boolean(
+        !KNOWN_PACKAGES[packageName] &&
+        options.modeEvidenceDocument &&
+        !options.modeEvidenceClassification
+      ),
+      document: options.modeEvidenceDocument || null,
     },
     failures,
     warnings,
@@ -444,6 +710,7 @@ async function runCli() {
       'Usage: validate-i18n-package.js --projectRoot <path> --package <name> ' +
       '[--framework <detected-candidate>] [--version <range>] ' +
       '--mode <runtime|static> [--modeEvidenceUrl <official-https-url>] ' +
+      '[--modeEvidenceClassificationFile <project-relative-json-path>] ' +
       '[--allowPrerelease] [--allowUnverifiedMode]'
     );
   }
@@ -479,18 +746,53 @@ async function runCli() {
     );
   }
   const metadata = await resolvePackage(args.package, args.version || 'latest');
-  let modeEvidenceText = '';
+  let modeEvidenceDocument = null;
+  let modeEvidenceClassification = null;
   let modeEvidenceUrl = null;
   let modeEvidenceError = null;
   if (args.modeEvidenceUrl) {
     modeEvidenceUrl = validateModeEvidenceUrl(args.modeEvidenceUrl, metadata);
     try {
-      modeEvidenceText = await fetchText(modeEvidenceUrl);
+      const fetched = await fetchText(modeEvidenceUrl);
+      const extracted = extractEvidenceText(fetched);
+      modeEvidenceDocument = {
+        url: modeEvidenceUrl,
+        text: extracted.text,
+        truncated: extracted.truncated,
+      };
     } catch (error) {
       // A documentation outage must not turn uncertainty into a hard package
       // rejection. Preserve the URL and return the normal inconclusive flow.
       modeEvidenceError = error.message;
     }
+  }
+  if (args.modeEvidenceClassificationFile) {
+    if (!modeEvidenceDocument) {
+      throw new Error(
+        'Mode evidence classification requires successfully fetched official documentation.'
+      );
+    }
+    const classificationPath = resolveProjectRelativePath(
+      projectRoot,
+      args.modeEvidenceClassificationFile
+    );
+    if (!classificationPath.valid || !fs.existsSync(classificationPath.path) ||
+        !fs.statSync(classificationPath.path).isFile()) {
+      throw new Error(
+        'Mode evidence classification file must be a project-relative JSON file inside the project root.'
+      );
+    }
+    let classification;
+    try {
+      classification = JSON.parse(fs.readFileSync(classificationPath.path, 'utf8'));
+    } catch {
+      throw new Error('Mode evidence classification file must contain valid JSON.');
+    }
+    modeEvidenceClassification = validateModeEvidenceClassification(classification, {
+      mode: args.mode,
+      evidenceUrl: modeEvidenceUrl,
+      documentText: modeEvidenceDocument.text,
+    });
   }
   const result = evaluatePackage(metadata, {
     packageName: args.package,
@@ -500,7 +802,8 @@ async function runCli() {
     mode: args.mode,
     allowPrerelease: args.allowPrerelease,
     allowUnverifiedMode: args.allowUnverifiedMode,
-    modeEvidenceText,
+    modeEvidenceClassification,
+    modeEvidenceDocument,
     modeEvidenceUrl,
     modeEvidenceError,
     rangeSatisfies: versionSatisfiesRangeWithNpm,
@@ -520,19 +823,23 @@ module.exports = {
   ALLOWED_LICENSES,
   assessModeSupport,
   evaluatePackage,
+  extractEvidenceText,
   fetchJson,
   fetchText,
   isPrerelease,
+  isPublicIpAddress,
   majorOf,
   modeSupported,
   normalizeLicense,
   packageSupportsFramework,
   peerRangeAllowsMajor,
   resolveInstalledVersion,
+  resolvePublicHostname,
   resolveVersionsWithNpm,
   resolveVersionWithNpm,
   versionSatisfiesRangeWithNpm,
   validateModeEvidenceUrl,
   resolvePackage,
   selectFramework,
+  validateModeEvidenceClassification,
 };

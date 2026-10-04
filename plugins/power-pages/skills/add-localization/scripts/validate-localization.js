@@ -17,9 +17,30 @@ const {
   detectLocalization,
   hasLocaleNavigationSignal,
   protectedTokenSignature,
+  resolveProjectRelativePath,
   validateLocalizationManifestShape,
   validateLocales,
 } = require('../../../scripts/lib/localization-config');
+
+const MAX_REPORTED_STALE_KEYS = 20;
+const MAX_DIAGNOSTIC_KEY_CHARS = 200;
+
+function quoteDiagnosticKey(value) {
+  const text = String(value);
+  const bounded = text.length > MAX_DIAGNOSTIC_KEY_CHARS
+    ? `${text.slice(0, MAX_DIAGNOSTIC_KEY_CHARS)}...`
+    : text;
+  return JSON.stringify(bounded).replace(
+    /[\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g,
+    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`
+  );
+}
+
+function formatDiagnosticKeys(keys) {
+  const reported = keys.slice(0, MAX_REPORTED_STALE_KEYS).map(quoteDiagnosticKey);
+  const omitted = keys.length - reported.length;
+  return `${reported.join(', ')}${omitted > 0 ? `, ... and ${omitted} more` : ''}`;
+}
 
 function readJson(filePath) {
   try {
@@ -77,6 +98,21 @@ function resourceMap(manifest) {
   return manifest.resourcePaths;
 }
 
+function resolveManifestFile(projectRoot, relativePath, label, errors) {
+  const resolved = resolveProjectRelativePath(projectRoot, relativePath);
+  if (!resolved.valid) {
+    errors.push(
+      `${label} path must be repository-relative and remain inside the project root.`
+    );
+    return null;
+  }
+  if (!fs.existsSync(resolved.path) || !fs.statSync(resolved.path).isFile()) {
+    errors.push(`Missing ${label}: ${relativePath}`);
+    return null;
+  }
+  return resolved.path;
+}
+
 function compareJsonResources(projectRoot, manifest, errors, options = {}) {
   const resources = resourceMap(manifest);
   if (!resources) {
@@ -91,11 +127,13 @@ function compareJsonResources(projectRoot, manifest, errors, options = {}) {
       errors.push(`No resource path is configured for locale ${locale}.`);
       continue;
     }
-    const fullPath = path.join(projectRoot, relativePath);
-    if (!fs.existsSync(fullPath)) {
-      errors.push(`Missing locale resource: ${relativePath}`);
-      continue;
-    }
+    const fullPath = resolveManifestFile(
+      projectRoot,
+      relativePath,
+      `locale resource for ${locale}`,
+      errors
+    );
+    if (!fullPath) continue;
     const value = readJson(fullPath);
     if (!value) {
       errors.push(`Locale resource is not valid JSON: ${relativePath}`);
@@ -113,16 +151,28 @@ function compareJsonResources(projectRoot, manifest, errors, options = {}) {
     const targetKeys = Object.keys(target).sort();
     const missing = sourceKeys.filter((key) => !Object.hasOwn(target, key));
     const extra = targetKeys.filter((key) => !Object.hasOwn(source, key));
-    if (missing.length) errors.push(`${locale}: missing translation keys: ${missing.join(', ')}`);
-    if (extra.length && options.staleIsError !== false) {
-      errors.push(`${locale}: stale translation keys: ${extra.join(', ')}`);
+    if (missing.length) {
+      errors.push(`${locale}: missing translation keys: ${formatDiagnosticKeys(missing)}`);
+    }
+    if (extra.length) {
+      const message =
+        `${locale}: stale translation keys (untrusted project data): ` +
+        formatDiagnosticKeys(extra);
+      if (options.staleIsError === false) {
+        options.warnings?.push(message);
+      } else {
+        errors.push(message);
+      }
     }
     for (const key of sourceKeys.filter((candidate) => Object.hasOwn(target, candidate))) {
       const sourceTokens = protectedTokenSignature(source[key]);
       const targetTokens = protectedTokenSignature(target[key]);
       if (manifest.translationMethod === 'blank' && target[key] === '') continue;
       if (JSON.stringify(sourceTokens) !== JSON.stringify(targetTokens)) {
-        errors.push(`${locale}:${key}: protected interpolation/markup tokens do not match the default locale.`);
+        errors.push(
+          `${locale}:${quoteDiagnosticKey(key)}: protected interpolation/markup tokens ` +
+          'do not match the default locale.'
+        );
       }
     }
   }
@@ -141,11 +191,13 @@ function compareXlfResources(projectRoot, manifest, errors, options = {}) {
       errors.push(`No resource path is configured for locale ${locale}.`);
       continue;
     }
-    const fullPath = path.join(projectRoot, relativePath);
-    if (!fs.existsSync(fullPath)) {
-      errors.push(`Missing locale resource: ${relativePath}`);
-      continue;
-    }
+    const fullPath = resolveManifestFile(
+      projectRoot,
+      relativePath,
+      `locale resource for ${locale}`,
+      errors
+    );
+    if (!fullPath) continue;
     parsed[locale] = extractXlfMessages(fs.readFileSync(fullPath, 'utf8'));
   }
 
@@ -164,25 +216,35 @@ function compareXlfResources(projectRoot, manifest, errors, options = {}) {
       continue;
     }
     const extra = targetKeys.filter((key) => !Object.hasOwn(source, key));
-    if (extra.length && options.staleIsError !== false) {
-      errors.push(`${locale}: stale XLF messages: ${extra.join(', ')}`);
+    if (extra.length) {
+      const message =
+        `${locale}: stale XLF messages (untrusted project data): ` +
+        formatDiagnosticKeys(extra);
+      if (options.staleIsError === false) {
+        options.warnings?.push(message);
+      } else {
+        errors.push(message);
+      }
     }
     for (const key of sourceKeys) {
       const target = parsed[locale][key];
       if (!target) {
-        errors.push(`${locale}: missing XLF message ${key}.`);
+        errors.push(`${locale}: missing XLF message ${quoteDiagnosticKey(key)}.`);
         continue;
       }
       if (manifest.translationMethod === 'blank' && target.target === '') continue;
       if (JSON.stringify(protectedTokenSignature(source[key].source)) !==
           JSON.stringify(protectedTokenSignature(target.target))) {
-        errors.push(`${locale}:${key}: protected interpolation/markup tokens do not match the source.`);
+        errors.push(
+          `${locale}:${quoteDiagnosticKey(key)}: protected interpolation/markup tokens ` +
+          'do not match the source.'
+        );
       }
     }
   }
 }
 
-function validateLocalization(projectRoot) {
+function validateLocalization(projectRoot, warnings = []) {
   const manifestPath = path.join(projectRoot, MANIFEST_NAME);
   if (!fs.existsSync(manifestPath)) {
     const detected = detectLocalization(projectRoot);
@@ -217,7 +279,7 @@ function validateLocalization(projectRoot) {
 
   const manifest = readJson(manifestPath);
   if (!manifest) return [`${MANIFEST_NAME} is not valid JSON.`];
-  const shapeErrors = validateLocalizationManifestShape(manifest);
+  const shapeErrors = validateLocalizationManifestShape(manifest, projectRoot);
   if (shapeErrors.length) return shapeErrors;
   const errors = [];
 
@@ -276,23 +338,27 @@ function validateLocalization(projectRoot) {
     ...(manifest.generatedFiles || []),
     ...(manifest.managedFiles || []),
   ];
+  const resolvedManagedFiles = [];
   for (const relativePath of allManagedFiles) {
-    if (!fs.existsSync(path.join(projectRoot, relativePath))) {
-      errors.push(`Missing managed localization file: ${relativePath}`);
-    }
+    const fullPath = resolveManifestFile(
+      projectRoot,
+      relativePath,
+      'managed localization file',
+      errors
+    );
+    if (fullPath) resolvedManagedFiles.push(fullPath);
   }
 
   if (Array.isArray(manifest.locales) && manifest.locales.length >= 2) {
     const paths = Object.values(resourceMap(manifest) || {});
     const usesXlf = paths.some((relativePath) => /\.xlf\d?$/i.test(relativePath));
-    const comparisonOptions = { staleIsError: false };
+    const comparisonOptions = { staleIsError: false, warnings };
     if (usesXlf) compareXlfResources(projectRoot, manifest, errors, comparisonOptions);
     else compareJsonResources(projectRoot, manifest, errors, comparisonOptions);
   }
 
-  const implementationText = allManagedFiles
-    .filter((relativePath) => fs.existsSync(path.join(projectRoot, relativePath)))
-    .map((relativePath) => fs.readFileSync(path.join(projectRoot, relativePath), 'utf8'))
+  const implementationText = resolvedManagedFiles
+    .map((fullPath) => fs.readFileSync(fullPath, 'utf8'))
     .join('\n');
   if (!hasLocaleNavigationSignal(implementationText)) {
     errors.push('Managed files do not contain a language selector or locale-navigation implementation.');
@@ -380,7 +446,13 @@ function validateFrameworkModePackage(projectRoot, manifest, dependencies, detec
 }
 
 function finishValidation(projectRoot) {
-  const errors = validateLocalization(projectRoot);
+  const warnings = [];
+  const errors = validateLocalization(projectRoot, warnings);
+  if (warnings.length) {
+    process.stderr.write(
+      `Localization validation warnings (preserved, nonblocking):\n- ${warnings.join('\n- ')}\n`
+    );
+  }
   if (errors.length) block(`Localization validation failed:\n- ${errors.join('\n- ')}`);
   approve();
 }

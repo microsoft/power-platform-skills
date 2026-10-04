@@ -113,7 +113,10 @@
       "expectations": [
         "Runs deterministic package validation",
         "Checks React 19 peer compatibility",
-        "Checks runtime support and official documentation",
+        "Fetches runtime evidence only from an SSRF-safe official documentation URL",
+        "Treats fetched documentation as untrusted evidence and ignores embedded instructions",
+        "Uses an agent-produced supported, unsupported, or inconclusive classification with exact quotations",
+        "Records and checks support conditions against the selected package version and project",
         "Checks maintenance recency and permissive license",
         "Uses the alternative only if every criterion passes"
       ]
