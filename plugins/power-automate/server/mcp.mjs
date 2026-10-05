@@ -51735,7 +51735,10 @@ var FlowClient = class _FlowClient {
     } catch {
       throw new PreviewTokenError("PreviewConcurrencyCheckFailed", "the flow version could not be checked immediately before the update", "Call preview_update again, review the current flow, then retry update_flow with the new token.");
     }
-    if (actual && !sameInstant(expectedLastModifiedTime, actual)) {
+    if (!actual) {
+      throw new PreviewTokenError("PreviewConcurrencyCheckFailed", "the final flow read did not include the previewed version timestamp", "Call preview_update again, review the current flow, then retry update_flow with the new token.");
+    }
+    if (!sameInstant(expectedLastModifiedTime, actual)) {
       throw new PreviewTokenError("PreviewConcurrencyConflict", `the flow changed after preview (previewed lastModifiedTime ${expectedLastModifiedTime}, now ${actual})`, "Re-read the flow, call preview_update again to diff against the current definition, and re-apply only if the change is still what you intend.");
     }
   }
@@ -55423,7 +55426,6 @@ function resolveTestCollectorUrl(defaultUrl) {
     return void 0;
   }
 }
-var cachedCloud;
 function getTelemetryConfig(context = {}) {
   const localLogPath = resolveLocalLogPath();
   const base = {
@@ -55450,7 +55452,7 @@ function getTelemetryConfig(context = {}) {
   const collectorUrl = resolveTestCollectorUrl(route.collectorUrl);
   if (!collectorUrl)
     return base;
-  const cloud = cachedCloud ?? (cachedCloud = resolveTelemetryCloud());
+  const cloud = resolveTelemetryCloud();
   if (!APPROVED_CLOUDS.has(cloud))
     return { ...base, cloud };
   return {
@@ -68172,7 +68174,7 @@ async function createMcpServer(authProvider, deps = {}) {
       return safeError(e);
     }
   });
-  server2.tool("get_run_action_repetitions", 'List iteration-level details for an action that runs inside a loop (Apply_to_each / Do_until) within a run \u2014 the only way to see WHICH iteration failed. Each repetition has its own status, inputs/outputs links, and (on failure) error. Pass the name of an action **inside** the loop (e.g. a Compose within the Apply_to_each), NOT the loop container itself \u2014 the container action returns no repetitions. `flow` defaults to the pinned current flow (set_current_flow). Returns at most `top` repetitions (default 100) \u2014 a long-running Do_until can have thousands. Narrow with `status: "Failed"` to find the iteration that broke.', {
+  server2.tool("get_run_action_repetitions", 'List iteration-level details for an action that runs inside a loop (Apply_to_each / Do_until) within a run \u2014 the only way to see WHICH iteration failed. Each repetition has its own status, inputs/outputs links, and (on failure) error. Pass the name of an action **inside** the loop (e.g. a Compose within the Apply_to_each), NOT the loop container itself \u2014 the container action returns no repetitions. `flow` defaults to the pinned current flow (set_current_flow). Returns { action, count, truncated, repetitions }; count is the returned count, not the total. Returns at most `top` repetitions (default 100) \u2014 a long-running Do_until can have thousands. Narrow with `status: "Failed"` to find the iteration that broke.', {
     env: external_exports.string().optional().describe("Environment ID"),
     flow: external_exports.string().optional().describe("Flow ID (defaults to pinned current flow)"),
     run: external_exports.string().describe("Run ID"),

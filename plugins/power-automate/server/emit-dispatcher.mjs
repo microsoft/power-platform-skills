@@ -173,9 +173,19 @@ async function main() {
     return;
   }
   const req = toPaIntegrationsEnvelope(record, { ikey, collectorUrl: collector, appEnvironment });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5e3);
   try {
-    await fetch(req.url, { method: "POST", headers: req.headers, body: req.body });
+    const response = await fetch(req.url, {
+      method: "POST",
+      headers: req.headers,
+      body: req.body,
+      signal: controller.signal
+    });
+    await response.body?.cancel();
   } catch {
+  } finally {
+    clearTimeout(timeout);
   }
 }
 void main();

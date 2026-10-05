@@ -69,5 +69,6 @@ session logs are pruned after 14 days.
 The FlowAgent CLI/MCP engine writes a separate local mirror to
 `~/.flowagent/telemetry.jsonl` by default. Set `FLOWAGENT_TELEMETRY_LOG` to
 change its path. The core log is not automatically pruned. See
-`skills/telemetry/SKILL.md` for telemetry controls and `../../docs/telemetry.md`
-for collection and routing details.
+[`skills/telemetry/SKILL.md`](skills/telemetry/SKILL.md) for telemetry controls and
+[`references/telemetry.md`](references/telemetry.md) for collection and routing
+details. Both guides ship inside the plugin.
