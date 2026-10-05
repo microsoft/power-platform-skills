@@ -102,6 +102,22 @@ test('lists every tenant-visible registration across Graph pages instead of owne
   assert.equal(requested[1], 'https://graph.microsoft.com/v1.0/applications?page=2');
 });
 
+test('rejects repeated Graph next links without requesting a visited page again', () => {
+  const repeatedLink = 'https://graph.microsoft.com/v1.0/applications?page=2';
+  const requested = [];
+
+  assert.throws(() => listAvailableApplications('', (url) => {
+    requested.push(url);
+    return {
+      value: [{ appId: `${requested.length}` }],
+      '@odata.nextLink': repeatedLink,
+    };
+  }), /repeated applications next link/);
+
+  assert.equal(requested.length, 2);
+  assert.equal(requested[1], repeatedLink);
+});
+
 test('filters a specific client ID at Graph instead of downloading the tenant list', () => {
   const clientId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
   let requested;

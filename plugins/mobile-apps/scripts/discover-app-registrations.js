@@ -127,7 +127,12 @@ function listAvailableApplications(clientId = '', request = graphGet) {
   if (clientId) query.$filter = `appId eq '${clientId}'`;
   let nextLink = graphUrl('/applications', query);
   const applications = [];
+  const visitedLinks = new Set();
   while (nextLink) {
+    if (visitedLinks.has(nextLink)) {
+      throw new Error('Microsoft Graph returned a repeated applications next link.');
+    }
+    visitedLinks.add(nextLink);
     const page = request(nextLink);
     if (!Array.isArray(page.value)) throw new Error('Microsoft Graph returned an invalid applications page.');
     applications.push(...page.value);
