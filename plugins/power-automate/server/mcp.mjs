@@ -10911,9 +10911,9 @@ var require_range = __commonJS({
       parseRange(range) {
         const memoOpts = (this.options.includePrerelease && FLAG_INCLUDE_PRERELEASE) | (this.options.loose && FLAG_LOOSE);
         const memoKey = memoOpts + ":" + range;
-        const cached3 = cache.get(memoKey);
-        if (cached3) {
-          return cached3;
+        const cached2 = cache.get(memoKey);
+        if (cached2) {
+          return cached2;
         }
         const loose = this.options.loose;
         const hr = loose ? re[t.HYPHENRANGELOOSE] : re[t.HYPHENRANGE];
@@ -18126,8 +18126,8 @@ var require_utils2 = __commonJS({
     var HOST_DELIMS = { "@": "%40", "/": "%2F", "?": "%3F", "#": "%23", ":": "%3A" };
     var HOST_DELIM_RE = /[@/?#:]/g;
     var HOST_DELIM_NO_COLON_RE = /[@/?#]/g;
-    function reescapeHostDelimiters(host, isIP) {
-      const re = isIP ? HOST_DELIM_NO_COLON_RE : HOST_DELIM_RE;
+    function reescapeHostDelimiters(host, isIP2) {
+      const re = isIP2 ? HOST_DELIM_NO_COLON_RE : HOST_DELIM_RE;
       re.lastIndex = 0;
       return host.replace(re, (ch) => HOST_DELIMS[ch]);
     }
@@ -18609,7 +18609,7 @@ var require_fast_uri2 = __commonJS({
         fragment: void 0
       };
       let malformedAuthorityOrPort = false;
-      let isIP = false;
+      let isIP2 = false;
       if (options.reference === "suffix") {
         if (options.scheme) {
           uri = options.scheme + ":" + uri;
@@ -18639,9 +18639,9 @@ var require_fast_uri2 = __commonJS({
           if (ipv4result === false) {
             const ipv6result = normalizeIPv6(parsed.host);
             parsed.host = ipv6result.host.toLowerCase();
-            isIP = ipv6result.isIPV6;
+            isIP2 = ipv6result.isIPV6;
           } else {
-            isIP = true;
+            isIP2 = true;
           }
         }
         if (parsed.scheme === void 0 && parsed.userinfo === void 0 && parsed.host === void 0 && parsed.port === void 0 && parsed.query === void 0 && !parsed.path) {
@@ -18658,7 +18658,7 @@ var require_fast_uri2 = __commonJS({
         }
         const schemeHandler = getSchemeHandler(options.scheme || parsed.scheme);
         if (!options.unicodeSupport && (!schemeHandler || !schemeHandler.unicodeSupport)) {
-          if (parsed.host && (options.domainHost || schemeHandler && schemeHandler.domainHost) && isIP === false && nonSimpleDomain(parsed.host)) {
+          if (parsed.host && (options.domainHost || schemeHandler && schemeHandler.domainHost) && isIP2 === false && nonSimpleDomain(parsed.host)) {
             try {
               parsed.host = URL.domainToASCII(parsed.host.toLowerCase());
             } catch (e) {
@@ -18672,7 +18672,7 @@ var require_fast_uri2 = __commonJS({
               parsed.scheme = unescape(parsed.scheme);
             }
             if (parsed.host !== void 0) {
-              parsed.host = reescapeHostDelimiters(unescape(parsed.host), isIP);
+              parsed.host = reescapeHostDelimiters(unescape(parsed.host), isIP2);
             }
           }
           if (parsed.path) {
@@ -21695,12 +21695,12 @@ var require_dist2 = __commonJS({
         throw new Error(`Unknown format "${name3}"`);
       return f;
     };
-    function addFormats2(ajv, list, fs6, exportName) {
+    function addFormats2(ajv, list, fs7, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list)
-        ajv.addFormat(f, fs6[f]);
+        ajv.addFormat(f, fs7[f]);
     }
     module.exports = exports = formatsPlugin;
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -44799,7 +44799,7 @@ var require_fast_uri = /* @__PURE__ */ __commonJSMin((exports, module) => {
       query: void 0,
       fragment: void 0
     };
-    let isIP = false;
+    let isIP2 = false;
     if (options.reference === "suffix") if (options.scheme) uri = options.scheme + ":" + uri;
     else uri = "//" + uri;
     const matches = uri.match(URI_PARSE);
@@ -44815,8 +44815,8 @@ var require_fast_uri = /* @__PURE__ */ __commonJSMin((exports, module) => {
       if (parsed.host) if (isIPv4(parsed.host) === false) {
         const ipv6result = normalizeIPv6(parsed.host);
         parsed.host = ipv6result.host.toLowerCase();
-        isIP = ipv6result.isIPV6;
-      } else isIP = true;
+        isIP2 = ipv6result.isIPV6;
+      } else isIP2 = true;
       if (parsed.scheme === void 0 && parsed.userinfo === void 0 && parsed.host === void 0 && parsed.port === void 0 && parsed.query === void 0 && !parsed.path) parsed.reference = "same-document";
       else if (parsed.scheme === void 0) parsed.reference = "relative";
       else if (parsed.fragment === void 0) parsed.reference = "absolute";
@@ -44824,7 +44824,7 @@ var require_fast_uri = /* @__PURE__ */ __commonJSMin((exports, module) => {
       if (options.reference && options.reference !== "suffix" && options.reference !== parsed.reference) parsed.error = parsed.error || "URI is not a " + options.reference + " reference.";
       const schemeHandler = getSchemeHandler(options.scheme || parsed.scheme);
       if (!options.unicodeSupport && (!schemeHandler || !schemeHandler.unicodeSupport)) {
-        if (parsed.host && (options.domainHost || schemeHandler && schemeHandler.domainHost) && isIP === false && nonSimpleDomain(parsed.host)) try {
+        if (parsed.host && (options.domainHost || schemeHandler && schemeHandler.domainHost) && isIP2 === false && nonSimpleDomain(parsed.host)) try {
           parsed.host = URL.domainToASCII(parsed.host.toLowerCase());
         } catch (e) {
           parsed.error = parsed.error || "Host's domain name can not be converted to ASCII: " + e;
@@ -48549,11 +48549,11 @@ var require_dist = /* @__PURE__ */ __commonJSMin((exports, module) => {
     if (!f) throw new Error(`Unknown format "${name3}"`);
     return f;
   };
-  function addFormats2(ajv, list, fs6, exportName) {
+  function addFormats2(ajv, list, fs7, exportName) {
     var _a3;
     var _b;
     (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 || (_b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`);
-    for (const f of list) ajv.addFormat(f, fs6[f]);
+    for (const f of list) ajv.addFormat(f, fs7[f]);
   }
   module.exports = exports = formatsPlugin;
   Object.defineProperty(exports, "__esModule", { value: true });
@@ -49477,6 +49477,23 @@ var StdioServerTransport = class {
   }
 };
 
+// packages/core/dist/version.js
+var FLOWAGENT_VERSION = "3.2.0";
+async function buildId() {
+  try {
+    const [{ createHash: createHash4 }, { readFile }, { fileURLToPath: fileURLToPath2 }] = await Promise.all([
+      import("node:crypto"),
+      import("node:fs/promises"),
+      import("node:url")
+    ]);
+    const self = fileURLToPath2(import.meta.url);
+    const bytes = await readFile(self);
+    return createHash4("sha256").update(bytes).digest("hex").slice(0, 12);
+  } catch {
+    return null;
+  }
+}
+
 // packages/core/dist/api/flow-client.js
 init_logger();
 
@@ -49587,6 +49604,48 @@ var PreviewTokenError = class extends Error {
   }
 };
 
+// packages/core/dist/utils/fetch-with-network-error.js
+function explain(code, hostname3) {
+  switch (code) {
+    case "UNABLE_TO_VERIFY_LEAF_SIGNATURE":
+    case "SELF_SIGNED_CERT_IN_CHAIN":
+    case "DEPTH_ZERO_SELF_SIGNED_CERT":
+    case "CERT_HAS_EXPIRED":
+    case "ERR_TLS_CERT_ALTNAME_INVALID":
+      return `TLS certificate validation failed for ${hostname3}. This usually means a corporate proxy or security appliance is inspecting HTTPS traffic. Point Node at your organisation's CA bundle with NODE_EXTRA_CA_CERTS=/path/to/ca.pem.`;
+    case "ENOTFOUND":
+    case "EAI_AGAIN":
+      return `DNS lookup failed for ${hostname3}. Check your network or VPN connection. If this is a Power Platform API host, verify the environment ID is a valid GUID \u2014 a malformed ID produces a hostname that does not exist.`;
+    case "ECONNREFUSED":
+      return `Connection refused by ${hostname3}. Check that any required proxy (HTTPS_PROXY) is reachable.`;
+    case "ETIMEDOUT":
+    case "UND_ERR_CONNECT_TIMEOUT":
+    case "UND_ERR_HEADERS_TIMEOUT":
+      return `Connection to ${hostname3} timed out. Check your network, VPN, or proxy configuration.`;
+    case "ECONNRESET":
+      return `Connection to ${hostname3} was reset. This is often a proxy or firewall closing the connection.`;
+    default:
+      return `Network request to ${hostname3} failed. Check your network, VPN, and proxy configuration.`;
+  }
+}
+function hostnameOf(url2) {
+  try {
+    return new URL(url2).hostname;
+  } catch {
+    return url2;
+  }
+}
+async function fetchWithNetworkError(url2, init) {
+  try {
+    return await fetch(url2, init);
+  } catch (err) {
+    const cause = err?.cause;
+    const hostname3 = cause?.hostname ?? hostnameOf(url2);
+    const code = cause?.code ?? (err instanceof TypeError ? "FETCH_FAILED" : "UNKNOWN");
+    throw new FlowApiError(0, "NetworkError", `Network request failed: ${code} (hostname: ${hostname3}). ${explain(code, hostname3)}`, url2);
+  }
+}
+
 // packages/core/dist/utils/odata.js
 function escapeODataString(s) {
   return s.replace(/'/g, "''");
@@ -49615,27 +49674,27 @@ function connQs(extra) {
   }
   return "?" + new URLSearchParams(params).toString();
 }
-function ppapiConnectionsUrl(envId, opts) {
-  const base = ppapiBaseUrl(envId);
+function ppapiConnectionsUrl(envId, opts, baseOverride) {
+  const base = baseOverride ?? ppapiBaseUrl(envId);
   if (opts?.connector) {
     return `${base}/connectivity/connectors/${opts.connector}/connections${connQs()}`;
   }
   return `${base}/connectivity/connections${connQs()}`;
 }
-function ppapiConnectionUrl(envId, connector, connName) {
-  const base = ppapiBaseUrl(envId);
+function ppapiConnectionUrl(envId, connector, connName, baseOverride) {
+  const base = baseOverride ?? ppapiBaseUrl(envId);
   return `${base}/connectivity/connectors/${connector}/connections/${connName}${connQs({ "$filter": `environment eq '${envId}'` })}`;
 }
-function ppapiConnectionConsentUrl(envId, connector, connName) {
-  const base = ppapiBaseUrl(envId);
+function ppapiConnectionConsentUrl(envId, connector, connName, baseOverride) {
+  const base = baseOverride ?? ppapiBaseUrl(envId);
   return `${base}/connectivity/connectors/${connector}/connections/${connName}/getConsentLink${connQs({ "$filter": `environment eq '${envId}'` })}`;
 }
-function ppapiConnectionPermissionsUrl(envId, connector, connName) {
-  const base = ppapiBaseUrl(envId);
+function ppapiConnectionPermissionsUrl(envId, connector, connName, baseOverride) {
+  const base = baseOverride ?? ppapiBaseUrl(envId);
   return `${base}/connectivity/connectors/${connector}/connections/${connName}/permissions${connQs({ "$filter": `environment eq '${envId}'` })}`;
 }
-function ppapiConnectionModifyPermissionsUrl(envId, connector, connName) {
-  const base = ppapiBaseUrl(envId);
+function ppapiConnectionModifyPermissionsUrl(envId, connector, connName, baseOverride) {
+  const base = baseOverride ?? ppapiBaseUrl(envId);
   return `${base}/connectivity/connectors/${connector}/connections/${connName}/modifyPermissions${connQs({ "$filter": `environment eq '${envId}'` })}`;
 }
 function dataverseConnectionReferencesUrl(instanceUrl, opts) {
@@ -49649,20 +49708,35 @@ function dataverseConnectionReferencesUrl(instanceUrl, opts) {
 }
 var PPAPI_API_VERSION = "1";
 var PPAPI_DEFAULT_SUFFIX = "environment.api.powerplatform.com";
-function ppapiBaseUrl(envId, templateOverride, suffixOverride) {
+var PPAPI_DEFAULT_SHARD_LENGTH = 2;
+function ppapiBaseUrl(envId, templateOverride, suffixOverride, shardLengthOverride) {
   const isDefault = /^Default-/i.test(envId);
   const hex3 = envId.replace(/^Default-/i, "").toLowerCase().replace(/-/g, "");
   if (!/^[0-9a-f]{32}$/.test(hex3)) {
     throw new InvalidEnvironmentIdError(envId, `Cannot derive a PPAPI URL from environment ID "${envId}": expected a GUID (optionally prefixed with "Default-"), but got ${hex3.length} hex character(s) after removing dashes, not 32. Pass a full environment ID such as "Default-a1b2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d" or "b7c8d9e0-1f2a-4b3c-9d4e-5f6a7b8c9d0e" \u2014 list_environments / resolve_environment return usable values. Environment display names and partial IDs are not accepted.`);
   }
-  const prefix = (isDefault ? "default" : "") + hex3.slice(0, 30);
-  const shard = hex3.slice(30, 32);
+  const shardLength = resolveShardLength(shardLengthOverride);
+  const splitAt = 32 - shardLength;
+  const prefix = (isDefault ? "default" : "") + hex3.slice(0, splitAt);
+  const shard = hex3.slice(splitAt);
   const template = templateOverride ?? process.env.PA_PPAPI_BASE_URL;
   if (template) {
     return template.replace(/\{prefix\}/g, prefix).replace(/\{shard\}/g, shard).replace(/\{envId\}/g, envId).replace(/\{hex\}/g, hex3);
   }
   const suffix = process.env.PA_PPAPI_SUFFIX ?? suffixOverride ?? PPAPI_DEFAULT_SUFFIX;
   return `https://${prefix}.${shard}.${suffix}`;
+}
+function resolveShardLength(shardLengthOverride) {
+  const isUsable = (n) => n !== void 0 && Number.isInteger(n) && n >= 1 && n <= 31;
+  const fromEnv = process.env.PA_PPAPI_SHARD_LENGTH;
+  if (fromEnv !== void 0 && fromEnv !== "") {
+    const parsed = Number(fromEnv);
+    if (isUsable(parsed))
+      return parsed;
+  }
+  if (isUsable(shardLengthOverride))
+    return shardLengthOverride;
+  return PPAPI_DEFAULT_SHARD_LENGTH;
 }
 function ppapiQs(extra) {
   const params = {
@@ -49704,8 +49778,8 @@ function ppapiFlowQs(extra) {
   }
   return "?" + new URLSearchParams(params).toString();
 }
-function ppapiConnectorUrl(envId, connectorName, opts) {
-  const base = ppapiBaseUrl(envId);
+function ppapiConnectorUrl(envId, connectorName, opts, baseOverride) {
+  const base = baseOverride ?? ppapiBaseUrl(envId);
   return `${base}/powerautomate/apis/${connectorName}${ppapiFlowQs({
     $expand: opts?.expand
   })}`;
@@ -49900,12 +49974,12 @@ init_backups();
 // packages/core/dist/api/pagination.js
 init_logger();
 var DEFAULT_MAX_PAGES = 5;
-async function followPagination(fetchPage, maxPages = DEFAULT_MAX_PAGES) {
+async function followPagination(fetchPage, maxPages = DEFAULT_MAX_PAGES, stopWhen) {
   const allItems = [];
   let response = await fetchPage();
   allItems.push(...response.value);
   let page = 1;
-  while (response.nextLink && page < maxPages) {
+  while (response.nextLink && page < maxPages && !stopWhen?.(allItems)) {
     logger.debug(`Following pagination page ${page + 1}`);
     response = await fetchPage(response.nextLink);
     allItems.push(...response.value);
@@ -50636,6 +50710,7 @@ function issueToken(args) {
     envId: args.envId,
     flowId: args.flowId,
     proposalHash: args.proposalHash,
+    lastModifiedTime: args.lastModifiedTime,
     issuedAt: now,
     expiresAt: now + ttl
   };
@@ -50676,7 +50751,7 @@ function redeemToken(token, expected) {
     };
   }
   store.delete(token);
-  return { ok: true };
+  return { ok: true, lastModifiedTime: rec.lastModifiedTime };
 }
 
 // packages/core/dist/api/flow-edit.js
@@ -50914,7 +50989,7 @@ var GATED_REQUEST_TRIGGER_KINDS = /* @__PURE__ */ new Set([
   "skills"
 ]);
 async function fetchContentLink(uri) {
-  const res = await fetch(uri, { method: "GET" });
+  const res = await fetchWithNetworkError(uri, { method: "GET" });
   const text = await res.text();
   if (!res.ok) {
     throw new FlowApiError(res.status, res.statusText, text, uri);
@@ -50952,6 +51027,13 @@ function isNoManagementRunEndpoint(err) {
   if (err.statusCode !== 404)
     return false;
   return /TriggerNotFound|WorkflowTriggerNotFound|NotSupported|OperationNotSupported/i.test(err.body ?? "");
+}
+function sameInstant(a, b) {
+  const ta = Date.parse(a);
+  const tb = Date.parse(b);
+  if (Number.isNaN(ta) || Number.isNaN(tb))
+    return a === b;
+  return ta === tb;
 }
 function assertTriggerInputsSatisfied(trigger, body) {
   const schema = trigger.inputsSchema;
@@ -51038,7 +51120,7 @@ var FlowClient = class _FlowClient {
   }
   /** Resolve the PPAPI base URL for an environment, respecting config overrides. */
   ppapiBase(envId) {
-    return ppapiBaseUrl(envId, this.config.ppapiBaseUrlTemplate, this.config.cloudEndpoints.ppapiSuffix);
+    return ppapiBaseUrl(envId, this.config.ppapiBaseUrlTemplate, this.config.cloudEndpoints.ppapiSuffix, this.config.cloudEndpoints.ppapiShardLength);
   }
   /**
    * Check whether a FlowApiError represents a DNS/network resolution failure
@@ -51173,16 +51255,17 @@ var FlowClient = class _FlowClient {
     }
     await this.assertNotManaged(envId, flowId, "update_flow", opts);
     await this.snapshotBeforeMutation(envId, flowId, "update_flow", opts);
+    const workingBody = structuredClone(body);
     let autoMerged = [];
-    if (opts.autoResolveConnectionRefs !== false && body.properties?.definition) {
-      autoMerged = await this.autoMergeConnectionRefs(envId, flowId, body);
+    if (opts.autoResolveConnectionRefs !== false && workingBody.properties?.definition) {
+      autoMerged = await this.autoMergeConnectionRefs(envId, flowId, workingBody);
     }
-    this.stripInjectedAuthentication(body);
-    if (body.properties?.definition) {
+    this.stripInjectedAuthentication(workingBody);
+    if (workingBody.properties?.definition) {
       try {
         const ctx = await this.getFlowContext(envId, flowId);
         if (ctx.inSolution && ctx.workflowId && !ctx.warning) {
-          const updated = await this.updateFlowViaDataverse(envId, flowId, ctx.workflowId, body);
+          const updated = await this.updateFlowViaDataverse(envId, flowId, ctx.workflowId, workingBody);
           if (updated) {
             if (autoMerged.length)
               updated._autoMergedConnectionRefs = autoMerged;
@@ -51193,9 +51276,9 @@ var FlowClient = class _FlowClient {
         logger.debug(`updateFlow: Dataverse path failed, falling through to PPAPI`);
       }
     }
-    this.rewriteConnectionNamesForPpapi(body);
+    this.rewriteConnectionNamesForPpapi(workingBody);
     const path7 = `/powerautomate/flows/${flowId}${this.ppapiFlowQs({})}`;
-    const result = await this.ppapiRequestWithFallback(envId, path7, "PATCH", body);
+    const result = await this.ppapiRequestWithFallback(envId, path7, "PATCH", workingBody);
     if (autoMerged.length)
       result._autoMergedConnectionRefs = autoMerged;
     return result;
@@ -51316,11 +51399,17 @@ var FlowClient = class _FlowClient {
     const def = body.properties?.definition;
     if (!def)
       return;
+    const isInjectedAuth = (value) => {
+      if (value === void 0 || value === null)
+        return false;
+      const serialized = typeof value === "string" ? value : JSON.stringify(value);
+      return /parameters\(\s*'\$authentication'\s*\)/.test(serialized ?? "");
+    };
     const stripAuth = (inputs) => {
       if (!inputs || typeof inputs !== "object" || Array.isArray(inputs))
         return;
       const inp = inputs;
-      if ("authentication" in inp)
+      if ("authentication" in inp && isInjectedAuth(inp.authentication))
         delete inp.authentication;
     };
     const walkActions = (actions) => {
@@ -51563,6 +51652,9 @@ var FlowClient = class _FlowClient {
       envId,
       flowId,
       proposalHash,
+      // Bind the flow version we diffed against, so apply can detect a
+      // concurrent write (#606). Free here — getFlow already ran above.
+      lastModifiedTime: current?.properties?.lastModifiedTime,
       ttlMs: opts.ttlMs
     });
     return {
@@ -51583,6 +51675,19 @@ var FlowClient = class _FlowClient {
         throw new PreviewTokenError("PreviewTokenMismatch", result.detail);
       }
       throw new PreviewTokenError(result.code);
+    }
+    const expected = result.lastModifiedTime;
+    if (expected) {
+      let actual;
+      try {
+        const currentFlow = await this.getFlow(envId, flowId);
+        actual = currentFlow?.properties?.lastModifiedTime;
+      } catch {
+        return;
+      }
+      if (actual && !sameInstant(expected, actual)) {
+        throw new PreviewTokenError("PreviewConcurrencyConflict", `the flow changed after preview (previewed lastModifiedTime ${expected}, now ${actual})`, "Somebody or something else wrote to this flow after you previewed it. Re-read the flow, call preview_update again to diff against the current definition, and re-apply only if the change is still what you intend.");
+      }
     }
   }
   async deleteFlow(envId, flowId, opts = {}) {
@@ -51684,9 +51789,7 @@ var FlowClient = class _FlowClient {
     try {
       await this.ppapiRequestWithFallback(envId, path7, "POST");
     } catch (err) {
-      if (err instanceof FlowApiError && err.statusCode === 409) {
-        alreadyStarted = true;
-      } else if (err instanceof FlowApiError && /CannotStartUnpublishedSolutionFlow/i.test(err.body)) {
+      if (err instanceof FlowApiError && /CannotStartUnpublishedSolutionFlow/i.test(err.body)) {
         logger.info(`[publish-flow] PPAPI blocked with CannotStartUnpublishedSolutionFlow, attempting Dataverse activation`);
         const ctx = await this.getFlowContext(envId, flowId);
         if (!ctx.workflowId)
@@ -51701,6 +51804,8 @@ var FlowClient = class _FlowClient {
           logger.warn(`[publish-flow] Dataverse activation failed: ${dvErr instanceof Error ? dvErr.message : dvErr}`);
           throw err;
         }
+      } else if (err instanceof FlowApiError && err.statusCode === 409) {
+        alreadyStarted = true;
       } else {
         throw err;
       }
@@ -51875,7 +51980,7 @@ var FlowClient = class _FlowClient {
       headers.Authorization = `Bearer ${await this.auth.getAccessToken(this.config.cloudEndpoints.flowResource)}`;
     }
     logger.debug(`POST ${callbackUrl}${opts.withAuth ? " (SAS + bearer)" : " (SAS only)"}`);
-    const response = await fetch(callbackUrl, {
+    const response = await fetchWithNetworkError(callbackUrl, {
       method: "POST",
       headers,
       body: JSON.stringify(triggerBody)
@@ -51913,7 +52018,7 @@ var FlowClient = class _FlowClient {
    */
   async runFlowViaLogicFlowsConnector(envId, flowId, triggerBody, triggerName) {
     const resolvedTrigger = triggerName ?? await this.resolveTriggerName(envId, flowId);
-    const connectorUrl = ppapiConnectorUrl(envId, LOGIC_FLOWS_CONNECTOR);
+    const connectorUrl = ppapiConnectorUrl(envId, LOGIC_FLOWS_CONNECTOR, void 0, this.ppapiBase(envId));
     const connector = await this.ppapiRequest("GET", connectorUrl);
     const runtimeUrl = connector.properties.primaryRuntimeUrl;
     if (!runtimeUrl) {
@@ -51922,7 +52027,7 @@ var FlowClient = class _FlowClient {
     const url2 = `${runtimeUrl.replace(/\/+$/, "")}/${encodeURIComponent(flowId)}/triggers/${encodeURIComponent(resolvedTrigger)}/run?api-version=2016-11-01`;
     const apihubToken = await this.auth.getAccessToken(APIHUB_RESOURCE);
     logger.debug(`POST ${url2} (Logic Flows connector)`);
-    const response = await fetch(url2, {
+    const response = await fetchWithNetworkError(url2, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apihubToken}`,
@@ -52026,13 +52131,73 @@ var FlowClient = class _FlowClient {
     await this.ppapiRequestWithFallback(envId, path7, "POST");
     return { resubmitted: true, triggerName };
   }
-  async getRunActionRepetitions(envId, flowId, runId, actionName) {
+  /**
+   * Fetch the recorded inputs or outputs of a single action in a run (#648).
+   *
+   * The run-actions response carries only `inputsLink`/`outputsLink` — SAS-signed
+   * URLs to the content, never the content itself — so there was previously no
+   * way to see what an action actually received or produced without leaving the
+   * tool. `maxBytes` guards against pulling a multi-megabyte payload into an
+   * agent's context; the link's `contentSize` is checked first so an oversized
+   * body is reported rather than downloaded.
+   */
+  async getRunActionContent(envId, flowId, runId, actionName, which, opts = {}) {
+    const maxBytes = Math.max(Math.trunc(opts.maxBytes ?? 256e3), 1);
+    const actions = await this.getRunActionDetails(envId, flowId, runId);
+    const action = actions.find((a) => a.name === actionName);
+    if (!action) {
+      throw new Error(`Action '${actionName}' not found in run ${runId}. Use get_run_actions to list the action names in this run.`);
+    }
+    const props = action.properties ?? {};
+    const link = which === "inputs" ? props.inputsLink : props.outputsLink;
+    if (!link?.uri) {
+      return {
+        action: actionName,
+        which,
+        skipped: `This action recorded no ${which}. Actions with no ${which}, or whose content has expired with the run history, carry no link.`
+      };
+    }
+    const contentSize = typeof link.contentSize === "number" ? link.contentSize : void 0;
+    if (contentSize !== void 0 && contentSize > maxBytes) {
+      return {
+        action: actionName,
+        which,
+        contentSize,
+        skipped: `Content is ${contentSize} bytes, over the ${maxBytes}-byte cap. Raise maxBytes to retrieve it.`
+      };
+    }
+    const content = await fetchContentLink(link.uri);
+    return { action: actionName, which, contentSize, content };
+  }
+  /**
+   * List the per-iteration records for an action inside a loop.
+   *
+   * A `Do_until` or a large `Apply_to_each` can produce thousands of
+   * repetitions, each carrying inputs/outputs links — enough to exhaust an MCP
+   * client's context in a single call (#517). The result is therefore bounded
+   * by `top` (default 100) and `statusFilter`, applied after retrieval because
+   * the API offers no server-side filter, with pagination stopped early once
+   * enough rows are in hand.
+   */
+  async getRunActionRepetitions(envId, flowId, runId, actionName, opts = {}) {
+    const top = Math.min(Math.max(Math.trunc(opts.top ?? 100), 1), 1e3);
+    const statusFilter = opts.statusFilter ?? "any";
+    const includeLinks = opts.includeLinks ?? true;
     const path7 = `/powerautomate/flows/${flowId}/runs/${runId}/actions/${actionName}/repetitions${this.ppapiFlowQs({})}`;
-    return followPagination(async (nextUrl) => {
+    const matches = (r) => statusFilter === "any" || r?.properties?.status === statusFilter;
+    const all = await followPagination(async (nextUrl) => {
       if (nextUrl)
         return this.ppapiRequest("GET", nextUrl);
       return this.ppapiRequestWithFallback(envId, path7, "GET");
+    }, void 0, (items) => items.filter(matches).length >= top);
+    const filtered = all.filter(matches);
+    const page = filtered.slice(0, top).map((r) => {
+      if (includeLinks)
+        return r;
+      const { inputsLink, outputsLink, ...rest } = r?.properties ?? {};
+      return { ...r, properties: rest };
     });
+    return { repetitions: page, returned: page.length, truncated: filtered.length > top };
   }
   /** Diagnose a failed run: classify each failed/timed-out action with an actionable remediation. */
   async diagnoseRun(envId, flowId, runId) {
@@ -52074,7 +52239,7 @@ var FlowClient = class _FlowClient {
         const instanceUrl = await this.getDataverseInstanceUrl(envId);
         const url2 = `${instanceUrl}/api/data/v9.2/workflows(${ctx.workflowId})/Microsoft.Dynamics.CRM.CancelAllCloudFlowRuns`;
         const token = await this.auth.getAccessToken(instanceUrl);
-        const resp = await fetch(url2, {
+        const resp = await fetchWithNetworkError(url2, {
           method: "POST",
           headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
           body: JSON.stringify({})
@@ -52407,7 +52572,7 @@ var FlowClient = class _FlowClient {
     const url2 = governanceUserRoutingUrl(this.config.cloudEndpoints.powerPlatformApiUrl);
     const token = await this.auth.getAccessToken();
     logger.debug(`GET ${url2}`);
-    const response = await fetch(url2, {
+    const response = await fetchWithNetworkError(url2, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -52425,7 +52590,7 @@ var FlowClient = class _FlowClient {
     const url2 = governanceRoutingStatusUrl(operationId, this.config.cloudEndpoints.powerPlatformApiUrl);
     const token = await this.auth.getAccessToken();
     logger.debug(`GET ${url2}`);
-    const response = await fetch(url2, {
+    const response = await fetchWithNetworkError(url2, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -52445,7 +52610,7 @@ var FlowClient = class _FlowClient {
     const url2 = bapDefaultEnvironmentUrl(this.config.cloudEndpoints.bapBaseUrl);
     const token = await this.auth.getAccessToken();
     logger.debug(`GET ${url2}`);
-    const response = await fetch(url2, {
+    const response = await fetchWithNetworkError(url2, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -52586,7 +52751,7 @@ var FlowClient = class _FlowClient {
     };
   }
   async invokeOperation(envId, connectorName, connectionId, operationId, params, continuation2) {
-    const connectorUrl = ppapiConnectorUrl(envId, connectorName, { expand: "swagger" });
+    const connectorUrl = ppapiConnectorUrl(envId, connectorName, { expand: "swagger" }, this.ppapiBase(envId));
     const connector = await this.ppapiRequest("GET", connectorUrl);
     const runtimeUrl = connector.properties.primaryRuntimeUrl;
     if (!runtimeUrl) {
@@ -53142,7 +53307,7 @@ var FlowClient = class _FlowClient {
   }
   // --- PPAPI Connections ---
   async getConnections(envId, opts) {
-    const url2 = ppapiConnectionsUrl(envId, opts);
+    const url2 = ppapiConnectionsUrl(envId, opts, this.ppapiBase(envId));
     const data = await this.connectivityRequest("GET", url2);
     return data.value;
   }
@@ -53485,14 +53650,14 @@ var FlowClient = class _FlowClient {
     };
   }
   async getConnection(envId, connector, connName) {
-    const url2 = ppapiConnectionUrl(envId, connector, connName);
+    const url2 = ppapiConnectionUrl(envId, connector, connName, this.ppapiBase(envId));
     return this.connectivityRequest("GET", url2);
   }
   async createConnection(envId, connector, opts) {
     const safeName = connector.replace(/_/g, "-").slice(0, 20);
     const connName = `${safeName}-${randomUUID2().slice(0, 8)}`;
     logger.info(`Creating connection '${connName}' for connector '${connector}'\u2026`);
-    const createUrl = ppapiConnectionUrl(envId, connector, connName);
+    const createUrl = ppapiConnectionUrl(envId, connector, connName, this.ppapiBase(envId));
     const createBody = {
       properties: {
         connectionParameters: opts?.params ?? {},
@@ -53532,17 +53697,17 @@ var FlowClient = class _FlowClient {
     return this.authenticateConnection(envId, connector, connName, connection, opts);
   }
   async deleteConnection(envId, connector, connName) {
-    const url2 = ppapiConnectionUrl(envId, connector, connName);
+    const url2 = ppapiConnectionUrl(envId, connector, connName, this.ppapiBase(envId));
     await this.connectivityRequest("DELETE", url2);
     this.invalidateConnectionCache(envId, connector);
   }
   async getConnectionPermissions(envId, connector, connName) {
-    const url2 = ppapiConnectionPermissionsUrl(envId, connector, connName);
+    const url2 = ppapiConnectionPermissionsUrl(envId, connector, connName, this.ppapiBase(envId));
     const data = await this.connectivityRequest("GET", url2);
     return data.value;
   }
   async shareConnection(envId, connector, connName, principalId, roleName, principalType) {
-    const url2 = ppapiConnectionModifyPermissionsUrl(envId, connector, connName);
+    const url2 = ppapiConnectionModifyPermissionsUrl(envId, connector, connName, this.ppapiBase(envId));
     const body = {
       put: [
         {
@@ -53559,12 +53724,12 @@ var FlowClient = class _FlowClient {
     await this.connectivityRequest("POST", url2, body);
   }
   async unshareConnection(envId, connector, connName, permissionId) {
-    const url2 = ppapiConnectionModifyPermissionsUrl(envId, connector, connName);
+    const url2 = ppapiConnectionModifyPermissionsUrl(envId, connector, connName, this.ppapiBase(envId));
     await this.connectivityRequest("POST", url2, { delete: [{ id: permissionId }] });
   }
   async updateConnection(envId, connector, connName, opts) {
     const current = await this.getConnection(envId, connector, connName);
-    const url2 = ppapiConnectionUrl(envId, connector, connName);
+    const url2 = ppapiConnectionUrl(envId, connector, connName, this.ppapiBase(envId));
     const body = {
       properties: {
         ...current.properties,
@@ -53577,7 +53742,7 @@ var FlowClient = class _FlowClient {
   }
   async authenticateConnection(envId, connector, connName, fallbackConnection, opts) {
     try {
-      const consentUrl = ppapiConnectionConsentUrl(envId, connector, connName);
+      const consentUrl = ppapiConnectionConsentUrl(envId, connector, connName, this.ppapiBase(envId));
       const consent = await this.connectivityRequest("POST", consentUrl, { redirectUrl: "https://make.powerautomate.com" });
       if (consent.firstPartyLoginUri) {
         logger.info("Authenticating connection (first-party silent auth)...");
@@ -53656,10 +53821,10 @@ var FlowClient = class _FlowClient {
   async listConnections(envId, opts) {
     const connector = opts?.connectorFilter ?? opts?.connector;
     if (opts?.useCache !== false) {
-      const cached3 = this.getCachedConnections(envId, connector);
-      if (cached3) {
+      const cached2 = this.getCachedConnections(envId, connector);
+      if (cached2) {
         logger.debug(`listConnections cache hit: ${envId}:${connector ?? "*"}`);
-        return cached3;
+        return cached2;
       }
     }
     const instanceUrl = await this.getDataverseInstanceUrl(envId);
@@ -53943,7 +54108,7 @@ var FlowClient = class _FlowClient {
   // --- Dataverse HTTP ---
   async dataverseGet(url2, token) {
     logger.debug(`GET ${url2}`);
-    const response = await fetch(url2, {
+    const response = await fetchWithNetworkError(url2, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -53960,7 +54125,7 @@ var FlowClient = class _FlowClient {
   }
   async dataversePost(url2, body, token) {
     logger.debug(`POST ${url2}`);
-    const response = await fetch(url2, {
+    const response = await fetchWithNetworkError(url2, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -53982,7 +54147,7 @@ var FlowClient = class _FlowClient {
   }
   async dataversePatch(url2, body, token) {
     logger.debug(`PATCH ${url2}`);
-    const response = await fetch(url2, {
+    const response = await fetchWithNetworkError(url2, {
       method: "PATCH",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -54024,25 +54189,11 @@ var FlowClient = class _FlowClient {
       headers["Content-Type"] = "application/json";
     }
     logger.debug(`${method} ${url2}`);
-    let response;
-    try {
-      response = await fetch(url2, {
-        method,
-        headers,
-        body: body !== void 0 ? JSON.stringify(body) : void 0
-      });
-    } catch (fetchErr) {
-      const cause = fetchErr?.cause;
-      const hostname3 = cause?.hostname ?? (() => {
-        try {
-          return new URL(url2).hostname;
-        } catch {
-          return url2;
-        }
-      })();
-      const code = cause?.code ?? (fetchErr instanceof TypeError ? "FETCH_FAILED" : "UNKNOWN");
-      throw new FlowApiError(0, "NetworkError", `Network request failed: ${code} (hostname: ${hostname3}). This often means the environment ID produced an invalid PPAPI URL. Verify the environment ID is a valid GUID.`, url2);
-    }
+    const response = await fetchWithNetworkError(url2, {
+      method,
+      headers,
+      body: body !== void 0 ? JSON.stringify(body) : void 0
+    });
     if (!response.ok) {
       const responseBody = await response.text();
       throw new FlowApiError(response.status, response.statusText, responseBody, url2);
@@ -54069,7 +54220,7 @@ var FlowClient = class _FlowClient {
           headers["Content-Type"] = "application/json";
         }
         logger.debug(`${method} ${url2}`);
-        const response = await fetch(url2, {
+        const response = await fetchWithNetworkError(url2, {
           method,
           headers,
           body: body !== void 0 ? JSON.stringify(body) : void 0
@@ -54221,6 +54372,26 @@ function searchExpressionHelp(opts = {}) {
 // packages/core/dist/auth/az-cli-auth.js
 import { spawnSync } from "node:child_process";
 
+// packages/core/dist/utils/az-output.js
+function decodeAzOutput(raw) {
+  if (raw == null)
+    return "";
+  const text = Buffer.isBuffer(raw) ? raw.toString("utf-8") : String(raw);
+  return text.charCodeAt(0) === 65279 ? text.slice(1) : text;
+}
+function parseAzJson(raw) {
+  const text = decodeAzOutput(raw).trim();
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    const start = text.search(/[[{]/);
+    if (start > 0) {
+      return JSON.parse(text.slice(start));
+    }
+    throw err;
+  }
+}
+
 // packages/core/dist/auth/disk-token-cache.js
 init_clear_cache_files();
 import * as fs2 from "node:fs";
@@ -54277,7 +54448,8 @@ function parseJwtClaims(token) {
     const claims = JSON.parse(payload);
     return {
       tenantId: typeof claims.tid === "string" ? claims.tid : void 0,
-      accountId: typeof claims.oid === "string" && claims.oid || typeof claims.upn === "string" && claims.upn || typeof claims.sub === "string" && claims.sub || void 0
+      accountId: typeof claims.oid === "string" && claims.oid || typeof claims.upn === "string" && claims.upn || typeof claims.sub === "string" && claims.sub || void 0,
+      username: typeof claims.preferred_username === "string" && claims.preferred_username || typeof claims.upn === "string" && claims.upn || typeof claims.email === "string" && claims.email || typeof claims.unique_name === "string" && claims.unique_name || void 0
     };
   } catch {
     return {};
@@ -54473,7 +54645,12 @@ var AzCliTokenProvider = class {
       }
     }
     const isWindows = process.platform === "win32";
-    const result = spawnSync("az", ["account", "get-access-token", "--resource", res, "--output", "json"], { encoding: "utf-8", shell: isWindows, windowsHide: true });
+    const spawned = spawnSync("az", ["account", "get-access-token", "--resource", res, "--output", "json"], { shell: isWindows, windowsHide: true });
+    const result = {
+      ...spawned,
+      stdout: decodeAzOutput(spawned.stdout),
+      stderr: decodeAzOutput(spawned.stderr)
+    };
     if (result.error && result.error.code === "ENOENT") {
       throw new AzCliAuthError("not-installed", "Azure CLI is not installed. Install it from https://aka.ms/installazurecli then run: az login");
     }
@@ -54496,7 +54673,7 @@ ${stdout}`.trim();
     }
     let parsed;
     try {
-      parsed = JSON.parse(result.stdout);
+      parsed = parseAzJson(result.stdout);
     } catch (err) {
       throw new AzCliAuthError("token-failed", "Azure CLI returned non-JSON output for get-access-token. Try: az login\nDetail: " + (err instanceof Error ? err.message : String(err)));
     }
@@ -54545,9 +54722,10 @@ function getAzTenantId() {
   if (cachedTenantId !== null)
     return cachedTenantId ?? void 0;
   const isWindows = process.platform === "win32";
-  const result = spawnSync("az", ["account", "show", "--query", "tenantId", "-o", "tsv"], { encoding: "utf-8", shell: isWindows, windowsHide: true });
-  if (result.status === 0 && result.stdout) {
-    cachedTenantId = result.stdout.trim() || void 0;
+  const result = spawnSync("az", ["account", "show", "--query", "tenantId", "-o", "tsv"], { shell: isWindows, windowsHide: true });
+  const stdout = decodeAzOutput(result.stdout);
+  if (result.status === 0 && stdout) {
+    cachedTenantId = stdout.trim() || void 0;
   } else {
     cachedTenantId = void 0;
   }
@@ -54690,7 +54868,8 @@ var CLOUD_ENDPOINTS = {
     flowResource: "https://service.flow.microsoft.com",
     bapBaseUrl: "https://api.bap.microsoft.com",
     powerPlatformApiUrl: "https://api.powerplatform.com",
-    ppapiSuffix: "environment.api.powerplatform.com"
+    ppapiSuffix: "environment.api.powerplatform.com",
+    ppapiShardLength: 2
   },
   gcc: {
     authorityHost: "https://login.microsoftonline.com",
@@ -54698,7 +54877,8 @@ var CLOUD_ENDPOINTS = {
     flowResource: "https://gov.service.flow.microsoft.us",
     bapBaseUrl: "https://gov.api.bap.microsoft.us",
     powerPlatformApiUrl: "https://api.gov.powerplatform.microsoft.us",
-    ppapiSuffix: "environment.api.gov.powerplatform.microsoft.us"
+    ppapiSuffix: "environment.api.gov.powerplatform.microsoft.us",
+    ppapiShardLength: 1
   },
   gcchigh: {
     authorityHost: "https://login.microsoftonline.us",
@@ -54709,7 +54889,8 @@ var CLOUD_ENDPOINTS = {
     // order here is the opposite of the flow/bap hosts above, and matches
     // ppapiSuffix below, which already had it right.
     powerPlatformApiUrl: "https://api.high.powerplatform.microsoft.us",
-    ppapiSuffix: "environment.api.high.powerplatform.microsoft.us"
+    ppapiSuffix: "environment.api.high.powerplatform.microsoft.us",
+    ppapiShardLength: 1
   },
   // DoD does not use the powerplatform.microsoft.us domain at all - it is
   // served from appsplatform.us. The previously shipped `dod.*.microsoft.us`
@@ -54726,15 +54907,17 @@ var CLOUD_ENDPOINTS = {
     flowResource: "",
     bapBaseUrl: "https://api.bap.appsplatform.us",
     powerPlatformApiUrl: "https://api.appsplatform.us",
-    ppapiSuffix: "environment.api.appsplatform.us"
+    ppapiSuffix: "environment.api.appsplatform.us",
+    ppapiShardLength: 1
   }
 };
 function detectAzureCloud() {
   try {
     const isWindows = process.platform === "win32";
-    const result = spawnSync2("az", ["cloud", "show", "--query", "name", "-o", "tsv"], { encoding: "utf-8", shell: isWindows, windowsHide: true, timeout: 1e4 });
-    if (result.status === 0 && result.stdout) {
-      const cloudName = result.stdout.trim();
+    const result = spawnSync2("az", ["cloud", "show", "--query", "name", "-o", "tsv"], { shell: isWindows, windowsHide: true, timeout: 1e4 });
+    const stdout = decodeAzOutput(result.stdout);
+    if (result.status === 0 && stdout) {
+      const cloudName = stdout.trim();
       switch (cloudName) {
         case "AzureUSGovernment":
           return "gcchigh";
@@ -54757,13 +54940,15 @@ function parseCloudEnvVar(value) {
     case "azurecloud":
       return "commercial";
     case "gcc":
+    case "usgov":
+    case "usgovmoderate":
       return "gcc";
     case "gcchigh":
     case "azureusgovernment":
     case "usgovhigh":
       return "gcchigh";
     case "dod":
-    case "usgov":
+    case "usgovdod":
       return "dod";
     default:
       return void 0;
@@ -54829,47 +55014,116 @@ function loadConfig() {
 
 // packages/core/dist/telemetry/index.js
 import { spawn } from "node:child_process";
+import { existsSync as existsSync4 } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 // packages/core/dist/telemetry/config.js
-import os3 from "node:os";
+import os4 from "node:os";
+import { isIP } from "node:net";
 import path4 from "node:path";
-var TELEMETRY_PLUGIN_NAME = "flow-agent";
-var TELEMETRY_PLUGIN_VERSION = "2.0.0";
-var TELEMETRY_SCHEMA_VERSION = "1.0";
-var DEFAULT_COLLECTOR_URL = "https://mobile.events.data.microsoft.com/OneCollector/1.0/";
-function isOptedOut() {
-  const off = (v) => v === "0" || v === "false" || v === "off";
-  return off(process.env.FLOWAGENT_TELEMETRY) || off(process.env.POWER_PLATFORM_SKILLS_TELEMETRY);
-}
-function resolveLocalLogPath() {
-  const override = process.env.FLOWAGENT_TELEMETRY_LOG;
-  if (override)
-    return override;
-  return path4.join(os3.homedir(), ".flowagent", "telemetry.jsonl");
-}
-var cached2;
-function getTelemetryConfig() {
-  if (cached2)
-    return cached2;
-  const localLogPath = resolveLocalLogPath();
-  const instrumentationKey = process.env.FLOWAGENT_TELEMETRY_IKEY ?? "";
-  const collectorUrl = process.env.FLOWAGENT_TELEMETRY_COLLECTOR ?? DEFAULT_COLLECTOR_URL;
-  let mode;
-  if (isOptedOut()) {
-    mode = "off";
-  } else if (instrumentationKey) {
-    mode = "collector";
-  } else {
-    mode = "local";
+import fs4 from "node:fs";
+import { spawnSync as spawnSync3 } from "node:child_process";
+
+// packages/core/dist/telemetry/geo-routing.js
+var COLLECTOR_QUERY = "?cors=true&content-type=application/x-json-stream";
+var GLOBAL_COLLECTOR = "https://mobile.events.data.microsoft.com/OneCollector/1.0/";
+var EUROPE_COLLECTOR = "https://eu-mobile.events.data.microsoft.com/OneCollector/1.0/";
+var US_COLLECTOR = "https://us-mobile.events.data.microsoft.com/OneCollector/1.0/";
+var ROUTES = {
+  asia: {
+    instrumentationKey: "e37a42e246af412ca5eb93c607097c53-3b84e4a6-27b9-4b17-bef6-85cda475a399-6887",
+    collectorUrl: GLOBAL_COLLECTOR
+  },
+  australia: {
+    instrumentationKey: "b1d3ed9c7a67493280ce8721e9bcbff1-9af96f5f-39c3-433c-9436-896511ddb442-6867",
+    collectorUrl: GLOBAL_COLLECTOR
+  },
+  brazil: {
+    instrumentationKey: "643794e0d45645b585d80c6ee6951317-f0c0dca4-c013-4db6-a42f-799603d30de4-7103",
+    collectorUrl: GLOBAL_COLLECTOR
+  },
+  canada: {
+    instrumentationKey: "f48d500c96514c9da86e86996ed3d317-c3e7047d-0170-4180-baee-31afe75712e5-6589",
+    collectorUrl: GLOBAL_COLLECTOR
+  },
+  europe: {
+    instrumentationKey: "2bab69432aa84ef098c68cbc8756e40f-d2c36df3-d2d7-432a-af54-0136a07a0217-7486",
+    collectorUrl: EUROPE_COLLECTOR
+  },
+  france: {
+    instrumentationKey: "2b9e8bc097784073806c17da9990a170-e146f635-6fd1-453e-bc49-b21589592be2-6788",
+    collectorUrl: EUROPE_COLLECTOR
+  },
+  germany: {
+    instrumentationKey: "0657d51bbb8847a6847e04ffc94a3323-b13a8408-7a26-448d-9cb1-7253b0df93cd-7332",
+    collectorUrl: EUROPE_COLLECTOR
+  },
+  india: {
+    instrumentationKey: "de750e33a5e74ffeaa58e575d89be6e6-84ddfe9f-1440-4a49-9f21-41f869fea3c3-7039",
+    collectorUrl: GLOBAL_COLLECTOR
+  },
+  italy: {
+    instrumentationKey: "5052dd8e385443d2a5cda4baf71f9df7-9ac5b03c-671e-4ddf-96a7-435bc7d20cd8-7130",
+    collectorUrl: EUROPE_COLLECTOR
+  },
+  japan: {
+    instrumentationKey: "09a5e0193d6d4274ba647b886df91945-2e7a3df0-28d3-4522-a616-b12bd9b767f6-7472",
+    collectorUrl: GLOBAL_COLLECTOR
+  },
+  korea: {
+    instrumentationKey: "b91951173a5c4a1ea3df7af3063fdbd8-741e4815-e406-4428-bfe6-32dbccfc82c6-7228",
+    collectorUrl: GLOBAL_COLLECTOR
+  },
+  norway: {
+    instrumentationKey: "ccf646992e424c9f9de77d8babfac70d-ab60dc0e-09b3-47a4-be19-6b324eb32f5c-7511",
+    collectorUrl: EUROPE_COLLECTOR
+  },
+  poland: {
+    instrumentationKey: "14e8c485ec2a44889ff666bd49f284fc-24d48997-b785-4030-81cc-f4bb52548e02-7989",
+    collectorUrl: EUROPE_COLLECTOR
+  },
+  singapore: {
+    instrumentationKey: "0326c6530e2e499db1a231b5dccdb2d7-1a4ae717-55f1-449f-ab72-cc15038d7c44-6795",
+    collectorUrl: GLOBAL_COLLECTOR
+  },
+  southafrica: {
+    instrumentationKey: "466e31d7e6544dc1b18a5f1c44090efb-f9d5d317-4d14-49ba-a6ee-db15fa52999e-7014",
+    collectorUrl: GLOBAL_COLLECTOR
+  },
+  switzerland: {
+    instrumentationKey: "0d7c1e826a7240b586c74d7c7a9bb286-84af3eb3-c900-4bd0-b15a-b9cdbfcf720a-7520",
+    collectorUrl: EUROPE_COLLECTOR
+  },
+  unitedarabemirates: {
+    instrumentationKey: "b0512932e0a44c6381e3a132d16d21c0-28605d64-e67f-44f0-aef5-a7b0f6db80e6-7517",
+    collectorUrl: GLOBAL_COLLECTOR
+  },
+  unitedkingdom: {
+    instrumentationKey: "982c3fa31fae40cf92fe43548bf19e11-d52e161b-3d0e-4b37-a3ef-81f8352906f1-6890",
+    collectorUrl: EUROPE_COLLECTOR
+  },
+  unitedstates: {
+    instrumentationKey: "2e7728f9f7ea42269fee5fbc9ea8a4f7-c026ab0c-92d3-4115-be4f-9d778dbe883f-7400",
+    collectorUrl: US_COLLECTOR
   }
-  cached2 = { mode, instrumentationKey, collectorUrl, localLogPath };
-  return cached2;
+};
+var ALIASES = {
+  southamerica: "brazil",
+  sweden: "europe",
+  unitedstatesfirstrelease: "unitedstates"
+};
+function resolveTelemetryRoute(location) {
+  if (typeof location !== "string" || !location.trim())
+    return void 0;
+  const normalized = location.trim().toLowerCase();
+  const canonical = ALIASES[normalized] ?? normalized;
+  const route = ROUTES[canonical];
+  return route ? { instrumentationKey: route.instrumentationKey, collectorUrl: `${route.collectorUrl}${COLLECTOR_QUERY}` } : void 0;
 }
 
 // packages/core/dist/telemetry/session.js
 import { randomUUID as randomUUID4 } from "node:crypto";
-import os4 from "node:os";
+import os3 from "node:os";
 var SESSION_ID = randomUUID4();
 function getSessionId() {
   return SESSION_ID;
@@ -54878,8 +55132,8 @@ var hostInfo;
 function getHostInfo() {
   if (!hostInfo) {
     hostInfo = {
-      osName: os4.platform(),
-      osVersion: os4.release(),
+      osName: os3.platform(),
+      osVersion: os3.release(),
       nodeVersion: process.version
     };
   }
@@ -54962,7 +55216,9 @@ var FIELD_TYPES = {
   actionCount: "number",
   // Flow creation
   templateId: "string",
-  envId: "string"
+  envId: "string",
+  envLocation: "string",
+  envRegion: "string"
 };
 function pick2(input) {
   const out = {};
@@ -55001,13 +55257,147 @@ function buildEvent(eventName, fields) {
   return pick2({ ...commonFields(), eventName, name: eventName, ...fields });
 }
 
+// packages/core/dist/telemetry/config.js
+var TELEMETRY_PLUGIN_NAME = "flow-agent";
+var TELEMETRY_PLUGIN_VERSION = FLOWAGENT_VERSION;
+var TELEMETRY_SCHEMA_VERSION = "1.0";
+var APPROVED_CLOUDS = /* @__PURE__ */ new Set(["commercial"]);
+var OPT_OUT_PLUGIN_NAME = "power-automate";
+function resolveTelemetryCloud() {
+  const explicit = process.env.PA_CLOUD?.trim().toLowerCase();
+  if (explicit) {
+    return parseCloudName(explicit);
+  }
+  const fromFile = readFileConfigCloud();
+  if (fromFile)
+    return parseCloudName(fromFile);
+  try {
+    const result = spawnSync3("az", ["cloud", "show", "--query", "name", "-o", "tsv"], {
+      shell: process.platform === "win32",
+      windowsHide: true,
+      timeout: 1e4
+    });
+    const stdout = decodeAzOutput(result.stdout);
+    if (result.status !== 0 || !stdout)
+      return "unknown";
+    const name3 = stdout.trim();
+    if (name3 === "AzureCloud")
+      return "commercial";
+    if (name3 === "AzureUSGovernment")
+      return "gcchigh";
+    return "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+function parseCloudName(value) {
+  const v = value.trim().toLowerCase();
+  if (["commercial", "public", "azurecloud"].includes(v))
+    return "commercial";
+  if (["gcc", "usgov", "gcchigh", "gcch", "dod"].includes(v))
+    return v;
+  return "unknown";
+}
+function readFileConfigCloud() {
+  try {
+    const p = path4.join(os4.homedir(), ".power-automate-cli", "config.json");
+    const parsed = JSON.parse(fs4.readFileSync(p, "utf-8"));
+    return typeof parsed.cloud === "string" && parsed.cloud.trim() ? parsed.cloud : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function isOptedOut() {
+  const off = (v) => v === "0" || v === "false" || v === "off";
+  return off(process.env.FLOWAGENT_TELEMETRY) || off(process.env.POWER_PLATFORM_SKILLS_TELEMETRY);
+}
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function isTransmissionOptedOut() {
+  const envValue = process.env.POWER_PLATFORM_SKILLS_TELEMETRY_POWER_AUTOMATE_OPTOUT?.trim().toLowerCase();
+  if (envValue === "1" || envValue === "true")
+    return true;
+  const configDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || path4.join(os4.homedir(), ".power-platform-skills");
+  try {
+    const parsed = JSON.parse(fs4.readFileSync(path4.join(configDir, "config.json"), "utf8"));
+    if (!isRecord(parsed) || !isRecord(parsed.telemetry))
+      return false;
+    return parsed.telemetry[OPT_OUT_PLUGIN_NAME] === "off";
+  } catch {
+    return false;
+  }
+}
+function resolveLocalLogPath() {
+  const override = process.env.FLOWAGENT_TELEMETRY_LOG;
+  if (override)
+    return override;
+  return path4.join(os4.homedir(), ".flowagent", "telemetry.jsonl");
+}
+function resolveTestCollectorUrl(defaultUrl) {
+  const override = process.env.FLOWAGENT_TELEMETRY_TEST_COLLECTOR;
+  if (!override)
+    return defaultUrl;
+  if (process.env.NODE_ENV !== "test")
+    return void 0;
+  try {
+    const url2 = new URL(override);
+    const hostname3 = url2.hostname.replace(/^\[|\]$/g, "");
+    const loopback = hostname3 === "localhost" || isIP(hostname3) === 4 && hostname3.startsWith("127.") || isIP(hostname3) === 6 && hostname3 === "::1";
+    if (url2.protocol !== "http:" || !loopback || url2.username || url2.password || url2.hash || !url2.pathname.startsWith("/OneCollector/1.0/")) {
+      return void 0;
+    }
+    return url2.toString();
+  } catch {
+    return void 0;
+  }
+}
+var cachedCloud;
+function getTelemetryConfig(context = {}) {
+  const localLogPath = resolveLocalLogPath();
+  const base = {
+    mode: "local",
+    instrumentationKey: "",
+    collectorUrl: "",
+    localLogPath,
+    cloud: "not-evaluated",
+    environmentLocation: context.envLocation ?? void 0,
+    environmentRegion: context.envRegion ?? void 0,
+    environmentId: context.envId ?? void 0,
+    appEnvironment: "prod"
+  };
+  if (isOptedOut())
+    return { ...base, mode: "off" };
+  if (isTransmissionOptedOut())
+    return base;
+  const hasEnvironment = typeof context.envId === "string" && context.envId.length > 0;
+  if (!hasEnvironment || !context.envLocation?.trim())
+    return base;
+  const route = resolveTelemetryRoute(context.envLocation);
+  if (!route)
+    return base;
+  const collectorUrl = resolveTestCollectorUrl(route.collectorUrl);
+  if (!collectorUrl)
+    return base;
+  const cloud = cachedCloud ?? (cachedCloud = resolveTelemetryCloud());
+  if (!APPROVED_CLOUDS.has(cloud))
+    return { ...base, cloud };
+  return {
+    ...base,
+    mode: "collector",
+    instrumentationKey: route.instrumentationKey,
+    collectorUrl,
+    cloud
+  };
+}
+
 // packages/core/dist/telemetry/local-log.js
-import fs4 from "node:fs";
+import fs5 from "node:fs";
 import path5 from "node:path";
 function appendLocal(logPath, record2) {
   const dir = path5.dirname(logPath);
-  fs4.mkdirSync(dir, { recursive: true });
-  fs4.appendFileSync(logPath, JSON.stringify(record2) + "\n", "utf8");
+  fs5.mkdirSync(dir, { recursive: true });
+  fs5.appendFileSync(logPath, JSON.stringify(record2) + "\n", "utf8");
 }
 
 // packages/core/dist/templates.js
@@ -56459,13 +56849,30 @@ var TEMPLATES = {
 // packages/core/dist/telemetry/index.js
 var dispatcherPath;
 function getDispatcherPath() {
-  if (!dispatcherPath) {
-    dispatcherPath = fileURLToPath(new URL("./emit-dispatcher.js", import.meta.url));
+  if (dispatcherPath === void 0) {
+    dispatcherPath = null;
+    for (const name3 of ["emit-dispatcher.js", "emit-dispatcher.mjs"]) {
+      try {
+        const candidate = fileURLToPath(new URL(`./${name3}`, import.meta.url));
+        if (existsSync4(candidate)) {
+          dispatcherPath = candidate;
+          break;
+        }
+      } catch {
+      }
+    }
   }
-  return dispatcherPath;
+  return dispatcherPath ?? void 0;
 }
-function sendToCollector(record2) {
-  const cfg = getTelemetryConfig();
+function dispatcherExists() {
+  return getDispatcherPath() !== void 0;
+}
+function sendToCollector(record2, cfg) {
+  const dispatcher = getDispatcherPath();
+  if (!dispatcher)
+    return;
+  if (cfg.mode !== "collector")
+    return;
   const payload = Buffer.from(JSON.stringify(record2), "utf8").toString("base64");
   const childEnv = {
     PATH: process.env.PATH,
@@ -56474,9 +56881,10 @@ function sendToCollector(record2) {
     USERPROFILE: process.env.USERPROFILE,
     FLOWAGENT_TELEMETRY_PAYLOAD: payload,
     FLOWAGENT_TELEMETRY_IKEY: cfg.instrumentationKey,
-    FLOWAGENT_TELEMETRY_COLLECTOR: cfg.collectorUrl
+    FLOWAGENT_TELEMETRY_COLLECTOR: cfg.collectorUrl,
+    FLOWAGENT_TELEMETRY_APP_ENVIRONMENT: cfg.appEnvironment
   };
-  const child = spawn(process.execPath, [getDispatcherPath()], {
+  const child = spawn(process.execPath, [dispatcher], {
     detached: true,
     stdio: "ignore",
     env: childEnv
@@ -56485,12 +56893,20 @@ function sendToCollector(record2) {
 }
 function emit(eventName, fields) {
   try {
-    const cfg = getTelemetryConfig();
+    const record2 = buildEvent(eventName, fields);
+    const cfg = getTelemetryConfig({
+      envId: typeof record2.envId === "string" ? record2.envId : void 0,
+      envLocation: typeof record2.envLocation === "string" ? record2.envLocation : void 0,
+      envRegion: typeof record2.envRegion === "string" ? record2.envRegion : void 0
+    });
     if (cfg.mode === "off")
       return;
-    const record2 = buildEvent(eventName, fields);
     if (cfg.mode === "collector") {
-      sendToCollector(record2);
+      if (dispatcherExists()) {
+        sendToCollector(record2, cfg);
+      } else {
+        appendLocal(cfg.localLogPath, record2);
+      }
     } else {
       appendLocal(cfg.localLogPath, record2);
     }
@@ -56519,9 +56935,12 @@ function createTelemetryObserver(opts = {}) {
     }
     return void 0;
   }
-  function envOf(args) {
-    const e = args?.env;
-    return typeof e === "string" ? e : void 0;
+  function envFields(info) {
+    return {
+      envId: info.environmentId,
+      envLocation: info.environmentLocation ?? void 0,
+      envRegion: info.environmentRegion ?? void 0
+    };
   }
   function responseBytes(result) {
     try {
@@ -56538,7 +56957,7 @@ function createTelemetryObserver(opts = {}) {
         toolName: info.tool,
         correlationId: info.correlationId,
         surface: "mcp",
-        envId: envOf(info.args)
+        ...envFields(info)
       });
     },
     onToolEnd(info) {
@@ -56549,7 +56968,7 @@ function createTelemetryObserver(opts = {}) {
         outcome: info.isError ? "failure" : "success",
         durationMs: info.durationMs,
         surface: "mcp",
-        envId: envOf(info.args),
+        ...envFields(info),
         errorCode: info.errorCode,
         responseBytes: responseBytes(info.result),
         mcpTransport: transport2,
@@ -56563,7 +56982,7 @@ function createTelemetryObserver(opts = {}) {
           templateId,
           surface: "mcp",
           correlationId: info.correlationId,
-          envId: envOf(info.args),
+          ...envFields(info),
           actionCount,
           mcpClientName
         });
@@ -56575,6 +56994,7 @@ function createTelemetryObserver(opts = {}) {
 // packages/core/dist/current-env-store.js
 var CurrentEnvStore = class {
   state;
+  environments = /* @__PURE__ */ new Map();
   subscribers = /* @__PURE__ */ new Set();
   constructor(initialEnvId = process.env.PA_DEFAULT_ENVIRONMENT) {
     this.state = initialEnvId ? { envId: initialEnvId, displayName: null, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), source: "env-var" } : { envId: null, displayName: null, updatedAt: (/* @__PURE__ */ new Date()).toISOString(), source: "none" };
@@ -56584,9 +57004,18 @@ var CurrentEnvStore = class {
   }
   set(envId, opts) {
     const prevId = this.state.envId;
+    const cached2 = this.environments.get(envId);
+    const metadata = {
+      displayName: opts.displayName ?? cached2?.displayName,
+      location: opts.location !== void 0 ? opts.location : cached2?.location,
+      region: opts.region !== void 0 ? opts.region : cached2?.region
+    };
+    this.environments.set(envId, metadata);
     this.state = {
       envId,
-      displayName: opts.displayName ?? this.state.displayName ?? null,
+      displayName: metadata.displayName ?? this.state.displayName ?? null,
+      environmentLocation: metadata.location ?? null,
+      environmentRegion: metadata.region ?? null,
       updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
       source: opts.source
     };
@@ -56599,6 +57028,20 @@ var CurrentEnvStore = class {
       }
     }
     return this.state;
+  }
+  rememberEnvironment(envId, opts) {
+    const previous = this.environments.get(envId);
+    this.environments.set(envId, {
+      displayName: opts.displayName ?? previous?.displayName,
+      location: opts.location !== void 0 ? opts.location : previous?.location,
+      region: opts.region !== void 0 ? opts.region : previous?.region
+    });
+    if (this.state.envId === envId) {
+      this.set(envId, { ...this.environments.get(envId), source: this.state.source });
+    }
+  }
+  getEnvironment(envId) {
+    return this.environments.get(envId);
   }
   subscribe(cb) {
     this.subscribers.add(cb);
@@ -56647,8 +57090,8 @@ var legacyCurrentFlowStore = new CurrentFlowStore();
 init_trigger_emulators();
 
 // packages/core/dist/diagnostics.js
-import { spawnSync as spawnSync3 } from "node:child_process";
-import fs5 from "node:fs";
+import { spawnSync as spawnSync4 } from "node:child_process";
+import fs6 from "node:fs";
 import path6 from "node:path";
 init_msal_disk_cache();
 init_msal_auth();
@@ -56660,6 +57103,26 @@ function connectivityIdentityMismatch(identity, az) {
     return false;
   return Boolean(identity.tenantId && az.tenantId && normalizeIdentity(identity.tenantId) !== normalizeIdentity(az.tenantId) || identity.username && az.user && normalizeIdentity(identity.username) !== normalizeIdentity(az.user));
 }
+function compareTokenIdentity(az, token) {
+  if (!az || !token)
+    return { mismatch: false, comparedUser: false };
+  if (az.tenantId && token.tenantId && normalizeIdentity(az.tenantId) !== normalizeIdentity(token.tenantId)) {
+    return {
+      mismatch: true,
+      comparedUser: false,
+      detail: `az is signed in to tenant ${az.tenantId} but the token FlowAgent would send belongs to tenant ${token.tenantId}.`
+    };
+  }
+  if (az.user && token.username) {
+    const mismatch = normalizeIdentity(az.user) !== normalizeIdentity(token.username);
+    return {
+      mismatch,
+      comparedUser: true,
+      detail: mismatch ? `az is signed in as ${az.user} but the token FlowAgent would send belongs to ${token.username}.` : void 0
+    };
+  }
+  return { mismatch: false, comparedUser: false };
+}
 function effectiveConnectivityIdentity(az, opts = {}) {
   const state = opts.auth?.getConnectivityAuthState?.();
   if (state?.account)
@@ -56667,8 +57130,8 @@ function effectiveConnectivityIdentity(az, opts = {}) {
   if (["1", "true"].includes(process.env.FLOWAGENT_DISABLE_MSAL_CACHE ?? ""))
     return null;
   const identity = state?.cacheIdentity ?? az?.tenantId ?? process.env.PA_TENANT_ID ?? "common";
-  const cached3 = readCachedMsalIdentities({ cacheDir: opts.cacheDir, identity });
-  const selected = selectCachedMsalAccount(cached3, identity);
+  const cached2 = readCachedMsalIdentities({ cacheDir: opts.cacheDir, identity });
+  const selected = selectCachedMsalAccount(cached2, identity);
   return selected?.username || selected?.tenantId ? selected : null;
 }
 function describeConnectivityIdentity(identity) {
@@ -56685,7 +57148,7 @@ async function readTokenIdentity(auth2, resource) {
 async function whoAmI(auth2, config3, opts = {}) {
   const azIdentity = readActiveAzIdentity();
   const tokenIdentity = await readTokenIdentity(auth2, config3.cloudEndpoints.flowResource);
-  const identityMismatch = Boolean(azIdentity?.tenantId && tokenIdentity?.tenantId && azIdentity.tenantId !== tokenIdentity.tenantId);
+  const identityMismatch = compareTokenIdentity(azIdentity, tokenIdentity).mismatch;
   const connectivityIdentity = readCachedMsalIdentities();
   const effectiveIdentity = effectiveConnectivityIdentity(azIdentity, { auth: auth2 });
   return {
@@ -56757,7 +57220,7 @@ function describeNextConnectivitySignIn(opts) {
 function azVersionInstalled() {
   try {
     const isWindows = process.platform === "win32";
-    const r = spawnSync3("az", ["version", "--output", "none"], {
+    const r = spawnSync4("az", ["version", "--output", "none"], {
       encoding: "utf-8",
       shell: isWindows,
       windowsHide: true,
@@ -56778,7 +57241,7 @@ async function doctor(auth2, config3, opts = {}) {
     fix: "Install it from https://aka.ms/installazurecli, then run: az login"
   });
   const configDir = azureConfigDir();
-  const profileExists = fs5.existsSync(path6.join(configDir, "azureProfile.json"));
+  const profileExists = fs6.existsSync(path6.join(configDir, "azureProfile.json"));
   const azIdentity = readActiveAzIdentity();
   if (!profileExists) {
     checks.push({
@@ -56829,11 +57292,12 @@ async function doctor(auth2, config3, opts = {}) {
     });
   }
   if (azIdentity?.tenantId && tokenIdentity?.tenantId) {
-    const match = azIdentity.tenantId === tokenIdentity.tenantId;
+    const cmp = compareTokenIdentity(azIdentity, tokenIdentity);
+    const match = !cmp.mismatch;
     checks.push({
       name: "identity-match",
       status: match ? "pass" : "fail",
-      detail: match ? "The cached token belongs to the account az is signed in as." : `Identity mismatch: az is signed in to tenant ${azIdentity.tenantId} but the token FlowAgent would send belongs to tenant ${tokenIdentity.tenantId}. This is what surfaces as EnvironmentAccessDenied / ServiceToServiceEnvironmentNotFound.`,
+      detail: match ? cmp.comparedUser ? "The cached token belongs to the account az is signed in as." : "The cached token belongs to the tenant az is signed in to. The user could not be compared \u2014 the token carries no name claim (expected for a service principal or managed identity)." : `Identity mismatch: ${cmp.detail} This is what surfaces as EnvironmentAccessDenied / ServiceToServiceEnvironmentNotFound.`,
       fix: match ? void 0 : "Call the reconnect tool (clears the token cache and re-acquires)."
     });
   }
@@ -56897,15 +57361,15 @@ async function doctor(auth2, config3, opts = {}) {
   const status = checks.some((c) => c.status === "fail") ? "fail" : checks.some((c) => c.status === "warn") ? "warn" : "pass";
   const failed = checks.filter((c) => c.status !== "pass");
   const summary = status === "pass" ? "All checks passed." : `${failed.length} check${failed.length === 1 ? "" : "s"} need attention: ${failed.map((c) => c.name).join(", ")}.`;
-  return { status, checks, summary };
+  return { status, version: FLOWAGENT_VERSION, buildId: await buildId(), checks, summary };
 }
 function listAccounts(opts) {
   const azIdentity = readActiveAzIdentity();
   const preferredAccount = readPreferredAccount(opts);
-  const cached3 = readCachedMsalIdentities(opts);
+  const cached2 = readCachedMsalIdentities(opts);
   const effectiveIdentity = effectiveConnectivityIdentity(azIdentity, opts);
   const nextSignIn = resolveInteractiveAccountOptions(process.env, { storedHint: preferredAccount });
-  const accounts = cached3.map((i) => ({
+  const accounts = cached2.map((i) => ({
     username: i.username,
     tenantId: i.tenantId,
     cacheFile: i.cacheFile,
@@ -67030,6 +67494,21 @@ async function createMcpServer(authProvider, deps = {}) {
     legacyContext.lastActivityAt = /* @__PURE__ */ new Date();
     return legacyContext;
   }
+  function telemetryEnvironment(tool, args, mcpCtx) {
+    if (tool === "set_current_env")
+      return {};
+    const current = mcpCtx.currentEnv.get();
+    const explicitEnv = typeof args.env === "string" ? args.env : void 0;
+    const environmentId = explicitEnv ?? current.envId ?? config3.defaultEnvironmentId ?? void 0;
+    if (!environmentId)
+      return {};
+    const metadata = mcpCtx.currentEnv.getEnvironment(environmentId);
+    return {
+      environmentId,
+      environmentLocation: metadata ? metadata.location ?? null : current.envId === environmentId ? current.environmentLocation ?? null : null,
+      environmentRegion: metadata ? metadata.region ?? null : current.envId === environmentId ? current.environmentRegion ?? null : null
+    };
+  }
   function getActiveToolContext() {
     const mcpCtx = getActiveMcpContext();
     let toolCtx = toolContexts.get(mcpCtx);
@@ -67048,7 +67527,7 @@ async function createMcpServer(authProvider, deps = {}) {
   };
   const server2 = new McpServer2({
     name: deps.serverInfo?.name ?? "flowagent-mcp",
-    version: deps.serverInfo?.version ?? "2.0.0"
+    version: deps.serverInfo?.version ?? FLOWAGENT_VERSION
   });
   if (deps.getContext || deps.onToolStart || deps.onToolEnd) {
     const origTool = server2.tool.bind(server2);
@@ -67064,9 +67543,11 @@ async function createMcpServer(authProvider, deps = {}) {
           const correlationId = Math.random().toString(36).slice(2, 10);
           const args = handlerArgs[0] ?? {};
           const t0 = Date.now();
+          let eventEnvironment = {};
           try {
-            getActiveMcpContext(extra?.sessionId);
-            deps.onToolStart?.({ tool: toolName, args, correlationId });
+            const mcpCtx = getActiveMcpContext(extra?.sessionId);
+            eventEnvironment = telemetryEnvironment(toolName, args, mcpCtx);
+            deps.onToolStart?.({ tool: toolName, args, correlationId, ...eventEnvironment });
           } catch {
           }
           try {
@@ -67091,7 +67572,8 @@ async function createMcpServer(authProvider, deps = {}) {
                 durationMs: Date.now() - t0,
                 isError,
                 errorCode: errorCode2,
-                result
+                result,
+                ...eventEnvironment
               });
             } catch {
             }
@@ -67104,7 +67586,8 @@ async function createMcpServer(authProvider, deps = {}) {
                 correlationId,
                 durationMs: Date.now() - t0,
                 isError: true,
-                errorCode: err?.code
+                errorCode: err?.code,
+                ...eventEnvironment
               });
             } catch {
             }
@@ -67162,6 +67645,17 @@ async function createMcpServer(authProvider, deps = {}) {
   server2.tool("list_environments", "List all Power Automate environments. Use query to filter by name.", { query: external_exports.string().optional().describe("Filter by display name (case-insensitive)") }, { readOnlyHint: true, title: "List Environments" }, async ({ query }) => {
     try {
       const envs = await ctx.getClient().listEnvironments();
+      const envStore = getActiveMcpContext().currentEnv;
+      for (const environment of envs) {
+        const record2 = environment;
+        const properties = record2.properties;
+        const region = typeof record2.region === "string" ? record2.region : typeof properties?.region === "string" ? properties.region : null;
+        envStore.rememberEnvironment(environment.name, {
+          displayName: environment.properties?.displayName ?? null,
+          location: typeof environment.location === "string" ? environment.location : null,
+          region
+        });
+      }
       let s = summarizeList(envs, ["name", "properties.displayName", "properties.isDefault", "properties.environmentSku", "location"], { "properties.displayName": "displayName", "properties.isDefault": "isDefault", "properties.environmentSku": "environmentSku" });
       if (query) {
         const q = query.toLowerCase();
@@ -67192,7 +67686,14 @@ async function createMcpServer(authProvider, deps = {}) {
         } catch {
         }
       }
-      return safeResult({ envId: cur.envId, displayName, updatedAt: cur.updatedAt, source: cur.source });
+      return safeResult({
+        envId: cur.envId,
+        displayName,
+        location: cur.environmentLocation,
+        region: cur.environmentRegion,
+        updatedAt: cur.updatedAt,
+        source: cur.source
+      });
     } catch (e) {
       return safeError(e);
     }
@@ -67214,8 +67715,23 @@ async function createMcpServer(authProvider, deps = {}) {
       }
       if (!match)
         return safeError(new Error(`No environment matches "${env}". Call list_environments to see options.`));
-      const next = getActiveMcpContext().currentEnv.set(match.name, { displayName: match.properties?.displayName ?? null, source: "set_tool" });
-      return safeResult({ envId: next.envId, displayName: next.displayName, source: next.source, updatedAt: next.updatedAt });
+      const record2 = match;
+      const properties = record2.properties;
+      const region = typeof record2.region === "string" ? record2.region : typeof properties?.region === "string" ? properties.region : null;
+      const next = getActiveMcpContext().currentEnv.set(match.name, {
+        displayName: match.properties?.displayName ?? null,
+        location: typeof match.location === "string" ? match.location : null,
+        region,
+        source: "set_tool"
+      });
+      return safeResult({
+        envId: next.envId,
+        displayName: next.displayName,
+        location: next.environmentLocation,
+        region: next.environmentRegion,
+        source: next.source,
+        updatedAt: next.updatedAt
+      });
     } catch (e) {
       return safeError(e);
     }
@@ -67308,7 +67824,7 @@ async function createMcpServer(authProvider, deps = {}) {
       return safeError(e, enhanceFlowApiError);
     }
   });
-  server2.tool("update_flow", "Update an existing flow's definition or properties. **Refuses by default if the flow lives in a managed Dataverse solution** (returns ManagedSolutionReadOnly). Pass forceManaged: true only if you understand the change will be overwritten on the next solution import \u2014 see docs/recipes/upgrade-managed-flow.md for the right pattern. **Recommended two-phase update**: call preview_update first to obtain a previewToken bound to the exact change, then pass that token back here. update_flow will only apply if the proposal still matches what was previewed (prevents lost writes from concurrent edits). Auto-captures a backup snapshot before applying (last 10 retained per flow, accessible via list_backups). **Use this for**: any change to an existing flow. **Do NOT use for**: creating a new flow (use create_flow) or starting/stopping a flow (use publish_flow / disable_flow).", { env: external_exports.string().optional().describe("Environment ID"), flow: external_exports.string().describe("Flow ID"), definition: jsonRecord.optional().describe("Updated definition JSON"), connectionRefs: jsonRecord.optional().describe("Connection references JSON"), name: external_exports.string().optional().describe("New name"), state: external_exports.enum(["Started", "Stopped"]).optional().describe("State"), forceManaged: external_exports.boolean().optional().describe("Override the managed-solution read-only guard. Default false."), autoResolveConnectionRefs: external_exports.boolean().optional().describe("Auto-resolve missing connection refs for new connectors in the definition. Default true. Set false to skip if auto-merge is causing errors."), previewToken: external_exports.string().optional().describe("Token issued by preview_update for this exact (env, flow, body) tuple. When supplied, the update only applies if the proposed change still matches what was previewed; mismatched tokens throw PreviewTokenMismatch.") }, { readOnlyHint: false, title: "Update Flow" }, async ({ env, flow, definition, connectionRefs, name: name3, state, forceManaged, autoResolveConnectionRefs, previewToken }) => {
+  server2.tool("update_flow", "Update an existing flow's definition or properties. **Refuses by default if the flow lives in a managed Dataverse solution** (returns ManagedSolutionReadOnly). Pass forceManaged: true only if you understand the change will be overwritten on the next solution import \u2014 see docs/recipes/upgrade-managed-flow.md for the right pattern. **Recommended two-phase update**: call preview_update first to obtain a previewToken bound to the exact change, then pass that token back here. update_flow applies only if the proposal still matches what was previewed AND nobody else has written to the flow since (prevents lost writes from concurrent edits). Auto-captures a backup snapshot before applying (last 10 retained per flow, accessible via list_backups). **Use this for**: any change to an existing flow. **Do NOT use for**: creating a new flow (use create_flow) or starting/stopping a flow (use publish_flow / disable_flow).", { env: external_exports.string().optional().describe("Environment ID"), flow: external_exports.string().describe("Flow ID"), definition: jsonRecord.optional().describe("Updated definition JSON"), connectionRefs: jsonRecord.optional().describe("Connection references JSON"), name: external_exports.string().optional().describe("New name"), state: external_exports.enum(["Started", "Stopped"]).optional().describe("State"), forceManaged: external_exports.boolean().optional().describe("Override the managed-solution read-only guard. Default false."), autoResolveConnectionRefs: external_exports.boolean().optional().describe("Auto-resolve missing connection refs for new connectors in the definition. Default true. Set false to skip if auto-merge is causing errors."), previewToken: external_exports.string().optional().describe("Token issued by preview_update for this exact (env, flow, body) tuple. Single-use. The update applies only if the proposed change still matches what was previewed (otherwise PreviewTokenMismatch) and the flow has not been modified by anyone else since (otherwise PreviewConcurrencyConflict).") }, { readOnlyHint: false, title: "Update Flow" }, async ({ env, flow, definition, connectionRefs, name: name3, state, forceManaged, autoResolveConnectionRefs, previewToken }) => {
     try {
       const envId = ctx.resolveEnv(env);
       const props = await buildUpdateProperties(ctx, envId, flow, {
@@ -67323,7 +67839,7 @@ async function createMcpServer(authProvider, deps = {}) {
       return safeError(e, enhanceFlowApiError);
     }
   });
-  server2.tool("preview_update", "Read-only: compute a diff between the live flow and the proposed update body, and return a short-lived single-use token. Use the token with update_flow to apply the change only if the proposal still matches what you reviewed. No mutation is performed by this tool.", { env: external_exports.string().optional().describe("Environment ID"), flow: external_exports.string().describe("Flow ID"), definition: jsonRecord.optional().describe("Proposed updated definition JSON"), connectionRefs: jsonRecord.optional().describe("Proposed connection references JSON"), name: external_exports.string().optional().describe("Proposed new name"), state: external_exports.enum(["Started", "Stopped"]).optional().describe("Proposed state") }, { readOnlyHint: true, title: "Preview Update" }, async ({ env, flow, definition, connectionRefs, name: name3, state }) => {
+  server2.tool("preview_update", "Read-only: compute a diff between the live flow and the proposed update body, and return a short-lived single-use token. Use the token with update_flow to apply the change only if the proposal still matches what you reviewed and nobody else has written to the flow since. No mutation is performed by this tool.", { env: external_exports.string().optional().describe("Environment ID"), flow: external_exports.string().describe("Flow ID"), definition: jsonRecord.optional().describe("Proposed updated definition JSON"), connectionRefs: jsonRecord.optional().describe("Proposed connection references JSON"), name: external_exports.string().optional().describe("Proposed new name"), state: external_exports.enum(["Started", "Stopped"]).optional().describe("Proposed state") }, { readOnlyHint: true, title: "Preview Update" }, async ({ env, flow, definition, connectionRefs, name: name3, state }) => {
     try {
       const envId = ctx.resolveEnv(env);
       const props = await buildUpdateProperties(ctx, envId, flow, {
@@ -67347,7 +67863,7 @@ async function createMcpServer(authProvider, deps = {}) {
       value: external_exports.unknown().optional().describe("New value (required for set/add/merge; merge requires an object)")
     })).describe("Ordered list of edit operations"),
     dryRun: external_exports.boolean().optional().describe("If true, return a diff + previewToken without writing."),
-    previewToken: external_exports.string().optional().describe("Token from a prior dryRun for these exact operations; applies only if the flow still matches."),
+    previewToken: external_exports.string().optional().describe("Token from a prior dryRun for these exact operations. Single-use, and rejected if the flow was modified by anyone else since the preview."),
     forceManaged: external_exports.boolean().optional().describe("Override the managed-solution read-only guard. Default false."),
     autoResolveConnectionRefs: external_exports.boolean().optional().describe("Auto-resolve missing connection refs for new connectors in the definition. Default true.")
   }, { readOnlyHint: false, title: "Edit Flow (surgical)" }, async ({ env, flow, operations, dryRun, previewToken, forceManaged, autoResolveConnectionRefs }) => {
@@ -67499,21 +68015,58 @@ async function createMcpServer(authProvider, deps = {}) {
       return safeError(e);
     }
   });
-  server2.tool("get_run_actions", "Get action-level execution details for a specific flow run", { env: external_exports.string().optional().describe("Environment ID"), flow: external_exports.string().describe("Flow ID"), run: external_exports.string().describe("Run ID") }, { readOnlyHint: true, title: "Run Actions" }, async ({ env, flow, run }) => {
+  server2.tool("get_run_actions", "Get action-level execution details for a specific flow run", {
+    env: external_exports.string().optional().describe("Environment ID"),
+    flow: external_exports.string().describe("Flow ID"),
+    run: external_exports.string().describe("Run ID"),
+    includeLinks: external_exports.boolean().optional().describe("Also return the inputs/outputs content links and their sizes, so you can pick what to fetch with get_run_action_content")
+  }, { readOnlyHint: true, title: "Run Actions" }, async ({ env, flow, run, includeLinks }) => {
     try {
       const actions = await ctx.getClient().getRunActionDetails(ctx.resolveEnv(env), flow, run);
-      return safeResult(summarizeList(actions, ["name", "properties.startTime", "properties.endTime", "properties.status", "properties.code", "properties.error.code", "properties.error.message"], { "properties.startTime": "startTime", "properties.endTime": "endTime", "properties.status": "status", "properties.code": "code", "properties.error.code": "errorCode", "properties.error.message": "errorMessage" }));
+      const fields = ["name", "properties.startTime", "properties.endTime", "properties.status", "properties.code", "properties.error.code", "properties.error.message"];
+      const labels = { "properties.startTime": "startTime", "properties.endTime": "endTime", "properties.status": "status", "properties.code": "code", "properties.error.code": "errorCode", "properties.error.message": "errorMessage" };
+      if (includeLinks) {
+        fields.push("properties.inputsLink.contentSize", "properties.outputsLink.contentSize");
+        labels["properties.inputsLink.contentSize"] = "inputsBytes";
+        labels["properties.outputsLink.contentSize"] = "outputsBytes";
+      }
+      return safeResult(summarizeList(actions, fields, labels));
     } catch (e) {
       if (isNotFoundError(e))
         return notFoundResult("Run", run, "The run may have expired or the flow was deleted.");
       return safeError(e);
     }
   });
-  server2.tool("get_run_action_repetitions", "List iteration-level details for an action that runs inside a loop (Apply_to_each / Do_until) within a run \u2014 the only way to see WHICH iteration failed. Each repetition has its own status, inputs/outputs links, and (on failure) error. Pass the name of an action **inside** the loop (e.g. a Compose within the Apply_to_each), NOT the loop container itself \u2014 the container action returns no repetitions. `flow` defaults to the pinned current flow (set_current_flow).", { env: external_exports.string().optional().describe("Environment ID"), flow: external_exports.string().optional().describe("Flow ID (defaults to pinned current flow)"), run: external_exports.string().describe("Run ID"), action: external_exports.string().describe("Loop action name (e.g. Apply_to_each)") }, { readOnlyHint: true, title: "Loop Iteration Details" }, async ({ env, flow, run, action }) => {
+  server2.tool("get_run_action_content", "Fetch what an action in a run actually received (inputs) or produced (outputs). get_run_actions reports only status and error \u2014 this returns the recorded payload, which is usually what tells you WHY an action failed. Capped at maxBytes (default 256000) so a large payload is reported rather than dumped.", {
+    env: external_exports.string().optional().describe("Environment ID"),
+    flow: external_exports.string().optional().describe("Flow ID (defaults to pinned current flow)"),
+    run: external_exports.string().describe("Run ID"),
+    action: external_exports.string().describe("Action name, as reported by get_run_actions"),
+    which: external_exports.enum(["inputs", "outputs"]).describe("Which side of the action to fetch"),
+    maxBytes: external_exports.number().int().optional().describe("Refuse to download content larger than this (default 256000)")
+  }, { readOnlyHint: true, title: "Run Action Content" }, async ({ env, flow, run, action, which, maxBytes }) => {
     try {
       const flowId = ctx.resolveFlow(flow);
-      const reps = await ctx.getClient().getRunActionRepetitions(ctx.resolveEnv(env), flowId, run, action);
-      return safeResult({ action, count: reps.length, repetitions: reps });
+      return safeResult(await ctx.getClient().getRunActionContent(ctx.resolveEnv(env), flowId, run, action, which, { maxBytes }));
+    } catch (e) {
+      if (isNotFoundError(e))
+        return notFoundResult("Run", run, "The run may have expired or the flow was deleted.");
+      return safeError(e);
+    }
+  });
+  server2.tool("get_run_action_repetitions", 'List iteration-level details for an action that runs inside a loop (Apply_to_each / Do_until) within a run \u2014 the only way to see WHICH iteration failed. Each repetition has its own status, inputs/outputs links, and (on failure) error. Pass the name of an action **inside** the loop (e.g. a Compose within the Apply_to_each), NOT the loop container itself \u2014 the container action returns no repetitions. `flow` defaults to the pinned current flow (set_current_flow). Returns at most `top` repetitions (default 100) \u2014 a long-running Do_until can have thousands. Narrow with `status: "Failed"` to find the iteration that broke.', {
+    env: external_exports.string().optional().describe("Environment ID"),
+    flow: external_exports.string().optional().describe("Flow ID (defaults to pinned current flow)"),
+    run: external_exports.string().describe("Run ID"),
+    action: external_exports.string().describe("Loop action name (e.g. Apply_to_each)"),
+    top: external_exports.number().int().optional().describe("Max repetitions to return (default 100, max 1000)"),
+    status: external_exports.enum(["Succeeded", "Failed", "Skipped", "TimedOut", "any"]).optional().describe("Return only repetitions in this state (default any)"),
+    includeLinks: external_exports.boolean().optional().describe("Keep the inputs/outputs content links on each repetition (default true)")
+  }, { readOnlyHint: true, title: "Loop Iteration Details" }, async ({ env, flow, run, action, top, status, includeLinks }) => {
+    try {
+      const flowId = ctx.resolveFlow(flow);
+      const r = await ctx.getClient().getRunActionRepetitions(ctx.resolveEnv(env), flowId, run, action, { top, statusFilter: status, includeLinks });
+      return safeResult({ action, count: r.returned, truncated: r.truncated, repetitions: r.repetitions });
     } catch (e) {
       return safeError(e);
     }
@@ -68327,7 +68880,7 @@ async function createMcpServer(authProvider, deps = {}) {
     };
   });
   server2.resource("recipe-content", new ResourceTemplate("flowagent://recipes/{slug}", { list: void 0 }), { description: "Full markdown content of a specific recipe by slug.", mimeType: "text/markdown" }, async (uri, { slug }) => {
-    const fs6 = await import("node:fs");
+    const fs7 = await import("node:fs");
     const path7 = await import("node:path");
     const fileURLToPath2 = (await import("node:url")).fileURLToPath;
     const here = path7.dirname(fileURLToPath2(import.meta.url));
@@ -68335,7 +68888,7 @@ async function createMcpServer(authProvider, deps = {}) {
     const safeSlug = String(slug).replace(/[^a-z0-9-]/gi, "");
     const file2 = path7.join(recipesDir, `${safeSlug}.md`);
     try {
-      const text = fs6.readFileSync(file2, "utf-8");
+      const text = fs7.readFileSync(file2, "utf-8");
       return { contents: [{ uri: uri.href, mimeType: "text/markdown", text }] };
     } catch {
       return { contents: [{ uri: uri.href, mimeType: "text/plain", text: `Recipe '${safeSlug}' not found. Available recipes: see flowagent://recipes/index` }] };
