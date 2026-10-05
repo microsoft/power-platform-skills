@@ -9,16 +9,18 @@
   policy is the backstop that holds even if the sanitizer is wrong.
 
   - `default-src 'none'` so anything not named here simply cannot load.
-  - `script-src` is the nonce plus the Mermaid CDN. An injected script element carries no nonce
-    and will not run, and inline event-handler attributes are refused because 'unsafe-inline' is
-    absent from script-src.
+  - `script-src` is the nonce alone. The Mermaid tag carries it, and a nonce admits an external
+    script as well as an inline one. Naming the CDN host as well would admit every script on
+    jsDelivr, so an injected script tag whose src named any npm package there would run; with the
+    nonce alone, an injected script element carries no nonce and will not run. Inline
+    event-handler attributes are refused because 'unsafe-inline' is absent from script-src.
   - `style-src 'unsafe-inline'` is required: this page ships a `<style>` block, the mockups carry
     `style=` attributes, and Mermaid injects stylesheets. Inline CSS cannot execute.
   - `img-src data:` only - the brand mark and the QR are both inlined, so no image is ever
     fetched, and an injected `<img src=...>` cannot call out.
   - No `connect-src`, `frame-src` or `object-src`: the plan never talks to the network.
 -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-__ATTR_CSP_NONCE__' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-__ATTR_CSP_NONCE__'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'"/>
 <title>__PLAN_TITLE__ - __APP_NAME__</title>
 <!--
   Mermaid is pinned to an exact version and checked against a hash of its bytes.

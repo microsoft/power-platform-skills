@@ -342,11 +342,11 @@ Use `AskUserQuestion` with options if available; otherwise plain text.
 **Handling responses:**
 
 - **`a` / `b` / `c`** → resolve to the direction name; go to Step 6
-- **`hybrid: ...`** → parse the description, merge bundles by picking the named dimensions from each, regenerate `_design_vibe.html` with the merged bundle as a 4th column titled "Your hybrid", re-open, ask "use this hybrid? (yes / refine)"
-- **`mix: ...`** → element-level remix. Parse the picks (`Inspection's status pills, Product's typography, SaaS's spacing`), build a custom bundle by overriding the recommended direction's fields with the named picks, render as a 4th frame titled "Your mix", same re-open / confirm loop as hybrid
+- **`hybrid: ...`** → parse the description, merge bundles by picking the named dimensions from each, regenerate `_design_vibe.html` with the merged bundle as a 4th column titled "Your hybrid", re-open it (standalone runs only; otherwise print the path), ask "use this hybrid? (yes / refine)"
+- **`mix: ...`** → element-level remix. Parse the picks (`Inspection's status pills, Product's typography, SaaS's spacing`), build a custom bundle by overriding the recommended direction's fields with the named picks, render as a 4th frame titled "Your mix", same re-open (standalone runs only; otherwise print the path) / confirm loop as hybrid
 - **`dark` / `light`** → flip the recommended direction's `background` field only (`dark-slate` ↔ `cool-gray-light`, `warm-cream` ↔ `rich-dark`); keep direction otherwise. Re-render the single affected frame so the user sees the swap before committing
 - **`again`** → regenerate with alternate accents (e.g. Product with rust instead of sage; Inspection with amber instead of orange) — same three directions, different concrete realizations. Cap to 1 `again` per session to avoid taste-paralysis.
-- **`none of these`** → ask what's missing AND what each direction got wrong (capture as a "rejected" log line in `memory-bank.md`). Regenerate the 3-up with adjustments (palette swap, density change, etc.), re-open, ask again
+- **`none of these`** → ask what's missing AND what each direction got wrong (capture as a "rejected" log line in `memory-bank.md`). Regenerate the 3-up with adjustments (palette swap, density change, etc.), re-open it (standalone runs only; otherwise print the path), ask again
 - **No reply / unclear** → ask once more, then default to the recommended direction with: `Defaulting to <name> based on app description; you can run /design-system --reskin any time to swap.`
 
 Cap re-renders at **3 iterations** to avoid infinite loops. After 3 the skill must lock in either the user's last clear pick or the recommended default.

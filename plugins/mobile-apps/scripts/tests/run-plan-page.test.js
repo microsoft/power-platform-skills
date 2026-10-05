@@ -972,7 +972,9 @@ test('the page carries a policy that makes injected mockup markup inert', () => 
   assert.match(policy, /default-src 'none'/);
   // A script injected through a mockup carries no nonce, and inline handlers need
   // 'unsafe-inline', which is deliberately absent from script-src.
-  assert.match(policy, /script-src 'nonce-__ATTR_CSP_NONCE__' https:\/\/cdn\.jsdelivr\.net/);
+  // The nonce alone. A host source would admit every script on that CDN, not just Mermaid.
+  assert.match(policy, /script-src 'nonce-__ATTR_CSP_NONCE__';/);
+  assert.doesNotMatch(policy.match(/script-src[^;]*/)[0], /https?:|\*/);
   assert.doesNotMatch(policy.match(/script-src[^;]*/)[0], /unsafe-inline|unsafe-eval/);
   // Every image the plan shows is inlined, so an injected <img src> cannot call out.
   assert.match(policy, /img-src data:/);

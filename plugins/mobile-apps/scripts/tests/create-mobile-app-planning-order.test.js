@@ -407,11 +407,18 @@ test('no instruction promises a browser window during an orchestrated run', () =
   assert.doesNotMatch(preference, /governs only a later standalone/);
   assert.match(preference, /Step 11\.4 offer/);
 
-  // And the nested skill's own branch descriptions say which runs they apply to.
-  const designSystem = fs.readFileSync(
-    path.resolve(__dirname, '..', '..', 'skills', 'design-system', 'SKILL.md'), 'utf8',
-  );
-  for (const line of designSystem.split('\n').filter((l) => /opens browser|Open in browser/.test(l))) {
-    assert.match(line, /standalone runs only/, `ungated opener: ${line.trim().slice(0, 70)}`);
+  // And every opener in the nested skill says which runs it applies to - including the style
+  // picker's refinement loops, which "re-open" the preview after each hybrid, mix or reject.
+  // These are instructions an agent follows, not a runtime branch, so one unqualified "open
+  // browser" is enough to put a tab over the build plan. Lines about the plan page itself
+  // ("its build plan open in the browser") describe it rather than open anything.
+  const OPENER = /\bre-?open\b|\bopens? (the )?browser\b|\bopen (it )?in (the )?browser\b|\bopen the browser\b/i;
+  for (const file of ['SKILL.md', path.join('references', 'vibe', 'style-picker.md')]) {
+    const text = fs.readFileSync(path.resolve(__dirname, '..', '..', 'skills', 'design-system', file), 'utf8');
+    const openers = text.split('\n').filter((l) => OPENER.test(l) && !/build plan open/.test(l));
+    assert.ok(openers.length > 0, `${file}: the opener pattern no longer finds anything`);
+    for (const line of openers) {
+      assert.match(line, /standalone runs only/, `${file}: ungated opener: ${line.trim().slice(0, 70)}`);
+    }
   }
 });
