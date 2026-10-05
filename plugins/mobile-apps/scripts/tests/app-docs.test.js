@@ -104,6 +104,15 @@ test('a note does not outlive the status it was written with', () => {
   applyStep(state, { id: 'screens', status: 'active', note: '3 of 12 screens built' });
   applyStep(state, { id: 'screens', status: 'active' });
   assert.equal(state.phases.find((p) => p.id === 'screens').note, '3 of 12 screens built');
+
+  // Opening the next phase auto-closes the live one, and the note goes with that status too.
+  // A gate left open on its awaiting note otherwise kept asking for approval on a phase the plan
+  // already showed as done.
+  applyStep(state, { id: 'screen-plan', status: 'active', note: 'Gate 3 — awaiting your approval' });
+  applyStep(state, { id: 'scaffold', status: 'active' });
+  const screenPlan = state.phases.find((p) => p.id === 'screen-plan');
+  assert.equal(screenPlan.status, 'done');
+  assert.equal(screenPlan.note, '', 'an auto-closed phase must not keep its awaiting note');
 });
 
 test('the skill closes every gate with a fresh note', () => {
@@ -366,8 +375,8 @@ test('the skill marks a phase failed before it stops', () => {
   assert.match(skill, /No argument switches this protocol off/);
 });
 
-test('an editor link survives a path containing ? or #', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-url-#1-'));
+test('an editor link survives a path containing ?, # or %', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-url-#1 100% Done-'));
   fs.writeFileSync(path.join(root, 'native-app-plan.md'), '# plan\n');
   save(root, initState(root, { appName: 'App' }));
 
@@ -382,6 +391,13 @@ test('an editor link survives a path containing ? or #', () => {
   assert.doesNotMatch(summary.planDocEditorHref, /#(?!23)/, 'a # must be percent-encoded');
   const pathname = new URL(summary.planDocEditorHref).pathname;
   assert.match(pathname, /native-app-plan\.md$/, 'the whole path must survive into the URL');
+
+  // A literal `%` starts an escape, so `100% Done` would be an invalid sequence if it were left
+  // alone. Decoding must give back exactly the path on disk, in the forward-slashed, rooted form
+  // the VS Code URL handler expects.
+  assert.match(summary.planDocEditorHref, /100%25%20Done/, 'a literal % must be percent-encoded');
+  const onDisk = path.join(root, 'native-app-plan.md').replace(/\\/g, '/');
+  assert.equal(decodeURIComponent(pathname), onDisk.startsWith('/') ? onDisk : `/${onDisk}`);
 });
 
 test('the skill records a skipped design step instead of leaving it open', () => {

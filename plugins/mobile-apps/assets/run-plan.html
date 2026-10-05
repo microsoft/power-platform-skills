@@ -591,13 +591,6 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   }
 
   /**
-   * Render an array as a bulleted list.
-   *
-   * Several of these fields are genuinely enumerable - a feature list, the distinct rules that
-   * make up an offline decision - and joining them with commas produced a paragraph nobody could
-   * scan. Items go in as textContent, so a free-text feature can never become markup.
-   */
-  /**
    * Render an element in a plan-named typeface.
    *
    * The name comes from the plan, so it is not interpolated into CSS unchecked: anything outside
@@ -612,6 +605,13 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     node.style.fontFamily = '"' + name + '", system-ui, sans-serif';
   }
 
+  /**
+   * Render an array as a bulleted list.
+   *
+   * Several of these fields are genuinely enumerable - a feature list, the distinct rules that
+   * make up an offline decision - and joining them with commas produced a paragraph nobody could
+   * scan. Items go in as textContent, so a free-text feature can never become markup.
+   */
   function bullets(items, className) {
     var ul = el('ul', 'bullets' + (className ? ' ' + className : ''));
     items.forEach(function (item) {
@@ -1375,10 +1375,20 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     var link = el('a', 'plan-doc');
     link.setAttribute('href', summary.planDocEditorHref || summary.planDocHref);
     link.textContent = label;
+    // This page stays open and reloads itself for the whole run, so a link that navigates must
+    // open beside it rather than replace it. The editor link is the exception: a `vscode://`
+    // click hands the file to the editor and leaves this page where it is, and giving it a new
+    // tab would only strand an empty one.
+    if (!summary.planDocEditorHref) {
+      link.setAttribute('target', '_blank');
+      link.setAttribute('rel', 'noopener');
+    }
 
     var raw = el('a', 'plan-doc-raw', 'native-app-plan.md');
     raw.setAttribute('href', summary.planDocHref);
-    raw.setAttribute('title', 'Open as plain text in this browser instead');
+    raw.setAttribute('title', 'Open as plain text in a new tab instead');
+    raw.setAttribute('target', '_blank');
+    raw.setAttribute('rel', 'noopener');
     container.appendChild(link);
     container.appendChild(raw);
   }

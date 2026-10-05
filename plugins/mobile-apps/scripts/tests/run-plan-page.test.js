@@ -600,6 +600,15 @@ test('the planner markdown is linked only once it exists on disk', () => {
   assert.match(template, /summary\.planDocEditorHref \|\| summary\.planDocHref/,
     'prefer the editor link, but never leave a reader without one stranded');
   assert.match(template, /plan-doc-raw/, 'the plain file link must remain available');
+
+  // The plan reloads itself for the whole run, so a link that navigates away from it must open
+  // beside it. The editor link only hands off to the editor, so it is given a new tab only when
+  // it has fallen back to the plain file.
+  const planDoc = template.slice(template.indexOf('function planDocLink('), template.indexOf('function renderScreens('));
+  assert.match(planDoc, /if \(!summary\.planDocEditorHref\) \{\s*link\.setAttribute\('target', '_blank'\);\s*link\.setAttribute\('rel', 'noopener'\);/,
+    'a link falling back to the plain file must not replace the live plan');
+  assert.match(planDoc, /raw\.setAttribute\('target', '_blank'\);\s*raw\.setAttribute\('rel', 'noopener'\);/,
+    'the plain file link must not replace the live plan');
 });
 
 test('the full-size screens are linked under the phone, once they exist', () => {

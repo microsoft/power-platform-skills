@@ -208,9 +208,14 @@ function applyStep(state, { id, status, note }) {
 
   // Only one phase is the live one; marking a new phase active resolves any earlier
   // still-active phase so a crashed or skipped step cannot leave two spinners running.
+  // The note goes with the status, as above: a gate left open on "awaiting your approval"
+  // would otherwise keep asking for it on a phase the plan now shows as done.
   if (status === 'active') {
     for (const other of state.phases) {
-      if (other.id !== id && other.status === 'active') other.status = 'done';
+      if (other.id !== id && other.status === 'active') {
+        other.status = 'done';
+        other.note = '';
+      }
     }
   }
   state.updatedAt = new Date().toISOString();
@@ -354,7 +359,9 @@ function editorHref(projectRoot, fileName) {
   // encodeURI keeps `/` as a separator, which is what this needs, but it also leaves `?` and
   // `#` alone - and both are legal in a POSIX path. `/tmp/app#1/native-app-plan.md` would parse
   // as pathname `/tmp/app` with the rest as a fragment, so the editor opens nothing. Escape
-  // those two afterwards; every other character encodeURI already handles.
+  // those two afterwards; every other character encodeURI already handles. That includes a
+  // literal `%` (`100% Done/` becomes `100%25%20Done/`), and because it is escaped first, the
+  // `%` in the `%3F` and `%23` added here is never escaped a second time.
   const escaped = encodeURI(rooted).replace(/\?/g, '%3F').replace(/#/g, '%23');
   return `vscode://file${escaped}`;
 }
