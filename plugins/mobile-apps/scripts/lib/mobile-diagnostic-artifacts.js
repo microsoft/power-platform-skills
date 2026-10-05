@@ -176,9 +176,14 @@ function parseAndroidPlayerMetadata(output) {
   // aapt2 xmltree prints one E: meta-data node with separate A: name/value
   // lines. Match the value only within the node naming PLAYER_COMPATIBILITY.
   const nodes = output.split(/^\s*E:\s+/m);
-  const matches = nodes.filter((node) => /^meta-data\b/.test(node) && node.includes(PLAYER_KEY));
+  const matches = nodes.filter((node) => /^meta-data\b/.test(node) && node.split('\n').some((line) =>
+    /^\s*A:\s+(?:android|http:\/\/schemas\.android\.com\/apk\/res\/android):name(?:\([^)]*\))?=/.test(line)
+      && line.match(/="([^"]*)"/)?.[1] === PLAYER_KEY));
   requireValue(matches.length === 1, 'Selected APK does not contain unique baked player compatibility metadata.');
-  const line = matches[0].split('\n').find((value) => /\bA:\s+android:value(?:\(|=)/.test(value));
+  const values = matches[0].split('\n').filter((line) =>
+    /^\s*A:\s+(?:android|http:\/\/schemas\.android\.com\/apk\/res\/android):value(?:\([^)]*\))?=/.test(line));
+  requireValue(values.length === 1, 'Selected APK player metadata requires one literal JSON value.');
+  const line = values[0];
   const raw = line?.match(/\(Raw: "(.*)"\)\s*$/)?.[1]
     ?? line?.match(/="(.*)"\s*$/)?.[1];
   requireValue(raw, 'Selected APK player metadata is missing or not a literal JSON value.');

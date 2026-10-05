@@ -605,10 +605,18 @@ test('Android metadata parser uses the actual compatibility node and supports es
   const f = fixture(t);
   const metadata = runtimeMetadata(f.manifest.player.metadata);
   assert.deepEqual(parseAndroidPlayerMetadata(f.output), metadata);
+  const qualified = f.output.replaceAll('A: android:', 'A: http://schemas.android.com/apk/res/android:');
+  assert.deepEqual(parseAndroidPlayerMetadata(qualified), metadata);
   assert.deepEqual(parseAndroidPlayerMetadata(f.output.replaceAll(JSON.stringify(metadata),
+    JSON.stringify(JSON.stringify(metadata)).slice(1, -1))), metadata);
+  assert.deepEqual(parseAndroidPlayerMetadata(qualified.replaceAll(JSON.stringify(metadata),
     JSON.stringify(JSON.stringify(metadata)).slice(1, -1))), metadata);
   assert.throws(() => parseAndroidPlayerMetadata('source profile only'), /baked player/);
   assert.throws(() => parseAndroidPlayerMetadata(`${f.output}\n${f.output}`), /unique/);
+  assert.throws(() => parseAndroidPlayerMetadata(`${f.output}\n${qualified}`), /unique/);
+  assert.throws(() => parseAndroidPlayerMetadata(qualified.replaceAll('/res/android:', '/res/other:')), /baked player/);
+  assert.throws(() => parseAndroidPlayerMetadata(qualified.replace('PLAYER_COMPATIBILITY"', 'PLAYER_COMPATIBILITY.extra"')), /baked player/);
+  assert.throws(() => parseAndroidPlayerMetadata(qualified + qualified.split('\n').find(line => line.includes(':value('))), /one literal/);
 });
 
 test('approved diagnostic acquisition uses the local template, reference lock and no npm target', (t) => {
