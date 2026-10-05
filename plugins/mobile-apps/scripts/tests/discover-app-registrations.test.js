@@ -3,13 +3,16 @@
 const assert = require('assert');
 const test = require('node:test');
 const {
+  AZURE_CLI_MAX_BUFFER_BYTES,
   CONNECTOR_PERMISSIONS,
   REQUIRED_PERMISSIONS,
   analyzeApplication,
+  assertMatchingTenant,
   graphUrl,
   listAvailableApplications,
   parseArgs,
   rankRegistrations,
+  runAzJson,
   sanitizeDisplayName,
 } = require('../discover-app-registrations');
 
@@ -65,6 +68,20 @@ test('builds encoded Graph URLs without shell interpolation', () => {
   );
 });
 
+test('allows permission-heavy Graph pages within a bounded Azure CLI buffer', () => {
+  let invocation;
+  const result = runAzJson(['rest', '--url', 'https://graph.microsoft.com'], 30000,
+    (command, args, options) => {
+      invocation = { command, args, options };
+      return '{"value":[]}';
+    });
+
+  assert.deepEqual(result, { value: [] });
+  assert.equal(invocation.command, 'az');
+  assert.equal(invocation.options.maxBuffer, AZURE_CLI_MAX_BUFFER_BYTES);
+  assert.equal(AZURE_CLI_MAX_BUFFER_BYTES, 16 * 1024 * 1024);
+});
+
 test('lists every tenant-visible registration across Graph pages instead of owned apps only', () => {
   const requested = [];
   const pages = [
@@ -110,6 +127,21 @@ test('sanitizes hostile tenant-controlled registration names before model consum
   assert.equal(result.displayName, sanitized.displayName);
   assert.equal(result.displayNameSanitized, true);
   assert.equal(result.displayNameIsUntrustedData, true);
+});
+
+test('tenant mismatch errors do not instruct callers to reauthenticate or retry', () => {
+  let mismatchMessage;
+  assert.throws(
+    () => assertMatchingTenant('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'),
+    (error) => {
+      mismatchMessage = error.message;
+      return true;
+    },
+  );
+
+  assert.match(mismatchMessage, /does not match expected tenant/);
+  assert.doesNotMatch(mismatchMessage, /az login|reauthenticate|retry/i);
 });
 
 test('baseline requires Dataverse impersonation and PowerApps.Apps.Read', () => {

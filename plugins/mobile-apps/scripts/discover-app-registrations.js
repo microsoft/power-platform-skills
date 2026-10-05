@@ -5,6 +5,7 @@ const { sanitize } = require('./lib/sanitize-external-content');
 
 const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const GRAPH_ROOT = 'https://graph.microsoft.com/v1.0';
+const AZURE_CLI_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const POWER_PLATFORM_API_APP_ID = '8578e004-a5c6-46e7-913e-12f58912df43';
 const REQUIRED_PERMISSIONS = Object.freeze([
   {
@@ -82,11 +83,14 @@ function parseArgs(argv) {
   return options;
 }
 
-function runAzJson(args, timeout = 30000) {
+function runAzJson(args, timeout = 30000, exec = execFileSync) {
   let stdout;
   try {
-    stdout = execFileSync('az', args, {
+    // Graph application pages include permission manifests and can exceed Node's
+    // 1 MiB default stdout buffer even when the request succeeds.
+    stdout = exec('az', args, {
       encoding: 'utf8',
+      maxBuffer: AZURE_CLI_MAX_BUFFER_BYTES,
       timeout,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -214,17 +218,21 @@ function rankRegistrations(registrations) {
   ));
 }
 
+function assertMatchingTenant(accountTenantId, expectedTenantId) {
+  if (String(accountTenantId).toLowerCase() !== expectedTenantId.toLowerCase()) {
+    throw new Error(
+      `Azure CLI tenant ${accountTenantId || '(unknown)'} does not match expected tenant `
+      + `${expectedTenantId}.`,
+    );
+  }
+}
+
 function discover(options) {
   if (!GUID_PATTERN.test(options.tenantId)) throw new Error('--tenant-id must be a GUID.');
   if (options.clientId && !GUID_PATTERN.test(options.clientId)) throw new Error('--client-id must be a GUID.');
 
   const account = runAzJson(['account', 'show', '--output', 'json']);
-  if (String(account.tenantId).toLowerCase() !== options.tenantId.toLowerCase()) {
-    throw new Error(
-      `Azure CLI is signed in to tenant ${account.tenantId || '(unknown)'}, not ${options.tenantId}. `
-      + `Run az login --tenant ${options.tenantId} and retry.`,
-    );
-  }
+  assertMatchingTenant(account.tenantId, options.tenantId);
 
   const applications = listAvailableApplications(options.clientId);
   const registrations = rankRegistrations(applications.map(
@@ -273,14 +281,17 @@ if (require.main === module) {
 }
 
 module.exports = {
+  AZURE_CLI_MAX_BUFFER_BYTES,
   CONNECTOR_PERMISSIONS,
   POWER_PLATFORM_API_APP_ID,
   REQUIRED_PERMISSIONS,
   analyzeApplication,
+  assertMatchingTenant,
   discover,
   graphUrl,
   listAvailableApplications,
   parseArgs,
   rankRegistrations,
+  runAzJson,
   sanitizeDisplayName,
 };
