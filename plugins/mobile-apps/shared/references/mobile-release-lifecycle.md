@@ -181,7 +181,11 @@ precede even creating a directory inside the target app.
 
 Use the **verified reference installation's target host CLI** for the preview,
 not an older app's host or an invented registry target. Resolve its real
-`package.json` `bin["upgrade-template"]` path. After the helper confirms that CLI
+`package.json` `bin["upgrade-template"]` path. Restore the disposable preview's
+source dependencies from its unchanged source lock before reading inherited
+TypeScript configurations. Do not use target-reference `NODE_PATH` as a
+substitute for the source dependency context.
+After the helper confirms that CLI
 actually supports the diagnostic flag, preview one edge with
 `--project "<preview_dir>" --dry-run --diagnostic-artifacts "<manifest.json>"`;
 apply a clean approved edge with
@@ -196,6 +200,12 @@ before previewing the coupled migration. If a reviewed intermediate write-only
 step is necessary, run `--no-install` separately: it writes files but does not
 advance state and must be followed by the normal validated apply. Do not combine
 it with `--dry-run` or mistake it for completed migration.
+
+An incompatible retained direct-dependency override is a blocking preview
+conflict, not permission to delete a customer pin or bypass npm `EOVERRIDE`.
+Review and separately approve the exact override resolution, then rerun the
+preview before installation. Keep test-fixture-only version pins distinguishable
+from genuine customer customizations.
 
 After each final migration, use the diagnostic option on both the resolver and
 `validate-mobile-files.js --file package.json`; the same exact inventory/JS

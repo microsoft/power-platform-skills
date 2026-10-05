@@ -268,3 +268,17 @@ test('explicit local diagnostics are consistently scoped without promoting produ
   assert.match(read('skills/deploy/SKILL.md'), /Reject any `--diagnostic-artifacts`[\s\S]{0,100}before building or pushing/);
   assert.match(read('skills/debug-app/SKILL.md'), /actual supported counters/);
 });
+
+test('upgrade rehearsals preserve source config context and require reviewed override resolutions', () => {
+  const skill = read('skills/check-updates/SKILL.md');
+  const lifecycle = read('shared/references/mobile-release-lifecycle.md');
+  for (const source of [skill, lifecycle]) {
+    assert.match(source, /source dependencies from its unchanged (?:source )?lock/);
+    assert.match(source, /target-reference `NODE_PATH`/);
+    assert.match(source, /source dependency context/);
+    assert.match(source, /(?:Package override conflicts are blocking|override is a blocking preview)/);
+    assert.match(source, /approve?[\s\S]{0,45}(?:exact resolution|exact override resolution)|approval for the[\s\S]{0,30}exact resolution/);
+    assert.match(source, /EOVERRIDE/);
+    assert.match(source, /[Tt]est-fixture-only/);
+  }
+});
