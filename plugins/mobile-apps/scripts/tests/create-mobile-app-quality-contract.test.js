@@ -240,3 +240,22 @@ test('scaffold changed-file validation separates preparation and generator owner
   assert.match(shared, /not modified afterward by the skill or its subagents/);
   assert.match(shared, /Do not suppress a protected-path finding/);
 });
+
+test('user-authored values never reach the shell as an inline JSON argument', () => {
+  const skill = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
+  );
+
+  // An app called `Dave's Rounds` ends a single-quoted shell argument at the apostrophe: the
+  // JSON is corrupted at best, and whatever follows is left to the shell at worst. Size was
+  // never the test - the sections carrying user text are the ones that matter.
+  const USER_AUTHORED = ['requirements', 'design', 'architecture', 'dataModel', 'screens', 'trust', 'offline'];
+  for (const section of USER_AUTHORED) {
+    const inline = new RegExp(`set --section ${section} --json '`);
+    assert.doesNotMatch(skill, inline, `${section} carries user text and must use --json-file`);
+  }
+
+  // And the rule is stated, so the next section added follows it.
+  assert.match(skill, /Use `--json-file` for anything the user wrote/);
+  assert.doesNotMatch(skill, /Use `--json-file` for anything large/);
+});

@@ -152,8 +152,13 @@ reviewable; "Reusing `account` — sites are already maintained there by the ser
 second Site table would drift" is. Write the reason the architect actually used, including what
 was rejected, since that is what the user is being asked to approve at Gate 2.
 
-**Use `--json-file` for anything large** (a full table list, a screen list). A long JSON blob
-as one shell argument is fragile to quote and easy to truncate.
+**Use `--json-file` for anything the user wrote.** Size is not the test — an app called
+`Dave's Rounds` is enough. A value interpolated into a single-quoted shell argument ends that
+quoting at the first apostrophe, which at best corrupts the JSON and at worst leaves whatever
+follows to the shell. App names, briefs, feature lists, table reasons and design directions are
+all user-authored, so they are written to a file with the `Write` tool and passed by path.
+
+`--json` inline is for values this skill controls end to end, such as a fixed status string.
 
 **Every one of these calls is best-effort.** If `app-docs.js` fails, say nothing and carry on:
 the documentation must never gate, retry, or fail a build.
@@ -474,8 +479,15 @@ Set tentative defaults (the preview preference applies at Step 6.75):
 **Record the confirmed brief.** The phase stays open: Step 2c still asks the user to approve the
 plan preview, and a closed phase cannot report that the run is waiting on them.
 
+Write `<tmp>/requirements.json` with the `Write` tool first — every value here came from the user,
+and none of it may go through the shell:
+
+```json
+{"appName":"<displayName>","slug":"<slug>","platforms":"iOS and Android","aesthetic":"<aesthetic>","industry":"<industry>","brief":"<confirmed brief>","features":["<feature>"]}
+```
+
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" set --section requirements --json '{"appName":"<displayName>","slug":"<slug>","platforms":"iOS and Android","aesthetic":"<aesthetic>","industry":"<industry>","brief":"<confirmed brief>","features":["<feature>"]}'
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" set --section requirements --json-file <tmp>/requirements.json
 node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id requirements --status active --note "Brief confirmed"
 ```
 
@@ -1740,10 +1752,17 @@ brand, while the data model is still being built. Do not skip it because they ar
 they are the same mockups `/preview-screens` would produce, and they are the first concrete thing
 in the whole run.
 
-**Record the design** once `/design-system` returns, taking the palette from `brand/tokens.ts`:
+**Record the design** once `/design-system` returns, taking the palette from `brand/tokens.ts`.
+Write `<tmp>/design.json` with the `Write` tool — the direction is free text the user chose, so it
+goes to a file rather than through the shell:
+
+```json
+{"direction":"<direction>","headingFont":"<font>","bodyFont":"<font>","darkMode":"<enabled|disabled>","palette":[{"name":"Primary","value":"#rrggbb"}]}
+```
+
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" set --section design --json '{"direction":"<direction>","headingFont":"<font>","bodyFont":"<font>","darkMode":"<enabled|disabled>","palette":[{"name":"Primary","value":"#rrggbb"}]}'
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" set --section design --json-file <tmp>/design.json
 node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id design --status done
 ```
 
