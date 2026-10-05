@@ -90,7 +90,7 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" <command
 
 | Command | Use |
 |---|---|
-| `init --app-name "<displayName>" --data-platform <dataverse\|connector-only>` | Once, at Step 2b. Safe to re-run: a resume keeps recorded progress. |
+| `init --json-file <path>` | Once, at Step 2b, with `{"appName","dataPlatform"}`. Safe to re-run: a resume keeps recorded progress. The display name is user text, so it travels in the file, never as an argument. |
 | `step --id <phase> --status <pending\|active\|done\|skipped\|failed> [--note "<text>"]` | At every phase boundary. Marking a phase `active` closes any previous one. |
 | `set --section <name> --json '<object>'` or `--json-file <path>` | When a decision is made. Merges, so a later step can add to a section. |
 | `step --id <phase> --status failed --note "<what stopped it>"` | Before surfacing any unrecoverable STOP. Best-effort like the rest: if it fails, still stop. |
@@ -355,10 +355,17 @@ Don't enter plan mode here — that's the planner agent's job in Step 3.
 
 ### Step 2b — Requirements discovery
 
-Create the plan now that the display name is known, and open the first phase:
+Create the plan now that the display name is known, and open the first phase. Write
+`<tmp>/plan-init.json` with the `Write` tool first — the display name is the user's own text, and
+a `"`, a backtick or `$(…)` in it would break out of a shell argument before Node saw it:
+
+```json
+{"appName":"<displayName>","dataPlatform":"unknown"}
+```
+
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" init --app-name "<displayName>" --data-platform unknown
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" init --json-file <tmp>/plan-init.json
 node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id requirements --status active --note "Waiting for your answers to the setup questions"
 ```
 

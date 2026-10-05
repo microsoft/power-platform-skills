@@ -455,7 +455,15 @@ if (require.main === module) {
       const state = loadState(root);
       process.stdout.write(`${JSON.stringify(state ? summarize(state) : { total: 0, done: 0 })}\n`);
     } else if (options.command === 'init') {
-      const written = save(root, initState(root, options));
+      // `--app-name` is the display name the user typed, so it may contain a quote, a backtick
+      // or `$(...)`. Passed as a shell argument those break out of the quoting before Node ever
+      // sees them, so the skill hands the name over in a file instead - the same channel every
+      // section write uses. `--app-name`/`--data-platform` stay for callers whose values are
+      // their own, such as tests and tooling.
+      const seed = options.jsonFile
+        ? JSON.parse(fs.readFileSync(options.jsonFile, 'utf8'))
+        : options;
+      const written = save(root, initState(root, seed));
       process.stdout.write(`${JSON.stringify({ status: 'ok', plan: written })}\n`);
     } else if (options.command === 'phone') {
       const state = loadState(root);

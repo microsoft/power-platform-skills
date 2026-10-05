@@ -241,23 +241,37 @@ test('scaffold changed-file validation separates preparation and generator owner
   assert.match(shared, /Do not suppress a protected-path finding/);
 });
 
-test('user-authored values never reach the shell as an inline JSON argument', () => {
+test('no user-authored value reaches the shell as a command argument', () => {
   const skill = fs.readFileSync(
     path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
   );
 
-  // An app called `Dave's Rounds` ends a single-quoted shell argument at the apostrophe: the
-  // JSON is corrupted at best, and whatever follows is left to the shell at worst. Size was
-  // never the test - the sections carrying user text are the ones that matter.
-  const USER_AUTHORED = ['requirements', 'design', 'architecture', 'dataModel', 'screens', 'trust', 'offline'];
-  for (const section of USER_AUTHORED) {
-    const inline = new RegExp(`set --section ${section} --json '`);
-    assert.doesNotMatch(skill, inline, `${section} carries user text and must use --json-file`);
-  }
+  // A `'` ends a single-quoted argument; a `"`, a backtick or `$(...)` breaks out of a
+  // double-quoted one and runs before Node sees it. Both forms have shipped here: first the
+  // inline `--json` writes, then `init --app-name "<displayName>"`. Checking only one quoting
+  // style is what let the second through, so this checks the values instead.
+  const USER_AUTHORED = [
+    '<displayName>', '<confirmed brief>', '<aesthetic>', '<industry>',
+    '<feature>', '<direction>', '<slug>',
+  ];
 
-  // And the rule is stated, so the next section added follows it.
+  const offenders = [];
+  for (const [line] of skill.matchAll(/^node "\$\{PLUGIN_ROOT\}\/scripts\/app-docs\.js"[^\n]*/gm)) {
+    for (const token of USER_AUTHORED) {
+      if (line.includes(token)) offenders.push(`${token} in: ${line.slice(60, 140)}`);
+    }
+  }
+  assert.deepEqual(offenders, [], 'these values are the user\'s own and must travel in a file');
+
+  // Every section that carries user text goes through --json-file, including the plan's own
+  // creation, which takes the display name.
+  for (const section of ['requirements', 'design', 'architecture', 'dataModel', 'screens', 'trust', 'offline', 'auth']) {
+    assert.doesNotMatch(skill, new RegExp(`set --section ${section} --json '`), `${section} must use --json-file`);
+  }
+  assert.match(skill, /init --json-file/);
+
+  // And the rule is stated, so the next value added follows it.
   assert.match(skill, /Use `--json-file` for anything the user wrote/);
-  assert.doesNotMatch(skill, /Use `--json-file` for anything large/);
 });
 
 test('authentication discovers and checks registrations before writing a client ID', () => {

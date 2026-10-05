@@ -496,7 +496,7 @@ test('every step that blocks on the user says so in the plan', () => {
   assert.deepEqual(silent, [], 'these steps ask the user but never raise the waiting banner');
 
   // The exemptions must stay true: the plan is created at 2b, and the protocol owns the gates.
-  assert.match(skill, /init --app-name[\s\S]{0,400}### Step 2b|### Step 2b[\s\S]{0,800}init --app-name/);
+  assert.match(skill, /### Step 2b[\s\S]{0,1200}init --json-file/, 'the plan is created at Step 2b');
   assert.match(skill, /Gate 2 — awaiting your approval/);
 
   // Step 13's menu is not a gate. The build has finished and the plan has settled, so
