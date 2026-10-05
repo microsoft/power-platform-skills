@@ -14,6 +14,10 @@ const { normalizeCloud } = require("./region/artemis-service");
 // event unresolved, so the dispatcher writes the local mirror and does not
 // POST.
 async function resolve({ event, cfg, cloud, configDir }) {
+  // normalizeCloud treats missing or unrecognized values as Public. Only use
+  // the public collector when PAC explicitly identified a known public cloud.
+  const cloudName = typeof cloud === "string" ? cloud.trim().toLowerCase() : "";
+  if (cloudName !== "public" && cloudName !== "azurecloud") return null;
   if (normalizeCloud(cloud) !== "Public") return null;
 
   return resolveRegion({

@@ -1,7 +1,6 @@
 "use strict";
 
-// Non-blocking, disk-cached variants of the shared telemetry library's PAC
-// readers.
+// Non-blocking variants of the shared telemetry library's PAC readers.
 //
 // Why this file exists: scripts/lib/telemetry/lib is a byte-identical copy of
 // shared/telemetry/lib and must stay that way, so plugin-specific additions
@@ -11,9 +10,8 @@
 // adds two things on top of the shared library without modifying it:
 //
 //   1. async execution, so the hook's event loop is not blocked, and
-//   2. a short-lived disk cache, so the .NET cold start is paid at most once
-//      per TTL across hook processes (each hook invocation is a new process,
-//      so the shared library's per-process cache never hits).
+//   2. a disk cache for the non-identity PAC version, so its .NET cold start
+//      is paid at most once per TTL across hook processes.
 //
 // Executables are resolved through the shared library's native-exec, so `pac`
 // is started by absolute path from PATH with shell:false — never by bare name
@@ -34,13 +32,10 @@ const { emitSkillStartedFromPrompt } = require("./lib/emit-from-prompt");
 
 const TIMEOUT_MS = 8000;
 
-// `pac auth who` changes only on `pac auth create/select`; an hour keeps a
-// profile switch visible quickly while removing the cold start from the hot path.
-const AUTH_CACHE_TTL_MS = 60 * 60 * 1000;
 // The CLI version changes only when the user updates PAC.
 const VERSION_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
-const AUTH_CACHE_FILE = "pac-auth-cache.json";
+const LEGACY_AUTH_CACHE_FILE = "pac-auth-cache.json";
 const VERSION_CACHE_FILE = "pac-version-cache.json";
 
 let authCache;
@@ -154,24 +149,22 @@ function parseVersion(stdout) {
   return match ? match[1] : "";
 }
 
-// Per-process cache → disk cache → async `pac auth who`. Resolves to the auth
-// object or null.
+// Per-process cache → async `pac auth who`. Identity is never persisted across
+// hook processes, so PAC profile switches cannot reuse another profile's IDs.
 async function readPacAuthAsync(opts = {}) {
   if (authCache !== undefined) return authCache;
+  try {
+    fs.unlinkSync(cachePath(LEGACY_AUTH_CACHE_FILE));
+  } catch {
+    /* no legacy cache to remove, or it is not writable */
+  }
   if (opts._exec === false) {
     authCache = null;
     return null;
   }
-  if (opts._skipDiskCache !== true) {
-    const cached = readDiskCache(AUTH_CACHE_FILE);
-    if (cached && (cached.orgId || cached.tenantId)) {
-      authCache = cached;
-      return authCache;
-    }
-  }
-  const result = parseAuth(await runNativeAsync("pac", ["auth", "who"]));
+  const runNative = typeof opts._runNative === "function" ? opts._runNative : runNativeAsync;
+  const result = parseAuth(await runNative("pac", ["auth", "who"]));
   authCache = result || null;
-  if (result) writeDiskCache(AUTH_CACHE_FILE, result, AUTH_CACHE_TTL_MS);
   return authCache;
 }
 
@@ -277,6 +270,5 @@ module.exports = {
   readPacCliVersionAsync,
   emitSkillStartedFromPromptAsync,
   _resetCache,
-  AUTH_CACHE_TTL_MS,
   VERSION_CACHE_TTL_MS,
 };

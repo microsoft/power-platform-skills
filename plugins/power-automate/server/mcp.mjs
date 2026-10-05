@@ -49478,7 +49478,7 @@ var StdioServerTransport = class {
 };
 
 // packages/core/dist/version.js
-var FLOWAGENT_VERSION = "3.2.0";
+var FLOWAGENT_VERSION = "3.2.1";
 async function buildId() {
   try {
     const [{ createHash: createHash4 }, { readFile }, { fileURLToPath: fileURLToPath2 }] = await Promise.all([
@@ -49611,6 +49611,9 @@ function explain(code, hostname3) {
     case "SELF_SIGNED_CERT_IN_CHAIN":
     case "DEPTH_ZERO_SELF_SIGNED_CERT":
     case "CERT_HAS_EXPIRED":
+    case "UNABLE_TO_GET_ISSUER_CERT_LOCALLY":
+    case "UNABLE_TO_GET_ISSUER_CERT":
+    case "CERT_UNTRUSTED":
     case "ERR_TLS_CERT_ALTNAME_INVALID":
       return `TLS certificate validation failed for ${hostname3}. This usually means a corporate proxy or security appliance is inspecting HTTPS traffic. Point Node at your organisation's CA bundle with NODE_EXTRA_CA_CERTS=/path/to/ca.pem.`;
     case "ENOTFOUND":
@@ -49974,7 +49977,7 @@ init_backups();
 // packages/core/dist/api/pagination.js
 init_logger();
 var DEFAULT_MAX_PAGES = 5;
-async function followPagination(fetchPage, maxPages = DEFAULT_MAX_PAGES, stopWhen) {
+async function followPagination(fetchPage, maxPages = DEFAULT_MAX_PAGES, stopWhen, onLimitReached) {
   const allItems = [];
   let response = await fetchPage();
   allItems.push(...response.value);
@@ -49985,8 +49988,9 @@ async function followPagination(fetchPage, maxPages = DEFAULT_MAX_PAGES, stopWhe
     allItems.push(...response.value);
     page++;
   }
-  if (response.nextLink) {
+  if (response.nextLink && page >= maxPages) {
     logger.debug(`Stopped pagination after ${maxPages} pages, more data available`);
+    onLimitReached?.(response.nextLink);
   }
   return allItems;
 }
@@ -50988,12 +50992,42 @@ var GATED_REQUEST_TRIGGER_KINDS = /* @__PURE__ */ new Set([
   "powerpages",
   "skills"
 ]);
-async function fetchContentLink(uri) {
-  const res = await fetchWithNetworkError(uri, { method: "GET" });
-  const text = await res.text();
-  if (!res.ok) {
-    throw new FlowApiError(res.status, res.statusText, text, uri);
+async function readContentText(response, maxBytes) {
+  const contentLength = Number(response.headers.get("content-length"));
+  if (maxBytes !== void 0 && Number.isFinite(contentLength) && contentLength > maxBytes) {
+    try {
+      await response.body?.cancel();
+    } catch {
+    }
+    return { contentSize: contentLength, exceedsLimit: true };
   }
+  if (maxBytes === void 0)
+    return { text: await response.text() };
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const text = await response.text();
+    const contentSize2 = Buffer.byteLength(text, "utf8");
+    return contentSize2 > maxBytes ? { contentSize: contentSize2, exceedsLimit: true } : { text, contentSize: contentSize2 };
+  }
+  const chunks = [];
+  let contentSize = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done)
+      break;
+    contentSize += value.byteLength;
+    if (contentSize > maxBytes) {
+      try {
+        await reader.cancel();
+      } catch {
+      }
+      return { contentSize, exceedsLimit: true };
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return { text: Buffer.concat(chunks).toString("utf8"), contentSize };
+}
+function parseContentText(text) {
   if (!text)
     return void 0;
   try {
@@ -51001,6 +51035,22 @@ async function fetchContentLink(uri) {
   } catch {
     return text;
   }
+}
+async function fetchContentLink(uri, maxBytes) {
+  let res;
+  try {
+    res = await fetchWithNetworkError(uri, { method: "GET" });
+  } catch (err) {
+    if (err instanceof FlowApiError) {
+      throw new FlowApiError(err.statusCode, err.statusText, err.body, "SAS content link");
+    }
+    throw err;
+  }
+  const { text, contentSize, exceedsLimit } = await readContentText(res, maxBytes);
+  if (!res.ok) {
+    throw new FlowApiError(res.status, res.statusText, exceedsLimit ? `Response body exceeded the ${maxBytes}-byte limit.` : text ?? "", "SAS content link");
+  }
+  return exceedsLimit ? { contentSize, exceedsLimit } : { content: parseContentText(text ?? ""), contentSize };
 }
 function isDirectApiTriggerKind(kind) {
   return !!kind && DIRECT_API_TRIGGER_KINDS.has(kind.toLowerCase());
@@ -51250,9 +51300,7 @@ var FlowClient = class _FlowClient {
     }
   }
   async updateFlow(envId, flowId, body, opts = {}) {
-    if (opts.previewToken) {
-      await this.assertPreviewTokenMatches(envId, flowId, body, opts.previewToken);
-    }
+    const expectedLastModifiedTime = opts.previewToken ? this.assertPreviewTokenMatches(envId, flowId, body, opts.previewToken) : void 0;
     await this.assertNotManaged(envId, flowId, "update_flow", opts);
     await this.snapshotBeforeMutation(envId, flowId, "update_flow", opts);
     const workingBody = structuredClone(body);
@@ -51265,19 +51313,22 @@ var FlowClient = class _FlowClient {
       try {
         const ctx = await this.getFlowContext(envId, flowId);
         if (ctx.inSolution && ctx.workflowId && !ctx.warning) {
-          const updated = await this.updateFlowViaDataverse(envId, flowId, ctx.workflowId, workingBody);
+          const updated = await this.updateFlowViaDataverse(envId, flowId, ctx.workflowId, workingBody, expectedLastModifiedTime);
           if (updated) {
             if (autoMerged.length)
               updated._autoMergedConnectionRefs = autoMerged;
             return updated;
           }
         }
-      } catch {
+      } catch (err) {
+        if (err instanceof PreviewTokenError)
+          throw err;
         logger.debug(`updateFlow: Dataverse path failed, falling through to PPAPI`);
       }
     }
     this.rewriteConnectionNamesForPpapi(workingBody);
     const path7 = `/powerautomate/flows/${flowId}${this.ppapiFlowQs({})}`;
+    await this.assertPreviewVersionUnchanged(envId, flowId, expectedLastModifiedTime);
     const result = await this.ppapiRequestWithFallback(envId, path7, "PATCH", workingBody);
     if (autoMerged.length)
       result._autoMergedConnectionRefs = autoMerged;
@@ -51365,7 +51416,7 @@ var FlowClient = class _FlowClient {
    * This bypasses PPAPI validation issues with connectionName/connectionReferenceName
    * round-trip (#314 finding 2).
    */
-  async updateFlowViaDataverse(envId, flowId, workflowId, body) {
+  async updateFlowViaDataverse(envId, flowId, workflowId, body, expectedLastModifiedTime) {
     let instanceUrl;
     try {
       instanceUrl = await this.getDataverseInstanceUrl(envId);
@@ -51384,6 +51435,7 @@ var FlowClient = class _FlowClient {
       clientdata.properties.displayName = body.properties.displayName;
     }
     const patchUrl = `${instanceUrl}/api/data/v9.2/workflows(${workflowId})`;
+    await this.assertPreviewVersionUnchanged(envId, flowId, expectedLastModifiedTime);
     await this.dataversePatch(patchUrl, { clientdata: JSON.stringify(clientdata) }, dvToken);
     return this.getFlow(envId, flowId);
   }
@@ -51399,12 +51451,7 @@ var FlowClient = class _FlowClient {
     const def = body.properties?.definition;
     if (!def)
       return;
-    const isInjectedAuth = (value) => {
-      if (value === void 0 || value === null)
-        return false;
-      const serialized = typeof value === "string" ? value : JSON.stringify(value);
-      return /parameters\(\s*'\$authentication'\s*\)/.test(serialized ?? "");
-    };
+    const isInjectedAuth = (value) => typeof value === "string" && /^(?:@parameters\(\s*'\$authentication'\s*\)|@\{\s*parameters\(\s*'\$authentication'\s*\)\s*\})$/.test(value.trim());
     const stripAuth = (inputs) => {
       if (!inputs || typeof inputs !== "object" || Array.isArray(inputs))
         return;
@@ -51667,7 +51714,7 @@ var FlowClient = class _FlowClient {
       note: diff.hasChanges ? "Review the diff above. Re-submit the SAME body to update_flow with previewToken to apply." : "No changes detected vs the live flow. update_flow is a no-op for this body."
     };
   }
-  async assertPreviewTokenMatches(envId, flowId, body, token) {
+  assertPreviewTokenMatches(envId, flowId, body, token) {
     const proposalHash = hashUpdateBody(body);
     const result = redeemToken(token, { envId, flowId, proposalHash });
     if (!result.ok) {
@@ -51676,18 +51723,20 @@ var FlowClient = class _FlowClient {
       }
       throw new PreviewTokenError(result.code);
     }
-    const expected = result.lastModifiedTime;
-    if (expected) {
-      let actual;
-      try {
-        const currentFlow = await this.getFlow(envId, flowId);
-        actual = currentFlow?.properties?.lastModifiedTime;
-      } catch {
-        return;
-      }
-      if (actual && !sameInstant(expected, actual)) {
-        throw new PreviewTokenError("PreviewConcurrencyConflict", `the flow changed after preview (previewed lastModifiedTime ${expected}, now ${actual})`, "Somebody or something else wrote to this flow after you previewed it. Re-read the flow, call preview_update again to diff against the current definition, and re-apply only if the change is still what you intend.");
-      }
+    return result.lastModifiedTime;
+  }
+  async assertPreviewVersionUnchanged(envId, flowId, expectedLastModifiedTime) {
+    if (!expectedLastModifiedTime)
+      return;
+    let actual;
+    try {
+      const currentFlow = await this.getFlow(envId, flowId);
+      actual = currentFlow?.properties?.lastModifiedTime;
+    } catch {
+      throw new PreviewTokenError("PreviewConcurrencyCheckFailed", "the flow version could not be checked immediately before the update", "Call preview_update again, review the current flow, then retry update_flow with the new token.");
+    }
+    if (actual && !sameInstant(expectedLastModifiedTime, actual)) {
+      throw new PreviewTokenError("PreviewConcurrencyConflict", `the flow changed after preview (previewed lastModifiedTime ${expectedLastModifiedTime}, now ${actual})`, "Re-read the flow, call preview_update again to diff against the current definition, and re-apply only if the change is still what you intend.");
     }
   }
   async deleteFlow(envId, flowId, opts = {}) {
@@ -52166,8 +52215,22 @@ var FlowClient = class _FlowClient {
         skipped: `Content is ${contentSize} bytes, over the ${maxBytes}-byte cap. Raise maxBytes to retrieve it.`
       };
     }
-    const content = await fetchContentLink(link.uri);
-    return { action: actionName, which, contentSize, content };
+    const fetched = await fetchContentLink(link.uri, maxBytes);
+    if (fetched.exceedsLimit) {
+      const actualSize = fetched.contentSize ?? contentSize;
+      return {
+        action: actionName,
+        which,
+        contentSize: actualSize,
+        skipped: `Content is at least ${actualSize} bytes, over the ${maxBytes}-byte cap. Raise maxBytes to retrieve it.`
+      };
+    }
+    return {
+      action: actionName,
+      which,
+      contentSize: contentSize ?? fetched.contentSize,
+      content: fetched.content
+    };
   }
   /**
    * List the per-iteration records for an action inside a loop.
@@ -52185,11 +52248,14 @@ var FlowClient = class _FlowClient {
     const includeLinks = opts.includeLinks ?? true;
     const path7 = `/powerautomate/flows/${flowId}/runs/${runId}/actions/${actionName}/repetitions${this.ppapiFlowQs({})}`;
     const matches = (r) => statusFilter === "any" || r?.properties?.status === statusFilter;
+    let paginationLimitReached = false;
     const all = await followPagination(async (nextUrl) => {
       if (nextUrl)
         return this.ppapiRequest("GET", nextUrl);
       return this.ppapiRequestWithFallback(envId, path7, "GET");
-    }, void 0, (items) => items.filter(matches).length >= top);
+    }, void 0, (items) => items.filter(matches).length > top, () => {
+      paginationLimitReached = true;
+    });
     const filtered = all.filter(matches);
     const page = filtered.slice(0, top).map((r) => {
       if (includeLinks)
@@ -52197,7 +52263,11 @@ var FlowClient = class _FlowClient {
       const { inputsLink, outputsLink, ...rest } = r?.properties ?? {};
       return { ...r, properties: rest };
     });
-    return { repetitions: page, returned: page.length, truncated: filtered.length > top };
+    return {
+      repetitions: page,
+      returned: page.length,
+      truncated: filtered.length > top || paginationLimitReached
+    };
   }
   /** Diagnose a failed run: classify each failed/timed-out action with an actionable remediation. */
   async diagnoseRun(envId, flowId, runId) {
@@ -52326,7 +52396,8 @@ var FlowClient = class _FlowClient {
         const inputsLink = runTrigger?.inputsLink?.uri ?? matchedAction?.properties?.inputsLink?.uri;
         if (triggerInputs === void 0 && inputsLink) {
           try {
-            triggerInputs = await fetchContentLink(inputsLink);
+            const fetched = await fetchContentLink(inputsLink);
+            triggerInputs = fetched.content;
           } catch (err) {
             triggerInputs = {
               _note: "inputsLink fetch failed; trigger inputs unavailable for this run",
@@ -55400,6 +55471,33 @@ function appendLocal(logPath, record2) {
   fs5.appendFileSync(logPath, JSON.stringify(record2) + "\n", "utf8");
 }
 
+// packages/core/dist/telemetry/scrubber.js
+function errorClass(err) {
+  if (err && typeof err === "object") {
+    const ctorName = err.constructor?.name;
+    if (ctorName && ctorName !== "Object")
+      return ctorName;
+    const name3 = err.name;
+    if (typeof name3 === "string" && name3)
+      return name3;
+  }
+  return "Error";
+}
+function errorCode(err) {
+  if (!err || typeof err !== "object")
+    return void 0;
+  const e = err;
+  if (typeof e.code === "string" && e.code)
+    return e.code;
+  if (typeof e.code === "number")
+    return String(e.code);
+  if (typeof e.statusCode === "number")
+    return String(e.statusCode);
+  if (typeof e.status === "number")
+    return String(e.status);
+  return void 0;
+}
+
 // packages/core/dist/templates.js
 var FLOWAGENT_TEMPLATE_ID = "fa2c7b91-3e04-4d8a-b6f1-a9e5c8d20147";
 function injectTemplateMetadata(definition) {
@@ -56901,14 +56999,14 @@ function emit(eventName, fields) {
     });
     if (cfg.mode === "off")
       return;
+    try {
+      appendLocal(cfg.localLogPath, record2);
+    } catch {
+    }
     if (cfg.mode === "collector") {
       if (dispatcherExists()) {
         sendToCollector(record2, cfg);
-      } else {
-        appendLocal(cfg.localLogPath, record2);
       }
-    } else {
-      appendLocal(cfg.localLogPath, record2);
     }
   } catch {
   }
@@ -56969,6 +57067,7 @@ function createTelemetryObserver(opts = {}) {
         durationMs: info.durationMs,
         surface: "mcp",
         ...envFields(info),
+        errorClass: info.errorClass,
         errorCode: info.errorCode,
         responseBytes: responseBytes(info.result),
         mcpTransport: transport2,
@@ -67175,6 +67274,14 @@ function safeResult(data, opts) {
   }
   return { content: [{ type: "text", text }] };
 }
+function safeErrorName(err) {
+  if (!(err instanceof Error))
+    return void 0;
+  if (err.name && err.name !== "Error")
+    return err.name;
+  const constructorName = err.constructor?.name;
+  return constructorName && constructorName !== "Error" ? constructorName : void 0;
+}
 function pageResolvedParams(result, options, context) {
   const { parameter, query, cursor } = options;
   if (parameter && !result.parameters.some((p) => p.name === parameter)) {
@@ -67249,11 +67356,14 @@ function pageResolvedParams(result, options, context) {
 }
 function safeError(err, enhance) {
   let payload;
+  const errorName = safeErrorName(err);
   if (err && typeof err === "object" && "code" in err && typeof err.code === "string") {
     const e = err;
     payload = {
       code: e.code,
       message: e.message ?? String(err),
+      ...errorName ? { errorName } : {},
+      ...typeof e.statusCode === "number" ? { statusCode: e.statusCode } : {},
       remediation: e.remediation,
       operation: e.operation,
       flowId: e.flowId,
@@ -67274,7 +67384,8 @@ function safeError(err, enhance) {
     payload = {
       code: "tool-error",
       message,
-      ...err instanceof Error && err.name && err.name !== "Error" ? { errorName: err.name } : {}
+      ...errorName ? { errorName } : {},
+      ...err && typeof err === "object" && typeof err.statusCode === "number" ? { statusCode: err.statusCode } : {}
     };
   }
   let text;
@@ -67553,13 +67664,18 @@ async function createMcpServer(authProvider, deps = {}) {
           try {
             const result = await handler(...handlerArgs);
             const isError = result?.isError === true;
+            let errorClass2;
             let errorCode2;
             if (isError) {
               try {
                 const text = result.content?.[0]?.text;
                 if (typeof text === "string") {
                   const parsed = JSON.parse(text);
-                  errorCode2 = parsed?.code;
+                  const payload = parsed?.error && typeof parsed.error === "object" ? parsed.error : parsed;
+                  errorClass2 = typeof (payload?.errorClass ?? payload?.className ?? payload?.errorName ?? payload?.name) === "string" ? errorClass({ name: payload.errorClass ?? payload.className ?? payload.errorName ?? payload.name }) : void 0;
+                  const payloadCode = errorCode(payload);
+                  const payloadStatus = typeof payload?.statusCode === "number" ? errorCode({ statusCode: payload.statusCode }) : void 0;
+                  errorCode2 = payloadCode && payloadCode !== "tool-error" ? payloadCode : payloadStatus ?? errorCode(parsed);
                 }
               } catch {
               }
@@ -67571,6 +67687,7 @@ async function createMcpServer(authProvider, deps = {}) {
                 correlationId,
                 durationMs: Date.now() - t0,
                 isError,
+                errorClass: errorClass2,
                 errorCode: errorCode2,
                 result,
                 ...eventEnvironment
@@ -67586,7 +67703,8 @@ async function createMcpServer(authProvider, deps = {}) {
                 correlationId,
                 durationMs: Date.now() - t0,
                 isError: true,
-                errorCode: err?.code,
+                errorClass: errorClass(err),
+                errorCode: errorCode(err),
                 ...eventEnvironment
               });
             } catch {
@@ -67824,7 +67942,7 @@ async function createMcpServer(authProvider, deps = {}) {
       return safeError(e, enhanceFlowApiError);
     }
   });
-  server2.tool("update_flow", "Update an existing flow's definition or properties. **Refuses by default if the flow lives in a managed Dataverse solution** (returns ManagedSolutionReadOnly). Pass forceManaged: true only if you understand the change will be overwritten on the next solution import \u2014 see docs/recipes/upgrade-managed-flow.md for the right pattern. **Recommended two-phase update**: call preview_update first to obtain a previewToken bound to the exact change, then pass that token back here. update_flow applies only if the proposal still matches what was previewed AND nobody else has written to the flow since (prevents lost writes from concurrent edits). Auto-captures a backup snapshot before applying (last 10 retained per flow, accessible via list_backups). **Use this for**: any change to an existing flow. **Do NOT use for**: creating a new flow (use create_flow) or starting/stopping a flow (use publish_flow / disable_flow).", { env: external_exports.string().optional().describe("Environment ID"), flow: external_exports.string().describe("Flow ID"), definition: jsonRecord.optional().describe("Updated definition JSON"), connectionRefs: jsonRecord.optional().describe("Connection references JSON"), name: external_exports.string().optional().describe("New name"), state: external_exports.enum(["Started", "Stopped"]).optional().describe("State"), forceManaged: external_exports.boolean().optional().describe("Override the managed-solution read-only guard. Default false."), autoResolveConnectionRefs: external_exports.boolean().optional().describe("Auto-resolve missing connection refs for new connectors in the definition. Default true. Set false to skip if auto-merge is causing errors."), previewToken: external_exports.string().optional().describe("Token issued by preview_update for this exact (env, flow, body) tuple. Single-use. The update applies only if the proposed change still matches what was previewed (otherwise PreviewTokenMismatch) and the flow has not been modified by anyone else since (otherwise PreviewConcurrencyConflict).") }, { readOnlyHint: false, title: "Update Flow" }, async ({ env, flow, definition, connectionRefs, name: name3, state, forceManaged, autoResolveConnectionRefs, previewToken }) => {
+  server2.tool("update_flow", "Update an existing flow's definition or properties. **Refuses by default if the flow lives in a managed Dataverse solution** (returns ManagedSolutionReadOnly). Pass forceManaged: true only if you understand the change will be overwritten on the next solution import \u2014 see docs/recipes/upgrade-managed-flow.md for the right pattern. **Recommended two-phase update**: call preview_update first to obtain a previewToken bound to the exact change, then pass that token back here. update_flow re-reads the flow's last-modified timestamp immediately before writing and rejects edits already present at that point. PPAPI provides no conditional-write primitive, so a concurrent write after the check can still be missed. Auto-captures a backup snapshot before applying (last 10 retained per flow, accessible via list_backups). **Use this for**: any change to an existing flow. **Do NOT use for**: creating a new flow (use create_flow) or starting/stopping a flow (use publish_flow / disable_flow).", { env: external_exports.string().optional().describe("Environment ID"), flow: external_exports.string().describe("Flow ID"), definition: jsonRecord.optional().describe("Updated definition JSON"), connectionRefs: jsonRecord.optional().describe("Connection references JSON"), name: external_exports.string().optional().describe("New name"), state: external_exports.enum(["Started", "Stopped"]).optional().describe("State"), forceManaged: external_exports.boolean().optional().describe("Override the managed-solution read-only guard. Default false."), autoResolveConnectionRefs: external_exports.boolean().optional().describe("Auto-resolve missing connection refs for new connectors in the definition. Default true. Set false to skip if auto-merge is causing errors."), previewToken: external_exports.string().optional().describe("Token issued by preview_update for this exact (env, flow, body) tuple. Single-use. It detects edits present at the final version check (otherwise PreviewConcurrencyConflict), but the API has no atomic conditional write and may miss a write after that check.") }, { readOnlyHint: false, title: "Update Flow" }, async ({ env, flow, definition, connectionRefs, name: name3, state, forceManaged, autoResolveConnectionRefs, previewToken }) => {
     try {
       const envId = ctx.resolveEnv(env);
       const props = await buildUpdateProperties(ctx, envId, flow, {
@@ -67839,7 +67957,7 @@ async function createMcpServer(authProvider, deps = {}) {
       return safeError(e, enhanceFlowApiError);
     }
   });
-  server2.tool("preview_update", "Read-only: compute a diff between the live flow and the proposed update body, and return a short-lived single-use token. Use the token with update_flow to apply the change only if the proposal still matches what you reviewed and nobody else has written to the flow since. No mutation is performed by this tool.", { env: external_exports.string().optional().describe("Environment ID"), flow: external_exports.string().describe("Flow ID"), definition: jsonRecord.optional().describe("Proposed updated definition JSON"), connectionRefs: jsonRecord.optional().describe("Proposed connection references JSON"), name: external_exports.string().optional().describe("Proposed new name"), state: external_exports.enum(["Started", "Stopped"]).optional().describe("Proposed state") }, { readOnlyHint: true, title: "Preview Update" }, async ({ env, flow, definition, connectionRefs, name: name3, state }) => {
+  server2.tool("preview_update", "Read-only: compute a diff between the live flow and the proposed update body, and return a short-lived single-use token. Use the token with update_flow to detect edits present at the final version check; the API has no atomic conditional write, so a write after that check can still be missed. No mutation is performed by this tool.", { env: external_exports.string().optional().describe("Environment ID"), flow: external_exports.string().describe("Flow ID"), definition: jsonRecord.optional().describe("Proposed updated definition JSON"), connectionRefs: jsonRecord.optional().describe("Proposed connection references JSON"), name: external_exports.string().optional().describe("Proposed new name"), state: external_exports.enum(["Started", "Stopped"]).optional().describe("Proposed state") }, { readOnlyHint: true, title: "Preview Update" }, async ({ env, flow, definition, connectionRefs, name: name3, state }) => {
     try {
       const envId = ctx.resolveEnv(env);
       const props = await buildUpdateProperties(ctx, envId, flow, {
@@ -67863,7 +67981,7 @@ async function createMcpServer(authProvider, deps = {}) {
       value: external_exports.unknown().optional().describe("New value (required for set/add/merge; merge requires an object)")
     })).describe("Ordered list of edit operations"),
     dryRun: external_exports.boolean().optional().describe("If true, return a diff + previewToken without writing."),
-    previewToken: external_exports.string().optional().describe("Token from a prior dryRun for these exact operations. Single-use, and rejected if the flow was modified by anyone else since the preview."),
+    previewToken: external_exports.string().optional().describe("Token from a prior dryRun for these exact operations. Single-use; edits present at the final version check are rejected, but the API has no atomic conditional write and may miss a write after that check."),
     forceManaged: external_exports.boolean().optional().describe("Override the managed-solution read-only guard. Default false."),
     autoResolveConnectionRefs: external_exports.boolean().optional().describe("Auto-resolve missing connection refs for new connectors in the definition. Default true.")
   }, { readOnlyHint: false, title: "Edit Flow (surgical)" }, async ({ env, flow, operations, dryRun, previewToken, forceManaged, autoResolveConnectionRefs }) => {
@@ -68019,13 +68137,13 @@ async function createMcpServer(authProvider, deps = {}) {
     env: external_exports.string().optional().describe("Environment ID"),
     flow: external_exports.string().describe("Flow ID"),
     run: external_exports.string().describe("Run ID"),
-    includeLinks: external_exports.boolean().optional().describe("Also return the inputs/outputs content links and their sizes, so you can pick what to fetch with get_run_action_content")
-  }, { readOnlyHint: true, title: "Run Actions" }, async ({ env, flow, run, includeLinks }) => {
+    includeSizes: external_exports.boolean().optional().describe("Also return the recorded inputs/outputs sizes, so you can pick what to fetch with get_run_action_content")
+  }, { readOnlyHint: true, title: "Run Actions" }, async ({ env, flow, run, includeSizes }) => {
     try {
       const actions = await ctx.getClient().getRunActionDetails(ctx.resolveEnv(env), flow, run);
       const fields = ["name", "properties.startTime", "properties.endTime", "properties.status", "properties.code", "properties.error.code", "properties.error.message"];
       const labels = { "properties.startTime": "startTime", "properties.endTime": "endTime", "properties.status": "status", "properties.code": "code", "properties.error.code": "errorCode", "properties.error.message": "errorMessage" };
-      if (includeLinks) {
+      if (includeSizes) {
         fields.push("properties.inputsLink.contentSize", "properties.outputsLink.contentSize");
         labels["properties.inputsLink.contentSize"] = "inputsBytes";
         labels["properties.outputsLink.contentSize"] = "outputsBytes";
@@ -68783,7 +68901,7 @@ async function createMcpServer(authProvider, deps = {}) {
           `2. \`preflight_flow definition=<proposed> connectionReferences=<proposed>\` \u2014 must return \`overall != "block"\`.`,
           `3. \`preview_update env=... flow=... definition=<proposed> connectionReferences=<proposed>\` \u2014 review the diff, capture the \`previewToken\`.`,
           `4. Show the user the diff summary. Pause for explicit confirmation.`,
-          `5. On confirmation, \`update_flow ... previewToken=<token>\`. The token binds the apply to the exact diff you previewed \u2014 concurrent edits will reject.`,
+          `5. On confirmation, \`update_flow ... previewToken=<token>\`. The final version check detects edits already present before the write; the API has no atomic conditional-write guarantee.`,
           `6. Optionally \`publish_flow\` if the flow needs to be started.`,
           `7. If you need to roll back: \`list_backups flow=...\` \u2192 \`restore_backup file=<filename>\`.`,
           ``,

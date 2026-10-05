@@ -58,3 +58,16 @@ error if the bundle is missing. That file is a single self-contained ESM bundle
 
 Auth uses Azure CLI (`az login`) plus MSAL for connectivity endpoints — see
 `CLAUDE.md` and `references/connection-patterns.md` in this folder.
+
+## Telemetry logs
+
+Power Automate hook telemetry writes per-session logs under
+`~/.power-platform-skills/telemetry/power-automate/sessions/` by default; the
+base directory follows `POWER_PLATFORM_SKILLS_CONFIG_DIR` when set. Old
+session logs are pruned after 14 days.
+
+The FlowAgent CLI/MCP engine writes a separate local mirror to
+`~/.flowagent/telemetry.jsonl` by default. Set `FLOWAGENT_TELEMETRY_LOG` to
+change its path. The core log is not automatically pruned. See
+`skills/telemetry/SKILL.md` for telemetry controls and `../../docs/telemetry.md`
+for collection and routing details.

@@ -117,9 +117,8 @@ function readStdin() {
   const configDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "";
   const fakeProbe = process.env.POWER_PLATFORM_SKILLS_FAKE_HTTPS || "";
 
-  // Run PAC calls in parallel — each uses a disk cache so subsequent
-  // invocations skip the .NET cold start entirely (~4s → ~0ms). On first run,
-  // parallelization cuts ~6s serial to ~4s (limited by the longer pac auth who).
+  // Read the active PAC identity fresh on each hook invocation; only the
+  // non-identity PAC version is cached on disk. Run both PAC calls in parallel.
   let pacAuth = null;
   let agentInfo = {};
   try {
