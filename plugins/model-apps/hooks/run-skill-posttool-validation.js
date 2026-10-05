@@ -68,7 +68,11 @@ readUtf8Stream(process.stdin).then((inputData) => {
     if (result.stderr) process.stderr.write(result.stderr);
 
     debug(`[model-apps hook] Validator exited with code ${result.status ?? 0}\n`);
-    process.exit(result.status ?? 0);
+    // Set the code rather than calling process.exit(): a write to a pipe is asynchronous on
+    // macOS, and exiting at once drops whatever the 64 KiB pipe buffer has not taken yet, so a
+    // long validator report arrived cut off. Nothing else is pending, so the process ends as
+    // soon as both streams have flushed.
+    process.exitCode = result.status ?? 0;
   } catch (err) {
     // Never block on a hook-side bug — the skill already ran.
     process.stderr.write(`[model-apps hook] Unexpected error: ${err.message}\n`);

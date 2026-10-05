@@ -109,4 +109,62 @@ function claimedByAuthoredName(authoredNames) {
   };
 }
 
-module.exports = { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsControlOf, claimedByAuthoredName };
+// ORDER — the layout's order of the containers it matched: the build moves them into it (tabs, and the
+// sections in each form-column) and verify requires it. Only the RELATIVE order of the matched containers
+// is the author's. A tab or section the layout does not mention — a maker's own, an engine host — has no
+// place in that order and is never moved for its own sake.
+//
+// `positions` are the current indices, in ONE array, of the containers the layout places there, listed in
+// the layout's order. Returns `{ moves, positions }`: the moves that put them in that order, each as the
+// SDK's moveElement takes it — `from`, the index in the array as it stands when that move runs, and `to`,
+// the index to insert at once the source is removed (moveElement removes first, then splices) — and each
+// container's index afterwards, in the order of the input.
+//
+// The longest run already in the layout's order stays put, and every other container moves in right
+// after the one the layout places before it (the first, right before the first one staying put). So the
+// fewest containers move, and a maker's own containers keep their place beside those that stay. A
+// container already where it would land is not moved: every move is a write, and a line in the report.
+function planOrderMoves(positions) {
+  const pos = positions.slice();
+  const n = pos.length;
+  // Longest strictly increasing run, by O(n²) dynamic programming: n is the number of tabs, or of
+  // sections in one form-column. Ties keep the run that ends first, so the plan is deterministic.
+  const runLength = new Array(n).fill(1);
+  const before = new Array(n).fill(-1);
+  let end = -1;
+  for (let i = 0; i < n; i += 1) {
+    for (let j = 0; j < i; j += 1) {
+      if (pos[j] < pos[i] && runLength[j] + 1 > runLength[i]) { runLength[i] = runLength[j] + 1; before[i] = j; }
+    }
+    if (end < 0 || runLength[i] > runLength[end]) end = i;
+  }
+  const stays = new Set();
+  for (let i = end; i >= 0; i = before[i]) stays.add(i);
+  const moves = [];
+  for (let w = 0; w < n; w += 1) {
+    if (stays.has(w)) continue;
+    const from = pos[w];
+    let to;
+    if (w > 0) {
+      const anchor = pos[w - 1];
+      to = from < anchor ? anchor : anchor + 1;
+    } else {
+      // The first container is out of the run, so the run starts later — and it goes before it.
+      const anchor = pos[Math.min(...stays)];
+      to = from < anchor ? anchor - 1 : anchor;
+    }
+    if (to === from) continue;
+    moves.push({ from, to });
+    for (let k = 0; k < n; k += 1) {
+      if (k === w) continue;
+      let p = pos[k];
+      if (p > from) p -= 1;
+      if (p >= to) p += 1;
+      pos[k] = p;
+    }
+    pos[w] = to;
+  }
+  return { moves, positions: pos };
+}
+
+module.exports = { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsControlOf, claimedByAuthoredName, planOrderMoves };

@@ -9,6 +9,7 @@
 const { normalizeLanguageCode } = require('./app-spec.js');
 const { nearestName } = require('./nearest-name.js');
 const { execFileAsync, runSync } = require('./process-runner.js');
+const { azTimeoutMs, azTimeoutAdvice, cliFailureKind } = require('./cli-failure.js');
 
 // Dataverse environment hosts, one family per cloud (the same families power-pages accepts in
 // scripts/lib/validation-helpers.js, plus the non-numbered `crm<ring>` labels such as crmtest):
@@ -59,6 +60,10 @@ function requireDataverseOrigin(value) {
  * @returns {string|null}
  */
 const authTokenMemo = new Map();
+// Why the last token read for an origin failed — 'timeout' | 'missing' | 'failed' (cli-failure.js) —
+// so the caller that then throws can say which, instead of "run az login" for a slow Azure CLI.
+const tokenFailures = new Map();
+const noteTokenFailure = (resource, error) => tokenFailures.set(resource, cliFailureKind(error) || 'failed');
 
 function getAuthToken(envUrl, opts = {}) {
   const resource = dataverseOrigin(envUrl);
@@ -71,18 +76,19 @@ function getAuthToken(envUrl, opts = {}) {
     const out = exec(
       'az',
       ['account', 'get-access-token', '--resource', resource, '--query', 'accessToken', '-o', 'tsv'],
-      { encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] }
+      { encoding: 'utf8', timeout: azTimeoutMs(), stdio: ['ignore', 'pipe', 'pipe'] }
     );
     const token = out.trim() || null;
     // `az account get-access-token` is expensive on a cold Windows process, but an immediate
     // re-call returns the same MSAL-cached token (see the ensureOk 401 note below). Reusing that
     // non-null token within this Node process removes repeated CLI cold-starts without changing
     // Dataverse semantics; a caller that just saw a 401 passes `{ fresh: true }` to replace it.
-    if (token) authTokenMemo.set(resource, token);
-    else authTokenMemo.delete(resource);
+    if (token) { authTokenMemo.set(resource, token); tokenFailures.delete(resource); }
+    else { authTokenMemo.delete(resource); noteTokenFailure(resource, null); }
     return token;
-  } catch {
+  } catch (e) {
     if (opts.fresh) authTokenMemo.delete(resource);
+    noteTokenFailure(resource, e);
     return null;
   }
 }
@@ -99,10 +105,11 @@ function getAuthTokenAsync(envUrl, opts = {}) {
       exec(
         'az',
         ['account', 'get-access-token', '--resource', resource, '--query', 'accessToken', '-o', 'tsv'],
-        { encoding: 'utf8', timeout: 30000, windowsHide: true },
+        { encoding: 'utf8', timeout: azTimeoutMs(), windowsHide: true },
         (error, stdout) => {
           if (error) {
             if (opts.fresh) authTokenMemo.delete(resource);
+            noteTokenFailure(resource, error);
             resolve(null);
             return;
           }
@@ -110,16 +117,37 @@ function getAuthTokenAsync(envUrl, opts = {}) {
           // Shares the synchronous helper's memo deliberately: check-auth can pre-warm the token
           // without blocking the event loop, and later synchronous Dataverse callers in the same
           // process still avoid a second Azure CLI cold start.
-          if (token) authTokenMemo.set(resource, token);
-          else authTokenMemo.delete(resource);
+          if (token) { authTokenMemo.set(resource, token); tokenFailures.delete(resource); }
+          else { authTokenMemo.delete(resource); noteTokenFailure(resource, null); }
           resolve(token);
         }
       );
-    } catch {
+    } catch (e) {
       if (opts.fresh) authTokenMemo.delete(resource);
+      noteTokenFailure(resource, e);
       resolve(null);
     }
   });
+}
+
+/**
+ * Why the last token read for `envUrl` failed: 'timeout' | 'missing' | 'failed', or null when it did
+ * not (or none was attempted in this process).
+ */
+function tokenFailureKind(envUrl) {
+  return tokenFailures.get(dataverseOrigin(envUrl)) || null;
+}
+
+/**
+ * The message to throw when no token could be had for `envUrl`: a slow or missing Azure CLI said as
+ * such, and anything else as `fallback` — the sign-in advice each caller already gives.
+ */
+function tokenFailureMessage(envUrl, fallback) {
+  const origin = dataverseOrigin(envUrl) || String(envUrl);
+  const kind = tokenFailureKind(envUrl);
+  if (kind === 'timeout') return `Could not get an Azure CLI token for ${origin}: ${azTimeoutAdvice('az account get-access-token')}`;
+  if (kind === 'missing') return `Could not get an Azure CLI token for ${origin}: Azure CLI (\`az\`) is not on PATH. Install it from https://aka.ms/azure-cli and run \`az login\`.`;
+  return fallback;
 }
 
 /**
@@ -132,7 +160,7 @@ function azIdentity(deps = {}) {
     const out = (deps.exec || runSync)(
       'az',
       ['account', 'show', '--query', '{user:user.name,tenantId:tenantId}', '-o', 'json'],
-      { encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] }
+      { encoding: 'utf8', timeout: azTimeoutMs(), stdio: ['ignore', 'pipe', 'pipe'] }
     );
     const parsed = JSON.parse(out);
     return parsed && parsed.user ? { user: parsed.user, tenantId: parsed.tenantId || '(unknown)' } : null;
@@ -194,10 +222,12 @@ async function preflightAuth(envUrl, deps = {}) {
   let token = null;
   try { token = getToken(origin); } catch { token = null; }
   if (!token) {
+    // A slow or missing Azure CLI is said as such: it is not a sign-in problem, and `az login` fixes
+    // neither. Only a failure the CLI actually reported gets the sign-in advice.
     return {
       ok: false,
-      error: `no Azure CLI access token could be obtained for ${origin}. This is a sign-in problem, not a `
-        + `permissions one — run \`az login\` (add \`--tenant <id>\` if this org lives in another tenant), then retry.`,
+      error: tokenFailureMessage(origin, `no Azure CLI access token could be obtained for ${origin}. This is a sign-in problem, not a `
+        + `permissions one — run \`az login\` (add \`--tenant <id>\` if this org lives in another tenant), then retry.`),
     };
   }
 
@@ -344,7 +374,7 @@ async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {})
   // been rejected is exactly the thing that must not be retried.
   let token = presetToken || acquireToken(cleanUrl, { fresh: false });
   if (!token) {
-    throw new Error(`Failed to get Azure CLI token for ${cleanUrl}. Run 'az login' first.`);
+    throw new Error(tokenFailureMessage(cleanUrl, `Failed to get Azure CLI token for ${cleanUrl}. Run 'az login' first.`));
   }
 
   const maxRetries = 2;
@@ -367,7 +397,7 @@ async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {})
 
     if (res.statusCode === 401 && attempt < maxRetries) {
       token = acquireToken(cleanUrl, { fresh: true });
-      if (!token) throw new Error("Token refresh failed. Run 'az login' again.");
+      if (!token) throw new Error(tokenFailureMessage(cleanUrl, "Token refresh failed. Run 'az login' again."));
       continue;
     }
 
@@ -722,6 +752,8 @@ module.exports = {
   azIdentity,
   getAuthToken,
   getAuthTokenAsync,
+  tokenFailureKind,
+  tokenFailureMessage,
   makeRequest,
   dataverseRequest,
   ensureOk,

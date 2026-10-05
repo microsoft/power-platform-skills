@@ -76,6 +76,11 @@ const SKILL_SDK_SURFACE = [
   'listArtifacts',
   'moveElement',
   'publishArtifact',
+  // Step 8 publishes the app and every table whose default-view enrichment was saved but not yet
+  // published in ONE PublishXml envelope (one customization lock, one publish job) instead of one
+  // call per artifact. `publishArtifact` stays above: it is the per-target fallback when the batch
+  // is refused or a target in it fails.
+  'publishArtifacts',
   'pushArtifact',
   'queryRecords',
   'removeElement',

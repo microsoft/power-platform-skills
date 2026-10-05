@@ -1,0 +1,74 @@
+# Unit tests for the shared telemetry library, plus a check that every adopting plugin's
+# bundled copy (plugins/<plugin>/scripts/lib/telemetry/lib) still matches it. Adopting
+# plugins keep their own path-filtered workflows, which run only when the plugin changes,
+# so this workflow runs on a change to the source or to any copy.
+#
+# The glob is expanded by bash (shell: bash), including on Windows runners, where
+# PowerShell would pass the wildcard through to node unexpanded.
+name: shared-telemetry-tests
+
+on:
+    pull_request:
+        branches:
+            - main
+        paths:
+            - "shared/telemetry/**"
+            - "plugins/*/scripts/lib/telemetry/lib/**"
+            - ".github/workflows/shared-telemetry-tests.yml"
+    push:
+        branches:
+            - main
+        paths:
+            - "shared/telemetry/**"
+            - "plugins/*/scripts/lib/telemetry/lib/**"
+            - ".github/workflows/shared-telemetry-tests.yml"
+
+# The job only reads the checkout; the token needs nothing more.
+permissions:
+    contents: read
+
+# A new push to the same PR supersedes the run in flight.
+concurrency:
+    group: shared-telemetry-tests-${{ github.event.pull_request.number || github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    test-shared-telemetry:
+        name: test-shared-telemetry (${{ matrix.os }}, node ${{ matrix.node }})
+        runs-on: ${{ matrix.os }}
+        # The suite is small, but a child waiting on stdin would otherwise hold the
+        # job for the six-hour default.
+        timeout-minutes: 15
+        # Every plugin that ships an ikey.json is an adopter. The opt-out name is
+        # POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT, with <PLUGIN> the plugin's
+        # manifest `name` uppercased and non-alphanumerics collapsed to "_"
+        # (telemetryOptOutEnvVarName in shared/telemetry/lib/user-config.js) — not its
+        # directory: plugins/mobile-apps is named "mobile-app". Set each one so a test
+        # that forgets to isolate emission cannot POST to a real collector.
+        # Transmission only — local diagnostic mirrors are unaffected.
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: "1"
+            POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"
+            POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "1"
+        strategy:
+            fail-fast: false
+            matrix:
+                os:
+                    - ubuntu-latest
+                    - windows-latest
+                    - macos-latest
+                node:
+                    - 20
+                    - 22
+        steps:
+            - name: checkout
+              uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+            - name: setup-node
+              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+              with:
+                  node-version: ${{ matrix.node }}
+
+            - name: run-shared-telemetry-tests
+              shell: bash
+              run: node --test shared/telemetry/tests/*.test.js

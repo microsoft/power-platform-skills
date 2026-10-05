@@ -1,0 +1,12 @@
+{
+  "changedOnly": {
+    "identity": {
+      "orgId": "00000000-0000-0000-0000-000000000900",
+      "envUrl": "https://contoso.crm.dynamics.com",
+      "appUniqueName": "cnt_orders",
+      "appId": "00000000-0000-0000-0000-000000000909",
+      "solutionUniqueName": "ContosoChangedOnly"
+    },
+    "generation": "offline-fixture-baseline"
+  }
+}

@@ -3,6 +3,7 @@
 // gate; warnings teach. Bakes in the modeling lessons hit live — notably the
 // relationship schema-name vs lookup-name collision Dataverse rejects.
 const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens, isPlatformIconRef, labelText } = require('./app-spec.js');
+const { compileFormIntent, formFieldLogicals, NON_FORM_RENDERABLE_TYPES } = require('./artifact-intent.js');
 const { normalizeSpecShape } = require('./spec-shape.js');
 const { resolveSurfaces, unresolvedSurfaceMessage } = require('./surface-resolver.js');
 const { nearestName } = require('./nearest-name.js');
@@ -222,6 +223,31 @@ function lintAppSpec(spec) {
         if (!Array.isArray(sections) || sections.length === 0) E(`Form ${f.entity} explicit tab '${t.label || t.name || ''}' has no sections — add at least one section with fields`);
       }
     }
+    // Under an AUTO layout the build writes a `readOnly` / `hidden` flag only on a field the layout
+    // places — the primary column, the table's declared columns and its parent lookups — so a flag on any
+    // other field (a stock column on an existing form, say) is never applied, and `--verify` does not
+    // prove it. The placed set is the compiler's own, the list the build reconciles.
+    if (!isExplicit && f.fieldOptions && typeof f.fieldOptions === 'object' && !Array.isArray(f.fieldOptions)) {
+      let placed = null;
+      try { placed = new Set(formFieldLogicals(compileFormIntent(spec, f))); } catch { /* a malformed form is the validator's to report */ }
+      for (const [key, opt] of Object.entries(placed ? f.fieldOptions : {})) {
+        const flags = [opt && opt.readOnly === true && 'readOnly', opt && opt.hidden === true && 'hidden'].filter(Boolean);
+        if (!flags.length || placed.has(lc(key))) continue;
+        // Why the field is off the form decides the advice. A DECLARED column the layout still leaves off is
+        // either a type with no form control at all (BigInt — validation explains it) or a type the auto
+        // layout simply does not place (a Customer column, say), which an explicit layout can list.
+        const ent = arrOf(spec.entities).find((e) => e && lc(e.schemaName) === lc(f.entity));
+        const col = ent && arrOf(ent.columns).find((c) => c && lc(c.schemaName) === lc(key));
+        const what = `Form ${f.entity} '${f.name || ''}': fieldOptions['${key}'] sets ${flags.join(' and ')}`;
+        if (col && NON_FORM_RENDERABLE_TYPES.has(col.type)) {
+          W(`${what} on a ${col.type} column, which has no form control, so the auto layout leaves it off the form and the build never applies it.`);
+        } else if (col) {
+          W(`${what} on a ${col.type} column, a type the auto layout does not place, so the build never applies it. List '${key}' in an explicit layout to place it (prune: false keeps the rest of the form).`);
+        } else {
+          W(`${what} on a field the auto layout does not place — it places the primary column, the table's declared columns and its parent lookups — so the build never applies it. Declare '${key}' as a column, or list it in an explicit layout (prune: false keeps the rest of the form).`);
+        }
+      }
+    }
     for (const sg of f.subgrids || []) {
       const has1N = (spec.relationships || []).some(
         (r) => r.type === 'OneToMany' && lc(r.referenced) === lc(f.entity) && lc(r.referencing) === lc(sg.childEntity)
@@ -345,6 +371,12 @@ function lintAppSpec(spec) {
   for (const p of spec.pages || []) {
     for (const ds of p.dataSources || []) {
       if (!entityLowerSet.has(lc(ds))) W(`Page '${p.name}' data source '${ds}' isn't a declared entity — ok if it's a standard table, otherwise a likely typo`);
+    }
+    // pac stores each ASCII `"` in a page's name as `\"` on the page's own record, and changes nothing else
+    // (live-measured). A warning, not an error: the navigation shows the subarea's `title`, which the build
+    // writes as given. (The standalone genpage upload refuses such a name — there pac writes the title too.)
+    if (typeof p.name === 'string' && p.name.includes('"')) {
+      W(`Page '${p.name}': pac stores each ASCII double quote (") in a page's name as \\" on the page's own record — use typographic quotes (“ ”) or an apostrophe instead`);
     }
   }
   // The sitemap `VectorIcon` attribute must be an SVG path (e.g. /_imgs/TableIconsFluentV9/x.svg) or
@@ -510,9 +542,14 @@ function lintAppSpec(spec) {
     }
   }
 
-  dupWarn((spec.views || []).map((v) => v.name), 'view', W);
-  dupWarn((spec.charts || []).map((c) => c.name), 'chart', W);
-  dupWarn((spec.forms || []).map((f) => f.name).filter(Boolean), 'form', W);
+  // Views, charts and forms belong to a TABLE, and the build finds each by its table and name (a form also
+  // by its type) — so one name on two tables is two artifacts, not a duplicate; a dashboard tile that
+  // could mean either is refused by validation until it names its table. Only a repeat on ONE table
+  // collides. Warning on the name alone flagged the supported same-named-charts-on-two-tables shape.
+  const forms = (spec.forms || []).filter((f) => f && f.name);
+  dupWarn(spec.views || [], 'view', W, (v) => `${lc(v.entity)}|${lc(v.name)}`);
+  dupWarn(spec.charts || [], 'chart', W, (c) => `${lc(c.entity)}|${lc(c.name)}`);
+  dupWarn(forms, 'form', W, (f) => `${lc(f.entity)}|${lc(f.formType || 'Main')}|${lc(f.name)}`);
 
   // Design-completeness warnings. These are WARNINGS, never errors: a spec without personas or pages
   // is still buildable, and the author may have good reason. They exist because all three were steps
@@ -558,11 +595,12 @@ function lintAppSpec(spec) {
   return { ok: errors.length === 0, errors, warnings };
 }
 
-function dupWarn(names, kind, W) {
+function dupWarn(items, kind, W, keyOf) {
   const seen = new Set();
-  for (const n of names) {
-    const k = String(n || '').toLowerCase();
-    if (k && seen.has(k)) W(`Duplicate ${kind} name: ${n}`);
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || !item.name) continue;
+    const k = keyOf(item);
+    if (seen.has(k)) W(`Duplicate ${kind} name on ${item.entity || '?'}: ${item.name}`);
     seen.add(k);
   }
 }

@@ -466,8 +466,8 @@ It returns a single JSON object:
 ```json
 {
   "ok": true | false,
-  "blocker": null | "usage" | "az_missing" | "az_not_logged_in" | "pac_not_logged_in"
-                 | "no_env_url" | "whoami_403" | "whoami_401" | "whoami_error",
+  "blocker": null | "usage" | "az_missing" | "az_not_logged_in" | "az_timeout" | "pac_not_logged_in"
+                 | "pac_timeout" | "no_env_url" | "whoami_403" | "whoami_401" | "whoami_error",
   "message": "human-readable next step",
   "warnings": ["..."],
   "azUser": "...", "pacUser": "...", "envUrl": "...",
@@ -486,6 +486,11 @@ It returns a single JSON object:
   blocker (run `az login`, etc.).
 - **`blocker: "usage"`** is the one exception: the `check-auth.js` command line itself was wrong (a
   mistyped flag or a missing value). Fix the invocation and run it again instead of stopping.
+- **`blocker: "az_timeout"`** means the Azure CLI was too slow to answer, not that it is missing or
+  signed out. Retry once; if it recurs on a busy machine, set `POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS`
+  (milliseconds, default 60000) for the Azure CLI budget.
+- **`blocker: "pac_timeout"`** means `pac org who` did not answer within its fixed 60 s, so the PAC
+  login is unknown, not missing. Retry once. The Azure CLI setting above does not change this budget.
 
 Capture `envUrl` from the result — Phase 2b passes it to the entity-builder.
 
@@ -903,9 +908,10 @@ foreach ($f in 'prompt.txt', 'agent-message.txt', 'page-name.txt') {
 Then write, with the file tool, `<working-dir>/prompt.txt` holding the prompt, `<working-dir>/agent-message.txt` the
 agent message and, on a create, `<working-dir>/page-name.txt` the page's display name — each exactly its text (a
 trailing line break on the name is ignored). `genpage-upload.js` refuses any of them that is a link, a hard link or a
-folder, but only after the write. The name is the one value passed to pac inline: where pac is installed as a
-`pac.cmd` shim (Windows), a name containing a double quote or `%` is refused before anything is uploaded, so pick
-one without them.
+folder, but only after the write. The name is the one value passed to pac inline. A name containing a straight double
+quote (`"`) is refused before anything is uploaded — pac stores each one as `\"`, in the page and in the navigation
+title it writes — so use typographic quotes (“ ”) or an apostrophe, which are stored exactly. Where pac is installed as
+a `pac.cmd` shim (Windows), a name containing `%` is refused too, so pick one without it.
 
 **Log the invocation into `workflow-log.md` under a `## Phase 6 — Deploy` section before running it.** Record the flags and the prompt-file path, plus the prompt's scope, so the approved text is preserved semantically without embedding arbitrary text as an executable command. Format:
 
@@ -979,6 +985,13 @@ For updates, include the `--connectors` line only when this upload intentionally
 replaces or clears connector bindings; otherwise omit it to preserve the
 deployed page's current bindings. The same rule applies to `--actions` for Custom
 API bindings: include it only when this upload intentionally replaces or clears them.
+
+An update without `--name-file` keeps the page's current display name, and one without `--model` its
+current model: pac would otherwise rename the page to its navigation title and store an empty model, so
+the script reads both from the deployed page and sends them again. If either cannot be read — or the
+name cannot be sent, because pac is a `pac.cmd` shim and the name holds `%` or `"` — the update still
+goes ahead and its result carries a `warnings` entry naming what may have changed; re-run with that value
+passed explicitly.
 
 ### Phase 6.5: Navigation Fix-Up (Multi-Page Only)
 

@@ -89,7 +89,7 @@ const {
   rowsFromCells,
 } = require('./artifact-intent.js');
 const { makeGenpageCli, suppliedButBlank } = require('./genpage-cli.js');
-const { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsControlOf, claimedByAuthoredName } = require('./form-container-match.js');
+const { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsControlOf, claimedByAuthoredName, planOrderMoves } = require('./form-container-match.js');
 const { rowOccupancy, fitsGrid, strandedRows } = require('./form-occupancy.js');
 const { manifestResourceName, buildManifest, serializeManifest, parseManifestBase64, reconcilePageIds } = require('./page-manifest.js');
 // MEMBERSHIP authority (the app's live sitemap) + the cross-app shared-page scan. fetchSitemap is
@@ -1058,29 +1058,23 @@ async function applyAppAiDescription(provision, spec, appId) {
 }
 
 // #583: halt precisely when the push of an app whose routing description this run changed was refused
-// because Dataverse will not take a header write until the app is PUBLISHED — rather than because of a
-// concurrent edit. Called before requireSuccessfulPush, whose generic 412 remedy (re-download and
-// rebuild) reads the same draft and fails the same way. The SDK reports that state two ways:
-//   * APP_DRAFT_HEADER_NOT_WRITABLE, THROWN (see pushAppHeader) for an app that was never published. The
-//     SDK's own message names the state, so no read is needed.
-//   * VERSION_CONFLICT, RESOLVED (saved:false) for a published app with an unpublished header change.
-//     LIVE-MEASURED: once a header change (name, description or routing description) is pushed but not
-//     published, the appmodule row has a second, unpublished layer with its own version number, and the
-//     SDK's next header PATCH fails with 412 although nothing changed since the fetch; a sitemap-only
-//     push over the same state still succeeds, and publishing clears it. The state arises from a header
-//     edit saved in Maker but not published, or from a build whose publish did not complete. A 412 is
-//     relabelled only when it was the APPMODULE row's and a draft read PROVES that state (componentstate
-//     1 = Unpublished:
-//     https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodule#BKMK_ComponentState);
-//     any other outcome — a settled row, a read that fails — returns and leaves the generic halt in place.
+// because the app was never PUBLISHED: Dataverse takes no write to a draft appmodule's name, description
+// or routing description until it is, and the SDK THROWS APP_DRAFT_HEADER_NOT_WRITABLE (see
+// pushAppHeader), naming that state, so no read is needed. Called before requireSuccessfulPush, whose
+// generic remedy (re-download and rebuild) reads the same draft and fails the same way.
 //
-//     Whose 412 it was matters because the SDK writes an app in two PATCHes, the header then the sitemap,
-//     each conditional on its own version, and names the refused one in the error's `detail`:
-//       Version conflict (412) from https://contoso.crm.dynamics.com/api/data/v9.2/appmodules(<id>)
-//       Version conflict (412) from https://contoso.crm.dynamics.com/api/data/v9.2/sitemaps(<id>)
-//     A sitemap 412 is a concurrent sitemap edit — and by then this push's own header write has committed,
-//     leaving exactly the unpublished layer the draft read finds. Relabelling it reset the copy, and
-//     "publish, then re-run" then overwrote the other edit; the kept copy is what makes that re-run stop.
+// A 412 (VERSION_CONFLICT) is NOT re-explained, wherever it lands. Before cds-maker-sdk 8930278f the
+// header PATCH carried the unpublished-aware read's CONTENT token, which runs one ahead of the row while
+// a header change is unpublished, so a header write over such a change (saved in Maker, or by a build
+// whose publish did not complete) answered 412 although nothing had changed since the fetch, and this
+// halt told the operator to publish first. 8930278f sends the appmodule's ROW token. LIVE-MEASURED with
+// the vendored bundle: over another writer's unpublished header change saved BEFORE the fetch, the push
+// now saves and keeps that change; when another writer moves the row AFTER the fetch, it still answers
+// 412 — where the previous bundle answered 412 to both. So a 412 on the appmodule row is a concurrent
+// edit, as one on the sitemap always was, and takes the generic path: the copy holding this run's edits
+// is kept (discardUnrecordedEdits), which is what stops a blind re-run from overwriting the other edit.
+// Re-explaining it as "publish, then re-run" reset that copy. The row token is pinned against the real
+// bundle in app-ai-description-real-bundle.test.js.
 //
 // Before halting it RESETS the workspace copy to the server's. The refused push left this run's edits in
 // it; once the operator publishes, the server moves, and a plain fetch then refuses to discard unpushed
@@ -1091,25 +1085,7 @@ async function haltOnUnpublishedAppHeader(provision, appId, pushed, name) {
   // pushFailed reads `saved`, then the older SDK spelling `success`, then a bare error — the same reading
   // requireSuccessfulPush applies, so the precise halt fires for either result shape.
   const code = pushFailed(pushed) && pushed.error && pushed.error.code;
-  const neverPublished = code === 'APP_DRAFT_HEADER_NOT_WRITABLE';
-  if (!neverPublished) {
-    if (code !== 'VERSION_CONFLICT' || !provision.dataverse || typeof provision.dataverse.get !== 'function') return;
-    if (!/\/appmodules\(/i.test(`${pushed.error.detail || ''} ${pushed.error.message || ''}`)) return;
-    let pending = false;
-    try {
-      // No `$top`: look for the unpublished layer among EVERY row the draft read returns. Measured, it
-      // returns only the unpublished row while one exists, but that is not a documented guarantee, and a
-      // published row read first would silently fall through to the generic halt this exists to replace.
-      const res = await provision.dataverse.get(`/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=componentstate&$filter=appmoduleid eq ${appId}`);
-      // `dataverse.get` RESOLVES on a non-2xx, so the status is checked explicitly.
-      if (res && res.status >= 200 && res.status < 300 && res.body && Array.isArray(res.body.value)) {
-        pending = res.body.value.some((r) => r && r.componentstate === 1);
-      }
-    } catch {
-      return;
-    }
-    if (!pending) return;
-  }
+  if (code !== 'APP_DRAFT_HEADER_NOT_WRITABLE') return;
   let reset = true;
   try {
     await provision.fetchArtifact('app', appId, { overwrite: true });
@@ -1118,11 +1094,7 @@ async function haltOnUnpublishedAppHeader(provision, appId, pushed, name) {
   }
   const workspace = reset ? ''
     : ` First reset the workspace, which still holds this run's unpushed copy of the app (a re-run would refuse to overwrite it): ${RESET_WORKSPACE}.`;
-  const why = neverPublished
-    ? 'the app has never been published, and Dataverse refuses a write to its name, description or routing description until it is'
-    : 'the app has an unpublished change to its name, description or routing description (saved in Maker, or by a build whose publish did not complete), and Dataverse refuses another write to those fields until it is published';
-  const fix = neverPublished ? 'publish the app in Power Apps' : 'publish the app in Power Apps (or discard the change)';
-  throw new BuildHalt(`push app ${name} failed: ${why}. Re-downloading reads the same draft and fails the same way: ${fix}, then re-run the build.${workspace}`, { phase: 'push', code: 'app-header-unpublished', recoverable: true, cause: pushed.error });
+  throw new BuildHalt(`push app ${name} failed: the app has never been published, and Dataverse refuses a write to its name, description or routing description until it is. Re-downloading reads the same draft and fails the same way: publish the app in Power Apps, then re-run the build.${workspace}`, { phase: 'push', code: 'app-header-unpublished', recoverable: true, cause: pushed.error });
 }
 
 // #583: push an app artifact whose header this run may have changed (the routing description). A refusal
@@ -1738,7 +1710,116 @@ async function siteMapOverLive(provision, appId, desired, opts, created) {
   return siteMap;
 }
 
+// What a DEFERRED `enrichDefaultViews(…, { publish: false })` had already saved when it failed
+// part-way. The SDK attaches that record to the error under a global-registry symbol (its
+// `readPartialEnrichment`, errors/index.ts) and looks for it on the error and its `cause` chain; this
+// reads it the same way, because the engine is handed an SDK instance and never imports the bundle.
+// Those saves are not published, so dropping the record would drop the only proof a publish is owed.
+const PARTIAL_ENRICHMENT = Symbol.for('cds-maker-sdk.partialDefaultViewEnrichment');
+function partialEnrichment(error) {
+  let current = error;
+  for (let depth = 0; current && typeof current === 'object' && depth < 8; depth += 1) {
+    const value = current[PARTIAL_ENRICHMENT];
+    if (value && typeof value === 'object') return value;
+    current = current.cause;
+  }
+  return undefined;
+}
+
+// Publish `entityTargets` (one artifact per table, `[type, id]`) and then the app, in ONE PublishXml
+// envelope when the SDK offers `publishArtifacts`. MEASURED by the SDK: a PublishXml costs ~2-2.5 s
+// even with nothing pending and parallel ones queue on the server — four one-table publishes took
+// 10-19 s, one envelope 3.6-3.8 s, and folding the app into it saved ~2 s more.
+//
+// A failed envelope fails every target with the shared error and may already have published some
+// scopes, so each failed target is published again on its own, which is what the SDK prescribes. A
+// preflight refusal (a target the workspace does not hold) throws before anything is published; the
+// per-target path then runs exactly as it did before this opt-in, and reports what it always did.
+//
+// `keepGoing` is for the halt path (settleOwedPublishes): there a target whose own publish THROWS is
+// reported and the others are still published, because nothing else will publish them. The publish
+// phase keeps the old behaviour — a thrown publish halts it — so a build reports that as it always did.
+async function publishTargets(provision, runner, concurrency, entityTargets, appTarget, warn, { keepGoing = false } = {}) {
+  const labelOf = ([type, id]) => (type === 'app' && appTarget ? appTarget[2] : `${type} ${id}`);
+  const publishOne = async ([type, id], label) => {
+    if (!keepGoing) return reportPartialPush(await provision.publishArtifact(type, id), label, warn);
+    try {
+      return reportPartialPush(await provision.publishArtifact(type, id), label, warn);
+    } catch (e) {
+      if (typeof warn === 'function') warn(`publish ${label} FAILED: ${(e && e.message) || e} — the change is SAVED but the runtime still serves the previously published copy; the build is idempotent, so re-run it once the cause is cleared`);
+      return undefined;
+    }
+  };
+  const all = appTarget ? [...entityTargets, appTarget] : entityTargets;
+  if (all.length > 1 && typeof provision.publishArtifacts === 'function') {
+    let results = null;
+    try {
+      results = await provision.publishArtifacts(all.map(([type, id]) => ({ type, id })));
+    } catch {
+      results = null;
+    }
+    if (Array.isArray(results) && results.length === all.length) {
+      const failed = [];
+      results.forEach((outcome, i) => {
+        if (outcome && outcome.publish && outcome.publish.kind === 'failed') failed.push(all[i]);
+        else reportPartialPush(outcome, labelOf(all[i]), warn);
+      });
+      for (const target of failed) await publishOne(target, labelOf(target));
+      return;
+    }
+  }
+  await runner.mapLimit(entityTargets, concurrency, (async (target) => publishOne(target, `${target[0]} ${target[1]}`)));
+  if (appTarget) await publishOne(['app', appTarget[1]], appTarget[2]);
+}
+
+// The publishes a build still OWED when it stopped: the tables whose default views its deferred
+// enrichment (4b) saved and that no completed publish phase (8) covered. `runSdkBuild` attaches them
+// to the halt (`owedPublishes`) instead of publishing them there, because only its caller knows
+// whether the halt is final: the CLI retries a transient one (a 429, a customization lock) at once,
+// the retry saves those views again and owes their publish again, and a publish sent into that
+// throttling would only fail the same way. The CLI keeps what each failed attempt owed, because a later
+// attempt can halt before the enrichment an earlier one did, until a publish phase pays it (`owedPaid`).
+//
+// On a FINAL halt the caller publishes them with this (`owed`: `[type, id]` pairs). Before the publish
+// was batched, the enrichment published each table as it went, so a build that stopped in a later phase
+// left those tables live (live-verified, before and after the batching). Without this they would wait,
+// saved but unpublished, for the full re-run that recovers from the halt — which saves them again and
+// owes their publish again — and nothing makes an operator start one.
+// Best-effort and per target: the halt is what the operator must see, so a failure is a warning, never a
+// throw, and a target that cannot be published does not keep the others back.
+async function settleOwedPublishes(provision, owed, warn) {
+  const targets = Array.isArray(owed) ? owed.filter((target) => Array.isArray(target) && target[0] && target[1]) : [];
+  if (!targets.length || !provision) return;
+  const say = (message) => { if (typeof warn === 'function') warn(`the build stopped before its publish phase; ${message}`); };
+  try {
+    await publishTargets(provision, makeRunner({ emit: () => undefined, total: 0 }), 1, targets, null, say, { keepGoing: true });
+  } catch (e) {
+    say(`publishing the default views it had already enriched FAILED: ${(e && e.message) || e} — the change is SAVED but the runtime still serves the previously published copy; the build is idempotent, so re-run it once the cause is cleared`);
+  }
+}
+
+// Every caller enters here; the phases run in runSdkBuildPhases. This wrapper only carries what the
+// deferred default-view enrichment still owes out of a halt: `owedPublishes`, and `owedPaid` when this
+// run's publish phase completed — which pays what an earlier attempt of the same build owed too, since
+// every attempt enriches the same tables (see settleOwedPublishes).
 async function runSdkBuild(spec, opts = {}) {
+  // tables: entity logical -> [type, id] of a saved default view that owes its publish.
+  const owed = { tables: new Map(), paid: false };
+  try {
+    return await runSdkBuildPhases(spec, opts, owed);
+  } catch (err) {
+    if ((owed.tables.size > 0 || owed.paid) && err && typeof err === 'object') {
+      try {
+        // Not enumerable: they ride along for the caller, never into a serialized error or the journal.
+        Object.defineProperty(err, 'owedPublishes', { value: [...owed.tables.values()], enumerable: false, configurable: true, writable: true });
+        Object.defineProperty(err, 'owedPaid', { value: owed.paid, enumerable: false, configurable: true, writable: true });
+      } catch { /* a frozen error carries nothing; the re-run saves the views again and owes their publish */ }
+    }
+    throw err;
+  }
+}
+
+async function runSdkBuildPhases(spec, opts, owed) {
   const { sdk, apply = false, sampleData = false, publish = false } = opts;
   const emit = opts.emit || (() => undefined);
   // Header-less client for solution lifecycle + artifact pushes (Dataverse rejects the
@@ -2214,53 +2295,85 @@ async function runSdkBuild(spec, opts = {}) {
     const claimedTabs = new Set();
     const claimedSections = new Map(); // column pointer -> Set(index)
     const claimedIn = (key) => { if (!claimedSections.has(key)) claimedSections.set(key, new Set()); return claimedSections.get(key); };
+    const warn = (message) => { if (typeof opts.warn === 'function') opts.warn(message); };
+    // Every tab is matched — or created — before any section is touched, so that the tabs can be put in
+    // the layout's order first: the section pass records section pointers under their tab's index, and
+    // ordering the tabs after it would shift those.
+    const tabIndexOf = []; // want index -> deployed tab index (a hole when the tab could not be placed)
+    // A tab another tab of the layout claims by NAME is matched only by that name (claimedByAuthoredName)
+    // — the rule sections follow, and verify's rule.
+    const tabSkip = claimedByAuthoredName(new Set(def.__authoredTabNames || []));
     for (let ti = 0; ti < wantTabs.length; ti++) {
       const wantTab = wantTabs[ti];
       // Re-read before every mutation: addElement appends and shifts sibling indices, so a pointer
       // computed against an earlier snapshot can address the wrong container.
-      let form = await provision.getArtifact('form', formId) || {};
-      let tabMatch = matchContainer(form.tabs, wantTab, ti, { claimed: claimedTabs });
+      const form = await provision.getArtifact('form', formId) || {};
+      let tabMatch = matchContainer(form.tabs, wantTab, ti, { claimed: claimedTabs, skip: tabSkip });
       if (!tabMatch) {
         // A new tab is added with EMPTY form-columns, and its sections then go through the same
         // per-section pass as an existing tab's: a section the deployed form already carries elsewhere
         // is MOVED in, and only a genuinely new one is created. Adding the tab with its sections created
         // a same-named DUPLICATE of any section it relocated — the field pass then emptied the original,
         // which the vacated-section sweep spared for its claimed name.
+        //
+        // It goes where the layout places it — right after the furthest tab already matched, the rule a
+        // new section follows — rather than last, where a tab declared mid-layout used to land for good.
+        // Every tab matched so far sits before that index, so inserting there shifts none of them.
+        const at = Math.min((form.tabs || []).length, claimedTabs.size ? Math.max(...claimedTabs) + 1 : 0);
         await provision.addElement('form', formId, '/tabs', Object.assign({}, wantTab, {
           columns: (wantTab.columns || []).map((c) => Object.assign({}, c, { sections: [] })),
-        }));
-        form = await provision.getArtifact('form', formId) || {};
-        tabMatch = matchContainer(form.tabs, wantTab, (form.tabs || []).length - 1, { claimed: claimedTabs });
+        }), { position: { index: at } });
+        const added = await provision.getArtifact('form', formId) || {};
+        tabMatch = matchContainer(added.tabs, wantTab, at, { claimed: claimedTabs, skip: tabSkip });
         if (!tabMatch) continue; // defensive: the added tab could not be found again
       }
       claimedTabs.add(tabMatch.index);
-      const tabPointer = '/tabs/' + tabMatch.index;
+      tabIndexOf[ti] = tabMatch.index;
       const tabPatch = diffPatch(tabMatch.item, wantTab, ['label', 'expanded', 'visible']);
-      if (Object.keys(tabPatch).length) await provision.updateElement('form', formId, tabPointer, tabPatch);
+      if (Object.keys(tabPatch).length) await provision.updateElement('form', formId, '/tabs/' + tabMatch.index, tabPatch);
+    }
+    // The tabs in the layout's order. The build used to leave every existing tab where it was, so a
+    // reordered layout deployed in the old order, and verify — which checked no order — passed it.
+    // Like a section's width or label, the spec wins over a tab a maker dragged: reported, never silent.
+    const placedTabs = wantTabs.map((_, ti) => ti).filter((ti) => Number.isInteger(tabIndexOf[ti]));
+    const tabPlan = planOrderMoves(placedTabs.map((ti) => tabIndexOf[ti]));
+    if (tabPlan.moves.length) {
+      for (const m of tabPlan.moves) await provision.moveElement('form', formId, '/tabs/' + m.from, '/tabs', { index: m.to });
+      placedTabs.forEach((ti, k) => { tabIndexOf[ti] = tabPlan.positions[k]; });
+      const ordered = await provision.getArtifact('form', formId) || {};
+      const names = placedTabs.map((ti) => (((ordered.tabs || [])[tabIndexOf[ti]]) || {}).name || `#${tabIndexOf[ti] + 1}`);
+      warn(`form ${def.name}: moved ${tabPlan.moves.length} tab(s) to put the tabs in the layout's order: ${names.join(', ')}.`);
+    }
+    for (let ti = 0; ti < wantTabs.length; ti++) {
+      if (!Number.isInteger(tabIndexOf[ti])) continue;
+      const wantTab = wantTabs[ti];
+      const tabIndex = tabIndexOf[ti];
+      const tabPointer = '/tabs/' + tabIndex;
+      let form;
 
       const wantColumns = wantTab.columns || [];
       for (let ci = 0; ci < wantColumns.length; ci++) {
         form = await provision.getArtifact('form', formId) || {};
-        let liveTab = (form.tabs || [])[tabMatch.index];
+        let liveTab = (form.tabs || [])[tabIndex];
         if (!liveTab) break; // defensive: the tab vanished mid-reconcile
         if (ci >= (liveTab.columns || []).length) {
           // A tab that gained a form-column — e.g. a single-column form widened into two. Added EMPTY,
           // for the same reason as a new tab: its sections go through the per-section pass below.
           await provision.addElement('form', formId, tabPointer + '/columns', Object.assign({}, wantColumns[ci], { sections: [] }));
           form = await provision.getArtifact('form', formId) || {};
-          liveTab = (form.tabs || [])[tabMatch.index];
+          liveTab = (form.tabs || [])[tabIndex];
           if (!liveTab || ci >= (liveTab.columns || []).length) break; // defensive: the add did not land
         }
         const liveColumns = liveTab.columns || [];
         if (wantColumns[ci].width && liveColumns[ci].width !== wantColumns[ci].width) {
           await provision.updateElement('form', formId, tabPointer + '/columns/' + ci, { width: wantColumns[ci].width });
         }
+        const columnPointer = tabPointer + '/columns/' + ci;
         const wantSections = wantColumns[ci].sections || [];
         for (let si = 0; si < wantSections.length; si++) {
           const wantSection = wantSections[si];
           form = await provision.getArtifact('form', formId) || {};
-          const columnPointer = tabPointer + '/columns/' + ci;
-          const liveSections = (((form.tabs || [])[tabMatch.index] || {}).columns || [])[ci];
+          const liveSections = (((form.tabs || [])[tabIndex] || {}).columns || [])[ci];
           const claimedHere = claimedIn(columnPointer);
           // A section may have been dragged to a different tab in Maker, or the spec may now place it
           // somewhere else; either way it is still THAT section, so a form-wide name hit outranks a
@@ -2318,10 +2431,10 @@ async function runSdkBuild(spec, opts = {}) {
             // for a section's columns and label — so it is reported, never silent.
             if (typeof opts.warn === 'function') {
               opts.warn(`form ${def.name}: moved section '${wantSection.name}' from tab '${fromTab}' (form-column ${fromColumn}) `
-                + `to tab '${liveTab.name || `#${tabMatch.index + 1}`}' (form-column ${ci + 1}), where the layout places it.`);
+                + `to tab '${liveTab.name || `#${tabIndex + 1}`}' (form-column ${ci + 1}), where the layout places it.`);
             }
             form = await provision.getArtifact('form', formId) || {};
-            const moved = ((((form.tabs || [])[tabMatch.index] || {}).columns || [])[ci] || {}).sections || [];
+            const moved = ((((form.tabs || [])[tabIndex] || {}).columns || [])[ci] || {}).sections || [];
             global = { pointer: columnPointer + '/sections/' + index, section: moved[index] || global.section };
           }
           // An ENGINE want has no label or position to go on: its evidence is its name and its own control,
@@ -2334,13 +2447,12 @@ async function runSdkBuild(spec, opts = {}) {
             // An authored section is created where the layout places it: right after the furthest section this
             // column has already matched, the index the move above uses. Appended, it landed after every
             // section still to come — a new one declared mid-column, or a generated one recreated after a
-            // drag in Maker — and the build never reorders what exists, so the wrong order was permanent (and
-            // verify does not check order). Nothing recorded sits at or after that index, so no recorded
-            // pointer shifts. An ENGINE want is still appended: the compiler puts the notes section last.
+            // drag in Maker. Nothing recorded sits at or after that index, so no recorded pointer shifts.
+            // An ENGINE want is still appended: the compiler puts the notes section last.
             const at = authoredWant ? Math.min(liveList.length, claimedHere.size ? Math.max(...claimedHere) + 1 : 0) : null;
             await provision.addElement('form', formId, columnPointer + '/sections', stripRows(wantSection), ...(at === null ? [] : [{ position: { index: at } }]));
             form = await provision.getArtifact('form', formId) || {};
-            const addedList = ((((form.tabs || [])[tabMatch.index] || {}).columns || [])[ci] || {}).sections || [];
+            const addedList = ((((form.tabs || [])[tabIndex] || {}).columns || [])[ci] || {}).sections || [];
             const addedIdx = at === null ? addedList.length - 1 : at;
             claimedHere.add(addedIdx);
             if (authoredWant) sectionTargets[wantSection.name] = { pointer: columnPointer + '/sections/' + addedIdx, name: (addedList[addedIdx] || {}).name };
@@ -2387,6 +2499,22 @@ async function runSdkBuild(spec, opts = {}) {
           }
           if (Object.keys(patch).length) await provision.updateElement('form', formId, pointer, patch);
           if (reflow) await repackSectionRows(formId, pointer, Number(patch.columns));
+        }
+        // The authored sections of this form-column in the layout's order. Moves and creations above land
+        // after the sections already matched, but a section that was ALREADY here in a different order
+        // stayed there: a reordered layout deployed in the old order, and verify checked no order, so it
+        // passed. Ordered once the column's sections are all matched and before any later column can take
+        // a section from this one; only this column's recorded targets live in this array, so theirs are
+        // the only pointers the moves shift. An ENGINE section is not the author's and keeps its place.
+        const sectionListPointer = columnPointer + '/sections';
+        const orderedWants = wantSections.filter((s) => !isEngineOwnedSection(s) && sectionTargets[s.name]
+          && String(sectionTargets[s.name].pointer || '').startsWith(sectionListPointer + '/'));
+        const sectionPlan = planOrderMoves(orderedWants.map((s) => Number(sectionTargets[s.name].pointer.slice(sectionListPointer.length + 1))));
+        if (sectionPlan.moves.length) {
+          for (const m of sectionPlan.moves) await provision.moveElement('form', formId, sectionListPointer + '/' + m.from, sectionListPointer, { index: m.to });
+          orderedWants.forEach((s, k) => { sectionTargets[s.name].pointer = sectionListPointer + '/' + sectionPlan.positions[k]; });
+          warn(`form ${def.name}: moved ${sectionPlan.moves.length} section(s) in tab '${liveTab.name || `#${tabIndex + 1}`}' (form-column ${ci + 1}) `
+            + `to put them in the layout's order: ${orderedWants.map((s) => sectionTargets[s.name].name || s.name).join(', ')}.`);
         }
       }
     }
@@ -2689,19 +2817,22 @@ async function runSdkBuild(spec, opts = {}) {
     const section = sectionAt(form, sectionPointer) || {};
     const rows = section.rows || [];
     const rowIndex = firstAppendRowThatFits(rows, wantCell, section.columns);
-    while ((section.rows || []).length < rowIndex) {
-      await provision.addElement('form', formId, sectionPointer + '/rows', { cells: [] });
-      section.rows = [...(section.rows || []), { cells: [] }];
-    }
-    if (rowIndex < rows.length) {
+    // Counted before any add, and locally: `rows` may alias the stored artifact (then every add grows
+    // it) or be a copy (then none does), so neither its length nor a re-assigned `section.rows` can say
+    // how many rows exist — re-assigning them added a phantom row wherever they alias.
+    const priorRowCount = rows.length;
+    if (rowIndex < priorRowCount) {
       await provision.updateElement('form', formId, sectionPointer + '/rows/' + rowIndex,
         { cells: [...(rows[rowIndex].cells || []), wantCell] });
       return;
     }
+    for (let rowCount = priorRowCount; rowCount < rowIndex; rowCount += 1) {
+      await provision.addElement('form', formId, sectionPointer + '/rows', { cells: [] });
+    }
     await provision.addElement('form', formId, sectionPointer + '/rows', { cells: [wantCell] });
   };
 
-  const placeFieldInSection = async (formId, logical, wantCell, target, vacated, rawSpan) => {
+  const placeFieldInSection = async (formId, logical, wantCell, target, vacated, rawSpan, formName) => {
     let form = await provision.getArtifact('form', formId) || {};
     const targetPointer = resolveSectionPointer(form, target);
     const existing = findFieldCellLocation(form, logical);
@@ -2762,13 +2893,22 @@ async function runSdkBuild(spec, opts = {}) {
     // reading `.length` afterwards would yield the POST-add count and target a row one past the end,
     // which silently skips the move (the `if (!row) return` guard below).
     const priorRowCount = targetRows.length;
-    let rowIndex = firstAppendRowThatFits(targetRows, wantCell, targetSection.columns);
-    while (rowIndex >= priorRowCount && ((targetSection.rows || []).length <= rowIndex)) {
-      // Either the section this run just created has no row yet, or all existing rows whose carried
-      // row-span reservations leave enough capacity are behind us. The SDK accepts a row with an
-      // empty cells array and serializes it correctly, so seed rows until the chosen target exists.
+    // The row is sized for the cell being MOVED, as it will be in the destination — not for the
+    // compiled one. A span the author did not declare is kept from the live cell, so the compiled cell
+    // (no span: "no opinion") under-states it: a maker's colspan-2 field moved into a one-column
+    // section was placed as if it were one column wide and then kept its colspan 2, overflowing that
+    // section on every apply. A kept colspan wider than the destination grid is clamped to the grid —
+    // a cell cannot be wider than the grid it sits in, and it is the clamp a grid narrowing applies
+    // (`rowsFromCells`).
+    const landing = landingSpans(cellAt(form, existing) || {}, wantCell, rawSpan, targetSection);
+    let rowIndex = firstAppendRowThatFits(targetRows, { ...wantCell, colspan: landing.colspan, rowspan: landing.rowspan }, targetSection.columns);
+    // Either the section this run just created has no row yet, or all existing rows whose carried
+    // row-span reservations leave enough capacity are behind us. The SDK accepts a row with an empty
+    // cells array and serializes it correctly, so seed rows until the chosen target exists. Counted
+    // locally: whether `targetSection` aliases the stored artifact is the SDK's business, and
+    // re-assigning its `rows` to track the count added a phantom row wherever it does.
+    for (let rowCount = priorRowCount; rowCount <= rowIndex; rowCount += 1) {
       await provision.addElement('form', formId, targetPointer + '/rows', { cells: [] });
-      targetSection.rows = [...(targetSection.rows || []), { cells: [] }];
     }
     form = await provision.getArtifact('form', formId) || {};
     const from = findFieldCellLocation(form, logical);
@@ -2787,7 +2927,40 @@ async function runSdkBuild(spec, opts = {}) {
     // possible stranded-row removal) invalidated every pointer computed above.
     const settledForm = await provision.getArtifact('form', formId) || {};
     const settled = findFieldCellLocation(settledForm, logical);
-    if (settled) await convergeCellSpans(formId, settledForm, settled, wantCell, rawSpan);
+    if (!settled) return;
+    if (landing.narrowed) {
+      // Written through the span-convergence path as if declared, so it is applied exactly like an
+      // authored narrowing (a narrowing never overflows its row). Reported: the build changed the
+      // width of a cell whose width the spec leaves to the maker.
+      await convergeCellSpans(formId, settledForm, settled, { ...wantCell, colspan: landing.colspan }, { ...(rawSpan || {}), colspan: landing.colspan });
+      if (typeof opts.warn === 'function') {
+        const destination = (sectionAt(settledForm, settled.sectionPointer) || {}).name || settled.sectionPointer;
+        opts.warn(`form ${formName}: '${logical}' spanned ${landing.liveColspan} columns, wider than the ${landing.gridWidth}-column `
+          + `section '${destination}' the layout moves it to, so it now spans ${landing.colspan}. Declare its colspan to choose the width.`);
+      }
+      return;
+    }
+    await convergeCellSpans(formId, settledForm, settled, wantCell, rawSpan);
+  };
+
+  // The spans a cell MOVING into `section` will have there: a span the author declared (clamped to
+  // the section's grid, as spanForLiveSection clamps it), otherwise the one the live cell already
+  // carries — with an undeclared colspan wider than the grid clamped to it. `narrowed` says the clamp
+  // changed a width the spec did not declare, which the caller writes and reports.
+  const landingSpans = (liveCell, wantCell, rawSpan, section) => {
+    const gridWidth = Math.max(1, Math.min(4, Number(section && section.columns) || 1));
+    const liveColspan = Math.max(1, Number(liveCell && liveCell.colspan) || 1);
+    const liveRowspan = Math.max(1, Number(liveCell && liveCell.rowspan) || 1);
+    const declaredColspan = spanForLiveSection('colspan', wantCell, rawSpan, section);
+    const declaredRowspan = spanForLiveSection('rowspan', wantCell, rawSpan, section);
+    const colspan = declaredColspan !== undefined ? declaredColspan : Math.min(liveColspan, gridWidth);
+    return {
+      colspan,
+      rowspan: declaredRowspan !== undefined ? declaredRowspan : liveRowspan,
+      liveColspan,
+      gridWidth,
+      narrowed: declaredColspan === undefined && colspan < liveColspan,
+    };
   };
 
   const reconcileForm = async (formId, def) => {
@@ -2824,7 +2997,7 @@ async function runSdkBuild(spec, opts = {}) {
     // stand-in that reconcile never deploys.
     const rawSpans = def.__fieldSpans || {};
     for (const logical of want) {
-      await placeFieldInSection(formId, logical, wantCellByLogical[logical], sectionTargets[declaredSection[logical]], vacatedSections, rawSpans[logical]);
+      await placeFieldInSection(formId, logical, wantCellByLogical[logical], sectionTargets[declaredSection[logical]], vacatedSections, rawSpans[logical], def.name);
     }
     await addSubgrids(formId, def.__subgrids);
     // Re-assert per-control attributes (read-only / hidden) on fields that were ALREADY on the form.
@@ -3293,6 +3466,21 @@ async function runSdkBuild(spec, opts = {}) {
   // them with only the primary column). One step per enrichable entity; opt out per-entity with
   // enrichDefaultViews:false. Author-declared views (also querytype 0) are excluded by id; the SDK
   // owns the default-view resolution + fetch/setViewColumns/push/publish mechanics.
+  //
+  // When this build publishes at the end (phase 8), the enrichment's own publish is deferred to that
+  // phase's single envelope: every enriched table used to be published twice, and each PublishXml
+  // costs ~2-2.5 s even with nothing pending (measured by the SDK). The deferred call returns the
+  // views whose saves still owe that publish (`pendingPublish`), and a call that fails part-way
+  // carries the same record on its error. Without --publish nothing is deferred: the SDK publishes
+  // the enrichment itself, as before. What is still owed when a phase halts leaves with the halt
+  // (runSdkBuild), and the caller publishes it once no retry follows (settleOwedPublishes).
+  const deferDefaultViewPublish = has('publish') && publish;
+  const recordOwed = (logical, record) => {
+    for (const pending of (record && record.pendingPublish) || []) {
+      const first = (pending.artifacts || [])[0];
+      if (first && first.id && !owed.tables.has(logical)) owed.tables.set(logical, [first.type || 'view', first.id]);
+    }
+  };
   if (has('views')) {
     const authorViewIds = Object.values(result.created.views || {}).filter(Boolean);
     for (const e of spec.entities || []) {
@@ -3300,8 +3488,26 @@ async function runSdkBuild(spec, opts = {}) {
       const logical = e.schemaName.toLowerCase();
       const cols = defaultViewColumns(spec, e);
       await runner.run('views', `enrich default views for ${logical}`, async () => {
-        const { updated } = await provision.enrichDefaultViews(logical, cols, { excludeViewIds: authorViewIds });
-        return updated;
+        if (!deferDefaultViewPublish) {
+          const { updated } = await provision.enrichDefaultViews(logical, cols, { excludeViewIds: authorViewIds });
+          return updated;
+        }
+        try {
+          const record = await provision.enrichDefaultViews(logical, cols, { excludeViewIds: authorViewIds, publish: false });
+          recordOwed(logical, record);
+          // A view whose push was REFUSED — the SDK answers a concurrent edit's 412 by value, not with a
+          // throw — saved nothing, so it fails the step as any other refused push does, rather than leave
+          // the table looking enriched. That is also what lets the CLI treat a completed publish phase as
+          // paying an earlier attempt's debt (`owedPaid`): every attempt that gets past this step has saved
+          // each table's default views again, so it owes, and publishes, the same tables. Without --publish
+          // the SDK publishes the enrichment itself and reports no per-view results, so a refusal there
+          // stays as silent as it always was.
+          for (const pushed of record.results || []) requireSuccessfulPush(pushed, `default view ${pushed && pushed.id} of ${logical}`);
+          return record.updated;
+        } catch (err) {
+          recordOwed(logical, partialEnrichment(err));
+          throw err;
+        }
       });
     }
   }
@@ -4396,7 +4602,7 @@ async function runSdkBuild(spec, opts = {}) {
           for (const p of implemented) {
             const key = keyOf(p);
             if (keyToId.has(key) || !navTargets.has(key)) continue; // only ABSENT targets need pre-minting
-            const up = await genpageCli.upload({ appId: result.created.app, codeFile: canonicalPath(p), name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources });
+            const up = await genpageCli.upload({ appId: result.created.app, codeFile: canonicalPath(p), name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources, model: p.model });
             keyToId.set(key, up.pageId);
             result.created.pages[key] = up.pageId;
             mintedKeys.add(key);
@@ -4434,7 +4640,9 @@ async function runSdkBuild(spec, opts = {}) {
           // canonical file content.
           const deployedBytes = isNav ? deployment.get(key) : fs.readFileSync(canonicalPath(p), 'utf8');
           const codeFile = isNav ? writeStagingFile(stagingDir, key, deployment.get(key)) : canonicalPath(p);
-          const up = await genpageCli.upload({ appId: result.created.app, pageId: requestedId, codeFile, name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources });
+          // `model` rides along because pac stores whatever `--model` an upload sends: re-uploading without it
+          // wiped a deployed page's model id to "". A downloaded spec carries it (pages[].model).
+          const up = await genpageCli.upload({ appId: result.created.app, pageId: requestedId, codeFile, name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources, model: p.model });
           // I7: an UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at
           // a stale target. Case-insensitive (Dataverse may echo a differently-cased GUID).
           if (requestedId && String(up.pageId).toLowerCase() !== String(requestedId).toLowerCase()) throw new BuildHalt(`page "${p.name}" UPDATE returned a different id (${up.pageId} != ${requestedId}) — refusing to finalize with an inconsistent target`, { phase: 'pages', code: 'pages-update-identity-mismatch', recoverable: false });
@@ -5097,9 +5305,15 @@ async function runSdkBuild(spec, opts = {}) {
       // halts the phase. `chartsToPublish` is populated at exactly the two points that put a chart in
       // the workspace, and keyed by entity because publishing is per-entity.
       for (const [k, cid] of chartsToPublish) { if (cid && !seen.has(k)) { seen.add(k); perEntity.push(['chart', cid]); } }
-      await runner.mapLimit(perEntity, concurrency, (async ([type, id]) => reportPartialPush(await provision.publishArtifact(type, id), `${type} ${id}`, opts.warn)));
-      if (result.created.app) reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
+      // Tables whose enriched default views still owe their publish (4b), when nothing above names them.
+      for (const [k, target] of owed.tables) { if (!seen.has(k)) { seen.add(k); perEntity.push(target); } }
+      const appTarget = result.created.app ? ['app', result.created.app, `app ${(spec.app && spec.app.name) || result.created.app}`] : null;
+      await publishTargets(provision, runner, concurrency, perEntity, appTarget, opts.warn);
     });
+    // Paid. A target that failed to publish was reported above, and the build is idempotent, so its
+    // re-run publishes it; a halt from here on owes nothing more, nor does an earlier attempt's.
+    owed.paid = true;
+    owed.tables.clear();
   }
 
   // 8b. AI feature re-issue + re-confirmation. An app-scope setting write is a NO-OP on a freshly
@@ -5195,4 +5409,4 @@ async function runSdkBuild(spec, opts = {}) {
   return result;
 }
 
-module.exports = { runSdkBuild, normalizeFormId, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };
+module.exports = { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, normalizeFormId, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };

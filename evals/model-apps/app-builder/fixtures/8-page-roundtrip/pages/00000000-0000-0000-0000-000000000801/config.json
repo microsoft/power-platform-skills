@@ -1,0 +1,4 @@
+{
+  "dataSources": ["cnt_order"],
+  "model": "gpt-4.1"
+}

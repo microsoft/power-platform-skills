@@ -5,7 +5,80 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [Unreleased] — 2.11.0
+## [Unreleased] — 2.12.0
+
+Fixes from a retest of 2.11.0: an existing form converges to its layout's order and `--verify` checks
+more of it, a generative page keeps its name and model on update, and several readers refuse output
+they cannot read instead of guessing. A `--publish` build publishes in fewer requests, with the refreshed
+vendored SDK.
+
+### Added
+
+- **`pages[].model`** — the model id a generative page was generated with. A download writes it and
+  the build sends it with every upload.
+- **`POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS`** — how long an Azure CLI call may take (default 60 s).
+
+### Changed
+
+- **Faster `--publish` builds.** The final publish sends every table and the app in one request,
+  and the enriched default views wait for it instead of publishing each table on the way: on a
+  three-table app, 8 publishes became 3 and the build took 152 s instead of 172 s. A build that stops
+  before its end still publishes the default views it had enriched, once no automatic retry follows.
+  A failed publish of them is now a warning naming the re-run, like any other, rather than a stop
+  before the forms are built; a default view someone edits while the build writes it now stops the
+  build, as any concurrent edit does, instead of being skipped.
+- **The vendored SDK is refreshed.** A build that changes an app's routing description no longer
+  stops with `app-header-unpublished` when the app holds an unpublished change to its name or
+  descriptions: it saves alongside that change. Only a never-published app must be published first,
+  and a concurrent edit is reported as one. On an org whose base language is not English, a new app
+  gets its System Administrator role, and the inactive default view is enriched too.
+
+### Fixed
+
+- **A field moved into a narrower section fits it.** Moved without a `colspan`, a two-column field
+  kept its width in a one-column section, and the build wrote a layout `--verify` then failed. It
+  keeps its width only where it fits, and is narrowed — and reported — where it does not.
+- **Tabs and sections are put in the layout's order** on an existing form, with the fewest moves. A
+  build used to create and move them but never reorder them, and a new tab placed between existing
+  ones took over the next one, which then came back as a duplicate.
+- **`--verify` checks more of a form**: tab expanded and visible state, form-column widths, section
+  visibility and label display, fields' `hidden` and `readOnly` (an auto layout's too, failing a
+  flagged field the form no longer carries), and the order of tabs and sections. A form that differed
+  in any of these passed. It also reads a field's state, span and section from the field itself, never
+  from a quick view bound to the same lookup. Lint warns when an auto layout flags a field it does not
+  place, since the build never applies that flag.
+- **A generative page keeps its name and model on update.** An update without a name renamed the
+  page to its navigation title, and one without `--model` stored the model empty. `genpage-upload`
+  now reads both from the deployed page and sends them again (a name a `pac.cmd` shim cannot receive
+  is left out, with a warning), and a download → rebuild keeps the model. A name with a straight
+  double quote is refused — pac stores each one as `\"`, in the navigation title too — and
+  `/app-builder` lints one in `pages[].name`. A download no longer copies pac's backslashes into
+  `pages[].name`, where each rebuild added another.
+- **Generative-page navigation parsing** is linear — a 2.5 KB page of nested template literals took
+  1.4 s, and a long comment inside one navigation call seconds more — and no longer rewrites a name
+  that only resembles a navigation call, misses an optional call (`?.`), misreads a property override
+  or a Unicode line terminator, or reads a word in a comment as a property.
+- **Adding pages to a solution checks every id first.** A malformed page id was refused only after
+  the app had been added; nothing is added now until the app and page ids are valid, and a repeated
+  id is sent once.
+- **Connector discovery refuses output it cannot read** — a warning, a changed format — instead of
+  reporting no connections, rejects malformed identifiers, and no longer reads a table's dashed
+  separator as a connection. The connector agent never creates a connection after a failed discovery.
+- **A slow Azure CLI or PAC is reported as slow.** A token request that ran out of time was reported
+  as `az` missing or signed out; it is now `az_timeout`, with the time it was given and a longer budget
+  to try — never more than the 15-minute maximum. A `pac org who` slower than its fixed 60 s is
+  `pac_timeout`, to retry, not `pac_not_logged_in`.
+- **Lint no longer warns about a view, chart or form name used on two tables** — only a repeat on
+  one table collides.
+- **A re-run of a failed teardown finds the generative pages it left.** When teardown could not delete
+  a page, or could not read which pages the app authored, it still deleted the page manifest — the
+  only record of them — so a re-run reported success and the pages stayed behind. The manifest and the
+  solution are now kept until the pages step succeeds.
+- **`capture-fixture.js` no longer passes an eval it could not verify.** A runner that exited with an
+  error but no failing assertion, or reported no assertions at all, was summarized as clean; each is
+  now listed as a failure, with the runner's exit code.
+
+## [2.11.0]
 
 AI features are written with each setting's own values, rebuilding an existing app no longer
 rewrites its navigation, a table opens with the form the spec makes its default, and the vendored

@@ -39,6 +39,14 @@
         {
             "name": "power-automate",
             "source": "./plugins/power-automate"
+        },
+        {
+            "name": "dataverse",
+            "source": {
+                "source": "github",
+                "repo": "microsoft/Dataverse-skills",
+                "path": ".github/plugins/dataverse"
+            }
         }
     ]
 }

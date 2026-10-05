@@ -15,6 +15,7 @@
 //                      SDK reports them and the owner decides. Runs AFTER the app so the app's own
 //                      sitemap reference is already gone and the only dependency the platform can
 //                      still report is a GENUINE other consumer; such a page is SKIPPED, not deleted.
+//                      When this step fails, runTeardown keeps the manifest (step 9) for a re-run.
 //   2. dashboards    — systemform (type 0) rows, pinned as app components
 //   3. commands      — appactions per entity (they reference the web-resource JS; delete first).
 //                      The SDK's command delete is ENTITY-keyed (removes every appaction on that
@@ -294,7 +295,8 @@ const KIND_HANDLERS = {
     async resolve(sdk, target) {
       if (typeof sdk.queryRecords !== 'function') return [];
       // The manifest lives in a web resource this same teardown deletes later (web-resources phase),
-      // so it is still readable here.
+      // so it is still readable here. runTeardown keeps it when this step fails, so a re-run can read
+      // it again.
       let manifest = null;
       try {
         const rows = await sdk.queryRecords('webresource', {
@@ -303,10 +305,16 @@ const KIND_HANDLERS = {
           top: 1,
         });
         if (rows && rows[0] && rows[0].content) manifest = parseManifestBase64(rows[0].content);
-      } catch {
-        // No manifest readable → nothing provably ours → delete nothing. Leaving a row behind is
-        // recoverable; deleting a page we cannot prove we authored is not.
-        return [];
+      } catch (err) {
+        // A failed read deletes nothing — a page we cannot prove we authored is never deleted — but it
+        // is a FAILED step, not "no pages". Read as an empty resolution, the step reported clean, the
+        // web-resources phase then deleted the manifest, and every later run found nothing: the pages
+        // stayed behind for good. As a failure, the manifest and the solution are kept for a re-run.
+        // `failClosed` stops runTeardown's not-found shortcut from turning a proxy's 404 back into "none".
+        // (No manifest row at all is different: the app never recorded a page, so [] is the truth.)
+        const e = new Error(`could not read the page manifest '${target.manifestName}' (${errMsg(err)}) — no page is deleted; re-run the teardown`);
+        e.failClosed = true;
+        throw e;
       }
       const authored = [];
       for (const p of (manifest && manifest.pages) || []) {
@@ -317,14 +325,19 @@ const KIND_HANDLERS = {
       if (!authored.length) return [];
 
       // Only pages that still exist (a re-run, or a maker deleting one by hand, is not a failure).
+      let rows;
       try {
         const filter = authored.map((a) => `uxagentprojectid eq ${String(a.id).toLowerCase()}`).join(' or ');
-        const rows = await sdk.queryRecords('uxagentproject', { select: ['uxagentprojectid'], filter });
-        const live = new Set((rows || []).map((r) => String(r.uxagentprojectid).toLowerCase()));
-        return authored.filter((a) => live.has(String(a.id).toLowerCase()));
-      } catch {
-        return [];
+        rows = await sdk.queryRecords('uxagentproject', { select: ['uxagentprojectid'], filter });
+      } catch (err) {
+        // Same as the manifest read above: not being able to look deletes nothing and fails the step,
+        // so the manifest naming these pages survives for a re-run.
+        const e = new Error(`could not check which of the ${authored.length} page(s) in '${target.manifestName}' still exist (${errMsg(err)}) — no page is deleted; re-run the teardown`);
+        e.failClosed = true;
+        throw e;
       }
+      const live = new Set((rows || []).map((r) => String(r.uxagentprojectid).toLowerCase()));
+      return authored.filter((a) => live.has(String(a.id).toLowerCase()));
     },
     // Delete ONLY the project row. Its `uxagentprojectfile` children go with it: the
     // uxagentproject_uxagentprojectfile_uxagentprojectid relationship is CascadeConfiguration
@@ -1262,10 +1275,24 @@ async function runTeardown(spec, opts = {}, deps = {}) {
   }
 
   const result = { ok: true, dryRun: false, deleted: {}, skipped: [], errors: [] };
+  // The page manifest is the only record of which generative pages this app authored (see the genpage
+  // handler), and it is deleted in the web-resources phase, well after the pages step. When that step
+  // failed, deleting the manifest anyway left a re-run nothing to find the pages by: it resolved none,
+  // reported success, released the workspace's teardown record, and the pages stayed behind for good.
+  // So the manifest is kept until a run gets through the pages step. Matched by name, so a declared web
+  // resource with the manifest's name is kept as well.
+  const pageManifests = new Set(plan.filter((p) => p.kind === 'genpage').map((p) => String(p.target.manifestName).toLowerCase()));
+  let pagesFailed = false;
   let n = 0;
   for (const step of plan) {
     const myN = (n += 1);
     emit({ phase: step.phase, status: 'start', label: step.label, n: myN, total });
+    if (step.kind === 'webResource' && pagesFailed && pageManifests.has(String(step.target.name).toLowerCase())) {
+      const why = `${step.label} (kept — the generative pages step failed, and a re-run needs this manifest to find the pages this app authored; it is deleted once that step succeeds)`;
+      result.skipped.push(why);
+      emit({ phase: step.phase, status: 'skip', skip: 'kept', label: why, n: myN, total });
+      continue;
+    }
     // The solution goes last, and only once every step before it succeeded. It is how a re-run tells
     // this app's dashboards from same-named ones elsewhere (the dashboard resolver): deleted after a
     // failed step, it left the retry nothing to prove them by, so the retry kept them — and their
@@ -1324,6 +1351,7 @@ async function runTeardown(spec, opts = {}, deps = {}) {
       const message = errMsg(err);
       result.errors.push({ step: step.label, message });
       emit({ phase: step.phase, status: 'error', label: step.label, n: myN, total, detail: message });
+      if (step.kind === 'genpage') pagesFailed = true;
       // Best-effort continue-on-error is right for the steps AFTER the dependency root is gone — one
       // undeletable view should not strand the rest. It is WRONG for the root itself (#587 item 5):
       // tables, forms, views and charts are COMPONENTS of the app module, so continuing past a failed

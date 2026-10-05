@@ -402,12 +402,16 @@ Omit `--data-sources` when `config.json.dataSources` was empty.
 Omit `--connectors` when connector bindings are unchanged.
 Omit `--actions` when Custom API bindings are unchanged.
 
-An update without `--name`/`--name-file` gives the page its **sitemap title** as its name (measured:
-a page renamed with `--name-file` reverted to the title on the next update that omitted it). An edit
-that does not rename the page can omit it. To rename a page, pass `--name-file` on this update, and
-tell the user its navigation title is the app's sitemap entry and is not changed by the upload. Where
-pac is installed as a `pac.cmd` shim (Windows), a name containing a double quote or `%` is refused
-before anything is uploaded.
+An update without `--name`/`--name-file` keeps the page's current name: the script reads it from the
+deployed page and sends it again, because pac would otherwise give the page its **sitemap title** as its
+name (measured: a page renamed with `--name-file` reverted to the title on the next update that omitted
+it). So an edit that does not rename the page omits it. To rename a page, pass `--name-file` on this
+update, and tell the user its navigation title is the app's sitemap entry and is not changed by the
+upload. A name containing a straight double quote (`"`) is refused before anything is uploaded, because
+pac would store each one as `\"`; where pac is installed as a `pac.cmd` shim (Windows), so is a name
+containing `%`. If the current name cannot be read — or cannot be sent, because pac is a `pac.cmd`
+shim and the name holds `%` or `"` — the update still goes ahead and its result carries a `warnings`
+entry; re-run it with `--name-file`.
 
 ## Edit Phase 7: Verify (Optional)
 

@@ -14,12 +14,12 @@ const { parseArgs, validateFlags, emitResult, preflightAuth, dataverseOrigin } =
 const { writeBaseline } = require('./lib/deployed-baseline.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { hydrateSpec, descriptionFromDataverse, withDescription } = require('./lib/hydrate-spec.js');
-const { makeGenpageCli } = require('./lib/genpage-cli.js');
+const { makeGenpageCli, unescapePacName } = require('./lib/genpage-cli.js');
 const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require('./lib/page-manifest.js');
 const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
-const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey } = require('./lib/app-spec.js');
+const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE } = require('./lib/app-spec.js');
 const { odataGuid } = require('./lib/ai-app-settings.js');
 
 // webresourcetype (int) -> app-spec web-resource type.
@@ -811,7 +811,10 @@ async function readDescriptionInventory(sdk, appId, solutionScope, referencedGlo
 // page's `dataSources` are unknown — and defaulting them to `[]` writes a spec that rebuilds the
 // page with NO table bindings while its source still queries the table. Silent, and only visible
 // once the rebuilt page returns nothing.
-function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable) {
+//
+// `unkeptModels` collects pages whose model id the App Spec cannot hold (`PAGE_MODEL_RE`): written into
+// the spec it would fail validation and block a rebuild, so it is left out and reported instead.
+function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable, unkeptModels) {
   const pages = [];
   if (!fs.existsSync(pagesRoot)) return pages;
   for (const entry of fs.readdirSync(pagesRoot)) {
@@ -856,10 +859,17 @@ function parseDownloadedPages(pagesRoot, outDir, nameById, unreadable) {
     } catch (e) {
       prompt = (e && e.code === 'ENOENT') ? undefined : '';
     }
+    // The model that generated the page, as config.json records it. It has to come back with the page:
+    // pac stores whatever `--model` an upload sends, so a rebuild that re-uploads without it wiped a
+    // deployed model id to "" (live-measured). Only an id the spec can hold is carried (see above).
+    const recordedModel = typeof config.model === 'string' ? config.model.trim() : '';
+    const model = PAGE_MODEL_RE.test(recordedModel) ? recordedModel : undefined;
+    if (recordedModel && !model && Array.isArray(unkeptModels)) unkeptModels.push({ pageId: entry, model: recordedModel });
     pages.push({
       pageId: entry,
       name: (nameById && nameById.get(String(entry).toLowerCase())) || entry,
       dataSources: Object.prototype.hasOwnProperty.call(config, 'dataSources') ? config.dataSources : [],
+      ...(model ? { model } : {}),
       prompt,
       codeFile: path.relative(outDir, tsx).replace(/\\/g, '/'),
     });
@@ -1956,13 +1966,22 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
 
     // Name resolver: env-wide name (real, stable) primary; sitemap title (XML-entity-decoded) as
     // fallback when the env-wide list doesn't cover an id (shouldn't happen in practice — env-wide
-    // lists all pages — but guards against an eventual stale or truncated listing).
+    // lists all pages — but guards against an eventual stale or truncated listing). Either one may hold
+    // pac's `\"` for a `"` (the row name always does; a title does when pac wrote it), and the spec's
+    // name is what a rebuild sends to pac — which would escape it again, adding a backslash every
+    // round trip. So the spec gets the name pac was given (`unescapePacName`).
     const nameById = new Map(smPages.map((p) => {
       const id = String(p.pageId).toLowerCase();
-      return [id, envNameById.get(id) || p.title || p.pageId];
+      return [id, unescapePacName(envNameById.get(id) || p.title || p.pageId)];
     }));
     const unreadableConfigs = [];
-    pages = parseDownloadedPages(pagesRoot, outDir, nameById, unreadableConfigs);
+    const unkeptModels = [];
+    pages = parseDownloadedPages(pagesRoot, outDir, nameById, unreadableConfigs, unkeptModels);
+    // Reported, not gated: a page whose model is left out rebuilds exactly as every page did before the
+    // spec carried models — the model is stored empty.
+    if (unkeptModels.length) {
+      process.stderr.write(`WARNING: ${unkeptModels.length} page model id(s) the App Spec cannot hold were left out, so a rebuild stores them empty: ${unkeptModels.map((u) => `${u.pageId} (${JSON.stringify(u.model)})`).join(', ')}\n`);
+    }
     // A page whose config.json could not be read has UNKNOWN data sources, and the spec would claim
     // it has none — rebuilding it with no table bindings while its source still queries the table.
     // That is exactly the class of silent loss `--allow-lossy-download` exists to gate.

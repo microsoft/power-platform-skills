@@ -272,6 +272,7 @@ async function hydrateSpec(read) {
           ...(p.pageId ? { pageId: p.pageId } : {}),
           ...(p.purpose !== undefined ? { purpose: p.purpose } : {}),
           ...(p.dataSources && p.dataSources.length ? { dataSources: p.dataSources } : {}),
+          ...(p.model ? { model: p.model } : {}),
           ...(p.navigatesTo ? { navigatesTo: p.navigatesTo } : {}),
           ...(p.pageInput !== undefined ? { pageInput: p.pageInput } : {}),
           ...directEntryOf(p),
@@ -283,6 +284,7 @@ async function hydrateSpec(read) {
       : {
           name: p.name,
           ...(p.dataSources && p.dataSources.length ? { dataSources: p.dataSources } : {}),
+          ...(p.model ? { model: p.model } : {}),
           ...(p.prompt !== undefined ? { prompt: p.prompt } : {}),
           codeFile: p.codeFile,
         })),

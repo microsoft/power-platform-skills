@@ -12,7 +12,7 @@ Comprehensive guide to the `/genpage` evaluation suite. **What evals exist, how 
 6. [Fixture types (synthetic vs real captures)](#fixture-types)
 7. [Running the suite](#running-the-suite)
 8. [Cadence — when to run](#cadence)
-9. [Quick start — running one eval end-to-end](#quick-start)
+9. [Quick start — manual capture and offline replay](#quick-start)
 10. [Reading runner output (TAP)](#reading-runner-output)
 11. [Manual grep patterns (Layer 2 fallback)](#manual-grep-patterns)
 12. [Pass / fail summary](#pass-fail-summary)
@@ -20,7 +20,7 @@ Comprehensive guide to the `/genpage` evaluation suite. **What evals exist, how 
 14. [Capturing real fixtures from `/genpage`](#capturing-real-fixtures)
 15. [Adding a new eval](#adding-a-new-eval)
 16. [Adding a new assertion](#adding-a-new-assertion)
-17. [Known-red fixtures and why they're allowed](#known-red-fixtures)
+17. [Expected refusals and corpus gating](#expected-refusals-and-corpus-gating)
 
 ---
 
@@ -42,7 +42,7 @@ Comprehensive guide to the `/genpage` evaluation suite. **What evals exist, how 
 
 ## What we evaluate
 
-`/genpage` is a multi-phase skill: orchestrator → planner → optional entity-builder → page-builder(s) → deploy → optional verify. Each phase has rules (auth must precede entity creation, plans must follow a schema, generated code must follow rules.md, etc.). The eval suite checks that the agent honors those rules end-to-end.
+`/genpage` is a multi-phase skill: orchestrator → planner → optional entity-builder → page-builder(s) → deploy → optional verify. Each phase has rules (auth must precede entity creation, plans must follow a schema, generated code must follow rules.md, etc.). These runners **replay stored artifacts** against selected contracts; they do not launch agents, answer questions, run logged commands, or deploy anything. A green replay is not end-to-end evidence of current agent or platform behavior.
 
 Three kinds of failure we want to catch:
 
@@ -60,18 +60,20 @@ Layers 1 and 2 are automated. Layer 3 is human judgment by design — visual qua
 
 ### Layer 1 — Workflow assertions
 
-**Input:** `workflow-log.md`, `genpage-plan.md`, optionally `genpage-edit-plan.md` and `entity-creation-log.md`.
+**Input:** `workflow-log.md`, `genpage-plan.md`, optionally `genpage-edit-plan.md` and `genpage-entity-creation-log.md` (legacy `entity-creation-log.md` remains supported). Current synthetic fixtures also supply `fixture.json`, ordered `tool-results.json` and the declared JSON/text/source snapshots.
 
 **What it checks:**
-- Prereq commands ran (`node --version`, `pac help` with version ≥ 2.7.0)
+- Prereq commands are recorded (`node --version`, `pac help` with version **> 2.10.0**)
 - `pac auth list` ran and the active env was reported
 - `AskUserQuestion` was used (or new-page intent was inferable from a `## Pages` section in the plan)
 - Plan was presented via `EnterPlanMode` and approved
-- Plan conforms to `references/plan-schema.md` (all required `##` headings)
+- Plan conforms to `references/plan-schema.md` (required headings, safe targets and matching Pages-table/per-page File values)
 - `## Environment` contains `Solution:` and `Publisher Prefix:` lines
 - Solution-selection question runs when (and only when) metadata work is needed
-- `check-auth.js` runs before `entity-builder` when entities need creating
-- `pac model genpage upload` invocations include `--prompt` with correct scoping
+- Auth results belong to their commands; the latest successful applicable gate precedes mutations, final failures halt, and timeout retry/advice is bounded
+- Failed connection discovery is not an empty success and cannot authorize setup
+- Current upload commands use `genpage-upload.js` with file transport; the preservation fixture compares exact approved/forwarded text and before/after name, model and binding sets
+- Custom API discovery/gates/bindings/runtime/update stages agree; optional packaging names every deployed page and preserves failures/read-back evidence
 - Prefix discipline holds across plan, entity-creation log, and resolved names
 
 **Runner:** `evals/model-apps/genpage/run-layer-1.js`
@@ -79,25 +81,27 @@ Layers 1 and 2 are automated. Layer 3 is human judgment by design — visual qua
 
 ### Layer 2 — Code-quality assertions
 
-**Input:** every `.tsx` file in the fixture (excluding `RuntimeTypes.ts`).
+**Input:** every top-level `.tsx` file in the fixture (excluding `RuntimeTypes.ts`), plus declared before/after source and lifecycle evidence where applicable.
 
 **What it checks** (against `common_code_assertions` in `evals.json`):
 - Single file with `export default GeneratedComponent`
 - `pageInput` is destructured from props (even on mock pages)
 - Either `./RuntimeTypes` import (Dataverse) or realistic inline mock data
-- `makeStyles` + `tokens` (no inline styles for static values)
+- `makeStyles` presence (the existing heuristic does not prove tokens or prohibit every inline style)
 - **No** `100vh` / `100vw` / `createTheme` / `mergeThemes` / `useTheme` / `<FluentProvider>`
 - **No** `window.location` / `react-router` / raw `pagetype=` URLs
 - `Xrm.Navigation.navigateTo` (or `xrm?.Navigation?.navigateTo` via a typed `(window as any).Xrm` alias) for in-app nav
 - Unsized Fluent icons only (e.g., `AddRegular`, not `Add24Regular`)
 - Every icon name in `@fluentui/react-icons` imports appears in `references/verified-icons.txt`
-- `try`/`catch` around `await dataApi.*` (Dataverse pages)
+- A `try`/`catch` marker for Dataverse awaits (not proof that every await is enclosed)
 - No `TODO`/`FIXME`/`...` placeholders
 - Lookup fields use `@OData.Community.Display.V1.FormattedValue` annotations
 - `<DataGrid>` usage imports `createTableColumn` + configures `columnSizingOptions` or `resizableColumns`
-- Multi-page builds use quoted `"PAGEREF_<filename>"` placeholders for cross-page nav
+- Every effective navigation target is checked with the production resolver; current before/after snapshots must differ by exact substitutions only, and only affected pages reupload
+- The production `pageStructureProblems` gate rejects truncated modules, including unfinished statements after valid exports
+- The Custom API lifecycle grades actual saved TSX, method/parameter/bound-record parity, sanitized result handling and preservation versus explicit clear
 
-Plus per-eval `expectations` whose text starts with `Phase 5` (page-builder-specific).
+Plus per-eval `expectations` for **Phase 5, 5a, 5b and 5c**. `Edit Phase 5` entries remain Layer-1 expectations. The registered Phase-5b column checker now executes; its existing `column-name verification requires RuntimeTypes.ts fixture` SKIP is explicit, not silently excluded by routing. Column/schema verification itself remains unimplemented. Other unregistered/AST-dependent expectations are reported as skips, not claimed as coverage. The API request scorer supports literal request objects in named helpers and scalar annotations; it is not a TypeScript compiler or a runtime execution oracle.
 
 **Runner:** `evals/model-apps/genpage/run-layer-2.js`
 **Library:** `lib/assertions-layer-2.js`
@@ -126,11 +130,58 @@ Plus per-eval `expectations` whose text starts with `Phase 5` (page-builder-spec
 
 All eval definitions live in `evals.json` alongside this file. The file contains:
 
-- `common_workflow_assertions`: 15 workflow checks every run must pass (prereqs, auth, solution selection gating, check-auth pre-flight, plan creation, workflow log, `--prompt` scoping, prefix discipline at plan-format / resolved-names / solution-alignment).
-- `common_code_assertions`: 18 code-quality checks the generated `.tsx` must pass (Fluent UI V9 only, no forbidden patterns, etc.).
-- `evals`: 16 test cases — each with `id`, `tier`, `prompt`, `data`, and per-eval `expectations`.
+- `common_workflow_assertions`: **19** registered workflow checks, each passed or explicitly skipped when inapplicable.
+- `common_code_assertions`: **21** registered code checks.
+- `evals`: **25** prompt definitions, each with `id`, `tier`, `prompt`, `data`, and per-eval `expectations`.
 
-The `data` field specifies the user answers and environment state the eval assumes. During manual eval runs, the human grader role-plays this data. During automated runs, the eval harness provides these responses to `AskUserQuestion`.
+The `data` field specifies scenario assumptions for a manual capture or constructed fixture. The offline harness does not provide responses to `AskUserQuestion` or verify every recorded answer. The corpus contains **20 fixture directories / 26 top-level TSX files**, representing 18 prompt IDs. IDs **3, 6, 8, 9, 12, 14, 16** have no fixture and are not executed.
+
+### Enumerating registered and unmatched checks
+
+The assertion modules export four iterable Maps: Layer 1's `WORKFLOW_ASSERTIONS` and
+`PHASE_EXPECTATIONS`, and Layer 2's `ASSERTIONS` and `PHASE5_EXPECTATIONS`. Iterate their
+entries to inventory every registered text and callback. Use the matching common Map
+for `common_workflow_assertions` / `common_code_assertions`.
+
+For **per-eval expectations**, both runner modules export `getExpectationCheck(text)`,
+returning the actual routed callback or `undefined`. They also export their predicates:
+Layer 1 `isPhaseExpectation(text)` and Layer 2 `isPhase5Expectation(text)`. The scoring
+loops use these same functions. A cross-runner contract test can list unmatched entries
+without reimplementing the routing expressions (paths below are relative to this directory):
+
+```javascript
+const data = require('./evals.json');
+const workflow = require('./run-layer-1.js');
+const code = require('./run-layer-2.js');
+const unmatched = data.evals.flatMap(({ id, expectations }) =>
+  expectations
+    .filter((text) => !workflow.getExpectationCheck(text) && !code.getExpectationCheck(text))
+    .map((text) => ({ id, text }))
+);
+```
+
+A matched callback can still intentionally return SKIP; matching is not proof of an
+implemented oracle. The Phase-5b routing test also injects a failing result at the real
+registry entry and requires runner exit 1, proving the callback executes.
+
+### The coverage contract
+
+`evals/model-apps/tests/eval-coverage-contract.test.js` (run by CI with the other eval unit
+tests) grades through each runner's exported `gradeFixture`, so it sees exactly what the runners
+report, and fails when:
+
+- a prompt has no fixture and no recorded reason, or a fixture has no prompt;
+- an expectation is routed by neither runner (it would be dropped without even a SKIP), or a
+  common assertion has no check;
+- an expectation has no check and is not recorded as `deferred` (an offline check could grade
+  it) or `manual` (a person judges the generated page);
+- a registered check returns SKIP on every fixture it runs on and is not recorded with its reason;
+- the counts and missing prompt IDs this guide and `fixtures/README.md` state disagree with the
+  registries, or the loader's entity-log name differs from the one the skill writes.
+
+Today's gaps are recorded in `evals/model-apps/tests/eval-coverage-baseline.json`. Every list in
+it is a ratchet: when you capture a missing prompt, add a check or make a placeholder grade, the
+contract fails until you remove the entry, so the baseline only shrinks.
 
 ---
 
@@ -140,8 +191,8 @@ Each eval in `evals.json` has a `tier` field for selective execution.
 
 | Tier | Count | When to run | Eval IDs |
 |------|------|-------------|----------|
-| `smoke` | 4 | **Every PR** that touches the skill, agents, rules, or evals | 1, 2, 3, 16 |
-| `full` | 9 | Nightly or pre-release; covers core workflows | 4, 5, 6, 7, 8, 9, 11, 13, 15 |
+| `smoke` | 5 | **Every PR** that touches the skill, agents, rules, or evals | 1, 2, 3, 16, 17 |
+| `full` | 17 | Nightly or pre-release; covers core workflows | 4, 5, 6, 7, 8, 9, 11, 13, 15, 18–25 |
 | `stress` | 3 | With full suite; edge cases (auth blockers, plan revisions, filename collisions) | 10, 12, 14 |
 
 **Recommended cadence:**
@@ -165,7 +216,7 @@ A fixture is a folder under `fixtures/<eval-id>-<slug>/` containing the artifact
 
 ### Synthetic fixtures
 
-Hand-built v2.x-compliant artifacts. Built from samples + hand-crafted workflow-log + plan. They serve as **green-path regression tests** — if a runner change accidentally rejects a known-good fixture, we know the change is wrong.
+Hand-built artifacts for specific contracts, not captured agent runs. The seven current additions declare `provenance: "synthetic"`, `contractVersion: 2` and the public skill/reference sections they exercise. They serve as deterministic positive/rejection/recovery controls. Historical synthetics retain their compatibility contract rather than being advertised as current compliant output.
 
 Pros: deterministic, fast to build, no Dataverse dependency, fully under our control.
 Cons: can't catch agent drift (the synthetic fixture is what we *want* the agent to produce, not what it *does*).
@@ -184,18 +235,48 @@ The suite ships both kinds:
 | Eval | Synthetic fixture | Real capture |
 |-----:|-------------------|---------------|
 | 1 | `1-account-card-gallery` | — |
-| 2 | `2-mock-dashboard` | `2-mock-dashboard-real` (pre-v2.2-spec — see [known-red](#known-red-fixtures)) |
+| 2 | `2-mock-dashboard` | `2-mock-dashboard-real` (historical compatibility replay) |
 | 4 | `4-case-wizard` | — |
-| 5 | — | `5-kanban-task-board` (pre-v2.2-spec — see [known-red](#known-red-fixtures)) |
+| 5 | — | `5-kanban-task-board` (historical compatibility replay) |
 | 7 | `7-job-candidates-new-entities` | — |
-| 11 | `11-recruitment-multi-page` | `11-recruitment-pages-real` (v2.2-spec, ✓ green) |
+| 11 | `11-recruitment-multi-page` (historical) | `11-recruitment-pages-real` (historical, green) |
 | 13 | `13-contact-localization` | — |
-| 15 | — | `15-support-tickets-real` (v2.2-spec, ✓ green) |
+| 15 | — | `15-support-tickets-real` (historical, green) |
+| 17 | `17-weather-mock-data` (historical) | — |
+| 18 | `18-sharepoint-connectors` (historical) | — |
+| 19 | `19-add-weather-connector` (historical edit) | — |
+| 10 | `10-auth-timeout-halt` (current refusal) | — |
+| 20 | `20-upload-preservation` (current create/edit/refusal) | — |
+| 21 | `21-discovery-failure` (current refusal) | — |
+| 22 | `22-navigation-contract` (current before/after) | — |
+| 23 | `23-worker-completeness` (current rejection/recovery) | — |
+| 24 | `24-custom-api-lifecycle` (current create/preserve/clear) | — |
+| 25 | `25-solution-package` (current packaging/refusal) | — |
 
 The mix gives:
 - A **green baseline** to catch runner regressions (synthetics)
 - **Drift detection** against real agent output (real captures)
-- **Proof of life** that the current spec produces green captures (the two v2.2-spec captures)
+- **Compatibility evidence**, not proof that the current skill produces current-compliant captures
+
+---
+
+### Versioned evidence and discrimination
+
+`fixtures/contracts.json` explicitly labels the 13 existing directories as historical contract 1, without rewriting captured content. Raw PAC transport, legacy navigation spelling and missing transport/read-back artifacts are **not** certified as current compliant. Contract 2 uses a per-directory `fixture.json` and `tool-results.json`: one ordered record per command with its own result, plus `artifacts` listing the exact files to load. Artifact paths must stay inside the fixture and be plain files.
+
+The seven new fixtures exercise these current contracts:
+
+| Fixture | Evidence/check | Negative control in scorer tests |
+|---------|----------------|----------------------------------|
+| `10-auth-timeout-halt` | One timeout retry, original advice, no provisioning/upload | Failed auth followed by unrelated `ok:true`; malformed result or wrong environment |
+| `20-upload-preservation` | Wrapper/name/prompt/message files; separate own-name/config snapshots | Inline/rewritten approved text; dropped name/model/bindings; hidden shim/read warnings |
+| `21-discovery-failure` | Unreadable discovery returns `needs_input`, no setup | Failed discovery followed by connection/reference creation or upload |
+| `22-navigation-contract` | Actual before/after TSX and deployed ID map | Unknown/optional-call non-GUID target, runtime override, collateral edit or extra reupload |
+| `23-worker-completeness` | Failed production gate, fresh regeneration, then upload | Valid export plus unfinished statement, stale/missing write or upload before acceptance |
+| `24-custom-api-lifecycle` | Discovery, re-probe, bare actions, runtime and config stages | Disabled/unreadable gate, invented kind/name/parameter, wrong method/bound record, unsafe response or lost bindings |
+| `25-solution-package` | Explicit page IDs, dynamic types, app-first writes and read-back | Omitted page/wrong solution/type/order; invalid ID writes; partial failure reported as success |
+
+Expected refusals are green **only when the recorded refusal contract is satisfied**. Fixtures 10 and 21 legitimately contain no generated TSX; Layer 2 grades their failed gate and absence of generation/mutations rather than manufacturing a page. Fixture 23's rejected snapshot is nested evidence; the top-level page is the accepted regeneration. Expected-failure mutations live in unit tests, never unexplained red corpus directories.
 
 ---
 
@@ -216,14 +297,14 @@ Exit codes:
 ### Filter by tier
 
 ```bash
-node run-layer-1.js --tier smoke    # 4 smoke evals
-node run-layer-1.js --tier full     # 9 full evals
-node run-layer-1.js --tier stress   # 3 stress evals
+node run-layer-1.js --tier smoke    # 4 stored fixtures, 5 prompt definitions
+node run-layer-1.js --tier full     # 15 stored fixtures, 17 prompt definitions
+node run-layer-1.js --tier stress   # 1 stored fixture (id 10), 3 prompt definitions
 ```
 
-A tier runs the fixtures that exist for its evals. The committed fixtures cover only some evals (none
-of the stress ones), so a tier with no captured fixture reports `no fixtures matched the filter` and
-exits 2; point `--fixtures <dir>` at your own captures to run it.
+A tier runs only existing fixtures, not every prompt definition. An empty selection reports
+`no fixtures matched the filter` and exits 2. The stress tier now replays the synthetic auth-timeout
+refusal; plan-revision and filename-collision prompts still have no fixture.
 
 ### Filter by eval id (debugging)
 
@@ -257,13 +338,13 @@ For raw counts:
 node run-layer-1.js 2>&1 | tail -6
 ```
 
-Prints:
+Example summary (counts come from the selected stored corpus):
 ```
-# tests 261
-# pass  124
-# fail  10
-# skip  127
-# fixtures 10 (pass 8, fail 2)
+# tests 530
+# pass  267
+# fail  0
+# skip  263
+# fixtures 20 (pass 20, fail 0)
 ```
 
 ---
@@ -297,31 +378,31 @@ Example using eval id 1 (account gallery) — manual fixture capture if you don'
 
 ## Reading runner output
 
-The runners emit TAP v13. Each fixture is a subtest; each assertion is one `ok` / `not ok` line.
+The runners emit TAP v13. Each fixture is a subtest; each assertion is one `ok` / `not ok` line. The following is illustrative failure output, not the current corpus result.
 
 ```
 TAP version 13
-1..10
+1..2
 # Subtest: 1-account-card-gallery
     ok 1 - Generated .tsx is a single file with `export default GeneratedComponent`
     ok 2 - Generated .tsx destructures props including `pageInput`
     ok 3 - Generated .tsx imports types from `./RuntimeTypes` ...
     ...
-    1..18
+    1..21
 ok 1 - 1-account-card-gallery
 # Subtest: 11-recruitment-pages-real
     ...
-    not ok 17 - For Dataverse list/detail pages, the inline IIFE + window cache pattern is used
+    not ok 18 - For Dataverse list/detail pages, the inline IIFE + window cache pattern is used
       ---
       reason: "candidate-list.tsx: missing window cache or uses useCallback for fetch"
       ...
-ok 2 - 11-recruitment-pages-real
+not ok 2 - 11-recruitment-pages-real
 ...
-# tests 187
-# pass  98
-# fail  6
-# skip  92
-# fixtures 7 (pass 6, fail 1)
+# tests 42
+# pass  39
+# fail  1
+# skip  2
+# fixtures 2 (pass 1, fail 1)
 ```
 
 Read this output as:
@@ -369,11 +450,11 @@ For ad-hoc verification or assertions the Layer 2 runner currently skips, grep t
 
 An eval run passes when:
 
-- **Layer 1:** 100% of workflow assertions pass
-- **Layer 2:** 100% of code assertions pass on every `.tsx`
+- **Layer 1:** no executed workflow assertion fails
+- **Layer 2:** no executed code/lifecycle assertion fails (or the declared source-free refusal is verified)
 - **Layer 3:** average UX score ≥ 8.5, no page below 7
 
-An eval run fails if any layer's criteria isn't met. Skipped assertions never count as failures — they're either inapplicable to the fixture or pending AST-based implementation.
+An offline replay fails if any executed assertion fails. Skips are visible but do not fail the run: they can be inapplicable, manual/AST-dependent or unregistered. Green therefore does not imply complete prompt coverage, a TypeScript build, React execution, live upload/download, or a browser/UX result.
 
 ---
 
@@ -399,7 +480,7 @@ Use `scripts/capture-fixture.js`. The helper copies the right files (excluding l
 
 ### Steps
 
-1. **Run `/genpage` in a regular interactive Claude Code session.** Use the eval's exact prompt from `evals.json`. Answer each `AskUserQuestion` per the eval's `data.question_answers` (the runner emits these as the canonical answers).
+1. **Run `/genpage` manually with the plugin loaded.** Use the eval's prompt and role-play its `data.question_answers`; offline runners do not emit or supply those answers.
 
 2. **After completion, run the capture script:**
 
@@ -410,15 +491,15 @@ Use `scripts/capture-fixture.js`. The helper copies the right files (excluding l
      --slug <kebab-slug>
    ```
 
-3. **Inspect the JSON summary** the script prints. If `layer1.failures` and `layer2.failures` are both empty, the fixture is good to commit. If there are failures, decide:
+3. **Inspect the JSON summary** the script prints. Each layer reports its counts, the runner's `exitCode` and a `failures` list. If `layer1.failures` and `layer2.failures` are both empty, the fixture is good to commit. A runner that exits with an error but reports no failing assertion, or reports no assertions at all, is listed as a failure too: nothing was verified, even though the process itself exits 0. If there are failures, decide:
    - **Real agent drift** → file an issue or tighten the spec (don't doctor the fixture)
    - **Runner false positive** → relax the assertion regex to accept the functionally-equivalent alternative pattern
-   - **Stale fixture from before a spec change** → mark as known-red with a fixture-local README (see `15-support-tickets-real/README.md` for the template)
+   - **Historical contract** → label/version the evidence and capture a new directory under a fresh slug, rather than rewriting an old transcript
 
 ### What the script copies (allowlist)
 
 - `*.tsx` (each page produced)
-- `*.md` (workflow-log, genpage-plan, entity-creation-log, edit-plan)
+- `*.md` (workflow-log, genpage-plan, genpage-entity-creation-log, genpage-edit-plan)
 - `RuntimeTypes.ts`
 
 ### What it skips (denylist)
@@ -435,6 +516,8 @@ Use `scripts/capture-fixture.js`. The helper copies the right files (excluding l
 | `--skip-verify` | Capture without running the layers (rare; use when you just want to inspect the artifacts) |
 
 ---
+
+Prefer a fresh slug for historical captures; do not use `--force` to make old evidence resemble today's workflow. The capture helper's allowlist does not collect the new JSON/text transport and lifecycle evidence. Constructed contract-2 fixtures explicitly package those snapshots and associated results themselves.
 
 ## Adding a new eval
 
@@ -508,7 +591,7 @@ When a new rule is added to `rules.md` or a new phase requirement lands in `SKIL
 
 4. **Add unit tests** in `tests/assertions-layer-{1,2}.test.js` covering pass / fail / skip cases.
 
-5. **Update at least one fixture** to exercise the assertion. If existing fixtures naturally cover it, you're done; otherwise edit a synthetic fixture's `.tsx` or workflow-log to include the pattern.
+5. **Add a versioned synthetic fixture** for a new contract, or rely on existing evidence when it genuinely covers it. Do not alter captured directories. Include a positive control and a negative mutation proving the scorer rejects the precise regression.
 
 6. **Run the full test + runner sweep:**
 
@@ -520,26 +603,14 @@ When a new rule is added to `rules.md` or a new phase requirement lands in `SKIL
 
 ---
 
-## Known-red fixtures
+## Expected refusals and corpus gating
 
-A fixture can be **intentionally red** if:
+Currently red: **none**. Every fixture — synthetic and real capture alike — is green under both
+runners, and CI runs both runners on every PR that touches `evals/model-apps/**`
+(`.github/workflows/model-apps-script-tests.yml`, job `test-model-apps-evals`).
 
-- It documents real agent drift (the runner is catching a legitimate violation)
-- It was captured before a spec change and predates the current rules
-- It serves as historical reference
-
-In all cases, the fixture must have a **`README.md` inside the fixture directory** documenting:
-- What's failing and why
-- Whether the failures are runner false-positives (would be fixed) or real-but-pre-spec drift (would be replaced)
-- When the fixture should be replaced
-
-Currently red:
-
-| Fixture | Why | Action |
-|---------|-----|--------|
-| `2-mock-dashboard-real/` | Pre-v2.2-spec workflow-log compactness + `void props;` instead of `pageInput` destructure | Re-capture under v2.2 spec to replace |
-| `5-kanban-task-board/` | Pre-v2.2-spec workflow-log compactness (Layer 2 is fully green; only Layer 1 affected) | Re-capture under v2.2 spec to replace |
-
-Both will go green when their `/genpage` sessions are re-run after the v2.2 planner-spec tightening propagates. See each fixture's README for the specific failing assertions and remediation path.
-
-**Aggregate state for CI gating:** A passing build is one where every **synthetic** fixture is green. Real captures may be red while documented; their failures count as known-signal, not regressions. (You can adjust this policy if you want CI to gate on real captures too — see the runner's `--eval` filter for narrowing.)
+**Aggregate state for CI gating:** every stored fixture must pass. Expected rejection is an explicit
+outcome with associated failed-gate/no-mutation evidence, not an excuse for a red fixture. Put bad
+inputs and ignored-failure mutations in scorer unit tests. Historical captures use their labelled
+compatibility contract; newer requirements need new evidence rather than rewritten history or a
+broader skip. CI green covers these replays and units, not unrepresented prompts or live behavior.

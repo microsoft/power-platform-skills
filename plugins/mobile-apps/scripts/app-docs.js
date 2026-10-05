@@ -95,6 +95,7 @@ const PHASES = [
   { id: 'screen-plan', title: 'Plan the screens', detail: 'Screen graph, navigation, and per-screen specs', skillSteps: '3 / Gates 3-4' },
   { id: 'scaffold', title: 'Bring the app online', detail: 'Prepare the template and initialize the Power Apps project', skillSteps: '5, 6' },
   { id: 'design', title: 'Lock the design system', detail: 'Brand tokens, typography, and colour', skillSteps: '6.75, 9b' },
+  { id: 'auth', title: 'Connect sign-in', detail: 'Entra ID app registration and MSAL config', skillSteps: '7' },
   { id: 'dataverse', title: 'Build the data model', detail: 'Create tables in Dataverse and generate services', skillSteps: '8, 8.5', dataverseOnly: true },
   { id: 'capabilities', title: 'Wire capabilities', detail: 'Device features and connectors', skillSteps: '9, 10' },
   { id: 'screens', title: 'Build the screens', detail: 'Navigation, shared code, and each screen', skillSteps: '10b, 10.8, 11' },

@@ -752,7 +752,7 @@ at the same order, as every new form is — were served with the `isdefault` for
 | section | `label`, `showLabel`, `visible` | Section heading, whether it renders, whether the section shows. |
 | section | `columns` | `1`–`4` grid columns. |
 | section | `fields[]` | Column logical names, or `{ "name": …, … }` entries. |
-| field entry | `colspan`, `rowspan` | Whole numbers ≥ 1. A cell wider than its section is clamped to it — the clamp reaches the deployed cell, not just the row packing. `rowspan` is valid only on the **last** field of a section (see below). |
+| field entry | `colspan`, `rowspan` | Whole numbers ≥ 1. A cell wider than its section is clamped to it — the clamp reaches the deployed cell, not just the row packing. A field **moved** into another section without a declared `colspan` keeps its deployed width if it fits there, and is narrowed to that section's width (and reported) if not — declare `colspan` to choose. `rowspan` is valid only on the **last** field of a section (see below). |
 
 A tab declares **either** `sections` **or** `columns`, never both. `columns` on a **tab** is the list
 of form-columns; `columns` on a **section** is its 1–4 grid width — a number on a tab is rejected
@@ -814,20 +814,24 @@ recorded in the build result (`skipped.layout`), and `--verify` reports the dive
 explicit layout.
 
 **Editing an existing form.** An explicit layout is converged onto the deployed form rather than
-flattened into its first section: missing tabs, form-columns and sections are **created**, a
-section's `columns`/`label`/`showLabel`/`visible` are **updated in place**, a named section that
-sits in another tab or form-column is **moved** to where the layout places it, and a field sitting
-in the wrong section is **moved** (never duplicated — the cell keeps its id and any control state a
-maker edited). Containers are matched by `name`, then `label`, then position, so a form built by an
-earlier `auto` layout — or by hand in Maker — converges instead of gaining a duplicate tab. Nothing
-is renamed, because form scripts and business rules can reference a section by name.
+flattened into its first section: missing tabs, form-columns and sections are **created** where the
+layout places them, a tab's `label`/`expanded`/`visible`, a form-column's `width` and a section's
+`columns`/`label`/`showLabel`/`visible` are **updated in place**, a named section that sits in another
+tab or form-column is **moved** to where the layout places it, the tabs — and the sections of each
+form-column — are **put in the layout's order**, and a field sitting in the wrong section is **moved**
+(never duplicated — the cell keeps its id and any control state a maker edited). Containers are
+matched by `name`, then `label`, then position, so a form built by an earlier `auto` layout — or by
+hand in Maker — converges instead of gaining a duplicate tab. Nothing is renamed, because form scripts
+and business rules can reference a section by name. Every move is reported; only the layout's own
+containers are ordered — a tab or section it does not mention (a maker's own, the notes timeline)
+keeps its place among them.
 
 Three rules keep that matching from claiming the wrong container. An index an earlier tab or section
 already matched is **not reused**, because an unlabeled container compiles to a default label
 (`General` for a tab, `Details` for a section) and several of them would otherwise all match the
-first one. A section whose name another section in the layout declares is matched only **by that
+first one. A tab or section whose name another one in the layout declares is matched only **by that
 name**, so it can be moved to its own place instead of being taken over by a neighbour with the same
-label. And sections the **engine** owns — a sub-grid host, the notes/timeline section — are
+label or position. And sections the **engine** owns — a sub-grid host, the notes/timeline section — are
 matched only by `name`: a label or a position is not evidence about what a container *is*, and
 matching one positionally would relabel a sub-grid and place fields in the row holding its grid.
 Their name is the engine's own, so a section **you** declare never takes one even by name: a section
@@ -855,8 +859,8 @@ remove in Maker.
 
 ⚠ **Field order.** A field the form lacks is appended to the end of its section; a field it already
 has stays where it is. So reordering a section's `fields` list on an existing form changes nothing
-(`--verify` does not check order either). Position a field explicitly with `fieldOptions[x].after`,
-below.
+(`--verify` does not check field order either — it does check the order of tabs and of sections).
+Position a field explicitly with `fieldOptions[x].after`, below.
 
 ⚠ Declaring explicit `tabs` also switches **pruning** on: a field the deployed form carries and the
 layout does not list is removed (never the primary field). Set `"prune": false` to restyle or
@@ -897,6 +901,12 @@ them and writes *nothing* when you do not, so a rebuild never clears a lock or a
 in the form designer. The corollary is that `readOnly: false` / `hidden: false` cannot turn a flag
 back off — they are rejected at author time rather than accepted and ignored. To un-set one, clear it
 in the designer, or drop the field and let the next build re-add it.
+
+**Under an `auto` layout the flags apply to the fields the layout places** — the primary column, the
+table's declared columns and its parent lookups. A `readOnly`/`hidden` on any other field (a stock
+column of an existing table, say) is never written, and lint warns about it; list that field in an
+explicit layout instead (`prune: false` keeps the rest of the form). `--verify` proves every flag the
+build writes, and fails a flagged field the deployed form no longer carries.
 
 - **`prune`** *(optional, default `true`, explicit layouts only)* — an explicit `tabs` layout is
   normally the complete desired state, so a rebuild removes any deployed field it does not list. Set
@@ -1006,6 +1016,11 @@ custom control), but the spec validator emits a warning.
   create (authored by different people/tools), and an unrelated edit (e.g. a form change) must still
   build. The pages phase matches by `pageId`/`key`, never by name, so distinct-id same-name pages
   build correctly; rename one in Maker to disambiguate the navigation.
+- **A straight double quote (`"`) in a page `name`** draws a lint warning: pac stores each one as `\"`
+  on the page's own record, and the backslashes stay there. The navigation shows the page subarea's
+  `title`, which the build writes as given. A download writes the name without pac's backslashes, so a
+  rebuild does not add more. Use typographic quotes (“ ”) or an apostrophe — pac stores those, and
+  every other character, exactly.
 - **`pageInput`**: `{ "data": { … } }` — the input this page expects when navigated to.
 - **Durable page manifest.** The build writes a `<app-unique-name>_pagemanifest` web resource
   carrying `{ schemaVersion, pages: [{ key, name, pageId, purpose, dataSources, navigatesTo, pageInput }], design }`.
@@ -1034,13 +1049,16 @@ custom control), but the spec validator emits a warning.
   highest identity authority (outranks the manifest), confirmed against EXISTENCE — so a downloaded
   app (including Maker-added pages) rebuilds against the correct existing page without duplication.
 - **What a page round-trip carries — and what it does not.** A download brings back each page's
-  code, prompt, `dataSources` and identity. A page's **connector and Custom API bindings** and the id
-  of the **model** that generated it have no App Spec field, so they are not in the spec. The build
-  uploads without them, and pac leaves a page's existing bindings in place when they are omitted: a
-  rebuild in the **same environment** keeps the bindings working, but that is preservation, not
-  reconstruction — the same spec rebuilt in **another environment** deploys the page without them
-  (bind them there with `/genpage`). The model id is stored empty whenever a rebuild re-uploads the
-  page.
+  code, prompt, `dataSources`, the id of the **model** that generated it (`pages[].model`) and its
+  identity; the build re-sends the model with every upload, because pac stores whatever an upload says
+  and an upload without one stored it empty. A page's **connector and Custom API bindings** have no App
+  Spec field, so they are not in the spec. The build uploads without them, and pac leaves a page's
+  existing bindings in place when they are omitted: a rebuild in the **same environment** keeps the
+  bindings working, but that is preservation, not reconstruction — the same spec rebuilt in **another
+  environment** deploys the page without them (bind them there with `/genpage`).
+- **`model` (optional).** The model id a page was generated with, e.g. `"gpt-4.1"` — letters, digits and
+  `. _ : / @ + -`, at most 100 characters. A download writes it (an id outside that shape is left out, with
+  a warning); an authored spec may omit it, and then a rebuild of an existing page stores it empty.
 - **Safety HALTs (pages phase).** The build halts on identity/safety violations rather than
   proceeding with potentially wrong state:
   - `pages-identity-conflict` — spec `pageId` and manifest disagree on a key, or a duplicate id is

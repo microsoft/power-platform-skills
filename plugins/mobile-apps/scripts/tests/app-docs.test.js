@@ -465,7 +465,6 @@ test('every step that blocks on the user says so in the plan', () => {
   );
   const lines = skill.split('\n');
 
-  // Attribute each line to the step it falls under.
   const headings = [];
   lines.forEach((line, i) => {
     const m = /^### Step ([0-9a-z.]+) /.exec(line);
@@ -479,24 +478,30 @@ test('every step that blocks on the user says so in the plan', () => {
     return name;
   };
 
-  // The steps that stop and wait for an answer. Each must raise the banner before asking: the
-  // plan is the surface the user is watching, and a run that blocks silently looks like a run
-  // that is still working. Found by walking the skill's own prompts, not from memory.
-  const BLOCKING = ['2b', '2c', '6.75', '8.5', '11.4'];
-  const waitingIn = new Set();
+  // Derived from the skill, not listed here. A hard-coded list is what let Step 7 ship asking
+  // for an app registration with no phase open at all - the plan showed nothing in progress
+  // while the run was blocked, and the test passed because 7 was not on the list.
+  const asks = new Set();
+  const raises = new Set();
   lines.forEach((line, i) => {
-    if (/step --id [a-z-]+ --status active[^\n]*--note "[^"]*(?:[Ww]aiting for|awaiting)/.test(line)) {
-      waitingIn.add(stepAt(i));
-    }
+    if (line.includes('AskUserQuestion')) asks.add(stepAt(i));
+    if (/--status active[^\n]*--note "[^"]*(?:[Ww]aiting for|awaiting)/.test(line)) raises.add(stepAt(i));
   });
+  asks.delete('(preamble)');
 
-  for (const step of BLOCKING) {
-    assert.ok(waitingIn.has(step), `Step ${step} asks the user but never raises the waiting banner`);
-  }
+  // Step 2 asks before `init` runs at Step 2b, so there is no plan to raise a banner on.
+  // Step 3's gates set their note through the documentation protocol rather than inline here.
+  const EXEMPT = new Set(['2', '3']);
+  const silent = [...asks].filter((step) => !raises.has(step) && !EXEMPT.has(step)).sort();
+  assert.deepEqual(silent, [], 'these steps ask the user but never raise the waiting banner');
 
-  // Step 13's menu is not a gate. The build has finished and the plan has settled, so re-opening
-  // a phase there would restart the reload loop and report work in progress on a finished run.
-  assert.ok(!waitingIn.has('13'), 'the closing menu must not re-open a phase');
+  // The exemptions must stay true: the plan is created at 2b, and the protocol owns the gates.
+  assert.match(skill, /init --app-name[\s\S]{0,400}### Step 2b|### Step 2b[\s\S]{0,800}init --app-name/);
+  assert.match(skill, /Gate 2 — awaiting your approval/);
+
+  // Step 13's menu is not a gate. The build has finished and the plan has settled, so
+  // re-opening a phase there would restart the reload loop.
+  assert.ok(!raises.has('13'), 'the closing menu must not re-open a phase');
   assert.match(skill, /Do \*\*not\*\* re-open the `run` phase/);
 });
 

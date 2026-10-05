@@ -1,7 +1,10 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 const { buildSmokeSpec, runSmokeAssertions, subAreaTag, hasSitemapAttr } = require('../smoke-eval.js');
+const { loadCli } = require('./helpers/cli-harness.js');
 const { validateAppSpec } = require('../lib/app-spec.js');
 const { appDef } = require('../lib/sdk-build.js');
 
@@ -152,4 +155,122 @@ test('hasSitemapAttr matches whole attribute names and escapes path values', () 
   assert.strictEqual(hasSitemapAttr(tag, 'Icon', '/WebResources/new_tvec.svg'), false);
   // `.` and `/` in a platform ref must stay literal, not act as regex metacharacters.
   assert.strictEqual(hasSitemapAttr(tag, 'VectorIcon', '/WebResources/new_tvecXsvg'), false);
+});
+
+// The build → verify → cleanup driver is otherwise live-only. spawnSync is required at load, so the
+// CLI harness can replace it; nothing here may launch the real build, dataverse-request, or teardown.
+const SMOKE_ENV = 'https://contoso.crm.dynamics.com';
+const smokeScript = path.join(__dirname, '..', 'smoke-eval.js');
+
+test('smoke orchestration reports build assertion and teardown outcomes', async () => {
+  const passingXml = sitemapXmlFor(buildSmokeSpec('t'));
+  const origMk = fs.mkdtempSync;
+  const origRm = fs.rmSync;
+  const prevDirname = global.__dirname;
+
+  async function drive({ buildStatus, buildStdout = '', buildStderr = '', teardownStatus, views, xml, prefix = 't' }) {
+    const order = [];
+    const dirs = [];
+    const spawns = [];
+    fs.mkdtempSync = (p) => {
+      const dir = origMk.call(fs, p);
+      dirs.push(dir);
+      order.push('mkdtemp');
+      return dir;
+    };
+    fs.rmSync = (p, o) => {
+      order.push('rm');
+      return origRm.call(fs, p, o);
+    };
+    global.__dirname = path.join(__dirname, '..');
+    try {
+      const cli = loadCli(smokeScript, {
+        requires: {
+          'node:child_process': {
+            spawnSync: (exec, args) => {
+              const base = path.basename(args[0] || '');
+              order.push('spawn:' + base);
+              spawns.push({ exec, args, base });
+              assert.strictEqual(exec, process.execPath, 'the driver must spawn node, never az or pac');
+              assert.ok(args.includes(SMOKE_ENV), base + ' was not given the requested environment');
+              if (base === 'build-model-app.js') {
+                const specArg = args[args.indexOf('--spec') + 1];
+                assert.ok(specArg && specArg.startsWith('@') && fs.existsSync(specArg.slice(1)), 'spec must be on disk before the build spawn');
+                return { status: buildStatus, stdout: buildStdout, stderr: buildStderr };
+              }
+              if (base === 'teardown-model-app.js') {
+                assert.ok(args.includes('--allow-destructive'), 'teardown must stay explicitly destructive');
+                return { status: teardownStatus, stdout: 'torn down\n', stderr: teardownStatus ? 'teardown failed\n' : '' };
+              }
+              if (base === 'dataverse-request.js') {
+                const api = args[3] || '';
+                let data = {};
+                if (api.startsWith('savedqueries')) data = { value: views };
+                else if (api.startsWith('appmodules(')) data = { appmoduleidunique: 'unique-1' };
+                else if (api.startsWith('appmodulecomponents')) data = { value: [{ objectid: 'sitemap-1' }] };
+                else if (api.startsWith('sitemaps(')) data = { sitemapxml: xml };
+                return { status: 0, stdout: JSON.stringify({ data }), stderr: '' };
+              }
+              throw new Error('unexpected smoke spawn ' + base);
+            },
+          },
+        },
+      });
+      const code = await cli.main(SMOKE_ENV, prefix);
+      return {
+        code,
+        order: order.slice(),
+        spawns,
+        dirExists: dirs.length ? fs.existsSync(dirs[0]) : null,
+        stdout: cli.stdoutText(),
+        stderr: cli.stderrText(),
+        dirs: dirs.slice(),
+      };
+    } finally {
+      fs.mkdtempSync = origMk;
+      fs.rmSync = origRm;
+      if (prevDirname === undefined) delete global.__dirname;
+      else global.__dirname = prevDirname;
+      for (const dir of dirs) origRm.call(fs, dir, { recursive: true, force: true });
+    }
+  }
+
+  const enriched = [{ name: 'Active t Orders', layoutxml: '<grid><row><cell name="new_status"/></row></grid>' }];
+  const built = JSON.stringify({ created: { app: 'app-1' } });
+
+  const ok = await drive({ buildStatus: 0, buildStdout: built, teardownStatus: 0, views: enriched, xml: passingXml });
+  assert.strictEqual(ok.code, 0, ok.stdout + ok.stderr);
+  assert.match(ok.stdout, /=== smoke eval: PASS \(/);
+  assert.strictEqual(ok.dirExists, false, 'a successful teardown deletes the local workspace');
+  assert.ok(ok.order.indexOf('spawn:teardown-model-app.js') < ok.order.indexOf('rm'), 'cleanup must follow a successful teardown, not precede it: ' + ok.order.join(','));
+  assert.ok(!ok.spawns.some((s) => /az|pac/i.test(path.basename(s.args[0] || ''))));
+
+  const buildFail = await drive({ buildStatus: 7, buildStdout: 'partial build\n', buildStderr: 'build-err\n', teardownStatus: 0, views: enriched, xml: passingXml });
+  assert.strictEqual(buildFail.code, 7);
+  assert.match(buildFail.stderr, /smoke build failed with exit code 7/);
+  assert.match(buildFail.stdout, /FAIL \(build failed; assertions skipped\)/);
+  assert.ok(!buildFail.order.includes('spawn:dataverse-request.js'), 'assertions must not run after a failed build');
+  assert.ok(buildFail.order.includes('spawn:teardown-model-app.js'), 'a failed build still tears down partial artifacts');
+  assert.strictEqual(buildFail.dirExists, false, 'cleanup still runs when teardown itself succeeded');
+
+  const assertFail = await drive({
+    buildStatus: 0,
+    buildStdout: built,
+    teardownStatus: 0,
+    views: [{ name: 'Active t Orders', layoutxml: '<grid><row><cell name="new_name"/></row></grid>' }],
+    xml: '<SiteMap><SubArea/></SiteMap>',
+  });
+  assert.strictEqual(assertFail.code, 1);
+  assert.match(assertFail.stdout, /▶ smoke assertions/);
+  assert.match(assertFail.stdout, /FAIL {2}default view enriched/);
+  assert.match(assertFail.stdout, /=== smoke eval: FAIL \(/);
+  assert.ok(!/assertions skipped/.test(assertFail.stdout));
+  assert.strictEqual(assertFail.dirExists, false, 'assertion failure still cleans up after a successful teardown');
+
+  const teardownFail = await drive({ buildStatus: 0, buildStdout: built, teardownStatus: 4, views: enriched, xml: passingXml });
+  assert.strictEqual(teardownFail.code, 4);
+  assert.match(teardownFail.stderr, /preserving local workspace for recovery/);
+  assert.match(teardownFail.stdout, /FAIL \(teardown failed; workspace preserved at /);
+  assert.strictEqual(teardownFail.dirExists, true, 'a failed teardown must keep the workspace for recovery');
+  assert.ok(!teardownFail.order.includes('rm'), 'cleanup must not run unless teardown succeeded: ' + teardownFail.order.join(','));
 });
