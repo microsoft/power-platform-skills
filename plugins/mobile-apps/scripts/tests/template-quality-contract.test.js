@@ -87,6 +87,10 @@ test('Babel and Metro configuration are delegated to native-host factories', () 
 test('bundled dependencies match the current host-factory template boundary', () => {
   const packageJson = JSON.parse(read('template/package.json'));
   assert.strictEqual(packageJson.dependencies['@microsoft/power-apps-native-host'], '^0.4.0');
+  assert.strictEqual(packageJson.dependencies['@react-native-firebase/app'], '25.1.0');
+  assert.strictEqual(packageJson.dependencies['@react-native-firebase/messaging'], '25.1.0');
+  assert.strictEqual(packageJson.dependencies['expo-build-properties'], '~55.0.14');
+  assert.strictEqual(packageJson.dependencies['expo-notifications'], '~55.0.23');
   assert.strictEqual(packageJson.scripts.dev, 'expo start');
   assert.strictEqual(packageJson.scripts.predev, 'npm run generate-schemas && npm run type-check');
   assert.strictEqual(packageJson.dependencies['expo-media-library'], undefined);
