@@ -17,6 +17,11 @@ vendored SDK.
 - **`pages[].model`** — the model id a generative page was generated with. A download writes it and
   the build sends it with every upload.
 - **`POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS`** — how long an Azure CLI call may take (default 60 s).
+- **Usage telemetry is on.** model-apps now sends its anonymous `skill_started` event (org and tenant
+  GUIDs, never your user object id) to the collector for your environment's cloud: US or EU for a
+  public-cloud org, or the GCC, GCC High, DoD or China collector. A sovereign cloud never falls back to
+  a public collector, and an unrecognized cloud sends nothing. Opt out with `/model-apps:telemetry off`
+  or `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT=1`.
 
 ### Changed
 

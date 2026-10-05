@@ -47,8 +47,8 @@ jobs:
         timeout-minutes: 20
         # Defense-in-depth: opt this CI job out of telemetry transmission so a test
         # that forgets to isolate emission can never POST to a real collector. The
-        # plugin's committed ikey.json currently ships `disabled: true`, but that is
-        # a value that can change; the guard must not depend on it. Suppresses
+        # plugin's committed ikey.json ships live (`disabled: false`) with real
+        # production keys, so without this a stray emission would reach Kusto. Suppresses
         # TRANSMISSION only — the local diagnostic mirror is still written, so this
         # cannot change what the tests actually assert.
         env:

@@ -92,7 +92,8 @@ function writeProvisionedConfig(configDir) {
 
 test("ikey.json is never shipped enabled with the placeholder key", () => {
   const cfg = JSON.parse(fs.readFileSync(SHIPPED_IKEY, "utf8"));
-  if (cfg.instrumentationKey === "PLACEHOLDER_REPLACE_BEFORE_SHIPPING") {
+  const keys = [cfg.instrumentationKey, ...Object.values(cfg.regions || {}).map((r) => r && r.instrumentation_key)];
+  if (keys.includes("PLACEHOLDER_REPLACE_BEFORE_SHIPPING")) {
     // Unprovisioned placeholder must stay hard-off.
     assert.equal(cfg.disabled, true, "a placeholder key must ship disabled:true");
   }
@@ -113,18 +114,39 @@ test("exits 0 on malformed stdin", () => {
   assert.equal(status, 0);
 });
 
-test("shipped disabled config → tracked skill emits nothing (no probe, hard-off)", () => {
+test("shipped config + resolver → tracked skill is region-routed to this plugin's key (no network)", () => {
   const configDir = mkTemp();
   const probePath = path.join(configDir, "probe.json");
-  // No ikey override → the hook reads the shipped ikey.json (disabled:true) and
-  // short-circuits before spawning the dispatcher.
+  const shipped = JSON.parse(fs.readFileSync(SHIPPED_IKEY, "utf8"));
+  // The stub pac reports a Public-cloud org. Seed the shared org→region cache with "eu" so the
+  // resolver routes from the cache instead of calling the Artemis gateway — the test stays offline,
+  // and an EU key (not the US default) in the probe proves the shipped resolver.js did the routing.
+  const cacheDir = path.join(configDir, "region-cache");
+  fs.mkdirSync(cacheDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(cacheDir, `${STUB_BANNER.orgId}.json`),
+    JSON.stringify({ region: "eu", expiresAt: Date.now() + 60 * 60 * 1000 })
+  );
+
+  // No ikey override → the hook and dispatcher read the shipped ikey.json and load the resolver.js
+  // beside it. FAKE_HTTPS swaps the POST for the probe file, so nothing reaches a real collector.
   const { status } = runHook({
     input: JSON.stringify({ tool_input: { skill: "genpage" } }),
     configDir,
     fakeProbe: probePath,
   });
   assert.equal(status, 0);
-  assert.equal(waitForFile(probePath, 1500), false, "disabled config must not write a probe");
+  assert.ok(waitForFile(probePath, 5000), "dispatcher should have written the probe");
+  const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
+  const body = JSON.parse(probe.body);
+  assert.equal(body.name, shipped.event_stream_name);
+  assert.equal(body.data.pluginName, "model-apps");
+  assert.equal(body.data.skillName, "genpage");
+  // Without the native stub (no csc.exe on this Windows box) PAC is absent: no org, so the event
+  // takes the US default instead of the cached EU route.
+  const region = stubBuilt ? "eu" : "us";
+  assert.equal(probe.headers["x-apikey"], shipped.regions[region].instrumentation_key);
+  assert.equal(body.iKey, "o:" + shipped.regions[region].instrumentation_key.split("-")[0]);
 });
 
 test("provisioned Tier-1 config → tracked skill emits skill_started to the probe", () => {
