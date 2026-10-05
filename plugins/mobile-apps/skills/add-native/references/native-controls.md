@@ -7,6 +7,11 @@ first. Resolve the existing app, not the newest plugin template:
 node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root "<working_dir>"
 ```
 
+The explicit local diagnostic path may carry `--diagnostic-artifacts` through
+this check, as documented by the lifecycle. It still requires the exact control
+in the verified installed inventory and actual selected Android player metadata.
+It cannot admit an absent aggregate/leaf or claim iOS/device validation.
+
 Missing/unknown release records block native mutations. A package manifest,
 successful import, or successful TypeScript check does not prove that a player
 or wrapped base contains matching native code. Do not install the aggregate to

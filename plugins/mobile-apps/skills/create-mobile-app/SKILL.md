@@ -31,6 +31,21 @@ and summary.
 
 Read [mobile-release-lifecycle.md](../../shared/references/mobile-release-lifecycle.md). Select an explicit reviewed release with `resolve-mobile-release.js --release "<release-id>"` (or inspect `--default`). No reviewed release means `BLOCKED` before scaffolding or data-platform mutations. npm `latest`, the plugin's bundled snapshot, and a mutable Git branch are not compatibility evidence.
 
+Only when the user explicitly supplies `--diagnostic-artifacts "<manifest.json>"`
+for a local test, follow the lifecycle's separate artifact inspection/acquisition
+path in place of published selection. Keep new/empty destination checks,
+acquisition/install approvals, customer instructions and telemetry checkpoints.
+Limit that test to online-only Android; do not claim the normal dual-platform
+creation target is verified, offer offline setup, initialize/deploy a tenant app,
+or promote the test selection to the default. Carry the option into project
+resolution and package validation. No automatic local-artifact fallback exists.
+End this local creation path after approved scaffold installation and validation;
+do not continue the tenant initialization/data-mutation phases below. Report a
+diagnostic scaffold, not a completed deployed dual-platform app.
+If the selected package is `upgrade-inspection-only`, stop before acquisition:
+it supports existing-app diagnostic upgrade inspection, not creation. Never
+reconstruct a template or copy its reference staging source/lock to bypass this.
+
 For a new/empty target, offer **Acquire reviewed template** or **Cancel**. After explicit approval, run `mobile-template-lifecycle.js acquire --release "<release-id>" --destination "<working_dir>"`. It verifies the immutable package and metadata before using the package's creation CLI. Separately approve dependency installation with the shipped lockfile (`npm ci`); use existing registry authentication, never print/provision credentials here. Do not fall back to `degit` or copy a bundled template on failure.
 
 An existing **fresh installed** template may be used only after `resolve-mobile-release.js --project-root "<working_dir>" --release "<release-id>"` succeeds. Preserve its shipped instructions and all compatibility metadata. Never run acquisition over a non-empty directory or adopt an already-created app through this gate.

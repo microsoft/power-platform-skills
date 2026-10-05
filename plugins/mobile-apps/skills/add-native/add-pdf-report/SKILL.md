@@ -47,6 +47,10 @@ native mutations; unknown/missing records block even if a dependency is present.
 node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root "<working_dir>"
 ```
 
+If the parent explicitly selected local diagnostic artifacts, append the same
+`--diagnostic-artifacts "<manifest.json>"` to resolution and package validation.
+Keep the lifecycle reference's online-only Android/no-deployment limits.
+
 `expo-print` is required. `expo-sharing` is optional unless sharing is required.
 Match exact installed versions/docs/types to the resolved native inventory.
 “Present” throughout this helper means verified in that app's release, not just

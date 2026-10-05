@@ -15,7 +15,7 @@ const PLUGIN_ROOT = path.resolve(__dirname, '..');
 
 function usage() {
   return [
-    'Usage: node validate-mobile-files.js --project-root <path> (--all-source | --file <path> [--file <path> ...]) [--approved-js-dependency <name>@<exact-version> ...]',
+    'Usage: node validate-mobile-files.js --project-root <path> (--all-source | --file <path> [--file <path> ...]) [--approved-js-dependency <name>@<exact-version> ...] [--diagnostic-artifacts <manifest.json>]',
     '',
     'Paths must be regular files. Relative paths resolve from --project-root.',
     '--all-source validates every .ts/.tsx file under app/ and src/, plus root .ts/.tsx files.',
@@ -53,6 +53,12 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg === '--all-source') {
       parsed.allSource = true;
+    } else if (arg === '--diagnostic-artifacts') {
+      if (parsed.diagnosticArtifacts || !argv[index + 1] || argv[index + 1].startsWith('--')) {
+        parsed.errors.push('Supply one explicit --diagnostic-artifacts manifest path.');
+      } else {
+        parsed.diagnosticArtifacts = path.resolve(argv[++index]);
+      }
     } else if (arg === '--approved-js-dependency') {
       const approvedDependency = parseApprovedJsDependency(argv[index + 1]);
       if (approvedDependency) {
@@ -104,7 +110,7 @@ function collectSourceTargets(projectRoot) {
   return targets.sort();
 }
 
-function runValidator(validatorName, filePath, content, projectRoot, approvedJsDependencies) {
+function runValidator(validatorName, filePath, content, projectRoot, approvedJsDependencies, diagnosticArtifacts) {
   const validatorPath = path.join(PLUGIN_ROOT, 'hooks', validatorName);
   const payload = JSON.stringify({
     cwd: projectRoot,
@@ -115,6 +121,7 @@ function runValidator(validatorName, filePath, content, projectRoot, approvedJsD
       filePath,
       validation_mode: 'explicit-mobile-workflow',
       approved_js_dependencies: approvedJsDependencies,
+      ...(diagnosticArtifacts ? { diagnostic_artifacts: diagnosticArtifacts } : {}),
     },
   });
 
@@ -134,6 +141,7 @@ function main(argv) {
   const {
     allSource,
     approvedJsDependencies,
+    diagnosticArtifacts,
     errors,
     help,
     projectRoot: projectRootArg,
@@ -213,6 +221,7 @@ function main(argv) {
         content,
         projectRoot,
         approvedJsDependencies,
+        diagnosticArtifacts,
       );
       if (result.stdout) process.stdout.write(result.stdout);
       if (result.stderr) process.stderr.write(result.stderr);

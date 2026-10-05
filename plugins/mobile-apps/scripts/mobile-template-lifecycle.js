@@ -34,6 +34,20 @@ function compareVersions(left, right) {
   return Math.sign(a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
 }
 
+function assertMajorTransition(source, target) {
+  const changed = ['android', 'ios'].some((platform) => (
+    source.nativeRuntimeVersions[platform] !== target.nativeRuntimeVersions[platform]
+    || source.platforms?.[platform]?.fingerprint !== target.platforms?.[platform]?.fingerprint
+  )) || ['expo', 'react-native'].some((name) => (
+    source.nativePackages[`node_modules/${name}`] !== target.nativePackages[`node_modules/${name}`]
+  ));
+  if (changed && (Number(target.nativePackages[`node_modules/${HOST}`].split('.')[0])
+    <= Number(source.nativePackages[`node_modules/${HOST}`].split('.')[0])
+    || Number(target.template.version.split('.')[0]) <= Number(source.template.version.split('.')[0]))) {
+    throw new Error('A native runtime transition requires a new host and template package major release; counters alone do not authorize an ABI change');
+  }
+}
+
 function planUpdate(projectRoot, releaseId, catalog = readCatalog()) {
   const source = selectProjectRelease(projectRoot, catalog);
   const target = selectRelease(releaseId, catalog);
@@ -52,6 +66,7 @@ function planUpdate(projectRoot, releaseId, catalog = readCatalog()) {
   ))) {
     throw new Error('Runtime changes require a published template migration, not metadata edits');
   }
+  assertMajorTransition(source, target);
   let kind = migrationRequired ? 'template-upgrade' : 'host-repair';
   if (!migrationRequired && installedHost === targetHost) {
     // Equality is supported, but is not proof the rest of the app is undrifted.
@@ -159,15 +174,24 @@ function acquireTemplate(destination, releaseId, options = {}) {
 function main(argv) {
   const [action, ...args] = argv;
   const values = {};
-  const allowed = action === 'acquire' ? ['--destination', '--release'] : ['--project-root', '--release'];
-  if (!['acquire', 'plan'].includes(action)) throw new Error('Use acquire or plan with an explicit --release');
+  const allowed = action === 'acquire'
+    ? ['--destination', '--release', '--diagnostic-artifacts']
+    : ['--project-root', '--release', '--diagnostic-artifacts'];
+  if (!['acquire', 'plan'].includes(action)) throw new Error('Use acquire or plan with an explicit selection; the producer host CLI owns diagnostic migration writes');
   for (let index = 0; index < args.length; index += 2) {
     const key = args[index];
     if (!allowed.includes(key) || values[key] !== undefined || !args[index + 1]
       || args[index + 1].startsWith('--')) throw new Error('Unknown, duplicate, or missing lifecycle argument');
     values[key] = args[index + 1];
   }
-  if (allowed.some((key) => !values[key])) throw new Error(`Required: ${allowed.join(', ')}`);
+  if (!values[allowed[0]] || Boolean(values['--release']) === Boolean(values['--diagnostic-artifacts'])) {
+    throw new Error(`Required: ${allowed[0]} and exactly one of --release or --diagnostic-artifacts`);
+  }
+  if (values['--diagnostic-artifacts']) {
+    const { acquireDiagnosticTemplate, planDiagnosticUpdate } = require('./lib/mobile-diagnostic-artifacts');
+    const helper = action === 'acquire' ? acquireDiagnosticTemplate : planDiagnosticUpdate;
+    return helper(path.resolve(values[allowed[0]]), values['--diagnostic-artifacts']);
+  }
   return action === 'acquire'
     ? acquireTemplate(values['--destination'], values['--release'])
     : planUpdate(path.resolve(values['--project-root']), values['--release']);
@@ -177,9 +201,12 @@ if (require.main === module) {
   try {
     process.stdout.write(`${JSON.stringify(main(process.argv.slice(2)), null, 2)}\n`);
   } catch (error) {
-    process.stderr.write(`BLOCKED: ${error.message}\n`);
+    const message = process.argv.includes('--diagnostic-artifacts') && error.code !== 'MOBILE_RELEASE_BLOCKED'
+      ? 'Local diagnostic action failed. Check the explicit arguments, artifact availability, and new/empty destination locally (raw errors withheld).'
+      : error.message;
+    process.stderr.write(`BLOCKED: ${message}\n`);
     process.exitCode = 2;
   }
 }
 
-module.exports = { acquireTemplate, assertEmptyDestination, assertTemplateManifest, compareVersions, main, planUpdate };
+module.exports = { acquireTemplate, assertEmptyDestination, assertTemplateManifest, assertMajorTransition, compareVersions, main, planUpdate };

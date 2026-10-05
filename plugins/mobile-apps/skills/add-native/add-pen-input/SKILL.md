@@ -31,6 +31,10 @@ If this fails, tell the user to run `/create-mobile-app` first and STOP.
 node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root "<working_dir>"
 ```
 
+If the parent explicitly selected local diagnostic artifacts, append the same
+`--diagnostic-artifacts "<manifest.json>"` to resolution and package validation.
+Keep the lifecycle reference's online-only Android/no-deployment limits.
+
 Read [release lifecycle](../../../shared/references/mobile-release-lifecycle.md)
 and [native controls](../references/native-controls.md). Unknown/missing release
 records STOP native mutation. Match installed public docs/types and native

@@ -68,6 +68,13 @@ node -e "const fs=require('node:fs');const p='src/generated/services';console.lo
 Read [release lifecycle](../../shared/references/mobile-release-lifecycle.md).
 For a mobile project, collect only the resolver's sanitized tuple:
 
+For a previously approved `--diagnostic-artifacts` selection, retain that explicit
+option and label the result `local-diagnostic-only`; report the actual selected
+APK's supported counters, never an inferred player version. Do not attach the
+artifact manifest, archive/binary, local paths, source profile, or private build
+evidence to a public issue. iOS remains untested; reporting still works if local
+inspection fails.
+
 ```bash
 node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root "<working_dir>"
 ```

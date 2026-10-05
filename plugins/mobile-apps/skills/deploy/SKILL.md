@@ -44,6 +44,11 @@ If absent, continue — the project may have been created without the plugin. Re
 
 ### Step 1.2 — Verified release and actual intended bases
 
+Reject any `--diagnostic-artifacts` selection or `local-diagnostic-only` context
+before building or pushing. Local test archives and APK metadata never authorize
+tenant/store deployment, even when their hashes and counters match. Do not
+silently replace the selection with a published/default release.
+
 Resolve the app's installed/locked template, host, Expo, React Native, and
 native inventory; never use the newest bundled template as its runtime allowlist.
 

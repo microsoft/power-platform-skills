@@ -151,7 +151,9 @@ function main(input) {
   let baseline;
   let installed;
   if (explicit) {
-    const release = resolveProjectRelease(projectRoot);
+    const release = toolInput.diagnostic_artifacts
+      ? require('../scripts/lib/mobile-diagnostic-artifacts').resolveDiagnosticProject(projectRoot, toolInput.diagnostic_artifacts).projectBaseline
+      : resolveProjectRelease(projectRoot);
     baseline = packageDeps(release.managedDependencies);
   } else {
     installed = inspectInstalledPackages(projectRoot);

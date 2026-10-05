@@ -120,6 +120,16 @@ Before entering the loop:
 
 ### 0.preflight Read project context
 
+For an explicitly selected `--diagnostic-artifacts "<manifest.json>"`, follow
+the [local diagnostic lifecycle](../../shared/references/mobile-release-lifecycle.md)
+and carry the option into resolver/validator calls. Use `mobile-template-lifecycle.js
+plan` read-only to compare the app's required counter with this known APK's
+actual supported counters. Report both values on mismatch; offer an approved
+`/check-updates` migration or a separately verified matching player, never a
+counter rewrite. No automatic device discovery, offline conversion, first-party
+package patch, or tenant/store deployment. APK metadata is not a device test;
+iOS remains untested. Existing no-fix/consent and telemetry behavior is unchanged.
+
 Follow the shared instructions before diagnosing logs:
 
 Use `workingDir` from argument parsing as `<working_dir>` throughout this workflow. It is already validated as an app root; do not derive it again from a later phase or silently switch projects.

@@ -57,6 +57,10 @@ Resolve the app before package checks or wrapper edits:
 node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root "<working_dir>"
 ```
 
+If the parent explicitly selected local diagnostic artifacts, append the same
+`--diagnostic-artifacts "<manifest.json>"` to resolution and package validation.
+Keep the lifecycle reference's online-only Android/no-deployment limits.
+
 Both `expo-camera` and `expo-image-picker` must match the resolved native
 inventory and installed docs/types for this combined wrapper. Missing package,
 release evidence, or native support means STOP, not install. Do not run

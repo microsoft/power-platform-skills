@@ -41,6 +41,7 @@ jobs:
               run: |
                   node --check plugins/mobile-apps/template/metro.config.js
                   node --check plugins/mobile-apps/scripts/lib/mobile-release.js
+                  node --check plugins/mobile-apps/scripts/lib/mobile-diagnostic-artifacts.js
                   node --check plugins/mobile-apps/scripts/resolve-mobile-release.js
                   node --check plugins/mobile-apps/scripts/mobile-template-lifecycle.js
 

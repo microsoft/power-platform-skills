@@ -41,6 +41,13 @@ connector wiring.
     check. Existing source-only editing remains possible without claiming native
     compatibility. See [the lifecycle contract](shared/references/mobile-release-lifecycle.md).
 
+    An explicitly requested online-only Android test may instead select immutable
+    local archives with `--diagnostic-artifacts "<manifest.json>"`, following
+    that contract's separate inspection/acquisition/install approvals. It verifies
+    package/lock hashes and actual selected APK metadata, not release readiness.
+    No catalogue/default is created; iOS remains unvalidated and diagnostic
+    tenant/store deployment is prohibited.
+
 2. Install the mobile-app plugin from the Power Platform Skills marketplace.
 
     1. Open the Extensions pane.

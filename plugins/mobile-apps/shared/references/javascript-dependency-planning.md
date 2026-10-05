@@ -30,6 +30,10 @@ Unknown/missing release records block native mutations, not pure source/UI
 planning and editing. For pure-JavaScript work, inspect the existing project's
 installed versions and contracts; record native compatibility as unverified,
 and do not claim that a successful type-check validates a player or base.
+For an explicitly approved local diagnostic, carry `--diagnostic-artifacts`
+through the resolver and changed-file validator as specified by the lifecycle
+reference. It does not waive exact JS approvals, alias checks, native closure
+inspection, or the Android-only/no-deployment boundary.
 Never install the controls aggregate, a native leaf, or a newer host to repair
 an older binary; those changes belong to an approved verified-release migration.
 

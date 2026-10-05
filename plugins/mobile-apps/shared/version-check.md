@@ -4,6 +4,12 @@ Tooling prerequisites only. Runtime compatibility comes from the app-matched
 [verified release context](references/mobile-release-lifecycle.md), not this
 file or the newest bundled template.
 
+The lifecycle's explicit `--diagnostic-artifacts` workflow is a separate
+online-only Android test selection. Only that opt-in inspection needs `tar`, `unzip` and
+an explicitly selected SDK `aapt2` on `PATH`; it does not discover devices or
+build native code. Keep normal tooling tiers unchanged, record iOS as untested,
+and never use this selection for deployment.
+
 ## Guiding principle — **scope-aware checks, not blanket gates**
 
 This plugin uses scope-aware checks based on the mobile workflow:

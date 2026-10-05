@@ -12,6 +12,32 @@ model: opus
 
 Resolve `<working_dir>` from `--working-dir <path>` or use the current directory. Require `package.json` and `node_modules/`, then run on every invocation. Read [mobile-release-lifecycle.md](../../shared/references/mobile-release-lifecycle.md). If the user names one package, scope discovery to it; a native/runtime package still belongs to Step 2's coupled release, not an independent bump. Explain the coupled changes and ask permission; naming a package does not approve them. Otherwise run Steps 2-4 in order.
 
+An explicitly supplied `--diagnostic-artifacts "<manifest.json>"` selects the
+lifecycle reference's immutable local **online-only Android test**, not a
+published release. Keep Step 1's plugin/version check and all approvals and
+checkpoints. In Step 2 use `mobile-template-lifecycle.js plan --project-root
+"<working_dir>" --diagnostic-artifacts "<manifest.json>"` instead of published
+source/default selection. The packed migration identifies the old source; an
+empty production catalogue still blocks ordinary invocations. Review the
+returned manifest hash, major transition, known APK's supported counters, and
+untested iOS limitation. Use only the verified target-host CLI for migration
+writes after isolated-preview approval; it binds the bundle's local archives.
+Do not pre-stage package edits or copy template source/lock into the app. Never run acquisition
+over the app, silently install packages, disable offline, or deploy this test.
+Carry the explicit diagnostic option into final resolve and package validation.
+Diagnostic replay requires a standalone npm app. Its Expo validation means the
+producer's immutable-graph, local configuration and TypeScript checks, not a
+floating remote `expo install --check`, `--fix` or doctor recommendation. Accept
+managed-range pins only at the verified reference resolutions; preserve custom
+values and block incompatible results rather than rewriting them silently.
+This mode ends after Step 2 is verified, declined or blocked. Do not continue to
+Steps 3-4 or offer generic dependency updates inside the diagnostic invocation:
+they can replace the APK-verified graph. Preserve real checkpoint/span outcomes;
+do not emit successful completion for maintenance steps that did not run. A
+read-only advisory audit may be offered separately, without package mutations.
+If the user asks only to prepare instructions/artifacts for a **later manual**
+upgrade, do not invoke this workflow on their app or make a rehearsal copy.
+
 Run the steps below in order. Begin the final response with `DONE` when updates complete or are declined, or `BLOCKED` when the workflow cannot continue.
 
 ## Step 1: Check The Plugin
@@ -38,6 +64,10 @@ First check for an existing `.tmp/dependency-maintenance/outdated.json` or recov
 snapshot. If present, stop for review/resume rather than overwriting another
 attempt. Scope all paths and commands to `<working_dir>`.
 
+For `--diagnostic-artifacts`, still review prior recovery state but skip the
+`npm outdated` discovery below and proceed to Step 2. Do not create a discovery
+file merely for skipped maintenance steps, or delete another attempt's files.
+
 ```bash
 mkdir -p .tmp/dependency-maintenance
 npm outdated --json --depth=0 > .tmp/dependency-maintenance/outdated.json
@@ -60,11 +90,19 @@ node "${PLUGIN_ROOT}/scripts/mobile-template-lifecycle.js" plan \
 
 No reviewed release/default, unknown or missing protected metadata, unavailable package, or unsupported CLI means `BLOCKED` for native adoption. Do not invent a version, use npm `latest`, or copy the plugin template as a fallback. Report the blocker and still offer the read-only direct-advisory audit; do not claim the update succeeded.
 
+The planning boundary rejects an Expo/React Native, native runtime counter or
+fingerprint transition within the same host/template package major for production
+or scaffoldable diagnostic packages, and also for controlled private prerelease
+targets. Use their actual packed versions, never their source-version provenance.
+A previously verified `0.x` source-version inspection-only bundle reports the
+required future production major without pretending to be that release. Neither
+form satisfies production admission or becomes a default.
+
 Interpret the decision:
 
 | Decision | Action |
 |---|---|
-| `current` | Equal supported targets are valid; no install/migration is needed. Continue with JS maintenance. |
+| `current` | Equal supported targets are valid; no install/migration is needed. Published mode continues with JS maintenance; diagnostic mode ends without changing its verified graph. |
 | `host-repair` | Rehearse the exact host/managed dependency repair. Do not require or fabricate template advancement. |
 | `template-upgrade` | Rehearse every migration edge, even if `hostInstallRequired` is false. |
 | Downgrade, unknown state, or runtime change without migration | Stop; never backfill metadata or use unsupported `--from-version`/`--json` flags. |
@@ -103,7 +141,7 @@ For each approved package update:
 
 1. Snapshot `package.json`, existing npm lockfiles, and `native-app-plan.md` when that package will change it under `.tmp/dependency-maintenance/`.
 2. Install with `--ignore-scripts`; use `--package-lock=false` when the project had no npm lockfile.
-3. Run `npm install --ignore-scripts`, `npx --no-install expo install --check`, the project's `type-check` script (or `npx --no-install tsc --noEmit` when TypeScript is declared), and `validate-mobile-files.js` for each changed file (including `package.json`, passing approved exact JS dependency exceptions). Re-resolve the native release and reject lock/native closure drift. Never run `npx expo install --fix`.
+3. For this published-release maintenance path, run `npm install --ignore-scripts`, `npx --no-install expo install --check`, the project's `type-check` script (or `npx --no-install tsc --noEmit` when TypeScript is declared), and `validate-mobile-files.js` for each changed file (including `package.json`, passing approved exact JS dependency exceptions). Re-resolve the native release and reject lock/native closure drift. This section never runs with `--diagnostic-artifacts`. Never run `npx expo install --fix`.
 4. If any command fails, restore that package's snapshot, reconcile `node_modules`, return `BLOCKED` with the failed command, and do not offer later packages. Otherwise delete the snapshot and continue.
 
 Do not update transitive packages directly, add overrides, move packages between dependency sections, or use Git to roll back project files.

@@ -2,7 +2,7 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
+const { randomUUID } = require('node:crypto');
 const path = require('node:path');
 const test = require('node:test');
 const {
@@ -26,7 +26,8 @@ function catalog(...releases) {
 }
 
 function directory(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'template-lifecycle-test-'));
+  const root = path.join(__dirname, `.template-lifecycle-test-${randomUUID()}`);
+  fs.mkdirSync(root);
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
 }
@@ -118,6 +119,25 @@ test('acquisition validates integrity before CLI execution and cleans its tempor
   assert.equal(fs.existsSync(path.join(target, 'node_modules')), false);
 });
 
+test('published acquisition can target an empty current directory without staging inside it', (t) => {
+  const target = path.join(directory(t), 'current-directory');
+  fs.mkdirSync(target);
+  const previous = process.cwd();
+  const entry = release();
+  const runner = packageRunner(entry);
+  try {
+    process.chdir(target);
+    const result = acquireTemplate('.', entry.id, { catalog: catalog(entry), ...runner });
+    assert.equal(result.installedDependencies, false);
+    assert.equal(fs.existsSync(path.join(target, 'app.json')), true);
+    const relative = path.relative(target, runner.calls[0].cwd);
+    assert.ok(relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative));
+    assert.equal(fs.existsSync(runner.calls[0].cwd), false);
+  } finally {
+    process.chdir(previous);
+  }
+});
+
 test('integrity, manifest, executable and registry failures never fall back to another template', (t) => {
   const root = directory(t);
   const entry = release();
@@ -168,6 +188,18 @@ test('same-template host repair does not require template advancement', (t) => {
   assert.equal(plan.kind, 'host-repair');
   assert.equal(plan.migrationRequired, false);
   assert.equal(plan.hostInstallRequired, true);
+});
+
+test('native transitions require a host and template major before approval', (t) => {
+  const root = directory(t);
+  const source = release();
+  project(root, source);
+  const sameHostMajor = release('fixture-bad-host-major', 2, '1.1.0');
+  assert.throws(() => planUpdate(root, sameHostMajor.id, catalog(source, sameHostMajor)), /major release/);
+  const sameTemplateMajor = release('fixture-bad-template-major', 2, '2.0.0');
+  sameTemplateMajor.template.version = '1.1.0';
+  assert.throws(() => planUpdate(root, sameTemplateMajor.id, catalog(source, sameTemplateMajor)), /major release/);
+  assert.equal(planUpdate(root, 'fixture-v2', catalog(source, release('fixture-v2', 2, '2.0.0'))).kind, 'template-upgrade');
 });
 
 test('downgrades and runtime metadata changes without a template edge block', (t) => {

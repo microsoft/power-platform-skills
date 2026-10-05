@@ -79,6 +79,13 @@ This is a focused edit workflow, not a lighter quality bar. Reuse `/create-mobil
 
 ### Step 0 — Locate app + health/drift probe
 
+An explicitly approved `--diagnostic-artifacts "<manifest.json>"` selection
+follows the [local diagnostic lifecycle](../../shared/references/mobile-release-lifecycle.md).
+Carry it into resolution, package validation and native helpers; preserve the
+existing impact/approval gates. Source-only edits remain available independently.
+Diagnostic native work is online-only Android, never an iOS compatibility claim,
+offline conversion, tenant mutation or deployment.
+
 **Telemetry checkpoint: `assess_app_health_and_drift`**
 
 Read [release lifecycle](../../shared/references/mobile-release-lifecycle.md).

@@ -228,3 +228,32 @@ test('all existing workflow telemetry checkpoint IDs remain unchanged', () => {
     assert.match(source, /scripts\/check-version\.js/, `${skill}: startup notification`);
   }
 });
+
+test('explicit local diagnostics are consistently scoped without promoting production defaults', () => {
+  for (const skill of ['create-mobile-app', 'check-updates', 'edit-app', 'add-native', 'deploy', 'debug-app', 'report-issue']) {
+    assert.match(read(`skills/${skill}/SKILL.md`), /--diagnostic-artifacts/, skill);
+  }
+  for (const helper of nativeHelpers) {
+    assert.match(read(`skills/add-native/${helper}/SKILL.md`), /--diagnostic-artifacts/, helper);
+  }
+  const policy = JSON.parse(read('shared/mobile-releases.json'));
+  assert.deepEqual(policy, { schemaVersion: 1, defaultRelease: null, releases: [] });
+  const lifecycle = read('shared/references/mobile-release-lifecycle.md');
+  assert.match(lifecycle, /source manifest[\s\S]{0,120}not evidence of a matching binary/);
+  assert.match(lifecycle, /actual APK/);
+  assert.match(lifecycle, /--dry-run --diagnostic-artifacts/);
+  assert.match(lifecycle, /run `--no-install` separately/);
+  assert.doesNotMatch(lifecycle, /stage-diagnostic/);
+  assert.match(lifecycle, /reference is intentionally uninstalled/);
+  assert.match(lifecycle, /absolute paths stay internal/);
+  assert.match(lifecycle, /Do not discard `diagnostic` fields/);
+  assert.match(lifecycle, /Managed baseline semver ranges may be[\s\S]{0,80}exact verified reference resolutions/);
+  assert.match(read('skills/check-updates/SKILL.md'), /Diagnostic replay requires a standalone npm app/);
+  assert.match(read('skills/check-updates/SKILL.md'), /This mode ends after Step 2/);
+  assert.match(read('skills/check-updates/SKILL.md'), /Do not continue to[\s\S]{0,30}Steps 3-4/);
+  assert.match(read('skills/check-updates/SKILL.md'), /skip the[\s\S]{0,40}`npm outdated` discovery/);
+  assert.match(lifecycle, /Do not disable offline automatically|Do not delete profiles,/);
+  assert.match(lifecycle, /new host and template package major/);
+  assert.match(read('skills/deploy/SKILL.md'), /Reject any `--diagnostic-artifacts`[\s\S]{0,100}before building or pushing/);
+  assert.match(read('skills/debug-app/SKILL.md'), /actual supported counters/);
+});

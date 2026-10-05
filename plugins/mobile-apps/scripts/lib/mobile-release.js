@@ -552,4 +552,5 @@ module.exports = {
   readProjectRequirements, selectProjectRelease,
   // Shared by the backwards-compatible write validator; not a release bypass.
   dependencySections, inspectInstalledPackages, isRuntimePackage, resolveInstalledDependency, readPlatformContext, npmAliasTarget,
+  readProject, validateProjectAgainstRelease, exactVersion, declarationSpec,
 };

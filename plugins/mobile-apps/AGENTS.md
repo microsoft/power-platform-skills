@@ -46,6 +46,21 @@ The bundled `template/` is retained for existing preparation/source tests. Runti
 
 Preparation preserves `app.json` compatibility metadata and customer extras byte-for-byte, together with scaffolded or customer-owned `AGENTS.md`, `CLAUDE.md`, and `.github/copilot-instructions.md`. Never synthesize runtime IDs from semver. Existing app instruction updates require a separately reviewed merge.
 
+An explicitly selected `--diagnostic-artifacts` manifest is a separate
+online-only Android test path, not a reviewed release/default. Follow the
+lifecycle reference for immutable archives, template CLI, host profile, protected
+reference lock and actual APK metadata validation. Preserve normal approvals and
+telemetry checkpoints; propagate the explicit selection to native helpers and
+package validation. No diagnostic tenant/store deployment or iOS validation
+claim is permitted. Native transitions require a new host/template package major;
+only the local test path accepts a prerelease in that new major. Private
+producer-packed targets retain their actual prerelease identities and
+package-specific role/source-version provenance. Previously verified `0.x`
+source-version bundles report the future production-major requirement instead.
+Neither inspection-only form can scaffold or satisfy production admission.
+Selecting producer-packed diagnostic artifacts is not permission to patch,
+fork, or locally rewrite a first-party package to work around a defect.
+
 Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `src/playerConfig.ts`, `fingerprint.config.js`, or `native-runtime.json` unless those files exist in the synced main template.
 
 ## Guiding Principles
