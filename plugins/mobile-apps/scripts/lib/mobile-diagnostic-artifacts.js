@@ -84,15 +84,18 @@ function execute(command, args, cwd) {
 }
 
 function unpack(archive, destination, run) {
-  const names = run('tar', ['-tzf', archive], destination).trim().split(/\r?\n/);
-  const types = run('tar', ['-tvzf', archive], destination).trim().split(/\r?\n/);
+  // GNU tar treats a drive letter in its archive argument as a remote host.
+  const archiveDirectory = path.dirname(archive);
+  const archiveName = path.basename(archive);
+  const names = run('tar', ['-tzf', archiveName], archiveDirectory).trim().split(/\r?\n/);
+  const types = run('tar', ['-tvzf', archiveName], archiveDirectory).trim().split(/\r?\n/);
   requireValue(names.length > 0 && names.length === types.length
     && types.every((line) => /^[-d]/.test(line))
     && new Set(names).size === names.length
     && names.every((name) => /^package(?:\/|$)/.test(name)
       && !/[\\:\u0000-\u001f]/.test(name) && name.split('/').every((part) => part !== '..' && part !== '.')),
   'Packed artifacts must contain only regular package files and directories; links and unsafe archive paths are rejected.');
-  run('tar', ['-xzf', archive, '-C', destination], destination);
+  run('tar', ['-xzf', archiveName, '-C', destination], archiveDirectory);
   return path.join(destination, 'package');
 }
 

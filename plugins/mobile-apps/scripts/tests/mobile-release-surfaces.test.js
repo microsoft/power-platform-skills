@@ -13,11 +13,22 @@ const agents = ['native-app-planner', 'screen-planner', 'screen-builder', 'data-
 const resolver = 'node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root "<working_dir>"';
 
 function codeBlock(source, marker) {
-  const blocks = [...source.matchAll(/```(?:ts|typescript|tsx)\n([\s\S]*?)```/g)];
+  const blocks = [...source.matchAll(/```(?:ts|typescript|tsx)\r?\n([\s\S]*?)```/g)];
   const block = blocks.find((match) => match[1].includes(marker));
   assert.ok(block, `Missing example: ${marker}`);
   return block[1];
 }
+
+test('native example extraction supports LF and CRLF Markdown fences', () => {
+  for (const newline of ['\n', '\r\n']) {
+    for (const language of ['ts', 'typescript', 'tsx']) {
+      const marker = 'export async function nativeExample() {}';
+      const source = ['```js', 'unrelated();', '```', `\`\`\`${language}`, marker, '```'].join(newline);
+      assert.equal(codeBlock(source, marker), `${marker}${newline}`);
+      assert.throws(() => codeBlock(source, 'missingExample'), /Missing example/);
+    }
+  }
+});
 
 test('entry skills and native helpers resolve the existing app and share lifecycle policy', () => {
   const files = [

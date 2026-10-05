@@ -115,7 +115,7 @@ if (process.argv[2] === '--manifest') {
     const relative = `reference/.branch-packages/${name.split('/')[1]}-${packageVersion}.tgz`;
     const archive = path.join(root, relative);
     fs.mkdirSync(path.dirname(archive), { recursive: true });
-    run('tar', ['-czf', archive, '-C', path.dirname(packageRoot), 'package'], root);
+    run('tar', ['-czf', path.basename(archive), '-C', path.dirname(packageRoot), 'package'], path.dirname(archive));
     const item = { name, version: packageVersion, path: relative, sha256: hash(archive), integrity: `sha512-${hash(archive, 'sha512', 'base64')}` };
     packed.push(item);
     if (name !== TEMPLATE) {
@@ -148,7 +148,7 @@ if (process.argv[2] === '--manifest') {
   const assetOutput = JSON.stringify(metadata);
   const calls = [];
   const execute = (command, args, cwd) => {
-    calls.push({ command, args });
+    calls.push({ command, args, cwd });
     return command === 'aapt2' ? output : command === 'unzip' ? assetOutput : run(command, args, cwd);
   };
   return { root, reference, manifest, file, output, assetOutput, options: { run: execute }, calls };
@@ -159,7 +159,7 @@ function repack(f, name, change) {
   const packageRoot = path.join(f.root, 'sources', name.split('/')[1], 'package');
   change(packageRoot);
   const archive = path.join(f.root, item.path);
-  run('tar', ['-czf', archive, '-C', path.dirname(packageRoot), 'package'], f.root);
+  run('tar', ['-czf', path.basename(archive), '-C', path.dirname(packageRoot), 'package'], path.dirname(archive));
   item.sha256 = hash(archive);
   item.integrity = `sha512-${hash(archive, 'sha512', 'base64')}`;
   if (name !== TEMPLATE) {
@@ -198,6 +198,14 @@ test('explicit immutable local selection verifies real package CLI and lock with
   assert.equal(f.calls.some((call) => call.command === 'npm'), false);
   assert.ok(f.calls.some((call) => call.args[1] === '--manifest'));
   assert.ok(f.calls.some((call) => call.command === 'aapt2'));
+  const tarCalls = f.calls.filter((call) => call.command === 'tar');
+  assert.equal(tarCalls.length, f.manifest.packages.length * 3);
+  for (const call of tarCalls) {
+    assert.equal(call.args[1], path.basename(call.args[1]));
+    assert.equal(path.isAbsolute(call.args[1]), false);
+    assert.equal(call.args[1].includes(':'), false);
+    assert.ok(f.manifest.packages.some((item) => path.join(f.root, item.path) === path.join(call.cwd, call.args[1])));
+  }
   assert.doesNotMatch(JSON.stringify(result), new RegExp(f.root));
   assert.equal(readCatalog().defaultRelease, null);
   assert.throws(() => selectRelease(), /No verified/);
