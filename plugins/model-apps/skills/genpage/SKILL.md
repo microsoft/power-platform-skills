@@ -1025,6 +1025,11 @@ phase substitutes the real GUIDs.
    the format page-builders emit) with `"<page-id-guid>"`.
 4. If a placeholder doesn't match any map key (typo, missing sibling), stop
    and report — never silently ship the literal string.
+   After the replacements, search every file again for `PAGEREF_`, every line and no exceptions — a comment is not
+   one (a line that starts with `//` can sit inside a template literal that runs): a token that is still there —
+   single-quoted, in a template literal, in a variable, a lookup table, a differently spelled call, or any comment
+   (a real call can hide in what looks like one) — would ship as literal text, so stop and report each one's file,
+   line and column; do not upload that page.
 5. Re-upload only the files that had at least one replacement. Use the update form
    of `scripts/genpage-upload.js` (`--page-id`, no `--add-to-sitemap`). Per the
    "Prompt semantics" rule in Phase 6, this is an **update**, so the prompt

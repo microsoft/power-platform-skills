@@ -208,7 +208,7 @@ const GeneratedComponent = (props: GeneratedComponentProps) => {
         const xrm = (window as unknown as { Xrm?: { Navigation?: { navigateTo: (opts: unknown) => unknown } } }).Xrm;
         xrm?.Navigation?.navigateTo({
             pageType: 'generative',
-            pageId: 'PAGEREF_9-list-with-caching',
+            pageId: "PAGEREF_9-list-with-caching",
             entityName: 'contact',
         });
     };

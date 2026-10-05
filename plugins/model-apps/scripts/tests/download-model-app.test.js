@@ -1097,6 +1097,7 @@ const { validateAppSpec } = require('../lib/app-spec.js');
 const { enrichesDefaultViews } = require('../lib/sdk-build.js');
 const { appUniqueName } = require('../lib/sdk-build.js');
 const { resolvePageRefs, reverseResolveNavIds } = require('../lib/pageref-resolver.js');
+const { OBJECT_DIVISION_PAGE, LONG_KEY, lookBehindPage } = require('./helpers/misread-page.js');
 
 test('runDownload translates a fail-closed app read into a graceful error, not a raw SDK throw', async () => {
   // `fetchArtifact('app')` fails closed (`APP_SITEMAP_UNRESOLVED`) rather than hand back an app whose
@@ -1205,7 +1206,8 @@ test('lexical navigation variants survive deploy-download-rebuild', async () => 
     { key: 'detail', name: 'Detail' },
   ] }, new Map([['overview', overviewId], ['detail', detailId]]));
   const manifestB64 = Buffer.from(JSON.stringify(manifest), 'utf8').toString('base64');
-  // Only the target arguments depend on this parameter; comments, escapes and Unicode are the oracle.
+  // Only the target arguments depend on this parameter; comments, escapes and Unicode are the oracle. A Unicode escape in a quoted KEY is inside
+  // a string and stays certain; one in an identifier in code (`navigate\u0054o`) is a trust frontier, so the callees are spelled plainly.
   const overviewCode = (target) => [
     'export default function Overview() {',
     `  const idText = "${detailId}"; const token = "PAGEREF_detail";`,
@@ -1214,7 +1216,7 @@ test('lexical navigation variants survive deploy-download-rebuild', async () => 
     `  // another inert pageId\u2029  Xrm.Navigation.navigateTo?.({pageType:"generative",pageId:"${target}"});`,
     String.raw`  Xrm?.Navigation?.navigateTo({"page\u0054ype":"generative","page\u{49}d":"` + target + '"});',
     `  Xrm.Navigation.navigateTo({pageType:"generative",pageId:"${target}",// keep pageId\u2029data:{}});`,
-    String.raw`  Xrm.Navigation.navigate\u0054o?.({"pageType":"generative",'page\x49d':"` + target + '"});',
+    String.raw`  Xrm.Navigation.navigateTo?.({"pageType":"generative",'page\x49d':"` + target + '"});',
     `  Xrm.Navigation.navigateTo({pageType:"entityrecord",entityName:"contoso_item",entityId:"${detailId}"});`,
     '  return null;',
     '}',
@@ -1277,6 +1279,195 @@ test('lexical navigation variants survive deploy-download-rebuild', async () => 
     assert.deepStrictEqual(unresolved, []);
     assert.strictEqual(deployment.get('overview'), deployed, 're-resolution reproduces every deployed byte, including inert IDs and LS/PS');
   } finally { fs.rmSync(out, { recursive: true, force: true }); }
+});
+
+// What a download turns back into a "PAGEREF_<key>" is only what it is sure of: a DOUBLE-quoted id literal (the one a build writes), and only
+// before any place the lexer reads by guess. An id it leaves is left as the id, reported on stderr and on the result, so the author is told
+// what a rebuild will refuse (a hardcoded page id) instead of finding it there. The detail page's key is the one the manifest names; a long one
+// makes the token longer than the id, which is what moves the code after it.
+async function downloadOverview(deployedOverview, detailKey = 'detail') {
+  const overviewId = 'aaaaaaaa-0000-4000-8000-000000000001';
+  const detailId = 'bbbbbbbb-0000-4000-8000-000000000002';
+  const appId = 'cccccccc-0000-4000-8000-000000000003';
+  const appUniqueId = 'cccccccc-0000-4000-8000-000000000004';
+  const sitemapId = 'cccccccc-0000-4000-8000-000000000005';
+  const appUnique = 'contoso_navids';
+  const manifest = buildManifest({ pages: [
+    { key: 'overview', name: 'Overview', navigatesTo: [{ targetKey: detailKey }] },
+    { key: detailKey, name: 'Detail' },
+  ] }, new Map([['overview', overviewId], [detailKey, detailId]]));
+  const manifestB64 = Buffer.from(JSON.stringify(manifest), 'utf8').toString('base64');
+  const xml = `<SiteMap><Area><Group><SubArea GenPageId="${overviewId}" Title="Navigation A"/><SubArea GenPageId="${detailId}" Title="Navigation B"/><SubArea Entity="contoso_item"/></Group></Area></SiteMap>`;
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'download-navids-'));
+  const sdk = {
+    fetchArtifact: async () => ({
+      name: 'Nav Ids App', description: '',
+      siteMap: { areas: [{ title: 'Main', groups: [{ title: 'Pages', subAreas: [
+        { type: 'GenPage', genPageId: overviewId, title: 'Navigation A' },
+        { type: 'GenPage', genPageId: detailId, title: 'Navigation B' },
+        { type: 'Entity', entity: 'contoso_item' },
+      ] }] }] },
+    }),
+    queryRecords: async (logical, opts = {}) => {
+      if (logical === 'appmodule') return [{ appmoduleid: appId, appmoduleidunique: appUniqueId, uniquename: appUnique }];
+      if (logical === 'appmodulecomponent') return [{ objectid: sitemapId, componenttype: 62 }];
+      if (logical === 'sitemap') return [{ sitemapxml: xml }];
+      if (logical === 'webresource') return /_pagemanifest'/.test(opts.filter || '') ? [{ content: manifestB64 }] : [];
+      return [];
+    },
+    fetchEntityMetadata: async (logical) => ({ schemaName: logical, displayName: 'Item', primaryNameAttribute: 'contoso_name', attributes: [], relationships: [] }),
+    dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
+  };
+  const genpageCli = {
+    enumerateEnv: async () => ({ ok: true, ids: [overviewId, detailId], pages: [{ pageId: overviewId, name: 'Overview' }, { pageId: detailId, name: 'Detail' }] }),
+    download: async ({ outputDir, pageIds }) => {
+      for (const id of pageIds) {
+        const dir = path.join(outputDir, id);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'page.tsx'), id === overviewId ? deployedOverview(detailId) : 'export default function Detail() { return null; }\n', 'utf8');
+        fs.writeFileSync(path.join(dir, 'config.json'), '\uFEFF{"dataSources":[]}', 'utf8');
+      }
+      return true;
+    },
+  };
+  const warned = [];
+  const realWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk) => { warned.push(String(chunk)); return true; };
+  let downloaded;
+  try {
+    downloaded = await runDownload({ sdk: currentReadSdk(sdk, { appId, layerId: appUniqueId, sitemapXml: xml }), genpageCli, outDir: out, appId, appUnique });
+  } finally { process.stderr.write = realWrite; }
+  const overview = downloaded.ok && downloaded.spec.pages.find((p) => p.key === 'overview');
+  return {
+    downloaded,
+    detailId,
+    warned: warned.join(''),
+    code: overview ? fs.readFileSync(path.join(out, overview.source.codeFile), 'utf8') : '',
+    cleanup: () => fs.rmSync(out, { recursive: true, force: true }),
+  };
+}
+
+test('download turns back a double-quoted id only, leaves any other as the id, and reports each one it leaves', async () => {
+  const deployed = (id) => [
+    'export default function Overview() {',
+    `  navigateTo({pageType:"generative",pageId:"${id}"});`,
+    `  navigateTo({pageType:"generative",pageId:'${id}'});`,
+    `  navigateTo({pageType:"generative",pageId:\`${id}\`});`,
+    '  return null;',
+    '}',
+    '',
+  ].join('\n');
+  const run = await downloadOverview(deployed);
+  try {
+    assert.ok(run.downloaded.ok, JSON.stringify(run.downloaded));
+    const lines = deployed(run.detailId).split('\n');
+    assert.strictEqual(run.code, [lines[0], lines[1].replace(`"${run.detailId}"`, '"PAGEREF_detail"'), lines[2], lines[3], lines[4], lines[5], ''].join('\n'),
+      'the double-quoted id is a token again; the single-quoted and back-ticked ids are as deployed, quotes and all');
+    assert.deepStrictEqual(run.downloaded.navIdsLeft, [
+      { page: 'Overview', key: 'detail', id: run.detailId, line: 3, column: lines[2].indexOf(run.detailId) + 1, why: 'quote' },
+      { page: 'Overview', key: 'detail', id: run.detailId, line: 4, column: lines[3].indexOf(run.detailId) + 1, why: 'quote' },
+    ]);
+    assert.match(run.warned, /WARNING: 2 page id\(s\) of this app remain in the downloaded page source instead of PAGEREF_ tokens \(page "Overview" line 3, column \d+: not a double-quoted literal; page "Overview" line 4, column \d+: not a double-quoted literal\)/);
+    assert.match(run.warned, /a navigation call that keeps one is a hardcoded page id, which a rebuild refuses: write it as a double-quoted "PAGEREF_<key>" literal in a navigateTo call whose options object is written inline/);
+    assert.match(run.warned, /An id that is data — a record id, text, a comment — can stay\./);
+  } finally { run.cleanup(); }
+});
+
+// The id of a call the lexer reads by guess is left alone, whatever its quotes: the corruption was a single-quoted id inside a
+// double-quoted string, which the lexer read as code after a misread, and which was rewritten to "PAGEREF_detail" — quotes ending the string.
+// The call after it is hidden by the same misread, and its id stays too: each is reported.
+test('download leaves an id after a place the lexer reads by guess, and says where that is', async () => {
+  const deployed = (id) => [
+    'export default function Overview() {',
+    `  navigateTo({pageType:"generative",pageId:"${id}"});`,
+    '  const of = 12;',
+    '  const count = of/2; const re = /\\/*$/;',
+    `  const note = "*/ navigateTo({pageType:'generative', pageId:'${id}'}) /*";`,
+    `  navigateTo({pageType:"generative",pageId:"${id}"});`,
+    '  return null;',
+    '}',
+    '',
+  ].join('\n');
+  const run = await downloadOverview(deployed);
+  try {
+    assert.ok(run.downloaded.ok, JSON.stringify(run.downloaded));
+    const lines = deployed(run.detailId).split('\n');
+    assert.strictEqual(run.code, [lines[0], lines[1].replace(`"${run.detailId}"`, '"PAGEREF_detail"'), ...lines.slice(2)].join('\n'),
+      'the call before the guess is a token again; the text after it, the string included, is exactly as deployed');
+    assert.deepStrictEqual(run.downloaded.navIdsLeft.map((l) => [l.page, l.id, l.line, l.why, l.frontier.kind, l.frontier.line]), [
+      ['Overview', run.detailId, 5, 'frontier', 'keyword', 4],
+      ['Overview', run.detailId, 6, 'frontier', 'keyword', 4],
+    ]);
+    assert.match(run.warned, /WARNING: 2 page id\(s\) of this app remain in the downloaded page source instead of PAGEREF_ tokens \(page "Overview" line 5, column \d+: after the "keyword" ambiguity at line 4, column \d+; page "Overview" line 6, column \d+: after the "keyword" ambiguity at line 4, column \d+\)/);
+  } finally { run.cleanup(); }
+});
+
+// A call the lexer hid keeps its id, and no call it recognised holds it. The ids a download leaves are found by reading the result as text,
+// so the call is reported, and the warning fires: before, `left` was empty and nothing was said.
+test('download reports the id in a call the lexer hid, though no call it recognised holds it', async () => {
+  const run = await downloadOverview((id) => OBJECT_DIVISION_PAGE.replaceAll('"PAGEREF_detail"', `"${id}"`));
+  try {
+    assert.ok(run.downloaded.ok, JSON.stringify(run.downloaded));
+    assert.strictEqual(run.code.split('PAGEREF_detail').length - 1, 1, 'the call before the guess is a token again');
+    assert.strictEqual(run.code.split(run.detailId).length - 1, 1, 'the hidden call keeps its id');
+    assert.deepStrictEqual(run.downloaded.navIdsLeft.map((l) => [l.page, l.id, l.line, l.why, l.frontier.kind, l.frontier.line]), [['Overview', run.detailId, 5, 'frontier', 'brace', 4]]);
+    assert.match(run.warned, /WARNING: 1 page id\(s\) of this app remain in the downloaded page source instead of PAGEREF_ tokens \(page "Overview" line 5, column \d+: after the "brace" ambiguity at line 4, column \d+\)/);
+  } finally { run.cleanup(); }
+});
+
+test('download reports an id that stays as data, with its place in the page it is written to, and says it can stay', async () => {
+  const deployed = (id) => `export default function Overview() {\n  navigateTo({pageType:"generative",pageId:"${id}",data:{recordId:"${id}"}});\n  return null;\n}\n`;
+  const run = await downloadOverview(deployed);
+  try {
+    assert.ok(run.downloaded.ok, JSON.stringify(run.downloaded));
+    assert.ok(run.code.includes('pageId:"PAGEREF_detail"'), 'the navigation id is a token again');
+    const column = run.code.split('\n')[1].indexOf(run.detailId) + 1;
+    assert.deepStrictEqual(run.downloaded.navIdsLeft, [{ page: 'Overview', key: 'detail', id: run.detailId, line: 2, column, why: 'text' }]);
+    assert.match(run.warned, new RegExp(`WARNING: 1 page id\\(s\\) of this app remain in the downloaded page source instead of PAGEREF_ tokens \\(page "Overview" line 2, column ${column}: not a navigation pageId literal \\(data, text or a comment\\)\\)`));
+    assert.match(run.warned, /An id that is data — a record id, text, a comment — can stay\./);
+  } finally { run.cleanup(); }
+});
+
+// A token is longer than the id it replaces when the key is long, and the code after it moves. This page's `if` head holds twenty calls: inside
+// the lexer's 2,000-character look-behind with ids, outside it with tokens. Written as tokens the page would have a `paren` ambiguity before the
+// call after the statement, and the build would refuse it, with nothing said at the download. So the download writes none: the page is as it was
+// deployed, every id is reported with the reason and the ambiguity, and the warning fires.
+test('download keeps every id of a page whose tokens the build would refuse, and says why', async () => {
+  const deployed = (id) => `${lookBehindPage(id, 20)}export default function Overview() { return null; }\n`;
+  const run = await downloadOverview(deployed, LONG_KEY);
+  try {
+    assert.ok(run.downloaded.ok, JSON.stringify(run.downloaded));
+    assert.strictEqual(run.code, deployed(run.detailId), 'the page is written exactly as it was deployed: no token');
+    const left = run.downloaded.navIdsLeft;
+    assert.strictEqual(left.length, 21, 'every id of the page is reported: twenty in the head and the one after the statement');
+    assert.ok(left.every((l) => l.page === 'Overview' && l.key === LONG_KEY && l.id === run.detailId && l.why === 'would-not-rebuild'));
+    const slash = run.code.split('\n')[1].indexOf(') /abc/') + 3;
+    assert.deepStrictEqual([...new Set(left.map((l) => JSON.stringify(l.frontier)))], [JSON.stringify({ kind: 'paren', line: 2, column: slash })], 'the ambiguity is told in the columns of the page as written');
+    assert.match(run.warned, /WARNING: 21 page id\(s\) of this app remain in the downloaded page source instead of PAGEREF_ tokens \(page "Overview" line 2, column \d+: kept as the id: written as tokens the page would not rebuild — it would have a "paren" ambiguity at line 2, column \d+, where the build stops trusting what it reads; /);
+    assert.match(run.warned, /a navigation call that keeps one is a hardcoded page id, which a rebuild refuses/);
+  } finally { run.cleanup(); }
+});
+
+// The same page with a short key: the tokens are shorter than the ids, the head only gets shorter, and the forward path takes the page. It is
+// the length of the token, not the construct, that decides.
+test('download writes the tokens of that page when they are shorter than the ids', async () => {
+  const deployed = (id) => `${lookBehindPage(id, 20)}export default function Overview() { return null; }\n`;
+  const run = await downloadOverview(deployed);
+  try {
+    assert.ok(run.downloaded.ok, JSON.stringify(run.downloaded));
+    assert.strictEqual(run.code, deployed(run.detailId).replaceAll(run.detailId, 'PAGEREF_detail'));
+    assert.ok(!('navIdsLeft' in run.downloaded), 'nothing left, nothing to report');
+  } finally { run.cleanup(); }
+});
+
+test('download is silent about page ids when every one is turned back into a token', async () => {
+  const run = await downloadOverview((id) => `export default function Overview() {\n  navigateTo({pageType:"generative",pageId:"${id}"});\n  return null;\n}\n`);
+  try {
+    assert.ok(run.downloaded.ok, JSON.stringify(run.downloaded));
+    assert.ok(run.code.includes('pageId:"PAGEREF_detail"'));
+    assert.ok(!('navIdsLeft' in run.downloaded), 'no field when there is nothing to report');
+    assert.ok(!/navigation page id/.test(run.warned), run.warned);
+  } finally { run.cleanup(); }
 });
 
 test('Task-6: Maker-added page (sitemap, not in manifest) gets a minted key, keeps pageId (C3)', () => {

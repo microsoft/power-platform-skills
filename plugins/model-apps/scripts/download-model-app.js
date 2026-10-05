@@ -19,7 +19,7 @@ const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { hydrateSpec, descriptionFromDataverse, withDescription } = require('./lib/hydrate-spec.js');
 const { makeGenpageCli, unescapePacName } = require('./lib/genpage-cli.js');
 const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require('./lib/page-manifest.js');
-const { reverseResolveNavIds } = require('./lib/pageref-resolver.js');
+const { reverseResolveNavIdsReport } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
 const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE, sitemapEntityTables } = require('./lib/app-spec.js');
@@ -1921,6 +1921,8 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   // NOT the page's real name — the real name comes from the env-wide list below).
   const smPages = sitemapGenPages(smResult.xml);
   let pages = [];
+  // Ids a download left in navigation calls instead of turning them back into PAGEREF_ tokens: see the reverse resolution below.
+  const navIdsLeft = [];
   let manifest = null;
 
   if (smPages.length) {
@@ -2029,13 +2031,29 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
     // manifest) get a fresh slug key minted from their env-wide name.
     const idToKey = assignPageKeys(pages, manifest, keyToId);
 
-    // Reverse-resolve nav pageId literals → symbolic PAGEREF_<key> tokens (structural, oracle-safe).
+    // Reverse-resolve nav pageId literals → symbolic PAGEREF_<key> tokens (structural, oracle-safe). Only a double-quoted literal before any
+    // place the lexer reads by guess is turned back, and only if the build would take the page written that way (see
+    // reverseResolveNavIdsReport); the ids it leaves are reported below.
     for (const p of pages) {
       const abs = path.join(outDir, p.codeFile);
       assertPlainFileTarget(abs);                         // FAIL on a planted link (no swallow, no write)
       const src = fs.readFileSync(abs, 'utf8');           // FAIL on a read error (no swallow)
-      const rev = reverseResolveNavIds(src, idToKey);     // structural — nav pageId literals only
-      if (rev !== src) writeFileSafe(abs, rev, { encoding: 'utf8' }); // FAIL on a write error (no swallow)
+      const rev = reverseResolveNavIdsReport(src, idToKey); // structural — nav pageId literals only
+      if (rev.code !== src) writeFileSafe(abs, rev.code, { encoding: 'utf8' }); // FAIL on a write error (no swallow)
+      for (const left of rev.left) navIdsLeft.push({ page: p.name, ...left });
+    }
+    // Every page id of this app still in a downloaded page is reported, whether a call the checker recognised holds it or not (see
+    // knownIdsLeft in pageref-resolver.js). One in a navigation call is a hardcoded page id to the build, which refuses one, so say so now
+    // rather than at the rebuild; one that is data can stay.
+    if (navIdsLeft.length) {
+      const why = (l) => {
+        if (l.why === 'quote') return 'not a double-quoted literal';
+        if (l.why === 'text') return 'not a navigation pageId literal (data, text or a comment)';
+        // The page as tokens would not rebuild (see rebuildRefusal in pageref-resolver.js): none was written, so every id of the page is as deployed.
+        if (l.why === 'would-not-rebuild') return `kept as the id: written as tokens the page would not rebuild${l.frontier ? ` — it would have a "${l.frontier.kind}" ambiguity at line ${l.frontier.line}, column ${l.frontier.column}, where the build stops trusting what it reads` : ''}`;
+        return `${l.frontier.reaches ? 'in a call that reaches' : 'after'} the "${l.frontier.kind}" ambiguity at line ${l.frontier.line}, column ${l.frontier.column}`;
+      };
+      process.stderr.write(`WARNING: ${navIdsLeft.length} page id(s) of this app remain in the downloaded page source instead of PAGEREF_ tokens (${navIdsLeft.map((l) => `page "${l.page}" line ${l.line}, column ${l.column}: ${why(l)}`).join('; ')}) — a navigation call that keeps one is a hardcoded page id, which a rebuild refuses: write it as a double-quoted "PAGEREF_<key>" literal in a navigateTo call whose options object is written inline, before any construct this check reads by guess, then rebuild. An id that is data — a record id, text, a comment — can stay.\n`);
     }
 
     // Warn about manifest pages no longer in the sitemap (Maker-deleted in the live app). The
@@ -2352,7 +2370,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   if (relationshipsSkipped.length) process.stderr.write(relationshipsSkippedWarning(relationshipsSkipped));
   const droppedSubareas = typeof spec.droppedSubareas === 'number' ? spec.droppedSubareas : droppedSubareaCount(app, spec);
   const droppedSubareaDetails = Array.isArray(spec.droppedSubareaDetails) ? spec.droppedSubareaDetails : [];
-  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped, ...(solutionCandidates ? { solutionCandidates } : {}) };
+  return { ok: true, spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, relationships, relationshipsSkipped, ...(navIdsLeft.length ? { navIdsLeft } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) };
 }
 
 async function main(deps = {}) {
@@ -2439,7 +2457,7 @@ async function main(deps = {}) {
     const result = await io.runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLossy: allowLossyDownload });
     if (!result.ok) { finish(false, result); return; }
 
-    const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, solutionCandidates } = result;
+    const { spec, pages, entities, webResources, droppedSubareas, droppedSubareaDetails, dashboardReconstructionError, dashboardWarnings, notRoundTripped, solutionCandidates, navIdsLeft } = result;
     if (droppedSubareas > 0 || dashboardReconstructionError) {
       const droppedList = (droppedSubareaDetails || [])
         .map((d) => `${d.type}${d.id ? `:${d.id}` : ''}${d.title ? ` (${d.title})` : ''}`)
@@ -2496,7 +2514,9 @@ async function main(deps = {}) {
     } catch (e) {
       if (e && e.code === 'UNSAFE_OUTPUT') io.stderr.write(`WARNING: ${e.message}\n`);
     }
-    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) });
+    // Each optional field is in the result only when it has something to say. `navIdsLeft` is absent in the usual case (runDownload leaves it out when no id is
+    // left) and could be an empty list from another producer, so it is checked for both: an empty list is no finding.
+    finish(true, { ok: true, spec: specPath, pages: pages.length, entities: entities.length, webResources: webResources.length, droppedSubareas, ...(notRoundTripped ? { notRoundTripped } : {}), ...(defaulted.length ? { directEntryDefaulted: defaulted } : {}), ...(navIdsLeft && navIdsLeft.length ? { navIdsLeft } : {}), ...(solutionCandidates ? { solutionCandidates } : {}) });
   } finally {
     try { if (session) session.cleanup(); } catch { /* best-effort: the result below matters more */ }
     if (outcome) io.emitResult(...outcome);

@@ -4,6 +4,7 @@ const assert = require('node:assert');
 const { verifySpec, hasElement, parseFetchXml, liveNavEntries, subareaDashboardHasLauncher } = require('../lib/verify-spec.js');
 const { sitemapXmlFor } = require('../verify-model-app.js');
 const { SDK_ROLE_MARKER } = require('../lib/app-spec.js');
+const { OBJECT_DIVISION_PAGE, MISREAD_PAGES, TEMPLATE_LINE_PAGE, JSX_TEXT_PAGE, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, ELEMENT_PAGE_TOKEN_LINE, FUNCTION_TYPE_PAGES } = require('./helpers/misread-page.js');
 
 const idFor = (set) => ({ savedquery: 'savedqueryid', savedqueryvisualization: 'savedqueryvisualizationid', systemform: 'formid' }[set] || 'id');
 
@@ -471,6 +472,123 @@ test('verifySpec pages: a residual PAGEREF_ in deployed nav code FAILS the no-pa
   const r = await verifySpec(pageSpec(), read);
   assert.ok(r.checks.some((c) => c.kind === 'page-no-pageref' && !c.present));
   assert.strictEqual(r.ok, false);
+});
+
+// Verification reads a deployed page with the reader the build uses, and trusts it no further than the build does. An id in a "call" that
+// the lexer read only by guess proves no edge: after `of/2` it reads a regex up to the next `/`, and the `/*` inside it opens a comment that
+// ends inside a string, so the string's text — here a navigation call to the target — is read as code.
+test('verifySpec pages: an id in a call the lexer reads only by guess does not prove the nav edge', async () => {
+  const forgery = ['const of = 12;', 'const count = of/2; const re = /\\/*$/;', `const note = "*/ navigateTo({pageType:'generative', pageId:'${GP_DETAIL}'}) /*";`, ''].join('\n');
+  const verify = async (code) => verifySpec(pageSpec(), pageRead({ sitemapIds: [GP_OVERVIEW, GP_DETAIL], existenceIds: [GP_OVERVIEW, GP_DETAIL], manifest: BOTH_MANIFEST, sitemap: SITEMAP_OK, code: { [GP_OVERVIEW]: code } }));
+  const forged = await verify(forgery);
+  assert.ok(forged.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && !c.present), 'the string is not a navigation');
+  assert.strictEqual(forged.ok, false);
+  // The same call, with nothing read by guess before it, proves the edge.
+  const real = await verify(`${forgery.split('\n')[0]}\n${NAV_TO(GP_DETAIL)}\n`);
+  assert.ok(real.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && c.present));
+  assert.strictEqual(real.ok, true, JSON.stringify(real.missing));
+});
+
+// A PAGEREF_ token the lexer hides is still a token that shipped: this page was resolved the way a build resolved it, and its second call
+// sits behind a false comment, so the oracle finds no target for it and the old check passed.
+test('verifySpec pages: a PAGEREF_ token the lexer hid in deployed code FAILS the no-pageref check, naming where', async () => {
+  const deployed = OBJECT_DIVISION_PAGE.replace('"PAGEREF_detail"', `"${GP_DETAIL}"`);
+  assert.strictEqual(deployed.split('PAGEREF_detail').length - 1, 1, 'one call resolved, one left');
+  const read = pageRead({ sitemapIds: [GP_OVERVIEW, GP_DETAIL], existenceIds: [GP_OVERVIEW, GP_DETAIL], manifest: BOTH_MANIFEST, sitemap: SITEMAP_OK, code: { [GP_OVERVIEW]: deployed } });
+  const r = await verifySpec(pageSpec(), read);
+  const check = r.checks.find((c) => c.kind === 'page-no-pageref');
+  assert.ok(check && !check.present);
+  assert.match(check.detail, /PAGEREF_detail \(line 5, column \d+, after the "brace" ambiguity at line 4, column \d+\)/);
+  assert.ok(r.checks.some((c) => c.kind === 'page-nav' && c.present), 'the call before the guess still proves the edge');
+  assert.strictEqual(r.ok, false);
+  // No comment is exempt: a token in one is a token that shipped. A comment with none is not a leftover.
+  const withComment = (comment) => verifySpec(pageSpec(), pageRead({ sitemapIds: [GP_OVERVIEW, GP_DETAIL], existenceIds: [GP_OVERVIEW, GP_DETAIL], manifest: BOTH_MANIFEST, sitemap: SITEMAP_OK, code: { [GP_OVERVIEW]: `${comment}\n${NAV_TO(GP_DETAIL)}` } }));
+  const commented = await withComment('// PAGEREF_detail was resolved at deploy');
+  const leftover = commented.checks.find((c) => c.kind === 'page-no-pageref');
+  assert.ok(leftover && !leftover.present, 'a token in a // comment on its own line is a leftover');
+  assert.match(leftover.detail, /PAGEREF_detail \(line 1, column 4\)/);
+  assert.strictEqual(commented.ok, false);
+  const clean = await withComment('// the link was resolved at deploy');
+  assert.ok(clean.checks.some((c) => c.kind === 'page-no-pageref' && c.present));
+  assert.strictEqual(clean.ok, true, JSON.stringify(clean.missing));
+});
+
+// A call is trusted only if all of it lies before the first place the lexer guessed. The members of an options object after a guess are
+// not read for certain, and a getter or a computed key there can make the call something else — here the call is
+// `{ pageType: "entityrecord", … }` when it runs — so an id in a call whose object runs through a guess proves no edge.
+test('verifySpec pages: an id in a call whose options object reaches a guess does not prove the nav edge, and one closed before it does', async () => {
+  const verify = (code) => verifySpec(pageSpec(), pageRead({ sitemapIds: [GP_OVERVIEW, GP_DETAIL], existenceIds: [GP_OVERVIEW, GP_DETAIL], manifest: BOTH_MANIFEST, sitemap: SITEMAP_OK, code: { [GP_OVERVIEW]: code } }));
+  const reaching = await verify(MISREAD_PAGES['inside an options object'].code.replace('"PAGEREF_detail"', `"${GP_DETAIL}"`));
+  assert.ok(!reaching.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && c.present), 'the edge is never reported present');
+  assert.ok(reaching.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && !c.present));
+  assert.strictEqual(reaching.ok, false);
+  // The same guess after a call that is closed before it changes nothing about that call.
+  const closed = await verify(`${NAV_TO(GP_DETAIL)}\nconst count = {valueOf(){return 12;}}/2; const half = total / 2;\n`);
+  assert.ok(closed.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && c.present));
+  assert.strictEqual(closed.ok, true, JSON.stringify(closed.missing));
+});
+
+// Every misread page (tests/helpers/misread-page.js), as the build would deploy it: only what the reader trusts is
+// resolved. Verification must not pass it — a token that lies at or after the first guess is still in the page, and an id in a call that
+// reaches the guess proves no edge — and a call in a template line that starts with `//`, which runs, is evidence like any other.
+test('verifySpec pages: a misread page deployed as far as the reader trusts it FAILS, and a call in a template line that starts with // proves the edge', async () => {
+  const verify = (code) => verifySpec(pageSpec(), pageRead({ sitemapIds: [GP_OVERVIEW, GP_DETAIL], existenceIds: [GP_OVERVIEW, GP_DETAIL], manifest: BOTH_MANIFEST, sitemap: SITEMAP_OK, code: { [GP_OVERVIEW]: code } }));
+  for (const [name, { code }] of Object.entries(MISREAD_PAGES)) {
+    const r = await verify(code.replace('"PAGEREF_detail"', `"${GP_DETAIL}"`));
+    assert.strictEqual(r.ok, false, name);
+  }
+  // JSX text that looks like parameters is text: the regex after the next arrow holds a token that no rewrite resolved, and verification says so.
+  const text = await verify(JSX_TEXT_PAGE.replace('"PAGEREF_detail"', `"${GP_DETAIL}"`));
+  const leftover = text.checks.find((c) => c.kind === 'page-no-pageref');
+  assert.ok(leftover && !leftover.present);
+  assert.match(leftover.detail, /PAGEREF_detail \(line 5, column \d+\)/);
+  assert.strictEqual(text.ok, false);
+  const ok = await verify(TEMPLATE_LINE_PAGE.replace('"PAGEREF_detail"', `"${GP_DETAIL}"`));
+  assert.ok(ok.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && c.present));
+  assert.ok(ok.checks.some((c) => c.kind === 'page-no-pageref' && c.present));
+  assert.strictEqual(ok.ok, true, JSON.stringify(ok.missing));
+});
+
+// After a unary or binary operator a `<` opens an element whatever follows its name (`a === <T extends X>text</T>`), so the regex after it is data. Deployed as the build
+// resolves it — the real call only — the token in the regex is still in the page, and verification says so with no guess named; the real call still proves the edge.
+test('verifySpec pages: a regex after an element that follows a unary or binary operator leaves a token that shipped, and FAILS the no-pageref check', async () => {
+  const verify = (code) => verifySpec(pageSpec(), pageRead({ sitemapIds: [GP_OVERVIEW, GP_DETAIL], existenceIds: [GP_OVERVIEW, GP_DETAIL], manifest: BOTH_MANIFEST, sitemap: SITEMAP_OK, code: { [GP_OVERVIEW]: code } }));
+  for (const { name, code } of ELEMENT_AFTER_OPERATOR_PAGES) {
+    const r = await verify(code.replace('"PAGEREF_detail"', `"${GP_DETAIL}"`));
+    const leftover = r.checks.find((c) => c.kind === 'page-no-pageref');
+    assert.ok(leftover && !leftover.present, name);
+    assert.match(leftover.detail, new RegExp(`PAGEREF_detail \\(line ${ELEMENT_PAGE_TOKEN_LINE}, column \\d+\\)`), name);
+    assert.doesNotMatch(leftover.detail, /ambiguity/, name);
+    assert.ok(r.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && c.present), `${name}: the real call still proves the edge`);
+    assert.strictEqual(r.ok, false, name);
+  }
+});
+
+// JSX that holds what looks like a function type's parameter list compiles as an element, so the regex after it is data. Deployed as the build resolves it — the real call only —
+// the token in the regex is still in the page, and verification says so with no guess named; the real call still proves the edge.
+test('verifySpec pages: a regex after an element whose text looks like a parameter list leaves a token that shipped, and FAILS the no-pageref check', async () => {
+  const verify = (code) => verifySpec(pageSpec(), pageRead({ sitemapIds: [GP_OVERVIEW, GP_DETAIL], existenceIds: [GP_OVERVIEW, GP_DETAIL], manifest: BOTH_MANIFEST, sitemap: SITEMAP_OK, code: { [GP_OVERVIEW]: code } }));
+  for (const { name, code } of ELEMENT_LOOKALIKE_PAGES) {
+    const r = await verify(code.replace('"PAGEREF_detail"', `"${GP_DETAIL}"`));
+    const leftover = r.checks.find((c) => c.kind === 'page-no-pageref');
+    assert.ok(leftover && !leftover.present, name);
+    assert.match(leftover.detail, new RegExp(`PAGEREF_detail \\(line ${ELEMENT_PAGE_TOKEN_LINE}, column \\d+\\)`), name);
+    assert.doesNotMatch(leftover.detail, /ambiguity/, name);
+    assert.ok(r.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && c.present), `${name}: the real call still proves the edge`);
+    assert.strictEqual(r.ok, false, name);
+  }
+});
+
+// A generic function type whose parameter list holds a type argument or an object type is a type, for certain: a page deployed with it is read as it is, the call after it proves the
+// edge, and no token or guess is left. (A rule that took each for a guess at the `<` trusted nothing after it, so the edge was never proved.)
+test('verifySpec pages: a call after a generic function type with a type argument or an object type in its parameter list proves the nav edge', async () => {
+  const verify = (code) => verifySpec(pageSpec(), pageRead({ sitemapIds: [GP_OVERVIEW, GP_DETAIL], existenceIds: [GP_OVERVIEW, GP_DETAIL], manifest: BOTH_MANIFEST, sitemap: SITEMAP_OK, code: { [GP_OVERVIEW]: code } }));
+  for (const { name, code } of FUNCTION_TYPE_PAGES) {
+    const r = await verify(code.replace('"PAGEREF_detail"', `"${GP_DETAIL}"`));
+    assert.ok(r.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && c.present), `${name}: the edge is proved`);
+    assert.ok(r.checks.some((c) => c.kind === 'page-no-pageref' && c.present), `${name}: no token is left`);
+    assert.strictEqual(r.ok, true, `${name}: ${JSON.stringify(r.missing)}`);
+  }
 });
 
 test('verifySpec pages: a page missing from existence FAILS the page check', async () => {

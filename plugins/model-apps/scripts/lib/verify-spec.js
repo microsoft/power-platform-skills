@@ -17,7 +17,7 @@ const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueN
 const { DASHBOARD_LAUNCHER_URL, isDashboardLauncherUrl, subAreaTargetKey, specSubAreaTargetKey, specSubAreas, chromeByTargetKey, keepsLiveValue } = require('./sitemap-merge.js');
 // Recorded on an icon check the build's keep rule satisfies (keepsLiveValue, sitemap-merge.js).
 const KEPT_BY_DESIGNER = 'kept as the environment has it: changed in the designer since the spec\u2019s baseline, which the spec still matches';
-const { extractNavTargets } = require('./pageref-resolver.js');
+const { extractNavTargets, strayPageRefs, describePageRefLocations } = require('./pageref-resolver.js');
 const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges.js');
 const { resolveSurfaces } = require('./surface-resolver.js');
@@ -1170,10 +1170,13 @@ async function verifySpec(spec, read, opts = {}) {
           // THE SINGLE STRUCTURAL ORACLE: parse the deployed page's real navigateTo call sites.
           // A decoy id in a comment, a stale GUID, or a dynamic pageId all FAIL (C1).
           const targets = extractNavTargets(code);
-          // No residual/malformed PAGEREF_ in deployed code means the resolve+upload step ran on this page.
-          add('page-no-pageref', p.name, !targets.some((t) => t.kind === 'pageref' || t.kind === 'pageref-malformed'));
-          // Every declared nav edge must resolve to the ACTUAL target's deployed id at a REAL call site.
-          const navLiteralIds = new Set(targets.filter((t) => t.kind === 'literal').map((t) => String(t.pageId).toLowerCase()));
+          // No residual/malformed PAGEREF_ in deployed code means the resolve+upload step ran on this page. A token that no call accounts for
+          // is read as well (strayPageRefs): the lexer can hide a call — and so its token — behind a misread, which the targets alone miss.
+          const strays = strayPageRefs(code);
+          add('page-no-pageref', p.name, !targets.some((t) => t.kind === 'pageref' || t.kind === 'pageref-malformed') && strays.length === 0, strays.length ? describePageRefLocations(strays) : '');
+          // Every declared nav edge must resolve to the ACTUAL target's deployed id at a REAL call site. A literal at or after a place the
+          // lexer reads by guess is not one: it may be text read as code (see the trust frontier in pageref-resolver.js).
+          const navLiteralIds = new Set(targets.filter((t) => t.kind === 'literal' && !t.afterFrontier).map((t) => String(t.pageId).toLowerCase()));
           for (const edge of nav) {
             // Target id via the same resolution order (spec pageId > manifest) for nav targets.
             const targetPage = (spec.pages || []).find((pp) => (pp.key || pp.name) === edge.targetKey);

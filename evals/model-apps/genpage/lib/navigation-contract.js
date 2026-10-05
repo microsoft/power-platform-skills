@@ -1,8 +1,13 @@
 'use strict';
 
-const { extractNavTargets, resolvePageRefs, navTargetParity } = require('../../../../plugins/model-apps/scripts/lib/pageref-resolver.js');
+const { extractNavTargets, resolvePageRefs, navTargetParity, strayPageRefs, describePageRefLocations, navigationFrontier } = require('../../../../plugins/model-apps/scripts/lib/pageref-resolver.js');
+const { WS } = require('../../../../plugins/model-apps/scripts/lib/source-literals.js');
 const { workflowCalls, isUpload, resultObject } = require('./workflow-evidence.js');
 const { artifactText, commandInfo, fileName, isGuid, pathKey } = require('./evidence-utils.js');
+
+// The historical spelling of a generative navigation's pageType, in the page code: the white space around the colon is TypeScript's (source-literals.js, WS), as everywhere the reader
+// of a page's code looks for a token. (The `\s` in the log lines read below belongs to a text log, not to code.)
+const LEGACY_PAGE_TYPE = new RegExp(String.raw`\bpageType${WS}*:${WS}*(["'])custom\1`, 'g');
 
 function historicalPageMap(log) {
   const map = {};
@@ -23,7 +28,7 @@ function sourceProblems(files, { phase = 'authored', pageMap = {}, legacy = fals
     // This one capture predates `pageType:"generative"` and double-quoted PAGEREFs. The
     // compatibility view admits those historical spellings ONLY; it still checks every actual
     // target against sibling files. It is never used to claim current-contract compliance.
-    const code = legacy ? file.content.replace(/\bpageType\s*:\s*(["'])custom\1/g, 'pageType: "generative"') : file.content;
+    const code = legacy ? file.content.replace(LEGACY_PAGE_TYPE, 'pageType: "generative"') : file.content;
     for (const target of extractNavTargets(code)) {
       if (target.kind === 'dynamic') problems.push(`${file.name}: effective navigation target is dynamic or overridden`);
       else if (target.kind === 'pageref' || (legacy && target.kind === 'pageref-malformed')) {
@@ -33,11 +38,20 @@ function sourceProblems(files, { phase = 'authored', pageMap = {}, legacy = fals
         problems.push(`${file.name}: navigation placeholder is not a canonical double-quoted PAGEREF`);
       } else if (target.kind === 'literal') {
         if (phase !== 'resolved') problems.push(`${file.name}: literal page id appears before resolution`);
-        if (!isGuid(target.pageId) || !ids.has(target.pageId.toLowerCase())) {
+        if (target.afterFrontier) {
+          // As verification does: an id in a call the lexer reads only by guess is no evidence of what the call navigates to, whether or not it
+          // is a deployed id from the page map.
+          const guess = navigationFrontier(code);
+          problems.push(`${file.name}: navigation page id ${target.pageId} is in a call that is not trusted: part of it lies at or after the "${guess.kind}" ambiguity at line ${guess.line}, column ${guess.column}, which this check cannot read for certain`);
+        } else if (!isGuid(target.pageId) || !ids.has(target.pageId.toLowerCase())) {
           problems.push(`${file.name}: resolved target is not a deployed GUID from the page map`);
         }
       }
     }
+    // The build refuses a PAGEREF_ token that no navigation rewrite resolves — it would ship as literal text — so a page that
+    // holds one is not a page the build could have produced, whoever wrote it. Judged on the same view of the source as the targets.
+    const stray = strayPageRefs(code);
+    if (stray.length) problems.push(`${file.name}: PAGEREF_ token(s) no navigation rewrite resolves: ${describePageRefLocations(stray)}`);
   }
   return problems;
 }

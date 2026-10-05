@@ -298,7 +298,7 @@ test('PAGEREF: skip on single-page fixture', () => {
 test('PAGEREF: pass on multi-page with placeholder', () => {
   const check = ASSERTIONS.get('For multi-page builds, cross-page navigation uses quoted `"PAGEREF_<filename>"` placeholders that the orchestrator\'s Phase 6.5 resolves to real GUIDs');
   const files = [
-    f('list.tsx', `Xrm.Navigation.navigateTo({ pageId: "PAGEREF_detail" });`),
+    f('list.tsx', `Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_detail" });`),
     f('detail.tsx', `// no nav`),
   ];
   const result = check({ files, eval: evalStub() });

@@ -378,12 +378,31 @@ xrm.Navigation.navigateTo({
 
 **Must be quoted, and it is the pageId.** The build's single structural resolver only rewrites a
 `PAGEREF_<token>` that appears as the **double-quoted `pageId:` value of a `pageType:"generative"`
-`navigateTo` call**. Always emit it exactly there — never single-quoted, back-ticked, concatenated,
-or as a decoy string elsewhere (the pre-deploy scan **rejects** a malformed nav ref and any parity
-mismatch). In `app-builder` mode every `PAGEREF_<key>` you emit must have a matching `navigatesTo`
-entry in the page's spec, and every declared `navigatesTo.targetKey` must appear as a real nav
-pageId in the source (the build enforces exact parity, and verification confirms each edge resolves
-to the actual target).
+`navigateTo` call** — the value is exactly that one string literal, with nothing after it but the
+`,` or `}` that ends the property (a plain cast — `as const`, `as Name`, `satisfies Name`, with `Name` a plain or dotted
+identifier — may follow the literal and is left as written; a generic, a union or a string-literal type may not). The options
+object has to be **written inline in the call**: an object built in a variable and passed by name is not recognised, and
+its token halts the build as stray. **Write the plain form, `navigateTo({ … })` or
+`Xrm.Navigation.navigateTo({ … })`.** A parenthesised callee, `(navigateTo)({ … })`, is read only where a call can
+start — at the start of a statement or after `;` `{` `(` `[` `,` `:`, a ternary `?`, an operator ending in `=`, `=>`,
+`&&`, `||` or `??` — and never after a name or keyword, `)`, `]`, `.`, `}`, `!`, `>`, a quote or a back-tick, because
+there the parentheses are an argument list for some other function (`factory!(navigateTo)({ … })`,
+``tag`x`(navigateTo)({ … })``); the token in one halts the build as stray. Always emit it exactly there — never single-quoted, back-ticked,
+concatenated, followed by an expression (`"PAGEREF_x".slice(8)`, `&& other`,
+`("PAGEREF_x" as const).slice(1)`), in a
+`pageType` that is not the plain literal, in a call spelled some way the resolver does not read, or
+as a decoy string elsewhere (the pre-deploy scan **rejects** a malformed nav ref, any `PAGEREF_`
+token that is not a resolvable nav pageId — **no comment may hold one**: a `//` comment, a block comment, a trailing comment
+(`navigateTo({ … }); // PAGEREF_x`) and a JSX `{/* PAGEREF_x */}` are all refused, so write the comment without the token — and any
+parity mismatch, and reports the page, line and column). Also keep the code before a navigation call unambiguous: the checker has
+no parser, so where it cannot tell a division from a regex, or a comparison from an element — a `/` or `<` right after a `}`
+(write `({ … }) / 2`, not `{ … } / 2`), after a `)` whose `(` is far back, after a word that can be a keyword or a name (`of`,
+`type`, `get`, `as` …), after a `>`, or on a later line than the operand before it (`type Value = number` then a regex line);
+an identifier written with a `\u` escape — it does not trust a `PAGEREF_` token at or after that spot, or a `navigateTo` call
+whose object or arguments reach it. Put the operand in parentheses, end the statement with `;`, or write the navigation call above it. In `app-builder` mode every `PAGEREF_<key>` you emit must have a
+matching `navigatesTo` entry in the page's spec, and every declared `navigatesTo.targetKey` must
+appear as a real nav pageId in the source (the build enforces exact parity, and verification
+confirms each edge resolves to the actual target).
 
 **Every `PAGEREF_` target page must be sitemap-placed.** <a id="PAGEREF_sitemap_placement"></a>
 A page referenced by a `PAGEREF_` placeholder must have a matching `page` subarea in the

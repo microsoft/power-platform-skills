@@ -272,7 +272,7 @@ The seven new fixtures exercise these current contracts:
 | `10-auth-timeout-halt` | One timeout retry, original advice, no provisioning/upload | Failed auth followed by unrelated `ok:true`; malformed result or wrong environment |
 | `20-upload-preservation` | Wrapper/name/prompt/message files; separate own-name/config snapshots | Inline/rewritten approved text; dropped name/model/bindings; hidden shim/read warnings |
 | `21-discovery-failure` | Unreadable discovery returns `needs_input`, no setup | Failed discovery followed by connection/reference creation or upload |
-| `22-navigation-contract` | Actual before/after TSX and deployed ID map | Unknown/optional-call non-GUID target, runtime override, collateral edit or extra reupload |
+| `22-navigation-contract` | Actual before/after TSX and deployed ID map | Unknown/optional-call non-GUID target, runtime override, a `PAGEREF_` token anywhere but a navigation `pageId` — a comment included (the build refuses it), a page the checker cannot read for certain (it refuses every token at or after the first guess and every call that reaches it, a resolved id literal there included), collateral edit or extra reupload |
 | `23-worker-completeness` | Failed production gate, fresh regeneration, then upload | Valid export plus unfinished statement, stale/missing write or upload before acceptance |
 | `24-custom-api-lifecycle` | Discovery, re-probe, bare actions, runtime and config stages | Disabled/unreadable gate, invented kind/name/parameter, wrong method/bound record, unsafe response or lost bindings |
 | `25-solution-package` | Explicit page IDs, dynamic types, app-first writes and read-back | Omitted page/wrong solution/type/order; invalid ID writes; partial failure reported as success |
