@@ -125,6 +125,20 @@ test('shared components preserve token literals and accessible row selection sem
   assert.doesNotMatch(components, /<Ionicons[^>]*color="\$[A-Za-z]/);
 });
 
+test('Tamagui text-control guidance uses the cross-platform string callback', () => {
+  const textControlGuidance = [
+    'agents/screen-builder.md',
+    'shared/references/tamagui-component-recipes.md',
+    'shared/references/universal-patterns.md',
+    'shared/samples/screen-form.tsx',
+    'shared/samples/screen-list.tsx',
+  ].map(read).join('\n');
+
+  assert.match(textControlGuidance, /onChangeText/);
+  assert.doesNotMatch(textControlGuidance, /event\.target\?\.value/);
+  assert.doesNotMatch(textControlGuidance, /event\.nativeEvent\?\.text/);
+});
+
 test('template path aliases are inherited from the host tsconfig', () => {
   const tsconfig = JSON.parse(read('template/tsconfig.json'));
   assert.strictEqual(tsconfig.extends, '@microsoft/power-apps-native-host/config/tsconfig');

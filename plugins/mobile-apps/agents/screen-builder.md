@@ -915,6 +915,7 @@ export default function <ScreenName>Screen() {
 
 - **Detail routes** like `/(app)/inspections/[id]` use `useLocalSearchParams<{ id: string }>()` from `expo-router`
 - **Form screens** use `react-hook-form` if installed; otherwise inline `useState` per field for v0
+- **Tamagui text controls** — use `onChangeText={(text) => ...}` for `<Input>` and `<TextArea>`. Do not read `target.value` or `nativeEvent.text` from their `onChange` event: Tamagui types that callback as a web `Event`, while `onChangeText` is consistently string-valued on web and native.
 - **Choice / picklist fields in forms** — use Tamagui `<Select>` with the generated const. The const lives in `src/generated/models/<Entity>Model.ts` and maps int values (as string keys) to label strings (e.g. `Cr123_Projectstatus = { '100000000': 'Active', ... }`). Use `Object.entries(Const)` to build `<Select.Item>` elements. Convert to/from string at the `Select` boundary (`String(field.value)` in, `Number(v)` out). Never hardcode option values. For read-only display (list rows, detail fields), use the `formattedValue(record, '<columnLogicalName>')` helper from `@/utils`, or fall back to the generated const lookup (`Cr123_Projectstatus[String(record.cr123_status)]`). NEVER invent/read a separate `*name` shadow property and NEVER inline the raw annotation key. See the "Choice / picklist select" recipe in `shared/references/tamagui-component-recipes.md`.
   - **Fallback — const missing or model file absent:** emit a plain `<Input>` storing the raw int as a string, with a TODO comment:
     ```tsx
@@ -922,7 +923,7 @@ export default function <ScreenName>Screen() {
       Re-run `npx power-apps add-data-source` from the app root with explicit connector/table flags to regenerate, then replace with <Select>. */}
     <Input
       value={String(field.value ?? '')}
-      onChange={event => field.onChange(Number(event.target?.value ?? event.nativeEvent?.text ?? ''))}
+      onChangeText={value => field.onChange(Number(value) || 0)}
       inputMode="numeric"
     />
     ```

@@ -438,7 +438,7 @@ const shadows = {
   <Input id="email" size="$4" bg="$color3" borderWidth={0}
     focusStyle={{ borderWidth: 2, borderColor: '$blue8' }}
     value={email}
-    onChange={event => setEmail(event.target?.value ?? event.nativeEvent?.text ?? '')} />
+    onChangeText={setEmail} />
   {error && <Text color="$red10" fontSize="$2">{error}</Text>}
 </YStack>
 ```
