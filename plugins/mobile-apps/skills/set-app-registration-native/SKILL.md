@@ -107,29 +107,44 @@ needs to create a registration before pasting its client ID.
 
 The script returns one boolean, `passesRequiredPermissions`, per registration.
 Registrations that pass sort first, followed by failures; each group is sorted by
-display name. Preserve that order.
-Present the top 10 registrations on the first `AskUserQuestion`, then paginate
-the remainder in groups of up to 10. Use this exact question on every page:
+display name. Preserve that order and show up to 10 registrations per page.
+
+Render each page as ordinary response text before calling `AskUserQuestion`; do
+not pass registrations or action commands through the structured `choices`
+field. Number registrations globally using their 1-based position in the full
+sorted result, so numbering does not restart on later pages:
 
 ```text
-Select an app registration:
+App registrations — showing <start>–<end> of <total>
+
+<global-number>. <displayName> (Client ID: <short-client-id>...)
+   <✓ All required permissions configured|✗ Missing required permissions>
 ```
 
-Render each registration as:
+Build `<short-client-id>` from the shortest unique client-ID prefix on the
+current page, with a minimum of 4 characters. Show the full client ID only after
+selection. Do not expose partial scores or individual permission details in the
+listing.
+
+After printing the page, use one free-form `AskUserQuestion` with no `choices`.
+Advertise only navigation commands that are valid for the current page:
 
 ```text
-<displayName> (Client ID: <short-client-id>...)
-<✓ All required permissions configured|✗ Missing required permissions>
+Enter a registration number, or type next, previous, create, paste, or skip:
 ```
 
-Use the shortest unique client-ID prefix on the current page, with a minimum of
-4 characters, and show the full client ID only after selection. Do not expose
-partial scores or individual permission details in the listing.
+Trim the answer and match commands case-insensitively:
+- A displayed global registration number selects that registration.
+- `next` and `previous` move one page without rerunning discovery.
+- `create` opens the Wrap creation path below.
+- `paste` asks for a client ID and follows the pasted-ID path below.
+- `skip` follows the existing skip path.
 
-Add `Show next registrations` and `Show previous registrations` when applicable.
-On every page also offer `Create a new registration in Power Apps Wrap`,
-`Paste a client ID not shown`, and `Skip for now`. Every returned registration
-must remain reachable; never truncate to the first page or silently select a result.
+Omit `previous` on the first page and `next` on the last page. For an
+unrecognized command or a number outside the displayed page, explain the valid
+numbers/actions, reprint the same page, and ask again. Every returned
+registration must remain reachable; never truncate to the first page or silently
+select a result, including when only one is returned.
 
 The boolean checks the native runtime profile, not the Wrap deployment profile.
 Every app requires Dynamics CRM `user_impersonation` and Power Platform API
