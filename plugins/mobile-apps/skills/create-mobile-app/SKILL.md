@@ -1588,9 +1588,10 @@ Registrations that pass sort first, followed by failures; each group is sorted b
 display name. Preserve that order and show up to 10 registrations per page.
 
 Render each page as ordinary response text before calling `AskUserQuestion`; do
-not pass registrations or action commands through the structured `choices`
-field. Number registrations globally using their 1-based position in the full
-sorted result, so numbering does not restart on later pages:
+not pass registrations or pagination commands through the structured `choices`
+field. Only the create and skip actions use choices, as specified below. Number
+registrations globally using their 1-based position in the full sorted result,
+so numbering does not restart on later pages:
 
 ```text
 App registrations — showing <start>–<end> of <total>
@@ -1604,23 +1605,29 @@ current page, with a minimum of 4 characters. Show the full client ID only after
 selection. Do not show partial scores or individual permission details in the
 listing.
 
-After printing the page, use one free-form `AskUserQuestion` with no `choices`.
-Advertise only navigation commands that are valid for the current page:
+After printing the page, call `AskUserQuestion` with the free-form input plus
+exactly these two structured choices on every page:
+
+1. `Create a new registration in Power Apps Wrap`
+2. `Skip for now`
+
+In the free-form question, advertise only navigation commands that are valid
+for the current page:
 
 ```text
-Enter a registration number, or type next, previous, create, paste, or skip:
+Enter a registration number, or type next, previous, or paste:
 ```
 
-Trim the answer and match commands case-insensitively:
+Trim free-form answers and match commands case-insensitively:
 - A displayed global registration number selects that registration.
 - `next` and `previous` move one page without rerunning discovery.
-- `create` runs 7.4.
 - `paste` asks for a client ID and follows the pasted-ID path below.
-- `skip` runs 7.5.
+- The `Create a new registration in Power Apps Wrap` choice runs 7.4.
+- The `Skip for now` choice runs 7.5.
 
 Omit `previous` on the first page and `next` on the last page. For an
-unrecognized command or a number outside the displayed page, explain the valid
-numbers/actions, reprint the same page, and ask again. Every returned
+unrecognized free-form command or a number outside the displayed page, explain
+the valid numbers/actions, reprint the same page, and ask again. Every returned
 registration must remain reachable; never truncate to the first page or silently
 select a result, including when only one is returned.
 

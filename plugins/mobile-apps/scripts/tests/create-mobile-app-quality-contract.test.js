@@ -255,8 +255,9 @@ test('authentication discovers and checks registrations before writing a client 
   assert.match(auth, /Registrations that pass sort first/);
   assert.match(auth, /show up to 10 registrations per page/);
   assert.match(auth, /Render each page as ordinary response text before calling `AskUserQuestion`/);
-  assert.match(auth, /do\s+not pass registrations or action commands through the structured `choices`\s+field/i);
-  assert.match(auth, /Number registrations globally using their 1-based position/);
+  assert.match(auth, /do\s+not pass registrations or pagination commands through the structured `choices`\s+field/i);
+  assert.match(auth, /Only the create and skip actions use choices/);
+  assert.match(auth, /Number\s+registrations globally using their 1-based position/);
   assert.match(auth, /App registrations — showing <start>–<end> of <total>/);
   assert.match(auth, /<global-number>\. <displayName> \(Client ID: <short-client-id>\.\.\.\)/);
   assert.match(auth, /<displayName> \(Client ID: <short-client-id>\.\.\.\)/);
@@ -264,8 +265,10 @@ test('authentication discovers and checks registrations before writing a client 
   assert.match(auth, /✗ Missing required permissions/);
   assert.match(auth, /shortest unique client-ID prefix on the\s+current page/);
   assert.match(auth, /Do not show partial scores or individual permission details in the\s+listing/);
-  assert.match(auth, /use one free-form `AskUserQuestion` with no `choices`/);
-  assert.match(auth, /Enter a registration number, or type next, previous, create, paste, or skip:/);
+  assert.match(auth, /free-form input plus\s+exactly these two structured choices on every page/);
+  assert.match(auth, /Create a new registration in Power Apps Wrap/);
+  assert.match(auth, /Skip for now/);
+  assert.match(auth, /Enter a registration number, or type next, previous, or paste:/);
   assert.match(auth, /A displayed global registration number selects that registration/);
   assert.match(auth, /Omit `previous` on the first page and `next` on the last page/);
   assert.match(auth, /number outside the displayed page/);
