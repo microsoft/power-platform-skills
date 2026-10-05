@@ -13,8 +13,9 @@ const { resolve: resolveRegion, mapToRegion } = require("./region/region-resolve
 
 // `cloud` is the "Cloud:" value from `pac auth who`. PAC documents Public, UsGov, UsGovHigh, UsGovDod and
 // China (https://learn.microsoft.com/en-us/power-platform/developer/cli/reference/auth#pac-auth-create);
-// Microsoft-internal stamps surface as Tip1/Tip2/Test/Preprod. An empty value means PAC is not signed
-// in — there is no org to route, so it takes the public default like power-pages does.
+// Microsoft-internal stamps surface as Tip1/Tip2/Test/Preprod. An empty value is public only when there
+// is also no org (PAC signed out): nothing identifies a region then, so the event takes the public default
+// like power-pages does. A signed-in org with no cloud line is handled in resolve() below.
 const PUBLIC_CLOUDS = new Set(["", "public"]);
 const STAMPED_CLOUDS = new Set([
   "usgov", "usgovgcc", "gcc", "gov",
@@ -34,6 +35,7 @@ async function resolve({ event, cfg, cloud, configDir }) {
   const regionsMap = (cfg && cfg.regions) || {};
   const defaultRegion = (cfg && cfg.default_region) || "us";
   const c = String(cloud || "").trim().toLowerCase();
+  const orgId = (event && event.data && event.data.orgId) || "";
 
   // Deliberate deviation from power-pages: a sovereign or internal cloud is routed from the PAC
   // stamp ALONE. The stamp already decides the region (the geo is ignored for these), and the region
@@ -50,9 +52,14 @@ async function resolve({ event, cfg, cloud, configDir }) {
   // local diagnostic mirror is still written by the dispatcher.
   if (!PUBLIC_CLOUDS.has(c)) return null;
 
+  // A signed-in org whose `pac auth who` output had no "Cloud:" line (the parser returns "" then) could be
+  // a sovereign org. Treating it as public would query the public Artemis gateway, fail, and fall back to
+  // the US public collector — so send nothing instead.
+  if (!c && orgId) return null;
+
   // Public cloud: US vs EU data boundary comes from the org's geo (Artemis gateway), cached per org.
   return resolveRegion({
-    orgId: (event && event.data && event.data.orgId) || "",
+    orgId,
     cloud,
     regionsMap,
     defaultRegion,

@@ -1061,14 +1061,17 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
   (CI-enforced: `node scripts/validate-telemetry-ikeys.js`).
 - **Routing:** `scripts/lib/telemetry/resolver.js` picks the key + collector per event.
   `region/` beside it is a **verbatim copy** of power-pages' Artemis geo + cloud-stamp
-  router — refresh it by copying, and keep model-apps logic in `resolver.js`. A public-cloud
+  router — refresh it by copying, and keep model-apps logic in `resolver.js`
+  (`telemetry-lib-copy.test.js` fails on drift, and the workflow runs on a power-pages
+  `region/` change). A public-cloud
   org routes to `us`/`eu` by its geo (cached per org for 24 h under
   `~/.power-platform-skills/region-cache/`, shared with power-pages — it stores only the
   region, never a key). Unlike power-pages, a sovereign or internal PAC cloud (`UsGov`,
   `UsGovHigh`, `UsGovDod`, `China`, `Tip1`/`Tip2`/`Test`/`Preprod`) routes from the stamp
   alone, with no Artemis call and **never** a fallback to the public collector; an
-  unrecognized cloud sends nothing. `ikey.json` deliberately has no top-level static key, so
-  a `null` resolution really does mean no transmission.
+  unrecognized cloud, or a signed-in org with no cloud line, sends nothing. `ikey.json`
+  deliberately has no top-level static key, so a `null` resolution really does mean no
+  transmission.
 - **Emission:** `hooks/run-skill-pretool-telemetry.js` (PreToolUse Skill) and
   `hooks/run-user-prompt-telemetry.js` (UserPromptSubmit `/model-apps:<skill>`).
 - **Privacy:** telemetry is default-on: events can include Dataverse organization and Entra tenant GUIDs

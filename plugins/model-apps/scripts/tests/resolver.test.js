@@ -97,6 +97,7 @@ for (const [cloud, region] of [
   ["China", "mooncake"],
   ["Tip1", "internal"],
   ["Tip2", "internal"],
+  ["Test", "internal"],
   ["Preprod", "internal"],
 ]) {
   test(`${cloud} → ${region} from the PAC stamp alone (no Artemis call, no public fallback)`, async () => {
@@ -118,6 +119,14 @@ test("sovereign cloud with no configured entry → null (never the public defaul
 test("unrecognized cloud stamp → null (fail closed, no gateway call)", async () => {
   const { result, calls } = await withFakeHttps("us", () =>
     resolver.resolve({ event: { data: { orgId: ORG_ID } }, cfg: CFG, cloud: "USNat", configDir: mkTemp() })
+  );
+  assert.equal(result, null);
+  assert.deepEqual(calls, []);
+});
+
+test("signed-in org with no cloud stamp → null (could be sovereign; never the public default)", async () => {
+  const { result, calls } = await withFakeHttps("us", () =>
+    resolver.resolve({ event: { data: { orgId: ORG_ID } }, cfg: CFG, cloud: "", configDir: mkTemp() })
   );
   assert.equal(result, null);
   assert.deepEqual(calls, []);
