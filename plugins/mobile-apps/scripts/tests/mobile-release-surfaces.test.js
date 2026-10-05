@@ -282,3 +282,21 @@ test('upgrade rehearsals preserve source config context and require reviewed ove
     assert.match(source, /[Tt]est-fixture-only/);
   }
 });
+
+test('upgrade skills reuse the verified external host CLI rather than duplicating installation', () => {
+  const skill = read('skills/check-updates/SKILL.md');
+  const lifecycle = read('shared/references/mobile-release-lifecycle.md');
+  for (const source of [skill, lifecycle]) {
+    assert.match(source, /mobile-template-lifecycle\.js acquire/);
+    assert.match(source, /bin\["upgrade-template"\]/);
+    assert.match(source, /guarded lock regeneration/);
+    assert.match(source, /producer fix/);
+    assert.match(source, /Player.build scripts|Player-build scripts/);
+  }
+  assert.match(skill, /separate private reference installation/);
+  assert.match(skill, /not by installing it into the old app's dependency graph/);
+  assert.match(skill, /same verified reference host CLI/);
+  assert.match(skill, /never[\s\S]{0,90}delete the app's lock or `node_modules`/);
+  assert.doesNotMatch(skill, /Install the \*\*exact reviewed target host\*\* only in the disposable copy/);
+  assert.match(lifecycle, /Published and[\s\S]{0,70}diagnostic migrations share the host-owned strict npm installer/);
+});

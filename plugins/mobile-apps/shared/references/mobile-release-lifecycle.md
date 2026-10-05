@@ -221,8 +221,10 @@ configuration and TypeScript before advancing state. It must not run floating
 `expo install --fix`/`--check` or doctor recommendations that change or judge the
 target against a newer remote SDK patch. Managed baseline semver ranges may be
 pinned to the exact verified reference resolutions; the consumer accepts only
-those pins, not a newer patch or rewritten custom declarations. Production
-validation remains unchanged.
+those pins, not a newer patch or rewritten custom declarations. Published and
+diagnostic migrations share the host-owned strict npm installer. Published
+validation also runs Expo's check and the profile-pinned doctor; diagnostic
+validation uses the frozen reference instead of floating recommendations.
 Replay requires a standalone npm project; do not install through a parent
 workspace or use peer-dependency/validation bypasses to force the selected graph.
 End diagnostic `/check-updates` after its coupled upgrade/repair is validated
@@ -299,6 +301,28 @@ with `--dry-run`. It has no promised JSON/multi-edge planning API or
 `--from-version` flag. `--no-install` does not advance template state. A nonzero
 dry-run can mean conflicts, not just a broken command. Diagnose its sanitized
 output; never treat every failure as a clean preview or apply it to the real app.
+
+Keep the target CLI outside the source dependency graph. For a published
+release, reuse `mobile-template-lifecycle.js acquire` with a new private
+reference directory and the selected release ID, then restore the packaged
+lock with `npm ci --strict-peer-deps --no-legacy-peer-deps --no-force` after
+reviewing install scripts. Verify that reference against the selected release
+and resolve its installed host's actual `bin["upgrade-template"]` path.
+Use that same verified CLI with `--project` for both the disposable rehearsal
+and the separately approved real application. Diagnostic mode already supplies
+its immutable reference. Neither path preinstalls an incompatible target host
+into the old app, chooses `latest`, or re-scaffolds over customer files.
+
+The host owns dependency edits, guarded lock regeneration and validation.
+For changed standalone npm inputs it resolves in isolation, checks retained
+direct dependency versions, then installs with strict `npm ci`. It never copies
+the reference/template lock over the customer's lock; phase rollback retains
+the original. Workspace and shrinkwrap upgrades keep their package-manager
+boundary and strict in-place resolution, with conflicts requiring review.
+Do not duplicate this installer in a skill or invoke migration-authoring,
+runtime-preparation, release-tagging or Player-build scripts on a customer app.
+An older published host without a safe install path requires a producer fix,
+not a force/legacy-peer bypass or a skill-authored repair.
 
 To approve a whole chain, first rehearse it in a user-approved private disposable
 copy of the app, with the exact target host, normal validated installs, and a
