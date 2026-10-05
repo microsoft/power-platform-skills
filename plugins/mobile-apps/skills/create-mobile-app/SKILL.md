@@ -110,6 +110,9 @@ browser, so a rendered ER diagram or screen graph is what they answer the gate a
 the decision afterwards means approving from terminal text and seeing the picture only once it is
 too late to change it.
 
+Step 3's Architecture gate lists every gate with its phase and section. The Gate 2 calls below are
+the pattern each one follows:
+
 ```bash
 DOCS="${PLUGIN_ROOT}/scripts/app-docs.js"
 # 1. propose - the tab shows "Proposed - review this, then answer the prompt in your terminal"
@@ -183,6 +186,15 @@ If `$ARGUMENTS` includes a `--working-dir` (or the user names an existing direct
 - **Bank present** → read it. Identify the highest-numbered completed step. Inform the user:
   > "Found existing project '<name>' at `<dir>`. Steps 1–<N> already completed (last update <date>). Resume from Step <N+1>?"
   Wait for confirmation. If the user says yes, jump to that step. Skip the wizard (Step 2) and re-use the values stored in the bank.
+
+  **Reopen the build plan on resume.** A resume skips Step 2b, where the plan is created and
+  opened, so open `<working_dir>/docs/create-app-plan.html` in the browser yourself when it exists.
+  If the earlier run stopped on a failure, the plan still says so and has stopped reloading. Run
+  `node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" show`, and if it reports a `failedPhase`, reopen that phase before continuing:
+
+  ```bash
+  node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id <failedPhase> --status active
+  ```
 - **Bank absent** → fresh project. Continue to Step 1.
 - **Bank present but corrupted** (missing required headings) → surface the parse error, ask the user whether to overwrite (lose history) or fix manually before proceeding.
 
@@ -601,11 +613,40 @@ mkdir -p <working_dir> <working_dir>/.tmp
 
 ### Architecture gate
 
-Planning is now the live phase. The gates that follow are recorded in the Step 3.9 batch:
+Planning is now the live phase. Open it with what the run is doing rather than with a question:
+between gates the agents work for minutes, and the plan must not tell the user the run is waiting
+on them while it is not.
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id architecture --status active --note "Planning — approval gates ahead"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id architecture --status active --note "Planning the architecture"
 ```
+
+**Raise every gate in the plan as you present it, and take it down as soon as it is answered** -
+here, in the inline fallback below, and in every revision loop. The plan is open in the user's
+browser, and its banner is how they can tell the run is waiting on them rather than still working.
+
+| Gate | `--id` | Section written first, `--state proposed` | Once approved, open next |
+|---|---|---|---|
+| 1 - architecture | `architecture` | `architecture` | `data-model`, note "Designing the data model" (`connector-only`: `screen-plan`, note "Planning the screens") |
+| 2 - data model, `required` only | `data-model` | `dataModel`, and `offline` when the plan has one | `screen-plan`, note "Planning the screens" |
+| 3 - screen graph | `screen-plan` | `screens` | `screen-plan`, note "Writing the screen specs" |
+| 4 - screen specs | `screen-plan` | `screens` | nothing - Step 3.9 closes the phase |
+
+```bash
+DOCS="${PLUGIN_ROOT}/scripts/app-docs.js"
+# Just before presenting gate <N>:
+node "$DOCS" --working-dir "<working_dir>" set --section <section> --json-file <tmp>/<section>.json --state proposed
+node "$DOCS" --working-dir "<working_dir>" step --id <id> --status active --note "Gate <N> — awaiting your approval"
+# As soon as the user approves it:
+node "$DOCS" --working-dir "<working_dir>" set --section <section> --json-file <tmp>/<section>.json --state approved
+node "$DOCS" --working-dir "<working_dir>" step --id <next id> --status active --note "<note from the table>"
+```
+
+Flip each section to `approved` when its gate is answered, not later in the Step 3.9 batch. A
+section left `proposed` while the next phase works reads as a question nobody is asking. The
+architecture-only planner pass does nothing but present Gate 1, so raise Gate 1 before dispatching
+it. When the planner's completion pass presents Gates 2-4 itself, the plan cannot see inside it and
+keeps its progress note until the result comes back.
 
 Run the planner once in architecture-only mode before any Dataverse discovery:
 
@@ -1317,10 +1358,10 @@ ER diagram when a sidecar is missing or malformed.
 
 ### Step 3.9 — Confirm the approved plan
 
-Each gated section was already written with `--state proposed` before its gate — that is what the
-user reviewed. Here the approved ones are confirmed, so the plan records decisions rather than
-proposals. Do this before any mutation starts, so an abort still leaves a document explaining what
-was agreed:
+Each gated section was written `proposed` before its gate and flipped to `approved` when the user
+answered it (the gate table under the Architecture gate). Restate them here, before any mutation
+starts, so a call missed at a gate cannot leave a proposal on record and an abort still leaves a
+document explaining what was agreed:
 
 ```bash
 DOCS="${PLUGIN_ROOT}/scripts/app-docs.js"
@@ -2004,6 +2045,13 @@ skip sample data and offline-profile setup, print
 `↷ Offline profile skipped — no Dataverse tables in this app.`, and continue to Step 9. A non-empty Dataverse plan in
 this mode is a planning mismatch and must be corrected before continuing.
 
+Otherwise open the Dataverse phase now. Creating tables is one of the longest waits in the run, and
+with no phase open the plan reads "Waiting to start" through all of it:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id dataverse --status active
+```
+
 **Print before starting:**
 > "→ [Step 8/13] Preparing the approved Dataverse operation manifest, then invoking /add-dataverse for sequential metadata writes and service generation. Dataverse write time varies by environment; local manifest preparation is deterministic, not a wall-clock promise."
 
@@ -2138,12 +2186,6 @@ npx tsc --noEmit
 ```
 
 If this fails, do not continue to native capabilities, connectors, navigation, or screens. Capture the full error list once, batch-fix generated-service/model or alias-map issues, then rerun the gate. If the failure is a hidden Dataverse collision already recovered via an alias (for example `aircraft` → `aircraftv2`), make sure the alias is reflected in `native-app-plan.md`, `memory-bank.md`, and the Generated Services snapshot before rerunning.
-
-The Dataverse build phase is live from here until sample data lands:
-
-```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id dataverse --status active
-```
 
 ### Step 8.5 — Seed sample data (auto)
 
@@ -2434,6 +2476,13 @@ trusts. Capabilities the user declined at Gate 1 belong here as `not-requested`.
 ### Step 10b — Wire navigation layout
 
 **Telemetry checkpoint: `wire_app_navigation`**
+
+Open the screens phase here rather than at the first screen wave. Navigation, shared code and the
+first wave are most of what is left of the run, and the plan should say what is being built:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id screens --status active
+```
 
 Read `## Screens → Navigation Pattern` from `native-app-plan.md`.
 
@@ -3125,7 +3174,7 @@ Branch as follows:
 2. Follow with:
 
   > "✓ Metro is running on port `<port>`.
-  > 📱 Scan the QR code shown above (or opened from `<working_dir>/.expo/metro-qr.png`) with your native dev client to load the app. Metro URL: `<metro-url>`
+  > 📱 Scan the QR code shown above (it is also in the build plan, and at `<working_dir>/.expo/metro-qr.png`) with your native dev client to load the app. Metro URL: `<metro-url>`
   > 🔄 Edits hot-reload automatically. Debug logs: `<working_dir>/.powernative/metro-logs/`."
 
 **Persist only stable discovery paths to memory bank** so resumed sessions and downstream skills can find the session without coupling to a host terminal:

@@ -310,7 +310,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       <div class="topbar-sub">
         <span>__HTML_APP_NAME__</span>
         <span class="topbar-sep">|</span>
-        <span>Updated __HTML_GENERATED_AT__</span>
+        <span id="updatedAt" data-generated="__ATTR_GENERATED_ISO__">Updated __HTML_GENERATED_AT__ UTC</span>
       </div>
     </div>
   </div>
@@ -540,7 +540,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
    * read the rendered diagram before answering the gate in the terminal. The banner says which
    * state it is in; without it a proposal and an approved decision look identical.
    */
-  function approvalBanner(containerId, sectionName) {
+  function approvalBanner(containerId, sectionName, proposedText) {
     var container = document.getElementById(containerId);
     if (!container) return;
     container.textContent = '';
@@ -551,7 +551,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     var banner = el('div', 'approval approval-' + state);
     banner.appendChild(el('span', 'approval-dot'));
     banner.appendChild(el('span', null, state === 'proposed'
-      ? 'Proposed \u2014 review this, then answer the approval prompt in your terminal'
+      ? (proposedText || 'Proposed \u2014 review this, then answer the approval prompt in your terminal')
       : 'Approved'));
     container.appendChild(banner);
   }
@@ -587,7 +587,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   }
 
   function list(value) {
-    return Array.isArray(value) && value.length ? value.join(', ') : '';
+    return Array.isArray(value) && value.length ? entryNames(value).join(', ') : '';
   }
 
   /**
@@ -676,8 +676,10 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       mermaid.render('mmd' + Math.random().toString(36).slice(2), source).then(function (result) {
         // Mermaid's output is built from plan data (table and screen names), so it goes through
         // the same cleaning as the mockups rather than straight into the document.
+        // Its own stylesheet is kept: Mermaid scopes every rule to this SVG's id and builds them
+        // from the theme, not from plan data, and without it the diagram renders unstyled.
         panel.textContent = '';
-        panel.appendChild(sanitizeMockup(result.svg));
+        panel.appendChild(sanitizeMockup(result.svg, { keepStyle: true }));
         if (onRendered) onRendered(panel);
       }).catch(function (error) {
         showSource(container, panel, source, error);
@@ -697,12 +699,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   }
 
   /**
-   * Link out to the full-size mockups instead of opening them in a browser tab mid-run. The
-   * carousel already shows these screens in the phone frame, so a tab that steals focus while
-   * the user is reading the plan is an interruption rather than information.
-   */
-  /**
-   * Power Apps Developer — the app that scans the Metro QR and runs the build on a device.
+   * Power Apps Mobile Preview - the app that scans the Metro QR and runs the build on a device.
    * Locale-neutral forms: the plan is a file people share, and a hard-coded storefront would
    * bounce a reader in another market through a redirect or an unavailable page.
    */
@@ -729,6 +726,11 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     }
   ];
 
+  /**
+   * Link out to the full-size mockups instead of opening them in a browser tab mid-run. The
+   * carousel already shows these screens in the phone frame, so a tab that steals focus while
+   * the user is reading the plan is an interruption rather than information.
+   */
   function railPreviewLink() {
     // The carousel shows HTML mockups rendered from the screen specs, not the built Tamagui
     // screens. They are close enough to approve a layout on and not close enough to be held to,
@@ -793,10 +795,13 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   // The CSP cannot refuse it: `style-src 'unsafe-inline'` is required for this page's own
   // stylesheet and for Mermaid's. Mockups keep their `style=` attributes, which only ever affect
   // the element carrying them; see `.car-frame` for how those are kept inside the phone.
-  var MOCKUP_BANNED_TAGS = ['SCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META', 'BASE', 'FORM', 'STYLE'];
+  // `ANIMATE` and `SET` are SVG animation elements, which can rewrite another element's `href`
+  // after this pass has checked it.
+  var MOCKUP_BANNED_TAGS = ['SCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META', 'BASE', 'FORM', 'STYLE',
+    'ANIMATE', 'SET'];
   // `javascript:` executes; `data:text/html` navigates to attacker-controlled markup with this
   // document's privileges. Images as `data:` are fine and are how the QR is drawn.
-  var MOCKUP_BANNED_URL = /^\s*(javascript:|data:text\/html)/i;
+  var MOCKUP_BANNED_URL = /^(javascript:|data:text\/html)/i;
 
   /**
    * Make generated mockup markup inert before it enters the document.
@@ -809,20 +814,27 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
    * Parsed into a `<template>`, whose content is an inert fragment: nothing executes and no
    * resource is fetched while it is being cleaned.
    */
-  function sanitizeMockup(markup) {
+  function sanitizeMockup(markup, options) {
+    var keepStyle = !!(options && options.keepStyle);
     var holder = document.createElement('template');
     holder.innerHTML = String(markup == null ? '' : markup);
     var nodes = holder.content.querySelectorAll('*');
     for (var i = 0; i < nodes.length; i++) {
       var node = nodes[i];
-      if (MOCKUP_BANNED_TAGS.indexOf(node.tagName) >= 0) {
+      // `tagName` is upper case only for HTML elements. Inside inline SVG an element keeps its
+      // own case, so `<svg><style>` reports "style" and passed an upper-case list untouched.
+      var tag = String(node.tagName || '').toUpperCase();
+      if (MOCKUP_BANNED_TAGS.indexOf(tag) >= 0 && !(keepStyle && tag === 'STYLE')) {
         if (node.parentNode) node.parentNode.removeChild(node);
         continue;
       }
       var attrs = node.attributes;
       for (var j = attrs.length - 1; j >= 0; j--) {
         var name = attrs[j].name;
-        var value = attrs[j].value;
+        // Test the URL the browser will actually follow. It drops tabs and newlines from
+        // anywhere in a URL and leading control characters and spaces, so `java&#9;script:`
+        // still navigates: https://url.spec.whatwg.org/#concept-basic-url-parser
+        var value = attrs[j].value.replace(/[\u0000-\u0020]/g, '');
         // Every event handler, however it is spelled.
         if (/^on/i.test(name)) { node.removeAttribute(name); continue; }
         if (/^(href|src|xlink:href|action|formaction)$/i.test(name) && MOCKUP_BANNED_URL.test(value)) {
@@ -929,15 +941,22 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
    * Surface a blocked run the way `/create-site` does: a persistent pill, not a toast, because
    * the answer is wanted in the terminal and the user may be reading another tab when the prompt
    * appears. Dismissal is keyed to the prompt text, so closing one gate's banner does not
-   * suppress the next gate's - and the plan reloads itself, so a stale dismissal cannot stick.
+   * suppress the next gate's, and it is forgotten once nothing is waiting.
    */
+  // Kept in sessionStorage because the page reloads itself every few seconds; a dismissal held
+  // only in memory came back on the next reload.
+  var STORE_DISMISSED = 'mobile-plan-dismissed-prompt';
   var dismissedPrompt = null;
+  try { dismissedPrompt = sessionStorage.getItem(STORE_DISMISSED); } catch (e) { /* private mode */ }
 
   function renderInputBanner() {
     var banner = document.getElementById('inputBanner');
     if (!banner) return;
     var prompt = summary.awaitingInput || '';
-    if (!prompt) dismissedPrompt = null;
+    if (!prompt) {
+      dismissedPrompt = null;
+      try { sessionStorage.removeItem(STORE_DISMISSED); } catch (e) { /* private mode */ }
+    }
     document.getElementById('inputBannerPrompt').textContent = prompt;
     banner.hidden = !prompt || dismissedPrompt === prompt;
   }
@@ -1198,8 +1217,8 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     document.getElementById('statReused').textContent = counts.reused;
     document.getElementById('statModified').textContent = counts.modified;
 
-    // A hand-written diagram in the plan wins; otherwise build one from the table data so the
-    // ER stays in step with what was actually approved.
+    // Built from the table data so the ER stays in step with what was actually approved. A
+    // hand-written `mermaid` source is drawn only when the plan has no structured tables.
     var compact = false;
     function paint() {
       drawEr(tables.length ? buildErDiagram(tables, compact) : (model.mermaid || ''), tables);
@@ -1578,7 +1597,10 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   }
 
   function renderTrust() {
-    approvalBanner('approval-trust', 'trust');
+    // The trust report is drafted at Gate 1 and finalised at Step 10, but no gate puts it to the
+    // user, so the default wording would send them to the terminal for a prompt that never comes.
+    approvalBanner('approval-trust', 'trust',
+      'Draft - written from the approved plan, and finalised once the capabilities are wired');
     var trust = sections.trust || {};
 
     var permissions = document.getElementById('permissionList');
@@ -1692,6 +1714,14 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'default', er: { fontSize: 16, useMaxWidth: true } });
   }
 
+  // The renderer stamps UTC. Show the reader's own clock; the UTC text stays if this cannot run.
+  var updatedAt = document.getElementById('updatedAt');
+  var generated = new Date(updatedAt.getAttribute('data-generated') || '');
+  if (!isNaN(generated.getTime())) {
+    updatedAt.textContent = 'Updated ' + generated.toLocaleString(undefined,
+      { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
   renderPhone();
   renderOverview();
   renderRequirements();
@@ -1704,6 +1734,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 
   document.getElementById('inputBannerClose').addEventListener('click', function () {
     dismissedPrompt = summary.awaitingInput || '';
+    try { sessionStorage.setItem(STORE_DISMISSED, dismissedPrompt); } catch (e) { /* private mode */ }
     document.getElementById('inputBanner').hidden = true;
   });
   renderSteps();

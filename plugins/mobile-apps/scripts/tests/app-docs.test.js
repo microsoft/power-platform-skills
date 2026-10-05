@@ -326,18 +326,24 @@ test('a failed run says so, because that is the last thing the page will ever sh
   assert.equal(summary.settled, true);
   assert.match(summary.currentTitle, /^Stopped — /);
   assert.match(summary.currentTitle, /Bring the app online/);
-  assert.match(summary.narrative, /stopped at bring the app online/i);
+  assert.match(summary.narrative, /stopped during "Bring the app online"\./);
   assert.doesNotMatch(summary.narrative, /Preparing to build/);
+});
+
+test('the narrative names the live phase without bending its title into a sentence', () => {
+  const root = project('docs-narrative');
+  const state = applyStep(initState(root, { appName: 'App' }), { id: 'data-model', status: 'active' });
+  assert.equal(summarize(state).narrative, 'In progress: Design the data model. Tables, columns, and relationships.');
 });
 
 test('the topbar shows the approved data platform, not the placeholder init was given', () => {
   const root = project('docs-platform');
   let state = initState(root, { appName: 'App', dataPlatform: 'unknown' });
   // `init` runs at Step 2b, before the platform is chosen, and nothing updates the top-level
-  // value - so the pill read "Data: unknown" for the whole run.
+  // value - so the pill read "Data: unknown" for the whole run. Before Gate 1 it says so in words.
   save(root, state);
   let html = fs.readFileSync(outputPath(root), 'utf8');
-  assert.match(html, /Data: unknown/);
+  assert.match(html, /Data: not decided yet/);
 
   state = setSection(state, 'architecture', { dataPlatform: 'Dataverse + connectors' }, 'approved');
   save(root, state);
@@ -490,19 +496,79 @@ test('every step that blocks on the user says so in the plan', () => {
   asks.delete('(preamble)');
 
   // Step 2 asks before `init` runs at Step 2b, so there is no plan to raise a banner on.
-  // Step 3's gates set their note through the documentation protocol rather than inline here.
-  const EXEMPT = new Set(['2', '3']);
+  const EXEMPT = new Set(['2']);
   const silent = [...asks].filter((step) => !raises.has(step) && !EXEMPT.has(step)).sort();
   assert.deepEqual(silent, [], 'these steps ask the user but never raise the waiting banner');
 
-  // The exemptions must stay true: the plan is created at 2b, and the protocol owns the gates.
+  // The exemption must stay true: the plan is created at 2b.
   assert.match(skill, /### Step 2b[\s\S]{0,1200}init --json-file/, 'the plan is created at Step 2b');
-  assert.match(skill, /Gate 2 — awaiting your approval/);
+
+  // Step 3 counts as raising through one generic call, so every gate must be in the table that
+  // call is applied to. Step 3 opened on "Planning — approval gates ahead" with no gate ever
+  // raising its own note, which also suppressed the proposed-section fallback for all four.
+  for (const [gate, id] of [['1', 'architecture'], ['2', 'data-model'], ['3', 'screen-plan'], ['4', 'screen-plan']]) {
+    assert.match(skill, new RegExp(`^\\| ${gate} - [^|]+\\| \`${id}\` \\|`, 'm'), `Gate ${gate} has no row in the gate table`);
+  }
 
   // Step 13's menu is not a gate. The build has finished and the plan has settled, so
   // re-opening a phase there would restart the reload loop.
   assert.ok(!raises.has('13'), 'the closing menu must not re-open a phase');
   assert.match(skill, /Do \*\*not\*\* re-open the `run` phase/);
+});
+
+test('each phase opens before its first step does any work', () => {
+  const skill = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
+  );
+  const lines = skill.split('\n');
+
+  // With no phase open the plan reads "Waiting to start". Step 8 opened `dataverse` only after
+  // its tables were created, and `screens` opened at the end of the first wave in Step 11 - so
+  // the two longest stretches of the run showed nothing in progress.
+  // Step 2 runs before the plan exists, so requirements opens at 2b. The gate phases are opened
+  // by Step 3's gate table, which the blocking-step test checks.
+  const OPENED_AT = { requirements: '2b' };
+  for (const phase of PHASES) {
+    if (/Gate/.test(phase.skillSteps)) continue;
+    const step = OPENED_AT[phase.id] || phase.skillSteps.split(/[,\s]+/)[0];
+    const start = lines.findIndex((line) => line.startsWith(`### Step ${step} `));
+    assert.ok(start >= 0, `no heading for Step ${step}`);
+    const next = lines.findIndex((line, i) => i > start && line.startsWith('### '));
+    const opens = lines.findIndex((line, i) => i > start && i < next
+      && line.includes(`step --id ${phase.id} --status active`));
+    assert.ok(opens > 0, `'${phase.id}' is not opened in Step ${step}, where its work starts`);
+
+    // Nothing runs before it: every code block above the call is the plan's own, or the JSON it
+    // is given.
+    let fence = null;
+    for (let i = start; i < opens; i += 1) {
+      const marker = /^\s*```(\w*)/.exec(lines[i]);
+      if (marker) { fence = fence === null ? marker[1] : null; continue; }
+      if (fence === null || fence === 'json' || !lines[i].trim()) continue;
+      assert.match(lines[i], /app-docs\.js|^\s*#/,
+        `Step ${step} runs \`${lines[i].trim().slice(0, 60)}\` before opening '${phase.id}'`);
+    }
+  }
+});
+
+test('a stopped plan names the failed phase by id, and a resume reopens it', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'app-docs-resume-'));
+  let state = initState(root, { appName: 'Resume', dataPlatform: 'dataverse' });
+  state = applyStep(state, { id: 'scaffold', status: 'failed', note: 'npm install failed' });
+  assert.equal(summarize(state).failedPhase, 'scaffold');
+  assert.equal(summarize(state).settled, true);
+
+  // Reopening is what takes the plan out of its stopped state, so it reloads again.
+  state = applyStep(state, { id: 'scaffold', status: 'active' });
+  assert.equal(summarize(state).failedPhase, '');
+  assert.equal(summarize(state).settled, false);
+
+  const skill = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
+  );
+  const resume = skill.slice(skill.indexOf('### Step 0 '), skill.indexOf('### Step 1 '));
+  assert.match(resume, /step --id <failedPhase> --status active/);
+  assert.match(resume, /docs\/create-app-plan\.html/, 'a resume skips 2b, so it must reopen the plan');
 });
 
 test('every waiting note is taken down by the step that set it', () => {

@@ -20,12 +20,12 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const { initState, outputPath, save, setPhone, setSection } = require('../app-docs');
+const { applyStep, initState, outputPath, save, setPhone, setSection } = require('../app-docs');
 
 /** Mermaid's crow's-foot tokens. Anything else aborts the parse and blanks the diagram. */
 const ER_CARDINALITY_TOKENS = ['||--||', '}o--o{', '}o--||', '||--o{'];
 
-function node(id) {
+function node(id, attributes = {}) {
   return {
     id,
     tagName: 'DIV',
@@ -41,7 +41,9 @@ function node(id) {
     set innerHTML(value) { this._html = String(value); },
     appendChild(child) { this.children.push(child); return child; },
     append(...kids) { this.children.push(...kids); },
-    setAttribute() {}, getAttribute() { return null; }, removeAttribute() {},
+    setAttribute() {},
+    getAttribute(name) { return Object.hasOwn(attributes, name) ? attributes[name] : null; },
+    removeAttribute() {},
     addEventListener() {}, removeEventListener() {}, remove() {},
     querySelector() { return null; }, querySelectorAll() { return []; },
     closest() { return null; }, focus() {}, scrollIntoView() {},
@@ -55,9 +57,22 @@ function node(id) {
  * `<script type="application/json" id="...">` blocks are the page's own state, read back with
  * `JSON.parse(getElementById(id).textContent)`. They are data, so they are registered as element
  * content rather than executed - running them as JavaScript is a syntax error on the first colon.
+ *
+ * `session` seeds sessionStorage, which is what survives the page's own reloads.
  */
-async function runPage(htmlPath) {
+async function runPage(htmlPath, { session = {} } = {}) {
   const html = fs.readFileSync(htmlPath, 'utf8');
+
+  // The attributes of every element the static markup gives an id, so a script reading one back
+  // (`getAttribute('data-generated')`) sees what the renderer wrote. Values are attribute-encoded
+  // by the renderer and none of the ones read here contain an entity, so no decoding is needed.
+  const staticAttributes = new Map();
+  for (const [, tag] of html.matchAll(/<[a-z][a-z0-9]*\s([^>]*\bid="[^"]+"[^>]*)>/g)) {
+    const attributes = Object.fromEntries(
+      [...tag.matchAll(/([a-zA-Z-]+)="([^"]*)"/g)].map(([, name, value]) => [name, value]),
+    );
+    staticAttributes.set(attributes.id, attributes);
+  }
 
   const data = new Map();
   const scripts = [];
@@ -71,7 +86,7 @@ async function runPage(htmlPath) {
   const document = {
     getElementById(id) {
       if (!elements.has(id)) {
-        const created = node(id);
+        const created = node(id, staticAttributes.get(id));
         if (data.has(id)) created.textContent = data.get(id);
         elements.set(id, created);
       }
@@ -111,7 +126,7 @@ async function runPage(htmlPath) {
     },
     location: { hash: '', reload() {} },
     sessionStorage: {
-      store: new Map(),
+      store: new Map(Object.entries(session)),
       getItem(key) { return this.store.has(key) ? this.store.get(key) : null; },
       setItem(key, value) { this.store.set(key, String(value)); },
       removeItem(key) { this.store.delete(key); },
@@ -167,7 +182,10 @@ async function runPage(htmlPath) {
   }
   const rendered = (id) => textOf(document.getElementById(id));
 
-  return { diagrams, diagramNotes, errors, thrown, elements, rendered, scriptCount: scripts.length };
+  return {
+    diagrams, diagramNotes, errors, thrown, elements, rendered, scriptCount: scripts.length,
+    session: sandbox.sessionStorage.store,
+  };
 }
 
 /** A plan far enough along to exercise every renderer: all sections set, mid-build. */
@@ -572,12 +590,140 @@ test('a blocked run shows a waiting-for-input banner, and clears it when unblock
   assert.equal(page.elements.get('inputBanner').hidden, true, 'approval must clear the banner');
 });
 
-test('dismissing the banner is scoped to the prompt that was dismissed', () => {
-  // Otherwise closing one gate's banner would silently suppress every later gate, and the user
-  // would stop being told the run is blocked.
+test('a dismissed banner stays dismissed across reloads, for that prompt only', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-dismiss-'));
+  let state = initState(root, { appName: 'Dismiss', dataPlatform: 'dataverse' });
+  state = applyStep(state, { id: 'data-model', status: 'active', note: 'Gate 2 — awaiting your approval' });
+  save(root, state);
+  const KEY = 'mobile-plan-dismissed-prompt';
+
+  // The page reloads itself every few seconds, so a dismissal held only in memory came back on
+  // the next reload. What the user closed is carried in sessionStorage instead.
+  let page = await runPage(outputPath(root), { session: { [KEY]: 'Gate 2 — awaiting your approval' } });
+  assert.equal(page.elements.get('inputBanner').hidden, true, 'the dismissed prompt stays hidden');
+
+  // Keyed to the prompt text, so closing one gate's banner does not silence the next gate's.
+  page = await runPage(outputPath(root), { session: { [KEY]: 'Gate 1 — awaiting your approval' } });
+  assert.equal(page.elements.get('inputBanner').hidden, false, 'a different prompt is shown');
+
+  // And forgotten once nothing is waiting, so the same words asked again are shown again.
+  state = applyStep(state, { id: 'data-model', status: 'done' });
+  save(root, state);
+  page = await runPage(outputPath(root), { session: { [KEY]: 'Gate 2 — awaiting your approval' } });
+  assert.equal(page.session.has(KEY), false);
+
   const template = fs.readFileSync(path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8');
-  assert.match(template, /banner\.hidden = !prompt \|\| dismissedPrompt === prompt/);
-  assert.match(template, /if \(!prompt\) dismissedPrompt = null/);
+  assert.match(template, /sessionStorage\.setItem\(STORE_DISMISSED, dismissedPrompt\)/,
+    'closing the banner records what was closed');
+});
+
+test('the trust report is labelled a draft, not sent to a terminal prompt that never comes', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-trust-draft-'));
+  let state = initState(root, { appName: 'Draft', dataPlatform: 'dataverse' });
+  state = setSection(state, 'trust', { permissions: [{ name: 'Camera', status: 'on-demand' }] }, 'proposed');
+  state = setSection(state, 'design', { direction: 'Calm' }, 'proposed');
+  save(root, state);
+
+  const { rendered } = await runPage(outputPath(root));
+  // No gate asks the user about the trust report; it is finalised at Step 10.
+  assert.match(rendered('approval-trust'), /^\s*Draft - written from the approved plan/);
+  assert.doesNotMatch(rendered('approval-trust'), /terminal/);
+  // A section that is put to a gate keeps the instruction.
+  assert.match(rendered('approval-design'), /answer the approval prompt in your terminal/);
+});
+
+test('the topbar shows when the plan was updated in the reader\'s own time', async () => {
+  const { htmlPath } = fullPlan();
+  const html = fs.readFileSync(htmlPath, 'utf8');
+  // The renderer runs in UTC, so the static text says so - that is what shows if the script
+  // cannot run.
+  assert.match(html, /Updated \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC</);
+
+  const { elements } = await runPage(htmlPath);
+  const shown = elements.get('updatedAt').textContent;
+  assert.match(shown, /^Updated /);
+  assert.doesNotMatch(shown, /UTC$/, 'the script replaces it with local time');
+});
+
+test('a screen whose capabilities are objects lists their names', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-screen-caps-'));
+  let state = initState(root, { appName: 'Caps', dataPlatform: 'dataverse' });
+  state = setSection(state, 'screens', {
+    navigation: 'Stack',
+    list: [{ name: 'Capture', route: '/(app)/capture', capabilities: [{ name: 'Camera', reason: 'Meter photos' }, 'Location'] }],
+  });
+  save(root, state);
+
+  const { rendered } = await runPage(outputPath(root));
+  assert.match(rendered('screensContainer'), /Camera, Location/);
+  assert.doesNotMatch(rendered('screensContainer'), /object Object/);
+});
+
+/**
+ * Run the page's own sanitizer against hand-built nodes.
+ *
+ * The page harness has no HTML parser, so the sanitizer is lifted out of the template and given
+ * a `<template>` whose content is exactly these nodes. That exercises its real decisions -
+ * which tags go, which attributes go - rather than matching its source text.
+ */
+function sanitize(nodes, options) {
+  const template = fs.readFileSync(path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8');
+  const source = template.slice(template.indexOf('  var MOCKUP_BANNED_TAGS'), template.indexOf('\n  function renderPhone('));
+  const parent = { removeChild(child) { child.removed = true; } };
+  nodes.forEach((n) => { n.parentNode = parent; });
+  const context = vm.createContext({
+    document: { createElement: () => ({ innerHTML: '', content: { querySelectorAll: () => nodes } }) },
+    options,
+  });
+  vm.runInContext(`${source}\nsanitizeMockup('', options);`, context);
+}
+
+function element(tagName, attributes = {}) {
+  const attrs = { ...attributes };
+  return {
+    tagName,
+    removed: false,
+    attrs,
+    get attributes() { return Object.entries(attrs).map(([name, value]) => ({ name, value })); },
+    removeAttribute(name) { delete attrs[name]; },
+  };
+}
+
+test('the sanitizer removes SVG-cased elements and disguised script URLs', () => {
+  // Inside inline SVG `tagName` keeps its own case, so an upper-case list missed these.
+  const svgStyle = element('style');
+  const svgScript = element('script');
+  const animate = element('animate', { attributeName: 'href' });
+  const tabbed = element('a', { href: 'java\tscript:void(0)' });
+  const controlled = element('a', { href: ' \u0001javascript:void(0)' });
+  const htmlDoc = element('a', { href: 'DATA:text/html,<b>x</b>' });
+  const safe = element('a', { href: 'https://contoso.com/' });
+  const image = element('img', { src: 'data:image/png;base64,AAAA', onerror: 'void(0)', ONLOAD: 'void(0)' });
+
+  sanitize([svgStyle, svgScript, animate, tabbed, controlled, htmlDoc, safe, image]);
+
+  assert.equal(svgStyle.removed, true, 'an SVG <style> could restyle the approval banners');
+  assert.equal(svgScript.removed, true);
+  assert.equal(animate.removed, true, 'animation can rewrite an href after it was checked');
+  assert.equal(tabbed.attrs.href, undefined, 'browsers drop the tab, so this is javascript:');
+  assert.equal(controlled.attrs.href, undefined);
+  assert.equal(htmlDoc.attrs.href, undefined);
+  assert.equal(safe.attrs.href, 'https://contoso.com/');
+  assert.deepEqual(image.attrs, { src: 'data:image/png;base64,AAAA' }, 'images stay; handlers go');
+});
+
+test('Mermaid output keeps its own stylesheet, and nothing else does', () => {
+  // Mermaid scopes its rules to the SVG's id, and the diagram is unstyled without them.
+  const kept = element('style');
+  const script = element('script');
+  sanitize([kept, script], { keepStyle: true });
+  assert.equal(kept.removed, false);
+  assert.equal(script.removed, true);
+
+  const template = fs.readFileSync(path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8');
+  const calls = [...template.matchAll(/sanitizeMockup\(([^)]*)\)/g)].map((m) => m[1]);
+  assert.deepEqual(calls.filter((c) => /keepStyle/.test(c)), ['result.svg, { keepStyle: true }'],
+    'only the Mermaid render may keep a stylesheet; mockups must not');
 });
 
 test('the topbar pills say what their numbers mean', async () => {

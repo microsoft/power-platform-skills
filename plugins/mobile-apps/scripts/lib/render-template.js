@@ -90,33 +90,71 @@ function renderTemplate({
   const template = fs.readFileSync(templatePath, 'utf8');
   const data = { ...dataObject, CSP_NONCE: crypto.randomBytes(16).toString('base64') };
 
+  // Collected from the template while it is being filled, never by scanning the output. The
+  // output also holds the substituted data, and plan data can legitimately contain
+  // placeholder-shaped text - React Native's `__DEV__` flag in a note, say. Scanning the output
+  // reported that as an unreplaced placeholder and failed the write, and because the value was
+  // already saved in the plan state, every later write failed with it.
+  const unreplaced = new Set();
   const result = template.replace(PLACEHOLDER_RE, (placeholder, explicitContext, key) => {
-    if (!(key in data)) return placeholder;
+    if (!(key in data)) {
+      unreplaced.add(placeholder);
+      return placeholder;
+    }
     const context = explicitContext || (typeof data[key] === 'string' ? 'HTML' : 'JSON');
     return renderValue(data[key], context);
   });
 
-  const unreplaced = result.match(PLACEHOLDER_RE);
-  if (unreplaced) {
-    throw new Error(`Unreplaced placeholders: ${[...new Set(unreplaced)].join(', ')}`);
+  if (unreplaced.size > 0) {
+    throw new Error(`Unreplaced placeholders: ${[...unreplaced].join(', ')}`);
   }
 
   if (!allowOverwrite && fs.existsSync(outputPath)) {
     throw new Error(`Refusing to overwrite ${outputPath}; pass allowOverwrite for living documents.`);
   }
 
-  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  // Publish with a rename so a reader opening the file mid-write never sees a partial page.
-  const temporary = `${outputPath}.tmp.${process.pid}`;
-  fs.writeFileSync(temporary, result, 'utf8');
-  fs.renameSync(temporary, outputPath);
-  return outputPath;
+  return publishAtomic(outputPath, result);
+}
+
+// Windows will not replace a file that another process holds open without delete sharing - a
+// browser reading the plan as it reloads, or an antivirus scanner inspecting the file just
+// written - and reports it as EPERM, EACCES or EBUSY. The hold lasts milliseconds, so retry for
+// up to about a second instead of dropping the update. graceful-fs retries renames on win32 for
+// the same reason: https://github.com/isaacs/node-graceful-fs/blob/main/polyfills.js
+// A POSIX rename replaces an open file atomically and never takes the retry.
+const RENAME_RETRY_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+const RENAME_ATTEMPTS = 20;
+const RENAME_BACKOFF_MS = 50;
+
+/**
+ * Write a file so a reader never sees it half-written: the content goes to a sibling temporary
+ * file, which is then renamed over the target. A reader opens either the previous file or the
+ * next one.
+ */
+function publishAtomic(filePath, content) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const temporary = `${filePath}.tmp.${process.pid}`;
+  fs.writeFileSync(temporary, content, 'utf8');
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      fs.renameSync(temporary, filePath);
+      return filePath;
+    } catch (error) {
+      if (!RENAME_RETRY_CODES.has(error.code) || attempt >= RENAME_ATTEMPTS) {
+        fs.rmSync(temporary, { force: true });
+        throw error;
+      }
+      // A synchronous pause: this runs inside a short-lived CLI with nothing else to schedule.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, RENAME_BACKOFF_MS);
+    }
+  }
 }
 
 module.exports = {
   PLACEHOLDER_RE,
   escapeHtml,
   escapeHtmlAttribute,
+  publishAtomic,
   renderTemplate,
   renderValue,
   serializeJson,

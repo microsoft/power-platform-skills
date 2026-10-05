@@ -17,6 +17,7 @@
  * The JSON is the source of truth so a re-render never has to parse HTML back.
  *
  * Commands:
+ *   init  --working-dir <d> --json-file <path>   ({"appName", "dataPlatform"}; the skill's route)
  *   init  --working-dir <d> --app-name <n> [--data-platform dataverse|connector-only]
  *   step  --working-dir <d> --id <phase-id> --status <pending|active|done|skipped|failed> [--note <t>]
  *   set   --working-dir <d> --section <name> --json <obj> | --json-file <path> [--state proposed|approved]
@@ -29,7 +30,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { renderTemplate } = require('./lib/render-template');
+const { publishAtomic, renderTemplate } = require('./lib/render-template');
 
 /**
  * The plan's state file is read by one process and rewritten by another as the run advances, so
@@ -47,10 +48,7 @@ function readJson(filePath) {
 }
 
 function writeJsonAtomic(filePath, value) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const temporary = `${filePath}.tmp.${process.pid}`;
-  fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  fs.renameSync(temporary, filePath);
+  publishAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 const DOCS_DIR = 'docs';
@@ -243,7 +241,9 @@ const AWAITING_NOTE = /\bawaiting\b|\bwaiting for\b/i;
  */
 function dataPlatformLabel(state) {
   const approved = ((state.sections || {}).architecture || {}).dataPlatform;
-  return approved || state.dataPlatform;
+  if (approved) return approved;
+  // The placeholder is internal; the pill is read as a fact about the app.
+  return state.dataPlatform === 'unknown' ? 'not decided yet' : state.dataPlatform;
 }
 
 function failedTitle(state) {
@@ -294,17 +294,22 @@ function summarize(state) {
       ? `Stopped — ${failedTitle(state) || 'a step failed'}`
       : (active ? active.title : (finished ? 'Finished' : 'Waiting to start')),
     // The page reloads itself to pick up each rewrite; `settled` stops that once there is
-    // nothing left to watch, so a finished plan is not reloading every five seconds forever.
+    // nothing left to watch, so a finished plan is not reloading forever.
     settled: finished || failed > 0,
+    // The id, not the title: a resumed run reopens this phase with `step --id`, and that is what
+    // takes the plan out of its stopped state.
+    failedPhase: (state.phases.find((phase) => phase.status === 'failed') || {}).id || '',
     // What the run is blocked on, if anything. A section held at `proposed` means the plan is
     // showing the user something to review while the terminal waits on their answer; an active
     // phase whose note says so covers gates that have no section of their own.
     awaitingInput: awaitingInput(state, active),
     narrative: failed > 0
-      ? `${state.appName} stopped at ${(failedTitle(state) || 'a step').toLowerCase()}. `
+      ? `${state.appName} stopped during ${failedTitle(state) ? `"${failedTitle(state)}"` : 'a step'}. `
         + 'The run does not continue past a failed phase; check your terminal for the error.'
       : (active
-        ? `Currently ${active.title.toLowerCase()}. ${active.detail}.`
+        // Phase titles are imperatives ("Design the data model"), so they follow a label rather
+        // than complete a sentence - "Currently design the data model" is what that produced.
+        ? `In progress: ${active.title}. ${active.detail}.`
         : (finished
           ? `${state.appName} is built. Every phase completed.`
           : `Preparing to build ${state.appName}.`)),
@@ -369,6 +374,7 @@ function editorHref(projectRoot, fileName) {
 
 function render(projectRoot, state) {
   const summary = summarize(state);
+  const now = new Date();
   summary.planDocHref = siblingHref(projectRoot, PLAN_DOC);
   summary.planDocEditorHref = editorHref(projectRoot, PLAN_DOC);
   summary.screenPreviewHref = siblingHref(projectRoot, SCREEN_PREVIEW);
@@ -380,7 +386,9 @@ function render(projectRoot, state) {
     dataObject: {
       PLAN_TITLE: 'Mobile app build plan',
       APP_NAME: state.appName,
-      GENERATED_AT: new Date().toISOString().replace('T', ' ').slice(0, 16),
+      // Both forms: the page shows the reader's local time and keeps this UTC text as fallback.
+      GENERATED_AT: now.toISOString().replace('T', ' ').slice(0, 16),
+      GENERATED_ISO: now.toISOString(),
       DATA_PLATFORM: dataPlatformLabel(state),
       PHASES: state.phases,
       SUMMARY: summary,
