@@ -11,7 +11,8 @@ An app's hidden tables and its list of Main forms now survive a download and reb
 relationships that share a name are caught. A generative page edited in the maker portal is no longer
 overwritten silently, and page cleanup removes only pages this workspace can prove it created. Spec
 sources and output files stay inside the folders you name, and a few transient platform responses
-are now retried without risking a duplicate.
+are now retried without risking a duplicate. A generative page's navigation tokens are rewritten only
+where the build reads its code for certain.
 
 ### Added
 
@@ -47,10 +48,15 @@ are now retried without risking a duplicate.
   only the records this build created.
 - **Edit plans treat earlier prompts as data.** The edit planner no longer copies them into the plan,
   and the written plan must carry the same ordered change list the user approved.
-- **Navigation tokens are accepted in fewer, exact forms.** A `navigateTo` options object is rewritten
-  only when it is the whole first argument, and the casts allowed after a `PAGEREF_` literal are
-  `as const`, `as Name` and `satisfies Name`. Anything else halts as stray or malformed with the rule
-  quoted, instead of being rewritten. Write the options object inline in the call.
+- **Navigation tokens are rewritten only where the build reads the code for certain.** A `PAGEREF_`
+  token is allowed only as the double-quoted `pageId` of a `navigateTo` call whose options object is
+  written inline, optionally followed by `as const`, `as Name` or `satisfies Name`. A token anywhere
+  else — a comment included — halts the build with the rule quoted. Where code before a call can be
+  read two ways (a `/` or `<` that may begin a regular expression, a JSX element or a type), calls after
+  it are not rewritten: the build halts naming the line, the reason and what to change. A page that
+  still holds a token after resolution is refused before anything is uploaded.
+- **Download writes a `PAGEREF_` token back only where a rebuild accepts it.** Otherwise the page
+  keeps its ids, and the download warns, naming each line.
 - **Build and download skip an unused identity read** after a successful sign-in check: one cold
   Azure CLI start less per run.
 
@@ -83,11 +89,37 @@ are now retried without risking a duplicate.
 - **An app missing from its solution is re-added.** A build that stopped after creating its app left
   the app outside its solution, and a re-run did not add it back. The app now joins its solution right
   after it is created, and every rebuild re-adds it.
-- **Connector discovery refuses more output it cannot read**: a line before the table header other than
-  PAC's sign-in banner, and a row whose id is not a connection id, no longer read as an empty or extra
-  connection.
-- **Nested navigation values use linear memory.** A deeply nested malformed value held a copy of
-  every token below it — 193 MiB at depth 8192, now under 1 MiB.
+- **A navigation literal inside an expression is no longer rewritten.** A `pageId` such as
+  `"PAGEREF_detail".slice(8)` halts as malformed instead of having its literal replaced, which changed
+  what the expression computes.
+- **A string continued with a backslash at a CRLF line end** is read as one string, so a valid page is
+  no longer refused.
+- **A `PAGEREF_` token inside a regular expression, a string or a comment is no longer rewritten in
+  rare shapes the check used to misread.** These are:
+  - an element right after a `/`;
+  - an element whose text opens with a parenthesis and whose attribute value ends in a backslash;
+  - an element written as an attribute value (`x=<B/>`);
+  - a self-closing tag with white space between its `/` and `>` (`<B / >`);
+  - a closing tag that holds a comment with a `>` in it;
+  - a regular expression whose flags spell a keyword (`/x/in`);
+  - an `if` or `while` whose keyword is separated from its `(` by U+0085 or U+200B, which TypeScript
+    treats as white space;
+  - a generic generator function, `function* <T>(…)`;
+  - a generic call signature with no return type (`interface I { <T>(x) }`);
+  - a `#!` line at the start of the page.
+
+  Such a page now halts, naming the line. So does an attribute value written after white space that
+  follows its `=` and holds a backslash, which TypeScript and other compilers end in different places.
+- **A navigation call after a generic generator function (`function* <T>(…)`) is now found.** The build
+  refused such a page with a navigation parity mismatch.
+- **Connector discovery refuses output it cannot read.** Text on stderr after a successful exit, a
+  line before the table header other than PAC's sign-in banner, a header that is not a known column
+  set, a lone carriage return, or a row whose id is not a connection id no longer reads as an empty
+  or extra connection.
+- **Packaging checks a connection reference's id before any write.** A `connectionreferenceid` that is
+  not a GUID is refused before anything is added to the solution.
+- **Nested navigation calls are read in linear time.** 512 nested calls took 0.55 s to check and now
+  take 5 ms; 8,192 nested malformed values took 143 s and now take about 0.1 s.
 - Samples 9 and 10 use the double-quoted `PAGEREF_` form the build accepts.
 
 [#673]: https://github.com/microsoft/power-platform-skills/issues/673
