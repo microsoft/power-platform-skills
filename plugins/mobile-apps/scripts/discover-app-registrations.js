@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const { execFileSync } = require('child_process');
+const { sanitize } = require('./lib/sanitize-external-content');
 
 const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const GRAPH_ROOT = 'https://graph.microsoft.com/v1.0';
@@ -137,6 +138,23 @@ function configuredResourceAccess(application, resourceAppId) {
   );
 }
 
+function sanitizeDisplayName(value) {
+  const rawName = typeof value === 'string' && value.trim()
+    ? value
+    : '(unnamed registration)';
+  const { content, issues } = sanitize(rawName, 'microsoft-graph:application-displayName');
+  const displayName = content
+    .replace(/(\{\{|\}\}|<%|%>|\$\{)/g, '[REDACTED]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 200)
+    || '(unnamed registration)';
+  return {
+    displayName,
+    displayNameSanitized: issues.length > 0 || displayName !== rawName,
+  };
+}
+
 function analyzeApplication(application, { includeConnectors = false } = {}) {
   const requiredDefinitions = includeConnectors
     ? [...REQUIRED_PERMISSIONS, ...CONNECTOR_PERMISSIONS]
@@ -161,9 +179,12 @@ function analyzeApplication(application, { includeConnectors = false } = {}) {
   const powerPlatformApiPermissions = permissions.filter(
     (permission) => permission.resourceAppId === POWER_PLATFORM_API_APP_ID,
   );
+  const { displayName, displayNameSanitized } = sanitizeDisplayName(application.displayName);
 
   return {
-    displayName: application.displayName || '(unnamed registration)',
+    displayName,
+    displayNameSanitized,
+    displayNameIsUntrustedData: true,
     clientId: application.appId,
     signInAudience: application.signInAudience || null,
     passesRequiredPermissions: missingRequiredPermissions.length === 0,
@@ -261,4 +282,5 @@ module.exports = {
   listAvailableApplications,
   parseArgs,
   rankRegistrations,
+  sanitizeDisplayName,
 };
