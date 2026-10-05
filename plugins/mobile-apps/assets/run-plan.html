@@ -1056,7 +1056,11 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
       var from = ids[String(table.logicalName || table.name || '')];
       (table.relationships || []).forEach(function (rel) {
         var to = ids[rel.relatedTable];
-        if (!from || !to || from === to) return;
+        // A relationship whose related table is not in the model has nowhere to point, so it is
+        // skipped. A table relating to itself is not that: parent account, manager, and category
+        // hierarchies are ordinary Dataverse models, and Mermaid draws the same entity on both
+        // ends, so dropping them made the plan misstate the approved model.
+        if (!from || !to) return;
         // Both tables declare the same relationship from their own side, so the reverse
         // declaration is a duplicate and is suppressed - but only for that same relationship.
         // The name is part of the identity, or a second lookup between the same two tables is

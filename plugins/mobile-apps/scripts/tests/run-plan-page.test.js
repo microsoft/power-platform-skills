@@ -56,7 +56,7 @@ function node(id) {
  * `JSON.parse(getElementById(id).textContent)`. They are data, so they are registered as element
  * content rather than executed - running them as JavaScript is a syntax error on the first colon.
  */
-function runPage(htmlPath) {
+async function runPage(htmlPath) {
   const html = fs.readFileSync(htmlPath, 'utf8');
 
   const data = new Map();
@@ -98,6 +98,7 @@ function runPage(htmlPath) {
   };
 
   const diagrams = [];
+  const renders = [];
   const errors = [];
   const sandbox = {
     document,
@@ -120,7 +121,12 @@ function runPage(htmlPath) {
     // Mermaid's job; what this test owns is that the page asks, and asks with valid source.
     mermaid: {
       initialize() {},
-      render(id, source) { diagrams.push({ id, source }); return Promise.resolve({ svg: '<svg/>' }); },
+      render(id, source) {
+        diagrams.push({ id, source });
+        const drawn = Promise.resolve({ svg: '<svg/>' });
+        renders.push(drawn);
+        return drawn;
+      },
     },
     navigator: { userAgent: 'node' },
     console: { log() {}, warn() {}, error(message) { errors.push(String(message)); } },
@@ -140,13 +146,28 @@ function runPage(htmlPath) {
     }
   }
 
+  // The page inserts each diagram in a `.then` and falls back to its source in a `.catch`, so
+  // neither has run when the scripts return. Waiting for the renders and then one macrotask
+  // drains both callbacks; without it, a diagram that throws while being inserted fails after
+  // the test has already passed.
+  await Promise.allSettled(renders);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  // `showSource` adds a `.diagram-note` when a diagram could not be drawn. Its text says why.
+  const diagramNotes = [];
+  function collectNotes(target) {
+    if (target.className === 'diagram-note') diagramNotes.push(target.textContent);
+    target.children.forEach(collectNotes);
+  }
+  ['erContainer', 'graphContainer'].forEach((id) => collectNotes(document.getElementById(id)));
+
   function textOf(target) {
     if (!target.children.length) return target.textContent;
     return target.children.map(textOf).join('\n');
   }
   const rendered = (id) => textOf(document.getElementById(id));
 
-  return { diagrams, errors, thrown, elements, rendered, scriptCount: scripts.length };
+  return { diagrams, diagramNotes, errors, thrown, elements, rendered, scriptCount: scripts.length };
 }
 
 /** A plan far enough along to exercise every renderer: all sections set, mid-build. */
@@ -228,9 +249,9 @@ function fullPlan() {
   return { root, htmlPath: outputPath(root) };
 }
 
-test('the generated page runs to completion without throwing', () => {
+test('the generated page runs to completion without throwing', async () => {
   const { htmlPath } = fullPlan();
-  const result = runPage(htmlPath);
+  const result = await runPage(htmlPath);
 
   assert.ok(result.scriptCount > 0, 'the page must ship an executable script');
   assert.deepEqual(
@@ -239,11 +260,13 @@ test('the generated page runs to completion without throwing', () => {
     'the page script threw while rendering a complete plan',
   );
   assert.deepEqual(result.errors, [], 'the page logged an error while rendering');
+  assert.equal(result.diagrams.length, 2, 'both diagrams must be handed to mermaid');
+  assert.deepEqual(result.diagramNotes, [], 'a diagram failed after mermaid drew it');
 });
 
-test('both diagrams are drawn, from the structured plan rather than a supplied string', () => {
+test('both diagrams are drawn, from the structured plan rather than a supplied string', async () => {
   const { htmlPath } = fullPlan();
-  const { diagrams } = runPage(htmlPath);
+  const { diagrams } = await runPage(htmlPath);
 
   const er = diagrams.find((d) => d.source.startsWith('erDiagram'));
   const graph = diagrams.find((d) => d.source.startsWith('flowchart'));
@@ -278,9 +301,9 @@ test('both diagrams are drawn, from the structured plan rather than a supplied s
   assert.ok(!has('SHELL', capture), 'a nested route must not also hang off the shell');
 });
 
-test('object-shaped plan entries render as their names, never as [object Object]', () => {
+test('object-shaped plan entries render as their names, never as [object Object]', async () => {
   const { htmlPath } = fullPlan();
-  const { elements, rendered } = runPage(htmlPath);
+  const { elements, rendered } = await runPage(htmlPath);
 
   // Capabilities and connectors are `{ name, reason }`. The overview listed them through a
   // plain join, so every entry rendered as "[object Object]" while the Capabilities tab - which
@@ -300,9 +323,9 @@ test('object-shaped plan entries render as their names, never as [object Object]
   assert.match(architecture, /SharePoint/, 'the connector name should reach the overview');
 });
 
-test('enumerable fields render as a list rather than a run-on sentence', () => {
+test('enumerable fields render as a list rather than a run-on sentence', async () => {
   const { htmlPath } = fullPlan();
-  const { elements } = runPage(htmlPath);
+  const { elements } = await runPage(htmlPath);
 
   const listItems = (id) => {
     const found = [];
@@ -322,11 +345,11 @@ test('enumerable fields render as a list rather than a run-on sentence', () => {
   assert.equal(offline.length, 0, 'a single-paragraph rationale stays prose');
 });
 
-test('a plan with no screens yet shows the empty state instead of drawing an empty graph', () => {
+test('a plan with no screens yet shows the empty state instead of drawing an empty graph', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-empty-'));
   save(root, initState(root, { appName: 'Early', dataPlatform: 'unknown' }));
 
-  const { diagrams, thrown, errors } = runPage(outputPath(root));
+  const { diagrams, thrown, errors } = await runPage(outputPath(root));
   assert.deepEqual(thrown.map((e) => e.message), [], 'an empty plan must still render');
   assert.deepEqual(errors, []);
   assert.equal(
@@ -335,7 +358,7 @@ test('a plan with no screens yet shows the empty state instead of drawing an emp
   );
 });
 
-test('a multi-paragraph rationale becomes one bullet per point', () => {
+test('a multi-paragraph rationale becomes one bullet per point', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-offline-'));
   let state = initState(root, { appName: 'Offline', dataPlatform: 'dataverse' });
   state = setSection(state, 'offline', {
@@ -347,7 +370,7 @@ test('a multi-paragraph rationale becomes one bullet per point', () => {
   }, 'approved');
   save(root, state);
 
-  const { elements, thrown } = runPage(outputPath(root));
+  const { elements, thrown } = await runPage(outputPath(root));
   assert.deepEqual(thrown.map((e) => e.message), []);
 
   const items = [];
@@ -363,7 +386,7 @@ test('a multi-paragraph rationale becomes one bullet per point', () => {
   ]);
 });
 
-test('a named font is applied to the card that names it, and only if it is a safe name', () => {
+test('a named font is applied to the card that names it, and only if it is a safe name', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-font-'));
   let state = initState(root, { appName: 'Fonts', dataPlatform: 'dataverse' });
   state = setSection(state, 'design', {
@@ -377,7 +400,7 @@ test('a named font is applied to the card that names it, and only if it is a saf
   }, 'approved');
   save(root, state);
 
-  const { elements, thrown } = runPage(outputPath(root));
+  const { elements, thrown } = await runPage(outputPath(root));
   assert.deepEqual(thrown.map((e) => e.message), []);
 
   const styled = [];
@@ -390,7 +413,7 @@ test('a named font is applied to the card that names it, and only if it is a saf
     'the safe name is applied with a fallback; the crafted one is dropped');
 });
 
-test('the screens stage with nothing to show falls back to the building animation', () => {
+test('the screens stage with nothing to show falls back to the building animation', async () => {
   // The skill is told to skip the stage switch when --no-design or "Skip preview" means no
   // _plan_preview.html was written. If it switches anyway, the phone must keep animating rather
   // than render an empty carousel with dead prev/next controls.
@@ -399,7 +422,7 @@ test('the screens stage with nothing to show falls back to the building animatio
   setPhone(state, { stage: 'screens', screens: [] });
   save(root, state);
 
-  const { elements, thrown } = runPage(outputPath(root));
+  const { elements, thrown } = await runPage(outputPath(root));
   assert.deepEqual(thrown.map((e) => e.message), []);
 
   const classes = [];
@@ -413,9 +436,9 @@ test('the screens stage with nothing to show falls back to the building animatio
   assert.equal(elements.get('railTitle').textContent, 'Building your app');
 });
 
-test('the trust report states when each permission is used, and downgrades an unknown status', () => {
+test('the trust report states when each permission is used, and downgrades an unknown status', async () => {
   const { htmlPath } = fullPlan();
-  const { elements, thrown } = runPage(htmlPath);
+  const { elements, thrown } = await runPage(htmlPath);
   assert.deepEqual(thrown.map((e) => e.message), []);
 
   const rows = [];
@@ -459,9 +482,9 @@ test('the trust report states when each permission is used, and downgrades an un
   assert.equal(new Set(icons).size, icons.length, 'no two permission types may share an icon');
 });
 
-test('the trust report separates what is handled from what is not collected', () => {
+test('the trust report separates what is handled from what is not collected', async () => {
   const { htmlPath } = fullPlan();
-  const { elements } = runPage(htmlPath);
+  const { elements } = await runPage(htmlPath);
   const flat = (node) => (node.children.length ? node.children.map(flat).join(' ') : node.textContent);
 
   const handles = flat(elements.get('handlesCard'));
@@ -503,7 +526,7 @@ test('every icon a capability name can select is actually drawn', () => {
   }
 });
 
-test('a background-tracking capability does not borrow the on-demand location pin', () => {
+test('a background-tracking capability does not borrow the on-demand location pin', async () => {
   // "Background location" contains "location", so keyword order is what keeps the two apart.
   // Getting this wrong would show a never-requested capability with the icon of one the app
   // actively asks for - the exact claim this report exists to make precisely.
@@ -517,7 +540,7 @@ test('a background-tracking capability does not borrow the on-demand location pi
   }, 'approved');
   save(root, state);
 
-  const { elements, thrown } = runPage(outputPath(root));
+  const { elements, thrown } = await runPage(outputPath(root));
   assert.deepEqual(thrown.map((e) => e.message), []);
 
   const rows = [];
@@ -529,7 +552,7 @@ test('a background-tracking capability does not borrow the on-demand location pi
   assert.notEqual(rows[0].children[0].innerHTML, rows[1].children[0].innerHTML);
 });
 
-test('a blocked run shows a waiting-for-input banner, and clears it when unblocked', () => {
+test('a blocked run shows a waiting-for-input banner, and clears it when unblocked', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-await-'));
   let state = initState(root, { appName: 'Waiting', dataPlatform: 'dataverse' });
   // A section held at `proposed` is the plan showing something for review while the terminal
@@ -537,7 +560,7 @@ test('a blocked run shows a waiting-for-input banner, and clears it when unblock
   state = setSection(state, 'dataModel', { tables: [] }, 'proposed');
   save(root, state);
 
-  let page = runPage(outputPath(root));
+  let page = await runPage(outputPath(root));
   assert.deepEqual(page.thrown.map((e) => e.message), []);
   assert.equal(page.elements.get('inputBanner').hidden, false, 'a proposed section must raise the banner');
   assert.match(page.elements.get('inputBannerPrompt').textContent, /Review the data model/);
@@ -545,7 +568,7 @@ test('a blocked run shows a waiting-for-input banner, and clears it when unblock
   // Approving it is what takes the banner down - nothing else has to remember to.
   state = setSection(state, 'dataModel', { tables: [] }, 'approved');
   save(root, state);
-  page = runPage(outputPath(root));
+  page = await runPage(outputPath(root));
   assert.equal(page.elements.get('inputBanner').hidden, true, 'approval must clear the banner');
 });
 
@@ -557,9 +580,9 @@ test('dismissing the banner is scoped to the prompt that was dismissed', () => {
   assert.match(template, /if \(!prompt\) dismissedPrompt = null/);
 });
 
-test('the topbar pills say what their numbers mean', () => {
+test('the topbar pills say what their numbers mean', async () => {
   const { htmlPath } = fullPlan();
-  const { elements } = runPage(htmlPath);
+  const { elements } = await runPage(htmlPath);
   // "4 of 11" and "unknown" on their own read as unlabelled noise.
   assert.match(elements.get('pillProgress').textContent, /^Step \d+ of \d+$/);
 
@@ -567,7 +590,7 @@ test('the topbar pills say what their numbers mean', () => {
   assert.match(template, /pill-platform">Data: __HTML_DATA_PLATFORM__/);
 });
 
-test('the planner markdown is linked only once it exists on disk', () => {
+test('the planner markdown is linked only once it exists on disk', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-doc-'));
   const state = initState(root, { appName: 'Linked', dataPlatform: 'dataverse' });
   save(root, state);
@@ -585,12 +608,12 @@ test('the planner markdown is linked only once it exists on disk', () => {
 
   // The planner writes native-app-plan.md at Step 3. Before that a link would 404 in the
   // user's browser, so it is not emitted at all.
-  assert.deepEqual(links(runPage(outputPath(root))), [], 'no link before the file exists');
+  assert.deepEqual(links(await runPage(outputPath(root))), [], 'no link before the file exists');
 
   // The plan is written into docs/, so the file sits one level up.
   fs.writeFileSync(path.join(root, 'native-app-plan.md'), '# Plan\n');
   save(root, state);
-  const shown = links(runPage(outputPath(root)));
+  const shown = links(await runPage(outputPath(root)));
   assert.ok(shown.length >= 1, 'the link appears once the planner has written its output');
   assert.match(shown[0].textContent, /Full screen specs|Read the full plan/);
 
@@ -611,7 +634,7 @@ test('the planner markdown is linked only once it exists on disk', () => {
     'the plain file link must not replace the live plan');
 });
 
-test('the full-size screens are linked under the phone, once they exist', () => {
+test('the full-size screens are linked under the phone, once they exist', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-preview-'));
   const state = initState(root, { appName: 'Preview', dataPlatform: 'dataverse' });
   save(root, state);
@@ -626,12 +649,12 @@ test('the full-size screens are linked under the phone, once they exist', () => 
   };
 
   // `/design-system` writes it at Step 6.75; before that the link would 404.
-  assert.deepEqual(railLink(runPage(outputPath(root))), [], 'no link before the file exists');
+  assert.deepEqual(railLink(await runPage(outputPath(root))), [], 'no link before the file exists');
 
   // Written into docs/, beside the plan, where every reviewable artifact is collected.
   fs.writeFileSync(path.join(root, '_plan_preview.html'), '<html></html>');
   save(root, state);
-  const shown = railLink(runPage(outputPath(root)));
+  const shown = railLink(await runPage(outputPath(root)));
   assert.equal(shown.length, 1, 'the link appears once the preview is rendered');
   assert.match(shown[0].textContent, /full size/i);
 });
@@ -654,7 +677,7 @@ test('the create skill renders the screen preview but never opens it', () => {
   assert.match(skill, /Render `_plan_preview\.html`/);
 });
 
-test('the QR is drawn in the phone and linked for scanning full size', () => {
+test('the QR is drawn in the phone and linked for scanning full size', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-qr-'));
   const state = initState(root, { appName: 'QR', dataPlatform: 'dataverse' });
   // What the `phone --stage qr --qr-image` CLI path produces: the code inlined for the phone,
@@ -667,7 +690,7 @@ test('the QR is drawn in the phone and linked for scanning full size', () => {
   });
   save(root, state);
 
-  const { elements, thrown } = runPage(outputPath(root));
+  const { elements, thrown } = await runPage(outputPath(root));
   assert.deepEqual(thrown.map((e) => e.message), []);
 
   const links = [];
@@ -721,7 +744,7 @@ test('the QR is drawn in the phone and linked for scanning full size', () => {
   assert.match(marks[0], /fill="currentColor"/);
 });
 
-test('the store links are only offered once the app can actually be used', () => {
+test('the store links are only offered once the app can actually be used', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-store-'));
   const state = initState(root, { appName: 'Early', dataPlatform: 'dataverse' });
   save(root, state);
@@ -730,7 +753,7 @@ test('the store links are only offered once the app can actually be used', () =>
   (function walk(node) {
     if (String(node.className).split(' ').includes('store-btn')) stores.push(node);
     node.children.forEach(walk);
-  })(runPage(outputPath(root)).elements.get('railPreviewLink'));
+  })((await await runPage(outputPath(root))).elements.get('railPreviewLink'));
   // Sending someone to install a player while their app is still being generated hands them
   // something they cannot use yet.
   assert.deepEqual(stores, [], 'no store links during the build');
@@ -771,25 +794,25 @@ test('the plan carries the same AI disclaimer as every other plan page', () => {
   assert.match(template, /\.rail\{[^}]*calc\(100vh - 65px - var\(--footer-h\)\)/);
 });
 
-test('the carousel says the mockups are not the built app, and only while they are shown', () => {
+test('the carousel says the mockups are not the built app, and only while they are shown', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-note-'));
   const state = initState(root, { appName: 'Note', dataPlatform: 'dataverse' });
 
   // Building: nothing to caveat yet.
   save(root, state);
-  assert.equal(runPage(outputPath(root)).elements.get('railNote').hidden, true);
+  assert.equal((await await runPage(outputPath(root))).elements.get('railNote').hidden, true);
 
   // Screens: the user is looking at approximations rendered from the specs.
   setPhone(state, { stage: 'screens', screens: [{ name: 'Today', html: '<div>Today</div>' }] });
   save(root, state);
-  const shown = runPage(outputPath(root)).elements.get('railNote');
+  const shown = (await await runPage(outputPath(root))).elements.get('railNote');
   assert.equal(shown.hidden, false);
   assert.match(shown.textContent, /mockups[\s\S]*differ/i);
 
   // QR: the phone now shows a real code, so the caveat would be wrong.
   setPhone(state, { stage: 'qr', qrImage: 'data:image/png;base64,iVBORw0KGgo=' });
   save(root, state);
-  assert.equal(runPage(outputPath(root)).elements.get('railNote').hidden, true);
+  assert.equal((await await runPage(outputPath(root))).elements.get('railNote').hidden, true);
 });
 
 test('the page carries a policy that makes injected mockup markup inert', () => {
@@ -858,7 +881,7 @@ test('the third-party script is pinned by version and by content', () => {
   assert.match(template, /Mermaid could not load/);
 });
 
-test('two relationships between the same tables both survive into the diagram', () => {
+test('two relationships between the same tables both survive into the diagram', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-rels-'));
   let state = initState(root, { appName: 'Rels', dataPlatform: 'dataverse' });
   state = setSection(state, 'dataModel', {
@@ -882,7 +905,7 @@ test('two relationships between the same tables both survive into the diagram', 
   }, 'approved');
   save(root, state);
 
-  const { diagrams, thrown } = runPage(outputPath(root));
+  const { diagrams, thrown } = await runPage(outputPath(root));
   assert.deepEqual(thrown.map((e) => e.message), []);
   const er = diagrams.find((d) => d.source.startsWith('erDiagram'));
   assert.ok(er, 'the ER diagram must render');
@@ -892,6 +915,36 @@ test('two relationships between the same tables both survive into the diagram', 
   // The reverse declaration of the same relationship is still suppressed.
   const edges = [...er.source.matchAll(/^ {4}\S+ \S+ \S+ : "([^"]+)"$/gm)].map((m) => m[1]);
   assert.equal(edges.length, new Set(edges).size, 'no relationship may be drawn twice');
+});
+
+test('a table that relates to itself is drawn, not dropped', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-self-'));
+  let state = initState(root, { appName: 'Self', dataPlatform: 'dataverse' });
+  state = setSection(state, 'dataModel', {
+    tables: [
+      {
+        logicalName: 'account', displayName: 'Account', status: 'reused',
+        columns: [{ logicalName: 'accountid', type: 'Unique identifier', key: 'PK' }],
+        // Parent account is a standard Dataverse hierarchy, so the approved model has it.
+        relationships: [{ relatedTable: 'account', name: 'parent account', cardinality: 'N:1' }],
+      },
+      {
+        logicalName: 'contoso_site', displayName: 'Site', status: 'new',
+        columns: [{ logicalName: 'contoso_siteid', type: 'Unique identifier', key: 'PK' }],
+        // A related table outside the model still has nothing to point at.
+        relationships: [{ relatedTable: 'contoso_missing', name: 'orphan', cardinality: 'N:1' }],
+      },
+    ],
+  }, 'approved');
+  save(root, state);
+
+  const { diagrams, diagramNotes, thrown } = await runPage(outputPath(root));
+  assert.deepEqual(thrown.map((e) => e.message), []);
+  assert.deepEqual(diagramNotes, []);
+  const er = diagrams.find((d) => d.source.startsWith('erDiagram'));
+  assert.ok(er, 'the ER diagram must render');
+  assert.match(er.source, /^ {4}ACCOUNT \S+ ACCOUNT : "parent account"$/m);
+  assert.doesNotMatch(er.source, /"orphan"/);
 });
 
 test('the two plan-document links are siblings, not one inside the other', () => {

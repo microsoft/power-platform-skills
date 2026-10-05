@@ -102,7 +102,7 @@ that only ever existed as terminal text, and terminal text scrolls away during a
 it once is enough: the page reloads itself as each phase lands.
 
 **Phases** (`--id`): `requirements`, `architecture`, `data-model`, `screen-plan`, `scaffold`,
-`design`, `dataverse`, `capabilities`, `screens`, `run`. Any other id is rejected by name.
+`design`, `auth`, `dataverse`, `capabilities`, `screens`, `run`. Any other id is rejected by name.
 
 **Write each gated section into the plan *before* asking for approval**, with `--state proposed`,
 then flip it to `--state approved` once the user says yes. The plan is already open in their
