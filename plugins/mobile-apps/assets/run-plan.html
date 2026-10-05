@@ -1132,7 +1132,14 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     var svg = container.querySelector('svg');
     if (!svg) return;
 
+    // Header, both alternating row bands, and the dividers between them. Tinting the header
+    // alone left every table's body the same lavender Mermaid ships, so the status read as a
+    // stripe at the top rather than as a property of the table - which is how a reader loses
+    // track of which table is which once the diagram is more than a screen tall. Matches the
+    // power-pages data-model plan, which these values are taken from.
     var fills = { new: '#d0e4f5', modified: '#f5dcc8', reused: '#c8e6c9' };
+    var rowOddFills = { new: '#e8f2fc', modified: '#fdf0e6', reused: '#e8f5e9' };
+    var rowEvenFills = { new: '#f0f7fe', modified: '#fef6ee', reused: '#f1f9f1' };
     var strokes = { new: '#0078d4', modified: '#ca5010', reused: '#107c10' };
 
     var statusById = {};
@@ -1155,6 +1162,18 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
         paths[1].setAttribute('stroke', strokes[status]);
         paths[1].setAttribute('stroke-width', '2');
       }
+
+      node.querySelectorAll('.row-rect-odd, .row-rect-even').forEach(function (row) {
+        var fill = row.classList.contains('row-rect-odd') ? rowOddFills : rowEvenFills;
+        var rect = row.querySelector('path');
+        if (rect) rect.setAttribute('fill', fill[status]);
+      });
+
+      node.querySelectorAll('.divider path').forEach(function (line) {
+        // A divider Mermaid drew as `none` is a spacer, not a rule; leaving it alone keeps the
+        // box from gaining lines it was not meant to have.
+        if (line.getAttribute('stroke') !== 'none') line.setAttribute('stroke', strokes[status]);
+      });
     });
   }
 

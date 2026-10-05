@@ -918,6 +918,33 @@ test('mockup CSS cannot reach past the phone frame', () => {
   assert.match(template, /\.car-frame\{[^}]*contain:layout paint/);
 });
 
+test('a table status tints the whole entity box, not just its header', () => {
+  const template = fs.readFileSync(path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8');
+  const fn = template.slice(template.indexOf('function colorErDiagram'));
+  const body = fn.slice(0, fn.indexOf('\n  function '));
+
+  // Header fill plus both alternating row bands. Tinting only the header left every table's
+  // body the same lavender Mermaid ships, so status read as a stripe at the top rather than as
+  // a property of the table.
+  for (const map of ['fills', 'rowOddFills', 'rowEvenFills', 'strokes']) {
+    assert.match(body, new RegExp(`var ${map} = \\{ new: '#`), `${map} must be defined`);
+  }
+  assert.match(body, /\.row-rect-odd, \.row-rect-even/);
+  assert.match(body, /rowOddFills : rowEvenFills/, 'both bands must be selected per row');
+  assert.match(body, /setAttribute\('fill', fill\[status\]\)/, 'the band is filled by status');
+
+  // Dividers take the status stroke, but only where Mermaid drew a real rule - a `none` stroke
+  // is a spacer, and overwriting it adds lines the box was not meant to have.
+  assert.match(body, /\.divider path/);
+  assert.match(body, /getAttribute\('stroke'\) !== 'none'/);
+
+  // The three palettes must agree with the legend's three swatches.
+  const legend = [...template.matchAll(/er-legend-swatch" style="background:[^;]+;border-color:(#[0-9a-f]{6})/g)]
+    .map((m) => m[1]);
+  assert.deepEqual(legend, ['#0078d4', '#ca5010', '#107c10'],
+    'the legend swatches must be the same three strokes the diagram uses');
+});
+
 test('every function the page defines is defined exactly once', () => {
   // `showSource` was defined twice, the second copy silently replacing the first. Duplicates are
   // invisible at runtime, so the only way to see one is to count the definitions.
