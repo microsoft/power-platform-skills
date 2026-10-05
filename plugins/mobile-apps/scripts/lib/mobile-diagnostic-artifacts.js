@@ -84,19 +84,24 @@ function execute(command, args, cwd) {
 }
 
 function unpack(archive, destination, run) {
-  // GNU tar treats a drive letter in its archive argument as a remote host.
-  const archiveDirectory = path.dirname(archive);
-  const archiveName = path.basename(archive);
-  const names = run('tar', ['-tzf', archiveName], archiveDirectory).trim().split(/\r?\n/);
-  const types = run('tar', ['-tvzf', archiveName], archiveDirectory).trim().split(/\r?\n/);
-  requireValue(names.length > 0 && names.length === types.length
-    && types.every((line) => /^[-d]/.test(line))
-    && new Set(names).size === names.length
-    && names.every((name) => /^package(?:\/|$)/.test(name)
-      && !/[\\:\u0000-\u001f]/.test(name) && name.split('/').every((part) => part !== '..' && part !== '.')),
-  'Packed artifacts must contain only regular package files and directories; links and unsafe archive paths are rejected.');
-  run('tar', ['-xzf', archiveName, '-C', destination], archiveDirectory);
-  return path.join(destination, 'package');
+  // Keep tar's archive and extraction in one cwd, without drive letters or cross-drive -C.
+  const archiveName = 'artifact.tgz';
+  const stagedArchive = path.join(destination, archiveName);
+  fs.copyFileSync(archive, stagedArchive, fs.constants.COPYFILE_EXCL);
+  try {
+    const names = run('tar', ['-tzf', archiveName], destination).trim().split(/\r?\n/);
+    const types = run('tar', ['-tvzf', archiveName], destination).trim().split(/\r?\n/);
+    requireValue(names.length > 0 && names.length === types.length
+      && types.every((line) => /^[-d]/.test(line))
+      && new Set(names).size === names.length
+      && names.every((name) => /^package(?:\/|$)/.test(name)
+        && !/[\\:\u0000-\u001f]/.test(name) && name.split('/').every((part) => part !== '..' && part !== '.')),
+    'Packed artifacts must contain only regular package files and directories; links and unsafe archive paths are rejected.');
+    run('tar', ['-xzf', archiveName], destination);
+    return path.join(destination, 'package');
+  } finally {
+    fs.unlinkSync(stagedArchive);
+  }
 }
 
 function same(left, right) {

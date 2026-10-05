@@ -74,8 +74,9 @@ hashes, known player, and required tools with the user; obtain approval for loca
 inspection. Use `tar`, `unzip` and an explicitly chosen Android SDK `aapt2` on `PATH`.
 Do not download tools or packages implicitly. Keep local paths and artifacts
 private and uncommitted; never include them in reports or telemetry.
-Archive inspection runs `tar` from the archive's directory using its basename,
-so Windows drive letters are not interpreted as remote archive hosts.
+Archive inspection copies the verified archive into its private scratch directory
+and runs `tar` there using a local filename, avoiding Windows drive-letter and
+cross-drive extraction handling. The scratch copy is removed after inspection.
 Inspection/acquisition uses private operating-system scratch directories outside
 the app target and removes them afterward. No scratch directory makes an empty
 creation destination nonempty or writes private package contents into the app.

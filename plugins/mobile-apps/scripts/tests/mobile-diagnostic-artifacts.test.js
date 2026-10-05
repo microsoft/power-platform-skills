@@ -148,7 +148,7 @@ if (process.argv[2] === '--manifest') {
   const assetOutput = JSON.stringify(metadata);
   const calls = [];
   const execute = (command, args, cwd) => {
-    calls.push({ command, args, cwd });
+    calls.push({ command, args, cwd, archiveSha256: command === 'tar' ? hash(path.join(cwd, args[1])) : null });
     return command === 'aapt2' ? output : command === 'unzip' ? assetOutput : run(command, args, cwd);
   };
   return { root, reference, manifest, file, output, assetOutput, options: { run: execute }, calls };
@@ -201,15 +201,34 @@ test('explicit immutable local selection verifies real package CLI and lock with
   const tarCalls = f.calls.filter((call) => call.command === 'tar');
   assert.equal(tarCalls.length, f.manifest.packages.length * 3);
   for (const call of tarCalls) {
-    assert.equal(call.args[1], path.basename(call.args[1]));
-    assert.equal(path.isAbsolute(call.args[1]), false);
-    assert.equal(call.args[1].includes(':'), false);
-    assert.ok(f.manifest.packages.some((item) => path.join(f.root, item.path) === path.join(call.cwd, call.args[1])));
+    assert.equal(call.args[1], 'artifact.tgz');
+    assert.equal(call.args.includes('-C'), false);
+    assert.ok(f.manifest.packages.some((item) => item.sha256 === call.archiveSha256));
+    assert.equal(fs.existsSync(call.cwd), false);
   }
   assert.doesNotMatch(JSON.stringify(result), new RegExp(f.root));
   assert.equal(readCatalog().defaultRelease, null);
   assert.throws(() => selectRelease(), /No verified/);
   assert.equal(fs.readdirSync(process.cwd()).some((name) => name.startsWith('.mobile-artifact-inspection-')), false);
+});
+
+test('failed extraction removes its staged archive without changing the selected bundle', (t) => {
+  const f = fixture(t);
+  const failure = new Error('fixture extraction failure');
+  let extractionDirectory;
+  assert.throws(() => loadDiagnosticArtifacts(f.file, {
+    run: (command, args, cwd) => {
+      if (command === 'tar' && args[0] === '-xzf') {
+        extractionDirectory = cwd;
+        assert.ok(fs.existsSync(path.join(cwd, 'artifact.tgz')));
+        throw failure;
+      }
+      return f.options.run(command, args, cwd);
+    },
+  }), (error) => error === failure);
+  assert.ok(extractionDirectory);
+  assert.equal(fs.existsSync(extractionDirectory), false);
+  for (const item of f.manifest.packages) assert.equal(hash(path.join(f.root, item.path)), item.sha256);
 });
 
 test('known selected APK supported counters produce concrete mismatch guidance without touching old app', (t) => {
