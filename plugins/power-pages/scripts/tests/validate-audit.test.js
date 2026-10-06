@@ -15,69 +15,12 @@ const VALIDATOR_PATH = path.join(
   'validate-audit.js'
 );
 
-const DIMENSIONS = [
-  'intent-coverage',
-  'privilege-calibration',
-  'scope-correctness',
-  'role-completeness',
-  'table-coverage',
-  'anonymous-access-hygiene',
-  'data-model-alignment',
-  'internal-consistency',
-  'security-posture',
-];
-
-function validResult() {
-  const issuesByDimension = {
-    'anonymous-access-hygiene': [{
-      id: 'AH1',
-      dimension: 'anonymous-access-hygiene',
-      severity: 'major',
-      description: 'Anonymous users can read staff email and phone.',
-      suggestion: 'Remove the Anonymous role from the staff read permission.',
-      mergedFrom: ['AH1'],
-    }],
-    'internal-consistency': [{
-      id: 'IS1',
-      dimension: 'internal-consistency',
-      severity: 'minor',
-      description: 'No permission plan document.',
-      suggestion: 'Add docs/permissions-plan.html.',
-      mergedFrom: ['IS1'],
-    }],
-  };
-  return {
-    dimensionResults: DIMENSIONS.map((dimension) => ({
-      dimension,
-      observations: 'Observed.',
-      issues: issuesByDimension[dimension] || [],
-      suggestions: [],
-    })),
-    categoryResults: [
-      { category: 'over-exposure', issueCounts: { major: 1, minor: 0, total: 1 }, score: 4.21 },
-      { category: 'under-exposure', issueCounts: { major: 0, minor: 0, total: 0 }, score: 5 },
-      { category: 'correctness', issueCounts: { major: 0, minor: 1, total: 1 }, score: 4.8 },
-    ],
-    verdict: 'Needs revision',
-    overallSummary: 'One major and one minor issue.',
-    issueCounts: { major: 1, minor: 1, total: 2 },
-    deterministic: {},
-    crossTrackPropagations: [{
-      issueId: 'AH1',
-      issueDimension: 'anonymous-access-hygiene',
-      rootCause: 'permissions',
-      confidence: 'high',
-      explanation: 'The anonymous Global read grant alone exposes the data.',
-    }],
-    modelInfo: {},
-  };
-}
-
 function validFindings() {
   return [
     {
       id: 'AH1',
       severity: 'major',
+      dimension: 'anonymous-access-hygiene',
       title: 'Staff contact details readable by Anonymous',
       reasoning: 'Staff-Public-Read grants Anonymous Global read.',
       fix: 'Restrict the permission to a staff role.',
@@ -87,6 +30,7 @@ function validFindings() {
     {
       id: 'IS1',
       severity: 'minor',
+      dimension: 'internal-consistency',
       title: 'No permission plan document',
       reasoning: 'docs/permissions-plan.html is missing.',
       fix: 'Add a permission plan.',
@@ -94,23 +38,30 @@ function validFindings() {
   ];
 }
 
-function reportHtml(findings) {
-  return `<!doctype html><html><body><script>\nconst FINDINGS = ${JSON.stringify(findings)};\n</script></body></html>`;
+function validScorecard() {
+  return {
+    categories: [
+      { name: 'Over-Exposure (Security)', score: 4.21 },
+      { name: 'Under-Exposure (Usability & Coverage)', score: 5 },
+      { name: 'Correctness (Validity & Alignment)', score: 4.8 },
+    ],
+    reportPaths: [{ label: 'HTML report', path: 'docs/permissions-audit.html' }],
+  };
 }
 
-function writeAudit(projectRoot, {
-  name = 'permissions-audit',
-  result = validResult(),
-  findings = validFindings(),
-  html,
-} = {}) {
-  const resultPath = writeProjectFile(projectRoot, `docs/${name}-result.json`, JSON.stringify(result));
-  writeProjectFile(projectRoot, `docs/${name}.html`, html ?? reportHtml(findings));
-  return resultPath;
+function reportHtml(findings, scorecard) {
+  return '<!doctype html><html><body><script>\n' +
+    `const FINDINGS = ${JSON.stringify(findings)};\n` +
+    `const SCORECARD = ${JSON.stringify(scorecard)};\n` +
+    '</script></body></html>';
 }
 
-function runResult(resultPath) {
-  return spawnSync(process.execPath, [VALIDATOR_PATH, '--result', resultPath], { encoding: 'utf8' });
+function writeReport(projectRoot, { findings = validFindings(), scorecard = validScorecard(), html } = {}) {
+  return writeProjectFile(projectRoot, 'docs/permissions-audit.html', html ?? reportHtml(findings, scorecard));
+}
+
+function runReport(reportPath) {
+  return spawnSync(process.execPath, [VALIDATOR_PATH, '--report', reportPath], { encoding: 'utf8' });
 }
 
 function runHook(cwd) {
@@ -120,29 +71,20 @@ function runHook(cwd) {
   });
 }
 
-function expectResultFailure(t, mutate, pattern, { findings } = {}) {
-  const projectRoot = createTempProject(t);
-  const result = validResult();
-  mutate(result);
-  const outcome = runResult(writeAudit(projectRoot, { result, findings }));
-  assert.equal(outcome.status, 1, outcome.stdout);
-  assert.match(outcome.stderr, pattern);
-}
-
-function expectFindingsFailure(t, mutate, pattern) {
+function expectFailure(t, { findings: mutateFindings, scorecard: mutateScorecard }, pattern) {
   const projectRoot = createTempProject(t);
   const findings = validFindings();
-  mutate(findings);
-  const outcome = runResult(writeAudit(projectRoot, { findings }));
+  const scorecard = validScorecard();
+  mutateFindings?.(findings);
+  mutateScorecard?.(scorecard);
+  const outcome = runReport(writeReport(projectRoot, { findings, scorecard }));
   assert.equal(outcome.status, 1, outcome.stdout);
   assert.match(outcome.stderr, pattern);
 }
 
-const findIssue = (result, id) => result.dimensionResults.flatMap((d) => d.issues).find((i) => i.id === id);
-
-test('valid result and report pass', (t) => {
+test('valid report passes', (t) => {
   const projectRoot = createTempProject(t);
-  const outcome = runResult(writeAudit(projectRoot));
+  const outcome = runReport(writeReport(projectRoot));
   assert.equal(outcome.status, 0, outcome.stderr);
   const summary = JSON.parse(outcome.stdout);
   assert.equal(summary.valid, true);
@@ -150,66 +92,52 @@ test('valid result and report pass', (t) => {
   assert.equal(summary.verdict, 'Needs revision');
 });
 
-test('recomputes category scores', (t) => {
-  expectResultFailure(t, (r) => { r.categoryResults[0].score = 3.5; }, /over-exposure\.score is 3\.5; expected 4\.21/);
+test('recomputes category scores from the findings', (t) => {
+  expectFailure(t, { scorecard: (s) => { s.categories[0].score = 3.5; } }, /Over-Exposure \(Security\) score is 3\.5; expected 4\.21/);
+  expectFailure(t, { findings: (f) => { f[1].severity = 'major'; f[1].rootCause = 'permissions'; f[1].rootCauseReason = 'x'; } }, /Correctness \(Validity & Alignment\) score is 4\.8; expected 4\.21/);
+  expectFailure(t, { scorecard: (s) => { s.categories.reverse(); } }, /categories\[0\] must be over-exposure/);
+  expectFailure(t, { scorecard: (s) => { s.categories.pop(); } }, /must contain exactly 3/);
 });
 
-test('recomputes issue counts', (t) => {
-  expectResultFailure(t, (r) => { r.issueCounts.minor = 0; }, /issueCounts\.minor/);
-  expectResultFailure(t, (r) => { r.categoryResults[2].issueCounts.total = 0; }, /correctness\.issueCounts\.total/);
-});
-
-test('recomputes the verdict', (t) => {
-  expectResultFailure(t, (r) => { r.verdict = 'Safe to go'; }, /verdict is Safe to go; expected Needs revision/);
-});
-
-test('rejects malformed results', (t) => {
-  expectResultFailure(t, (r) => { r.dimensionResults.reverse(); }, /dimensionResults\[0\] must be intent-coverage/);
-  expectResultFailure(t, (r) => { r.categoryResults.pop(); }, /categoryResults must contain exactly 3/);
-  expectResultFailure(t, (r) => { findIssue(r, 'IS1').id = 'SP1'; }, /must use the IS prefix/);
-  expectResultFailure(t, (r) => { findIssue(r, 'IS1').severity = 'info'; }, /invalid severity info/);
-  expectResultFailure(t, (r) => { findIssue(r, 'IS1').mergedFrom = []; }, /non-empty mergedFrom/);
-  expectResultFailure(t, (r) => { findIssue(r, 'IS1').description = ' '; }, /IS1 needs a non-empty description/);
-  expectResultFailure(t, (r) => { delete findIssue(r, 'AH1').suggestion; }, /AH1 needs a non-empty suggestion/);
-});
-
-test('requires one root-cause entry per major issue', (t) => {
-  expectResultFailure(t, (r) => { r.crossTrackPropagations = []; }, /Major issue AH1 has no propagation entry/);
-  expectResultFailure(t, (r) => {
-    r.crossTrackPropagations.push({ ...r.crossTrackPropagations[0], issueId: 'IS1', issueDimension: 'internal-consistency' });
-  }, /Propagation entry IS1 does not reference a major issue/);
-  expectResultFailure(t, (r) => { r.crossTrackPropagations[0].rootCause = 'unknown'; }, /invalid rootCause unknown/);
-  expectResultFailure(t, (r) => { r.crossTrackPropagations[0].explanation = ''; }, /non-empty explanation/);
-});
-
-test('checks the report against the JSON result', (t) => {
-  expectFindingsFailure(t, (f) => { f.pop(); }, /lists 1 issues; JSON result has 2/);
-  expectFindingsFailure(t, (f) => { f[1].id = 'f2'; }, /finding f2 does not match a JSON issue id/);
-  expectFindingsFailure(t, (f) => { f[0].rootCause = 'mixed'; }, /AH1 has rootCause mixed; expected permissions/);
-  expectFindingsFailure(t, (f) => { f[1].fix = ''; }, /finding IS1 needs a non-empty fix/);
-  expectFindingsFailure(t, (f) => { delete f[0].title; }, /finding AH1 needs a non-empty title/);
-  expectFindingsFailure(t, (f) => { f[1] = { ...f[0] }; }, /lists finding AH1 more than once/);
-});
-
-test('rejects reports with unreplaced placeholders', (t) => {
+test('skips the score check when scoring was skipped', (t) => {
   const projectRoot = createTempProject(t);
-  const outcome = runResult(writeAudit(projectRoot, { html: `${reportHtml(validFindings())}__SUMMARY__` }));
-  assert.equal(outcome.status, 1);
-  assert.match(outcome.stderr, /unreplaced data placeholders/);
-});
-
-test('pairs a renamed result with its own report', (t) => {
-  const projectRoot = createTempProject(t);
-  writeAudit(projectRoot, { findings: [validFindings()[0]] });
-  const outcome = runResult(writeAudit(projectRoot, { name: 'permissions-audit-apr-2026' }));
+  const outcome = runReport(writeReport(projectRoot, { scorecard: null }));
   assert.equal(outcome.status, 0, outcome.stderr);
 });
 
-test('hook mode never blocks, even with an invalid earlier result', (t) => {
+test('rejects malformed findings', (t) => {
+  expectFailure(t, { findings: (f) => { f[1].id = 'SP1'; } }, /SP1 must use the IS prefix/);
+  expectFailure(t, { findings: (f) => { f[1].dimension = 'unknown'; } }, /invalid dimension unknown/);
+  expectFailure(t, { findings: (f) => { f[1].severity = 'info'; } }, /invalid severity info/);
+  expectFailure(t, { findings: (f) => { f[1] = { ...f[0] }; } }, /AH1 is listed more than once/);
+  expectFailure(t, { findings: (f) => { f[1].fix = ''; } }, /IS1 needs a non-empty fix/);
+  expectFailure(t, { findings: (f) => { delete f[0].title; } }, /AH1 needs a non-empty title/);
+  expectFailure(t, { findings: (f) => { f[0].reasoning = ' '; } }, /AH1 needs a non-empty reasoning/);
+});
+
+test('requires a root cause on major findings only', (t) => {
+  expectFailure(t, { findings: (f) => { f[0].rootCause = 'unknown'; } }, /AH1 has invalid rootCause unknown/);
+  expectFailure(t, { findings: (f) => { delete f[0].rootCause; } }, /AH1 has invalid rootCause undefined/);
+  expectFailure(t, { findings: (f) => { f[0].rootCauseReason = ''; } }, /AH1 needs a non-empty rootCauseReason/);
+  expectFailure(t, { findings: (f) => { f[1].rootCause = 'permissions'; } }, /Minor finding IS1 must not carry a root cause/);
+});
+
+test('rejects reports with unreplaced placeholders or missing data', (t) => {
   const projectRoot = createTempProject(t);
-  const result = validResult();
-  result.verdict = 'Safe to go';
-  writeAudit(projectRoot, { result });
+  let outcome = runReport(writeReport(projectRoot, { html: `${reportHtml(validFindings(), validScorecard())}__SUMMARY__` }));
+  assert.equal(outcome.status, 1);
+  assert.match(outcome.stderr, /unreplaced data placeholders/);
+  outcome = runReport(writeReport(projectRoot, { html: reportHtml(validFindings(), validScorecard()).replace(/const SCORECARD = .*;/, 'const SCORECARD = __JSON_SCORECARD_DATA__;') }));
+  assert.equal(outcome.status, 1);
+  assert.match(outcome.stderr, /unreplaced data placeholders/);
+  outcome = runReport(writeReport(projectRoot, { html: '<html></html>' }));
+  assert.equal(outcome.status, 1);
+  assert.match(outcome.stderr, /no FINDINGS data/);
+});
+
+test('hook mode never blocks, even with an invalid earlier report', (t) => {
+  const projectRoot = createTempProject(t);
+  writeReport(projectRoot, { html: '__SUMMARY__' });
   const outcome = runHook(projectRoot);
   assert.equal(outcome.status, 0, outcome.stderr);
   assert.equal(outcome.stderr, '');

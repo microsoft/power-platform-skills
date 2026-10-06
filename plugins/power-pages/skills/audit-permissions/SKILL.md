@@ -6,8 +6,8 @@ description: >-
   3 security/usability/correctness categories (9 dimensions). Detection is anchored by a
   recurring-issue catalog so findings and severities stay consistent run-to-run. Generates an
   HTML report with an at-a-glance verdict and per-category scores in the Overview plus a
-  single list of **major/minor** issues (each major issue labelled permissions-only or upstream-caused with a short justification), and suggested fixes — and
-  writes a machine-readable JSON result. Use when the user wants to review, verify, check, score,
+  single list of **major/minor** issues (each major issue labelled permissions-only or upstream-caused with a short justification), and suggested fixes.
+  Use when the user wants to review, verify, check, score,
   or grade table permissions for security issues.
 user-invocable: true
 argument-hint: "[optional: specific table or concern]"
@@ -36,7 +36,7 @@ The skill has two parts:
 4. **Run Audit Checks** — Compare permissions against code usage and best practices (A–K checklist)
 5. **Score the Configuration** — Detect/label issues by the 3 categories using the recurring-issue catalog, consolidate to distinct root causes (major/minor), compute the 1–5 category scores and the verdict
 6. **Root-cause attribution** — In a single batched pass, label every major issue as permissions-only or caused by an upstream artifact, with a one-sentence justification shown in the report
-7. **Generate Report** — Create the HTML report (score overview + findings + inventory) and write the JSON result
+7. **Generate Report** — Create the HTML report (score overview + findings + inventory) and validate it
 8. **Present Findings & Track** — Summarize, record skill usage, and ask the user if they want to fix issues
 
 **Important:** Do NOT ask the user questions during analysis. Autonomously gather all data, then present findings.
@@ -53,7 +53,7 @@ At the start of Step 1, create all tasks upfront using `TaskCreate`. Mark each t
 | Run audit checks | Running audit checks | Create per-table tasks and run checklist (A–K) for each table, then cross-validate |
 | Score configuration | Scoring configuration | Detect/label by the 3 categories via the recurring-issue catalog, consolidate to root causes, compute 1–5 scores |
 | Root-cause attribution | Attributing root causes | Label every major issue permissions-only or upstream-caused in a single pass |
-| Generate report | Generating report | Create HTML report + JSON result and display in browser |
+| Generate report | Generating report | Create and validate the HTML report and display it in browser |
 | Present findings | Presenting findings | Summarize results, record usage, and offer to fix issues |
 
 **Note:** The "Run audit checks" phase creates **additional per-table tasks** dynamically in Step 4.2. These per-table tasks track the systematic A–K checklist for each table independently.
@@ -165,6 +165,13 @@ Parse the JSON output and carry the findings into the audit as **major/minor** i
 
 These findings should be included in the final report even if the later code/Dataverse analysis also finds additional issues. Exception: drop the validator's "no associated web roles" warning for a Parent-scope child permission whose parent chain is valid (see check B).
 
+If the validator reports wildcard field access in a `Webapi/<table>/fields` setting, add this finding as a **major** `security-posture` issue (one per affected setting):
+
+- **Title:** `Unsupported wildcard Web API fields for <table>`
+- **Reasoning:** The fields setting uses wildcard access, which is unsupported beginning September 14, 2026
+- **Fix:** Replace the wildcard using `${PLUGIN_ROOT}/references/webapi-field-allowlist.md`: LogicalNames for ordinary columns, `_<LogicalName>_value` for lookup reads, and exact Navigation Properties used by `@odata.bind`
+- **Details:** Include the site-setting file path and setting name from the validator finding
+
 After Step 3.1 determines the environment URL, rerun the shared validator with live relationship verification only when the Step 3 discovery gate is open. Merge any additional findings:
 
 ```bash
@@ -184,7 +191,6 @@ Purely mechanical cross-checks over the parsed YAML + data model + Web API artif
 | Permission references a web-role GUID not defined in any role | IS | internal-consistency | major |
 | Web role has a **blank id** | IS | internal-consistency | major |
 | Permission has a **blank `entitylogicalname`** | DM | data-model-alignment | major |
-| Permission links **no web role** (empty `entitypermission_webrole`) and is not a Parent-scope child with a valid parent chain | RC | role-completeness | major |
 | Permission grants **no privileges** (all 6 CRUD bits false) | TC | table-coverage | major |
 | Permission has **no scope** (`scope < 0`) | SC | scope-correctness | major |
 | Permission scope code **unrecognized** (`Unknown(code)`) | SC | scope-correctness | minor |
@@ -194,9 +200,6 @@ Purely mechanical cross-checks over the parsed YAML + data model + Web API artif
 | Web API site-setting YAML parse error | IS | internal-consistency | major |
 | `-enabled` entity set with **no matching `-fields`** whitelist | IS | internal-consistency | major |
 | `-fields` whitelist with **no matching `-enabled`** setting | IS | internal-consistency | major |
-| `Webapi/<table>/fields` value is a **wildcard** (`*`) — exposes every column | SP | security-posture | major |
-| Source code issues a Web API query with **`$select=*`** | SP | security-posture | major |
-| A table permission exposes columns via a **wildcard** (`*`) column list | SP | security-posture | major |
 | Type file declaring 1–6 properties absent from the data model | DM | data-model-alignment | minor |
 
 ---
@@ -205,7 +208,7 @@ Purely mechanical cross-checks over the parsed YAML + data model + Web API artif
 
 Before running judgment-based checks, write a temporary `<OUTPUT_DIR>/audit-evidence.json` containing the normalized facts gathered so far: roles, permissions, data-model tables/columns, service operations, route/component reachability, capability matrix, lookup/expand usage, client-side row filters, implementation-plan claims, authentication reachability, and preflight issues. Sort tables, permissions, routes, and capabilities by stable identifiers.
 
-Steps 4–6 MUST reason from this ledger instead of rescanning and selectively rediscovering evidence. If live Dataverse discovery adds facts in Step 3, append those facts and rewrite the ledger once before Step 4. Do not change a `reachability` classification during scoring unless new evidence is added to the ledger. Delete `audit-evidence.json` after the final HTML and JSON result pass validation.
+Steps 4–6 MUST reason from this ledger instead of rescanning and selectively rediscovering evidence. If live Dataverse discovery adds facts in Step 3, append those facts and rewrite the ledger once before Step 4. Do not change a `reachability` classification during scoring unless new evidence is added to the ledger. Delete `audit-evidence.json` after the final HTML report passes validation.
 
 ---
 
@@ -493,19 +496,6 @@ Is this table fetched via `$expand` on another table's query?
   - **Fix:** Create a table permission with `read: true` for the same web role. For collection-valued expansions (one-to-many), use Parent scope with the relationship name. For single-valued expansions (lookups to reference data), use Global scope with read-only access.
 - If properly covered → `pass`
 
-**J2. Wildcard Column Exposure**
-
-Is any of this table's column exposure expressed as a wildcard instead of an explicit list?
-
-- Check this table's `Webapi/<entitySet>/fields` site setting (from Step 2.3), any wildcard `$select` recorded for it, and any column list on its table permissions
-- If the `fields` value is `*` (or any comma-separated entry is `*`), or a query issues `$select=*` → finding:
-  - **Severity:** `critical`
-  - **Title:** `Wildcard column exposure for <table>`
-  - **Reasoning:** `*` grants read access to EVERY column on `<table>` — including sensitive columns and any column added to the table later, so the exposure silently grows with the schema instead of staying a reviewed decision. Power Pages is also deprecating wildcard `fields` values.
-  - **Fix:** Replace `*` with the explicit list of column logical names the site actually reads, verified against Dataverse metadata.
-- **Explicitly naming every column is NOT this finding.** Enumerating columns is a deliberate, reviewable choice; only the wildcard is flagged, no matter how many columns the explicit list contains.
-- If no wildcard is present → `pass`
-
 **K. Record Findings & Complete**
 
 After all checks, mark the table's task as `completed` via `TaskUpdate`.
@@ -537,7 +527,7 @@ Assess the **3 categories**; within each, reason across its 3 dimensions togethe
 
 **RECURRING ISSUE CATALOG — DETECTION + SEVERITY (the primary lever for run-to-run consistency).** Test EACH pattern against the artifacts; whenever a pattern's TRIGGER holds, raise exactly ONE issue for it in the stated dimension with the FIXED severity — on every run, no matter how obvious or minor it seems. Match on the described SHAPE, not on specific table/role names (names in parentheses are illustrations). **Patterns are evaluated PER affected table-group and are NOT mutually exclusive**: if one table hits a MAJOR pattern and a different table hits a similar MINOR pattern (e.g. C2 on a PII table AND C9 on a public table), raise BOTH as separate issues — the ordering only resolves severity WITHIN one table-group, it never suppresses a finding on a different table.
 
-- **[C1]** Anonymous / unauthenticated role has write, create, or delete on ANY table → dim `anonymous-access-hygiene` · **major**.
+- **[C1]** Anonymous write, create, or delete — raised by the preflight `AH` row (Step 2.5); do not raise it again here.
 - **[C2]** PII / contact columns (email, phone, guardian or parent contact, address) readable by the Anonymous role → dim `anonymous-access-hygiene` · **major**.
 - **[C3]** A role has GLOBAL-scope access to a per-person / per-owner table carrying PII or sensitive operational data (personal records, contact PII, grades, rosters) — reaching every record. Mutating grant → `privilege-calibration`; read-only → `security-posture` · **major**. This explicitly includes the baseline Authenticated Users role: when open registration lets any visitor acquire that role, treat it as a broad external audience, not as trusted staff. Evaluate and emit this pattern separately for each affected table; do not merge Student and Teacher (or other disjoint table exposures) into one issue.
 - **[C4]** A role is granted access (any CRUD) beyond its natural need-to-know / need-to-act → dim `privilege-calibration` · **major** only when the extra access reaches another audience's sensitive records (PII, confidential, financial); otherwise **minor**. C4 never applies to a case covered by C3, C9, C16, C17 or C18.
@@ -549,7 +539,7 @@ Assess the **3 categories**; within each, reason across its 3 dimensions togethe
 - **[C10]** A scope/permission that only matters under a HYPOTHETICAL future change ("if guardians authenticate later, a Contact or Parent scope would be better") → dim `scope-correctness` · **minor**.
 - **[C11]** No `permission-plan.html` present, or only a generic/boilerplate plan ("Global is the broadest scope") → dim `internal-consistency` · **minor**.
 - **[C12]** A data-model table with no permission that is NOT clearly user-facing (not referenced by code, not an obvious end-user entity) → dim `table-coverage` · **minor**.
-- **[C13]** **Wildcard column exposure** — a Web API `fields` site setting, a `$select`, or any other column list is set to the wildcard `*` instead of naming columns → dim `security-posture` · **major**. `*` grants every column, including sensitive ones and any column added to the table later, so the exposure grows silently with the schema. Raise this **per affected table**. **Explicitly enumerating column names is NOT this pattern** — a hand-written list covering all of a table's columns is fine and must never be flagged under C13; only the wildcard itself is the issue.
+- **[C13]** Wildcard `*` column exposure — a Web API query with `$select=*`, or any other column list set to `*` → dim `security-posture` · **major**, one issue per affected table. A `Webapi/<table>/fields` wildcard is reported through the Step 2.4 validator finding instead. An explicitly enumerated column list is never this issue, however long.
 - **[C14]** A portal-readable table mixes allowed and restricted rows, and the only separation is a client-controlled `$filter`/query predicate. Client filtering is not an authorization boundary. If bypass exposes **sensitive or confidential content** (PII, credentials/secrets, financial/health data, internal staff or agent notes, private case details, security data) → dim `security-posture` · **major**. If bypass exposes only non-sensitive content that is merely unpublished, draft, or workflow-incomplete → dim `security-posture` · **minor**. If Dataverse permissions, column security, a server-side endpoint, or a separate protected table enforces the separation, C14 does not trigger.
 - **[C15]** A purpose-specific persona has at least one `reachable` portal capability but lacks the persona web role and the permissions needed across that capability's tables/operations → emit exactly ONE consolidated dim `role-completeness` · **major** issue. Absorb the resulting missing-table and missing-operation symptoms into it. If the persona role exists and only one table is uncovered, use C6 `table-coverage`; if the table permission exists and only an operation bit is missing, use `intent-coverage`. `disabled` code does not trigger C15. `ambiguous` code conflicting with the plan produces only the minor `internal-consistency` issue described in Step 2.3.
 - **[C16]** **Staff shared work queue** — a staff/back-office persona role (not Anonymous, not the baseline Authenticated Users role) has Global scope on a shared work-queue table (cases, tickets, requests, tasks) or its child tables. If the role's reachable pages read or update those records across owners → **no issue** (do NOT raise C3 or C4). Global write/create that no reachable staff page uses → fold into the role's C18 issue (**minor**). Global delete that no reachable staff page performs → dim `privilege-calibration` · **major**. Any mutation by Anonymous or a customer/baseline role stays C1/C3 **major**.
@@ -563,19 +553,19 @@ Assess the **3 categories**; within each, reason across its 3 dimensions togethe
 
 **NOVEL ISSUES (not covered by C1–C18):** still detect them — do NOT restrict yourself to the catalog. Assign severity by the [Appendix C](#appendix-c--severity-policy--auditgrader-bridge) security-first policy. A novel issue is NOT automatically minor: if it exposes data to the wrong audience, over-scopes access, or breaks a required flow, it is **major**.
 
-Number LLM-derived issue ids per canonical dimension prefix (`IC`, `PC`, `SC`, `RC`, `TC`, `AH`, `DM`, `IS`, `SP`) and restart numbering within each dimension. The issue id prefix MUST match the issue's final dimension after consolidation. For each dimension record: `dimension`, `observations` (1–3 sentences grounded in evidence), `issues[]` (`{id, dimension, severity, description, suggestion, evidence?}`), and `suggestions[]` (1–3 dimension-level improvements). **Do not assign a per-dimension 1–5 score** — scoring happens at the category level after consolidation.
+Number LLM-derived issue ids per canonical dimension prefix (`IC`, `PC`, `SC`, `RC`, `TC`, `AH`, `DM`, `IS`, `SP`). Within each dimension, continue after the highest preflight id already used for that prefix (or start at 1 when there is none), so generated ids never collide with fixed preflight ids. The issue id prefix MUST match the issue's final dimension after consolidation. Record each issue as `{id, dimension, severity, title, reasoning, fix}` plus the evidence that supports it — the shape of a report finding (Step 7.2). **Do not assign a per-dimension 1–5 score** — scoring happens at the category level after consolidation.
 
 ### 5.2 Consolidate to distinct root causes (major/minor)
 
 Consolidate the full pooled issue list into **distinct root causes**, then classify each into exactly ONE category by **dominant impact**. The number of issues after this step equals the number of root causes.
 
-- **Merge** issues describing the SAME underlying misconfiguration into ONE — even across dimensions/categories, and even when one cites a superset of another's tables (a broad "all tables Global" absorbs a narrow "student Global"). Enumerate all impacts in the description; set severity to the **highest** among merged; record every absorbed id in `mergedFrom` (including the primary's own id).
+- **Merge** issues describing the SAME underlying misconfiguration into ONE — even across dimensions/categories, and even when one cites a superset of another's tables (a broad "all tables Global" absorbs a narrow "student Global"). Enumerate all impacts in the description; set severity to the **highest** among merged.
 - **One category per root cause — by DOMINANT IMPACT:** over-exposure = too much access (data exposed to the wrong audience, anonymous mutation, PII readable too widely, Global on per-owner data); under-exposure = too little access (missing required CRUD flow, user-facing table with no permission, missing persona/role); correctness = structural (references a table absent from the model, dangling role link, wrong/invalid scope, missing design doc). When a root cause could touch two categories, pick its WORST real-world consequence. Reassign the merged issue a `dimension` within the chosen category.
 - **Under-exposure dimension tie-breaker (first match wins):** missing persona role spanning one or more reachable capabilities → `role-completeness`; existing persona role but missing table permission → `table-coverage`; existing role and table permission but missing CRUD/append bit → `intent-coverage`. Never choose among these dimensions by prose emphasis.
 - **Plan/code conflict tie-breaker:** for `reachable` capabilities, implementation wins and the applicable C6/C7/C15 issue remains major; for `disabled` capabilities, the plan wins and no under-exposure issue is raised; for `ambiguous` capabilities, raise only the minor `internal-consistency` conflict.
 - **Do NOT merge distinct exposures on different tables.** Two exposure/PII issues on DISJOINT table sets, or with different audiences/severities, are SEPARATE root causes — keep BOTH (e.g. anonymous-PII on student/teacher tables (major) vs over-broad Global read of public announcements/facilities (minor)). Only merge on the same or subset/superset tables. When in doubt, keep separate. C16 and C18 are one issue per role by definition.
 - **Preserve every preflight issue** (Step 2.5) as its own standalone issue with its fixed id + severity. If an audit/rubric issue duplicates a preflight one, merge it **into** the preflight issue (keep the preflight id/severity).
-- Never invent new problems; every consolidated issue traces to ≥1 source id via `mergedFrom`. Never downgrade a major to shrink the count.
+- Never invent new problems; every consolidated issue traces to at least one source issue. Never downgrade a major to shrink the count.
 
 The consolidated issues are what feed scoring and all later phases. Re-bucket each under its (possibly reassigned) dimension. **This single consolidated `major`/`minor` list is the one issue set for everything downstream** — it becomes the report's `FINDINGS_DATA` (Step 7.2), the Overview's Major/Minor counts, and the input to the score. One issue set, one tally, so more issues ⇒ lower score.
 
@@ -585,7 +575,7 @@ Apply [Appendix A](#appendix-a--scoring-model) exactly: one 1–5 score per cate
 
 ### 5.4 Verdict (prose)
 
-Write a **2–3 sentence** grader verdict: the top thing the config gets right, the top thing it gets wrong, and the verdict. State the verdict verbatim — **"Safe to go"** when there are **zero major** issues, **"Needs revision"** when there is **at least one major** issue. Minor issues never change it. **Do NOT tell the user whether to deploy, release, or ship** — the verdict summarises the findings; the decision is theirs. Prose only. (This is separate from the audit `SUMMARY`; it is stored as `overallSummary` in the JSON result.)
+Write a **2–3 sentence** grader verdict: the top thing the config gets right, the top thing it gets wrong, and the verdict. State the verdict verbatim — **"Safe to go"** when there are **zero major** issues, **"Needs revision"** when there is **at least one major** issue. Minor issues never change it. **Do NOT tell the user whether to deploy, release, or ship** — the verdict summarises the findings; the decision is theirs. Prose only. Use it as the report's `SUMMARY` (Step 7.2).
 
 ---
 
@@ -600,7 +590,7 @@ Root-cause values:
 - `webapi-settings` — `Webapi-*-enabled` / `-fields` YAML forces the grant (or gap).
 - `mixed` — an upstream cause AND a permissions-side mistake both contribute.
 
-For each major issue emit: `{ issueId, issueDimension, rootCause, confidence: high|medium|low, explanation, upstreamEvidence: [names/paths] (empty when rootCause = permissions), upstreamFixSuggestion (when permissions, set to "No upstream fix; address in the permission YAML directly.") }`.
+For each major issue decide `rootCause` and write `explanation`; they become the finding's `rootCause` and `rootCauseReason` in Step 7.2.
 
 `explanation` is shown to the user next to the major issue, so write **one plain-language sentence** that justifies the label: for `permissions`, say why the permission configuration alone is at fault; otherwise, name the specific upstream file or setting and what it forces.
 
@@ -630,7 +620,7 @@ Write a temporary JSON data file (e.g., `<OUTPUT_DIR>/audit-data.json`) with the
 }
 ```
 
-`SITE_NAME`, `AUDIT_DESC`, `SUMMARY`, `FINDINGS_DATA`, `INVENTORY_DATA` are the **required** keys the render script validates. `SCORECARD_DATA` is an extra key the enhanced template consumes — **always include it** (object or `null`) so no placeholder is left unreplaced. In `SCORECARD_DATA.reportPaths`, list the absolute paths to the full evaluation artifacts (the HTML report and the `permissions-audit-result.json` you will write in Step 7.4) — the Overview tab renders these so the user can open the complete reports.
+`SITE_NAME`, `AUDIT_DESC`, `SUMMARY`, `FINDINGS_DATA`, `INVENTORY_DATA` are the **required** keys the render script validates. `SCORECARD_DATA` is an extra key the enhanced template consumes — **always include it** (object or `null`) so no placeholder is left unreplaced. In `SCORECARD_DATA.reportPaths`, list the absolute path to the HTML report — the Overview tab renders it so the user can open the report.
 
 **FINDINGS_DATA format** — this is the single consolidated **major/minor** issue list from Step 5.2 (one entry per issue; it is exactly what the score is computed from). Use the canonical issue id from Step 5 (e.g. `AH1`). For **major** issues, copy `rootCause` and `explanation` from that issue's Step 6 entry; omit both fields for minor issues:
 
@@ -651,7 +641,7 @@ Write a temporary JSON data file (e.g., `<OUTPUT_DIR>/audit-data.json`) with the
 }
 ```
 
-- `id`: The canonical issue id from Step 5 — the same id used in the JSON result and in Step 6.
+- `id`: The canonical issue id from Step 5 — the same id used in Step 6.
 - `severity`: **`major`** or **`minor`** — the only two tiers (never critical/warning/info/pass).
 - `table`: The table logical name this issue relates to (or `null` for general issues)
 - `dimension`: The grader dimension the issue rolls up to (via the Appendix C bridge)
@@ -690,13 +680,12 @@ Write a temporary JSON data file (e.g., `<OUTPUT_DIR>/audit-data.json`) with the
     { "name": "Correctness (Validity & Alignment)", "score": 3.48 }
   ],
   "reportPaths": [
-    { "label": "HTML report", "path": "<PROJECT_ROOT>/docs/permissions-audit.html" },
-    { "label": "JSON result", "path": "<PROJECT_ROOT>/docs/permissions-audit-result.json" }
+    { "label": "HTML report", "path": "<PROJECT_ROOT>/docs/permissions-audit.html" }
   ]
 }
 ```
 
-The report surfaces this data automatically. The **Overview** tab leads with the **Audit Summary**, then an **Issues** row (**major** and **minor** counts — the single problem tally, which is exactly what drives the score) and a **Verdict** section (**Safe to go** / **Needs revision**, computed from the major count in `FINDINGS_DATA`, plus the per-category 1–5 score bars), plus the report paths. Every issue is **major** or **minor** — there is no critical/warning/info/pass tier anywhere in the report. The **Issues** tab lists each major/minor issue with its evidence and fix; each major issue also shows a root-cause badge (**Permissions only**, **Permissions + upstream**, or **Upstream: data model / site code / Web API settings**) and the one-sentence justification. Dimensions and the full root-cause entries are carried only in the JSON result, not in the HTML.
+The report surfaces this data automatically. The **Overview** tab leads with the **Audit Summary**, then an **Issues** row (**major** and **minor** counts — the single problem tally, which is exactly what drives the score) and a **Verdict** section (**Safe to go** / **Needs revision**, computed from the major count in `FINDINGS_DATA`, plus the per-category 1–5 score bars), plus the report paths. Every issue is **major** or **minor** — there is no critical/warning/info/pass tier anywhere in the report. The **Issues** tab lists each major/minor issue with its evidence and fix; each major issue also shows a root-cause badge (**Permissions only**, **Permissions + upstream**, or **Upstream: data model / site code / Web API settings**) and the one-sentence justification.
 
 ### 7.3 Render the HTML File
 
@@ -706,25 +695,21 @@ Run the render script (it creates the output directory if needed):
 node "${PLUGIN_ROOT}/scripts/render-audit-report.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 
-The render script refuses to overwrite existing files. Before calling it, check if the default output path (`<PROJECT_ROOT>/docs/permissions-audit.html`) already exists. If it does, choose a new descriptive filename based on context — e.g., `permissions-audit-apr-2026.html`, `permissions-audit-post-migration.html`. Pass the chosen name via `--output`, and use the same name for the `reportPaths` entries and the JSON result in Step 7.4.
+The render script refuses to overwrite existing files. Before calling it, check if the default output path (`<PROJECT_ROOT>/docs/permissions-audit.html`) already exists. If it does, choose a new descriptive filename based on context — e.g., `permissions-audit-apr-2026.html`, `permissions-audit-post-migration.html`. Pass the chosen name via `--output`, and use the same path in `reportPaths`.
 
-### 7.4 Write the JSON result
+### 7.4 Validate the report
 
-Alongside the HTML (same output directory), write a machine-readable result named after the report with `-result.json` in place of `.html` — `permissions-audit.html` → `permissions-audit-result.json`, `permissions-audit-apr-2026.html` → `permissions-audit-apr-2026-result.json`. The validator pairs the two files by this name. The key list below and the formats above are the complete authoring contract; the validator is the format authority.
-
-Top-level keys: `dimensionResults[]`, `categoryResults[]`, `verdict`, `overallSummary`, `issueCounts`, `deterministic`, `crossTrackPropagations[]`, `modelInfo`. Order `dimensionResults` per Appendix B and `categoryResults` as Over-Exposure, Under-Exposure, Correctness. Every issue requires `id`, `dimension`, `severity`, `description`, `suggestion`, and non-empty `mergedFrom`; `evidence` is optional. Every major issue requires exactly one propagation entry; minor issues have none.
-
-Run the semantic validator after writing both artifacts:
+Run the semantic validator on the rendered report:
 
 ```bash
-node "${PLUGIN_ROOT}/skills/audit-permissions/scripts/validate-audit.js" --result "<RESULT_JSON_PATH>"
+node "${PLUGIN_ROOT}/skills/audit-permissions/scripts/validate-audit.js" --report "<OUTPUT_PATH>"
 ```
 
-Do not present or copy a report until validation succeeds. The validator recomputes issue/category counts, scores, verdict, canonical dimension order, issue-id prefixes, and one-to-one major-issue propagation coverage, and checks that every HTML finding uses a JSON issue id and that each major finding shows the same root cause.
+Do not present or copy a report until validation succeeds. The validator reads `FINDINGS_DATA` and `SCORECARD_DATA` from the report and checks unique issue ids whose prefix matches the dimension, major/minor severities, non-empty `title`/`reasoning`/`fix`, a valid `rootCause` and `rootCauseReason` on every major finding (and none on minor findings), the three category scores recomputed from the findings, and leftover placeholders.
 
-If validation fails, repair only the named invariant and rerun it. Do not repeat evidence gathering to fix a validation error.
+If validation fails, delete the report you just rendered, fix the named problem in the data file, render again to the same path, and rerun the validator. Do not repeat evidence gathering to fix a validation error.
 
-Delete the temporary `audit-data.json` and `audit-evidence.json` files after both artifacts are written and validation succeeds.
+Delete the temporary `audit-data.json` and `audit-evidence.json` files after validation succeeds.
 
 ### 7.5 Open in Browser
 
@@ -744,7 +729,7 @@ Follow the skill tracking instructions in the reference to record this skill's u
 
 <!-- gate: audit-permissions:6.fix-offer | category=plan | cancel-leaves=nothing -->
 
-> 🚦 **Gate (plan · audit-permissions:6.fix-offer):** Offer to apply auto-fixes for major/minor issues. The report has already been written; declining here just leaves the HTML report + JSON result in place — no Dataverse / filesystem mutation.
+> 🚦 **Gate (plan · audit-permissions:6.fix-offer):** Offer to apply auto-fixes for major/minor issues. The report has already been written; declining here just leaves the HTML report in place — no Dataverse / filesystem mutation.
 >
 > **Trigger:** Phase 8 has tallied findings and the report is saved.
 > **Why we ask:** Tooling could silently invoke the table-permissions-architect agent — accept-by-default would write or mutate permission YAML against the user's intent.
@@ -755,7 +740,7 @@ Present a summary to the user:
 1. **Verdict** — **Safe to go** or **Needs revision**, plus the three category scores
 2. **Major issues count** — these need immediate attention
 3. **Minor issues count** — nice-to-have / forward-looking
-4. **Report location** — where the HTML file and JSON result were saved
+4. **Report location** — where the HTML report was saved
 5. **Ask the user** using `AskUserQuestion`: "Would you like me to fix any of these issues? I can create or update table permissions to resolve the major issues."
 
 If the user wants fixes applied:
@@ -804,7 +789,7 @@ The verdict is driven by **severity**, not by any score:
 | **0 major issues** | **Safe to go** | No major issues were identified. |
 | **≥ 1 major issue** | **Needs revision** | One or more major issues were identified; review and address them. |
 
-Minor issues never change the verdict — they are still recorded and still lower their category score, but they are left to the user's judgement. State the verdict phrase verbatim in Step 5.4, in the JSON result, and in the report.
+Minor issues never change the verdict — they are still recorded and still lower their category score, but they are left to the user's judgement. State the verdict phrase verbatim in Step 5.4 and in the report.
 
 The verdict is **advisory**. It summarises what the audit found; it is not an approval or a release gate, and the decision to act on it rests with the human reviewer. Never instruct the user to deploy or not deploy.
 
@@ -830,7 +815,7 @@ Use each dimension's definition to decide where an issue belongs. Order is canon
 
 **8. Internal Consistency** — `IS` · *Correctness* — YAML valid; every web-role GUID in a permission resolves; `permission-plan.html` aligns with the YAML.
 
-**9. Security Posture** — `SP` · *Over-Exposure* — Overall least-privilege. No surprising broad grants on sensitive tables (Contact, system tables); no avoidable delete/write on shared records. If Web API field whitelists exist, check they don't broadly expose sensitive PII columns — and that they never use the wildcard `*`, which grants every column including any added later. An explicit column list is fine however long it is.
+**9. Security Posture** — `SP` · *Over-Exposure* — Overall least-privilege. No surprising broad grants on sensitive tables (Contact, system tables); no avoidable delete/write on shared records. If Web API field whitelists exist, check they don't broadly expose sensitive PII columns.
 
 ---
 
@@ -858,7 +843,7 @@ Map each Step-4 finding into a dimension, then apply the severity policy above t
 |---|---|---|
 | A. Missing permission for referenced table | intent-coverage (+ table-coverage) | major |
 | A. Unused permission (not referenced in code) | privilege-calibration (C18, one issue per role) | minor |
-| B. Permission has no web role | role-completeness | major (also preflight `RC`); none for a Parent-scope child with a valid parent chain |
+| B. Permission has no web role | role-completeness | major; none for a Parent-scope child with a valid parent chain |
 | C. Global scope with write/delete | privilege-calibration / security-posture | major, except staff shared work queues (C16) and child-table parity (C17) |
 | C. Scope could be narrower | scope-correctness | major if per-owner/PII, else minor |
 | D. Missing read | intent-coverage | major |
@@ -870,8 +855,6 @@ Map each Step-4 finding into a dimension, then apply the severity policy above t
 | H. Append enabled but not needed | privilege-calibration (C18, one issue per role) | minor |
 | I. Broken parent chain | internal-consistency | major |
 | J. Missing read on `$expand` table | intent-coverage | major |
-| J2. Wildcard column exposure (`fields: *`, `$select=*`) | security-posture | major |
-| Anonymous write/create/delete | anonymous-access-hygiene | major |
 | PII readable by anonymous | anonymous-access-hygiene / security-posture | major |
 | Schema-validator `error` / `warning` / `info` | internal-consistency (or the specific dimension) | error→major, warning→policy, info→minor |
 
@@ -891,5 +874,5 @@ Map each Step-4 finding into a dimension, then apply the severity policy above t
 - **Deterministic API calls**: Always use the Node.js scripts (`query-table-lookups.js`, `query-table-relationships.js`) for Dataverse API queries — never use inline PowerShell `Invoke-RestMethod` calls.
 - **No questions during analysis**: Autonomously gather all data, run checks, score, and present findings. Only ask the user at the end about fixing issues.
 - **Security**: Never log or display auth tokens. The scripts handle token acquisition internally via `getAuthToken()`.
-- **Graceful degradation**: If Dataverse API scripts fail (exit code 1), skip API-dependent checks (H/H2 append/appendto validation, I parent chain integrity) and note in the report which checks were skipped. If scoring inputs are too thin (e.g., no data model), still emit the audit findings; set `SCORECARD_DATA` to `null` and omit the JSON result rather than fabricating a score.
+- **Graceful degradation**: If Dataverse API scripts fail (exit code 1), skip API-dependent checks (H/H2 append/appendto validation, I parent chain integrity) and note in the report which checks were skipped. If scoring inputs are too thin (e.g., no data model), still emit the audit findings; set `SCORECARD_DATA` to `null` rather than fabricating a score.
 - **Don't invent files or tables** not present in the inputs.

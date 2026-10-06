@@ -3,17 +3,6 @@
 const fs = require('fs');
 const path = require('path');
 
-const DIMENSIONS = [
-  'intent-coverage',
-  'privilege-calibration',
-  'scope-correctness',
-  'role-completeness',
-  'table-coverage',
-  'anonymous-access-hygiene',
-  'data-model-alignment',
-  'internal-consistency',
-  'security-posture',
-];
 const PREFIXES = {
   'intent-coverage': 'IC',
   'privilege-calibration': 'PC',
@@ -28,14 +17,17 @@ const PREFIXES = {
 const CATEGORIES = [
   {
     id: 'over-exposure',
+    name: /^Over-Exposure/i,
     dimensions: ['privilege-calibration', 'anonymous-access-hygiene', 'security-posture'],
   },
   {
     id: 'under-exposure',
+    name: /^Under-Exposure/i,
     dimensions: ['intent-coverage', 'table-coverage', 'role-completeness'],
   },
   {
     id: 'correctness',
+    name: /^Correctness/i,
     dimensions: ['scope-correctness', 'data-model-alignment', 'internal-consistency'],
   },
 ];
@@ -55,14 +47,6 @@ function countIssues(issues) {
   return { major, minor, total: major + minor };
 }
 
-function assertCounts(actual, expected, label) {
-  for (const key of ['major', 'minor', 'total']) {
-    if (actual?.[key] !== expected[key]) {
-      throw new Error(`${label}.${key} is ${actual?.[key]}; expected ${expected[key]}.`);
-    }
-  }
-}
-
 function requireText(record, fields, label) {
   for (const field of fields) {
     if (typeof record[field] !== 'string' || !record[field].trim()) {
@@ -71,146 +55,74 @@ function requireText(record, fields, label) {
   }
 }
 
-function validateResult(result) {
-  if (!result || typeof result !== 'object') throw new Error('Result must be a JSON object.');
-  if (!Array.isArray(result.dimensionResults) || result.dimensionResults.length !== DIMENSIONS.length) {
-    throw new Error(`dimensionResults must contain exactly ${DIMENSIONS.length} entries.`);
-  }
-  if (!Array.isArray(result.categoryResults) || result.categoryResults.length !== CATEGORIES.length) {
-    throw new Error(`categoryResults must contain exactly ${CATEGORIES.length} entries.`);
-  }
-
-  const issueIds = new Set();
-  const issues = [];
-  result.dimensionResults.forEach((dimensionResult, index) => {
-    const expectedDimension = DIMENSIONS[index];
-    if (dimensionResult.dimension !== expectedDimension) {
-      throw new Error(`dimensionResults[${index}] must be ${expectedDimension}, found ${dimensionResult.dimension}.`);
+function validateFindings(findings) {
+  if (!Array.isArray(findings)) throw new Error('FINDINGS must be an array.');
+  const ids = new Set();
+  for (const finding of findings) {
+    const prefix = PREFIXES[finding.dimension];
+    if (!prefix) throw new Error(`Finding ${finding.id} has invalid dimension ${finding.dimension}.`);
+    if (!new RegExp(`^${prefix}[1-9][0-9]*$`).test(finding.id)) {
+      throw new Error(`Finding ${finding.id} must use the ${prefix} prefix for ${finding.dimension}.`);
     }
-    if (!Array.isArray(dimensionResult.issues)) {
-      throw new Error(`${expectedDimension}.issues must be an array.`);
+    if (ids.has(finding.id)) throw new Error(`Finding ${finding.id} is listed more than once.`);
+    ids.add(finding.id);
+    if (!['major', 'minor'].includes(finding.severity)) {
+      throw new Error(`Finding ${finding.id} has invalid severity ${finding.severity}.`);
     }
-    for (const issue of dimensionResult.issues) {
-      if (issue.dimension !== expectedDimension) {
-        throw new Error(`Issue ${issue.id} is nested under ${expectedDimension} but declares ${issue.dimension}.`);
+    requireText(finding, ['title', 'reasoning', 'fix'], `Finding ${finding.id}`);
+    if (finding.severity === 'major') {
+      if (!ROOT_CAUSES.includes(finding.rootCause)) {
+        throw new Error(`Major finding ${finding.id} has invalid rootCause ${finding.rootCause}.`);
       }
-      if (!['major', 'minor'].includes(issue.severity)) {
-        throw new Error(`Issue ${issue.id} has invalid severity ${issue.severity}.`);
-      }
-      if (!new RegExp(`^${PREFIXES[expectedDimension]}[1-9][0-9]*$`).test(issue.id)) {
-        throw new Error(`Issue ${issue.id} must use the ${PREFIXES[expectedDimension]} prefix.`);
-      }
-      if (issueIds.has(issue.id)) throw new Error(`Duplicate issue id ${issue.id}.`);
-      if (!Array.isArray(issue.mergedFrom) || issue.mergedFrom.length === 0) {
-        throw new Error(`Issue ${issue.id} must include non-empty mergedFrom.`);
-      }
-      requireText(issue, ['description', 'suggestion'], `Issue ${issue.id}`);
-      issueIds.add(issue.id);
-      issues.push(issue);
+      requireText(finding, ['rootCauseReason'], `Major finding ${finding.id}`);
+    } else if (finding.rootCause !== undefined || finding.rootCauseReason !== undefined) {
+      throw new Error(`Minor finding ${finding.id} must not carry a root cause.`);
     }
-  });
-
-  const expectedTotalCounts = countIssues(issues);
-  assertCounts(result.issueCounts, expectedTotalCounts, 'issueCounts');
-  const expectedVerdict = expectedTotalCounts.major === 0 ? 'Safe to go' : 'Needs revision';
-  if (result.verdict !== expectedVerdict) {
-    throw new Error(`verdict is ${result.verdict}; expected ${expectedVerdict}.`);
   }
+}
 
+function validateScorecard(scorecard, findings) {
+  if (scorecard === null) return;
+  const categories = scorecard?.categories;
+  if (!Array.isArray(categories) || categories.length !== CATEGORIES.length) {
+    throw new Error(`SCORECARD.categories must contain exactly ${CATEGORIES.length} entries.`);
+  }
   CATEGORIES.forEach((category, index) => {
-    const categoryResult = result.categoryResults[index];
-    if (categoryResult.category !== category.id) {
-      throw new Error(`categoryResults[${index}] must be ${category.id}, found ${categoryResult.category}.`);
+    const entry = categories[index];
+    if (!category.name.test(String(entry?.name || ''))) {
+      throw new Error(`SCORECARD.categories[${index}] must be ${category.id}, found ${entry?.name}.`);
     }
-    const categoryIssues = issues.filter((issue) => category.dimensions.includes(issue.dimension));
-    const expectedCounts = countIssues(categoryIssues);
-    assertCounts(categoryResult.issueCounts, expectedCounts, `${category.id}.issueCounts`);
-    const expectedScore = scoreFromIssues(expectedCounts.major, expectedCounts.minor);
-    if (categoryResult.score !== expectedScore) {
-      throw new Error(`${category.id}.score is ${categoryResult.score}; expected ${expectedScore}.`);
+    const counts = countIssues(findings.filter((finding) => category.dimensions.includes(finding.dimension)));
+    const expected = scoreFromIssues(counts.major, counts.minor);
+    if (entry.score !== expected) {
+      throw new Error(`${entry.name} score is ${entry.score}; expected ${expected}.`);
     }
   });
-
-  const majorIssues = issues.filter((issue) => issue.severity === 'major');
-  const propagations = result.crossTrackPropagations;
-  if (!Array.isArray(propagations)) throw new Error('crossTrackPropagations must be an array.');
-  const propagatedIds = propagations.map((entry) => entry.issueId);
-  if (new Set(propagatedIds).size !== propagatedIds.length) {
-    throw new Error('crossTrackPropagations contains duplicate issue ids.');
-  }
-  const missingPropagation = majorIssues.find((issue) => !propagatedIds.includes(issue.id));
-  const extraPropagation = propagatedIds.find((id) => !majorIssues.some((issue) => issue.id === id));
-  if (missingPropagation) throw new Error(`Major issue ${missingPropagation.id} has no propagation entry.`);
-  if (extraPropagation) throw new Error(`Propagation entry ${extraPropagation} does not reference a major issue.`);
-  for (const propagation of propagations) {
-    const issue = majorIssues.find((candidate) => candidate.id === propagation.issueId);
-    if (propagation.issueDimension !== issue.dimension) {
-      throw new Error(`Propagation ${propagation.issueId} has dimension ${propagation.issueDimension}; expected ${issue.dimension}.`);
-    }
-    if (!ROOT_CAUSES.includes(propagation.rootCause)) {
-      throw new Error(`Propagation ${propagation.issueId} has invalid rootCause ${propagation.rootCause}.`);
-    }
-    if (typeof propagation.explanation !== 'string' || !propagation.explanation.trim()) {
-      throw new Error(`Propagation ${propagation.issueId} needs a non-empty explanation.`);
-    }
-  }
-
-  return { issueCounts: expectedTotalCounts, verdict: expectedVerdict };
 }
 
-function htmlPathFor(resultPath) {
-  if (/-result\.json$/i.test(resultPath)) return resultPath.replace(/-result\.json$/i, '.html');
-  return path.join(path.dirname(resultPath), 'permissions-audit.html');
-}
-
-function readFindings(html) {
-  const marker = 'const FINDINGS = ';
+function readConst(html, name) {
+  const marker = `const ${name} = `;
   const start = html.indexOf(marker);
-  if (start < 0) throw new Error('Audit report has no FINDINGS data.');
+  if (start < 0) throw new Error(`Audit report has no ${name} data.`);
   const end = html.indexOf('\n', start);
   const json = html.slice(start + marker.length, end < 0 ? undefined : end).trim().replace(/;$/, '');
   try {
     return JSON.parse(json);
   } catch {
-    throw new Error('Audit report FINDINGS data is not valid JSON.');
+    throw new Error(`Audit report ${name} data is not valid JSON.`);
   }
 }
 
-function validateHtmlFindings(html, result) {
-  const findings = readFindings(html);
-  const issues = result.dimensionResults.flatMap((dimension) => dimension.issues);
-  const rootCauseById = Object.fromEntries(result.crossTrackPropagations.map((entry) => [entry.issueId, entry.rootCause]));
-  if (findings.length !== issues.length) {
-    throw new Error(`Audit report lists ${findings.length} issues; JSON result has ${issues.length}.`);
+function validateReport(reportPath) {
+  const html = fs.readFileSync(reportPath, 'utf8');
+  if (/__(?:(?:HTML|ATTR|JSON|RAW)_)?(?:SITE_NAME|AUDIT_DESC|SUMMARY|FINDINGS_DATA|INVENTORY_DATA|SCORECARD_DATA)__/.test(html)) {
+    throw new Error('Audit report has unreplaced data placeholders.');
   }
-  const findingIds = new Set();
-  for (const finding of findings) {
-    if (findingIds.has(finding.id)) {
-      throw new Error(`Audit report lists finding ${finding.id} more than once.`);
-    }
-    findingIds.add(finding.id);
-    const issue = issues.find((candidate) => candidate.id === finding.id);
-    if (!issue) {
-      throw new Error(`Audit report finding ${finding.id} does not match a JSON issue id.`);
-    }
-    requireText(finding, ['title', 'reasoning', 'fix'], `Audit report finding ${finding.id}`);
-    if (issue.severity === 'major' && finding.rootCause !== rootCauseById[finding.id]) {
-      throw new Error(`Audit report finding ${finding.id} has rootCause ${finding.rootCause}; expected ${rootCauseById[finding.id]}.`);
-    }
-  }
-}
-
-function validateFiles(resultPath, htmlPath) {
-  const result = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
-  const summary = validateResult(result);
-  if (htmlPath && fs.existsSync(htmlPath)) {
-    const html = fs.readFileSync(htmlPath, 'utf8');
-    if (/__(?:SITE_NAME|AUDIT_DESC|SUMMARY|FINDINGS_DATA|INVENTORY_DATA|SCORECARD_DATA)__/.test(html)) {
-      throw new Error('Audit report has unreplaced data placeholders.');
-    }
-    validateHtmlFindings(html, result);
-  }
-  return summary;
+  const findings = readConst(html, 'FINDINGS');
+  validateFindings(findings);
+  validateScorecard(readConst(html, 'SCORECARD'), findings);
+  const issueCounts = countIssues(findings);
+  return { issueCounts, verdict: issueCounts.major === 0 ? 'Safe to go' : 'Needs revision' };
 }
 
 function fail(error) {
@@ -219,21 +131,20 @@ function fail(error) {
   process.exit(1);
 }
 
-const resultFlagIndex = process.argv.indexOf('--result');
-const positionalResult = process.argv.slice(2).find((argument) => !argument.startsWith('-'));
-const explicitResult = resultFlagIndex >= 0 ? process.argv[resultFlagIndex + 1] : positionalResult;
+const reportFlagIndex = process.argv.indexOf('--report');
+const positionalReport = process.argv.slice(2).find((argument) => !argument.startsWith('-'));
+const explicitReport = reportFlagIndex >= 0 ? process.argv[reportFlagIndex + 1] : positionalReport;
 
-if (explicitResult) {
+if (explicitReport) {
   try {
-    const resultPath = path.resolve(explicitResult);
-    const htmlPath = htmlPathFor(resultPath);
-    const summary = validateFiles(resultPath, htmlPath);
-    process.stdout.write(`${JSON.stringify({ valid: true, resultPath, ...summary })}\n`);
+    const reportPath = path.resolve(explicitReport);
+    const summary = validateReport(reportPath);
+    process.stdout.write(`${JSON.stringify({ valid: true, reportPath, ...summary })}\n`);
   } catch (error) {
     fail(error);
   }
 } else {
-  // The PostToolUse(Skill) hook fires before the audit writes its artifacts, so it can only see a previous run; Step 7.4 validates the new result.
+  // The PostToolUse(Skill) hook fires before the audit writes its report, so it can only see a previous run; Step 7.4 validates the new report.
   process.stdin.resume();
   process.stdin.on('end', () => process.exit(0));
 }
