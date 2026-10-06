@@ -74,8 +74,8 @@ const { sanitizeSubject } = require('./sanitize-subject.js');
 function sdkProvenance(root) {
   const git = (args) => {
     try {
-      return require('node:child_process')
-        .execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+      return require('../lib/process-runner.js')
+        .runSync('git', ['-C', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
         .trim();
     } catch {
       return null;
@@ -230,6 +230,14 @@ esbuild
     outfile: OUTFILE,
     logLevel: 'info',
     minify: true,
+    // The SDK compiles generative pages with a TypeScript compiler its HOST supplies
+    // (`MakerSdkOptions.typescript`); its `/node` entry offers `loadNodeTypeScript`, which loads
+    // `typescript` with a dynamic import. esbuild follows that import and inlined the whole compiler:
+    // 3.5 MB of a 4.4 MB bundle, measured with a metafile. The plugin supplies no compiler, since it
+    // still deploys pages through `pac`, so nothing ever calls that loader. Left external, the import
+    // stays a lazy runtime require, and a caller of `loadNodeTypeScript` gets "Cannot find module
+    // 'typescript'" instead of a compiler nobody asked for.
+    external: ['typescript'],
     // The bundle is entirely Microsoft's cds-maker-sdk + its designer packages; esbuild's extracted
     // legal comments were 100% redundant Microsoft copyright headers (no third-party notices — the
     // bundled OSS deps ship pre-stripped), so we drop the sidecar and carry a single copyright banner

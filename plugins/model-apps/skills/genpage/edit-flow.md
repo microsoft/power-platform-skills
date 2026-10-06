@@ -132,8 +132,7 @@ Also read `config.json.connectorBindings` and `config.json.actionBindings`.
 > - **Add / replace / discover connector data:** invoke `genpage-connector-builder`
 >   via `Task` with **Mode: `edit`**, the working directory, `${PLUGIN_ROOT}`, the
 >   `envUrl` from Edit Phase 1, the existing bindings, and the edit intent. The
->   builder owns the rollback gate: when connectors are off it preserves existing
->   bindings and adds none; otherwise it discovers and returns the updated set. It
+>   builder discovers and returns the updated set. It
 >   writes `<working-dir>/connectors.json` (bare array) and
 >   `<working-dir>/connector-bindings.md`.
 > - **Remove one (or some) connectors:** invoke `genpage-connector-builder` the
@@ -351,7 +350,7 @@ It is written to a file and passed as `--prompt-file`; see SKILL.md Phase 6
 
 Connector binding rules for edit deploy:
 - **Add / replace / discover / remove one connector:** the `genpage-connector-builder`
-  agent (Mode: `edit`) has already gated on the flag and written the full desired
+  agent (Mode: `edit`) has already written the full desired
   binding set to `<working-dir>/connectors.json` (a removal writes the remaining
   bindings). Pre-flight that `pac model genpage upload --help` contains `--connectors`
   and include `--connectors '<working-dir>/connectors.json'` in the upload — this is a
@@ -402,6 +401,17 @@ the sitemap; the wrapper refuses the combination anyway).
 Omit `--data-sources` when `config.json.dataSources` was empty.
 Omit `--connectors` when connector bindings are unchanged.
 Omit `--actions` when Custom API bindings are unchanged.
+
+An update without `--name`/`--name-file` keeps the page's current name: the script reads it from the
+deployed page and sends it again, because pac would otherwise give the page its **sitemap title** as its
+name (measured: a page renamed with `--name-file` reverted to the title on the next update that omitted
+it). So an edit that does not rename the page omits it. To rename a page, pass `--name-file` on this
+update, and tell the user its navigation title is the app's sitemap entry and is not changed by the
+upload. A name containing a straight double quote (`"`) is refused before anything is uploaded, because
+pac would store each one as `\"`; where pac is installed as a `pac.cmd` shim (Windows), so is a name
+containing `%`. If the current name cannot be read — or cannot be sent, because pac is a `pac.cmd`
+shim and the name holds `%` or `"` — the update still goes ahead and its result carries a `warnings`
+entry; re-run it with `--name-file`.
 
 ## Edit Phase 7: Verify (Optional)
 

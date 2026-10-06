@@ -41,7 +41,7 @@ This skill orchestrates specialist agents across the create and edit flows:
 
 5. **`genpage-connector-builder`** — top-level orchestrator dispatch when an edit adds,
    replaces, discovers, removes, or clears connector bindings; preserves unchanged bindings
-   when the edit does not touch them, or when the `connectors` rollback gate is off.
+   when the edit does not touch them.
    **`genpage-customapi-builder`** — the same top-level dispatch when an edit adds, replaces,
    discovers, removes, or clears Custom API bindings.
 6. **`genpage-edit-planner`** — reads the downloaded page artifacts, gathers change
@@ -310,8 +310,8 @@ missing and stop, so the run can be re-driven with the decision supplied.
 #### 1a. Connector discovery is orchestrator-owned and never speculative
 
 `genpage-connector-builder` is dispatched only by this top-level orchestrator,
-not by `genpage-planner`. This keeps connector discovery and its rollback gate in one
-agent while avoiding nested `Task` calls from the planner.
+not by `genpage-planner`. This keeps connector discovery in one agent while avoiding
+nested `Task` calls from the planner.
 
 **Never run discovery before the planner returns** — not even when `$ARGUMENTS`
 obviously mentions SharePoint, Teams, Office 365 or a custom REST source.
@@ -334,10 +334,9 @@ So the sequence is always: plan first, then discover, then re-plan.
   `<working-dir>/connector-bindings.md` and verify `<working-dir>/connectors.json`
   is a bare JSON array, then re-run the planner with the refreshed contract.
 
-The builder remains the single owner of connector discovery and of the `connectors`
-rollback gate: it probes first, writes `No connector bindings.` + `[]` when the gate
-is off or the page needs no connector, and performs all connection discovery only
-when one is required.
+The builder remains the single owner of connector discovery: it writes
+`No connector bindings.` + `[]` when the page needs no connector, and performs all
+connection discovery only when one is required.
 
 #### 1b. Custom API discovery is orchestrator-owned too
 
@@ -467,8 +466,8 @@ It returns a single JSON object:
 ```json
 {
   "ok": true | false,
-  "blocker": null | "az_missing" | "az_not_logged_in" | "pac_not_logged_in"
-                 | "no_env_url" | "whoami_403" | "whoami_401" | "whoami_error",
+  "blocker": null | "usage" | "az_missing" | "az_not_logged_in" | "az_timeout" | "pac_not_logged_in"
+                 | "pac_timeout" | "no_env_url" | "whoami_403" | "whoami_401" | "whoami_error",
   "message": "human-readable next step",
   "warnings": ["..."],
   "azUser": "...", "pacUser": "...", "envUrl": "...",
@@ -485,6 +484,13 @@ It returns a single JSON object:
 - **`ok: false`** → show the `message` field to the user verbatim and
   **stop the workflow**. The script already includes a fix-it command for every
   blocker (run `az login`, etc.).
+- **`blocker: "usage"`** is the one exception: the `check-auth.js` command line itself was wrong (a
+  mistyped flag or a missing value). Fix the invocation and run it again instead of stopping.
+- **`blocker: "az_timeout"`** means the Azure CLI was too slow to answer, not that it is missing or
+  signed out. Retry once; if it recurs on a busy machine, set `POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS`
+  (milliseconds, default 60000) for the Azure CLI budget.
+- **`blocker: "pac_timeout"`** means `pac org who` did not answer within its fixed 60 s, so the PAC
+  login is unknown, not missing. Retry once. The Azure CLI setting above does not change this budget.
 
 Capture `envUrl` from the result — Phase 2b passes it to the entity-builder.
 
@@ -563,32 +569,19 @@ After generating, read the RuntimeTypes.ts file to verify it generated correctly
 
 ### Phase 4.5: Connector Bindings (Conditional)
 
-**Re-probe the rollback gate here — do not rely on the plan content alone.** Connectors
-are GA and the flag ships ON, so this normally passes; it exists so a plan authored
-while the feature was on cannot deploy connectors after it has been turned off:
-
-```powershell
-node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors
-```
-
-**If it prints `disabled`:** the outcome is `Connectors: none` **regardless of what the
-plan's `## Connector Bindings` section says**. Skip the rest of this phase — do not
-create or pass `connectors.json`, and do not add `--connectors` on upload. (Backstop:
-`list-connections.js` / `create-connection-reference.js` also fail closed with exit 3.)
-
-**If it prints `enabled`:** read the plan's `## Connector Bindings` section and treat it
-as bindings **only when it contains an actual binding table** (a `| Logical Name | …`
-header with at least one data row). If the section is `No connector bindings.`, empty,
-missing, or malformed, the page has no connectors: skip this phase entirely — do not
-create or pass `connectors.json`, and do not add `--connectors` on upload.
+Read the plan's `## Connector Bindings` section and treat it as bindings **only when
+it contains an actual binding table** (a `| Logical Name | …` header with at least
+one data row). If the section is `No connector bindings.`, empty, missing, or
+malformed, the page has no connectors: skip this phase entirely — do not create or
+pass `connectors.json`, and do not add `--connectors` on upload.
 
 **Carry this decision into code generation.** The outcome is `Connectors: <n>
 binding(s)` or `Connectors: none` for the rest of the run, and Phase 5 **must** pass
 it verbatim in every page-builder dispatch — otherwise the generated page could call
 a connector this run never binds, and the page fails at runtime instead of simply
-omitting the feature. Note the dispatch value is the **binding count**, not the flag
-state: a disabled gate and an empty binding table both produce `none`, because the
-page-builder only ever needs to know how many bindings it may call.
+omitting the feature. The dispatch value is the **binding count**, not a flag state:
+an empty binding table produces `none`, because the page-builder only ever needs to
+know how many bindings it may call.
 
 When there are real bindings, the `genpage-connector-builder` agent already wrote
 `<working-dir>/connectors.json` during planning — verify it exists and matches the
@@ -712,11 +705,10 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
 
 1. Read `${PLUGIN_ROOT}/references/rules.md`
 2. Read the sample listed in the plan's `## Relevant Samples`
-3. Only when the Phase 4.5 probe printed `enabled` **and** the plan's
-   `## Connector Bindings` section contains an **actual binding table** (a
-   `| Logical Name | …` header with at least one data row), also read
-   `${PLUGIN_ROOT}/references/connectors.md`. Treat a `No connector bindings.`
-   sentinel, an empty/missing/malformed section, **or a `disabled` probe** as
+3. Only when the plan's `## Connector Bindings` section contains an **actual
+   binding table** (a `| Logical Name | …` header with at least one data row),
+   also read `${PLUGIN_ROOT}/references/connectors.md`. Treat a
+   `No connector bindings.` sentinel or an empty/missing/malformed section as
    having no connectors (same contract as Phase 4.5 and genpage-page-builder).
 3b. Only when the Phase 4.6 probe printed `enabled` **and** the plan's
    `## Custom API Bindings` section contains an **actual binding table** (a
@@ -789,7 +781,7 @@ For each page, pass a prompt that includes:
 - Target file name (e.g., "candidate-tracker.tsx")
 - Absolute path to `genpage-plan.md`
 - Data mode (see below) — either a RuntimeTypes path or an explicit mock flag
-- **Connectors: `none` or `<n> binding(s)`** — the Phase 4.5 outcome, verbatim
+- **Connectors: `none` or `<n> binding(s)`** — the Phase 4.5 binding-count outcome, verbatim
 - **Telemetry: `enabled` or `disabled`** — the Phase 4.7 probe result, verbatim
 - Working directory
 - Plugin root: `${PLUGIN_ROOT}`
@@ -916,7 +908,10 @@ foreach ($f in 'prompt.txt', 'agent-message.txt', 'page-name.txt') {
 Then write, with the file tool, `<working-dir>/prompt.txt` holding the prompt, `<working-dir>/agent-message.txt` the
 agent message and, on a create, `<working-dir>/page-name.txt` the page's display name — each exactly its text (a
 trailing line break on the name is ignored). `genpage-upload.js` refuses any of them that is a link, a hard link or a
-folder, but only after the write.
+folder, but only after the write. The name is the one value passed to pac inline. A name containing a straight double
+quote (`"`) is refused before anything is uploaded — pac stores each one as `\"`, in the page and in the navigation
+title it writes — so use typographic quotes (“ ”) or an apostrophe, which are stored exactly. Where pac is installed as
+a `pac.cmd` shim (Windows), a name containing `%` is refused too, so pick one without it.
 
 **Log the invocation into `workflow-log.md` under a `## Phase 6 — Deploy` section before running it.** Record the flags and the prompt-file path, plus the prompt's scope, so the approved text is preserved semantically without embedding arbitrary text as an executable command. Format:
 
@@ -990,6 +985,13 @@ For updates, include the `--connectors` line only when this upload intentionally
 replaces or clears connector bindings; otherwise omit it to preserve the
 deployed page's current bindings. The same rule applies to `--actions` for Custom
 API bindings: include it only when this upload intentionally replaces or clears them.
+
+An update without `--name-file` keeps the page's current display name, and one without `--model` its
+current model: pac would otherwise rename the page to its navigation title and store an empty model, so
+the script reads both from the deployed page and sends them again. If either cannot be read — or the
+name cannot be sent, because pac is a `pac.cmd` shim and the name holds `%` or `"` — the update still
+goes ahead and its result carries a `warnings` entry naming what may have changed; re-run with that value
+passed explicitly.
 
 ### Phase 6.5: Navigation Fix-Up (Multi-Page Only)
 

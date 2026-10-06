@@ -76,6 +76,11 @@ const SKILL_SDK_SURFACE = [
   'listArtifacts',
   'moveElement',
   'publishArtifact',
+  // Step 8 publishes the app and every table whose default-view enrichment was saved but not yet
+  // published in ONE PublishXml envelope (one customization lock, one publish job) instead of one
+  // call per artifact. `publishArtifact` stays above: it is the per-target fallback when the batch
+  // is refused or a target in it fails.
+  'publishArtifacts',
   'pushArtifact',
   'queryRecords',
   'removeElement',
@@ -90,6 +95,9 @@ const SKILL_SDK_SURFACE = [
   // `systemformrole` entity — they live inside `formxml` as `<DisplayConditions>`, so this dedicated
   // call is the only way to write them.
   'setFormSecurityRoles',
+  // Reads a form's <DisplayConditions> back — including its `Order`, the form's place in the table's
+  // Main Form Set, which the forms phase sets and keeps (AB#6736948).
+  'getFormSecurityRoles',
   // Written by the app-shell phase for `app.newLook` — the modern shell is a per-app SETTING
   // (`NewLookAlwaysOn`), not an appmodule column.
   'saveSettingValue',

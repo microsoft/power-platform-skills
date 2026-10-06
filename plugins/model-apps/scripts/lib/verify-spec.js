@@ -6,17 +6,22 @@
 
 const { odataLit } = require('./odata.js');
 const { matchContainer, isEngineOwnedSection, isEngineHostSection, claimedByAuthoredName } = require('./form-container-match.js');
-const { authoredSectionNames } = require('./app-spec.js');
+const { authoredSectionNames, authoredTabNames } = require('./app-spec.js');
 const { decodeXmlEntities } = require('./sitemap-pages.js');
 const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf } = require('./app-spec.js');
-const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef, dashboardsInSolution, findDashboardsByName } = require('./sdk-build.js');
+const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef, dashboardsInSolution, findDashboardsByName, findPinnedDashboard } = require('./sdk-build.js');
+const { DASHBOARD_LAUNCHER_URL, isDashboardLauncherUrl, subAreaTargetKey, specSubAreaTargetKey, specSubAreas, chromeByTargetKey, keepsLiveValue } = require('./sitemap-merge.js');
+// Recorded on an icon check the build's keep rule satisfies (keepsLiveValue, sitemap-merge.js).
+const KEPT_BY_DESIGNER = 'kept as the environment has it: changed in the designer since the spec\u2019s baseline, which the spec still matches';
 const { extractNavTargets } = require('./pageref-resolver.js');
 const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges.js');
 const { resolveSurfaces } = require('./surface-resolver.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
 const { isVisualizationUnsupported } = require('./entity-provision.js');
-const { sectionGridWidth, mergeFieldOptions, fieldOptionsMap, normalizeFieldEntry } = require('./artifact-intent.js');
+const { sectionGridWidth, mergeFieldOptions, fieldOptionsMap, normalizeFieldEntry, compileFormIntent, isNonFieldControl } = require('./artifact-intent.js');
+const { rowOccupancy } = require('./form-occupancy.js');
+const { isMainForm, selectDefaultForm, plannedMainFormSequence, displayConditionsOrder, compareServedOrder } = require('./form-order.js');
 
 // The PER-APP setting each AI feature writes now lives in ./ai-app-settings.js, together with the
 // flag-resolution and override-proof helpers the BUILD uses — see that module for why one source of
@@ -55,23 +60,22 @@ async function verifySpec(spec, read, opts = {}) {
   const phaseSkipped = [];
 
   const selectedDefaultForms = new Map();
+  const declaredMainFormsByEntity = new Map();
   for (const f of spec.forms || []) {
-    const formType = f.formType || 'Main';
-    if (formType !== 'Main') continue;
+    if (!isMainForm(f)) continue;
     const entity = String(f.entity || '').toLowerCase();
     if (!entity) continue;
-    // Mirror the BUILD's promotion guard exactly (sdk-build.js `isOwnCustomTable`): the build
-    // refuses to re-point the default form of a reused or stock table, because that is an
-    // environment-wide side effect on a table the spec does not own. Asserting `isdefault` for a
-    // table the build deliberately never promotes makes `--verify` permanently unsatisfiable for any
-    // spec that puts a Main form on `account`, `contact`, or an `existing: true` table.
-    const entSpec = (spec.entities || []).find((e) => e && String(e.schemaName || '').toLowerCase() === entity);
-    const prefix = spec.solution && spec.solution.publisherPrefix;
-    const isOwnCustomTable = !!(entSpec && entSpec.existing !== true && prefix &&
-      String(entSpec.schemaName).toLowerCase().startsWith(String(prefix).toLowerCase() + '_'));
-    if (!isOwnCustomTable) continue;
-    const current = selectedDefaultForms.get(entity);
-    if (!current || (f.isDefault === true && current.isDefault !== true)) selectedDefaultForms.set(entity, f);
+    if (!declaredMainFormsByEntity.has(entity)) declaredMainFormsByEntity.set(entity, []);
+    declaredMainFormsByEntity.get(entity).push(f);
+  }
+  // Mirror the BUILD's choice exactly (lib/form-order.js `selectDefaultForm`, which sdk-build.js
+  // promotes): an explicit `isDefault` or `mainFormOrder` on any table, the first-Main-form fallback
+  // only on a table the spec owns. Asserting `isdefault` for a table the build deliberately never
+  // promotes would make `--verify` permanently unsatisfiable for any spec that puts a Main form on
+  // `account`, `contact`, or an `existing: true` table without choosing its default.
+  for (const entity of declaredMainFormsByEntity.keys()) {
+    const chosen = selectDefaultForm(spec, entity);
+    if (chosen) selectedDefaultForms.set(entity, chosen.form);
   }
 
   // Entities + their declared columns.
@@ -115,10 +119,11 @@ async function verifySpec(spec, read, opts = {}) {
   // Views / charts / forms — by (entity, name) identity.
   for (const v of spec.views || []) {
     const viewName = `${String(v.entity).toLowerCase()}.${v.name}`;
-    // Also select layoutxml so a CONTENT check can catch a view whose column set drifted from the spec
-    // (reconcileView is additive-union, so a removed/renamed spec column would otherwise silently NOT
-    // apply and still pass an existence-only verify). Best-effort: the column check only runs when the
-    // deployed row actually carries layoutxml — an existence-only reader (no layoutxml) skips it.
+    // Also select layoutxml so a CONTENT check can catch a spec column the view does not carry (an
+    // added or renamed column that never landed would otherwise pass an existence-only verify). It
+    // cannot catch a column REMOVED from the spec: reconcileView is additive-union, so the column stays
+    // deployed, and an extra deployed column is deliberately not a failure (see below). Best-effort: the
+    // column check only runs when the deployed row actually carries layoutxml.
     let rows = [];
     let readError = null;
     try {
@@ -206,7 +211,18 @@ async function verifySpec(spec, read, opts = {}) {
   // same-named dashboard of another app sorted first and failed a correctly wired app. Memoized per
   // name, so each name is read once.
   const ownDashboards = new Map();
+  // A downloaded dashboard's pinned id (dashboards[].dashboardId) is what the build binds first, so it
+  // is what verify checks first — after a rename in the designer the name alone finds nothing.
+  const pinByName = new Map((spec.dashboards || []).filter((d) => d && d.name && d.dashboardId).map((d) => [d.name, d.dashboardId]));
   const identifyDashboard = async (name) => {
+    if (pinByName.has(name)) {
+      try {
+        const pinned = await findPinnedDashboard(read, pinByName.get(name));
+        if (pinned) return { id: pinned.id };
+      } catch (e) {
+        return { id: null, detail: `its dashboardId could not be resolved (${(e && e.message) || e}) — unverified, not proven correct` };
+      }
+    }
     let rows = null;
     try {
       rows = await findDashboardsByName(read, name);
@@ -262,6 +278,7 @@ async function verifySpec(spec, read, opts = {}) {
     }
     add('dashboard', d.name, problems.length === 0, problems.join('; '));
   }
+  const resolvedMainFormsByEntity = new Map();
   for (const f of spec.forms || []) {
     const name = f.name || `${f.entity} form`;
     // Resolve with the SAME identity the build reconcile uses — (entity, name, TYPE) or a validated pinned
@@ -275,6 +292,10 @@ async function verifySpec(spec, read, opts = {}) {
     } catch { id = null; }
     add('form', name, id);
     const entityLogical = String(f.entity || '').toLowerCase();
+    if (id && declaredMainFormsByEntity.has(entityLogical) && (f.formType || 'Main') === 'Main') {
+      if (!resolvedMainFormsByEntity.has(entityLogical)) resolvedMainFormsByEntity.set(entityLogical, []);
+      resolvedMainFormsByEntity.get(entityLogical).push({ form: f, name, id });
+    }
     if (id && selectedDefaultForms.get(entityLogical) === f && typeof read.formDefaultState === 'function') {
       let state = null;
       let readError = null;
@@ -288,6 +309,92 @@ async function verifySpec(spec, read, opts = {}) {
         readError
           ? `could not read deployed systemform.isdefault: ${readError}`
           : `expected this Main form to be the table default, but deployed systemform.isdefault is ${state && state.isDefault === false ? 'false' : 'unreadable'}`);
+    }
+  }
+  if (typeof read.formDefaultState === 'function') {
+    for (const [entityLogical, selected] of selectedDefaultForms) {
+      const selectedName = selected.name || `${selected.entity} form`;
+      for (const sibling of resolvedMainFormsByEntity.get(entityLogical) || []) {
+        if (sibling.form === selected) continue;
+        let state = null;
+        let readError = null;
+        try { state = await read.formDefaultState(entityLogical, sibling.id); } catch (e) { readError = (e && e.message) || String(e); }
+        const present = !!(state && state.isDefault !== true && !readError);
+        add('form-default-unique', `${entityLogical}.${sibling.name}`, present, present ? '' :
+          readError
+            ? `could not read deployed systemform.isdefault: ${readError}`
+            : state && state.isDefault === true
+              ? `another spec-declared Main form is also default; expected only '${selectedName}' to be default`
+              : 'could not prove this spec-declared Main form is not also default');
+      }
+    }
+  }
+
+  // AB#6736948 — the Main Form Set order, for every table the build orders (lib/form-order.js). Two
+  // checks, because they answer different questions:
+  //   form-order         what is STORED: each form's published <DisplayConditions Order>, which must
+  //                      rise along the build's order. Independent of who runs verify.
+  //   form-order-served  what the platform SERVES: the public RetrieveFilteredForms answer for the user
+  //                      running verify. It sees what the stored check cannot — a form this spec does
+  //                      not declare whose order puts it first — but only through that user's security
+  //                      roles, so a form they may not open cannot be placed from their answer: that is
+  //                      reported as not verifiable here, never as a pass.
+  // Neither sees a user's remembered form (the one they last switched to), which opens first for them
+  // while they may open it; it is per user and not configuration (references/app-spec-schema.md).
+  if (typeof read.formTopology === 'function') {
+    for (const [entityLogical, declared] of declaredMainFormsByEntity) {
+      if (!plannedMainFormSequence(spec, entityLogical)) continue;
+      const resolved = resolvedMainFormsByEntity.get(entityLogical) || [];
+      const idOf = new Map(resolved.map((r) => [r.form, r.id]));
+      const nameOf = new Map(resolved.map((r) => [r.form, r.name]));
+      // A form that did not resolve is already reported missing by its own check; its place cannot be.
+      if (declared.some((f) => !idOf.get(f))) continue;
+      const current = new Map();
+      let readError = null;
+      for (const f of declared) {
+        try {
+          current.set(f, displayConditionsOrder(await read.formTopology(entityLogical, idOf.get(f))).order);
+        } catch (e) {
+          readError = `'${nameOf.get(f)}': ${(e && e.message) || e}`;
+          break;
+        }
+      }
+      const sequence = plannedMainFormSequence(spec, entityLogical, current);
+      const label = `${entityLogical}: ${sequence.map((f) => nameOf.get(f)).join(' > ')}`;
+      if (readError) {
+        add('form-order', label, false, `could not read the deployed form order (${readError})`);
+        continue;
+      }
+      let problem = '';
+      for (let i = 0; i < sequence.length && !problem; i += 1) {
+        const o = current.get(sequence[i]);
+        const prev = i > 0 ? current.get(sequence[i - 1]) : undefined;
+        if (!Number.isFinite(o)) problem = `'${nameOf.get(sequence[i])}' has no form order in its published formxml`;
+        else if (i > 0 && !(o > prev)) problem = `'${nameOf.get(sequence[i])}' (order ${o}) is not after '${nameOf.get(sequence[i - 1])}' (order ${prev})`;
+      }
+      add('form-order', label, !problem, problem ? `${problem} — build the spec again with --publish to put them in this order` : '');
+      if (problem || typeof read.servedMainForms !== 'function') continue;
+
+      let served = null;
+      try { served = await read.servedMainForms(entityLogical); } catch (e) {
+        add('form-order-served', entityLogical, false, `could not read the order the platform serves (RetrieveFilteredForms): ${(e && e.message) || e}`);
+        continue;
+      }
+      const planned = sequence.map((f) => ({ name: nameOf.get(f), id: idOf.get(f) }));
+      const cmp = compareServedOrder(planned, (served || []).map((s) => s.id));
+      const first = planned[0].name;
+      if (cmp.ok === null) {
+        environmentSkipped.push(`form-order-served:${entityLogical} (the user running verify may not open '${first}' — check it as a user with that form's security roles)`);
+      } else if (cmp.reason === 'order') {
+        add('form-order-served', `${entityLogical} opens with '${first}'`, false, `'${cmp.before}' is served before '${cmp.after}' — build the spec again with --publish`);
+      } else if (cmp.reason === 'ahead') {
+        const ahead = (served || []).find((s) => String(s.id).replace(/[{}]/g, '').toLowerCase() === cmp.aheadId);
+        const aheadName = (ahead && ahead.name) || cmp.aheadId;
+        add('form-order-served', `${entityLogical} opens with '${first}'`, false,
+          `users without a remembered form open '${aheadName}' first: a Main form this spec does not declare, whose form order is not after '${first}'. Move it down in Maker (Form settings > Form order), or declare it in forms[] and list it in entities[].mainFormOrder`);
+      } else {
+        add('form-order-served', `${entityLogical} opens with '${first}'`, true);
+      }
     }
   }
 
@@ -334,12 +441,33 @@ async function verifySpec(spec, read, opts = {}) {
   const canReadTopology = typeof read.formTopology === 'function';
   {
     for (const f of spec.forms || []) {
-      if (!Array.isArray(f.tabs) || !f.tabs.length) continue;
+      const explicit = Array.isArray(f.tabs) && f.tabs.length > 0;
       const entity = String(f.entity || '').toLowerCase();
       const name = f.name || `${f.entity} form`;
       const formFieldOptions = fieldOptionsMap(f);
+      // An AUTO layout declares no shape, so it has no topology to prove — but its `fieldOptions` can
+      // still make a field read-only or hidden, which the build asserts on every apply. Those flags are
+      // proven on their own (`form-field-state`); without this an auto-layout form's declared state was
+      // never checked at all. Exactly the flags the BUILD writes are proven: those on the fields the
+      // compiled layout places (autoLayoutFieldFlags). A flag on any other field is never applied, so
+      // proving it failed a form the build had never been asked to change.
+      const flagsAny = !explicit && Object.values(formFieldOptions).some((o) => o.readOnly === true || o.hidden === true);
+      let autoFlagged = [];
+      let autoCompileError = null;
+      if (flagsAny) {
+        try { autoFlagged = autoLayoutFieldFlags(spec, f); } catch (e) { autoCompileError = (e && e.message) || String(e); }
+      }
+      if (!explicit && !autoFlagged.length && !autoCompileError) continue;
+      const kind = explicit ? 'form-topology' : 'form-field-state';
+      if (autoCompileError) {
+        // Only an unvalidated spec reaches this (validation requires every table's primary column), but a
+        // layout the compiler cannot read cannot say which fields the build places — so nothing is proven.
+        add(kind, `${entity}.${name}`, false,
+          `could not compile the layout to tell which fields the build places (${autoCompileError}) — the field state is unverified, not proven correct`);
+        continue;
+      }
       if (!canReadTopology) {
-        add('form-topology', `${entity}.${name}`, false,
+        add(kind, `${entity}.${name}`, false,
           'this reader exposes no deployed-layout source, so the layout is UNVERIFIED — not proven correct');
         continue;
       }
@@ -354,7 +482,7 @@ async function verifySpec(spec, read, opts = {}) {
         // and correct, and silently skipping the layout check let a transient read failure pass as a
         // verified layout.
         if (idError) {
-          add('form-topology', `${entity}.${name}`, false,
+          add(kind, `${entity}.${name}`, false,
             `could not resolve the deployed form id (${idError}) — the layout is unverified, not proven correct`);
         }
         continue;
@@ -364,12 +492,56 @@ async function verifySpec(spec, read, opts = {}) {
       let readError = null;
       try { xml = await read.formTopology(entity, id); } catch (e) { readError = (e && e.message) || String(e); }
       if (!xml) {
-        add('form-topology', `${entity}.${name}`, false,
+        add(kind, `${entity}.${name}`, false,
           `could not read the deployed form layout${readError ? `: ${readError}` : ''} — the layout is unverified, not proven correct`);
         continue;
       }
 
       const deployed = parseFormTopology(xml);
+      const problems = [];
+      // A declared flag against the deployed attribute, where an absent attribute is what the form
+      // renders without one: shown, expanded, labelled, editable. Reported in the spec's own terms
+      // (`specClause`), which for `hidden` is the inverse of the attribute it sets.
+      const flagProblem = (what, xmlAttr, deployedValue, wantAttr, renderedDefault, specClause) => {
+        const got = deployedValue === undefined ? renderedDefault : deployedValue;
+        if (got !== wantAttr) {
+          problems.push(`${what} is deployed with ${xmlAttr}="${got}"${deployedValue === undefined ? ' (absent, the default)' : ''}, the spec declares ${specClause}`);
+        }
+      };
+      const stateFlag = (what, specKey, xmlAttr, deployedValue, want) => flagProblem(what, xmlAttr, deployedValue, want, true, `${specKey}: ${want}`);
+      // The state the build asserts for a field: only the ENABLED flags are ever written (a rebuild never
+      // clears a lock or a hide applied in the designer), so only `true` is proven.
+      const fieldStateProblems = (fl, eff, dc) => {
+        if (eff.hidden === true) flagProblem(`field '${fl}'`, 'visible', dc.visible, false, true, 'hidden: true');
+        if (eff.readOnly === true) flagProblem(`field '${fl}'`, 'disabled', (dc.control || {}).disabled, true, false, 'readOnly: true');
+      };
+      if (!explicit) {
+        // The FIRST cell binding the field — the one the build's cell lookup patches. Every field here is
+        // one the build places on the form, so a flagged field the deployed form does not carry is a
+        // mismatch: its state cannot be deployed without it. Skipping it passed a form whose read-only
+        // field a maker had removed.
+        const cellOf = (fl) => deployed.flatMap((t) => (t.columns || []).flatMap((c) => (c.sections || []).flatMap((s) => (s.rows || []).flatMap((r) => r.cells || []))))
+          .find((c) => c.control && c.control.fieldName === fl && !isNonFieldControl(c.control));
+        for (const { field, readOnly, hidden } of autoFlagged) {
+          const dc = cellOf(field);
+          if (!dc) {
+            const declared = [readOnly && 'readOnly: true', hidden && 'hidden: true'].filter(Boolean).join(' and ');
+            problems.push(`field '${field}' is not on the deployed form, so its ${declared} is not deployed`);
+            continue;
+          }
+          fieldStateProblems(field, { readOnly, hidden }, dc);
+        }
+        add(kind, `${entity}.${name}`, problems.length === 0,
+          problems.length ? `deployed field state does not match the authored one — ${problems.slice(0, 6).join('; ')}${problems.length > 6 ? `; +${problems.length - 6} more` : ''}` : '');
+        continue;
+      }
+      // What the COMPILER emitted for this layout — tab state, form-column widths, section state — taken
+      // from the compiler itself rather than re-derived, so verify expects exactly what the build was asked
+      // to converge (an undeclared width is the equal split, an undeclared flag is `true`). Its tabs, their
+      // form-columns and their sections line up index for index with the spec's; the compiler only APPENDS
+      // (the notes section, after the first tab's authored sections). The build compiled this same layout,
+      // so it compiles here too.
+      const compiledTabs = compileFormIntent(spec, f).tabs || [];
       // Where the DEPLOYED form actually placed each bound field, as the IDENTITY of the section
       // holding it — not merely its name.
       //
@@ -386,16 +558,31 @@ async function verifySpec(spec, read, opts = {}) {
         for (const fl of sec.fields || []) if (!placedIn.has(fl)) placedIn.set(fl, sec);
       }
 
-      const problems = [];
+      // ORDER. The authored containers must deploy in the layout's order — the build moves them into it
+      // (planOrderMoves). Only their RELATIVE order is compared: a tab or section the layout does not
+      // mention (a maker's own, an engine host) has no place in it. `matched` holds the deployed index of
+      // each container matched, in layout order.
+      const orderProblem = (matched, what) => {
+        if (matched.every((m, i) => i === 0 || matched[i - 1].index < m.index)) return;
+        const deployedOrder = matched.slice().sort((a, b) => a.index - b.index).map((m) => m.name);
+        problems.push(`${what} are deployed in the order ${deployedOrder.join(', ')}; the spec orders them ${matched.map((m) => m.name).join(', ')}`);
+      };
+      const sameWidth = (got, want) => {
+        const pct = (w) => { const m = /^\s*(\d+(?:\.\d+)?)\s*%\s*$/.exec(String(w === undefined ? '' : w)); return m ? Number(m[1]) : null; };
+        return pct(got) !== null && pct(got) === pct(want);
+      };
       // Match containers the way the BUILD does — name, then label, then position — using the same
       // function it uses. A label- or position-matched container deliberately KEEPS its deployed
       // name (form scripts and business rules reference section names), so looking one up by the
       // AUTHORED name reported a perfectly good auto-to-explicit migration as "section absent" and
       // failed a build that had done exactly what was asked. Live-reproduced.
       const claimedTabs = new Set();
+      const tabOrder = [];
       // The section names the author declared — the same set the build's compiler records — so the
       // label and position passes skip a section another want owns by name, exactly as the build does.
+      // Tabs follow the same rule, from the same kind of set.
       const authoredNames = authoredSectionNames(f);
+      const tabSkip = claimedByAuthoredName(authoredTabNames(f));
       f.tabs.forEach((t, ti) => {
         if (!t || typeof t !== 'object') return;
         const tabName = String(t.name || generatedTabName(ti)).toLowerCase();
@@ -403,18 +590,29 @@ async function verifySpec(spec, read, opts = {}) {
         // a tab to 'General' and a section to 'Details', so the deployed container carries the
         // default — comparing against `undefined` would skip the label pass and fall through to
         // position, picking a different container than the build did.
-        const tabHit = matchContainer(deployed, { name: tabName, label: t.label || 'General' }, ti, { claimed: claimedTabs });
+        const tabHit = matchContainer(deployed, { name: tabName, label: t.label || 'General' }, ti, { claimed: claimedTabs, skip: tabSkip });
         if (!tabHit) { problems.push(`tab '${tabName}' is absent`); return; }
         claimedTabs.add(tabHit.index);
+        tabOrder.push({ name: tabName, index: tabHit.index });
         const got = tabHit.item;
+        const compiledTab = compiledTabs[ti] || {};
+        stateFlag(`tab '${tabName}'`, 'expanded', 'expanded', got.expanded, compiledTab.expanded !== false);
+        stateFlag(`tab '${tabName}'`, 'visible', 'visible', got.visible, compiledTab.visible !== false);
         const authoredColumns = formColumnsOf(t);
         if ((got.columns || []).length < authoredColumns.length) {
           problems.push(`tab '${tabName}' has ${(got.columns || []).length} form-column(s), the spec declares ${authoredColumns.length}`);
         }
         authoredColumns.forEach((col, ci) => {
           const sections = (col && Array.isArray(col.sections)) ? col.sections : [];
-          const deployedSections = ((got.columns || [])[ci] || {}).sections || [];
+          const deployedColumn = (got.columns || [])[ci];
+          const deployedSections = (deployedColumn || {}).sections || [];
+          const compiledColumn = (compiledTab.columns || [])[ci] || {};
+          // The width the build writes on every apply — the authored one, or the compiler's equal split.
+          if (deployedColumn && compiledColumn.width !== undefined && !sameWidth(deployedColumn.width, compiledColumn.width)) {
+            problems.push(`tab '${tabName}' form-column ${ci + 1} is deployed ${deployedColumn.width === undefined ? 'with no width' : `${deployedColumn.width} wide`}, the spec declares ${compiledColumn.width}`);
+          }
           const claimedSections = new Set();
+          const sectionOrder = [];
           sections.forEach((sec, si) => {
             if (!sec || typeof sec !== 'object') return;
             const secName = String(sec.name || generatedSectionName(ti, ci, si)).toLowerCase();
@@ -429,6 +627,10 @@ async function verifySpec(spec, read, opts = {}) {
               return;
             }
             claimedSections.add(secHit.index);
+            sectionOrder.push({ name: secName, index: secHit.index });
+            const compiledSection = (compiledColumn.sections || [])[si] || {};
+            stateFlag(`section '${secName}'`, 'visible', 'visible', secHit.item.visible, compiledSection.visible !== false);
+            stateFlag(`section '${secName}'`, 'showLabel', 'showlabel', secHit.item.showLabel, compiledSection.showLabel !== false);
             // The grid width the COMPILER emits for this authored section — taken from the same
             // function the compiler uses, never re-derived here. Reading the raw `columns` instead
             // failed forms that deployed exactly as compiled: an omitted `columns` compiles to 1,
@@ -455,20 +657,11 @@ async function verifySpec(spec, read, opts = {}) {
             // sitting under a rowspan — live, `[name rowspan=2, tier] / [code, zeta]` in a 2-column
             // section passed, with row 2 needing three columns.
             if (Number.isFinite(secCols) && secCols >= 1) {
-              let carried = []; // one entry per reserving cell: its width and the rows it still covers
-              for (const [ri, drow] of (secHit.item.rows || []).entries()) {
-                const own = (drow.cells || []).reduce((n, c) => n + (Number(c.colspan) || 1), 0);
-                const reserved = carried.reduce((n, r) => n + r.width, 0);
-                const used = own + reserved;
-                if (used > secCols) {
-                  problems.push(`section '${secName}' row ${ri + 1} carries ${used} columns of content`
-                    + (reserved ? ` (${reserved} reserved by a row-spanning cell above)` : '')
+              for (const [ri, occupancy] of rowOccupancy(secHit.item.rows || []).entries()) {
+                if (occupancy.used > secCols) {
+                  problems.push(`section '${secName}' row ${ri + 1} carries ${occupancy.used} columns of content`
+                    + (occupancy.reserved ? ` (${occupancy.reserved} reserved by a row-spanning cell above)` : '')
                     + ` in a ${secCols}-column section`);
-                }
-                carried = carried.map((r) => ({ width: r.width, left: r.left - 1 })).filter((r) => r.left > 0);
-                for (const c of drow.cells || []) {
-                  const rs = Number(c.rowspan) || 1;
-                  if (rs > 1) carried.push({ width: Number(c.colspan) || 1, left: rs - 1 });
                 }
               }
             }
@@ -481,7 +674,7 @@ async function verifySpec(spec, read, opts = {}) {
             // every `fieldOptions` span unverified — including one the build had to skip.
             const deployedCellOf = (logical) => (secHit.item.rows || [])
               .flatMap((r2) => r2.cells || [])
-              .find((c) => c.control && c.control.fieldName === logical);
+              .find((c) => c.control && c.control.fieldName === logical && !isNonFieldControl(c.control));
             for (const entry of (sec.fields || [])) {
               const inline = normalizeFieldEntry(entry);
               const fl = inline.name;
@@ -489,6 +682,7 @@ async function verifySpec(spec, read, opts = {}) {
               const eff = mergeFieldOptions(formFieldOptions[fl], inline, fl);
               const dc = deployedCellOf(fl);
               if (!dc) continue; // placement is reported separately below
+              fieldStateProblems(fl, eff, dc);
               for (const key of ['colspan', 'rowspan']) {
                 const declared = Number(eff[key]);
                 if (!Number.isFinite(declared) || declared < 1) continue; // not declared
@@ -526,8 +720,10 @@ async function verifySpec(spec, read, opts = {}) {
               }
             }
           });
+          orderProblem(sectionOrder, `the sections of tab '${tabName}' form-column ${ci + 1}`);
         });
       });
+      orderProblem(tabOrder, 'the tabs');
 
       add('form-topology', `${entity}.${name}`, problems.length === 0,
         problems.length ? `deployed layout does not match the authored one — ${problems.slice(0, 6).join('; ')}${problems.length > 6 ? `; +${problems.length - 6} more` : ''}` : '');
@@ -667,6 +863,41 @@ async function verifySpec(spec, read, opts = {}) {
   // icon, the owning entity) so an icon/entity value reused elsewhere in the XML can't satisfy an
   // unrelated check (e.g. an Area icon must not make a missing SubArea icon look present).
   const xml = (await read.sitemapXml()) || '';
+  // AB#6726727: a rebuild KEEPS a nav entry's icon that changed in the designer since the spec's
+  // baseline while the spec did not (sitemap-merge.js), and its own --verify must not fail on that.
+  // Such a failing icon check is accepted only when the build's rule (keepsLiveValue) holds for the
+  // LIVE entry the subarea targets — found by the target key the build matches on, resolved with the
+  // dashboard and page ids this verify resolves, so an entry missing from the sitemap (or a sitemap
+  // that could not be read) still fails. Resolved once, and only if an icon check fails.
+  let keepContext = null;
+  const keptByBuild = async (sa, field) => {
+    if (!opts.baselineSpec) return false;
+    if (!keepContext) keepContext = (async () => {
+      const ids = { dashboards: {}, pages: {} };
+      const dashboards = [];
+      for (const s of specSubAreas(spec)) {
+        if (!s.dashboard) continue;
+        const own = await ownDashboard(s.dashboard);
+        if (own.id) dashboards.push([s.dashboard, own.id]);
+      }
+      ids.dashboards = Object.fromEntries(dashboards);
+      if (specSubAreas(spec).some((s) => s.page)) {
+        // The same page identity the page checks below use: the spec's own pageId, then the manifest's.
+        let man = null;
+        try { man = typeof read.manifest === 'function' ? await read.manifest() : null; } catch { man = null; }
+        const byKey = new Map(((man && man.pages) || []).filter((p) => p && p.key && p.pageId).map((p) => [p.key, p.pageId]));
+        ids.pages = Object.fromEntries((spec.pages || []).filter((p) => p && (p.key || p.name))
+          .map((p) => [p.key || p.name, p.pageId || byKey.get(p.key || p.name)]).filter(([, id]) => id));
+      }
+      return { ids, live: liveNavEntries(xml), base: chromeByTargetKey(opts.baselineSpec, ids) };
+    })();
+    const { ids, live, base } = await keepContext;
+    const key = specSubAreaTargetKey(sa, ids);
+    // An unreadable sitemap (liveNavEntries answered null) proves nothing was kept.
+    const entries = key && live ? live.get(key) : undefined;
+    if (!entries || entries.length !== 1) return false;
+    return keepsLiveValue(field, sa[field], entries[0][field], base.get(key));
+  };
   for (const a of (spec.appShell && spec.appShell.areas) || []) {
     if (a.icon) add('area-icon', a.label || '', hasElement(xml, 'Area', { Icon: a.icon }));
     if (a.vectorIcon) add('area-vectorIcon', a.label || '', hasElement(xml, 'Area', { VectorIcon: a.vectorIcon }));
@@ -678,19 +909,39 @@ async function verifySpec(spec, read, opts = {}) {
           // some dashboard subarea exists, and not at another app's same-named dashboard, which the
           // name lookup returns too (see ownDashboard above). Absent or unidentifiable => not present.
           const own = await ownDashboard(sa.dashboard);
-          add('subarea', sa.title || sa.dashboard, own.id ? subareaHasDashboard(xml, own.id) : false, own.id ? '' : own.detail);
+          const wired = own.id ? subareaHasDashboard(xml, own.id) : false;
+          add('subarea', sa.title || sa.dashboard, wired, own.id ? '' : own.detail);
+          // AB#6726727: pointing at the dashboard is not enough. An entry without the launcher Url shows
+          // a placeholder icon and is not a dashboard entry to the designer — the shape earlier builds
+          // wrote over designer-made entries, which the check above passed.
+          if (wired) {
+            const launcher = subareaDashboardHasLauncher(xml, own.id);
+            // Wired, but by a `<SubArea …>` that is no nav entry (in a comment, outside
+            // SiteMap/Area/Group), or in a sitemap the walk cannot read: there is no entry to fault
+            // for a missing Url, so say what is actually wrong.
+            const detail = launcher ? ''
+              : dashboardNavEntries(xml, own.id).length
+                ? `its nav entry has no Url="${DASHBOARD_LAUNCHER_URL}", so the app shows a placeholder icon for it and the designer does not treat it as a dashboard entry — a rebuild restores it`
+                : 'no nav entry points at it: the SubArea that does is not directly under SiteMap/Area/Group (or is inside a comment), or the sitemap XML could not be read';
+            add('subarea-dashboard-launcher', sa.title || sa.dashboard, launcher, detail);
+          }
         }
         if (sa.icon) {
           // Prefer matching the icon on the SubArea that also declares this entity; fall back to any
           // SubArea carrying the icon when the subarea has no entity identity.
           const present = sa.entity ? hasElement(xml, 'SubArea', { Entity: sa.entity, Icon: sa.icon }) : hasElement(xml, 'SubArea', { Icon: sa.icon });
-          add('subarea-icon', sa.title || '', present);
+          // AB#6726727: an icon changed in the designer since the spec's baseline, which the spec has not
+          // changed, is one the build deliberately KEEPS — accepted here in exactly that case, or the
+          // build's own --verify would fail on it.
+          const kept = !present && await keptByBuild(sa, 'icon');
+          add('subarea-icon', sa.title || '', present || kept, kept ? KEPT_BY_DESIGNER : '');
         }
         if (sa.vectorIcon) {
           // VectorIcon serializes as its own sitemap attribute, so check it independently from the
           // raster Icon attribute while keeping the same SubArea scoping rules.
           const present = sa.entity ? hasElement(xml, 'SubArea', { Entity: sa.entity, VectorIcon: sa.vectorIcon }) : hasElement(xml, 'SubArea', { VectorIcon: sa.vectorIcon });
-          add('subarea-vectorIcon', sa.title || '', present);
+          const kept = !present && await keptByBuild(sa, 'vectorIcon');
+          add('subarea-vectorIcon', sa.title || '', present || kept, kept ? KEPT_BY_DESIGNER : '');
         }
       }
     }
@@ -1086,8 +1337,8 @@ async function verifySpec(spec, read, opts = {}) {
     for (const [feature, requested] of Object.entries(requestedFeatures)) {
       const setting = AI_APP_SETTING[feature];
       if (!setting) continue; // unknown key — validation already reports it
-      // Feature-aware: `true` means '2' for the form-fill family and '1' elsewhere. Comparing
-      // against the wrong spelling reports a correctly-applied feature as missing.
+      // Feature-aware: `true` is '2' for every AI setting, while `false` is '1' for most and '0' for
+      // nlChart. Comparing against the wrong spelling reports a correctly-applied feature as missing.
       const want = featureWantValue(requested, feature);
 
       // (1) Authoritative: does an app-scope override row exist, holding `want`?
@@ -1107,7 +1358,7 @@ async function verifySpec(spec, read, opts = {}) {
 
       // Fail-closed: when the proof could not be run we could LOOK and looking failed, so we must not
       // claim PASS on the strength of a value that may simply be the environment default.
-      const present = !proof.error && proof.exists && sameSettingValue(proof.value, want);
+      const present = !proof.error && proof.exists && sameSettingValue(proof.value, want, feature);
       const inForce = effective === undefined ? '(unreadable)' : effective === '' ? '(unset)' : effective;
       add('ai-feature', feature, present, present ? '' :
         proof.error
@@ -1398,6 +1649,30 @@ function parseFetchXml(xml) {
   return { conditions, orders };
 }
 
+// The read-only / hidden flags the build writes for an AUTO-layout form: one entry per field the compiled
+// layout places — the primary column, the table's declared columns, its parent lookups — whose compiled cell
+// carries a flag, in the cell's own terms (`control.isReadOnly`, `visible: false`). These are exactly the
+// fields the build's reconcile places and re-asserts (`want` → applyFieldControlOptions in sdk-build.js); a
+// `fieldOptions` flag on any other field is never written (spec-lint warns about it).
+function autoLayoutFieldFlags(spec, formSpec) {
+  const out = [];
+  const seen = new Set();
+  const def = compileFormIntent(spec, formSpec);
+  for (const t of def.tabs || []) for (const col of t.columns || []) for (const sec of col.sections || []) {
+    for (const row of sec.rows || []) for (const cell of row.cells || []) {
+      const fn = cell.control && cell.control.fieldName;
+      if (!fn || isNonFieldControl(cell.control)) continue;
+      const field = String(fn).toLowerCase();
+      if (seen.has(field)) continue;
+      seen.add(field);
+      const readOnly = cell.control.isReadOnly === true;
+      const hidden = cell.visible === false;
+      if (readOnly || hidden) out.push({ field, readOnly, hidden });
+    }
+  }
+  return out;
+}
+
 // Parse a deployed form's FormXml into the container tree `--verify` needs to prove a layout.
 //
 // Why this exists: form verification used to prove only that a form row EXISTS with the right
@@ -1429,6 +1704,15 @@ function parseFormTopology(xml) {
     const m = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i').exec(raw || '');
     return m ? (m[1] != null ? m[1] : m[2]) : undefined;
   };
+  // The display flags verify compares — tab `expanded`/`visible`, section `visible`/`showlabel`, cell
+  // `visible`, control `disabled` — are `xs:boolean`, so "true"/"false" or "1"/"0", and the schema gives
+  // none of them a default. An absent (or unreadable) one stays undefined; the comparison applies what
+  // the form renders without it.
+  // See: https://learn.microsoft.com/en-us/power-apps/developer/model-driven-apps/form-xml-schema
+  const flag = (raw, name) => {
+    const v = String(attr(raw, name) === undefined ? '' : attr(raw, name)).trim().toLowerCase();
+    return v === 'true' || v === '1' ? true : (v === 'false' || v === '0' ? false : undefined);
+  };
   let m;
   while ((m = re.exec(s)) !== null) {
     const closing = m[1] === '/';
@@ -1443,14 +1727,14 @@ function parseFormTopology(xml) {
       else if (tag === 'cell') { inCell = false; cell = null; }
       continue;
     }
-    if (tag === 'tab') { tab = { name: attr(raw, 'name'), label: undefined, columns: [] }; tabs.push(tab); if (selfClosing) tab = null; }
+    if (tag === 'tab') { tab = { name: attr(raw, 'name'), label: undefined, expanded: flag(raw, 'expanded'), visible: flag(raw, 'visible'), columns: [] }; tabs.push(tab); if (selfClosing) tab = null; }
     else if (tag === 'column' && tab) { column = { width: attr(raw, 'width'), sections: [] }; tab.columns.push(column); if (selfClosing) column = null; }
     else if (tag === 'section' && column) {
       const ratio = attr(raw, 'columns');
       // `columns` is a width RATIO string, not a count: "11" is two equal columns, "1111" is four.
       // ABSENT means the width is UNKNOWN — left undefined so the occupancy check skips rather than
       // assuming a 1-column grid and inventing an overflow that is not there.
-      section = { name: attr(raw, 'name'), label: undefined, columns: ratio ? String(ratio).length : undefined, rows: [], fields: [] };
+      section = { name: attr(raw, 'name'), label: undefined, columns: ratio ? String(ratio).length : undefined, visible: flag(raw, 'visible'), showLabel: flag(raw, 'showlabel'), rows: [], fields: [] };
       column.sections.push(section);
       if (selfClosing) section = null;
     }
@@ -1459,7 +1743,7 @@ function parseFormTopology(xml) {
       inCell = !selfClosing;
       // A cell with no <control> child stays control-less, which is what keeps a SPACER from
       // reading as engine-owned.
-      cell = { colspan: Number(attr(raw, 'colspan')) || 1, rowspan: Number(attr(raw, 'rowspan')) || 1 };
+      cell = { colspan: Number(attr(raw, 'colspan')) || 1, rowspan: Number(attr(raw, 'rowspan')) || 1, visible: flag(raw, 'visible') };
       if (row) row.cells.push(cell);
       if (selfClosing) cell = null;
     }
@@ -1482,8 +1766,12 @@ function parseFormTopology(xml) {
       // marks a timeline or sub-grid host a maker added a field to (isEngineHostSection).
       const f = attr(raw, 'datafieldname');
       const classId = attr(raw, 'classid');
-      if (f) section.fields.push(String(f).toLowerCase());
-      if (cell) cell.control = Object.assign(f ? { fieldName: String(f).toLowerCase() } : {}, classId ? { classId } : {});
+      const disabled = flag(raw, 'disabled');
+      // A quick view binds a LOOKUP's datafieldname too, but it is not that field: counted as one, it placed
+      // the lookup wherever the quick view sat and lent the field its visibility and state. The build skips it
+      // the same way (isNonFieldControl) when it picks the cell to place or patch.
+      if (f && !isNonFieldControl({ classId })) section.fields.push(String(f).toLowerCase());
+      if (cell) cell.control = Object.assign(f ? { fieldName: String(f).toLowerCase() } : {}, classId ? { classId } : {}, disabled === undefined ? {} : { disabled });
     }
   }
   return tabs;
@@ -1545,6 +1833,76 @@ function subareaHasDashboard(xml, dashId) {
   return false;
 }
 
+// The live nav entries pointing at dashboard `dashId`, read by the nav-entry walk (liveNavEntries below):
+// only a `SubArea` element directly under SiteMap/Area/Group counts, never one in a comment, a CDATA
+// section, a processing instruction or elsewhere in the document. None when the walk cannot account for
+// the sitemap (fail-closed), so nothing unreadable can vouch for an entry.
+function dashboardNavEntries(xml, dashId) {
+  const live = liveNavEntries(xml);
+  return (live && live.get(subAreaTargetKey({ type: 'DashBoard', dashboardId: dashId }))) || [];
+}
+
+// True when a nav entry pointing at `dashId` also carries the dashboard launcher Url, e.g.
+//   <SubArea Id="ops" Url="/workplace/home_dashboards.aspx" DefaultDashboard="{280948EC-…}" …>
+// Read through the walk rather than by matching `<SubArea …>` start tags in the raw text, which would take
+// a decoy in a comment or outside navigation carrying the Url as the entry. The Url is compared
+// XML-decoded, as the runtime and the designer read it (isDashboardLauncherUrl, sitemap-merge.js).
+function subareaDashboardHasLauncher(xml, dashId) {
+  return dashboardNavEntries(xml, dashId).some((e) => isDashboardLauncherUrl(e.url));
+}
+
+// The live nav entries in sitemap XML, by navigation target (subAreaTargetKey, sitemap-merge.js) — the
+// identity a rebuild matches live entries by — each with its icons and Url. For example
+//   <SubArea Id="ops" Url="/workplace/home_dashboards.aspx" DefaultDashboard="{280948EC-…}" VectorIcon="$webresource:new_ops.svg">
+// becomes 'DashBoard:280948ec-…' → [{ icon: undefined, vectorIcon: '$webresource:new_ops.svg', url: '/workplace/home_dashboards.aspx' }].
+// An entry's type is read the way the vendored SDK reads it — GenPageId, then Entity, then Page, then
+// DefaultDashboard, else it is a URL entry — so the two agree on what an entry targets.
+// Only ELEMENTS count, and only where the vendored SDK models navigation: a `SubArea` element (that exact
+// name — not `SubArea-Archived`, not `SubAreaÜ`) directly under `SiteMap/Area/Group`. A SubArea anywhere
+// else is kept by the SDK as opaque XML and is no nav entry, and a `<SubArea …>` inside a comment, a CDATA
+// section or a processing instruction is text — so those three are removed first, and the remaining tags
+// are walked with an element stack. A name is read whole, whatever its characters (XML names may be
+// Unicode), so every element boundary is on the stack. A value may hold a raw `>`, so a tag is matched
+// quote by quote. Values are fully XML-decoded (`&amp;`, and numeric references such as `&#38;`), in
+// either quote style, before they are compared with the spec's.
+//
+// FAIL-CLOSED: the answer is null — no entries, so verify grants no "kept" exemption and the icon check
+// stands as it would without a baseline — for anything this walk cannot account for completely: a `<`
+// that starts no element tag (which is also how a document type declaration, whose entities could expand
+// into elements, is turned away), or a closing tag that does not close the innermost open element.
+const NAV_PATH = ['SiteMap', 'Area', 'Group'];
+const XML_TAG = /<(\/?)([^\s/>"'=!?]+)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>/g;
+const XML_ATTR = /\s([^\s/>"'=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+function liveNavEntries(xml) {
+  const markup = String(xml || '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '')
+    .replace(/<\?[\s\S]*?\?>/g, '');
+  const tags = [...markup.matchAll(XML_TAG)];
+  // In well-formed XML every remaining `<` starts a tag: text escapes it, and an attribute value cannot hold one.
+  if (tags.length !== (markup.match(/</g) || []).length) return null;
+  const byKey = new Map();
+  const open = [];
+  for (const [, closing, name, body, selfClosing] of tags) {
+    if (closing) {
+      if (open[open.length - 1] !== name) return null;
+      open.pop();
+      continue;
+    }
+    if (name === 'SubArea' && open.length === NAV_PATH.length && NAV_PATH.every((n, i) => open[i] === n)) {
+      const attrs = Object.create(null);
+      for (const m of body.matchAll(XML_ATTR)) attrs[m[1]] = decodeXmlEntities(m[2] !== undefined ? m[2] : m[3]);
+      const type = attrs.GenPageId ? 'GenPage' : attrs.Entity ? 'Entity' : attrs.Page ? 'CustomPage' : attrs.DefaultDashboard ? 'DashBoard' : 'URL';
+      const key = subAreaTargetKey({ type, entity: attrs.Entity, url: attrs.Url, dashboardId: attrs.DefaultDashboard, page: attrs.Page, genPageId: attrs.GenPageId });
+      if (key) {
+        if (!byKey.has(key)) byKey.set(key, []);
+        byKey.get(key).push({ icon: attrs.Icon, vectorIcon: attrs.VectorIcon, url: attrs.Url });
+      }
+    }
+    if (!selfClosing) open.push(name);
+  }
+  return open.length ? null : byKey;
+}
 // True when some sitemap `<SubArea GenPageId="<id>">` in the XML binds this page id. Generative-page
 // subareas store the id in the GenPageId attribute SPECIFICALLY (vendor cds-maker-sdk.cjs:50 parses
 // /GenPageId="([0-9a-fA-F-]{36})"/), so match THAT attribute only — a decoy id elsewhere on the
@@ -1568,4 +1926,4 @@ function appShellReferencesPage(spec, key) {
   return false;
 }
 
-module.exports = { verifySpec, hasElement, subareaHasDashboard, subareaHasGenPage, appShellReferencesPage, layoutColumnNames, parseFetchXml };
+module.exports = { verifySpec, hasElement, subareaHasDashboard, subareaDashboardHasLauncher, liveNavEntries, subareaHasGenPage, appShellReferencesPage, layoutColumnNames, parseFetchXml };

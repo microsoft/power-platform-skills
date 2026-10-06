@@ -228,6 +228,26 @@ function extractFailures(stdout) {
     .map((l) => l.trim());
 }
 
+// One layer's verdict for the summary. The documented review rule is "both `failures` arrays empty → the fixture is
+// good to commit", so a runner that produced NO verdict has to put something into `failures` itself. Two cases used to
+// leave it empty and read as a clean capture:
+//   - the runner exited nonzero without reporting a failing assertion — a crash, or its own refusal (exit 2 when the
+//     eval id matches no fixture). Its counts, if any, are not a result. Its exit code was read and then dropped.
+//   - the runner exited 0 but reported no assertions, so nothing was verified.
+// The process itself still exits 0: the files were captured, and a capture of a run with real failures is still a
+// capture — the summary is how the caller judges it.
+function layerSummary(run) {
+  const counts = parseTapSummary(run.stdout);
+  const failures = extractFailures(run.stdout);
+  if (run.exitCode !== 0 && failures.length === 0) {
+    const detail = String(run.stderr || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(-3).join(' | ');
+    failures.push(`runner exited ${run.exitCode === null ? 'without an exit code' : run.exitCode} without reporting a failing assertion — its result is not verified${detail ? `: ${detail.slice(0, 300)}` : ''}`);
+  } else if (run.exitCode === 0 && counts.tests === 0) {
+    failures.push('runner reported no assertions for this eval — nothing was verified');
+  }
+  return { ...counts, exitCode: run.exitCode, failures };
+}
+
 function main() {
   let args;
   try {
@@ -282,16 +302,8 @@ function main() {
   };
 
   if (!args.skipVerify) {
-    const layer1 = runRunner(LAYER1_SCRIPT, args.eval);
-    const layer2 = runRunner(LAYER2_SCRIPT, args.eval);
-    summary.layer1 = {
-      ...parseTapSummary(layer1.stdout),
-      failures: extractFailures(layer1.stdout),
-    };
-    summary.layer2 = {
-      ...parseTapSummary(layer2.stdout),
-      failures: extractFailures(layer2.stdout),
-    };
+    summary.layer1 = layerSummary(runRunner(LAYER1_SCRIPT, args.eval));
+    summary.layer2 = layerSummary(runRunner(LAYER2_SCRIPT, args.eval));
   }
 
   console.log(JSON.stringify(summary, null, 2));

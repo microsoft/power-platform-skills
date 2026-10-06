@@ -5,28 +5,14 @@
 // then falls back to Playwright's bundled Chromium.
 // Self-contained — no external dependencies required.
 
-const { spawn } = require('child_process');
 const os = require('os');
 const path = require('path');
 const { detectBrowser } = require('./lib/detect-browser');
-
-function quoteShellArg(value, platform = process.platform) {
-  const argument = String(value);
-
-  if (platform === 'win32') {
-    if (argument.includes('"')) {
-      throw new Error('Cannot quote an argument containing double quotes for cmd.exe.');
-    }
-
-    return `"${argument}"`;
-  }
-
-  return `'${argument.replace(/'/g, "'\\''")}'`;
-}
+// npx is a batch shim on Windows; the runner starts it without a shell (see lib/process-runner.js).
+const { spawnProcess } = require('./lib/process-runner');
 
 function buildMcpArgs(browser, {
   configPath = path.join(__dirname, 'playwright-mcp-fullscreen.config.json'),
-  platform = process.platform,
 } = {}) {
   return [
     '-y',
@@ -34,13 +20,13 @@ function buildMcpArgs(browser, {
     '--browser',
     browser,
     '--config',
-    quoteShellArg(configPath, platform),
+    configPath,
   ];
 }
 
 function launch({
   browser = detectBrowser(),
-  spawnFn = spawn,
+  spawnFn = spawnProcess,
   // Node passes (code, signal): on a SIGNAL termination `code` is null and `signal` is e.g.
   // 'SIGTERM'/'SIGSEGV'. `code || 0` therefore turned every crash and every kill into exit 0, so an
   // MCP host saw a server that had died as one that had shut down cleanly.
@@ -66,10 +52,14 @@ function launch({
     process.exit(1);
   },
 } = {}) {
-  const child = spawnFn('npx', buildMcpArgs(browser), {
-    stdio: 'inherit',
-    shell: true,
-  });
+  let child;
+  try {
+    child = spawnFn('npx', buildMcpArgs(browser), { stdio: 'inherit' });
+  } catch (err) {
+    // npx is not on PATH, or the config path cannot reach the npx shim unchanged.
+    onError(err);
+    return null;
+  }
 
   child.on('exit', onExit);
   child.on('error', onError);
@@ -80,4 +70,4 @@ if (require.main === module) {
   launch();
 }
 
-module.exports = { buildMcpArgs, launch, quoteShellArg };
+module.exports = { buildMcpArgs, launch };

@@ -21,6 +21,11 @@ const fs = require('node:fs');
 // two divergent copies of a tokenizer is exactly how a false-green assertion creeps back in. Evals
 // never ship, so reaching into the plugin directory here is in-repo only.
 const { blankLiterals, findElisionMarker } = require('../../../../plugins/model-apps/scripts/lib/source-literals.js');
+const { pageStructureProblems } = require('../../../../plugins/model-apps/scripts/lib/page-structure.js');
+const { navigationProblems } = require('./navigation-contract.js');
+const { workerProblems } = require('./worker-contract.js');
+const { customApiProblems } = require('./custom-api-contract.js');
+const { gradeEvidence } = require('./evidence-utils.js');
 
 let _verifiedIcons = null;
 function getVerifiedIcons() {
@@ -84,6 +89,17 @@ function pass() { return { status: 'pass', reason: '' }; }
 function skip(reason) { return { status: 'skip', reason }; }
 
 const ASSERTIONS = new Map();
+
+ASSERTIONS.set(
+  'Generated .tsx passes the production completeness gate (complete module, JSX, brackets, strings, comments and no prose fences)',
+  ({ files }) => {
+    for (const file of files) {
+      const problems = pageStructureProblems(file.content);
+      if (problems.length) return fail(`${file.name}: ${problems[0]}`);
+    }
+    return pass();
+  }
+);
 
 ASSERTIONS.set(
   'Generated .tsx is a single file with `export default GeneratedComponent`',
@@ -437,8 +453,11 @@ ASSERTIONS.set(
 
 ASSERTIONS.set(
   'For multi-page builds, cross-page navigation uses quoted `"PAGEREF_<filename>"` placeholders that the orchestrator\'s Phase 6.5 resolves to real GUIDs',
-  ({ files }) => {
+  ({ files, fixture }) => {
     if (files.length <= 1) return skip('single-page fixture');
+    const result = gradeEvidence(navigationProblems, { ...fixture, files });
+    if (result.status === 'fail') return result;
+    if (fixture?.manifest?.navigation || fixture?.manifest?.navigationPhase === 'resolved') return result;
     const hasPageref = files.some((f) => /["']PAGEREF_[a-zA-Z0-9_-]+["']/.test(f.content));
     const hasNav = files.some((f) => /Xrm\.Navigation\.navigateTo/.test(f.content));
     if (hasNav && !hasPageref) {
@@ -467,6 +486,16 @@ ASSERTIONS.set(
 );
 
 const PHASE5_EXPECTATIONS = new Map();
+
+PHASE5_EXPECTATIONS.set(
+  'Phase 5: Custom API discovery, gate, bare bindings, runtime calls and update preservation or explicit clear agree',
+  ({ fixture, files }) => gradeEvidence(customApiProblems, { ...fixture, files })
+);
+
+PHASE5_EXPECTATIONS.set(
+  'Phase 5: A rejected worker artifact prevents upload until a stamped, complete regeneration passes the production gate',
+  ({ fixture, files }) => gradeEvidence(workerProblems, { ...fixture, files })
+);
 
 PHASE5_EXPECTATIONS.set(
   'Phase 5b: Generated .tsx uses only column names verified from RuntimeTypes.ts — no guessed names',

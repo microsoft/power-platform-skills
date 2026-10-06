@@ -1,0 +1,537 @@
+#!/usr/bin/env node
+
+/**
+ * app-docs.js — own the generated app's `docs/` folder.
+ *
+ * `/create-mobile-app` runs for 10-20 minutes across ~30 steps, and until now the only
+ * record of what it did was scrollback. This writes a living plan to `<app>/docs/` that the
+ * user can keep open while the run proceeds and come back to afterwards to understand how
+ * their app was put together.
+ *
+ * Modelled on the power-pages `/create-site` HTML plan artifacts (see that plugin's
+ * render scripts and their HTML assets). The template encoder is a physical port
+ * at `lib/render-template.js`; the one behavioural change is that this document is
+ * re-rendered in place on every update rather than written once.
+ *
+ * State lives in `docs/.run-plan.json`; the rendered page is `docs/create-app-plan.html`.
+ * The JSON is the source of truth so a re-render never has to parse HTML back.
+ *
+ * Commands:
+ *   init  --working-dir <d> --json-file <path>   ({"appName", "dataPlatform"}; the skill's route)
+ *   init  --working-dir <d> --app-name <n> [--data-platform dataverse|connector-only]
+ *   step  --working-dir <d> --id <phase-id> --status <pending|active|done|skipped|failed> [--note <t>]
+ *   set   --working-dir <d> --section <name> --json <obj> | --json-file <path> [--state proposed|approved]
+ *   phone --working-dir <d> --stage building|screens|qr [--screens-file <path>] [--qr-image <png>] [--qr-url <url>]
+ *   show  --working-dir <d>
+ */
+
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+
+const { publishAtomic, renderTemplate } = require('./lib/render-template');
+
+/**
+ * The plan's state file is read by one process and rewritten by another as the run advances, so
+ * it is published with a rename: a reader either sees the previous object or the next one, never
+ * a half-written file.
+ */
+function readJson(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    // A missing file and a truncated one are the same to a reader: no plan yet. Callers
+    // distinguish the states from which files exist, not from parse failures.
+    return null;
+  }
+}
+
+function writeJsonAtomic(filePath, value) {
+  publishAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+const DOCS_DIR = 'docs';
+const STATE_FILE = '.run-plan.json';
+const OUTPUT_FILE = 'create-app-plan.html';
+const TEMPLATE_PATH = path.join(__dirname, '..', 'assets', 'run-plan.html');
+
+const STATUSES = new Set(['pending', 'active', 'done', 'skipped', 'failed']);
+
+/**
+ * Sections the skill records as it learns them. Each is written once by the step that owns
+ * the decision, so the finished document explains not just what was built but what the user
+ * chose and what environment it landed in.
+ *
+ *   environment   Step 1/4   resolved env, tenant, publisher prefix
+ *   requirements  Step 2/2b  app identity, platforms, aesthetic, confirmed feature brief
+ *   architecture  Gate 1     data platform, device capabilities, connectors - each with a reason
+ *   offline       Gate 2     whether offline sync is on, which tables, and why
+ *   dataModel     Gate 2     tables with reuse/extend/create intent + Mermaid ER source
+ *   screens       Gates 3-4  navigation pattern, screen graph source, per-screen specs
+ *   design        Step 6.75  direction, typography, palette
+ *   auth          Step 7     whether an app registration was supplied or deferred
+ */
+const SECTIONS = new Set([
+  'environment', 'requirements', 'architecture', 'dataModel', 'screens', 'design', 'auth',
+  'offline', 'trust',
+]);
+
+/**
+ * User-facing phases, not the skill's ~30 internal step numbers. A plan the user reads should
+ * describe what is happening to their app, so several skill steps collapse into one row here.
+ * `skillSteps` records the mapping so a maintainer can trace a phase back to the SKILL.md.
+ */
+const PHASES = [
+  { id: 'requirements', title: 'Understand what to build', detail: 'Confirm the feature brief', skillSteps: '2, 2b, 2c' },
+  // Planning is approved before anything is scaffolded: the gates decide the data platform,
+  // capabilities and screen set that Steps 5-6 then materialize. This list is the order the
+  // user sees, so it has to match the order the skill runs, or a phase reads as complete
+  // while phases above it are still pending.
+  { id: 'architecture', title: 'Approve the architecture', detail: 'Device capabilities, connectors, and data platform', skillSteps: '3 / Gate 1' },
+  { id: 'data-model', title: 'Design the data model', detail: 'Tables, columns, and relationships', skillSteps: '3 / Gate 2', dataverseOnly: true },
+  { id: 'screen-plan', title: 'Plan the screens', detail: 'Screen graph, navigation, and per-screen specs', skillSteps: '3 / Gates 3-4' },
+  { id: 'scaffold', title: 'Bring the app online', detail: 'Prepare the template and initialize the Power Apps project', skillSteps: '5, 6' },
+  { id: 'design', title: 'Lock the design system', detail: 'Brand tokens, typography, and colour', skillSteps: '6.75, 9b' },
+  { id: 'auth', title: 'Connect sign-in', detail: 'Entra ID app registration and MSAL config', skillSteps: '7' },
+  { id: 'dataverse', title: 'Build the data model', detail: 'Create tables in Dataverse and generate services', skillSteps: '8, 8.5', dataverseOnly: true },
+  { id: 'capabilities', title: 'Wire capabilities', detail: 'Device features and connectors', skillSteps: '9, 10' },
+  { id: 'screens', title: 'Build the screens', detail: 'Navigation, shared code, and each screen', skillSteps: '10b, 10.8, 11' },
+  { id: 'run', title: 'Run it on a device', detail: 'Start Metro and scan the QR code to open the app on your phone', skillSteps: '12, 13' },
+];
+
+function docsDir(projectRoot) {
+  return path.join(path.resolve(projectRoot), DOCS_DIR);
+}
+
+function statePath(projectRoot) {
+  return path.join(docsDir(projectRoot), STATE_FILE);
+}
+
+function outputPath(projectRoot) {
+  return path.join(docsDir(projectRoot), OUTPUT_FILE);
+}
+
+function loadState(projectRoot) {
+  return readJson(statePath(projectRoot));
+}
+
+function initState(projectRoot, { appName, dataPlatform }) {
+  const existing = loadState(projectRoot);
+  // A resumed run must not lose the progress already recorded.
+  if (existing) return existing;
+
+  return {
+    appName: appName || 'Your app',
+    dataPlatform: dataPlatform || 'unknown',
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    sections: {},
+    phone: { stage: 'building', screens: [] },
+    phases: PHASES.map((phase) => ({ ...phase, status: 'pending', note: '' })),
+  };
+}
+
+const SECTION_STATES = new Set(['proposed', 'approved']);
+
+const PHONE_STAGES = new Set(['building', 'screens', 'qr']);
+
+/**
+ * The device rail beside the plan. It moves through three stages as the run proceeds:
+ *   building  an animation, from the first phase until the design is locked
+ *   screens   a carousel of the plan-time screen previews `/design-system` renders at Step 6.75,
+ *             which exist before any TSX is written
+ *   qr        the Metro QR code, so the last thing the plan shows is how to open the real app
+ */
+function setPhone(state, update) {
+  state.phone = state.phone || { stage: 'building', screens: [] };
+
+  if (update.stage !== undefined) {
+    if (!PHONE_STAGES.has(update.stage)) {
+      throw new Error(`Unknown stage '${update.stage}'. Known: ${[...PHONE_STAGES].join(', ')}`);
+    }
+    state.phone.stage = update.stage;
+  }
+  if (update.screens !== undefined) state.phone.screens = update.screens;
+  if (update.qrImage !== undefined) state.phone.qrImage = update.qrImage;
+  if (update.qrHref !== undefined) state.phone.qrHref = update.qrHref;
+  if (update.qrUrl !== undefined) state.phone.qrUrl = update.qrUrl;
+
+  state.updatedAt = new Date().toISOString();
+  return state;
+}
+
+function setSection(state, name, value, sectionState) {
+  if (!SECTIONS.has(name)) {
+    throw new Error(`Unknown section '${name}'. Known: ${[...SECTIONS].join(', ')}`);
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`Section '${name}' must be a JSON object`);
+  }
+  state.sections = state.sections || {};
+  // Merge so a later step can add to a section without restating what an earlier one wrote
+  // (for example Step 4 confirming the environment Step 1 resolved).
+  state.sections[name] = { ...(state.sections[name] || {}), ...value };
+
+  // A section is written when it is *proposed*, so the user can read the rendered ER or screen
+  // graph while deciding, then flipped to `approved` once they say yes. Kept beside the content
+  // rather than inside it so it cannot collide with a content key.
+  if (sectionState !== undefined) {
+    if (!SECTION_STATES.has(sectionState)) {
+      throw new Error(`Unknown state '${sectionState}'. Known: ${[...SECTION_STATES].join(', ')}`);
+    }
+    state.sectionStates = state.sectionStates || {};
+    state.sectionStates[name] = sectionState;
+  }
+  state.updatedAt = new Date().toISOString();
+  return state;
+}
+
+function applyStep(state, { id, status, note }) {
+  const phase = state.phases.find((entry) => entry.id === id);
+  if (!phase) {
+    throw new Error(`Unknown phase '${id}'. Known: ${PHASES.map((p) => p.id).join(', ')}`);
+  }
+  if (!STATUSES.has(status)) {
+    throw new Error(`Unknown status '${status}'. Known: ${[...STATUSES].join(', ')}`);
+  }
+
+  // A note describes the status it was written with, so it must not outlive it. A gate opens
+  // with "Gate 1 — awaiting your approval" and is later closed by a bare `--status done`;
+  // without this the approved step kept asking for an approval the user had already given.
+  // A repeated status keeps its note, so progress updates like "3 of 12 screens built" survive
+  // an `active` -> `active` refresh.
+  if (note !== undefined) phase.note = String(note);
+  else if (status !== phase.status) phase.note = '';
+  phase.status = status;
+
+  // Only one phase is the live one; marking a new phase active resolves any earlier
+  // still-active phase so a crashed or skipped step cannot leave two spinners running.
+  // The note goes with the status, as above: a gate left open on "awaiting your approval"
+  // would otherwise keep asking for it on a phase the plan now shows as done.
+  if (status === 'active') {
+    for (const other of state.phases) {
+      if (other.id !== id && other.status === 'active') {
+        other.status = 'done';
+        other.note = '';
+      }
+    }
+  }
+  state.updatedAt = new Date().toISOString();
+  return state;
+}
+
+// Sections the user is actually asked to approve. `trust` is deliberately absent: it is written
+// `proposed` at Gate 1 and only finalised at Step 10, but no gate asks the user to answer for it,
+// so including it held the banner up for most of the run with no question to answer.
+const AWAITING_LABEL = {
+  architecture: 'the architecture', dataModel: 'the data model', screens: 'the screen plan',
+  design: 'the design system', offline: 'the offline profile',
+};
+
+// An active phase announces it is blocked through its note. Both spellings are accepted because
+// a gate writes "Gate 2 - awaiting your approval" while an ordinary question reads more naturally
+// as "Waiting for your answers"; matching only the first missed every prompt that is not a gate.
+const AWAITING_NOTE = /\bawaiting\b|\bwaiting for\b/i;
+
+/**
+ * `init` runs at Step 2b, before the data platform is decided, so the top-level value is
+ * "unknown" and nothing updates it. Gate 1 records the real answer on the architecture section,
+ * so read that once it exists and fall back to whatever `init` was given.
+ */
+function dataPlatformLabel(state) {
+  const approved = ((state.sections || {}).architecture || {}).dataPlatform;
+  if (approved) return approved;
+  // The placeholder is internal; the pill is read as a fact about the app.
+  return state.dataPlatform === 'unknown' ? 'not decided yet' : state.dataPlatform;
+}
+
+function failedTitle(state) {
+  const failed = state.phases.find((phase) => phase.status === 'failed');
+  return failed ? failed.title : '';
+}
+
+/**
+ * What the run is blocked on, if anything.
+ *
+ * The active phase's note is the authority, because it is the only signal that distinguishes
+ * "a question is open" from "work is in progress". A `proposed` section does not mean a question
+ * is open: `screens` is proposed at Gate 3 and stays proposed until Step 3.9, so between Gate 3's
+ * approval and Gate 4 the plan showed "Review the screen plan, then answer in your terminal"
+ * while the planner was busy writing specs and nobody had been asked anything.
+ *
+ * A proposed section still raises the banner when the phase says nothing at all, so a gate that
+ * forgets its note is not silent.
+ */
+function awaitingInput(state, active) {
+  const note = (active && active.note) || '';
+  if (AWAITING_NOTE.test(note)) return note;
+  // A note that says something else is a progress report, not a question.
+  if (note.trim()) return '';
+
+  const states = state.sectionStates || {};
+  for (const name of Object.keys(AWAITING_LABEL)) {
+    if (states[name] === 'proposed') return `Review ${AWAITING_LABEL[name]} above, then answer in your terminal`;
+  }
+  return '';
+}
+
+function summarize(state) {
+  const counted = state.phases.filter((phase) => phase.status !== 'skipped');
+  const done = counted.filter((phase) => phase.status === 'done').length;
+  const failed = state.phases.filter((phase) => phase.status === 'failed').length;
+  const skipped = state.phases.filter((phase) => phase.status === 'skipped').length;
+  const active = state.phases.find((phase) => phase.status === 'active');
+  const finished = counted.length > 0 && done === counted.length;
+
+  return {
+    total: counted.length,
+    done,
+    failed,
+    skipped,
+    percent: counted.length === 0 ? 0 : Math.round((done / counted.length) * 100),
+    currentTitle: failed > 0
+      ? `Stopped — ${failedTitle(state) || 'a step failed'}`
+      : (active ? active.title : (finished ? 'Finished' : 'Waiting to start')),
+    // The page reloads itself to pick up each rewrite; `settled` stops that once there is
+    // nothing left to watch, so a finished plan is not reloading forever.
+    settled: finished || failed > 0,
+    // The id, not the title: a resumed run reopens this phase with `step --id`, and that is what
+    // takes the plan out of its stopped state.
+    failedPhase: (state.phases.find((phase) => phase.status === 'failed') || {}).id || '',
+    // What the run is blocked on, if anything. A section held at `proposed` means the plan is
+    // showing the user something to review while the terminal waits on their answer; an active
+    // phase whose note says so covers gates that have no section of their own.
+    awaitingInput: awaitingInput(state, active),
+    narrative: failed > 0
+      ? `${state.appName} stopped during ${failedTitle(state) ? `"${failedTitle(state)}"` : 'a step'}. `
+        + 'The run does not continue past a failed phase; check your terminal for the error.'
+      : (active
+        // Phase titles are imperatives ("Design the data model"), so they follow a label rather
+        // than complete a sentence - "Currently design the data model" is what that produced.
+        ? `In progress: ${active.title}. ${active.detail}.`
+        : (finished
+          ? `${state.appName} is built. Every phase completed.`
+          : `Preparing to build ${state.appName}.`)),
+  };
+}
+
+/**
+ * Short labels for the building animation. Uses the approved architecture once it exists so the
+ * chips describe *this* app, and falls back to the platform's headline capabilities before then.
+ */
+function capabilityLabels(state) {
+  const architecture = (state.sections || {}).architecture || {};
+  const named = [...(architecture.nativeCapabilities || []), ...(architecture.connectors || [])]
+    .map((entry) => (typeof entry === 'string' ? entry : (entry && entry.name)))
+    .filter(Boolean);
+  if (named.length) return named.slice(0, 6);
+  return ['Dataverse', 'Works offline', 'Camera', 'Location', 'Push', 'Biometrics'];
+}
+
+// The full planner output, with the per-screen specs the tabs only summarise. It sits beside
+// the app root and the plan is written into `docs/`, so one level up is the whole path.
+const PLAN_DOC = 'native-app-plan.md';
+
+// The full-size screen mockups `/design-system` renders at the app root. The carousel shows the
+// same blocks in a phone frame; this is the link out to them at full width.
+const SCREEN_PREVIEW = '_plan_preview.html';
+
+// Linked only when really present: each is written partway through the run, so an unconditional
+// link would 404 in the user's browser for the phases before it exists.
+
+/** A file at the app root. The plan is written into `docs/`, so one level up is the whole path. */
+function siblingHref(projectRoot, fileName) {
+  return fs.existsSync(path.join(path.resolve(projectRoot), fileName)) ? `../${fileName}` : '';
+}
+
+/**
+ * An editor deep-link for a local file.
+ *
+ * A page opened over `file://` cannot hand a document to the OS default application - browsers
+ * deliberately refuse, or any site could launch local apps. A registered URL scheme is the one
+ * route that works, and `vscode://file/<path>` is the realistic target here: this plugin is used
+ * from editors that register it. The plain relative link stays beside it for anyone without one.
+ *
+ * Path form per the VS Code URL handler: forward slashes throughout and a leading slash, so a
+ * Windows `C:\app\plan.md` becomes `vscode://file/C:/app/plan.md`.
+ * https://code.visualstudio.com/docs/configure/command-line#_opening-vs-code-with-urls
+ */
+function editorHref(projectRoot, fileName) {
+  const absolute = path.join(path.resolve(projectRoot), fileName);
+  if (!fs.existsSync(absolute)) return '';
+  const forwardSlashed = absolute.replace(/\\/g, '/');
+  const rooted = forwardSlashed.startsWith('/') ? forwardSlashed : `/${forwardSlashed}`;
+  // encodeURI keeps `/` as a separator, which is what this needs, but it also leaves `?` and
+  // `#` alone - and both are legal in a POSIX path. `/tmp/app#1/native-app-plan.md` would parse
+  // as pathname `/tmp/app` with the rest as a fragment, so the editor opens nothing. Escape
+  // those two afterwards; every other character encodeURI already handles. That includes a
+  // literal `%` (`100% Done/` becomes `100%25%20Done/`), and because it is escaped first, the
+  // `%` in the `%3F` and `%23` added here is never escaped a second time.
+  const escaped = encodeURI(rooted).replace(/\?/g, '%3F').replace(/#/g, '%23');
+  return `vscode://file${escaped}`;
+}
+
+function render(projectRoot, state) {
+  const summary = summarize(state);
+  const now = new Date();
+  summary.planDocHref = siblingHref(projectRoot, PLAN_DOC);
+  summary.planDocEditorHref = editorHref(projectRoot, PLAN_DOC);
+  summary.screenPreviewHref = siblingHref(projectRoot, SCREEN_PREVIEW);
+  return renderTemplate({
+    templatePath: TEMPLATE_PATH,
+    outputPath: outputPath(projectRoot),
+    allowOverwrite: true,
+    requiredKeys: ['APP_NAME', 'PHASES', 'SUMMARY', 'SECTIONS', 'SECTION_STATES', 'PHONE'],
+    dataObject: {
+      PLAN_TITLE: 'Mobile app build plan',
+      APP_NAME: state.appName,
+      // Both forms: the page shows the reader's local time and keeps this UTC text as fallback.
+      GENERATED_AT: now.toISOString().replace('T', ' ').slice(0, 16),
+      GENERATED_ISO: now.toISOString(),
+      DATA_PLATFORM: dataPlatformLabel(state),
+      PHASES: state.phases,
+      SUMMARY: summary,
+      SECTIONS: state.sections || {},
+      SECTION_STATES: state.sectionStates || {},
+      PHONE: state.phone || { stage: 'building', screens: [] },
+      CAPABILITIES: capabilityLabels(state),
+      BRAND_ICON: brandIconDataUri(),
+    },
+  });
+}
+
+/**
+ * The brand mark as a `data:` URI.
+ *
+ * Inlined rather than copied beside the page for two reasons. The page is opened over `file://`,
+ * where the origin is opaque, so a CSP `img-src 'self'` would not reliably match a sibling file -
+ * and the plan carries a strict CSP precisely so injected mockup markup cannot fetch or execute
+ * anything. It also makes the plan a single shareable file rather than a folder.
+ */
+function brandIconDataUri() {
+  const source = path.join(__dirname, '..', 'assets', 'power-apps-icon.svg');
+  try {
+    return `data:image/svg+xml;base64,${fs.readFileSync(source).toString('base64')}`;
+  } catch {
+    // A missing mark must not fail a build; the page renders without it.
+    return '';
+  }
+}
+
+function save(projectRoot, state) {
+  fs.mkdirSync(docsDir(projectRoot), { recursive: true });
+  writeJsonAtomic(statePath(projectRoot), state);
+  return render(projectRoot, state);
+}
+
+function parseArgs(argv) {
+  const options = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (argument === '--working-dir') options.workingDir = argv[++index];
+    else if (argument === '--app-name') options.appName = argv[++index];
+    else if (argument === '--data-platform') options.dataPlatform = argv[++index];
+    else if (argument === '--id') options.id = argv[++index];
+    else if (argument === '--status') options.status = argv[++index];
+    else if (argument === '--note') options.note = argv[++index];
+    else if (argument === '--section') options.section = argv[++index];
+    else if (argument === '--json') options.json = argv[++index];
+    else if (argument === '--json-file') options.jsonFile = argv[++index];
+    else if (argument === '--state') options.state = argv[++index];
+    else if (argument === '--stage') options.stage = argv[++index];
+    else if (argument === '--screens-file') options.screensFile = argv[++index];
+    else if (argument === '--qr-image') options.qrImage = argv[++index];
+    else if (argument === '--qr-url') options.qrUrl = argv[++index];
+    else if (!argument.startsWith('--') && !options.command) options.command = argument;
+    else throw new Error(`Unknown argument: ${argument}`);
+  }
+  options.workingDir = options.workingDir || process.cwd();
+  options.command = options.command || 'show';
+  if (!['init', 'step', 'show', 'set', 'phone'].includes(options.command)) {
+    throw new Error(`Unknown command: ${options.command}`);
+  }
+  return options;
+}
+
+if (require.main === module) {
+  try {
+    const options = parseArgs(process.argv.slice(2));
+    const root = path.resolve(options.workingDir);
+
+    if (options.command === 'show') {
+      const state = loadState(root);
+      process.stdout.write(`${JSON.stringify(state ? summarize(state) : { total: 0, done: 0 })}\n`);
+    } else if (options.command === 'init') {
+      // `--app-name` is the display name the user typed, so it may contain a quote, a backtick
+      // or `$(...)`. Passed as a shell argument those break out of the quoting before Node ever
+      // sees them, so the skill hands the name over in a file instead - the same channel every
+      // section write uses. `--app-name`/`--data-platform` stay for callers whose values are
+      // their own, such as tests and tooling.
+      const seed = options.jsonFile
+        ? JSON.parse(fs.readFileSync(options.jsonFile, 'utf8'))
+        : options;
+      const written = save(root, initState(root, seed));
+      process.stdout.write(`${JSON.stringify({ status: 'ok', plan: written })}\n`);
+    } else if (options.command === 'phone') {
+      const state = loadState(root);
+      if (!state) throw new Error('No run plan yet; run `init` first.');
+      const update = { stage: options.stage, qrUrl: options.qrUrl };
+      if (options.screensFile) {
+        update.screens = JSON.parse(fs.readFileSync(options.screensFile, 'utf8'));
+      }
+      if (options.qrImage) {
+        // Inlined as a data URI: the plan is opened over file://, where a relative <img> works
+        // but a moved or deleted PNG leaves a broken image in a document meant to outlive the run.
+        update.qrImage = `data:image/png;base64,${fs.readFileSync(options.qrImage).toString('base64')}`;
+        // A link to the file as well, for opening the code full size in its own tab. A data:
+        // URI cannot be used for that - browsers block top-level navigation to one - so this
+        // has to be a real path. It is relative to `docs/`, and disappears once `.expo/` is
+        // cleaned, at which point the inlined copy above is still there.
+        const qrPath = path.resolve(options.qrImage);
+        const relative = path.relative(docsDir(root), qrPath);
+        // POSIX separators: this becomes an href, not a filesystem path.
+        update.qrHref = relative.split(path.sep).join('/');
+      }
+      const written = save(root, setPhone(state, update));
+      process.stdout.write(`${JSON.stringify({ status: 'ok', stage: state.phone.stage, plan: written })}\n`);
+    } else if (options.command === 'set') {
+      const state = loadState(root);
+      if (!state) throw new Error('No run plan yet; run `init` first.');
+      // A large section (a full screen list, an ER diagram) is awkward and fragile to pass as
+      // one shell argument, so --json-file is the route for anything non-trivial.
+      const raw = options.jsonFile ? fs.readFileSync(options.jsonFile, 'utf8') : options.json;
+      if (!raw) throw new Error('Provide --json <object> or --json-file <path>');
+      const written = save(root, setSection(state, options.section, JSON.parse(raw), options.state));
+      process.stdout.write(`${JSON.stringify({ status: 'ok', section: options.section, plan: written })}\n`);
+    } else {
+      const state = loadState(root);
+      if (!state) throw new Error('No run plan yet; run `init` first.');
+      const written = save(root, applyStep(state, options));
+      process.stdout.write(`${JSON.stringify({ status: 'ok', plan: written, ...summarize(state) })}\n`);
+    }
+  } catch (error) {
+    process.stderr.write(`${error.message}\n`);
+    process.exit(1);
+  }
+}
+
+module.exports = {
+  DOCS_DIR,
+  OUTPUT_FILE,
+  PHASES,
+  STATE_FILE,
+  applyStep,
+  docsDir,
+  initState,
+  loadState,
+  outputPath,
+  render,
+  save,
+  SECTION_STATES,
+  setPhone,
+  setSection,
+  summarize,
+  PHONE_STAGES,
+  SECTIONS,
+};

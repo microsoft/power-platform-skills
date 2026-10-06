@@ -350,38 +350,31 @@ test('#6a4 a failed BUSINESS-RULE read is UNKNOWN, not "this app has no business
   assert.ok(!(clean.incomplete || []).some((i) => i.kind === 'businessRules'), JSON.stringify(clean.incomplete));
 });
 
-test('#6a5 a TRUNCATED component page marks the class incomplete, not undercounted', async () => {
-  // `$top` is a hard cap and Dataverse omits `@odata.nextLink` when it is honoured, so a full page is
-  // indistinguishable from a truncated one and there is no signal to read afterwards. This list feeds
-  // `notRoundTrippedSummary`, which reports a COUNT — so a truncated read there is not merely a
-  // missing artifact, it is a smaller number presented as the whole truth.
-  //
-  // Written after a mutation run showed the guard was shipped untested: disabling it changed no test.
+test('#6a5 app component inventory reads are paginated, not capped and undercounted', async () => {
+  // These component rows decide which deployed forms/views/charts are reported as not round-tripped.
+  // A capped read turns the tail into an authoritative undercount, so the query must ask the SDK to
+  // follow every page instead of relying on `$top`.
   const { readDescriptionInventory } = require('../download-model-app.js');
   const APP = '11111111-1111-1111-1111-111111111111';
-  const CAP = 1000; // COMPONENT_PAGE_CAP — module-private, so pinned here deliberately.
-  const full = Array.from({ length: CAP }, (_, i) => ({ objectid: `v-${i}`, componenttype: 26 }));
-  const sdk = (rows) => ({
+  const calls = [];
+  const sdk = {
     dataverse: { get: async () => ({ status: 200, headers: {}, body: { value: [] } }) },
     queryRecords: async (logical, opts) => {
+      calls.push({ logical, opts });
       if (logical === 'appmodule') return [{ appmoduleidunique: APP }];
-      // Only the VIEW class (componenttype 26) is saturated; the others return a short page.
-      if (logical === 'appmodulecomponent') return /componenttype eq 26/.test((opts && opts.filter) || '') ? rows : [];
-      if (logical === 'savedquery') return [];
+      if (logical === 'appmodulecomponent') return [];
       return [];
     },
-  });
+  };
 
-  const truncated = await readDescriptionInventory(sdk(full), APP, null);
-  const v = (truncated.incomplete || []).find((i) => i.kind === 'views');
-  assert.ok(v, `views must be marked incomplete at the cap, got ${JSON.stringify(truncated.incomplete)}`);
-  assert.match(v.reason, /truncated/i, v.reason);
-  // Scoped: the classes that read a SHORT page are not tarred with it.
-  assert.ok(!(truncated.incomplete || []).some((i) => i.kind === 'charts'), JSON.stringify(truncated.incomplete));
-
-  // One row under the cap is a complete read and must stay silent, or the warning cries wolf.
-  const under = await readDescriptionInventory(sdk(full.slice(0, CAP - 1)), APP, null);
-  assert.ok(!(under.incomplete || []).some((i) => i.kind === 'views'), JSON.stringify(under.incomplete));
+  const inv = await readDescriptionInventory(sdk, APP, null);
+  assert.ok(!(inv.incomplete || []).some((i) => i.kind === 'views'), JSON.stringify(inv.incomplete));
+  const componentReads = calls.filter((c) => c.logical === 'appmodulecomponent');
+  assert.ok(componentReads.length >= 3, `expected reads for views/charts/forms, got ${JSON.stringify(componentReads)}`);
+  for (const call of componentReads) {
+    assert.strictEqual(call.opts.paginate, true, `${call.opts.filter} must paginate`);
+    assert.strictEqual(call.opts.top, undefined, `${call.opts.filter} must not cap with top`);
+  }
 });
 
 test('#6a2 an unreadable app-component list marks EVERY class unknown', async () => {

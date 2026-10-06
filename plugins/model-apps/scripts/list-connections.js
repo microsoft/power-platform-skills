@@ -11,7 +11,7 @@
 // Output:
 //   { "ok": true, "connections": [...], "connectionReferences": [...] }
 
-const { spawnSync } = require('node:child_process');
+const { spawnResultSync } = require('./lib/process-runner.js');
 const {
   dataverseRequest,
   ensureOk,
@@ -19,7 +19,6 @@ const {
   validateFlags,
   emitResult,
 } = require('./lib/dataverse-auth');
-const { exitIfConnectorsDisabled } = require('./lib/feature-flags');
 
 function normalizeHeader(header) {
   return String(header).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -30,22 +29,25 @@ function mapConnectionRow(row) {
   for (const [key, value] of Object.entries(row)) {
     normalized[normalizeHeader(key)] = value;
   }
+  // An identifier is a non-empty STRING, trimmed. A number, an object, an array or whitespace in an id
+  // column is not one: kept, it made a row with "both ids" that no connection reference could ever bind.
+  const text = (value) => (typeof value === 'string' ? value.trim() : '');
 
   const connectionId =
-    normalized.connectionid ||
-    normalized.id ||
-    normalized.connection ||
+    text(normalized.connectionid) ||
+    text(normalized.id) ||
+    text(normalized.connection) ||
     '';
   const connectorId =
-    normalized.connectorid ||
-    normalized.apiid ||
-    normalized.connector ||
+    text(normalized.connectorid) ||
+    text(normalized.apiid) ||
+    text(normalized.connector) ||
     extractConnectorId(connectionId) ||
     '';
   const displayName =
-    normalized.connectionname ||
-    normalized.displayname ||
-    normalized.name ||
+    text(normalized.connectionname) ||
+    text(normalized.displayname) ||
+    text(normalized.name) ||
     connectorId ||
     connectionId;
 
@@ -55,6 +57,16 @@ function mapConnectionRow(row) {
 function extractConnectorId(connectionId) {
   const match = String(connectionId).match(/(\/providers\/Microsoft\.PowerApps\/apis\/[^/]+)\/connections/i);
   return match ? match[1] : '';
+}
+
+// Whether a row of column names is a connection table's header: at least two columns, one of them a column
+// `mapConnectionRow` reads the connection id from. A line that only MENTIONS a connector — "Warning: failed to
+// retrieve connector metadata." — is prose; read as a header it made an empty table, and so "no connections", the
+// answer that sends connection setup on to create a duplicate.
+const CONNECTION_ID_COLUMNS = new Set(['connectionid', 'id', 'connection']);
+function isConnectionHeader(names) {
+  const columns = names.map(normalizeHeader).filter(Boolean);
+  return columns.length >= 2 && columns.some((column) => CONNECTION_ID_COLUMNS.has(column));
 }
 
 function usableConnection(row) {
@@ -87,7 +99,7 @@ function parseFixedWidthTable(raw) {
     const runs = line.match(/-{3,}/g) || [];
     return runs.length >= 2;
   });
-  if (separatorIndex <= 0) return [];
+  if (separatorIndex <= 0) return null; // no table here — not the same as a table with no rows
 
   const headerLine = lines[separatorIndex - 1];
   const ranges = [...lines[separatorIndex].matchAll(/-+/g)].map((match, index, matches) => ({
@@ -95,6 +107,7 @@ function parseFixedWidthTable(raw) {
     start: match.index,
     end: matches[index + 1]?.index,
   }));
+  if (!isConnectionHeader(ranges.map((range) => range.name))) return null;
 
   return usableConnectionRows(lines
     .slice(separatorIndex + 1)
@@ -110,8 +123,9 @@ function parseFixedWidthTable(raw) {
 
 function parseWhitespaceTable(raw) {
   const lines = raw.replace(/\r/g, '').split('\n').filter((line) => line.trim());
-  const headerIndex = lines.findIndex((line) => /Connection Name|Connection Id|Connector|API Id/i.test(line));
-  if (headerIndex === -1) return [];
+  const headerIndex = lines.findIndex((line) => /Connection Name|Connection Id|Connector|API Id/i.test(line)
+    && isConnectionHeader(line.trim().split(/\s{2,}/)));
+  if (headerIndex === -1) return null; // no table here — not the same as a table with no rows
   const headers = lines[headerIndex].trim().split(/\s{2,}/);
   const normalizedHeaders = headers.map(normalizeHeader);
   // Current PAC builds emit:
@@ -136,7 +150,9 @@ function parseWhitespaceTable(raw) {
   }
   return usableConnectionRows(lines
     .slice(headerIndex + 1)
-    .filter((line) => !/^-+$/.test(line.trim()))
+    // A separator is dashes and the spaces between its runs ("-----  -----"). Kept as a row, its dash runs read
+    // as a connection's ids and names, and an empty table became one phantom connection.
+    .filter((line) => !/^[\s-]+$/.test(line))
     .map((line) => {
       const values = line.trim().split(/\s{2,}/);
       const row = {};
@@ -147,9 +163,31 @@ function parseWhitespaceTable(raw) {
     }), 'whitespace table');
 }
 
+// PAC's auth banner, printed before any listing, and its "nothing to list" message, e.g.
+//   Connected as maker@contoso.onmicrosoft.com
+//   No connections found.
+const PAC_BANNER = /^connected as\b/i;
+const NO_CONNECTIONS_MESSAGE = /^no connections?\b.*\bfound\b/i;
+
+// Output none of the parsers recognised. It is REFUSED rather than read as "no connections": that answer
+// sends connection setup on to create a connection the maker already has — and a warning printed on a
+// zero exit ("Warning: failed to retrieve connections."), JSON cut short, or a changed format are all
+// failures to read, not an empty environment.
+function unreadableListing(raw, why) {
+  const first = String(raw).split(/\r\n|\r|\n/).map((l) => l.trim()).find((l) => l && !PAC_BANNER.test(l)) || '(no output)';
+  return `pac connection list printed output this script could not read — ${why} (first line: "${first.slice(0, 200)}"). `
+    + 'It is not reported as "no connections", which would lead connection setup to create a duplicate; run `pac connection list` to see what it printed.';
+}
+
 function parsePacConnectionList(raw) {
-  const jsonRows = parseJsonConnections(raw);
-  if (jsonRows) return jsonRows;
+  const text = String(raw == null ? '' : raw);
+  // JSON is recognised by its first character, so JSON that does not parse — cut short, say — is an
+  // unreadable listing rather than something for the table parsers to find nothing in.
+  if (/^[[{]/.test(text.trim())) {
+    const jsonRows = parseJsonConnections(text.trim());
+    if (jsonRows) return jsonRows;
+    throw new Error(unreadableListing(text, 'it starts like JSON but is not a connection list'));
+  }
 
   // PAC commonly emits a fixed-width table similar to:
   //   Connection Name        Connector Id                                           Connection Id
@@ -157,8 +195,15 @@ function parsePacConnectionList(raw) {
   //   Contoso SharePoint     /providers/Microsoft.PowerApps/apis/shared_sharepointonline /providers/.../connections/abc
   // Some older builds wrap friendly names but keep 2+ spaces between columns, so
   // parse fixed-width first and fall back to a whitespace table for simpler output.
-  const fixed = parseFixedWidthTable(raw);
-  return fixed.length ? fixed : parseWhitespaceTable(raw);
+  const fixed = parseFixedWidthTable(text);
+  if (fixed && fixed.length) return fixed;
+  const loose = parseWhitespaceTable(text);
+  if (loose) return loose;
+  if (fixed) return fixed;
+  // No table and no JSON: only PAC's own message says there is nothing to list.
+  const lines = text.split(/\r\n|\r|\n/).map((l) => l.trim()).filter((l) => l && !PAC_BANNER.test(l));
+  if (lines.length && lines.every((l) => NO_CONNECTIONS_MESSAGE.test(l))) return [];
+  throw new Error(unreadableListing(text, lines.length ? 'no connection table, JSON list or "no connections found" message' : 'it printed no listing at all'));
 }
 
 function sameConnectionId(a, b) {
@@ -215,10 +260,6 @@ function pacFailureMessage(pac) {
 }
 
 async function main() {
-  // Rollback gate (fail closed) — see lib/feature-flags.js. connectors is GA and ships ON, so
-  // this normally passes; exit 3 = "feature off" stays distinct from 1 = runtime/usage error.
-  exitIfConnectorsDisabled();
-
   const argv = process.argv.slice(2);
   const { positional } = parseArgs(argv);
   const USAGE = 'Usage: node list-connections.js <envUrl>';
@@ -238,10 +279,9 @@ async function main() {
   const [envUrl] = positional;
 
   try {
-    const pac = spawnSync('pac', ['connection', 'list'], {
+    const pac = spawnResultSync('pac', ['connection', 'list'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
-      shell: process.platform === 'win32',
     });
     if (pac.error || pac.status !== 0) {
       throw new Error(pacFailureMessage(pac));
@@ -289,7 +329,7 @@ module.exports = {
   // The `pac connection list` parsers are exported for unit tests. They consume loosely
   // structured CLI output whose shape varies across PAC builds (JSON, fixed-width table,
   // whitespace table), which is exactly the code most likely to break silently on a CLI
-  // upgrade — a mis-parse yields "no connections found" rather than an error.
+  // upgrade — so output none of them recognises is refused, never read as "no connections".
   parsePacConnectionList,
   parseJsonConnections,
   parseFixedWidthTable,

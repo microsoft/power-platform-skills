@@ -292,9 +292,8 @@ Two cases:
    environment or the wrong mode cannot be undone. Return this only after your
    auth/environment steps have run, so both values are real.
 
-`genpage-connector-builder` remains the single owner of the connectors rollback gate,
-connection / connection-ref discovery, connection-reference creation, and the binding
-contract. When no connectors are involved, write the exact sentinel
+`genpage-connector-builder` remains the single owner of connection / connection-ref
+discovery, connection-reference creation, and the binding contract. When no connectors are involved, write the exact sentinel
 `No connector bindings.` into the plan.
 
 When the orchestrator forwards results it provides:

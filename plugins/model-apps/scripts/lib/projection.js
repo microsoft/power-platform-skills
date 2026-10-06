@@ -15,14 +15,9 @@
 
 const { stableStringify } = require('./phase-diff.js');
 const { sha256 } = require('./hash.js');
-
-// Dataverse control class ids that occupy a cell but are NOT bound form fields (a quick-view even
-// carries a fieldName). Kept in sync with artifact-intent.js NON_FIELD_CONTROL_CLASS_IDS.
-const NON_FIELD_CONTROL_CLASS_IDS = new Set([
-  '5C5600E0-1D6E-4205-A272-BE80DA87FD42', // QuickView
-  'E7A81278-8635-4D9E-8D4D-59480B391C5B', // Subgrid / Grid
-  '06375649-C143-495E-A496-C962E5B4488E', // Notes / Timeline
-]);
+// The non-field control rule (quick-view, sub-grid, notes/timeline class ids) lives in the compiler
+// that places those controls, so the verifier and the compiler cannot disagree about what counts.
+const { isNonFieldControl } = require('./artifact-intent.js');
 
 // Normalize a GUID for comparison: drop braces, lowercase. Non-guid strings pass through lowercased-trim.
 function normId(s) {
@@ -31,10 +26,6 @@ function normId(s) {
 
 function normClassId(id) {
   return String(id || '').replace(/[{}]/g, '').toUpperCase();
-}
-
-function isNonFieldControl(ctrl) {
-  return !!(ctrl && ctrl.classId && NON_FIELD_CONTROL_CLASS_IDS.has(normClassId(ctrl.classId)));
 }
 
 // One cell's projection: a bound field (name + required), a sub-grid (relationship/target/view/label,

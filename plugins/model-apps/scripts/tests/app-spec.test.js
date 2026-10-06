@@ -1092,6 +1092,19 @@ test('validateAppSpec REJECTS a non-GUID pages[].pageId', () => {
   assert.ok(!validateAppSpec(emptySpec, { profile: 'deploy' }).ok, 'empty pageId is rejected');
 });
 
+// pages[].model is the id a download writes back and the build sends to pac's `--model`, so it is a short token.
+test('validateAppSpec ACCEPTS a model id and REJECTS anything that is not one', () => {
+  const withModel = (model) => v2PagesSpec([{ page: 'overview', title: 'Overview' }, { page: 'order-detail', title: 'Order Detail' }], { model });
+  for (const good of ['gpt-4.1', 'gpt-5-mini', 'org/model:v2_1', 'claude-3-5-sonnet@20240620', 'model+tuned', 'm'.repeat(100)]) {
+    const r = validateAppSpec(withModel(good), { profile: 'deploy' });
+    assert.ok(r.ok, `${good}: ${JSON.stringify(r.errors)}`);
+  }
+  for (const bad of ['', ' gpt-4.1', 'gpt 4.1', '-gpt', 'gpt"4', 'm'.repeat(101), 41, null]) {
+    const r = validateAppSpec(withModel(bad), { profile: 'deploy' });
+    assert.ok(r.errors.some((e) => /page 'overview': model must be a model id such as 'gpt-4\.1'/.test(e)), `${JSON.stringify(bad)}: ${JSON.stringify(r.errors)}`);
+  }
+});
+
 // --- entities[].quickCreate (Allow quick create table flag) --------------------------------------
 function quickCreateSpec(entityExtra, forms) {
   return {

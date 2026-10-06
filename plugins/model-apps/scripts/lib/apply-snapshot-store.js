@@ -48,28 +48,35 @@ function snapshotAbsent(workspaceDir) {
   }
 }
 
-// Atomic write. The temp file MUST be in the same directory as the target — rename() is only atomic
-// within a single filesystem, and a workspace-local temp guarantees that. fsync the fd before rename so
-// the bytes are durable, not just in the page cache. A crash leaves EITHER the prior snapshot or the new
-// one, never a partial write. The temp name carries pid+timestamp so two racing writers don't collide on
-// the temp path itself (the rename still yields one final winner; the CAS decides which SHOULD win).
-function writeSnapshotAtomic(workspaceDir, envelope) {
-  fs.mkdirSync(workspaceDir, { recursive: true });
-  const target = snapshotPath(workspaceDir);
+// Atomic write of `text` to `target`. The temp file MUST be in the same directory as the target —
+// rename() is only atomic within a single filesystem, and a temp beside the target guarantees that. fsync
+// the fd before rename so the bytes are durable, not just in the page cache. A crash leaves EITHER the
+// prior file or the new one, never a partial write. The temp name carries pid+timestamp so two racing
+// writers don't collide on the temp path itself (the rename still yields one final winner; for the
+// snapshot, the CAS decides which SHOULD win). writeFileSync on the descriptor writes the whole text: one
+// writeSync may write only part of it (see createExclusive), and a short write fsynced and renamed into
+// place is exactly the partial file this exists to prevent. A write that fails at any step removes its
+// temp and leaves the target as it was. The sitemap baseline (deployed-baseline.js) is written through it too.
+function writeFileAtomic(target, text) {
   const tmp = `${target}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
-  const fd = fs.openSync(tmp, 'w');
   try {
-    fs.writeSync(fd, serializeEnvelope(envelope));
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-  try {
+    const fd = fs.openSync(tmp, 'w');
+    try {
+      fs.writeFileSync(fd, text);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
     fs.renameSync(tmp, target);
   } catch (e) {
     try { fs.unlinkSync(tmp); } catch { /* best-effort cleanup of the orphaned temp */ }
     throw e;
   }
+}
+
+function writeSnapshotAtomic(workspaceDir, envelope) {
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  writeFileAtomic(snapshotPath(workspaceDir), serializeEnvelope(envelope));
 }
 
 // Create a CLAIM `file` holding `text` exclusively ('wx' — one writer wins), and remove it again when the write
@@ -253,14 +260,6 @@ function casWriteSnapshot(workspaceDir, envelope, expectedGeneration, deps = {})
   } finally {
     releaseLease(lease);
   }
-}
-
-// Unconditional persist under the lease (no CAS) — used to seed the very first snapshot or to write a
-// freshly-minted envelope where no read-modify-write ordering matters. Prefer casWriteSnapshot on any
-// update path.
-function persistSnapshot(workspaceDir, envelope) {
-  writeSnapshotAtomic(workspaceDir, envelope);
-  return { ok: true };
 }
 
 // INVALIDATE-before-write: force eligible:false and persist, under the lease, ROTATING the generation so a
@@ -694,13 +693,13 @@ module.exports = {
   leasePath,
   readSnapshot,
   snapshotAbsent,
+  writeFileAtomic,
   writeSnapshotAtomic,
   processAlive,
   createExclusive,
   acquireLease,
   releaseLease,
   casWriteSnapshot,
-  persistSnapshot,
   invalidateSnapshot,
   tombstoneSnapshot,
   claimBaselineSnapshot,

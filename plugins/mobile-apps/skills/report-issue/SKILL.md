@@ -102,6 +102,12 @@ echo "ANDROID_HOME=$ANDROID_HOME"
 
 Run `npx --no-install expo doctor` and capture the text output verbatim.
 
+Ask for the affected workflow's Support ID when available. Use the telemetry
+helper's read-only `--report` mode from the affected project to inspect only its
+allowlisted timeline. Include the Support ID and relevant step/error category in
+the issue body, not environment, tenant, or organization IDs. Do not
+upload the telemetry directory or raw timing/authentication files.
+
 If the user pasted an error, capture verbatim. Otherwise look for recent failure signals:
 
 - Last 50 lines of any Metro / Gradle / Xcode log if user mentions a build failure
@@ -114,6 +120,8 @@ If the user pasted an error, capture verbatim. Otherwise look for recent failure
 - Connection IDs unless the user explicitly opted in (PII / can map to tenant)
 - Anything under `node_modules/`
 - Package source excerpts, patched package contents, or proposed fork code
+- Tenant/environment/organization IDs in a public issue, even though verified
+  IDs can exist in access-controlled telemetry
 
 ### Step 4 — Render issue body
 
@@ -152,11 +160,12 @@ Print this block — user copies into a new issue:
 ### Project context
 
 <if in project>
-- Project: `<name>` v`<version>`
-- Power Platform env: `<env-id>`
+- Mobile project detected: yes
+- Support ID: `<affected workflow run GUID, or unavailable>`
+- Failed step / error category: `<registered step and fixed category, or unknown>`
 - Memory bank present: <yes/no>
 - Plan present: <yes/no>
-- Connectors registered: <list from src/generated/services>
+- Connector count: <count, not generated service or business-table names>
 </if>
 
 <if not in project>

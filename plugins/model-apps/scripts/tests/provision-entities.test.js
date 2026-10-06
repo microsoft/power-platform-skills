@@ -1,8 +1,13 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const vm = require('node:vm');
 const { provisionEntities } = require(path.join(__dirname, '..', 'provision-entities.js'));
+const { loadCli } = require('./helpers/cli-harness.js');
+const { validateFlagsFromParsed, realAuth } = require('./helpers/fake-auth.js');
 
 const input = { solution: { uniqueName: 'Default', publisherPrefix: 'cr' },
   entities: [{ schemaName: 'cr_candidate', displayName: 'Candidate', pluralName: 'Candidates', primaryAttribute: { schemaName: 'cr_name' },
@@ -226,4 +231,226 @@ test('provision-entities surfaces a language fallback through deps.warn', async 
     warnings.some((w) => /base language/i.test(w) && /--language-code/.test(w)),
     'the fallback must reach deps.warn; got: ' + JSON.stringify(warnings)
   );
+});
+
+// makeSdk/main are otherwise never called: the tests above inject mockDeps into provisionEntities().
+// emitResult() ends the process, so a cleanup that runs in a finally the printer never returns to
+// leaks both throwaway workspaces. The stub throws where the real printer exits, and only after both
+// directories are gone. validateFlagsFromParsed cannot see an unknown flag (parseArgs drops it), so
+// the real checker runs first; the rebuilt-argv check still guards the success-path `known` list.
+const PROVISION_SCRIPT = path.join(__dirname, '..', 'provision-entities.js');
+const PROVISION_ENV = 'https://contoso.crm.dynamics.com';
+
+function cliProvisionInput() {
+  return {
+    solution: { uniqueName: 'Default', publisherPrefix: 'cr' },
+    entities: [{
+      schemaName: 'cr_candidate',
+      displayName: 'Candidate',
+      pluralName: 'Candidates',
+      primaryAttribute: { schemaName: 'cr_name' },
+      columns: [{ schemaName: 'cr_status', type: 'Choice', options: ['Applied', 'Hired'] }],
+    }],
+    relationships: [],
+    sampleData: { cr_candidate: [{ cr_name: 'Ada' }, { cr_name: 'Grace' }] },
+  };
+}
+
+function provisionHarness({ initThrows = null, constructThrows = null, provisioned = [1033, 3082, 1036], onEmit = null } = {}) {
+  const d = mockDeps();
+  const seen = { envs: [], http: [], cols: [], order: [], removed: [], storages: [], solution: undefined, emitted: null };
+  d.sdk.seedRecordGraph = async () => ({ createdIds: { cr_candidate: ['rec-0', 'rec-1'] } });
+  d.sdk.createColumn = async (_logical, column) => {
+    d.calls.push('createColumn');
+    seen.cols.push(column);
+    return { logicalName: column.schemaName.toLowerCase(), metadataId: `col-${column.schemaName}` };
+  };
+  d.provision.queryRecords = async (set) => (set === 'organization' ? [{ languagecode: 1033 }] : [{ solutionid: 's' }]);
+  const requires = {
+    'node:fs': {
+      mkdtempSync: (prefix) => {
+        const dir = prefix + String(seen.storages.length);
+        seen.storages.push(dir);
+        seen.order.push('mkdtemp');
+        return dir;
+      },
+      rmSync: (dir, opts) => {
+        seen.order.push('rm');
+        seen.removed.push({ dir, opts });
+      },
+    },
+    './lib/sdk-http-client.js': {
+      createAzHttpClient: (env) => {
+        seen.http.push(env);
+        return { env };
+      },
+    },
+    './vendor/cds-maker-sdk.cjs': {
+      createNodeWorkspaceStorage: (root) => ({ root }),
+      createMakerSdk: (opts) => {
+        seen.envs.push(opts.instanceUrl);
+        if (opts.solutionUniqueName) seen.solution = opts.solutionUniqueName;
+        if (constructThrows) throw new Error(constructThrows);
+        const base = opts.solutionUniqueName ? d.sdk : d.provision;
+        return Object.assign({}, base, {
+          initWorkspace: async () => { if (initThrows) throw new Error(initThrows); },
+        });
+      },
+    },
+    './lib/dataverse-auth.js': {
+      parseArgs: realAuth.parseArgs,
+      validateFlags: (passed, contract) => {
+        const direct = realAuth.validateFlags(passed, contract);
+        if (direct) return direct;
+        return validateFlagsFromParsed(() => realAuth.parseArgs(passed).flags)(passed, contract);
+      },
+      readAliasedFlag: realAuth.readAliasedFlag,
+      readJsonArg: realAuth.readJsonArg,
+      readProvisionedLanguages: async () => provisioned,
+      emitResult: (ok, payload) => {
+        seen.order.push('emit');
+        if (seen.removed.length < 2) throw new Error(`emit before workspace cleanup (removed ${seen.removed.length})`);
+        seen.emitted = { ok, payload };
+        if (onEmit) return onEmit(ok, payload);
+        const err = new Error(`process.exit(${ok ? 0 : 1})`);
+        err.exitCode = ok ? 0 : 1;
+        throw err;
+      },
+    },
+  };
+  return { d, seen, requires };
+}
+
+function assertCleanedBeforeEmit(seen) {
+  assert.deepStrictEqual(seen.removed.map((r) => r.dir), seen.storages, 'both workspaces makeSdk created are the ones removed');
+  assert.ok(seen.removed.every((r) => r.opts && r.opts.recursive === true && r.opts.force === true));
+  const emitAt = seen.order.lastIndexOf('emit');
+  assert.ok(emitAt > 1, 'emit ran');
+  assert.ok(seen.order.slice(0, emitAt).filter((step) => step === 'rm').length >= 2, 'cleanup ran before the emitter exited: ' + seen.order.join(','));
+}
+
+test('CLI provisions the requested input and cleans its workspace before emit', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-cli-'));
+  const inputFile = path.join(dir, 'input.json');
+  fs.writeFileSync(inputFile, JSON.stringify(cliProvisionInput()));
+  const inputArg = '@' + inputFile;
+
+  async function viaLoadCli(argv, opts) {
+    const h = provisionHarness(opts);
+    const cli = loadCli(PROVISION_SCRIPT, { argv, requires: h.requires });
+    let exitErr = null;
+    try { await cli.main(); } catch (err) { exitErr = err; }
+    return { ...h, exitErr, stderr: cli.stderrText(), stdout: cli.stdoutText() };
+  }
+
+  // The entry `main().catch(emitResult)` only arms when the file is the process main. loadCli cannot
+  // set that, so thrown init/provision failures are driven through the same compile with require.main
+  // pointed at the module — otherwise a deleted catch would still look green.
+  function viaEntry(argv, opts) {
+    let finish;
+    const done = new Promise((resolve) => { finish = resolve; });
+    const h = provisionHarness({ ...opts, onEmit: () => finish() });
+    const source = fs.readFileSync(PROVISION_SCRIPT, 'utf8');
+    const mod = { exports: {} };
+    const stderr = [];
+    const customRequire = (id) => {
+      if (Object.prototype.hasOwnProperty.call(h.requires, id)) return h.requires[id];
+      const noExt = id.replace(/\.js$/, '');
+      if (Object.prototype.hasOwnProperty.call(h.requires, noExt)) return h.requires[noExt];
+      if (id.startsWith('.')) return require(path.resolve(path.dirname(PROVISION_SCRIPT), id));
+      return require(id);
+    };
+    customRequire.main = mod;
+    const sandboxProcess = {
+      argv: ['node', PROVISION_SCRIPT, ...argv],
+      env: {},
+      platform: process.platform,
+      execPath: process.execPath,
+      exit: (code) => { h.seen.exitCode = code; finish(); },
+      stdout: { write: () => true },
+      stderr: { write: (s) => { stderr.push(String(s)); return true; } },
+    };
+    const fn = vm.compileFunction(source, ['require', 'module', 'exports', 'process'], { filename: PROVISION_SCRIPT });
+    fn(customRequire, mod, mod.exports, sandboxProcess);
+    return done.then(() => ({ ...h, stderr: stderr.join('') }));
+  }
+
+  try {
+    const dry = await viaLoadCli(['--env', PROVISION_ENV, '--input', inputArg, '--sample-data']);
+    assert.strictEqual(dry.exitErr && dry.exitErr.exitCode, 0);
+    assert.strictEqual(dry.seen.emitted.ok, true);
+    assert.strictEqual(dry.seen.emitted.payload.dryRun, true);
+    assert.ok(dry.seen.emitted.payload.plan.includes('table cr_candidate'));
+    assert.ok(dry.seen.emitted.payload.plan.includes('2 record(s) -> cr_candidate'));
+    assert.deepStrictEqual(dry.d.calls, [], 'dry-run must not write');
+    assert.ok(dry.seen.envs.every((env) => env === PROVISION_ENV));
+    assert.deepStrictEqual(dry.seen.http, [PROVISION_ENV]);
+    assertCleanedBeforeEmit(dry.seen);
+
+    const applied = await viaLoadCli(['--env', PROVISION_ENV, '--input', inputArg, '--apply', '--sample-data', '--language-code', '3082']);
+    assert.strictEqual(applied.exitErr && applied.exitErr.exitCode, 0, applied.stderr);
+    const body = applied.seen.emitted.payload;
+    assert.strictEqual(body.ok, true);
+    assert.strictEqual(body.entities[0].logicalName, 'cr_candidate');
+    assert.strictEqual(body.entities[0].entitySetName, 'cr_candidates');
+    assert.strictEqual(body.entities[0].metadataId, 'tbl-cr_candidate');
+    assert.strictEqual(body.columns[0].logicalName, 'cr_status');
+    assert.strictEqual(body.columns[0].metadataId, 'col-cr_status');
+    assert.deepStrictEqual(body.records, { cr_candidate: ['rec-0', 'rec-1'] });
+    assert.strictEqual(applied.seen.cols[0].languageCode, 3082, '--language-code must reach the column create');
+    assert.strictEqual(applied.seen.solution, 'Default');
+    assert.ok(applied.d.calls.includes('createTable'));
+    assert.ok(applied.seen.envs.every((env) => env === PROVISION_ENV));
+    assertCleanedBeforeEmit(applied.seen);
+
+    const camel = await viaLoadCli(['--env', PROVISION_ENV, '--input', inputArg, '--apply', '--languageCode', '1036']);
+    assert.strictEqual(camel.exitErr && camel.exitErr.exitCode, 0, camel.stderr);
+    assert.strictEqual(camel.seen.cols[0].languageCode, 1036, '--languageCode is the same flag, not a dropped alias');
+
+    const badInput = path.join(dir, 'bad.json');
+    fs.writeFileSync(badInput, JSON.stringify({ solution: { uniqueName: 'Default' }, entities: [], relationships: [] }));
+    const refused = await viaLoadCli(['--env', PROVISION_ENV, '--input', '@' + badInput, '--apply']);
+    assert.strictEqual(refused.exitErr && refused.exitErr.exitCode, 1);
+    assert.strictEqual(refused.seen.emitted.ok, false);
+    assert.ok(refused.seen.emitted.payload.errors.some((e) => /publisherPrefix/i.test(e)));
+    assert.deepStrictEqual(refused.d.calls, [], 'a refused input must not write');
+    assertCleanedBeforeEmit(refused.seen);
+
+    const badLcid = await viaLoadCli(['--env', PROVISION_ENV, '--input', inputArg, '--language-code', '1O33']);
+    assert.strictEqual(badLcid.exitErr && badLcid.exitErr.exitCode, 1);
+    assert.match(badLcid.stderr, /--language-code \/ --languageCode must be digits only/);
+    assert.match(badLcid.stderr, /got '1O33'/);
+    assert.deepStrictEqual(badLcid.seen.storages, [], 'an invalid LCID exits before makeSdk');
+    assert.strictEqual(badLcid.seen.emitted, null);
+
+    const unknown = await viaLoadCli(['--env', PROVISION_ENV, '--bogus', 'x', '--input', inputArg]);
+    assert.strictEqual(unknown.exitErr && unknown.exitErr.exitCode, 1);
+    assert.match(unknown.stderr, /unknown flag\(s\): --bogus/);
+    assert.deepStrictEqual(unknown.seen.storages, []);
+    assert.deepStrictEqual(unknown.d.calls, []);
+
+    const initFailed = await viaEntry(['--env', PROVISION_ENV, '--input', inputArg, '--apply'], { initThrows: 'workspace init failed' });
+    assert.strictEqual(initFailed.seen.emitted.ok, false);
+    assert.match(initFailed.seen.emitted.payload.message, /workspace init failed/);
+    assert.deepStrictEqual(initFailed.d.calls, []);
+    assert.ok(initFailed.seen.envs.includes(PROVISION_ENV));
+    assertCleanedBeforeEmit(initFailed.seen);
+
+    const constructFailed = await viaEntry(['--env', PROVISION_ENV, '--input', inputArg, '--apply'], { constructThrows: 'bundle missing' });
+    assert.strictEqual(constructFailed.seen.emitted.ok, false);
+    assert.match(constructFailed.seen.emitted.payload.message, /bundle missing/);
+    assert.deepStrictEqual(constructFailed.d.calls, []);
+    assertCleanedBeforeEmit(constructFailed.seen);
+
+    const unprovisioned = await viaEntry(
+      ['--env', PROVISION_ENV, '--input', inputArg, '--apply', '--language-code', '3082'],
+      { provisioned: [1033] }
+    );
+    assert.strictEqual(unprovisioned.seen.emitted.ok, false);
+    assert.match(unprovisioned.seen.emitted.payload.message, /3082 is not provisioned/);
+    assert.ok(!unprovisioned.d.calls.includes('createTable'), 'an unprovisioned language must not write tables');
+    assertCleanedBeforeEmit(unprovisioned.seen);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

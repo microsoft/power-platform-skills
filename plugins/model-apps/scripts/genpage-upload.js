@@ -31,7 +31,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
-const { makeGenpageCli, suppliedButBlank } = require('./lib/genpage-cli.js');
+const { makeGenpageCli, suppliedButBlank, unescapePacName } = require('./lib/genpage-cli.js');
 
 const KNOWN = ['env', 'app-id', 'code-file', 'compiled-code-file', 'page-id', 'name', 'name-file',
   'data-sources', 'clear-data-sources', 'prompt', 'prompt-file', 'agent-message', 'agent-message-file',
@@ -153,6 +153,18 @@ async function main(argv = process.argv.slice(2), deps = {}) {
       });
     }
   }
+  // An ASCII double quote cannot be deployed in a page name: pac stores every `"` in it as `\"` — in the page
+  // row AND in the navigation title it writes, which the app then shows (live-measured: `Say "hi" now` became
+  // `Say \"hi\" now` in both). No other character is changed — backslashes, typographic quotes, apostrophes
+  // and non-ASCII text all arrive exactly — so the name is refused before anything is deployed, and the
+  // message names the characters that do survive.
+  if (typeof pageName.value === 'string' && pageName.value.includes('"')) {
+    return emit(false, {
+      error: `the page name ${JSON.stringify(pageName.value)} contains an ASCII double quote ("), which the page would `
+        + 'show as \\" — pac stores every " in a page name that way, in the navigation title too. Use typographic '
+        + 'quotes (“ ”) or an apostrophe instead; they are stored exactly.',
+    });
+  }
 
   const addToSitemap = flags['add-to-sitemap'] === true || flags['add-to-sitemap'] === 'true';
   // Same normalization as the switch above, and for the same reason: `parseArgs` yields the STRING
@@ -213,7 +225,20 @@ async function main(argv = process.argv.slice(2), deps = {}) {
           + 'unknown --page-id as a create and would make a new page and report it as an update.',
       });
     }
-    const known = await enumerate();
+    const enumeratePages = typeof cli.enumeratePages === 'function' ? cli.enumeratePages.bind(cli) : null;
+    // The existence and membership listings are independent reads, each its own pac process of about
+    // five seconds, so they run together. Measured live: a pair run one after the other averaged
+    // 10.6 s and an overlapped pair 5.6 s, and all 20 overlapped listings succeeded. The VERDICTS are
+    // still reached in the original order (existence first), so a given failure is reported as it
+    // was before, and a listing that throws surfaces only when its verdict is reached: a page that
+    // does not exist is reported as absent even if the app listing also broke.
+    const settle = (fn) => Promise.resolve().then(fn).then((value) => ({ value }), (error) => ({ failed: true, error }));
+    const [existence, membership] = await Promise.all([
+      settle(enumerate),
+      enumeratePages ? settle(() => enumeratePages(flags['app-id'], { includeUnpublished: true })) : null,
+    ]);
+    if (existence.failed) throw existence.error;
+    const known = existence.value;
     if (!known || known.ok !== true) {
       return emit(false, {
         error: `cannot verify that page ${flags['page-id']} exists before updating it `
@@ -228,6 +253,39 @@ async function main(argv = process.argv.slice(2), deps = {}) {
           + '--page-id to create a page deliberately.',
       });
     }
+    // EXISTENCE is not enough for an update: pac accepts a real page id together with ANY app id
+    // and then writes the page under that app context, which renames it and attaches its table
+    // bindings to the wrong app. The app-scoped list is sitemap/navigation membership, so prove the
+    // page is actually placed in THIS app before the binding probe downloads content or upload writes.
+    if (!enumeratePages) {
+      return emit(false, {
+        error: `cannot verify that page ${flags['page-id']} belongs to app ${flags['app-id']} — this pac `
+          + 'wrapper exposes no app-scoped page listing. Refusing to upload, because updating a '
+          + 'page through the wrong app id would rename it and attach its tables to that app.',
+      });
+    }
+    if (membership.failed) throw membership.error;
+    const appPages = membership.value;
+    if (!appPages || appPages.ok !== true) {
+      return emit(false, {
+        error: `cannot verify that page ${flags['page-id']} belongs to app ${flags['app-id']} `
+          + `(${(appPages && appPages.error) || 'unknown reason'})`,
+      });
+    }
+    const pages = Array.isArray(appPages.pages) ? appPages.pages : [];
+    if (!pages.length) {
+      return emit(false, {
+        error: `app ${flags['app-id']} has no generative pages, or could not be found — cannot verify `
+          + `that page ${flags['page-id']} belongs to it`,
+      });
+    }
+    const pageInApp = pages.some((p) => String(p && p.pageId || '').toLowerCase() === String(flags['page-id']).toLowerCase());
+    if (!pageInApp) {
+      return emit(false, {
+        error: `page ${flags['page-id']} is not in app ${flags['app-id']}'s navigation — updating it `
+          + 'with this app id would rename it and attach its tables to that app; use the id of the app the page belongs to',
+      });
+    }
   }
 
   // An UPDATE that says NOTHING about data sources must not DESTROY them. pac rewrites the page's
@@ -238,8 +296,16 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   // Same rule as an omitted cell span: absence is "no opinion", never "clear it". The current
   // bindings are read back and re-sent, so a fix-redeploy is non-destructive by default; pass
   // `--clear-data-sources` to actually unbind. A create has nothing to preserve.
+  //
+  // The page's MODEL follows the same rule: pac stores whatever `--model` an upload sends, and an update
+  // without one wiped the deployed model id to "" (live-measured). So an update that omits it re-sends the
+  // one config.json records — read from the same download.
   let preservedDataSources;
-  if (flags['page-id'] && !flags['data-sources'] && !clearDataSources) {
+  let preservedModel;
+  let modelUnread = null; // why the page's current model could not be read, when it could not
+  const preserveBindings = flags['page-id'] && !flags['data-sources'] && !clearDataSources;
+  const preserveModel = flags['page-id'] && !flags.model;
+  if (preserveBindings || preserveModel) {
     const probe = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-ds-'));
     // The failure is RECORDED and emitted after cleanup, never emitted from inside the try. The real
     // `emitResult` calls `process.exit(1)`, so a `return emit(...)` in the catch never reaches the
@@ -266,17 +332,37 @@ async function main(argv = process.argv.slice(2), deps = {}) {
       // path uses (`config.dataSources || []`), and how an unbound page legitimately looks. A key
       // that is PRESENT but not an array is neither absent nor readable: it is malformed, and
       // treating it as "no bindings" would unbind the page on the strength of a value we could not
-      // interpret. Only a MISSING or UNREADABLE config is unknown, and that is refused below.
-      if (cfg.dataSources !== undefined && !Array.isArray(cfg.dataSources)) {
-        throw new Error(`config.json dataSources is ${typeof cfg.dataSources}, not an array`);
+      // interpret. Only a MISSING or UNREADABLE config is unknown, and that is refused below. Checked
+      // only when the bindings are what this download preserves — a caller who named them owns them.
+      if (preserveBindings) {
+        if (cfg.dataSources !== undefined && !Array.isArray(cfg.dataSources)) {
+          throw new Error(`config.json dataSources is ${typeof cfg.dataSources}, not an array`);
+        }
+        if (Array.isArray(cfg.dataSources)) {
+          const bad = cfg.dataSources.find((value) => typeof value !== 'string' || !value.trim());
+          if (bad !== undefined) {
+            throw new Error('config.json dataSources must be an array of non-empty table logical names');
+          }
+        }
+        preservedDataSources = Array.isArray(cfg.dataSources) ? cfg.dataSources : [];
       }
-      preservedDataSources = Array.isArray(cfg.dataSources) ? cfg.dataSources : [];
+      // An absent or empty model is the page having none — nothing to re-send.
+      if (preserveModel) {
+        if (typeof cfg.model === 'string' && cfg.model.trim()) preservedModel = cfg.model.trim();
+        else if (cfg.model !== undefined && cfg.model !== null && cfg.model !== '') modelUnread = `config.json model is ${typeof cfg.model}, not a string`;
+      }
     } catch (e) {
-      // Fail CLOSED: guessing "probably none" is exactly the silent unbinding this exists to stop.
-      probeError = `cannot read the current data-source bindings for page ${flags['page-id']} (${e.message})`
-        + ' — refusing to update, because pac would persist an EMPTY binding list and the page would'
-        + ' keep querying a table it is no longer bound to. Pass --data-sources explicitly, or'
-        + ' --clear-data-sources to unbind deliberately.';
+      // Fail CLOSED for the BINDINGS: guessing "probably none" is exactly the silent unbinding this exists
+      // to stop. The model is metadata — the page works without it — so not knowing it never blocks an
+      // update (a deliberate `--clear-data-sources` included); it is reported instead.
+      if (preserveBindings) {
+        probeError = `cannot read the current data-source bindings for page ${flags['page-id']} (${e.message})`
+          + ' — refusing to update, because pac would persist an EMPTY binding list and the page would'
+          + ' keep querying a table it is no longer bound to. Pass --data-sources explicitly, or'
+          + ' --clear-data-sources to unbind deliberately.';
+      } else {
+        modelUnread = e.message;
+      }
     } finally {
       // Best-effort: a cleanup failure must not replace the outcome of the operation, nor abort an
       // update whose bindings were read successfully.
@@ -285,19 +371,54 @@ async function main(argv = process.argv.slice(2), deps = {}) {
     if (probeError) return emit(false, { error: probeError });
   }
 
+  // An UPDATE without a name keeps the page's CURRENT name. pac otherwise renames it to its navigation
+  // title — live-reproduced: a page renamed by an earlier upload went back to its original title when a
+  // later update omitted the name. The name lives only on the page's Dataverse row, so it is read from
+  // there and sent again, unescaped (`unescapePacName`): pac's escaping then stores exactly the value that
+  // was there. Only a `"` that pac did not write (no backslash before it — a name set some other way)
+  // cannot be kept as it is; the update goes ahead and says so. A name pac cannot be HANDED here — a
+  // `pac.cmd` shim cannot receive `%` or `"` — is not sent at all: the update proceeds as it did before
+  // names were kept, and says so. Metadata, like the model: not knowing or not being able to send the name
+  // never blocks the update, and is reported.
+  let preservedName;
+  let nameUnread = null;
+  let nameChanged = null;
+  let nameUnsent = null;
+  if (flags['page-id'] && pageName.value === undefined) {
+    if (typeof cli.pageName !== 'function') {
+      nameUnread = 'this pac wrapper cannot read a page name';
+    } else {
+      try {
+        const current = await cli.pageName(flags['page-id']);
+        if (typeof current === 'string' && current.trim()) {
+          const name = unescapePacName(current);
+          const refusal = typeof cli.argumentRefusal === 'function' ? cli.argumentRefusal(name) : null;
+          if (refusal) {
+            nameUnsent = { current, refusal };
+          } else {
+            preservedName = name;
+            if (/(?:^|[^\\])"/.test(current)) nameChanged = current;
+          }
+        }
+      } catch (e) {
+        nameUnread = (e && e.message) || String(e);
+      }
+    }
+  }
+
   try {
     const res = await cli.upload({
       appId: flags['app-id'],
       pageId: flags['page-id'] || undefined,
       codeFile: flags['code-file'],
       compiledCodeFile: flags['compiled-code-file'] || undefined,
-      name: pageName.value || undefined,
+      name: pageName.value || preservedName || undefined,
       prompt: prompt.value,
       agentMessage: agentMessage.value,
       // Passed through as the CSV the caller typed; upload() normalizes array-or-string. When the
       // caller said nothing on an update, this carries the page's EXISTING bindings so they survive.
       dataSources: flags['data-sources'] || preservedDataSources || undefined,
-      model: flags.model || undefined,
+      model: flags.model || preservedModel || undefined,
       connectors: flags.connectors || undefined,
       actions: flags.actions || undefined,
       addToSitemap,
@@ -317,11 +438,18 @@ async function main(argv = process.argv.slice(2), deps = {}) {
     }
     // `pageId` is the one value a caller needs in order to continue (sitemap wiring, a follow-up
     // edit). Echo the identity back rather than making the caller re-parse pac output.
+    const warnings = [
+      ...(modelUnread ? [`could not read page ${flags['page-id']}'s current model (${modelUnread}), so this update stored it empty — pass --model to set it`] : []),
+      ...(nameUnread ? [`could not read page ${flags['page-id']}'s current name (${nameUnread}), so pac may have renamed it to its navigation title — pass --name-file to set it`] : []),
+      ...(nameChanged ? [`page ${flags['page-id']}'s name ${JSON.stringify(nameChanged)} has a double quote (") pac cannot store as it is, so the page now shows \\" there — pass --name-file with typographic quotes (“ ”) or an apostrophe to fix it`] : []),
+      ...(nameUnsent ? [`page ${flags['page-id']}'s name ${JSON.stringify(nameUnsent.current)} could not be sent to keep it (${nameUnsent.refusal}), so pac may have renamed the page to its navigation title — give it a name without % or a double quote, or install pac as a .NET tool, which receives any name`] : []),
+    ];
     return emit(true, {
       ok: true,
       pageId,
       appId: flags['app-id'],
       updated: !!flags['page-id'],
+      ...(warnings.length ? { warnings } : {}),
     });
   } catch (e) {
     return emit(false, { error: e && e.message ? e.message : String(e) });

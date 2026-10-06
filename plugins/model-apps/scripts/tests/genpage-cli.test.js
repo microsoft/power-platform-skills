@@ -1,9 +1,23 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { makeGenpageCli, parsePageId, parseList, quoteArg, buildPacInvocation, classifyListOutput, parseListCount } = require('../lib/genpage-cli.js');
+const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { makeGenpageCli, parsePageId, parseList, buildPacInvocation, classifyListOutput, parseListCount, runPac } = require('../lib/genpage-cli.js');
 
 const GUID = '6e0c28a2-cdbf-41ec-9186-d10fd5de6e35';
+// Scratch goes in the OS temp dir, never beside this file. Tests that walk scripts/ (the await scan in
+// sdk-async-surface.test.js) list every .js file first and read each one seconds later, so a scratch
+// directory this file deletes in between failed them with ENOENT.
+const scratchDirs = [];
+const scratch = (prefix) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  scratchDirs.push(dir);
+  return dir;
+};
+test.after(() => { for (const d of scratchDirs) fs.rmSync(d, { recursive: true, force: true }); });
 
 // REAL `pac model genpage list` output — a fixed-width TABLE (header + GUID/Name/Published rows), captured
 // LIVE from a Dataverse test environment (2026-07). Columns auto-size to the longest name. `listText` reproduces
@@ -35,46 +49,169 @@ function envList(rows) {
   return `Connected as user@contoso.com\nRetrieving generated pages...\nFound ${count} generated page(s):\n\n${header}\n${body}\n`;
 }
 
-test('quoteArg quotes args with spaces/specials, leaves plain args', () => {
-  assert.strictEqual(quoteArg('Overview'), 'Overview');
-  assert.strictEqual(quoteArg('A responsive cards overview'), '"A responsive cards overview"');
-  assert.strictEqual(quoteArg('has"quote'), '"has""quote"');
-  assert.strictEqual(quoteArg('https://x'), 'https://x');
+// A Windows machine where pac is either the dotnet-tool pac.exe or an MSI-style pac.cmd shim.
+// The fake pac.cmd forwards %* like an MSI install's shim, without turning delayed expansion on.
+const winPac = (file) => ({ platform: 'win32', env: { Path: 'C:\\pac', PATHEXT: '.EXE;.CMD', SystemRoot: 'C:\\Windows' }, exists: (p) => p === file, readFile: () => '@"%~dp0tools\\pac.exe" %*\r\n' });
+const PAC_EXE = winPac('C:\\pac\\pac.exe');
+const PAC_CMD = winPac('C:\\pac\\pac.cmd');
+
+// A listing row whose GUID runs straight into more identifier text is not a page id followed by a
+// name. The row parser used an ASCII `\b`, which JavaScript places before `東`, so `<guid>東京` was
+// read as a valid id and a count-matched listing was accepted as authoritative.
+test('parseList skips a row whose GUID runs into more identifier text, and the listing fails closed', () => {
+  for (const suffix of ['東京', 'é', '_x', '-x']) {
+    const out = listText([{ pageId: GUID + suffix, name: 'Overview' }]);
+    assert.deepStrictEqual(parseList(out), [], `a row starting ${JSON.stringify(GUID + suffix)} is not a page`);
+    assert.strictEqual(classifyListOutput(out).kind, 'unrecognized', `suffix ${JSON.stringify(suffix)} must fail closed`);
+  }
+  const mixed = listText([{ pageId: GUID, name: 'Overview' }, { pageId: GP_A + '東京', name: 'Detail' }]);
+  assert.strictEqual(classifyListOutput(mixed).kind, 'unrecognized', 'one bad row makes the whole listing untrustworthy');
+  // Control: the same listing with a clean id is authoritative, so the refusals above are about the suffix.
+  assert.deepStrictEqual(classifyListOutput(listText([{ pageId: GUID, name: 'Overview' }])),
+    { kind: 'pages', pages: [{ pageId: GUID, name: 'Overview' }] });
+});
+test('buildPacInvocation starts pac.exe directly with every argument unchanged, and no shell', () => {
+  const inv = buildPacInvocation(['model', 'genpage', 'upload', '--name', 'a "quote" & 50%!'], PAC_EXE);
+  assert.strictEqual(inv.file, 'C:\\pac\\pac.exe');
+  assert.deepStrictEqual(inv.args, ['model', 'genpage', 'upload', '--name', 'a "quote" & 50%!']);
+  assert.strictEqual(inv.options.shell, false);
 });
 
-test('quoteArg collapses newlines to spaces (a multi-line prompt must not break the command line)', () => {
-  assert.strictEqual(quoteArg('Conversation with 2 prompts:\r\n1. A\r\n2. B'), '"Conversation with 2 prompts: 1. A 2. B"');
-  assert.strictEqual(quoteArg('line1\nline2'), '"line1 line2"');
-  assert.ok(!quoteArg('a\r\nb').includes('\n'), 'no raw newline survives into the command line');
+// An update sends a page's CURRENT name on the user's behalf. Whether pac can be handed it is decided without
+// starting anything, so an update can leave out a name a pac.cmd shim would refuse instead of failing on it.
+test('argumentRefusal says why a pac.cmd shim cannot receive a value, and is null when pac can', () => {
+  const shim = makeGenpageCli('https://contoso.crm.dynamics.com', { pacInvocation: PAC_CMD });
+  for (const value of ['Revenue 100%', 'Say "hi"']) assert.match(shim.argumentRefusal(value), /cannot pass .* to pac\.cmd/, value);
+  assert.strictEqual(shim.argumentRefusal('Plain name — “curly” it\'s 東京'), null);
+  const exe = makeGenpageCli('https://contoso.crm.dynamics.com', { pacInvocation: PAC_EXE });
+  for (const value of ['Revenue 100%', 'Say "hi"']) assert.strictEqual(exe.argumentRefusal(value), null, value);
+  // pac not installed at all is the upload's own error to report, not a refusal of the value.
+  const none = makeGenpageCli('https://contoso.crm.dynamics.com', { pacInvocation: { ...PAC_EXE, exists: () => false } });
+  assert.strictEqual(none.argumentRefusal('Revenue 100%'), null);
 });
 
-test('quoteArg caret-escapes % so cmd.exe does not expand %VAR% inside the quoted arg (Windows)', () => {
-  // cmd.exe expands %VAR% even inside double quotes; breaking out of the quotes and caret-escaping each
-  // % (verified to round-trip literally through cmd.exe) keeps prompts/names with env-var syntax intact.
-  assert.strictEqual(quoteArg('plain%PATH%end'), '"plain"^%"PATH"^%"end"');
-  assert.ok(quoteArg('50% off').includes('"^%"'), 'a bare % triggers quoting + escaping');
-});
-
-test('buildPacInvocation (win32) builds a shell command line with cmd-style quoting', () => {
-  const inv = buildPacInvocation(['model', 'genpage', 'upload', '--prompt', 'a "quote"'], 'win32');
-  assert.strictEqual(inv.options.shell, true);
-  assert.strictEqual(inv.args, undefined);
-  assert.ok(inv.command.startsWith('pac '));
-  assert.ok(inv.command.includes('"a ""quote"""'), 'embedded quotes are cmd-escaped by doubling');
+test('buildPacInvocation runs a pac.cmd shim through cmd.exe and refuses what cmd.exe would reinterpret', () => {
+  const inv = buildPacInvocation(['model', 'genpage', 'list', '--name', 'Order Detail'], PAC_CMD);
+  assert.strictEqual(inv.file, 'C:\\Windows\\System32\\cmd.exe');
+  assert.strictEqual(inv.args[4], '""C:\\pac\\pac.cmd" model genpage list --name "Order Detail""');
+  assert.strictEqual(inv.options.windowsVerbatimArguments, true);
+  for (const name of ['50% off', 'a "quote"']) {
+    assert.throws(() => buildPacInvocation(['--name', name], PAC_CMD), (e) => e.code === 'EARGUMENT', name);
+  }
+  assert.ok(buildPacInvocation(['--name', 'Hello!'], PAC_CMD).args[4].endsWith('--name "Hello!""'), '! is literal with delayed expansion off');
 });
 
 test('buildPacInvocation (posix) spawns pac directly with an args array and no shell', () => {
-  const inv = buildPacInvocation(['model', 'genpage', 'upload', '--prompt', 'a "quote" & more'], 'linux');
-  assert.strictEqual(inv.command, 'pac');
-  assert.strictEqual(inv.options.shell, undefined, 'no shell on POSIX so metacharacters round-trip verbatim');
+  const posix = { platform: 'linux', env: { PATH: '/usr/bin' }, exists: (p) => p === '/usr/bin/pac' };
+  const inv = buildPacInvocation(['model', 'genpage', 'upload', '--prompt', 'a "quote" & more'], posix);
+  assert.strictEqual(inv.file, '/usr/bin/pac');
+  assert.strictEqual(inv.options.shell, false, 'no shell on POSIX so metacharacters round-trip verbatim');
   assert.deepStrictEqual(inv.args, ['model', 'genpage', 'upload', '--prompt', 'a "quote" & more']);
 });
 
-test('buildPacInvocation collapses embedded newlines in args (both platforms)', () => {
-  const posix = buildPacInvocation(['--prompt', 'l1\r\nl2\nl3'], 'linux');
+test('buildPacInvocation collapses embedded newlines in args (every platform and pac form)', () => {
+  const posix = buildPacInvocation(['--prompt', 'l1\r\nl2\nl3'], { platform: 'linux', env: { PATH: '/b' }, exists: () => true });
   assert.deepStrictEqual(posix.args, ['--prompt', 'l1 l2 l3'], 'multi-line prompt collapsed to spaces');
-  const win = buildPacInvocation(['--prompt', 'l1\r\nl2'], 'win32');
-  assert.ok(!win.command.includes('\n'), 'no raw newline survives into the Windows command line');
+  const win = buildPacInvocation(['--prompt', 'l1\r\nl2'], PAC_CMD);
+  assert.ok(!win.args[4].includes('\n'), 'no raw newline survives into a batch shim command line');
+});
+// Put a directory first on PATH for the duration of `fn`, so `pac` resolves to whatever it holds.
+async function withPathFirst(dir, fn, { only = false } = {}) {
+  const saved = process.env.PATH;
+  process.env.PATH = only ? dir : dir + path.delimiter + saved;
+  try { return await fn(); } finally { process.env.PATH = saved; }
+}
+
+// A fake `pac` to put first on PATH: `pac.cmd` on Windows, reached through cmd.exe exactly as the
+// real one is, and an executable script elsewhere. By default it writes a multibyte character in two
+// pieces 200 ms apart, then its argv, then an error, and exits 3. With `--big` it writes 1.5 MiB.
+// With `--late` it starts a process that shares its stdout and writes 300 ms after the fake exits.
+const BIG_OUTPUT_BYTES = 1536 * 1024;
+function makeFakePac() {
+  const dir = scratch('genpage-cli-fakepac-');
+  const script = path.join(dir, 'fake-pac.js');
+  fs.writeFileSync(script, [
+    `if (process.argv.includes('--big')) process.stdout.write('x'.repeat(${BIG_OUTPUT_BYTES}));`,
+    "else if (process.argv.includes('--late')) {",
+    "  require('child_process').spawn(process.execPath, ['-e', \"setTimeout(() => process.stdout.write('late'), 300)\"],",
+    "    { stdio: ['ignore', 'inherit', 'inherit'], detached: true, windowsHide: true }).unref();",
+    "  process.stdout.write('early ');",
+    '} else {',
+    "  const bytes = Buffer.from('東京', 'utf8');",
+    '  process.stdout.write(bytes.subarray(0, 1));',
+    '  setTimeout(() => {',
+    "    process.stdout.write(Buffer.concat([bytes.subarray(1), Buffer.from(' ' + JSON.stringify(process.argv.slice(2)) + '\\n', 'utf8')]));",
+    "    process.stderr.write('Error: fake failure\\n');",
+    '    process.exitCode = 3;',
+    '  }, 200);',
+    '}',
+    '',
+  ].join('\n'), 'utf8');
+  if (process.platform === 'win32') {
+    fs.writeFileSync(path.join(dir, 'pac.cmd'), `@"${process.execPath}" "${script}" %*\r\n`, 'utf8');
+  } else {
+    fs.writeFileSync(path.join(dir, 'pac'), `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`, { mode: 0o755 });
+  }
+  return dir;
+}
+
+// The default runner must YIELD while pac runs. genpage-upload.js overlaps an update's two
+// listings, which saves nothing if every pac call freezes the process the way spawnSync did. The
+// fake's split character catches a runner that decodes each chunk as it arrives.
+test('runPac lets the event loop run while pac runs, and decodes output split mid-character', async () => {
+  const dir = makeFakePac();
+  const args = ['model', 'genpage', 'list', '--name', 'Order Detail'];
+  let ticks = 0;
+  const timer = setInterval(() => { ticks += 1; }, 10);
+  try {
+    const r = await withPathFirst(dir, () => runPac(args));
+    assert.strictEqual(r.status, 3, 'the exit code is passed through');
+    assert.strictEqual(r.stdout, `東京 ${JSON.stringify(args)}\n`, 'the split character arrives whole, and the args intact');
+    assert.match(r.stderr, /Error: fake failure/);
+    assert.ok(ticks > 0, 'timers fired while pac was running, so the process was not blocked');
+  } finally {
+    clearInterval(timer);
+  }
+});
+
+// spawnSync capped output at 1 MiB (its maxBuffer): past that it killed pac and returned a
+// truncated listing as a failure. The runner keeps everything, and reads each pipe to its end before
+// settling — pac can exit while the tail of a large write is still unread in the pipe.
+test('runPac keeps output past 1 MiB, read to the end of the pipe', async () => {
+  const dir = makeFakePac();
+  const r = await withPathFirst(dir, () => runPac(['model', 'genpage', 'list', '--big']));
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.length, BIG_OUTPUT_BYTES);
+});
+
+// Settling when pac EXITS would lose output a process it started writes afterwards. spawnSync
+// returned only once the pipes closed, and so does the runner.
+test('runPac settles when the pipes close, as spawnSync did, not when pac exits', async () => {
+  const r = await withPathFirst(makeFakePac(), () => runPac(['model', 'genpage', 'list', '--late']));
+  assert.strictEqual(r.stdout, 'early late');
+  assert.strictEqual(r.status, 0, r.stderr);
+});
+
+// A pac that cannot be started must come back as an ordinary failed result — every caller branches
+// on `status` and none of them catches. That is spawn's 'error' event (ENOENT), which spawnSync
+// reported as status 1 with no text at all. On Windows pac runs through cmd.exe, which would print
+// its own "not recognized" and exit, so the shell itself is made unstartable to reach that path.
+test('runPac resolves with a non-zero status and the launch error when pac cannot be started', async () => {
+  const empty = scratch('genpage-cli-nopac-');
+  const savedComSpec = process.env.ComSpec;
+  if (process.platform === 'win32') process.env.ComSpec = path.join(empty, 'no-such-shell.exe');
+  let r;
+  try {
+    r = await withPathFirst(empty, () => runPac(['model', 'genpage', 'list']), { only: true });
+  } finally {
+    if (process.platform === 'win32') {
+      if (savedComSpec === undefined) delete process.env.ComSpec;
+      else process.env.ComSpec = savedComSpec;
+    }
+  }
+  assert.notStrictEqual(r.status, 0);
+  assert.strictEqual(r.stdout, '');
+  assert.match(r.stderr, /ENOENT/, `the failure must say why; got ${JSON.stringify(r)}`);
 });
 
 test('parsePageId extracts the guid from upload output', () => {
@@ -286,6 +423,9 @@ test('classifyListOutput: pages / empty / unrecognized (tri-state, COMPLETE-list
   assert.deepStrictEqual(classifyListOutput(LIST_EMPTY).pages, []);
   // recognized-empty: "no pages" phrase variant (observed in older pac builds)
   assert.strictEqual(classifyListOutput('No generated pages found.\n').kind, 'empty');
+  assert.strictEqual(classifyListOutput('  No pages found  \n').kind, 'empty', 'a standalone no-pages line is accepted');
+  assert.strictEqual(classifyListOutput('Warning: no pages could be retrieved because the service is unavailable\n').kind, 'unrecognized', 'a warning sentence is not proof of an empty app');
+  assert.strictEqual(classifyListOutput('Status: No generated pages found after retry\n').kind, 'unrecognized', 'the no-pages phrase must occupy the whole trimmed line');
   // unrecognized: blank output (not proof of empty — could be a timeout or help-dump with no banner)
   assert.strictEqual(classifyListOutput('').kind, 'unrecognized');
   // unrecognized: help/usage banner (pac dumps usage on a flag error but exits 0 on some builds)
@@ -301,6 +441,16 @@ test('classifyListOutput: pages / empty / unrecognized (tri-state, COMPLETE-list
 // stdout (names + descriptions), so a page NAMED or DESCRIBED with "no page(s)" text must NOT force an app
 // WITH live pages to classify as EMPTY. A false 'empty' → reconcile sees zero live → duplicate CREATE on
 // build + silent page-drop on download. Empty requires NO positive page evidence.
+test('classifyListOutput: repeated page ids make a matching-count listing unrecognized', () => {
+  const duplicateId = listText([
+    { pageId: GUID, name: 'Overview' },
+    { pageId: GUID.toUpperCase(), name: 'Summary' },
+  ], 2);
+  const k = classifyListOutput(duplicateId);
+  assert.strictEqual(k.kind, 'unrecognized', `duplicate page identity must fail closed; got ${JSON.stringify(k)}`);
+  assert.deepStrictEqual(k.pages, [], 'duplicate identities are not an authoritative set of pages');
+});
+
 test('classifyListOutput: a page NAMED "no pages" does NOT force empty when real pages are listed', () => {
   // A page literally named "No Pages" with a valid 1-page summary → 'pages', not 'empty'. The "no pages"
   // phrase is tested against the whole stdout (which includes page NAMES), so it must not fire here.
@@ -786,25 +936,24 @@ test('a trailing backslash is doubled so it cannot escape the closing quote', ()
   // `String.raw` cannot be used here: a template literal may not END with a backslash, because it
   // escapes the closing backtick. Ordinary escapes it is.
   const dir = 'C:\\Users\\Power User\\download\\';
-  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', dir, '--app-id', 'after'], 'win32');
+  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', dir, '--app-id', 'after'], PAC_CMD);
   // The run before the closing quote is doubled; the following flag stays a separate argument.
-  assert.match(inv.command, /--output-directory "C:\\Users\\Power User\\download\\\\" --app-id after$/,
-    `the trailing separator must be escaped; got ${inv.command}`);
+  assert.match(inv.args[4], /--output-directory "C:\\Users\\Power User\\download\\\\" --app-id after"$/,
+    `the trailing separator must be escaped; got ${inv.args[4]}`);
 });
 
 test('interior backslashes are left alone (every Windows path has them)', () => {
-  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', String.raw`C:\Users\Power User\download`], 'win32');
-  assert.match(inv.command, /"C:\\Users\\Power User\\download"/,
-    `an ordinary path must round-trip unchanged; got ${inv.command}`);
+  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', String.raw`C:\Users\Power User\download`], PAC_CMD);
+  assert.match(inv.args[4], /"C:\\Users\\Power User\\download"/,
+    `an ordinary path must round-trip unchanged; got ${inv.args[4]}`);
 });
 
 test('POSIX passes args verbatim, with no cmd-style quoting at all', () => {
   const dir = '/home/user/download\\';
-  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', dir], 'linux');
+  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', dir], { platform: 'linux', env: { PATH: '/b' }, exists: () => true });
   assert.deepStrictEqual(inv.args, ['model', 'genpage', 'download', '--output-directory', dir],
     'the POSIX path spawns pac directly, so nothing may be rewritten');
 });
-
 // --- review follow-up: a TRANSIENT message must NOT be mistaken for a deterministic one --------
 // The first version matched the bare phrases "does not exist" and "could not be found", so a
 // service message like "The resource does not exist yet; please retry." aborted the retry loop —
@@ -892,6 +1041,8 @@ test('parsePageId refuses a GUID followed by any identifier character, not just 
       `a token continuing with ${JSON.stringify(suffix)} must be refused, not trimmed to the GUID`);
   }
   // ...but punctuation genuinely ENDS the token — pac prints the id inside prose.
+  assert.strictEqual(parsePageId(`Page ID: ${G}東京`), null,
+    'a Unicode letter continues the token and must not be silently dropped');
   for (const suffix of ['.', ',', ')', ' ', '\n']) {
     assert.strictEqual(parsePageId(`Page ID: ${G}${suffix}`), G,
       `${JSON.stringify(suffix)} terminates the id and must still parse`);
@@ -984,4 +1135,18 @@ test('a deterministic-looking error on a CREATE that landed is still adopted and
   assert.strictEqual(uploads.length, 2, 'exactly one follow-up attempt — the UPDATE of the adopted page');
   assert.ok(!uploads[0].includes('--page-id'), 'the first attempt was the create');
   assert.ok(uploads[1].includes('--page-id') && uploads[1].includes(GUID), 'the second attempt updated the adopted id');
+});
+
+
+test('enumeratePages can include unpublished app-scoped pages without changing the default enumerate call', async () => {
+  const seen = [];
+  const run = async (args) => { seen.push(args); return { status: 0, stdout: LIST_ONE, stderr: '' }; };
+  const cli = makeGenpageCli('https://x', { run, sleep: async () => {} });
+  await cli.enumerate({ appId: 'app-1' });
+  await cli.enumeratePages('app-1', { includeUnpublished: true });
+
+  assert.ok(seen[0].includes('--app-id') && seen[0].includes('app-1'), 'default enumerate stays app-scoped');
+  assert.ok(!seen[0].includes('--include-unpublished'), 'default enumerate call is unchanged for existing callers');
+  assert.ok(seen[1].includes('--app-id') && seen[1].includes('app-1'), 'option still combines with --app-id');
+  assert.ok(seen[1].includes('--include-unpublished'), 'the requested option reaches pac argv');
 });

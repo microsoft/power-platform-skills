@@ -26,6 +26,23 @@
 const EXPR_START_PUNCT = new Set(['(', ',', '=', ':', '[', '!', '&', '|', '?', '{', '}', ';', '+', '-', '*', '%', '<', '>', '~', '^', '\n']);
 const EXPR_START_WORDS = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'case', 'do', 'else', 'yield', 'await']);
 
+// ECMAScript LineTerminator is LF, CR, LS and PS; CRLF is one terminator. LS/PS also
+// terminate // comments and regex literals, but since ES2019 they are legal inside string
+// literals. See https://tc39.es/ecma262/#sec-line-terminators and
+// https://tc39.es/ecma262/#sec-literals-string-literals.
+function isLineTerminator(ch) {
+  return ch === '\n' || ch === '\r' || ch === '\u2028' || ch === '\u2029';
+}
+
+function lineTerminatorStart(src, from) {
+  for (let i = from; i < src.length; i += 1) if (isLineTerminator(src[i])) return i;
+  return -1;
+}
+
+function isRawStringBreak(ch) {
+  return ch === '\n' || ch === '\r';
+}
+
 function prevSignificant(src, i) {
   for (let j = i - 1; j >= 0; j -= 1) {
     if (!/\s/.test(src[j])) return { ch: src[j], index: j };
@@ -345,7 +362,7 @@ function skipTrivia(src, j) {
   const c = src[j];
   const n = src[j + 1];
   if (c === '/' && n === '/') {
-    const end = src.indexOf('\n', j);
+    const end = lineTerminatorStart(src, j);
     return end === -1 ? src.length : end;
   }
   if (c === '/' && n === '*') {
@@ -356,7 +373,7 @@ function skipTrivia(src, j) {
     for (let k = j + 1; k < src.length; k += 1) {
       if (src[k] === '\\') { k += 1; continue; }
       if (src[k] === c) return k + 1;
-      if (src[k] === '\n' && c !== '`') return j;   // not a string after all
+      if (isRawStringBreak(src[k]) && c !== '`') return j;   // not a string after all
     }
     return src.length;
   }
@@ -463,43 +480,144 @@ function blankLiterals(code, opts) {
 // as the start of a regex that swallowed the closing `}`, and the apostrophe in `${<p>it's</p>}` as a
 // string. Either way the template never ended, and the page's `export default` vanished with it.
 // Otherwise it returns src.length.
-function lexInto(src, out, start, { onComment = null, onRegexEnd = null, onJsxTagEnd = null, untilCloseBrace = false, onEnd = null } = {}) {
+function lexInto(src, out, start, { onComment = null, onRegexEnd = null, onJsxTagEnd = null, untilCloseBrace = false, onEnd = null, keep = null } = {}) {
+  // `out` is the literal view every position judgment below reads: comments, strings, regexes, JSX
+  // text AND whole template bodies blanked. `keep`, when given, is the executable view built in the
+  // same pass (blankNonCodePreservingTemplateExpressions): blanked exactly like `out`, except that a
+  // template's `${…}` bodies stay code.
   const blank = (from, to) => {
-    for (let k = Math.max(0, from); k < to && k < src.length; k += 1) if (src[k] !== '\n') out[k] = ' ';
+    for (let k = Math.max(0, from); k < to && k < src.length; k += 1) {
+      if (isLineTerminator(src[k])) continue;
+      out[k] = ' ';
+      if (keep) keep[k] = ' ';
+    }
+  };
+  const blankLiteralViewOnly = (from, to) => {
+    for (let k = Math.max(0, from); k < to && k < src.length; k += 1) if (!isLineTerminator(src[k])) out[k] = ' ';
+  };
+  // A template literal from its opening backtick at `open` to its closing one at `close`, whose `${…}`
+  // bodies (`expressions`) were lexed by frames of their own. Its TEXT — the `${` and `}` delimiters
+  // included — is blanked in both views. Its bodies are blanked in the literal view only (no
+  // declaration lives in one), and there only around the templates each body closed itself: those are
+  // blank already. Blanking the whole body at every level instead cost one pass per enclosing template
+  // over every nested character — quadratic in the nesting depth. In `keep` a body's closing `}`
+  // becomes `;`, so two bodies separated only by blanked text cannot read as one call:
+  //   `${Xrm.Navigation.navigateTo} text ${({ pageType: "generative", pageId: "PAGEREF_x" })}`
+  // blanked to spaces would present `navigateTo   ({ ... })`.
+  const closeTemplate = (open, close, expressions, closedBy) => {
+    let from = open + 1;
+    for (const e of expressions) {
+      blank(from, e.start);
+      let k = e.start;
+      for (const [o, c] of e.closed) { blankLiteralViewOnly(k, o + 1); k = c; }
+      blankLiteralViewOnly(k, e.end);
+      if (e.end >= close) { from = close; break; }   // an unterminated body ran to the end
+      out[e.end] = ' ';
+      if (keep) keep[e.end] = ';';
+      from = e.end + 1;
+    }
+    blank(from, close);
+    closedBy.push([open, close]);
   };
 
-  let mode = 'code';
-  let jsxDepth = 0;                 // open JSX elements in the CURRENT expression frame
-  let angleDepth = 0;               // nested < > inside a tag's type arguments
-  const frames = [];                // JSX-expression frames: { returnMode, braceDepth, savedJsxDepth }
-  let braceDepth = 0;               // `{` opened in plain code inside a `${…}` body (untilCloseBrace)
-  let unterminated = false;         // a string, regex, template, comment or closing tag ran off the end
+  // The lexer's state is a STACK OF FRAMES, not the call stack. A CODE frame lexes code — the module,
+  // or one `${…}` body — and a TEMPLATE frame reads a template literal's text around its bodies. Each
+  // body used to be lexed by a recursive call, which overflowed the call stack a little over a thousand
+  // templates deep: page source is untrusted input, so its nesting now costs heap, at any depth. A code
+  // frame carries its own lexer state, the templates it closed itself (`closed`), and — for a body —
+  // the `${…}` record it fills in (`bodyOf`).
+  const codeFrame = (bodyOf) => ({
+    kind: 'code',
+    mode: 'code',
+    jsxDepth: 0,                    // open JSX elements in the CURRENT expression frame
+    angleDepth: 0,                  // nested < > inside a tag's type arguments
+    frames: [],                     // JSX-expression frames: { returnMode, braceDepth, savedJsxDepth }
+    braceDepth: 0,                  // `{` opened in plain code inside a `${…}` body (untilCloseBrace)
+    unterminated: false,            // a string, regex, template, comment or closing tag ran off the end
+    untilCloseBrace: !!bodyOf,
+    bodyOf,
+    closed: [],
+  });
+  const root = codeFrame(null);
+  root.untilCloseBrace = untilCloseBrace;
+  const stack = [root];
   let i = start;
+  // Only the module frame reports regex and JSX-tag ends: a body's are inside a template literal, which
+  // the checks that listen for them read as one inert token.
+  const reportRegexEnd = (fr, j) => { if (onRegexEnd && fr === root) onRegexEnd(j); };
+  const reportJsxTagEnd = (fr, j) => { if (onJsxTagEnd && fr === root) onJsxTagEnd(j); };
 
-  const leaveJsxExpr = () => {
-    const f = frames.pop();
-    if (!f) { mode = 'code'; return; }
+  const leaveJsxExpr = (fr) => {
+    const f = fr.frames.pop();
+    if (!f) { fr.mode = 'code'; return; }
     // Restore the enclosing element depth. It must be per-frame: in
     //   <div>{items.map(x => { return (<section>…</section>); })}</div>
     // the `<div>` is open across the whole expression, but once `</section>` closes we are back in
     // CODE (inside the arrow body), not in the div's text run. A single global counter left the
     // lexer in jsxText for the rest of the file and blanked the real `export default`.
-    jsxDepth = f.savedJsxDepth;
-    mode = f.returnMode;
+    fr.jsxDepth = f.savedJsxDepth;
+    fr.mode = f.returnMode;
   };
-  const enterJsxExpr = (returnMode) => {
-    frames.push({ returnMode, braceDepth: 0, savedJsxDepth: jsxDepth });
-    jsxDepth = 0;
-    mode = 'code';
+  const enterJsxExpr = (fr, returnMode) => {
+    fr.frames.push({ returnMode, braceDepth: 0, savedJsxDepth: fr.jsxDepth });
+    fr.jsxDepth = 0;
+    fr.mode = 'code';
+  };
+  // A template literal starts at the backtick `i`: its text is read by a frame of its own.
+  const openTemplate = () => {
+    stack.push({ kind: 'template', open: i, expressions: [] });
+    i += 1;
+  };
+  // The template frame `tf` ends at `end` — its closing backtick, or src.length when none closes it —
+  // and the code frame that opened it resumes right after it.
+  const endTemplate = (tf, end) => {
+    stack.pop();
+    const opener = stack[stack.length - 1];
+    if (end >= src.length) opener.unterminated = true;
+    closeTemplate(tf.open, end, tf.expressions, opener.closed);
+    i = Math.min(end + 1, src.length);
+  };
+  // The `${…}` body `fr` ends at `end` — its closing `}`, or src.length — and its template's text
+  // resumes right after it.
+  const endBody = (fr, end) => {
+    fr.bodyOf.end = end;
+    fr.bodyOf.closed = fr.closed;
+    stack.pop();
+    i = end < src.length ? end + 1 : src.length;
   };
 
-  while (i < src.length) {
+  for (;;) {
+    const fr = stack[stack.length - 1];
+
+    if (fr.kind === 'template') {
+      // Template text: only an escape, the closing backtick and a `${` mean anything here.
+      if (i >= src.length) { endTemplate(fr, src.length); continue; }
+      const t = src[i];
+      if (t === '\\') { i += 2; continue; }
+      if (t === '`') { endTemplate(fr, i); continue; }
+      if (t === '$' && src[i + 1] === '{') {
+        const body = { start: i + 2, end: src.length, closed: [] };
+        fr.expressions.push(body);
+        stack.push(codeFrame(body));
+        i += 2;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (i >= src.length) {
+      if (fr.bodyOf) { endBody(fr, src.length); continue; }
+      // Where the lexer stopped: a complete module ends in plain code, with nothing left open.
+      if (onEnd) onEnd({ open: fr.unterminated || fr.mode !== 'code' || fr.frames.length > 0 });
+      return src.length;
+    }
     const c = src[i];
     const n = src[i + 1];
 
-    if (mode === 'code') {
+    if (fr.mode === 'code') {
       if (c === '/' && n === '/') {
-        const end = src.indexOf('\n', i);
+        const end = lineTerminatorStart(src, i);
         blank(i, end === -1 ? src.length : end);
         if (onComment) onComment(i, end === -1 ? src.length : end);
         i = end === -1 ? src.length : end;
@@ -508,7 +626,7 @@ function lexInto(src, out, start, { onComment = null, onRegexEnd = null, onJsxTa
       if (c === '/' && n === '*') {
         const end = src.indexOf('*/', i + 2);
         const stop = end === -1 ? src.length : end + 2;
-        if (end === -1) unterminated = true;
+        if (end === -1) fr.unterminated = true;
         blank(i, stop);
         if (onComment) onComment(i, stop);
         i = stop;
@@ -519,10 +637,10 @@ function lexInto(src, out, start, { onComment = null, onRegexEnd = null, onJsxTa
         for (; j < src.length; j += 1) {
           if (src[j] === '\\') { j += 1; continue; }
           if (src[j] === c) break;
-          if (src[j] === '\n') { j = -1; break; }   // a string cannot span a raw newline
+          if (isRawStringBreak(src[j])) { j = -1; break; }   // a string cannot span a raw LF/CR
         }
         if (j === -1) { i += 1; continue; }
-        if (j >= src.length) unterminated = true;
+        if (j >= src.length) fr.unterminated = true;
         blank(i + 1, j);
         i = Math.min(j + 1, src.length);
         continue;
@@ -534,10 +652,7 @@ function lexInto(src, out, start, { onComment = null, onRegexEnd = null, onJsxTa
         // ended `[${rows.map((r) => `{"id":"${r.id}"}`).join(",")}]` at the `}` in the nested
         // template's TEXT, and everything up to the next backtick — `export default` included — was
         // misread, so a complete page failed as truncated and later nav calls went unseen.
-        const j = scanTemplateLiteral(src, i, out, onComment).end;
-        if (j >= src.length) unterminated = true;
-        blank(i + 1, j);
-        i = Math.min(j + 1, src.length);
+        openTemplate();
         continue;
       }
       // Position is judged on the blanked output, not the raw source: every comment before `i` is
@@ -554,42 +669,45 @@ function lexInto(src, out, start, { onComment = null, onRegexEnd = null, onJsxTa
         let inClass = false;
         for (; j < src.length; j += 1) {
           if (src[j] === '\\') { j += 1; continue; }
-          if (src[j] === '\n') { j = -1; break; }
+          if (isLineTerminator(src[j])) { j = -1; break; }
           if (src[j] === '[') inClass = true;
           else if (src[j] === ']') inClass = false;
           else if (src[j] === '/' && !inClass) break;
         }
         if (j === -1) { i += 1; continue; }
-        if (j >= src.length) unterminated = true;
-        else if (onRegexEnd) onRegexEnd(j);
+        if (j >= src.length) fr.unterminated = true;
+        else reportRegexEnd(fr, j);
         blank(i + 1, j);
         i = Math.min(j + 1, src.length);
         continue;
       }
       if (c === '<' && /[A-Za-z_$>]/.test(n || '') && expressionPosition(out, i) && !looksLikeTypeParams(src, i)) {
-        mode = 'jsxTag';
+        fr.mode = 'jsxTag';
         i += 1;
         continue;
       }
-      if (frames.length) {
-        const top = frames[frames.length - 1];
+      if (fr.frames.length) {
+        const top = fr.frames[fr.frames.length - 1];
         if (c === '{') { top.braceDepth += 1; i += 1; continue; }
         if (c === '}') {
-          if (top.braceDepth === 0) { leaveJsxExpr(); i += 1; continue; }
+          if (top.braceDepth === 0) { leaveJsxExpr(fr); i += 1; continue; }
           top.braceDepth -= 1; i += 1; continue;
         }
-      } else if (untilCloseBrace) {
-        if (c === '{') braceDepth += 1;
+      } else if (fr.untilCloseBrace) {
+        if (c === '{') fr.braceDepth += 1;
         else if (c === '}') {
-          if (braceDepth === 0) return i;
-          braceDepth -= 1;
+          if (fr.braceDepth === 0) {
+            if (fr.bodyOf) { endBody(fr, i); continue; }
+            return i;
+          }
+          fr.braceDepth -= 1;
         }
       }
       i += 1;
       continue;
     }
 
-    if (mode === 'jsxTag') {
+    if (fr.mode === 'jsxTag') {
       // Comments come FIRST. A `//` or `/* */` comment between attributes is valid TSX, and a
       // generator naturally emits one to explain an attribute. Without this branch the attribute-
       // value case below sees an apostrophe in the comment prose ("Griffel's") and treats it as a
@@ -600,7 +718,7 @@ function lexInto(src, out, start, { onComment = null, onRegexEnd = null, onJsxTa
       //
       // `/` in a tag is otherwise only the start of `/>`, and `n` distinguishes all three cases.
       if (c === '/' && n === '/') {
-        const end = src.indexOf('\n', i);
+        const end = lineTerminatorStart(src, i);
         blank(i, end === -1 ? src.length : end);
         if (onComment) onComment(i, end === -1 ? src.length : end);
         i = end === -1 ? src.length : end;
@@ -609,7 +727,7 @@ function lexInto(src, out, start, { onComment = null, onRegexEnd = null, onJsxTa
       if (c === '/' && n === '*') {
         const end = src.indexOf('*/', i + 2);
         const stop = end === -1 ? src.length : end + 2;
-        if (end === -1) unterminated = true;
+        if (end === -1) fr.unterminated = true;
         blank(i, stop);
         if (onComment) onComment(i, stop);
         i = stop;
@@ -618,7 +736,7 @@ function lexInto(src, out, start, { onComment = null, onRegexEnd = null, onJsxTa
       if (c === '"' || c === "'") {                 // attribute value
         let j = i + 1;
         while (j < src.length && src[j] !== c) j += 1;
-        if (j >= src.length) unterminated = true;
+        if (j >= src.length) fr.unterminated = true;
         blank(i + 1, j);
         i = Math.min(j + 1, src.length);
         continue;
@@ -630,17 +748,11 @@ function lexInto(src, out, start, { onComment = null, onRegexEnd = null, onJsxTa
       // would blank to end of line and reject a valid module, and could also hide a genuinely
       // malformed expression that follows on the same line. Mirrors the `code`-mode scanner: the
       // body is blanked, and its end is found by the expression-aware scanner.
-      if (c === '`') {
-        const j = scanTemplateLiteral(src, i, out, onComment).end;
-        if (j >= src.length) unterminated = true;
-        blank(i + 1, j);
-        i = Math.min(j + 1, src.length);
-        continue;
-      }
-      if (c === '{') { enterJsxExpr('jsxTag'); i += 1; continue; }
+      if (c === '`') { openTemplate(); continue; }
+      if (c === '{') { enterJsxExpr(fr, 'jsxTag'); i += 1; continue; }
       if (c === '/' && n === '>') {                 // self-closing: no text run follows
-        if (onJsxTagEnd) onJsxTagEnd(i + 1);
-        mode = jsxDepth > 0 ? 'jsxText' : 'code';
+        reportJsxTagEnd(fr, i + 1);
+        fr.mode = fr.jsxDepth > 0 ? 'jsxText' : 'code';
         i += 2;
         continue;
       }
@@ -648,12 +760,12 @@ function lexInto(src, out, start, { onComment = null, onRegexEnd = null, onJsxTa
       // Without tracking that, the `>` of `<Row>` would end the tag early and the element would
       // never close, desynchronising the rest of the file. A bare `<` can only be a type argument
       // here — a comparison would be inside a `{…}` expression, which switches to code mode.
-      if (c === '<') { angleDepth += 1; i += 1; continue; }
+      if (c === '<') { fr.angleDepth += 1; i += 1; continue; }
       if (c === '>') {
-        if (angleDepth > 0) { angleDepth -= 1; i += 1; continue; }
-        if (onJsxTagEnd) onJsxTagEnd(i);
-        jsxDepth += 1;
-        mode = 'jsxText';
+        if (fr.angleDepth > 0) { fr.angleDepth -= 1; i += 1; continue; }
+        reportJsxTagEnd(fr, i);
+        fr.jsxDepth += 1;
+        fr.mode = 'jsxText';
         i += 1;
         continue;
       }
@@ -662,51 +774,29 @@ function lexInto(src, out, start, { onComment = null, onRegexEnd = null, onJsxTa
     }
 
     // mode === 'jsxText' — everything here is prose until a tag or an expression starts.
-    if (c === '{') { enterJsxExpr('jsxText'); i += 1; continue; }
+    if (c === '{') { enterJsxExpr(fr, 'jsxText'); i += 1; continue; }
     if (c === '<' && n === '/') {                   // closing tag
       const end = src.indexOf('>', i);
       const stop = end === -1 ? src.length : end + 1;
-      if (end === -1) unterminated = true;
-      else if (onJsxTagEnd) onJsxTagEnd(end);
-      jsxDepth = Math.max(0, jsxDepth - 1);
-      mode = jsxDepth > 0 ? 'jsxText' : 'code';
+      if (end === -1) fr.unterminated = true;
+      else reportJsxTagEnd(fr, end);
+      fr.jsxDepth = Math.max(0, fr.jsxDepth - 1);
+      fr.mode = fr.jsxDepth > 0 ? 'jsxText' : 'code';
       i = stop;
       continue;
     }
-    if (c === '<' && /[A-Za-z_$>]/.test(n || '')) { mode = 'jsxTag'; i += 1; continue; }
+    if (c === '<' && /[A-Za-z_$>]/.test(n || '')) { fr.mode = 'jsxTag'; i += 1; continue; }
     blank(i, i + 1);
     i += 1;
   }
-  // Where the lexer stopped: a complete module ends in plain code, with nothing left open.
-  if (onEnd) onEnd({ open: unterminated || mode !== 'code' || frames.length > 0 });
-  return src.length;
 }
 
 // Index of the `}` that closes the `${…}` whose body starts at `start`, or src.length. The body is
 // lexed into `scratch` — a `src.split('')` the caller owns and whose blanks inside the body do not
-// matter to it (the lexer passes its own output, which blanks the whole template anyway) — or into
-// a fresh copy when none is given. `onComment` hears the body's comments: they are real comments,
-// so an elision marker or a comment inside an import there counts like any other.
+// matter to it — or into a fresh copy when none is given. `onComment` hears the body's comments: they
+// are real comments, so an elision marker or a comment inside an import there counts like any other.
 function scanTemplateExpressionEnd(src, start, scratch, onComment) {
   return lexInto(src, scratch || src.split(''), start, { untilCloseBrace: true, onComment: onComment || null });
-}
-
-function scanTemplateLiteral(src, start, scratch, onComment) {
-  const expressions = [];
-  let view = scratch || null;       // one copy for every `${…}` in this template, made on the first
-  for (let i = start + 1; i < src.length; i += 1) {
-    const c = src[i];
-    if (c === '\\') { i += 1; continue; }
-    if (c === '`') return { end: i, expressions };
-    if (c === '$' && src[i + 1] === '{') {
-      if (!view) view = src.split('');
-      const exprStart = i + 2;
-      const exprEnd = scanTemplateExpressionEnd(src, exprStart, view, onComment);
-      expressions.push({ start: exprStart, end: exprEnd });
-      i = exprEnd < src.length ? exprEnd : src.length;
-    }
-  }
-  return { end: src.length, expressions };
 }
 
 /**
@@ -723,29 +813,16 @@ function scanTemplateLiteral(src, start, scratch, onComment) {
  *
  * `blankLiterals` intentionally blanks whole template bodies for declaration/bracket checks. The
  * navigation oracle needs a different view: template text is still data, but `${...}` is live code.
- * This overlays recursively blanked expression bodies back onto the normal blanked output without
- * changing `blankLiterals` for its existing callers.
+ * Both views come out of ONE lexing pass (lexInto's `keep` buffer), so every position judgment is the
+ * one `blankLiterals` makes. Overlaying each body with a fresh lex of its own slice, recursively,
+ * re-lexed a template nested n deep n times over — cubic: a valid 2.5 KB page of nested templates
+ * took seconds.
  */
 function blankNonCodePreservingTemplateExpressions(code) {
   const src = String(code || '');
-  const out = blankLiterals(src).split('');
-  const scratch = src.split('');     // raw copy every `${…}` body below is lexed into
-  for (let i = 0; i < src.length; i += 1) {
-    if (src[i] !== '`' || out[i] !== '`') continue;
-    const { end, expressions } = scanTemplateLiteral(src, i, scratch);
-    for (const expr of expressions) {
-      // Keep executable substitutions from being concatenated through blanked template text. In
-      //   `${Xrm.Navigation.navigateTo} text ${({ pageType: "generative", pageId: "PAGEREF_x" })}`
-      // the two expressions are independent, but blanking the `${` / `}` delimiters to spaces made
-      // call-site regexes see `navigateTo   ({ ... })`. A same-length semicolon at the close boundary
-      // preserves offsets while making the expression boundary syntactically non-whitespace.
-      if (expr.end < out.length && out[expr.end] !== '\n') out[expr.end] = ';';
-      const blanked = blankNonCodePreservingTemplateExpressions(src.slice(expr.start, expr.end));
-      for (let k = 0; k < blanked.length; k += 1) out[expr.start + k] = blanked[k];
-    }
-    i = end;
-  }
-  return out.join('');
+  const keep = src.split('');
+  lexInto(src, src.split(''), 0, { keep });
+  return keep.join('');
 }
 
 /**
@@ -762,7 +839,7 @@ function blankNonCodePreservingTemplateExpressions(code) {
  *   export { P as default }   /   export { default } from './x'
  */
 // Identifiers may be non-ASCII (`Página`), so every name below is matched by Unicode property.
-const DEFAULT_EXPORT = /(?:^[ \t]*|[;}][ \t]*)export[ \t]+default[ \t\r\n]+[\p{ID_Continue}$({[*]/gmu;
+const DEFAULT_EXPORT = /(?:^[ \t]*|[;}][ \t]*)export[ \t]+default\s+[\p{ID_Continue}$({[*]/gmu;
 const NAMED_DEFAULT_EXPORT = /(?:^[ \t]*|[;}][ \t]*)export[ \t]*\{[^}]*\bdefault\b[^}]*\}/m;
 function hasDefaultExport(code) {
   const bare = blankLiterals(code);
@@ -791,12 +868,12 @@ function defaultExportIsComplete(bare, at) {
   if (mod) {
     const after = rest.slice(mod[0].length);
     if (!after.trim()) return false;
-    if (!/^(?:function|class)\b/.test(after) && !/^(?:;|\r?\n)/.test(after)) {
+    if (!/^(?:function|class)\b/.test(after) && !/^(?:;|[\r\n\u2028\u2029])/.test(after)) {
       // Only an async ARROW is left — `async (x) => …`, `async x => …` — and it needs its `=>` and body.
       return mod[1] === 'async' && /=>/.test(after) && !/=>\s*$/.test(after);
     }
   }
-  const fn = /^(?:async[ \t\r\n]+)?function\b\s*\*?\s*(?:[\p{ID_Start}$_][\p{ID_Continue}$\u200c\u200d]*)?\s*/u.exec(rest);
+  const fn = /^(?:async\s+)?function\b\s*\*?\s*(?:[\p{ID_Start}$_][\p{ID_Continue}$\u200c\u200d]*)?\s*/u.exec(rest);
   if (fn) {
     // Type parameters come first and may hold parentheses of their own: `<T extends (a: A) => void>`.
     let k = fn[0].length;
@@ -810,9 +887,9 @@ function defaultExportIsComplete(bare, at) {
     }
     return false;
   }
-  const cls = /^(?:abstract[ \t\r\n]+)?class\b/.exec(rest);
+  const cls = /^(?:abstract\s+)?class\b/.exec(rest);
   if (cls) return hasDeclarationBody(rest, cls[0].length);
-  const name = /^([\p{ID_Start}$_][\p{ID_Continue}$\u200c\u200d]*)[ \t]*(?:;|\r?\n|$)/u.exec(rest);
+  const name = /^([\p{ID_Start}$_][\p{ID_Continue}$\u200c\u200d]*)[ \t]*(?:;|[\r\n\u2028\u2029]|$)/u.exec(rest);
   if (!name) {
     // A member chain at EOF is syntactically complete: `export default UI.Spinner` and
     // `export default pages.Home` are valid exports whether the base is imported or local. A cut at
@@ -1134,4 +1211,4 @@ function ellipsisFollowedByStatement(mask, k) {
   return STATEMENT_WORDS.has(word) || word === 'import' || word === 'export';
 }
 
-module.exports = { blankLiterals, blankNonCodePreservingTemplateExpressions, commentRanges, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets, expressionPosition, scanTemplateExpressionEnd };
+module.exports = { blankLiterals, blankNonCodePreservingTemplateExpressions, commentRanges, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets, expressionPosition, scanTemplateExpressionEnd, isLineTerminator };

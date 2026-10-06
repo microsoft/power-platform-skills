@@ -3,6 +3,7 @@
 
 const path = require('node:path');
 const { normalizeSpecShape } = require('./spec-shape.js');
+const { isMainForm, selectDefaultForm, ordersByHand } = require('./form-order.js');
 
 // URL scheme allowlist for spec-supplied URLs that the built app will RENDER (iframe dashboard tiles,
 // sitemap URL subareas). Only http(s) is allowed — a `javascript:`, `data:`, `vbscript:`, or `file:`
@@ -25,6 +26,9 @@ const FORM_TYPE_CODE = { Main: 2, QuickView: 6, QuickCreate: 7, Card: 11 };
 // A canonical GUID (used to validate an author-pinned forms[].formId, which is interpolated UNQUOTED into
 // an Edm.Guid OData filter). Anchored so it can neither over-match nor be an injection seam.
 const FORM_GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// A page's model id (`pages[].model`), e.g. `gpt-4.1` or `claude-3-5-sonnet@20240620`: a short token, because the
+// build hands it to pac as one command-line value. Shared with download, which carries only a model the spec can hold.
+const PAGE_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,99}$/;
 
 // Security-authoring enums (personas[]). These mirror the vendored SDK's security surface
 // (cds-maker-sdk src/types/security.ts) EXACTLY — the app-spec validator is a lint-time echo of the
@@ -33,7 +37,7 @@ const FORM_GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 //   PrivilegeScope depth, least->most permissive (user->Basic … organization->Global)
 // Keep these in lockstep with the SDK; vendor-sdk-smoke asserts the vendored bundle still exposes them.
 const ACCESS_LEVELS = new Set(['read', 'create', 'write', 'delete', 'append', 'appendTo', 'assign', 'share']);
-const { AI_FEATURE_KEYS, AI_FEATURE_MAX_VALUE } = require('./ai-app-settings.js');
+const { AI_FEATURE_KEYS, AI_FEATURE_MAX_VALUE, AI_SETTING_CODEC } = require('./ai-app-settings.js');
 const PRIVILEGE_SCOPES = new Set(['user', 'businessUnit', 'parentChild', 'organization']);
 
 // The exact ownership marker the vendored SDK (cds-maker-sdk SecurityApi) stamps on the `description`
@@ -524,13 +528,13 @@ const BUSINESS_RULE_SCOPES = ['Entity'];
 //
 // v1 is deliberately a SINGLE-ENTITY, linear flow: ordered stages, each with ordered steps bound to
 // columns of that same entity. The SDK's artifact additionally models `category`, `nextStageId`,
-// `relationshipName`, `branch`, stage `actions` and `securityRoles`, and those are NOT exposed here:
-//   * cross-entity stages / branching change what the flow MEANS and need live verification per
-//     shape before being offered;
-//   * `securityRoles` needs role IDs (the SDK grants CRUD privileges on the backing table that
-//     ACTIVATION creates, via `reconcileBpfSecurityRoles({ roleId, access })`) — that is the
-//     `security` phase's job, not this one, and is tracked as a follow-up.
-// Offering a knob the build cannot verify is how a spec deploys something the author did not mean.
+// `relationshipName`, `branch` and stage `actions`, and those are NOT exposed here: cross-entity
+// stages and branching change what the flow MEANS and need live verification per shape before being
+// offered. Offering a knob the build cannot verify is how a spec deploys something the author did not
+// mean. The SDK's `securityRoles` started on this list and has since shipped, in a different shape:
+// persona names rather than role ids (validateBpfSecurityRoles below), applied by the `security`
+// phase — the grants are privileges on the backing table that ACTIVATION creates, so they can only be
+// written once both the flow and the personas' roles exist.
 const BPF_STATUSES = ['Active', 'Draft'];
 
 // `businessProcessFlows[].securityRoles` — who may run a flow. #513.
@@ -652,7 +656,7 @@ const ENTITY_KEYS = new Set([
   'schemaName', 'displayName', 'pluralName', 'description', 'primaryAttribute', 'columns',
   'hasNotes', 'quickCreate', 'existing', 'enrichDefaultViews',
   'vectorIcon', 'iconDescription', 'icon',
-  'statusReasons', 'alternateKeys',
+  'statusReasons', 'alternateKeys', 'mainFormOrder',
 ]);
 
 // What to write INSTEAD, for the keys an author is most likely to reach for. A bare "unknown key"
@@ -665,6 +669,52 @@ const ENTITY_KEY_HINTS = Object.assign(Object.create(null), {
   languageCode: ' — the authoring language is build-wide, not per-table: set the spec-level `languageCode`, which applies to every table',
   localizedLabels: ' — write the LCID map on the label FIELD itself (e.g. "displayName": { "1033": "Baseline", "3082": "Línea base" }), not in a separate per-table block; see references/app-spec-schema.md → "Localized labels"',
 });
+
+// The keys the build READS on each `appShell` level (appDef, sdk-build.js), for the same reason as
+// ENTITY_KEYS (#537). The levels name their title differently — areas and groups take `label`,
+// subareas take `title` — and a key with no reader was accepted and dropped: an area written with
+// `title` deployed untitled while lint, the build and `--verify` all passed (#631). Adding a key here
+// without a reader would re-open that hole. `iconDescription` is read by the icon-authoring step,
+// not the build, and is validated where it is used.
+const APP_SHELL_KEYS = {
+  area: new Set(['label', 'icon', 'vectorIcon', 'iconDescription', 'groups']),
+  group: new Set(['label', 'iconDescription', 'subAreas']),
+  subArea: new Set(['title', 'entity', 'dashboard', 'url', 'page', 'icon', 'vectorIcon', 'iconDescription']),
+};
+// The mix-ups an author is most likely to make, with the fix. Prototype-less for the reason given
+// on ENTITY_KEY_HINTS: the lookup key comes from the spec.
+const LABEL_NOT_TITLE = ' — did you mean `label`? Areas and groups take `label`; only subAreas take `title`';
+const APP_SHELL_KEY_HINTS = {
+  area: Object.assign(Object.create(null), { title: LABEL_NOT_TITLE, subAreas: ' — subAreas belong to a group: areas[].groups[].subAreas' }),
+  group: Object.assign(Object.create(null), {
+    title: LABEL_NOT_TITLE,
+    icon: ' — a sitemap group has no icon; set it on the area or on each subArea',
+    vectorIcon: ' — a sitemap group has no icon; set it on the area or on each subArea',
+    groups: ' — groups belong to an area: areas[].groups',
+  }),
+  subArea: Object.assign(Object.create(null), {
+    label: ' — did you mean `title`? SubAreas take `title`; areas and groups take `label`',
+    table: ' — did you mean `entity`?',
+  }),
+};
+
+// Report every key on one `appShell` node that the build does not read. Guarded like the entity
+// check: a non-object node is reported by the shape checks, and enumerating a caller's object can
+// throw (a Proxy), which must become an error rather than escape the validator.
+function reportUnknownAppShellKeys(node, level, where, errors) {
+  if (!node || typeof node !== 'object' || Array.isArray(node)) return;
+  let keys;
+  try {
+    keys = Object.keys(node);
+  } catch {
+    errors.push(`${where} could not be inspected: enumerating its keys threw`);
+    return;
+  }
+  for (const k of keys) {
+    if (APP_SHELL_KEYS[level].has(k)) continue;
+    errors.push(`${where}: unknown key '${k}'${APP_SHELL_KEY_HINTS[level][k] || ''} (allowed: ${[...APP_SHELL_KEYS[level]].join(', ')})`);
+  }
+}
 
 // The column logical names an entity legitimately exposes to a rule / process step: its declared
 // columns, its primary name column, and any lookup a relationship creates ON it (a lookup is a real
@@ -1258,6 +1308,18 @@ function authoredSectionNames(formSpec, { named = false } = {}) {
       if (sec && typeof sec === 'object' && (!named || sec.name)) names.add(String(sec.name || generatedSectionName(ti, ci, si)).toLowerCase());
     });
   }));
+  return names;
+}
+
+// Every tab name an explicit layout declares, under the name the compiler gives it, lower-cased — the
+// tabs' counterpart of authoredSectionNames, for the same reason: a deployed tab another tab of the
+// layout claims by name is not handed to a different one by label or position. Without it, a tab
+// declared mid-layout took the next existing tab by POSITION, and that tab's own want — its name now
+// taken — created a second tab of the same name.
+function authoredTabNames(formSpec) {
+  const names = new Set();
+  const tabs = formSpec && Array.isArray(formSpec.tabs) ? formSpec.tabs : [];
+  tabs.forEach((t, ti) => { if (t && typeof t === 'object') names.add(String(t.name || generatedTabName(ti)).toLowerCase()); });
   return names;
 }
 
@@ -2047,6 +2109,77 @@ function validateAppSpec(spec, opts = {}) {
     }
   }
 
+  // AB#6736948: `entities[].mainFormOrder` — the table's Main Form Set order, first to last. The first
+  // form is the one the table opens with; lib/form-order.js has the platform's model of it and what
+  // was measured. Every name must address exactly one Main form of the table in forms[], because the
+  // build writes the order onto the forms it resolves, and a name it cannot resolve would silently
+  // leave a different form first.
+  for (const e of spec.entities || []) {
+    if (!e || typeof e !== 'object' || e.mainFormOrder === undefined) continue;
+    const label = `entity '${e.schemaName}'`;
+    const list = e.mainFormOrder;
+    if (!Array.isArray(list) || !list.length || list.some((n) => typeof n !== 'string' || !n.trim())) {
+      errors.push(`${label}: mainFormOrder must be a non-empty array of Main form names from forms[] (got ${describeSpecValue(list)})`);
+      continue;
+    }
+    const key = String(e.schemaName || '').toLowerCase();
+    const formsOfEntity = (spec.forms || []).filter((f) => f && typeof f === 'object' && String(f.entity || '').toLowerCase() === key);
+    const mains = formsOfEntity.filter(isMainForm);
+    const seen = new Set();
+    for (const name of list) {
+      // Repeats are compared case-insensitively: Dataverse matches a form name that way, so two
+      // spellings of one name would still be one form.
+      const k = name.trim().toLowerCase();
+      if (seen.has(k)) { errors.push(`${label}: mainFormOrder lists '${name}' more than once`); continue; }
+      seen.add(k);
+      // The build finds a deployed form with a server-side `name eq` filter, which compares names the way
+      // Dataverse does — ignoring case and, in most languages, accents (dashboardNameKey: a dashboard is a
+      // systemform too, so its measured folding is a form name's) — so Main forms whose names compare
+      // equal there are one name to the build, and the order could not address either. The listed name
+      // must still be spelled exactly as in forms[]: it is a cross-reference into this spec, resolved
+      // exactly (listedMainForms, form-order.js).
+      const twins = mains.filter((f) => dashboardNameKey(f.name) === dashboardNameKey(name));
+      const matches = twins.filter((f) => f.name === name);
+      if (twins.length > 1) {
+        const spellings = [...new Set(twins.map((f) => `'${f.name}'`))];
+        errors.push(`${label}: mainFormOrder names '${name}', but ${twins.length} Main forms of this table share that name${spellings.length > 1 ? ` (${spellings.join(', ')}: Dataverse compares form names ignoring case and, in most languages, accents)` : ''} — rename one so the order can address it`);
+      } else if (!matches.length) {
+        const other = formsOfEntity.find((f) => f.name === name);
+        errors.push(other
+          ? `${label}: mainFormOrder names '${name}', a ${other.formType} form — only Main forms are in the Main Form Set`
+          : `${label}: mainFormOrder names '${name}', which is not a Main form of this table in forms[] (its Main forms: ${mains.map((f) => `'${f.name || '(unnamed)'}'`).join(', ') || 'none'})`);
+      }
+    }
+    const flagged = mains.find((f) => f.isDefault === true);
+    if (flagged && list[0] !== flagged.name) {
+      errors.push(`${label}: form '${flagged.name}' sets isDefault, so it must come first in mainFormOrder (which starts with '${list[0]}') — the first form in the order is the one the table opens with`);
+    }
+    const byHand = mains.filter((f) => f.securityRoles && typeof f.securityRoles === 'object' && f.securityRoles.order !== undefined);
+    if (byHand.length) {
+      errors.push(`${label}: mainFormOrder and forms[].securityRoles.order (on ${byHand.map((f) => `'${f.name || f.entity}'`).join(', ')}) both set this table's form order — keep one of them`);
+    }
+  }
+  // `securityRoles.order` writes the same attribute, so a table ordered that way is ordered by hand and
+  // the build leaves it alone — which means the default form opens first only when ITS order is the
+  // lowest. Warned, not rejected: the combination is legal and can be exactly what the author meant.
+  const orderedByHandSeen = new Set();
+  for (const f of spec.forms || []) {
+    if (!isMainForm(f)) continue;
+    const key = String(f.entity || '').toLowerCase();
+    if (orderedByHandSeen.has(key)) continue;
+    orderedByHandSeen.add(key);
+    const entSpec = (spec.entities || []).find((e) => e && String(e.schemaName || '').toLowerCase() === key);
+    if (!ordersByHand(spec, key) || (entSpec && entSpec.mainFormOrder !== undefined)) continue;
+    const chosen = selectDefaultForm(spec, key);
+    if (!chosen) continue;
+    const mine = chosen.form.securityRoles && chosen.form.securityRoles.order;
+    const rivals = (spec.forms || []).filter((o) => o !== chosen.form && isMainForm(o) && String(o.entity || '').toLowerCase() === key
+      && o.securityRoles && Number.isInteger(o.securityRoles.order) && (!Number.isInteger(mine) || o.securityRoles.order <= mine));
+    if (!Number.isInteger(mine) || rivals.length) {
+      warnings.push(`entity '${key}': forms[].securityRoles.order sets this table's form order, so the build does not reorder its Main forms — '${chosen.form.name || key}' opens first only if its securityRoles.order is lower than every other Main form's${rivals.length ? ` (${rivals.map((o) => `'${o.name || key}': ${o.securityRoles.order}`).join(', ')})` : ''}. Or declare entities[].mainFormOrder instead.`);
+    }
+  }
+
   // #6: a Main form that sets deactivateOtherMainForms must be the ONLY Main form declared for its
   // entity. NOTE the original rationale — "forms build concurrently and every Main form is promoted,
   // so a sibling can win the isdefault race" — no longer holds: promotion is now a single serialized
@@ -2520,6 +2653,7 @@ function validateAppSpec(spec, opts = {}) {
   const viewTables = entitiesByName(spec.views);
   const chartTables = entitiesByName(spec.charts);
   const seenDashboardNames = new Map(); // dashboardNameKey → the first dashboard's name as written
+  const seenDashboardIds = new Map(); // pinned dashboardId (bare, lower) → the dashboard's name as written
   // The table a name-based chart/list tile shows, or null when it cannot be determined (reported).
   const tileTable = (d, t) => {
     const tables = viewTables.get(t.view);
@@ -2540,6 +2674,22 @@ function validateAppSpec(spec, opts = {}) {
   };
   for (const d of spec.dashboards || []) {
     if (!d || !d.name) { errors.push('a dashboard is missing a name'); continue; }
+    // A DOWNLOADED dashboard carries its deployed id (edit-snapshot only, like pages[].pageId), which a
+    // rebuild binds to before trying the name. Two entries pinning one id would bind two nav targets
+    // to one dashboard, so each must be a distinct GUID.
+    if (d.dashboardId !== undefined) {
+      // A bare GUID, or one in braces as Dataverse writes it in sitemap XML — both braces or none: an id
+      // with a lone brace is malformed, not one to bind a dashboard to.
+      const raw = typeof d.dashboardId === 'string' ? d.dashboardId.trim() : '';
+      const pin = (/^\{.*\}$/.test(raw) ? raw.slice(1, -1) : raw).toLowerCase();
+      if (!FORM_GUID_RE.test(pin)) {
+        errors.push(`dashboard '${d.name}': dashboardId must be a GUID (got ${JSON.stringify(d.dashboardId)}) — it is the deployed dashboard's id, which a download writes; leave it out of an authored spec`);
+      } else if (seenDashboardIds.has(pin)) {
+        errors.push(`dashboard '${d.name}': has the same dashboardId as dashboard '${seenDashboardIds.get(pin)}' — each entry must pin a different dashboard`);
+      } else {
+        seenDashboardIds.set(pin, d.name);
+      }
+    }
     // A sitemap subarea and the build both find a dashboard BY NAME, the build through a server-side
     // filter that ignores case (and usually accents), so two names that compare equal there cannot be
     // told apart: both subareas resolve to one dashboard and the other silently leaves the nav
@@ -2649,6 +2799,11 @@ function validateAppSpec(spec, opts = {}) {
     // so silently accepting a malformed / empty value would cause reconcile to bind the wrong page.
     if (p.pageId !== undefined && !PAGE_ID_GUID.test(String(p.pageId))) {
       errors.push(`page '${p.key || p.name}': pageId must be a 36-char GUID`);
+    }
+    // The id of the model that generated the page — what `pac model genpage upload --model` records, and
+    // what a download writes back. A short token (e.g. `gpt-4.1`); it travels as a command-line value.
+    if (p.model !== undefined && (typeof p.model !== 'string' || !PAGE_MODEL_RE.test(p.model))) {
+      errors.push(`page '${p.key || p.name}': model must be a model id such as 'gpt-4.1' (letters, digits and . _ : / @ + -, at most 100 characters)`);
     }
     const src = normalizePageSource(p);
     // Track whether a structural source error was emitted so the profile check below doesn't
@@ -2816,6 +2971,20 @@ function validateAppSpec(spec, opts = {}) {
       warnings.push(`${label}: icon reference '${val}' points at a custom web resource ('${wrName}') that is NOT declared in webResources[] — it will render only on an environment that already has it (a rebuild into a fresh env shows a broken icon). Declare that web resource so the build recreates it; a downloaded spec does this automatically.`);
     }
   };
+  (spec.appShell && spec.appShell.areas || []).forEach((a, ai) => {
+    // Named by whatever the author wrote, so a mistaken `title` still identifies the node it is on.
+    const nodeName = (n, i) => {
+      const v = n && typeof n === 'object' ? (n.label || n.title) : '';
+      return typeof v === 'string' && v.trim() ? `"${v}"` : `#${i + 1}`;
+    };
+    reportUnknownAppShellKeys(a, 'area', `sitemap area ${nodeName(a, ai)}`, errors);
+    ((a && a.groups) || []).forEach((g, gi) => {
+      reportUnknownAppShellKeys(g, 'group', `sitemap group ${nodeName(g, gi)} in area ${nodeName(a, ai)}`, errors);
+      ((g && g.subAreas) || []).forEach((sa, si) => {
+        reportUnknownAppShellKeys(sa, 'subArea', `sitemap subArea ${nodeName(sa, si)} in group ${nodeName(g, gi)}`, errors);
+      });
+    });
+  });
   for (const a of (spec.appShell && spec.appShell.areas) || []) {
     checkIcon(a.icon, `sitemap area "${a.label || ''}"`);
     checkPortableIconRef(a.icon, `sitemap area "${a.label || ''}"`);
@@ -3120,8 +3289,9 @@ function validateAppSpec(spec, opts = {}) {
           for (const [k, v] of Object.entries(spec.ai.appFeatures)) {
             if (!AI_FEATURE_KEYS.has(k)) errors.push(`ai.appFeatures: unknown key '${k}' (allowed: ${AI_FEATURE_KEYS_LIST})`);
             // These map to NUMERIC Dataverse app settings, not booleans: `true`/`false` are the
-            // ergonomic spellings of 1/0, but the platform also defines other values (notably 2 =
-            // "on for everyone"), which a boolean-only contract made inexpressible (ADO 6560699).
+            // ergonomic spellings of each setting's On/Off value (see AI_SETTING_CODEC), but every one
+            // of them is a tri-state, and a boolean-only contract made the third state — notably `0`,
+            // the platform default for most — inexpressible (ADO 6560699).
             // Accept a boolean or a non-negative integer; reject anything else (a string like '2'
             // would silently bypass the range check downstream).
             //
@@ -3131,7 +3301,10 @@ function validateAppSpec(spec, opts = {}) {
             // front, where the maker gets a message naming the field. `isSafeInteger` (not
             // `isInteger`) because beyond 2^53 an "integer" double no longer round-trips.
             if (typeof v !== 'boolean' && !(typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 && v <= AI_FEATURE_MAX_VALUE)) {
-              errors.push(`ai.appFeatures.${k}: must be a boolean or an integer between 0 and ${AI_FEATURE_MAX_VALUE} (e.g. true, false, or 2 for "on for everyone")`);
+              // The example names THIS setting's platform default: it is 0 for most, but 1 (Auto) for
+              // nlChart, where 0 means Off.
+              const platformDefault = AI_SETTING_CODEC[k] ? AI_SETTING_CODEC[k].platformDefault : '0';
+              errors.push(`ai.appFeatures.${k}: must be a boolean or an integer between 0 and ${AI_FEATURE_MAX_VALUE} (e.g. true, false, or ${platformDefault} to leave it to the platform default)`);
             }
           }
         }
@@ -3569,6 +3742,7 @@ module.exports = {
   generatedSectionName,
   formColumnsOf,
   authoredSectionNames,
+  authoredTabNames,
   validateAppSpec,
   validateSampleDataRows,
   normalizePageSource,
@@ -3586,6 +3760,7 @@ module.exports = {
   webResourceNameFromRef,
   FORM_TYPE_CODE,
   FORM_GUID_RE,
+  PAGE_MODEL_RE,
   ACCESS_LEVELS,
   PRIVILEGE_SCOPES,
   ROLE_GRANT_KEYS,

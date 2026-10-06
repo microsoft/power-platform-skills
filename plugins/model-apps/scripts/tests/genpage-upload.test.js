@@ -43,18 +43,32 @@ const TRANSCRIPT = 'Conversation with 3 prompts:\r\n1. Build a list of inspectio
 
 function capturingCli(opts = {}) {
   const calls = [];
+  const downloads = [];
+  const nameReads = [];
   return {
     calls,
+    downloads,
+    nameReads,
     factory: () => ({
       upload: async (o) => { calls.push(o); return { pageId: '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8' }; },
       // Default: the requested page exists. Tests that care override this.
       enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+      enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
+      // An update without a name re-sends the page's CURRENT name, read from its Dataverse row.
+      pageName: async (pid) => {
+        nameReads.push(pid);
+        if (opts.liveNameError) throw new Error(opts.liveNameError);
+        return opts.liveName !== undefined ? opts.liveName : 'Current Page';
+      },
+      // A pac.cmd shim cannot receive `%` or `"`; `opts.shim` makes this fake installation one.
+      argumentRefusal: (value) => (opts.shim && /[%"]/.test(value) ? `cannot pass ${JSON.stringify(value)} to pac.cmd: a Windows batch file cannot receive a double quote, %, a control character unchanged` : null),
       // An update reads the page's CURRENT bindings so omitting `--data-sources` preserves them
       // instead of persisting `[]`. pac writes this config UTF-8 with a BOM, so the fixture does too.
       download: async ({ outputDir, pageIds }) => {
+        downloads.push(pageIds);
         for (const pid of (pageIds || [])) {
           fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
-          const body = JSON.stringify({ dataSources: opts.liveDataSources || ['contoso_ticket'] });
+          const body = JSON.stringify({ dataSources: opts.liveDataSources || ['contoso_ticket'], ...(opts.liveModel !== undefined ? { model: opts.liveModel } : {}) });
           fs.writeFileSync(path.join(outputDir, pid, 'config.json'), Buffer.from('\uFEFF' + body, 'utf8'));
         }
         return true;
@@ -163,7 +177,7 @@ test('a display name passed by file reaches upload() intact, and a blank or doub
   const nf = path.join(d, 'page-name.txt');
   fs.writeFileSync(pf, 'Build the revenue page', 'utf8');
   fs.writeFileSync(af, 'Initial deploy', 'utf8');
-  const NAME = 'Revenue $100 \u2014 "Q3" $(whoami) `x` 100% & more';
+  const NAME = 'Revenue $100 \u2014 \u201cQ3\u201d $(whoami) `x` 100% & it\'s more';
   fs.writeFileSync(nf, `\uFEFF${NAME}\r\n`, 'utf8');
   const base = ['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'page.tsx', '--prompt-file', pf, '--agent-message-file', af];
   const cli = capturingCli();
@@ -398,7 +412,7 @@ test('WINDOWS: the prompt never appears on the command line pac is invoked with'
   // Fragments must be unique to the PROMPT: `--name` is legitimately passed inline (a short,
   // caller-controlled value), and the first version of this test matched the quoted name instead
   // of the prompt — a test that would have failed on correct code.
-  const win = buildPacInvocation(args, 'win32');
+  const win = { command: buildPacInvocation(args, { platform: 'win32', env: { Path: 'C:\\pac', PATHEXT: '.CMD', SystemRoot: 'C:\\Windows' }, exists: (p) => p === 'C:\\pac\\pac.cmd' }).args[4] };
   for (const fragment of ['résumé', '$(whoami)', '<b>bold</b>', '%PATH%', "apostrophe's"]) {
     assert.ok(!win.command.includes(fragment),
       `prompt fragment ${JSON.stringify(fragment)} leaked onto the command line:\n${win.command}`);
@@ -539,14 +553,125 @@ test('an /app-builder-shaped upload sends none of the standalone flags', async (
 
 // pac's env-wide listing, in the LIVE shape (auto-sized fixed-width columns) — an invented format is
 // correctly rejected as 'unrecognized', so a fixture that only LOOKS plausible tests the wrong path.
-const envListing = (ids) => {
-  const names = ids.map((_, i) => `Page${i}`);
+const envListing = (ids, names = ids.map((_, i) => `Page${i}`)) => {
   const nameW = Math.max(4, ...names.map((n) => n.length));
   const header = 'Page ID'.padEnd(37) + 'Name'.padEnd(nameW + 1) + 'Published';
   const body = ids.map((id, i) => `${id} ${names[i].padEnd(nameW)} -`).join('\n');
   return `Connected as tester@contoso.com\nRetrieving generated pages...\n`
     + `Found ${ids.length} generated page(s):\n\n${header}\n${body}\n`;
 };
+
+test('implicit update metadata reaches real wrapper argv', async () => {
+  const id = 'aaaaaaaa-0000-4000-8000-000000000001';
+  const appId = 'bbbbbbbb-0000-4000-8000-000000000002';
+  const env = 'https://contoso.crm.dynamics.com';
+  const navigationTitle = 'Navigation title';
+  const d = tmp();
+  const codeFile = path.join(d, 'page.tsx');
+  fs.writeFileSync(codeFile, 'export default function Page() { return null; }', 'utf8');
+  // No executable is started: both PAC installation shapes use the real invocation constructor.
+  const winPac = (file) => ({
+    platform: 'win32', env: { Path: 'C:\\pac', PATHEXT: '.EXE;.CMD', SystemRoot: 'C:\\Windows' },
+    exists: (p) => p === file, readFile: () => '@"%~dp0tools\\pac.exe" %*\r\n',
+  });
+  for (const [installation, storedName, expectedName] of [
+    ['pac.exe', 'Say \\"hi\\"', 'Say "hi"'],
+    ['pac.exe', 'Revenue 100%', 'Revenue 100%'],
+    ['pac.cmd', 'Revenue 100%', undefined],
+  ]) {
+    const seen = [];
+    const requests = [];
+    const probeDirs = [];
+    const uploadDirs = [];
+    const pacInvocation = winPac(`C:\\pac\\${installation}`);
+    const factory = (url) => makeGenpageCli(url, {
+      pacInvocation,
+      request: async (...args) => {
+        requests.push(args);
+        return { status: 200, data: { name: storedName } };
+      },
+      run: async (args) => {
+        const invocation = buildPacInvocation(args, pacInvocation);
+        seen.push({ args: [...args], invocation });
+        const valueOf = (flag) => args[args.indexOf(flag) + 1];
+        if (args[2] === 'list') {
+          const name = args.includes('--app-id') ? navigationTitle : storedName;
+          return { status: 0, stdout: envListing([id], [name]), stderr: '' };
+        }
+        if (args[2] === 'download') {
+          assert.strictEqual(valueOf('--page-id'), id);
+          const outputDir = valueOf('--output-directory');
+          probeDirs.push(outputDir);
+          dirs.push(outputDir);
+          const pageDir = path.join(outputDir, id.toUpperCase());
+          fs.mkdirSync(pageDir, { recursive: true });
+          const config = Buffer.from('\uFEFF' + JSON.stringify({ model: ' gpt-4.1 ', dataSources: ['contoso_ticket', 'contoso_asset'] }), 'utf8');
+          fs.writeFileSync(path.join(pageDir, 'config.json'), config);
+          assert.deepStrictEqual([...config.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+          return { status: 0, stdout: 'Downloaded 1 page(s)', stderr: '' };
+        }
+        assert.strictEqual(args[2], 'upload', 'only fake list/download/upload operations are permitted');
+        uploadDirs.push(path.dirname(valueOf('--prompt-file')));
+        dirs.push(uploadDirs[uploadDirs.length - 1]);
+        assert.strictEqual(fs.readFileSync(valueOf('--prompt-file'), 'utf8'), 'Fix the sort handler');
+        assert.strictEqual(fs.readFileSync(valueOf('--agent-message-file'), 'utf8'), 'Preserve page metadata');
+        return { status: 0, stdout: `Page ID: ${id}`, stderr: '' };
+      },
+      sleep: async () => {},
+    });
+    let result;
+    let cleanupAtEmit;
+    await main(['--env', env, '--app-id', appId, '--code-file', codeFile, '--page-id', id,
+      '--prompt', 'Fix the sort handler', '--agent-message', 'Preserve page metadata'], {
+      makeGenpageCli: factory,
+      emit: (ok, payload) => {
+        cleanupAtEmit = [...probeDirs, ...uploadDirs].map((dir) => fs.existsSync(dir));
+        result = { ok, payload };
+      },
+    });
+    assert.strictEqual(result.ok, true, `${installation}: ${JSON.stringify(result.payload)}`);
+    assert.deepStrictEqual([result.payload.pageId, result.payload.appId, result.payload.updated], [id, appId, true]);
+    assert.deepStrictEqual(requests, [[env, 'GET', `uxagentprojects(${id})?$select=name`]], 'the page row, not its navigation title, supplies the implicit name');
+    const listings = seen.filter((call) => call.args[2] === 'list');
+    assert.strictEqual(listings.length, 2);
+    assert.ok(listings.some((call) => !call.args.includes('--app-id') && call.args.includes('--include-unpublished')), 'existence is checked environment-wide');
+    assert.ok(listings.some((call) => call.args.includes('--app-id')), 'app membership is also checked');
+    const uploads = seen.filter((call) => call.args[2] === 'upload');
+    assert.strictEqual(uploads.length, 1);
+    const { args, invocation } = uploads[0];
+    const valueOf = (flag) => {
+      assert.strictEqual(args.filter((a) => a === flag).length, 1, `${installation}: ${flag} appears exactly once`);
+      return args[args.indexOf(flag) + 1];
+    };
+    assert.strictEqual(valueOf('--environment'), env);
+    assert.strictEqual(valueOf('--app-id'), appId);
+    assert.strictEqual(valueOf('--page-id'), id);
+    assert.strictEqual(valueOf('--code-file'), codeFile);
+    assert.strictEqual(valueOf('--model'), 'gpt-4.1');
+    assert.strictEqual(valueOf('--data-sources'), 'contoso_ticket,contoso_asset');
+    for (const flag of ['--connectors', '--actions', '--add-to-sitemap']) assert.ok(!args.includes(flag), flag);
+    if (expectedName !== undefined) {
+      assert.strictEqual(valueOf('--name'), expectedName);
+      assert.notStrictEqual(valueOf('--name'), navigationTitle);
+      assert.strictEqual(result.payload.warnings, undefined, 'metadata that reaches native PAC intact produces no warning');
+      assert.strictEqual(invocation.file, 'C:\\pac\\pac.exe');
+      assert.deepStrictEqual(invocation.args, args, 'native PAC receives every argument verbatim');
+      assert.strictEqual(invocation.options.shell, false);
+    } else {
+      assert.ok(!args.includes('--name'), 'an implicit name containing % must never reach a batch shim');
+      assert.strictEqual(result.payload.warnings.length, 1);
+      assert.match(result.payload.warnings[0], /name "Revenue 100%" could not be sent to keep it \(cannot pass .* to pac\.cmd/);
+      assert.match(result.payload.warnings[0], /pac may have renamed the page to its navigation title/);
+      assert.strictEqual(invocation.file, 'C:\\Windows\\System32\\cmd.exe');
+      assert.ok(!invocation.args[4].includes('Revenue 100%'));
+      assert.ok(invocation.args[4].includes('--model gpt-4.1'));
+      assert.ok(invocation.args[4].includes('--data-sources contoso_ticket,contoso_asset'));
+      assert.strictEqual(invocation.options.windowsVerbatimArguments, true);
+    }
+    assert.deepStrictEqual([probeDirs.length, uploadDirs.length], [1, 1]);
+    assert.deepStrictEqual(cleanupAtEmit, [false, false], 'both temp directories are gone before the emitter can exit');
+  }
+});
 
 test('REAL wrapper: updating an id absent from the environment is refused and never uploads', async () => {
   const seen = [];
@@ -691,10 +816,13 @@ test('an explicit --data-sources still WINS over the preserved list', async () =
   assert.strictEqual(cli.calls[0].dataSources, 'contoso_other', 'an explicit value is the caller\'s intent');
 });
 
-test('--clear-data-sources really unbinds, and does not read the old list first', async () => {
+test('--clear-data-sources really unbinds, and does not depend on reading the old list first', async () => {
   let probed = false;
   const factory = () => ({
     enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
+    // The page is read for its MODEL (the update omits --model) — and here that read fails, which must
+    // not stop a deliberate unbind: the model is metadata, reported, never a reason to refuse.
     download: async () => { probed = true; return true; },
     upload: async (o) => { probed = probed || false; return { pageId: o.pageId, _ds: o.dataSources }; },
   });
@@ -710,7 +838,166 @@ test('--clear-data-sources really unbinds, and does not read the old list first'
   });
   assert.strictEqual(r.ok, true, `a deliberate unbind must be allowed; got ${JSON.stringify(r.payload)}`);
   assert.strictEqual(seen[0].dataSources, undefined, 'nothing is sent, so pac clears the bindings');
-  assert.strictEqual(probed, false, 'a deliberate clear need not read the list it is discarding');
+  assert.strictEqual(probed, true, 'the page is read for its model');
+  assert.match(r.payload.warnings[0], /could not read page 9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d's current model \(pac wrote no directory for this page\)/);
+  assert.strictEqual(seen[0].model, undefined);
+});
+
+// pac stores whatever `--model` an upload sends, so an update without one wiped the deployed model id to
+// "" (live-measured). Absence is "no opinion", as for the bindings: the current model is re-sent.
+test('an update that omits --model re-sends the page\'s current model; an explicit one wins', async () => {
+  const run = (cli, extra) => new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p', ...extra],
+    { makeGenpageCli: cli.factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  const kept = capturingCli({ liveModel: ' gpt-4.1 ' });
+  assert.strictEqual((await run(kept, [])).ok, true);
+  assert.strictEqual(kept.calls[0].model, 'gpt-4.1');
+
+  // Named bindings do not stop the model being read: the download is then for the model alone.
+  const withBindings = capturingCli({ liveModel: 'gpt-4.1' });
+  assert.strictEqual((await run(withBindings, ['--data-sources', 'contoso_other'])).ok, true);
+  assert.deepStrictEqual([withBindings.downloads.length, withBindings.calls[0].model, withBindings.calls[0].dataSources], [1, 'gpt-4.1', 'contoso_other']);
+
+  const explicit = capturingCli({ liveModel: 'gpt-4.1' });
+  assert.strictEqual((await run(explicit, ['--model', 'gpt-5', '--data-sources', 'contoso_other'])).ok, true);
+  assert.deepStrictEqual([explicit.downloads.length, explicit.calls[0].model], [0, 'gpt-5'], 'nothing to read when both are named');
+
+  // A page with no model has nothing to re-send — and a model that is not a string is reported, not sent.
+  const none = capturingCli({});
+  const noneRun = await run(none, []);
+  assert.deepStrictEqual([noneRun.ok, none.calls[0].model, noneRun.payload.warnings], [true, undefined, undefined]);
+  const odd = capturingCli({ liveModel: 42 });
+  const oddRun = await run(odd, []);
+  assert.strictEqual(oddRun.ok, true);
+  assert.strictEqual(odd.calls[0].model, undefined);
+  assert.match(oddRun.payload.warnings[0], /config\.json model is number, not a string/);
+
+  // A create has no current model to keep.
+  const created = capturingCli({ liveModel: 'gpt-4.1' });
+  const createRun = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx', '--prompt', 'p', '--agent-message', 'm'],
+      { makeGenpageCli: created.factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.deepStrictEqual([createRun.ok, created.downloads.length, created.calls[0].model], [true, 0, undefined]);
+});
+
+// pac stores every ASCII `"` in a page name as `\"` — in the page row and in the navigation title it writes —
+// and nothing else (live-measured). Such a name is refused before anything is read or deployed.
+test('a page name with an ASCII double quote is refused before anything is deployed', async () => {
+  const d = tmp();
+  const nf = path.join(d, 'page-name.txt');
+  fs.writeFileSync(nf, 'Say "hi" now\n', 'utf8');
+  const base = ['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx', '--prompt', 'p', '--agent-message', 'm'];
+  for (const [label, extra] of [
+    ['create, by file', ['--name-file', nf]],
+    ['create, inline', ['--name', 'Say "hi" now']],
+    ['update, by file', ['--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--name-file', nf]],
+  ]) {
+    const cli = capturingCli();
+    const r = await runMain([...base, ...extra], cli);
+    assert.strictEqual(r.ok, false, label);
+    assert.match(r.payload.error, /the page name "Say \\"hi\\" now" contains an ASCII double quote/, label);
+    assert.match(r.payload.error, /typographic quotes \(“ ”\) or an apostrophe/, label);
+    assert.deepStrictEqual([cli.calls.length, cli.downloads.length, cli.nameReads.length], [0, 0, 0], `${label}: nothing read or deployed`);
+  }
+  // CONTROL — the characters pac keeps as they are still deploy.
+  const ok = capturingCli();
+  const kept = await runMain([...base, '--name', 'Back\\slash “curly” \'single\' 東京'], ok);
+  assert.strictEqual(kept.ok, true, JSON.stringify(kept.payload));
+  assert.strictEqual(ok.calls[0].name, 'Back\\slash “curly” \'single\' 東京');
+});
+
+// An update without a name renamed the page to its navigation title (live-reproduced after an earlier rename), so the
+// update re-sends the page's current name, read from its row. pac stores `"` as `\"`, so a stored `\"` is sent back as
+// `"` — pac's escaping then stores the same value again.
+test('an update without a name re-sends the page\'s current name; a named update or a create reads nothing', async () => {
+  const PID = '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d';
+  const update = ['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx', '--page-id', PID, '--prompt', 'p'];
+  const renamed = capturingCli({ liveName: 'Renamed Alpha' });
+  const r = await runMain(update, renamed);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.deepStrictEqual([renamed.nameReads, renamed.calls[0].name, r.payload.warnings], [[PID], 'Renamed Alpha', undefined]);
+
+  // What pac stored for `Say "hi" \"x\"` — every quote escaped once — goes back exactly one escape shorter.
+  const escaped = capturingCli({ liveName: 'Say \\"hi\\" \\\\"x\\\\"' });
+  const e = await runMain(update, escaped);
+  assert.strictEqual(e.ok, true);
+  assert.strictEqual(escaped.calls[0].name, 'Say "hi" \\"x\\"');
+  assert.strictEqual(e.payload.warnings, undefined, 'a name pac wrote is kept exactly, so there is nothing to report');
+
+  // A `"` pac did not write cannot be stored as it is. The update still goes ahead, and says what changed.
+  for (const raw of ['Say "hi"', '"Quoted', 'Mixed \\"a\\" and "b"']) {
+    const cli = capturingCli({ liveName: raw });
+    const run = await runMain(update, cli);
+    assert.strictEqual(run.ok, true, raw);
+    assert.strictEqual(cli.calls[0].name, raw.replace(/\\"/g, '"'), raw);
+    assert.strictEqual(run.payload.warnings.length, 1, raw);
+    assert.match(run.payload.warnings[0], /has a double quote \(\"\) pac cannot store as it is, so the page now shows \\" there/, raw);
+  }
+
+  // Not knowing the name never blocks the update: it is reported, and pac is left to its default.
+  const unread = capturingCli({ liveNameError: 'Request failed: socket hang up' });
+  const u = await runMain(update, unread);
+  assert.strictEqual(u.ok, true);
+  assert.strictEqual(unread.calls[0].name, undefined);
+  assert.match(u.payload.warnings[0], new RegExp(`could not read page ${PID}'s current name \\(Request failed: socket hang up\\), so pac may have renamed it to its navigation title`));
+  const noMethod = capturingCli();
+  const plain = noMethod.factory;
+  noMethod.factory = () => { const f = plain(); delete f.pageName; return f; };
+  const m = await runMain(update, noMethod);
+  assert.strictEqual(m.ok, true);
+  assert.match(m.payload.warnings[0], /cannot read a page name/);
+  // A blank stored name has nothing to keep.
+  const blank = capturingCli({ liveName: '  ' });
+  const b = await runMain(update, blank);
+  assert.deepStrictEqual([b.ok, blank.calls[0].name, b.payload.warnings], [true, undefined, undefined]);
+
+  // A name pac cannot be handed here — a pac.cmd shim cannot receive `%` or `"` — is not sent: the update goes ahead
+  // as it did before names were kept (pac may rename the page to its title), and says so. Refusing it would block an
+  // ordinary content edit on the page's name.
+  for (const stored of ['Revenue 100%', 'Say \\"hi\\"']) {
+    const shim = capturingCli({ liveName: stored, shim: true });
+    const s = await runMain(update, shim);
+    assert.strictEqual(s.ok, true, stored);
+    assert.strictEqual(shim.calls[0].name, undefined, `${stored}: not sent`);
+    assert.strictEqual(s.payload.warnings.length, 1, stored);
+    assert.match(s.payload.warnings[0], /could not be sent to keep it \(cannot pass .* to pac\.cmd/, stored);
+    assert.match(s.payload.warnings[0], /pac may have renamed the page to its navigation title/, stored);
+  }
+  const shimPlain = capturingCli({ liveName: 'Renamed Alpha', shim: true });
+  const sp = await runMain(update, shimPlain);
+  assert.deepStrictEqual([sp.ok, shimPlain.calls[0].name, sp.payload.warnings], [true, 'Renamed Alpha', undefined], 'a name the shim can receive is still kept');
+
+  // A named update and a create read nothing: the caller's name is the one deployed.
+  const named = capturingCli({ liveName: 'Renamed Alpha' });
+  assert.strictEqual((await runMain([...update, '--name', 'New Title'], named)).ok, true);
+  assert.deepStrictEqual([named.nameReads.length, named.calls[0].name], [0, 'New Title']);
+  const created = capturingCli({ liveName: 'Renamed Alpha' });
+  const c = await runMain(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx', '--prompt', 'p', '--agent-message', 'm'], created);
+  assert.deepStrictEqual([c.ok, created.nameReads.length, created.calls[0].name], [true, 0, undefined]);
+});
+
+// The row is read over the Web API with the az token — pac cannot read it: its listing shows each page's navigation
+// title. The id goes into a key segment, so anything but a bare GUID is refused before a request is made.
+test('pageName() reads the page row\'s name, and refuses an id that is not a GUID', async () => {
+  const seen = [];
+  const request = async (env, method, apiPath) => {
+    seen.push([env, method, apiPath]);
+    if (apiPath.startsWith('uxagentprojects(0')) return { status: 404, data: { error: { message: 'Does Not Exist' } } };
+    if (apiPath.startsWith('uxagentprojects(1')) return { status: 200, data: {} };
+    return { status: 200, data: { name: 'Renamed Alpha' } };
+  };
+  const cli = makeGenpageCli('https://contoso.crm.dynamics.com', { request });
+  assert.strictEqual(await cli.pageName('9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'), 'Renamed Alpha');
+  assert.deepStrictEqual(seen[0], ['https://contoso.crm.dynamics.com', 'GET', 'uxagentprojects(9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d)?$select=name']);
+  assert.strictEqual(await cli.pageName('1f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'), null, 'a row without a name');
+  await assert.rejects(cli.pageName('0f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'), /name returned HTTP 404/);
+  for (const bad of ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d)?$select=name,prompt&x=(', ' 9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '', undefined]) {
+    await assert.rejects(cli.pageName(bad), /is not a page id/, String(bad));
+  }
+  assert.strictEqual(seen.length, 3, 'no request for an id that is not a GUID');
 });
 
 test('an unreadable current binding list refuses the update rather than unbinding the page', async () => {
@@ -718,6 +1005,7 @@ test('an unreadable current binding list refuses the update rather than unbindin
   let uploads = 0;
   const factory = () => ({
     enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
     download: async () => true, // writes nothing — the config is then missing
     upload: async () => { uploads += 1; return { pageId: 'x' }; },
   });
@@ -756,6 +1044,7 @@ test('a page whose config has no dataSources key updates normally (it simply has
   const seen = [];
   const factory = () => ({
     enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
     download: async ({ outputDir, pageIds }) => {
       for (const pid of (pageIds || [])) {
         fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
@@ -783,6 +1072,7 @@ test('a config that is PRESENT but unparseable refuses the update', async () => 
     let uploads = 0;
     const factory = () => ({
       enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+      enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
       download: async ({ outputDir, pageIds }) => {
         for (const pid of (pageIds || [])) {
           fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
@@ -815,6 +1105,7 @@ test('the current bindings are found even when --page-id casing differs from pac
   const seen = [];
   const factory = () => ({
     enumerateEnvironment: async () => ({ ok: true, ids: [canonical] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: canonical, name: 'Current Page' }] }),
     download: async ({ outputDir }) => {
       // pac writes the directory in ITS casing, not the caller's.
       fs.mkdirSync(path.join(outputDir, canonical), { recursive: true });
@@ -854,6 +1145,7 @@ test('--clear-data-sources combined with --data-sources is refused, not silently
   let uploads = 0;
   const factory = () => ({
     enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
     upload: async () => { uploads += 1; return { pageId: 'x' }; },
   });
   const r = await new Promise((resolve) => {
@@ -874,6 +1166,7 @@ test('a dataSources value of the wrong type refuses the update, rather than unbi
     let uploads = 0;
     const factory = () => ({
       enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+      enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
       download: async ({ outputDir, pageIds }) => {
         for (const pid of (pageIds || [])) {
           fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
@@ -902,6 +1195,7 @@ test('the probe directory is removed even when the read fails', async () => {
   const probes = [];
   const factory = () => ({
     enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
     download: async ({ outputDir }) => { probes.push(outputDir); return true; }, // writes no config
     upload: async () => ({ pageId: 'x' }),
   });
@@ -984,4 +1278,208 @@ test('a BOM is still stripped even though the rest of the file is passed through
     { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
   });
   assert.strictEqual(onDisk, 'keep this\n', 'the BOM goes, the trailing newline stays');
+});
+
+// --- Task D: an update must target a page placed in the supplied app -----------------------------
+
+test('an update refuses a page that exists but is not in the supplied app navigation, without probing or uploading', async () => {
+  let downloads = 0;
+  let uploads = 0;
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', name: 'Other Page' }] }),
+    download: async () => { downloads += 1; return true; },
+    upload: async () => { uploads += 1; return { pageId: 'x' }; },
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'app-a', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /page 9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d is not in app app-a's navigation/);
+  assert.match(r.payload.error, /would rename it and attach its tables to that app/);
+  assert.strictEqual(downloads, 0, 'membership refusal must happen before the data-source probe');
+  assert.strictEqual(uploads, 0, 'membership refusal must happen before upload');
+});
+
+test('an update refuses an app that lists no generative pages, without probing or uploading', async () => {
+  let downloads = 0;
+  let uploads = 0;
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: true, pages: [], empty: true }),
+    download: async () => { downloads += 1; return true; },
+    upload: async () => { uploads += 1; return { pageId: 'x' }; },
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'missing-app', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /app missing-app has no generative pages, or could not be found/);
+  assert.strictEqual(downloads, 0);
+  assert.strictEqual(uploads, 0);
+});
+
+test('an update refuses when the app-scoped page listing cannot be read', async () => {
+  let downloads = 0;
+  let uploads = 0;
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: false, error: 'pac list failed' }),
+    download: async () => { downloads += 1; return true; },
+    upload: async () => { uploads += 1; return { pageId: 'x' }; },
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'app-a', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /cannot verify that page 9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d belongs to app app-a \(pac list failed\)/);
+  assert.strictEqual(downloads, 0);
+  assert.strictEqual(uploads, 0);
+});
+
+test('an update whose page is a member of the supplied app proceeds, case-insensitively', async () => {
+  const canonical = '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d';
+  const seen = [];
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: [canonical] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: canonical.toUpperCase(), name: 'Current Page' }] }),
+    download: async ({ outputDir }) => {
+      fs.mkdirSync(path.join(outputDir, canonical), { recursive: true });
+      fs.writeFileSync(path.join(outputDir, canonical, 'config.json'), JSON.stringify({ dataSources: ['contoso_ticket'] }));
+      return true;
+    },
+    upload: async (o) => { seen.push(o); return { pageId: o.pageId }; },
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'app-a', '--code-file', 'c.tsx',
+      '--page-id', canonical.toUpperCase(), '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(seen.length, 1);
+  assert.deepStrictEqual(seen[0].dataSources, ['contoso_ticket']);
+});
+
+test('a wrapper exposing no app-scoped enumeratePages is refused for updates', async () => {
+  let uploads = 0;
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    upload: async () => { uploads += 1; return { pageId: 'x' }; },
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'app-a', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /exposes no app-scoped page listing/);
+  assert.strictEqual(uploads, 0);
+});
+
+// Each listing is its own pac process of about five seconds, so an update runs the existence and
+// membership listings together. The overlap must not change what the guard DECIDES: verdicts are
+// still reached existence-first, so each failure is reported exactly as it was when the listings
+// ran one after the other.
+const OVERLAP_PAGE = '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d';
+function updateWith(factory) {
+  return new Promise((resolve, reject) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'app-a', '--code-file', 'c.tsx',
+      '--page-id', OVERLAP_PAGE, '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) }).catch(reject);
+  });
+}
+
+test('an update starts its existence and membership listings together', async () => {
+  const started = [];
+  const release = new Map();
+  const held = (name, value) => new Promise((resolve) => {
+    started.push(name);
+    release.set(name, () => resolve(value));
+  });
+  const base = capturingCli().factory();
+  const factory = () => ({
+    ...base,
+    enumerateEnvironment: () => held('existence', { ok: true, ids: [OVERLAP_PAGE] }),
+    enumeratePages: () => held('membership', { ok: true, pages: [{ pageId: OVERLAP_PAGE, name: 'Current Page' }] }),
+  });
+  const done = updateWith(factory);
+  // Neither listing has answered yet, so a guard that awaited them in turn would still be on the first.
+  const deadline = Date.now() + 2000;
+  while (started.length < 2 && Date.now() < deadline) await new Promise((r) => setImmediate(r));
+  assert.deepStrictEqual([...started].sort(), ['existence', 'membership'],
+    'both listings must be in flight before either answers');
+  // Membership answers FIRST: which listing finishes first must not matter.
+  release.get('membership')();
+  release.get('existence')();
+  const r = await done;
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(r.payload.updated, true);
+});
+
+test('when both update listings fail, the existence failure is the one reported', async () => {
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: false, error: 'EXISTENCE-LISTING-DOWN' }),
+    enumeratePages: async () => ({ ok: false, error: 'MEMBERSHIP-LISTING-DOWN' }),
+    upload: async () => { throw new Error('must not upload'); },
+  });
+  const r = await updateWith(factory);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /cannot verify that page \S+ exists before updating it \(EXISTENCE-LISTING-DOWN\)/);
+  assert.doesNotMatch(r.payload.error, /MEMBERSHIP-LISTING-DOWN/);
+});
+
+// Running the membership listing early must not let ITS failure pre-empt the existence verdict. A
+// listing that throws surfaces only once the guard reaches its verdict, as it did when it ran second.
+test('a listing that throws surfaces only when the guard reaches its verdict', async () => {
+  const absent = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: ['aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'] }),
+    enumeratePages: async () => { throw new Error('MEMBERSHIP-THREW'); },
+    upload: async () => { throw new Error('must not upload'); },
+  });
+  const r = await updateWith(absent);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /does not exist in this environment/);
+
+  const present = () => ({ ...absent(), enumerateEnvironment: async () => ({ ok: true, ids: [OVERLAP_PAGE] }) });
+  await assert.rejects(updateWith(present), /MEMBERSHIP-THREW/);
+
+  const existenceThrows = () => ({
+    ...absent(),
+    enumerateEnvironment: async () => { throw new Error('EXISTENCE-THREW'); },
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: OVERLAP_PAGE, name: 'Current Page' }] }),
+  });
+  await assert.rejects(updateWith(existenceThrows), /EXISTENCE-THREW/);
+});
+
+test('preserved data-source bindings must be non-empty strings', async () => {
+  for (const dataSources of [[null], [{}], [18], ['contoso_ticket', '']]) {
+    let uploads = 0;
+    const factory = () => ({
+      enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+      enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
+      download: async ({ outputDir, pageIds }) => {
+        for (const pid of pageIds) {
+          fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
+          fs.writeFileSync(path.join(outputDir, pid, 'config.json'), JSON.stringify({ dataSources }));
+        }
+        return true;
+      },
+      upload: async () => { uploads += 1; return { pageId: 'x' }; },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    const r = await new Promise((resolve) => {
+      main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'app-a', '--code-file', 'c.tsx',
+        '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+      { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+    });
+    assert.strictEqual(r.ok, false, `must refuse ${JSON.stringify(dataSources)}`);
+    assert.match(r.payload.error, /cannot read the current data-source bindings/);
+    assert.strictEqual(uploads, 0, `must not upload ${JSON.stringify(dataSources)}`);
+  }
 });

@@ -1,9 +1,8 @@
 ---
 name: genpage-connector-builder
 description: >-
-  Owns ALL GenPage connector work: it is the single owner of the connectors
-  rollback gate, performs connector discovery (connections, connection
-  references, datasets, tables, operations, and schema), creates Dataverse
+  Owns ALL GenPage connector work: performs connector discovery (connections,
+  connection references, datasets, tables, operations, and schema), creates Dataverse
   connection references when needed, and produces the ## Connector Bindings
   contract. Invoked only by the top-level genpage orchestrator from BOTH the
   create and edit flows; never invoked by planners or directly by users.
@@ -51,9 +50,9 @@ not repeat the reads. Full contract: `references/agent-interaction-contract.md`.
 # Genpage Connector Builder
 
 You are the connector specialist for generative pages. You are the **single
-owner** of connector discovery, connection-reference creation, and the feature
-gate. Planners must not invoke you directly; nested `Task` calls cannot safely host
-your user-facing connector selection prompts.
+owner** of connector discovery and connection-reference creation. Planners must
+not invoke you directly; nested `Task` calls cannot safely host your user-facing
+connector selection prompts.
 
 Your discovery is **mutating** (it can create a connection reference), and a
 reference created in the wrong environment or the wrong mode cannot be undone. So
@@ -106,33 +105,7 @@ forward the entire `connector-bindings.md` body and the `connectors.json` path (
 Log every command you run (with its purpose) into the working directory's
 `workflow-log.md`.
 
-## Step 1 — Rollback gate (you own it; run it FIRST, always)
-
-Probe the flag before ANY discovery, for both create and edit:
-
-```powershell
-node "${PLUGIN_ROOT}/scripts/lib/feature-flags.js" connectors
-```
-
-Record the result in `workflow-log.md` (e.g. `feature-flags.js connectors → enabled`).
-
-Connectors are **GA and the flag ships ON**, so this normally prints `enabled` and you
-continue to Step 2. The gate is retained for one release as a rollback switch, so handle
-the off case:
-
-**If it prints `disabled` (exit 1)** — connector support has been explicitly turned off
-(`GENPAGE_ENABLE_CONNECTORS=0`, or `"connectors": false` in `feature-flags.json`):
-
-- Do **not** run `list-connections.js` or any other connector discovery.
-- **create:** write `connector-bindings.md` containing exactly
-  `No connector bindings.` and `connectors.json` containing `[]`. Return
-  `connectors disabled — no bindings`.
-- **edit:** you must **not add or discover** new bindings. **Preserve** the existing
-  bindings passed to you: write them unchanged to `connectors.json` (bare array) and
-  reproduce them in `connector-bindings.md`. Return
-  `connectors disabled — existing bindings preserved, none added`.
-
-## Step 2 — Connection discovery (enabled only)
+## Step 1 — Connection discovery
 
 If the intent implies a non-Dataverse source (SharePoint, Teams, weather, Office
 365, SQL via connector, a custom REST connector, …), enumerate what exists:
@@ -146,6 +119,11 @@ The script returns `connections` sorted with `readyToBind: true` first and
 is actually bound to that connection (its `connectionId` matches) — prefer those.
 Offer ready-to-bind choices first in a `needs_input` request, showing the
 connectionreference logical name, connector id, and connection display name.
+
+If the script fails (`ok: false`), discovery did not happen — it refuses PAC output
+it cannot read rather than report it as "no connections". Do **not** treat that as
+"no suitable connection exists" below, and never create a connection on it: return
+`needs_input` with the script's error.
 
 After selecting any existing connection — before branching into tabular versus
 REST/action discovery — derive `connectorName` from the final path segment of

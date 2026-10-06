@@ -70,10 +70,13 @@ function harness({ argv, refLookup = defaultLookup }) {
 }
 
 const ENV = 'https://contoso.crm.dynamics.com';
+const APP = '11111111-1111-4111-8111-111111111111';
+const P1 = '22222222-2222-4222-8222-222222222222';
+const P2 = '33333333-3333-4333-8333-333333333333';
 
 test('packages appmodule, each page, and each connection reference with the right component types', async () => {
   const { cli, calls, emitted } = harness({
-    argv: [ENV, 'sol', 'app-1', '--page-ids', 'p1,p2', '--connection-refs', 'new_sp'],
+    argv: [ENV, 'sol', APP, '--page-ids', `${P1},${P2}`, '--connection-refs', 'new_sp'],
   });
 
   await cli.main();
@@ -82,11 +85,11 @@ test('packages appmodule, each page, and each connection reference with the righ
   // appmodule (80) with AddRequiredComponents=true pulls the sitemap + appmodulecomponent.
   assert.deepEqual(
     { ComponentId: adds[0].body.ComponentId, ComponentType: adds[0].body.ComponentType, AddRequiredComponents: adds[0].body.AddRequiredComponents },
-    { ComponentId: 'app-1', ComponentType: 80, AddRequiredComponents: true }
+    { ComponentId: APP, ComponentType: 80, AddRequiredComponents: true }
   );
   // Each GenPage is added EXPLICITLY as uxagentproject (10372) — it does not travel with the app.
   assert.deepEqual(adds.slice(1, 3).map((c) => [c.body.ComponentId, c.body.ComponentType, c.body.AddRequiredComponents]),
-    [['p1', 10372, true], ['p2', 10372, true]]);
+    [[P1, 10372, true], [P2, 10372, true]]);
   // The connection reference resolves by logical name, then is added as 10158 WITHOUT required
   // components (371 is msdyn_Connector and fails with a MetadataCache error).
   assert.deepEqual([adds[3].body.ComponentId, adds[3].body.ComponentType, adds[3].body.AddRequiredComponents],
@@ -98,7 +101,7 @@ test('packages appmodule, each page, and each connection reference with the righ
 
 test('discovers environment-specific component types for GenPages and connection references', async () => {
   const { cli, calls } = harness({
-    argv: [ENV, 'sol', 'app-1', '--page-ids', 'p1', '--connection-refs', 'new_sp'],
+    argv: [ENV, 'sol', APP, '--page-ids', P1, '--connection-refs', 'new_sp'],
     refLookup: (requestPath) => {
       if (requestPath.includes("EntityDefinitions(LogicalName='uxagentproject')")) {
         return { status: 200, data: { ObjectTypeCode: 10380 } };
@@ -120,7 +123,7 @@ test('discovers environment-specific component types for GenPages and connection
 test('the appmodule is packaged BEFORE any page or connection reference', async () => {
   // Order is load-bearing: adding a uxagentproject to a solution the app is not yet in produces a
   // solution whose page has no owning app.
-  const { cli, calls } = harness({ argv: [ENV, 'sol', 'app-1', '--page-ids', 'p1', '--connection-refs', 'new_sp'] });
+  const { cli, calls } = harness({ argv: [ENV, 'sol', APP, '--page-ids', P1, '--connection-refs', 'new_sp'] });
   await cli.main();
   const types = calls.filter((c) => c.path === 'AddSolutionComponent').map((c) => c.body.ComponentType);
   assert.equal(types[0], 80, 'appmodule must be first');
@@ -129,7 +132,7 @@ test('the appmodule is packaged BEFORE any page or connection reference', async 
 
 test('a connection reference that does not exist fails the run instead of packaging a partial solution', async () => {
   const { cli, calls, emitted } = harness({
-    argv: [ENV, 'sol', 'app-1', '--connection-refs', 'new_missing'],
+    argv: [ENV, 'sol', APP, '--connection-refs', 'new_missing'],
     refLookup: (requestPath) =>
       requestPath.includes("EntityDefinitions(LogicalName='connectionreference')")
         ? { status: 200, data: { ObjectTypeCode: 10158 } }
@@ -147,7 +150,7 @@ test('a connection reference that does not exist fails the run instead of packag
 
 test('all requested connection references are validated before adding the app or pages', async () => {
   const { cli, calls, emitted } = harness({
-    argv: [ENV, 'sol', 'app-1', '--page-ids', 'p1,p2', '--connection-refs', 'new_missing'],
+    argv: [ENV, 'sol', APP, '--page-ids', `${P1},${P2}`, '--connection-refs', 'new_missing'],
     refLookup: (requestPath) => {
       if (requestPath.includes("EntityDefinitions(LogicalName='uxagentproject')")) {
         return { status: 200, data: { ObjectTypeCode: 10372 } };
@@ -171,7 +174,7 @@ test('all requested connection references are validated before adding the app or
 test('a connection reference logical name with a quote is OData-escaped, not injected', async () => {
   const seen = [];
   const { cli } = harness({
-    argv: [ENV, 'sol', 'app-1', '--connection-refs', "new_o'brien"],
+    argv: [ENV, 'sol', APP, '--connection-refs', "new_o'brien"],
     refLookup: (p) => {
       if (p.includes("EntityDefinitions(LogicalName='connectionreference')")) {
         return { status: 200, data: { ObjectTypeCode: 10158 } };
@@ -187,7 +190,7 @@ test('a connection reference logical name with a quote is OData-escaped, not inj
 });
 
 test('no --connection-refs packages the app and pages only', async () => {
-  const { cli, calls, emitted } = harness({ argv: [ENV, 'sol', 'app-1', '--page-ids', 'p1'] });
+  const { cli, calls, emitted } = harness({ argv: [ENV, 'sol', APP, '--page-ids', P1] });
   await cli.main();
   assert.equal(calls.filter((c) => c.method === 'GET').length, 1, 'only the page component-type lookup runs');
   assert.deepEqual(emitted[0].payload.added.map((a) => a.type), ['appmodule', 'uxagentproject']);
@@ -214,7 +217,7 @@ test('a failing AddSolutionComponent surfaces as a failure, not a silent partial
   };
   const cli = loadCli(scriptPath, {
     requires: { './lib/dataverse-auth': authStub },
-    argv: [ENV, 'sol', 'app-1', '--page-ids', 'p1'],
+    argv: [ENV, 'sol', APP, '--page-ids', P1],
   });
   await cli.main();
   assert.equal(emitted[0].ok, false, 'a mid-sequence failure must not report ok:true');
@@ -225,36 +228,32 @@ test('a failing AddSolutionComponent surfaces as a failure, not a silent partial
   );
 });
 
-test('--connection-refs while the rollback switch is off exits 3 before any mutation', () => {
-  // The gate's whole purpose: refuse BEFORE the first AddSolutionComponent, so a refused run
-  // leaves the solution untouched rather than half-packaged (app + pages added, refs missing).
-  // Dropping the refs while still reporting ok:true is what made this silently lossy before —
-  // the solution then imports with unbound connectors.
-  const res = spawnSync(
-    process.execPath,
-    [scriptPath, 'https://contoso.crm.dynamics.com', 'sol', 'app-1', '--connection-refs', 'new_a'],
-    { encoding: 'utf8', env: { ...process.env, GENPAGE_ENABLE_CONNECTORS: '0' } }
-  );
-  assert.equal(res.status, 3, 'exit 3 = feature off (distinct from 1 = usage/runtime error)');
-  assert.match(res.stderr, /Connector support is disabled/);
-  assert.doesNotMatch(res.stdout || '', /"ok":\s*true/, 'must not report success');
+// Ids are checked as GUIDs before ANYTHING is read or written. A malformed page id used to reach
+// Dataverse only at its own AddSolutionComponent — after the app had been added — leaving the solution
+// holding the app without its page.
+test('a malformed page or app id refuses the run before any request', async () => {
+  for (const [argv, named] of [
+    [[ENV, 'sol', APP, '--page-ids', `${P1},not-a-guid`], /page id 'not-a-guid'/],
+    [[ENV, 'sol', 'app-1', '--page-ids', P1], /app id 'app-1'/],
+    [[ENV, 'sol', APP, '--page-ids', `{${P1}}`], /page id '\{/],
+  ]) {
+    const { cli, calls, emitted } = harness({ argv });
+    await cli.main();
+    assert.equal(emitted.length, 1);
+    assert.equal(emitted[0].ok, false);
+    assert.match(emitted[0].payload.message, named);
+    assert.match(emitted[0].payload.message, /Nothing was added to sol/);
+    assert.deepEqual(calls, [], 'no metadata read and no AddSolutionComponent');
+  }
 });
 
-test('packaging WITHOUT --connection-refs is not gated by the rollback switch', () => {
-  // Only an explicit connector request is refused; ordinary page packaging must still work.
-  // Reaching a Dataverse/auth failure (not exit 3) proves the gate did not fire.
-  const res = spawnSync(
-    process.execPath,
-    [scriptPath, 'https://example.invalid', 'sol', 'app-1', '--page-ids', 'p1'],
-    { encoding: 'utf8', env: { ...process.env, GENPAGE_ENABLE_CONNECTORS: '0' } }
-  );
-  assert.notEqual(res.status, 3, 'the gate must not fire without --connection-refs');
-});
-
-test('connectionRefsToAdd drops refs only when the switch is off', () => {
-  const { connectionRefsToAdd } = require(scriptPath);
-  assert.deepEqual(connectionRefsToAdd(['new_a', 'new_b'], true), ['new_a', 'new_b']);
-  assert.deepEqual(connectionRefsToAdd(['new_a', 'new_b'], false), []);
+test('a page id or connection reference given twice is added once', async () => {
+  const { cli, calls, emitted } = harness({ argv: [ENV, 'sol', APP, '--page-ids', `${P1},${P1.toUpperCase()},${P2}`, '--connection-refs', 'new_sp,NEW_SP'] });
+  await cli.main();
+  const adds = calls.filter((c) => c.path === 'AddSolutionComponent').map((c) => [c.body.ComponentType, c.body.ComponentId]);
+  assert.deepEqual(adds, [[80, APP], [10372, P1], [10372, P2], [10158, 'cr-1']]);
+  assert.equal(calls.filter((c) => c.method === 'GET' && /connectionreferences\?/.test(c.path)).length, 1, 'one lookup per reference');
+  assert.equal(emitted[0].ok, true);
 });
 
 test('the stable app component type and dynamic entity names are pinned', () => {
@@ -262,10 +261,8 @@ test('the stable app component type and dynamic entity names are pinned', () => 
     APPMODULE_COMPONENT_TYPE,
     UXAGENTPROJECT_LOGICAL_NAME,
     CONNECTION_REFERENCE_LOGICAL_NAME,
-    escapeODataString,
   } = require(scriptPath);
   assert.equal(APPMODULE_COMPONENT_TYPE, 80);
   assert.equal(UXAGENTPROJECT_LOGICAL_NAME, 'uxagentproject');
   assert.equal(CONNECTION_REFERENCE_LOGICAL_NAME, 'connectionreference');
-  assert.equal(escapeODataString("a'b'c"), "a''b''c");
 });

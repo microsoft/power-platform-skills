@@ -24,10 +24,11 @@ neither leaves state the other depends on**. Keep it that way — shared **agent
 fine, a skill-to-skill call is not, and neither may write a file the other treats as authoritative
 (this is why `write-page-plan.js` emits `app-builder-page-plan.md`, not `genpage-plan.md`).
 
-Plus **`/report-issue`** to file bugs against this repo. All Dataverse mutation flows through the
-shared, vendored SDK (`scripts/vendor/cds-maker-sdk.cjs`) — see `## Building & Testing`.
+Plus **`/report-issue`** to file bugs against this repo. Dataverse mutation flows through the
+shared, vendored SDK (`scripts/vendor/cds-maker-sdk.cjs`) — see `## Building & Testing` — except for
+the few surfaces it does not model, which use `dataverseRequest()` (see `## Dataverse Access From
+Scripts`).
 
-**Requirements:**
 **Requirements:**
 - **PAC CLI > 2.10.0** — for app and generative-page deploy operations (incl. the genpage `upload` connector/Custom API flags)
 - **Azure CLI (`az`)** — Dataverse Web API auth (SDK + entity builder); must be logged in with the
@@ -139,7 +140,39 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `updateElement('/siteMap')`, a dashboard tile is `addElement('/components')`. Form reconcile adds the
   spec's fields and — for an author-controlled **explicit** layout — prunes fields it dropped (never the
   primary) via `findFieldCellPointer`+`removeElement`, keyed by a declared semantic identity so a rebuild
-  never duplicates a control. Every push routes through `requireSuccessfulPush` (a 412 version conflict
+  never duplicates a control. A row that a pruned or moved cell leaves holding nothing is removed too
+  (`strandedRows` in `lib/form-occupancy.js`, shared by the prune pass and both move paths). A row that
+  a row-spanning cell above still reserves is kept, and so is a row that was already empty.
+  **Which form a table opens with** (AB#6736948, `lib/form-order.js`) is decided by the table's Main
+  Form Set order — each Main form's formxml `<DisplayConditions Order>` — not by `systemform.isdefault`
+  (measured: moving the flag reorders nothing, and a table's three new forms, all at the same order,
+  were served with the `isdefault` form last). After every form exists, the forms phase promotes the default (an explicit
+  `isDefault` or `entities[].mainFormOrder[0]` on any table; the first Main form only on a table the
+  spec owns) and then writes Order 0..n-1 onto the spec's Main forms, the ones it does not list keeping
+  their stored relative order. On a table it orders nothing on, a Main form it creates is created after the
+  table's others: its order is written into the new form's own `<DisplayConditions>` before the first
+  push (`createInPlace`), so no interrupted run or later failure can leave it at the Order 0 every new
+  form gets — a later build could not tell it is new. Only declared forms are written, order-only through `setFormSecurityRoles` so roles
+  survive; a table ordered by hand (`securityRoles.order`) is left alone; the step is best-effort (✗ and
+  a warning, never a halt). Verify checks the stored order (`form-order`) and what the public
+  `RetrieveFilteredForms` serves the user running it (`form-order-served`). On `build --apply`, the destructive preflight writes `.maker-workspace/destructive-approval.json`
+  when it refuses form-field or sitemap removals, and also when an approved destructive run starts so
+  retries and later failures stay bound to that gate-time list — an empty list included, when the run
+  includes the removal phases. A later `--allow-destructive` run may
+  remove only that recorded set; the record is consumed only after a successful run that included both
+  removal phases (`forms` and `app-shell`) and kept no field, and is otherwise kept on failure, partial
+  runs, changed-only runs, or when the fence kept a field. An approved run consumes or rewrites only a record it
+  found at its start or wrote itself (each record carries its run id, compared by content fingerprint),
+  checked and changed under the workspace lease the apply snapshot uses, so two builds sharing a
+  workspace cannot consume each other's record. A refusal still replaces the record with the list it
+  just showed, because that is the list the maker is looking at, and a halt naming new removals refreshes
+  it with the full current list (the halt shows only the new ones). An approved
+  run halts before any write if the record
+  changed after it was read, or if the lease stays held. The gate fails closed if the record is
+  unreadable or if discovery fails while a record exists, because live removals cannot be compared with
+  the approved list. If live state contains a new removal, the build halts, lists only that new removal,
+  refreshes the record, and the engine keeps any field or sitemap target that appears during the run
+  rather than pruning beyond the preflight-approved set. Every push routes through `requireSuccessfulPush` (a 412 version conflict
   halts the build for a fresh download instead of silently dropping the edit) — so new, existing, and mixed
   envs all work. The data model is **complete** (all column types, global choices, status reasons,
   alternate keys, N:N). It also builds **quick-create/quick-view forms** (`formType`) with **quick-view
@@ -201,6 +234,12 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   default; `--apply` writes, `--sample-data` / `--publish` opt-in (`--publish` gates the final *bulk*
   publish; edit/finalize paths — reconciling an existing form/view, form events, quick-views,
   existing-app sitemap, page finalize — still publish their one artifact so the change takes effect).
+  The bulk publish is ONE `PublishXml` envelope (`publishArtifacts`) for every table and the app, and
+  with `--publish` the default-view enrichment defers its own publish to it. A build that halts before
+  it hands what is still owed to the CLI, which keeps each attempt's debt across transient retries until
+  a publish phase pays it, and settles the rest per target once no retry follows (`settleOwedPublishes`)
+  — so a halted build leaves those views live, as it did before the batching. A default-view push
+  refused by a concurrent edit fails the enrichment step, as any refused push does.
   **The modern ("new look") shell is opt-in via `app.newLook`.** It is a per-app SETTING
   (`NewLookAlwaysOn`, written through the SDK's `saveSettingValue` scoped to app + solution), NOT an
   app-module column — `navigationtype` is Single/Multi *session* and unrelated, which is the reason
@@ -209,16 +248,48 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   a silent success.
   **`app.aiDescription` (the routing description) is written only when the spec sets it** — at create,
   and on an existing app when it differs from the fetched draft, riding that run's app push. The
-  platform may author this text itself, so an omitted field is never written or blanked. A 412 on the
-  appmodule row over an UNPUBLISHED header change (componentstate 1, proven by a draft read) halts with
+  platform may author this text itself, so an omitted field is never written or blanked. A
+  never-published app refuses the write (`APP_DRAFT_HEADER_NOT_WRITABLE`), which halts with
   `app-header-unpublished` — publish, then re-run — after resetting the workspace copy, which a plain
-  re-fetch would otherwise refuse to replace (`LOCAL_EDITS_WOULD_BE_LOST`). A 412 on the sitemap is a
-  concurrent edit even then (the push writes the header first, so its own write left that layer). Any
+  re-fetch would otherwise refuse to replace (`LOCAL_EDITS_WOULD_BE_LOST`). An app with an UNPUBLISHED
+  header change takes it: the vendored SDK conditions the header write on the appmodule's row token, so
+  the push saves and keeps that change (live-verified). A 412 is a concurrent edit, on the appmodule
+  row as on the sitemap, and is never re-explained as "publish first". Any
   other failed push that carried the change resets the copy too — except a concurrent edit
   (`VERSION_CONFLICT` / a code-less 412), where the unrecorded copy is what stops a blind re-run — and
   without the pages phase the change is applied only after the live-page gate, so a gate halt leaves
   nothing behind; a page-backed app's standalone header push refuses a copy still holding an earlier
   run's unpushed edits (`app-copy-unpushed-edits`) rather than replay them.
+  **An existing app's sitemap is rewritten ONTO its live nodes (AB#6726727).** The App Spec describes a
+  node's label/title, target and icons only, and the SDK serializes a node without its fetched `bag` from
+  scratch (new `Id`, `ResourceId="SitemapDesigner.NewSubArea"`, broad `Client`/`Sku`,
+  `AvailableOffline="true"`). Both existing-app writers (the app-shell write and the pages finalizer)
+  therefore pass appDef's tree through `adoptLiveSitemap` (`scripts/lib/sitemap-merge.js`) first: a
+  subarea corresponds by navigation target (a URL keeps the case of its path and query), an area or
+  group by a label its level uses once, then by the navigation entries it holds, then by the id an
+  earlier build gave it (a node none of these identifies is written as new rather than guessed); the
+  live `id` and `bag` are kept, and only
+  what the spec sets is overlaid — chrome it does not name is still removed, as before. Because the SDK
+  only patches an existing `<Titles>` on a node with a bag, and reads an empty title as "no edit", a
+  title added to an entry that had none, or removed from one, is reconciled in the adopted bag at the
+  SDK's language (other languages' titles are kept). Every dashboard entry carries exactly
+  `Url="/workplace/home_dashboards.aspx"` — the designer writes it on every dashboard entry and
+  recognizes one only by the whole Url, and the runtime keys the dashboard glyph on it with a
+  case-sensitive match — and verify fails an entry without it (`subarea-dashboard-launcher`, which
+  reads only real nav entries — a `SubArea` directly under `SiteMap/Area/Group`, never one in a comment
+  or elsewhere — as the kept-icon check below does). With a
+  **baseline** — `.maker-workspace/last-applied.json`, written atomically by a successful apply and
+  by download, stamped with its environment and app (`scripts/lib/deployed-baseline.js`) — a nav entry's
+  title/icon that the spec has not changed since, but the designer has, is kept and reported rather
+  than reverted (`keepsLiveValue`); without one the spec wins and every change to an existing entry is
+  reported. Baseline entries are lined up with live ones by the ids the baseline RECORDED for its
+  environment (`__deployedIds`: what the apply resolved, or what the download read), never by the
+  spec's own `dashboardId`/`pageId`, which may be another environment's. Verify accepts a kept icon by
+  the same rule and identities, and only on a live entry that exists. A downloaded dashboard carries
+  `dashboards[].dashboardId`, which build, verify and teardown resolve before the name
+  (`findPinnedDashboard`) — when it resolves it is the only candidate, and teardown still requires
+  solution membership — so a dashboard renamed in the designer is reused, with a warning since a build
+  never renames one, instead of a second being created under the stale name.
   **DATA-MODEL Dataverse labels are stamped with the ORGANIZATION's base language, not a hardcoded
   1033.** `resolveLanguageCode` (`scripts/lib/entity-provision.js`) reads `organization.languagecode`
   once per build and threads it into every label-emitting SDK call in that phase (tables, columns,
@@ -339,7 +410,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   **icon** web resource is referenced by the table itself, so Dataverse refuses to delete it until the table
   is gone (form JS, referenced by its already-deleted form, is safe either way). Teardown also removes the
   build's **generated default app icon** (`<appUnique>_icon`, created in-solution when the spec sets no
-  `app.icon`) so it doesn't leak as an orphan. **An app is TWO rows** — an `appmodule` AND a `sitemaps`
+  `app.icon`) so it doesn't leak as an orphan. It keeps the **page manifest** while the generative-pages
+  step fails (a failed manifest or page read fails that step too), so a re-run still finds the pages the
+  app authored. **An app is TWO rows** — an `appmodule` AND a `sitemaps`
   row, with no lookup between them and no server-side cascade; the only link is
   `sitemap.sitemapnameunique === appmodule.uniquename`. Deleting only the appmodule strands the sitemap
   forever and, because `sitemapnameunique` is unique-constrained, permanently **burns that unique name**:
@@ -352,8 +425,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   412 every time). This is why
   **`scripts/lib/sdk-http-client.js` must implement `postRaw`**: the SDK will not fall back to two
   sequential deletes, so a transport without it fails every teardown with `APP_DELETE_NOT_ATOMIC` (see
-  that file for the wire contract, why a `$batch` is never retried, and why a conditional write that
-  gets no answer is never re-sent). Pinned by
+  that file for the wire contract, why a `$batch` is sent once unless its answer proves nothing in it
+  ran — a SQL deadlock or a 429 — and why a conditional write that gets no answer is never re-sent).
+  Pinned by
   `scripts/tests/app-delete-real-bundle.test.js` against the real bundle — every other teardown test
   drives a mock and would stay green through a regression here.
   The empty solution container goes last — but a **built-in
@@ -377,7 +451,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
 - **`scripts/download-model-app.js` → `scripts/lib/hydrate-spec.js`** — the **edit flow**: pulls a
   *deployed* app back into an editable App Spec + page code (sitemap → `appShell` with icons, **every**
   generative page via `pac model genpage download`, referenced entities/tables, icon web resources,
-  dashboards, solution).
+  dashboards, solution). It reads through a throwaway SDK workspace, never the folder's
+  `.maker-workspace` — a copy an interrupted build left there made the download fail, or describe edits
+  that were never deployed — and writes only the baseline (`last-applied.json`) into it.
   **Round-trip scope (be precise — do not claim "complete"):** tables, sitemap/appShell, generative pages,
   classic dashboards, icons, and solution round-trip; **forms, views, charts, and commands do NOT yet
   round-trip.** (View hydration was tried and reverted — LIVE-verified that the deployed savedquery set
@@ -479,8 +555,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   against what actually deployed; exits non-zero and lists anything missing, catching silent partial
   builds. Checks **existence** (entities/columns/views/charts/forms + sitemap subareas + icons + pages by
   id) AND, best-effort, **content** so an *unapplied edit* is caught (not just a missing artifact): a
-  view's **column set** (parsed from `layoutxml` — the additive `reconcileView` won't drop a removed spec
-  column, so this flags it), plus **relationship** and **command-bar existence** (previously unchecked).
+  view's **column set** (parsed from `layoutxml`; every spec column must be deployed — an extra deployed
+  column passes by design, so a column REMOVED from the spec, which the additive `reconcileView` leaves
+  in place, is not flagged), plus **relationship** and **command-bar existence** (previously unchecked).
   Content checks are additive + reader-gated (they only fire when the reader supplies `layoutxml` /
   `entityRelationships` / `commandBar`), so existence-only callers are unaffected. **Dashboards** are
   checked too (#586): each declared dashboard must exist. A name can also match another app's
@@ -513,8 +590,10 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   and the exact admin action needed (Power Platform Admin Center → Environments → Settings → Product →
   Features) for anything off. Never fails. The `ai-features` build phase calls this logic internally and
   uses `RetrieveSetting`/`SaveSettingValue` (SDK) for app-level feature flags and `AIModelPublish` +
-  `aiskillconfigs` for per-table row summaries. Feature values are `true`/`false` (the numeric settings'
-  1/0) or an explicit integer such as `2` ("on for everyone"), bounded to `0..1000000` — the same range
+  `aiskillconfigs` for per-table row summaries. Feature values are `true`/`false` — encoded by the
+  plugin to each setting's own On/Off value (On is `2` everywhere; Off is `1`, but `0` for `nlChart`;
+  `AI_SETTING_CODEC` in `lib/ai-app-settings.js`, AB#6714731) before the SDK sees them — or an explicit
+  integer written verbatim, bounded to `0..1000000` — the same range
   the SDK enforces, so validation rejects an out-of-range value up front instead of aborting the build
   half-applied. The SDK **proves every write** against the app-scope override row, retrying with backoff
   (an immediate read can still return the environment fallback, which previously produced a false
@@ -609,7 +688,7 @@ AGENTS.md                      ← Plugin guidance for AI agents (this file)
 CLAUDE.md                      ← Symlink → AGENTS.md
 README.md                      ← User-facing intro and prereqs
 CHANGELOG.md                   ← Keep-a-Changelog
-feature-flags.json             ← Feature flags (connectors=ga/on, custom-api, custom-telemetry)
+feature-flags.json             ← Feature flags (custom-api, custom-telemetry)
 .claude-plugin/plugin.json     ← Legacy plugin metadata mirror
 docs/
   architecture.md              ← Wiring/flow diagrams for BOTH skills (/genpage + /app-builder)
@@ -628,6 +707,10 @@ references/                    ← Shared reference docs
   page-telemetry.md            ← props.appInsights page telemetry contract (custom-telemetry gated; loaded only when the maker asked to measure something)
   connectors.md                ← GenPage connector binding contract and runtime patterns
   plan-schema.md               ← Schema contract for genpage-plan.md
+  app-spec-schema.md           ← The App Spec contract (always-present fields) — /app-builder
+  app-spec-schema-advanced.md  ← Conditional App Spec fields (business rules, BPFs, commands, web resources, global choices, dashboards, roleGrants)
+  authoring-flow.md            ← /app-builder Phase 1 authoring playbook, run in the main loop (not a subagent)
+  agent-interaction-contract.md ← Agents are headless: no AskUserQuestion / plan mode inside a Task subagent
   data-caching.md              ← Rule 15 on-mount fetch: de-dupe + cache (loaded conditionally)
   localization.md              ← Multi-language + RTL pattern (loaded conditionally)
   supported-dependencies.md    ← Versioned package list for generated pages
@@ -638,7 +721,10 @@ scripts/
   launch-playwright-mcp.js     ← Playwright MCP server launcher (fullscreen; uses lib/detect-browser.js)
   playwright-mcp-fullscreen.config.json ← Fullscreen browser config for the launcher
   regenerate-verified-icons.js ← Regenerates references/verified-icons.txt from npm
-  check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match
+  check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match (pac overlaps the az probes); a CLI too slow to answer is `az_timeout`/`pac_timeout`
+  check-version.js             ← Skill-start update notice: compares the plugin clone with its origin/main (git runs in the plugin, never the user's repo)
+  resolve-interaction-mode.js  ← Reports whether a human can answer in this run (unattended defaults)
+  lint-app-spec.js             ← Validate + lint an App Spec without touching an environment
   dataverse-request.js         ← General Dataverse Web API wrapper (escape hatch)
   list-connections.js          ← Connector discovery: PAC connections + Dataverse connection references
   create-connection-reference.js ← Creates Dataverse connectionreference rows for connector bindings
@@ -659,7 +745,7 @@ scripts/
   run-tests.js                 ← one-command plugin + SDK regression runner
   smoke-eval.js                ← scripted live smoke eval (build → assert → teardown)
   generate-page-manifest.js    ← Phase 0.5: writes working-dir package.json + genpage.d.ts
-  genpage-upload.js            ← /genpage: deploy one page via the shared wrapper (prompt passed BY FILE, never on a command line)
+  genpage-upload.js            ← /genpage: deploy one page via the shared wrapper (prompt passed BY FILE, never on a command line; an update must name the app the page is placed in, and keeps the page's name, model and bindings unless given)
   genpage-plan-provenance.js   ← /genpage: quarantine a stale plan before the planner writes, then verify the written plan targets the pages the approval named
   check-page-files.js          ← /genpage: pre-dispatch gate — the page file names of the plan's one ## Pages table are safe write targets (lib/page-file-targets.js)
   genpage-worker-output.js     ← /genpage: accept a parallel worker's page only if complete (default export, balanced, no elided code)
@@ -667,15 +753,23 @@ scripts/
   lib/
     entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data)
     provision-input.js         ← Input validation for entity provisioning
-    dataverse-auth.js          ← Shared auth + HTTP helpers (uses `az account get-access-token`), plus the CLI arg contract (parseArgs/validateFlags)
+    dataverse-auth.js          ← Shared auth + HTTP helpers (`az account get-access-token`, memoized per process and replaced on a 401; responses decoded as UTF-8 once; an environment URL is used only as a Dataverse https origin, `dataverseOrigin`), plus the CLI arg contract (parseArgs/validateFlags)
+    process-runner.js          ← how every script starts az/pac/npm/npx/git: the executable is resolved to an absolute path on PATH, never the project folder, and started without a shell (a Windows batch shim runs through cmd.exe with its arguments checked)
+    cli-failure.js             ← how a CLI child failed (timeout / missing / failed) and the Azure CLI budget (60 s, `POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS`), so a slow `az` is never reported as missing or signed out
     nearest-name.js            ← pure single-edit "did you mean" matcher for closed vocabularies (CLI flags, FetchXML operators)
     supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
-    feature-flags.js           ← Default-OFF feature flag probe + connector script backstop
+    feature-flags.js           ← Default-OFF feature flag probe + Custom API script backstop
     sdk-build.js               ← app-builder build engine (idempotent; incl. the pages phase)
     stages.js                  ← stage→phase-range mapping + PHASES/STAGES constants
     op-diff.js                 ← destructive-op diff + --allow-destructive / --non-interactive gating
     artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)
+    form-occupancy.js          ← pure row occupancy (own cells + columns reserved by row-spanning cells above), shared by build and verify
+    form-order.js              ← the Main Form Set order: which Main form a table opens with, and which forms the build orders (shared by the spec gate, build and verify)
+    form-container-match.js    ← how an authored tab/section is matched to a deployed one, and the moves that put them in the layout's order (shared by build and verify)
+    ai-app-settings.js         ← single source of truth for the per-app AI feature contract
+    interaction-mode.js        ← whether a human is reachable in this run (shared by both skills)
     page-plan.js               ← pure App Spec → plan-document projection used by write-page-plan.js
+    page-structure.js          ← the one structural gate a generated page must pass (empty, truncated, prose, elided), shared by genpage-worker-output.js and promote-intent-pages.js
     page-file-targets.js       ← the one page-filename rule (absolute/backslash/traversal/.tsx only/links/case collision, incl. with files already there), shared with check-page-files.js and the evals
     source-literals.js         ← TSX lexer (code/comment/string/template/regex/JSX) — see "Known limits" below
     sdk-teardown.js            ← app-builder teardown engine (planTeardown is pure)
@@ -686,7 +780,7 @@ scripts/
     role-privileges.js         ← pure: declared persona privileges + subset comparison against a deployed role
                                   (also the oracle for `roleGrants[]`, which is additive rather than converged)
     odata.js                   ← OData literal escaping helpers
-    genpage-cli.js             ← pac model genpage upload/list/download wrapper
+    genpage-cli.js             ← pac model genpage upload/list/download wrapper, plus a page's own name read from its row (pac stores `"` as `\"`; `unescapePacName`)
     hydrate-spec.js            ← reconstruct an App Spec from a deployed app (edit flow)
     verify-spec.js             ← spec-vs-deployed reconciliation core
     build-journal.js           ← durable JSONL build journal (resume diagnostics)
@@ -697,6 +791,8 @@ scripts/
     pageref-resolver.js        ← PAGEREF_<key> → GenPageId nav resolver
     page-manifest.js           ← durable <app>_pagemanifest read/write
     sitemap-pages.js           ← pure GenPageId extractors + fail-closed fetchSitemap MEMBERSHIP reader + cross-app scan
+    sitemap-merge.js           ← pure: re-attach an existing app's rewritten sitemap to its live nodes (ids + everything the spec cannot describe), keep designer nav edits the spec did not make
+    deployed-baseline.js       ← `.maker-workspace/last-applied.json`: the spec last applied or downloaded, stamped with its environment + app and the dashboard/page ids deployed there
     ai-candidates.js           ← selects good-candidate tables for auto row-summary mode
     ai-prompt.js               ← generates tailored Copilot row-summary prompts
     _graph.js                  ← entity topological ordering (shared by build + teardown)
@@ -705,22 +801,25 @@ scripts/
     content-hash.js / hash.js  ← content-aware phase diff: fold on-disk .tsx/contentPath byte hashes into the diff (changed-only)
     classify-changes.js        ← changed-only: classify a spec diff → fast (page-content) | full | noop + sticky debt
     apply-snapshot.js          ← changed-only: pure eligibility state machine (identity bind, debt, tombstone, generation CAS)
-    apply-snapshot-store.js    ← changed-only: atomic snapshot write + workspace lease + invalidate/claim/tombstone/delete + distrust marker
+    apply-snapshot-store.js    ← changed-only: atomic snapshot write (writeFileAtomic, also the baseline's) + workspace lease + invalidate/claim/tombstone/delete + distrust marker
     apply-snapshot-index.js    ← changed-only: build result.created → snapshot artifact map
     workspace-paths.js         ← the `.maker-workspace` name + the guard that gates destructive --clear-workspace cleanup
     changed-only-flow.js       ← changed-only: --changed-only orchestration (decide fast/full, live identity, snapshot lifecycle)
     projection.js              ← changed-only: pure post-apply verifiers (form placement / sitemap / page dual-hash)
     detect-browser.js          ← System Chromium/Edge/Chrome detection (used by the launcher)
     modelapps-hook-utils.js    ← Tracked-skill discovery + validator lookup for the hooks
-    telemetry/                 ← Bundled 1DS telemetry: ikey.json (this plugin's config) + lib/ (copy of shared/telemetry/lib)
+    utf8-stream.js             ← reads a hook's stdin as UTF-8 without splitting a multibyte character across pipe chunks
+    telemetry/                 ← Bundled 1DS telemetry: ikey.json (this plugin's per-region keys) + resolver.js + region/ (copy of power-pages' router) + lib/ (copy of shared/telemetry/lib)
   vendor/cds-maker-sdk.cjs     ← headless vendored SDK bundle (rebuilt via _vendor-build/)
   _vendor-build/               ← esbuild vendoring tooling (build.js + pinned deps)
   tests/                       ← node --test coverage for the scripts + hooks
-hooks/                         ← Lifecycle hooks (registered in hooks/hooks.json)
+hooks/                         ← Lifecycle hooks
+  hooks.json                   ← Hook registrations (closed schema — documentation lives in README.md)
+  README.md                    ← What hooks.json wires up, and why
   run-skill-posttool-validation.js ← Runs a skill's validate*.js after the Skill tool returns
   validate-icon-imports.js     ← PostToolUse: blocks unverified @fluentui/react-icons in generated .tsx
   validate-write-safety.js     ← PreToolUse: flags (non-blocking) out-of-cwd writes in model-apps sessions
-  run-skill-pretool-telemetry.js   ← PreToolUse(Skill): emits skill_started (ships disabled)
+  run-skill-pretool-telemetry.js   ← PreToolUse(Skill): emits skill_started
   run-user-prompt-telemetry.js ← UserPromptSubmit: emits skill_started for /model-apps:<skill>
 skills/
   app-builder/
@@ -752,7 +851,7 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 | `genpage-entity-builder` | `genpage` (create flow) | Provisions Dataverse tables, columns, relationships, choices, and sample data via `scripts/provision-entities.js` (the shared SDK-backed core). Bulk inserts use OData `$batch`. Writes a transactional log for recovery |
 | `genpage-page-builder` | `genpage` (create flow) **and** `app-builder` (Phase 1.5) | Generates one complete `.tsx` page from a plan document and schema; runs in parallel with other builders for multi-page requests. `/app-builder` projects its App Spec into that plan format via `scripts/write-page-plan.js` and dispatches this same agent |
 | `genpage-edit-planner` | `genpage` (edit flow) | Reads the downloaded page artifacts (page.tsx, config.json, prompt.txt), gathers change requirements, presents edit plan, writes `genpage-edit-plan.md`. The orchestrator applies the edit inline. |
-| `genpage-connector-builder` | `genpage` orchestrator (create **and** edit flows) | **Single owner of the connectors feature gate.** Performs connector discovery (connections, connection references, datasets, tables, operations, schema), creates Dataverse connection references, and writes the `## Connector Bindings` contract + `connectors.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
+| `genpage-connector-builder` | `genpage` orchestrator (create **and** edit flows) | Performs connector discovery (connections, connection references, datasets, tables, operations, schema), creates Dataverse connection references, and writes the `## Connector Bindings` contract + `connectors.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
 | `genpage-customapi-builder` | `genpage` orchestrator (create **and** edit flows) | **Single owner of the custom-api feature gate.** Discovers the Dataverse Custom APIs a page can bind to (Global + entity-bound Actions/Functions) plus their parameter kinds via `list-custom-apis.js`, and writes the `## Custom API Bindings` contract + `actions.json`. The orchestrator forwards its output into the planner or edit-planner prompt. |
 
 ## Key Concepts
@@ -778,21 +877,22 @@ is about runtime/deploy output, not that every authoring artifact is byte-for-by
 unchanged. The mechanism lives in `scripts/lib/feature-flags.js` with the committed
 values in `feature-flags.json` at the plugin root.
 
-**A GA flag is flipped to `true` FIRST and removed in a LATER change, not both at once.**
+**A flag is flipped to `true` FIRST and removed in a LATER change, not both at once.**
 Flipping is reversible in one line if the rollout turns out to be incomplete in some tenant;
 deleting the gate in the same change that enables the feature leaves no way back except a
 revert. Once a release has shipped with the flag on and no rollback was needed, remove it —
 a permanently-on gate is dead weight that still has to be probed, branched on and reasoned
 about at every call site.
 
-`connectors` is in that window now: **GA, shipping `true`, gate retained as a rollback
-switch, scheduled for removal in the next release.**
+Connector authoring no longer has a feature flag (the feature itself is in public preview). The
+remaining flags are `custom-api` and `custom-telemetry`; both currently ship **OFF** while their
+dependencies finish rolling out.
 
 - **Source of truth:** `feature-flags.json` (e.g. `{ "custom-api": false }`). Flip a
   flag to `true` in a one-line PR once its dependencies are GA in PROD, then remove
   it in a follow-up that deletes its gates.
 - **Precedence (highest first):** env var `GENPAGE_ENABLE_<FLAG>` (e.g.
-  `GENPAGE_ENABLE_CONNECTORS=0` to roll connectors back) → committed
+  `GENPAGE_ENABLE_CUSTOM_API=1` for a single run) → committed
   `feature-flags.json` → default `false`
   (fail-closed). This mirrors the telemetry opt-out env-over-config convention.
 - **LLM gate:** skill/agent markdown probes a flag with
@@ -801,19 +901,19 @@ switch, scheduled for removal in the next release.**
   flag's lifecycle **status** (experimental / in-progress / ga), effective state +
   source (env/file/default), summary, how to enable, plus config-validation warnings.
   Flags are catalogued with that metadata in the `FLAGS` map in `feature-flags.js`
-  (the committed `feature-flags.json` carries only the on/off value).
-- **Script backstop:** connector entrypoints call the shared
-  `exitIfConnectorsDisabled()` helper (DRY — no inlined gate) and fail closed with
-  exit 3 when OFF: `list-connections.js`, `create-connection-reference.js`, and the
-  `--connection-refs` branch of `add-page-to-solution.js`. Custom API entrypoints call
-  the parallel `exitIfCustomApiDisabled()` helper the same way: `list-custom-apis.js`.
+  (the committed `feature-flags.json` carries only the on/off value). Unknown flags
+  are disabled even when a matching env var is set.
+- **Script backstop:** Custom API entrypoints call the shared
+  `exitIfCustomApiDisabled()` helper (DRY — no inlined gate) and fail closed with
+  exit 3 when OFF: `list-custom-apis.js`. Connector scripts have no feature-flag
+  backstop because connector authoring is always on.
 - **Validation:** `KNOWN_FLAGS` + `validateFlags()` warn on unknown keys / non-boolean
   values in the committed file (so a typo can't silently do nothing, or — after a flip
   to `true` — accidentally enable the wrong thing).
 
 **Each gated feature has a SINGLE OWNER agent, and every entry point must go through it or the
-shared helper.** The currently-gated features gate at the same five places, so the rule is stated
-once here and only the per-feature specifics are tabled below:
+shared helper.** Gate a feature at the same five places, so the rule is stated once here and
+only the per-feature specifics are tabled below:
 
 1. **Discovery** — the owner agent runs the probe first; planners/edit-planners delegate to it and
    never gate inline.
@@ -825,21 +925,20 @@ once here and only the per-feature specifics are tabled below:
 5. **Codegen** — `genpage-page-builder` emits feature code **only** when the plan carries an actual
    binding table, never on an absent/sentinel section.
 
-| | `connectors` | `custom-api` | `custom-telemetry` |
-|---|---|---|---|
-| **Owner agent** | `genpage-connector-builder` | `genpage-customapi-builder` | none — codegen-only |
-| **Plan section** | `## Connector Bindings` | `## Custom API Bindings` | none — driven by the maker request, not the plan |
-| **Gated scripts** | `list-connections.js`, `create-connection-reference.js` | `list-custom-apis.js` | none |
-| **Deploy phase** | SKILL Phase 4.5 | SKILL Phase 4.6 | SKILL Phase 4.7 (probe only) |
-| **ALM** | the `--connection-refs` branch of `add-page-to-solution.js` | none needed — `config.json`'s `actionBindings` travels inside the page's `uxagentprojectfile` rows automatically (the Custom APIs themselves are a separate deployment prerequisite, bound by name) | none — telemetry rides the host runtime, nothing is packaged |
-| **Emits** | connector code | `executeAction` / `executeFunction` / `listBoundActions` | `props.appInsights` calls (`trackEvent` / `trackMetric` / `trackTrace` / `trackException` / `trackDependency` / `startTrack` / `stopTrack`) |
+| | `custom-api` | `custom-telemetry` |
+|---|---|---|
+| **Owner agent** | `genpage-customapi-builder` | none — codegen-only |
+| **Plan section** | `## Custom API Bindings` | none — driven by the maker request, not the plan |
+| **Gated scripts** | `list-custom-apis.js` | none |
+| **Deploy phase** | SKILL Phase 4.6 | SKILL Phase 4.7 (probe only) |
+| **ALM** | none needed — `config.json`'s `actionBindings` travels inside the page's `uxagentprojectfile` rows automatically (the Custom APIs themselves are a separate deployment prerequisite, bound by name) | none — telemetry rides the host runtime, nothing is packaged |
+| **Emits** | `executeAction` / `executeFunction` / `listBoundActions` | `props.appInsights` calls (`trackEvent` / `trackMetric` / `trackTrace` / `trackException` / `trackDependency` / `startTrack` / `stopTrack`) |
 
 At Phase 4.7 the `/genpage` orchestrator probes and passes the verbatim result as
 `Telemetry: enabled|disabled` in every page-builder dispatch — **that dispatch value wins over
 the plan.** Phase 4.5 passes a `Connectors: none|<n> binding(s)` line the same way, but note the
-difference: that value is the **binding count**, not the flag state. A disabled gate and an empty
-binding table both yield `none`, because the page-builder only needs to know how many bindings it
-may call — which keeps the dispatch stable when the flag is eventually removed.
+difference: that value is the **binding count**, not a flag state. An empty binding table yields
+`none`, because the page-builder only needs to know how many bindings it may call.
 
 `custom-telemetry` is the odd one out: it has no owner agent, no discovery script, no plan
 section and no deploy or ALM step. It gates **code generation only** — steps 2-4 of the
@@ -848,10 +947,8 @@ produces the dispatch line. It also carries a second gate the other flags do not
 when `enabled`, `genpage-page-builder` instruments a page **only** when the maker explicitly
 asked to measure or track something. `enabled` is permission, not instruction.
 
-All three flags currently ship **OFF**, each waiting on cross-repo dependencies:
+The two remaining flags currently ship **OFF**, each waiting on cross-repo dependencies:
 
-- **`connectors`** — the pac CLI connector verbs (PowerPlatform-Scale-AdminTools), the GenUX
-  authoring control (power-platform-ux), and the maker/admin ECS setting must all release first.
 - **`custom-api`** — the AIBuilder CoderAgent action prompt, the shared `pai-gen-ux-action-runtime`
   plus the UCI and Controls host runtimes, a pac CLI `model genpage upload --actions` verb to
   persist `actionBindings` into `config.json`, and the `GenUxPluginActionAllowList` ECS setting.
@@ -866,17 +963,21 @@ All three flags currently ship **OFF**, each waiting on cross-repo dependencies:
 **`scripts/lib/source-literals.js` — known limits.** It is a hand-rolled TSX lexer, not a
 parser: the plugin ships dependency-free, so there is no TypeScript to call. It tracks
 code / line comment / block comment / string / template / regex / JSX tag / JSX text, and
-backs the `promote-intent-pages.js` structural gate plus the eval's effect scoper. It also
+backs the page structural gate (`lib/page-structure.js`, shared by `promote-intent-pages.js` and
+`genpage-worker-output.js`) plus the eval's effect scoper. It also
 backs the navigation oracle (`pageref-resolver.js`), which finds each call AND parses its object
 in the lexer's mask — executable code inside a template's `${…}` is visible, template text and
-string bodies are not — and reads each value from the source at the same offsets, so one lexer
-drives both. It also backs the worker-output gate
-(`genpage-worker-output.js`), and `findElisionMarker` — the one "was code elided?" rule the
-worker gate and the Layer 2 eval share (a `FIXME` comment, a `TODO` that opens a comment or takes
+string bodies are not — and reads each value, and each quoted key (`"pageId"`), from the source at
+the same offsets, so one lexer drives both. It also backs `findElisionMarker` — the one "was code
+elided?" rule the page gate and the Layer 2 eval share (a `FIXME` comment, a `TODO` that opens a comment or takes
 a colon, a comment opening with `...`, "omitted for brevity", or a bare `...` line; the same words
 as UI copy — "Loading…", a `'TODO'` status value — are not elision). A template's `${…}` body is
 code and is read by the same lexer (`lexInto`), JSX and comments included, never by a lighter
-scanner. Whether a `/` or `<` starts a regex or JSX is judged by the code before it: never by a
+scanner. It is **one pass** over the file with an explicit stack of code and template frames, so
+its time is linear in the file's length however deeply templates nest — a lexer that re-scanned
+each `${…}` body per level of nesting took over a second on a 2.5 KB page. Keep it one pass; the
+`performance:` tests and the 50,000-deep nesting test in `genpage-lexer-hardening.test.js` guard it.
+Whether a `/` or `<` starts a regex or JSX is judged by the code before it: never by a
 comment's last word; a keyword read back as a property name (`counts.new / total`) or a postfix
 `!` / `++` ends an operand; and a `)` ends one too, unless it closes an `if` / `for` / `while`
 head, after which a statement starts. Each of those rules was once broken, and each break refused
@@ -952,18 +1053,40 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
 (never a symlink) so installed plugins don't depend on symlink handling. Edit
 `shared/telemetry/lib/` first, then refresh this plugin's copy in the same change.
 
-- **Posture:** the committed `ikey.json` ships **`disabled: true`** (Tier-1 static,
-  no resolver) — currently carrying the **provisioned model-apps key + collector +
-  `event_stream_name`, staged disabled**. It emits nothing — no POST, no local log —
-  while `disabled: true`; flip `disabled` to `false` only after the Geneva mapping
-  is validated in DGrep (see the ADE provisioning runbook). `disabled: true` is the
-  active guard; the placeholder-key gate is a secondary defense for un-provisioned
-  copies. **Provision a fresh key; never copy another plugin's `ikey.json`**
+- **Posture:** the committed `ikey.json` ships **live** (`disabled: false`) with this
+  plugin's own per-region keys (`internal`, `us`, `eu`, `gov`, `high`, `dod`, `mooncake`;
+  US and EU share the public key and differ only by collector) and the Power Apps client
+  `event` stream. `disabled: true` is the repo-wide hard-off (no POST,
+  no local log). **Provision a fresh key; never copy another plugin's `ikey.json`**
   (CI-enforced: `node scripts/validate-telemetry-ikeys.js`).
+- **Wire shape:** these tenants ingest **only** the `event` stream, into the Power Apps client
+  `event` table; any other stream name is accepted by the collector and then dropped. So
+  `resolver.js` also exports `formatEnvelope`, which mirrors mobile-apps' envelope:
+  `app_Name: "powerappsclient"`, `event_Name`, `session_Id`, `tenantId`, and every other
+  allowlisted field as a `customDimensions` JSON string. `clientType` is
+  **`ModelAppsAIPlugin`** (never mobile's `PowerAppsNative`), so rows are separable from
+  real client traffic. Query the tenant's `event` table (raw 1DS copies prefix columns with `data_`):
+  `event | where clientType == "ModelAppsAIPlugin" | extend d = parse_json(customDimensions)
+  | summarize count() by tostring(d.pluginName), tostring(d.skillName)`.
+  The local mirror keeps the flat, readable shape.
+- **Routing:** `scripts/lib/telemetry/resolver.js` picks the key + collector per event.
+  `region/` beside it is a **verbatim copy** of power-pages' Artemis geo + cloud-stamp
+  router — refresh it by copying, and keep model-apps logic in `resolver.js`
+  (`telemetry-lib-copy.test.js` fails on drift, and the workflow runs on a power-pages
+  `region/` change). A public-cloud
+  org routes to `us`/`eu` by its geo (cached per org for 24 h under
+  `~/.power-platform-skills/region-cache/`, shared with power-pages — it stores only the
+  region, never a key); if its geo can't be determined (Artemis down, unknown geo) it sends
+  nothing rather than defaulting to US, and only a signed-out PAC (no org) takes the `us`
+  default. Unlike power-pages, a sovereign or internal PAC cloud (`UsGov`,
+  `UsGovHigh`, `UsGovDod`, `China`, `Tip1`/`Tip2`/`Test`/`Preprod`) routes from the stamp
+  alone, with no Artemis call and **never** a fallback to the public collector; an
+  unrecognized cloud, or a signed-in org with no cloud line, sends nothing. `ikey.json`
+  deliberately has no top-level static key, so a `null` resolution really does mean no
+  transmission.
 - **Emission:** `hooks/run-skill-pretool-telemetry.js` (PreToolUse Skill) and
   `hooks/run-user-prompt-telemetry.js` (UserPromptSubmit `/model-apps:<skill>`).
-- **Privacy:** while `disabled: true` nothing is built, sent or mirrored (see Posture). Once
-  enabled, telemetry is default-on: events can include Dataverse organization and Entra tenant GUIDs
+- **Privacy:** telemetry is default-on: events can include Dataverse organization and Entra tenant GUIDs
   when PAC is signed in, never the signed-in user's Entra object ID, and the local diagnostic mirror
   (`~/.power-platform-skills/telemetry/model-apps/sessions/<id>/events.jsonl`) retains the same
   fields — it is still written after a user opts out of transmission via
@@ -1090,14 +1213,19 @@ NODE20_BIN=/path/to/node20/bin node scripts/run-tests.js --with-sdk /path/to/pow
 ```
 
 - `run-tests.js` runs the full `scripts/tests/*.test.js` suite and prints a combined PASS/FAIL.
-  **CI runs this same command** (`.github/workflows/model-apps-script-tests.yml`) on any PR touching
-  `plugins/model-apps/**` or `evals/model-apps/**`, across ubuntu × windows × macos and Node 20 × 22.
+  **CI runs this same command** (`.github/workflows/model-apps-script-tests.yml`) on any PR into `main`
+  touching `plugins/model-apps/**`, `evals/model-apps/**`, `shared/telemetry/**`, `shared/skills/**` or the
+  workflow itself, across ubuntu × windows × macos and Node 20 × 22.
   Keep `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"` on any new job that could run a
   telemetry-emitting hook or script.
 - The SDK's Jest suite needs **Node 20** (its `canvas` native module is built for the Node-20 ABI).
   Set `NODE20_BIN` to a Node-20 bin dir; without it the SDK suite is skipped (plugin suite still runs).
-- genpage evals: `node --test evals/model-apps/genpage/tests/*.test.js`, plus the Layer 1/2 runners
-  (`node evals/model-apps/genpage/run-layer-{1,2}.js --tier smoke`). See `## Eval Suite` below.
+- Evals: `node --test evals/model-apps/tests/*.test.js evals/model-apps/app-builder/tests/*.test.js
+  evals/model-apps/genpage/tests/*.test.js` (the first directory holds the cross-runner coverage
+  contract), plus the runners (`node evals/model-apps/genpage/run-layer-{1,2}.js --tier smoke`,
+  `node evals/model-apps/app-builder/run-app-builder.js`). See `## Eval Suite` below. CI's
+  `test-model-apps-evals` job runs the eval tests AND all three runners (genpage Layer 1/2, app-builder)
+  over every committed fixture — offline, no org — so a fixture that falls out of step fails the PR.
 
 **The vendored SDK lives in a separate repo.** The Dataverse mechanics are in
 `power-platform-ux` (Azure DevOps `msazure/OneAgile`), package `packages/cds-maker-sdk`. This plugin
@@ -1123,7 +1251,7 @@ changes. **Never patch the bundle** to work around an SDK defect: the next re-ve
 reverts it and the hash in `PROVENANCE.json` stops matching. Fix it upstream and re-vendor.
 
 **Vendored-SDK contract invariants (regression net).** When you bump the SDK and re-vendor, the
-skill relies on behaviors that must survive. Four test files lock them — run all against every
+skill relies on behaviors that must survive. The test files below lock them — run all against every
 rebuilt bundle.
 
 **Re-vendor from a COMMIT, and check the recorded provenance.** `scripts/_vendor-build/build.js`
@@ -1194,6 +1322,26 @@ fails on any un-awaited `provision.*`/`sdk.*` call to those methods (annotate a 
 `sdk-async-ok`), and a **dynamic check** that the real bundle still returns Promises for exactly that
 list — so if a future SDK makes one synchronous again, the scan can't go on enforcing a dead rule.
 
+`scripts/tests/workspace-projection-real-bundle.test.js` — the **upgrade** guard. The SDK refuses to
+push a workspace copy stamped with another parser version (`ARTIFACT_PROJECTION_STALE`), so a
+re-vendor that raises it makes every existing `.maker-workspace` old. Upgrades stay invisible only
+because a plain fetch re-reads a clean old copy (and the build fetches every existing form, view,
+chart and app before editing it); a copy still holding an interrupted build's edits is kept by that
+fetch and refused at push — or, when the environment's copy has moved since, refused by the fetch
+itself (`LOCAL_EDITS_WOULD_BE_LOST`, measured live on a 2.10.0 workspace). For the push refusal the
+runner names the manual reset every workspace-reset remedy shares
+(`RESET_WORKSPACE` in `lib/entity-provision.js`): stop other builds and teardowns on the workspace
+first — the changed-only snapshot holds their leases and a running teardown's registration — then
+delete everything except `last-applied.json` (the navigation baseline) and `destructive-approval.json`
+(the approved removals), which no re-run can rebuild. The build does not reset the copy itself: the
+SDK's per-artifact lock is per process, so an overwrite could discard another build's newer edits on
+the same workspace. For the fetch refusal it asks for a review first: the environment has changed
+since the copy was fetched (maybe by a maker — the same copy is what a concurrent-edit halt keeps as
+a fence), so rebuilding the same spec over a cleared copy could overwrite that change. The halt says
+to look at the change in Maker and put into the spec what should stay, then make the same reset. (A
+re-download is no substitute: it captures no forms, views or charts, and an interrupted first build
+can leave them before the app exists.)
+
 
 **Live end-to-end (app-builder — writes to a real Dataverse env; optional).** All build/verify/
 teardown scripts are **dry-run by default**; add `--apply` to write.
@@ -1227,9 +1375,10 @@ skill (`/genpage` or `/app-builder`), and for genpage verify Playwright browser 
 (navigate/snapshot/click/screenshot).
 
 **Hooks + telemetry:** the lifecycle hooks and telemetry hooks are covered by the plugin unit suite
-(`node scripts/run-tests.js`). Keep `scripts/lib/telemetry/ikey.json` shipping `disabled: true` until a
-key is provisioned (a test enforces this), and run `node scripts/validate-telemetry-ikeys.js` from the
-repo root after touching `ikey.json`.
+(`node scripts/run-tests.js`); `resolver.test.js` pins the shipped `ikey.json` (live, a real key and the
+right collector per region) and the sovereign/unknown-cloud routing. A test also forbids shipping a
+placeholder key enabled. Run `node scripts/validate-telemetry-ikeys.js` from the repo root after
+touching `ikey.json`.
 
 ## Eval Suite
 
@@ -1240,12 +1389,17 @@ layers are automated (TAP v13 runners); Layer 3 is manual.
   we evaluate, the 3 layers, tiers (smoke/full/stress), fixture types
   (synthetic vs real captures), runner output, capture flow, cadence,
   diagnosing failures, adding evals and assertions.
-- **Eval definitions:** `evals/model-apps/genpage/evals.json` — 18 evals
-  with prompts, answers, and expectations.
+- **Eval definitions:** `evals/model-apps/genpage/evals.json` — prompts,
+  answers, and expectations.
 - **Fixtures:** `evals/model-apps/genpage/fixtures/<eval-id>-<slug>/` —
   one folder per captured or synthetic run. Each contains the `.tsx`,
   `workflow-log.md`, `genpage-plan.md`, and (when applicable)
-  `entity-creation-log.md` and `RuntimeTypes.ts`.
+  `genpage-entity-creation-log.md` (older captures: `entity-creation-log.md`)
+  and `RuntimeTypes.ts`.
+- **Coverage contract:** `evals/model-apps/tests/eval-coverage-contract.test.js`
+  fails when a prompt has no fixture, an expectation has no check, or a check
+  skips on every fixture, unless `eval-coverage-baseline.json` beside it records
+  the gap and why; it also pins the guides' counts to the registries.
 
 Run on every PR that touches the skill, agents, rules, or evals:
 
@@ -1268,7 +1422,9 @@ snapshots — using the plugin's own pure primitives. No live env required.
 
 Per-stage oracles: `author` (validate + lint), `plan` (`planFor`), `data`
 (`schema-facts.js` normalized tables/columns/relationships), `ui` (view/chart/form
-intent facts), `app` (sitemap facts + nav graph), `verify` (`verifySpec` reconcile).
+intent facts), `app` (sitemap facts + nav graph), `security`, `verify` (`verifySpec`
+reconcile, fail-closed), `process`, `generate-pages`, `teardown`, `round-trip` and
+`changed-only` — see the guide's stage → oracle table for what each grades.
 
 ```bash
 # From repo root:

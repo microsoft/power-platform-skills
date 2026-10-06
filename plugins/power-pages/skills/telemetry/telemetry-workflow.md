@@ -27,7 +27,7 @@ telemetry for this plugin. Default to `status` when no argument is given.
   `eventInfo.aadObjectId` when PAC exposes it, and the SPA framework of the
   Power Pages code site being worked in (`react`, `vue`, `angular`, or `astro`)
   as `eventInfo.framework`. The framework name describes the scaffold only —
-  it is never a site name or path.
+  it is never a site name or path. Model Apps excludes both.
   When plugin telemetry is enabled, the local diagnostic mirror retains the same
   event fields even when transmission is off.
   A plugin whose committed telemetry config has `disabled: true` writes no mirror.

@@ -377,6 +377,58 @@ test('MODEL_APPS_DISABLE_HOOKS=1 disables the validator (exit 0 despite bad icon
   assert.equal(status, 0);
 });
 
+test('MODEL_APPS_DISABLE_HOOKS=1 exits 0 even when skill discovery would throw', () => {
+  const preload = path.join(__dirname, 'hook-readdir-throw-preload.js');
+  fs.writeFileSync(preload, [
+    "const fs = require('node:fs');",
+    'const real = fs.readdirSync;',
+    "fs.readdirSync = function patched(p, ...args) {",
+    "  if (String(p).includes('plugins' + require('node:path').sep + 'model-apps' + require('node:path').sep + 'skills')) {",
+    "    const err = new Error('EACCES: permission denied, scandir skills');",
+    "    err.code = 'EACCES';",
+    "    throw err;",
+    '  }',
+    '  return real.call(this, p, ...args);',
+    '};',
+  ].join('\n'));
+  try {
+    const res = spawnSync(process.execPath, ['-r', preload, HOOK], {
+      input: 'not json',
+      encoding: 'utf8',
+      env: { ...process.env, MODEL_APPS_DISABLE_HOOKS: '1' },
+    });
+    assert.equal(res.status, 0, res.stderr);
+  } finally {
+    fs.rmSync(preload, { force: true });
+  }
+});
+
+test('icon validator: an unreadable skills folder cannot crash the ENABLED hook', () => {
+  // The hook needs only the stdin reader, not skill discovery. Loading discovery would scan the skills
+  // folder at require time, so an EACCES there would crash the hook even though it never uses it.
+  const preload = path.join(__dirname, 'hook-readdir-throw-preload-enabled.js');
+  fs.writeFileSync(preload, [
+    "const fs = require('node:fs');",
+    'const real = fs.readdirSync;',
+    "fs.readdirSync = function patched(p, ...args) {",
+    "  if (String(p).includes('plugins' + require('node:path').sep + 'model-apps' + require('node:path').sep + 'skills')) {",
+    "    const err = new Error('EACCES: permission denied, scandir skills');",
+    "    err.code = 'EACCES';",
+    "    throw err;",
+    '  }',
+    '  return real.call(this, p, ...args);',
+    '};',
+  ].join('\n'));
+  try {
+    const env = { ...process.env };
+    delete env.MODEL_APPS_DISABLE_HOOKS;
+    const res = spawnSync(process.execPath, ['-r', preload, HOOK], { input: 'not json', encoding: 'utf8', env });
+    assert.equal(res.status, 0, res.stderr);
+  } finally {
+    fs.rmSync(preload, { force: true });
+  }
+});
+
 test('unparseable stdin does not block (exit 0)', () => {
   const res = spawnSync(process.execPath, [HOOK], { input: 'not json', encoding: 'utf8' });
   assert.equal(res.status, 0);
@@ -397,4 +449,22 @@ test('every committed sample page passes the icon hook', () => {
     const { status, stderr } = runHook(payloadFor(fp, content));
     assert.equal(status, 0, `samples/${name} is blocked by the hook:\n${stderr}`);
   }
+});
+
+test('line comments ending with CR, LS or PS do not hide or forge icon imports', () => {
+  for (const term of ['\r', '\u2028', '\u2029']) {
+    const commented = `// import { TotallyMadeUpIconRegular } from '@fluentui/react-icons';${term}${GENPAGE_HEADER}`;
+    let fp = writeTemp(tmp, 'commented.tsx', commented);
+    assert.equal(runHook(payloadFor(fp, commented)).status, 0, `commented ${JSON.stringify(term)}`);
+
+    const bad = `import { TotallyMadeUpIconRegular } from '@fluentui/react-icons';${term}${GENPAGE_HEADER}`;
+    fp = writeTemp(tmp, 'bad.tsx', bad);
+    assert.equal(runHook(payloadFor(fp, bad)).status, 2, `real ${JSON.stringify(term)}`);
+  }
+});
+
+test('block comments preserve LS and PS offsets while icon imports are matched', () => {
+  const content = `/* note\u2028import { TotallyMadeUpIconRegular } from '@fluentui/react-icons';\u2029 */\nimport { AddRegular } from '@fluentui/react-icons';\n${GENPAGE_HEADER}`;
+  const fp = writeTemp(tmp, 'page.tsx', content);
+  assert.equal(runHook(payloadFor(fp, content)).status, 0);
 });
