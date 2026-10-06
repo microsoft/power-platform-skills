@@ -87,6 +87,14 @@ jobs:
               working-directory: plugins/model-apps
               run: node scripts/run-tests.js
 
+            # The routing eval's runner launches agent CLIs as child processes, and on Windows
+            # those are .cmd shims that must go through cmd.exe (quoting, process-tree kill). Its
+            # unit tests drive a fake agent only — no model, no credentials — so run them on every
+            # OS here; in the Ubuntu-only eval job below the Windows shim test would always skip.
+            - name: run-routing-eval-unit-tests
+              shell: bash
+              run: node --test evals/model-apps/routing/tests/*.test.js
+
     test-model-apps-evals:
         name: test-model-apps-evals
         runs-on: ubuntu-latest
