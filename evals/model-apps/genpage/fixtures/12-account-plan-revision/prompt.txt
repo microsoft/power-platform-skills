@@ -1,0 +1,3 @@
+Build a page showing Account records with a filter toolbar and sortable columns.
+
+Revision requested at plan approval: add a search box in addition to the filter toolbar.

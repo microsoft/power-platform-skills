@@ -162,7 +162,10 @@ function entityLogNameProblems({ docs, loaderName, legacyName, evalTexts }) {
   return problems;
 }
 
+// `**none**` is how a guide says the list is empty (every prompt captured); the regexes need a token
+// there, since `**` directly followed by `**` would read as bold markup rather than an empty list.
 function parseIdList(text) {
+  if (/^\s*none\s*$/i.test(text)) return [];
   return text.split(',').map((s) => s.trim()).filter(Boolean).flatMap((part) => {
     const range = /^(\d+)\s*[–-]\s*(\d+)$/.exec(part);
     if (!range) return [Number(part)];
@@ -213,7 +216,7 @@ function genpageGuideProblems(guide, facts) {
   if (m) expect('common_code_assertions count', Number(m[1]), facts.codeCount);
   m = find('the prompt definition count', /`evals`:\s*\*\*(\d+)\*\*\s+prompt definitions/);
   if (m) expect('prompt definition count', Number(m[1]), facts.promptCount);
-  m = find('the corpus sentence', /\*\*(\d+) fixture directories \/ (\d+) top-level TSX files\*\*,\s+representing (\d+) prompt IDs\.\s+IDs \*\*([\d,\s]+)\*\* have no fixture/);
+  m = find('the corpus sentence', /\*\*(\d+) fixture directories \/ (\d+) top-level TSX files\*\*,\s+representing (\d+) prompt IDs\.\s+IDs \*\*(none|[\d,\s]+)\*\* have no fixture/);
   if (m) {
     expect('fixture directory count', Number(m[1]), facts.fixtureDirs);
     expect('top-level TSX count', Number(m[2]), facts.tsxFiles);
@@ -244,7 +247,7 @@ function genpageReadmeProblems(readme, facts) {
     const actual = [facts.fixtureDirs, facts.tsxFiles, facts.representedIds];
     if (JSON.stringify(said) !== JSON.stringify(actual)) problems.push(`fixtures/README.md counts: says ${JSON.stringify(said)}, actual ${JSON.stringify(actual)}`);
   }
-  const missing = /Registered prompts with no fixture:\s*\*\*([\d,\s]+)\*\*/.exec(readme);
+  const missing = /Registered prompts with no fixture:\s*\*\*(none|[\d,\s]+)\*\*/.exec(readme);
   if (!missing) problems.push('fixtures/README.md: could not find the prompts with no fixture — update the README or this contract');
   else if (JSON.stringify(parseIdList(missing[1])) !== JSON.stringify(facts.missingIds)) {
     problems.push(`fixtures/README.md prompts with no fixture: says ${missing[1].trim()}, actual ${facts.missingIds.join(', ')}`);
@@ -390,11 +393,14 @@ test('the eval guides state the corpus as it is', () => {
 test('negative controls: prompt, routing and registration drift is reported', () => {
   const fixtureIds = new Set(genpageFixtures.map((f) => f.id));
   const uncaptured = baseline.genpage.uncaptured;
-  const [first] = uncaptured;
-  assert.match(uncapturedProblems({ evals: genpageData.evals, fixtureIds, uncaptured: uncaptured.slice(1) }).join('\n'), new RegExp(`eval ${first.eval} has no fixture`));
-  assert.match(uncapturedProblems({ evals: genpageData.evals, fixtureIds: new Set([...fixtureIds, first.eval]), uncaptured }).join('\n'), /now has a fixture/);
+  // A synthetic prompt with no fixture, so these controls keep working when every real prompt is
+  // captured and the baseline's uncaptured list is empty.
+  const evalsPlus = [...genpageData.evals, { id: 9997, tier: 'full', prompt: 'x', expectations: [] }];
+  const first = { eval: 9997, reason: 'not captured yet' };
+  assert.match(uncapturedProblems({ evals: evalsPlus, fixtureIds, uncaptured }).join('\n'), /eval 9997 has no fixture/);
+  assert.match(uncapturedProblems({ evals: evalsPlus, fixtureIds: new Set([...fixtureIds, first.eval]), uncaptured: [...uncaptured, first] }).join('\n'), /now has a fixture/);
   assert.match(uncapturedProblems({ evals: genpageData.evals, fixtureIds, uncaptured: [...uncaptured, { eval: 9999, reason: 'x' }] }).join('\n'), /no longer defines/);
-  assert.match(uncapturedProblems({ evals: genpageData.evals, fixtureIds, uncaptured: [{ ...first, reason: ' ' }, ...uncaptured.slice(1)] }).join('\n'), /needs a reason/);
+  assert.match(uncapturedProblems({ evals: evalsPlus, fixtureIds, uncaptured: [...uncaptured, { ...first, reason: ' ' }] }).join('\n'), /needs a reason/);
   assert.match(uncapturedProblems({ evals: genpageData.evals, fixtureIds: new Set([...fixtureIds, 9998]), uncaptured }).join('\n'), /eval 9998, which evals.json does not define/);
 
   const evals = structuredClone(genpageData.evals);
@@ -453,7 +459,7 @@ test('negative controls: entity-log and guide drift is reported', () => {
   assert.match(genpageGuideProblems(guide, { ...facts, tiers: { ...facts.tiers, full: { ...facts.tiers.full, fixtures: facts.tiers.full.fixtures + 1 } } }).join('\n'), /--tier full stored fixtures/);
   const readme = readText(path.join(GENPAGE, 'fixtures', 'README.md'));
   assert.match(genpageReadmeProblems(readme, { ...facts, tsxFiles: facts.tsxFiles + 1 }).join('\n'), /counts: says/);
-  assert.match(genpageReadmeProblems(readme, { ...facts, missingIds: [] }).join('\n'), /prompts with no fixture: says/);
+  assert.match(genpageReadmeProblems(readme, { ...facts, missingIds: [...facts.missingIds, 999] }).join('\n'), /prompts with no fixture: says/);
 
   const appGuide = readText(path.join(APP_BUILDER, 'EVAL_GUIDE.md'));
   const dirs = appBuilderFixtures.map((f) => f.dirName);

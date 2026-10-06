@@ -60,7 +60,7 @@ Layers 1 and 2 are automated. Layer 3 is human judgment by design — visual qua
 
 ### Layer 1 — Workflow assertions
 
-**Input:** `workflow-log.md`, `genpage-plan.md`, optionally `genpage-edit-plan.md` and `genpage-entity-creation-log.md` (legacy `entity-creation-log.md` remains supported). Current synthetic fixtures also supply `fixture.json`, ordered `tool-results.json` and the declared JSON/text/source snapshots.
+**Input:** `workflow-log.md`, `genpage-plan.md`, optionally `genpage-edit-plan.md`, `genpage-entity-creation-log.md` (legacy `entity-creation-log.md` remains supported) and a captured `RuntimeTypes.ts`. Current synthetic fixtures also supply `fixture.json`, ordered `tool-results.json` and the declared JSON/text/source snapshots.
 
 **What it checks:**
 - Prereq commands are recorded (`node --version`, `pac help` with version **> 2.10.0**)
@@ -76,6 +76,7 @@ Layers 1 and 2 are automated. Layer 3 is human judgment by design — visual qua
 - A divergence refusal (`no-base`, `deployed-changed`, `deployed-unreadable`) stops an update before PAC writes (`ok: false`, no PAC write, no forwarded args). `--overwrite-deployed` needs the `Choice:` line that upload command consumes to be exactly `Choice: Overwrite the deployed changes`. Each `genpage-upload.js` line consumes the pending choice, so one approval does not cover a later upload
 - Custom API discovery/gates/bindings/runtime/update stages agree; optional packaging names every deployed page and preserves failures/read-back evidence
 - Prefix discipline holds across plan, entity-creation log, and resolved names
+- Per-eval discovery, provisioning, schema and deployment expectations compare structured evidence read by `lib/expectation-evidence.js` — `list-tables`/`list-languages`/`generate-types`/upload flags and their recorded results, the plan's entity blocks, the entity-creation transactions, and the choice enums in the captured `RuntimeTypes.ts` — on either upload transport
 
 **Runner:** `evals/model-apps/genpage/run-layer-1.js`
 **Library:** `lib/assertions-layer-1.js` (one check function per assertion text)
@@ -135,7 +136,7 @@ All eval definitions live in `evals.json` alongside this file. The file contains
 - `common_code_assertions`: **21** registered code checks.
 - `evals`: **25** prompt definitions, each with `id`, `tier`, `prompt`, `data`, and per-eval `expectations`.
 
-The `data` field specifies scenario assumptions for a manual capture or constructed fixture. The offline harness does not provide responses to `AskUserQuestion` or verify every recorded answer. The corpus contains **20 fixture directories / 26 top-level TSX files**, representing 18 prompt IDs. IDs **3, 6, 8, 9, 12, 14, 16** have no fixture and are not executed.
+The `data` field specifies scenario assumptions for a manual capture or constructed fixture. The offline harness does not provide responses to `AskUserQuestion` or verify every recorded answer. The corpus contains **27 fixture directories / 34 top-level TSX files**, representing 25 prompt IDs. IDs **none** have no fixture — every registered prompt is executed.
 
 ### Enumerating registered and unmatched checks
 
@@ -253,6 +254,13 @@ The suite ships both kinds:
 | 23 | `23-worker-completeness` (current rejection/recovery) | — |
 | 24 | `24-custom-api-lifecycle` (current create/preserve/clear) | — |
 | 25 | `25-solution-package` (current packaging/refusal) | — |
+| 3 | `3-contacts-edit-search-sort` (current edit) | — |
+| 6 | `6-traffic-analytics-mock` (current mock data) | — |
+| 8 | `8-account-metrics-new-app` (current new app) | — |
+| 9 | `9-project-tracker-new-entities` (current new tables + sample data) | — |
+| 12 | `12-account-plan-revision` (current plan revision) | — |
+| 14 | `14-account-list-edit-collision` (current filename collision) | — |
+| 16 | `16-account-list` (current minimal existing-table page) | — |
 
 The mix gives:
 - A **green baseline** to catch runner regressions (synthetics)
@@ -265,7 +273,7 @@ The mix gives:
 
 `fixtures/contracts.json` explicitly labels the 13 existing directories as historical contract 1, without rewriting captured content. Raw PAC transport, legacy navigation spelling and missing transport/read-back artifacts are **not** certified as current compliant. Contract 2 uses a per-directory `fixture.json` and `tool-results.json`: one ordered record per command with its own result, plus `artifacts` listing the exact files to load. Artifact paths must stay inside the fixture and be plain files.
 
-The seven new fixtures exercise these current contracts:
+The first seven contract-2 fixtures exercise these current contracts:
 
 | Fixture | Evidence/check | Negative control in scorer tests |
 |---------|----------------|----------------------------------|
@@ -298,14 +306,14 @@ Exit codes:
 ### Filter by tier
 
 ```bash
-node run-layer-1.js --tier smoke    # 4 stored fixtures, 5 prompt definitions
-node run-layer-1.js --tier full     # 15 stored fixtures, 17 prompt definitions
-node run-layer-1.js --tier stress   # 1 stored fixture (id 10), 3 prompt definitions
+node run-layer-1.js --tier smoke    # 6 stored fixtures, 5 prompt definitions
+node run-layer-1.js --tier full     # 18 stored fixtures, 17 prompt definitions
+node run-layer-1.js --tier stress   # 3 stored fixtures, 3 prompt definitions
 ```
 
 A tier runs only existing fixtures, not every prompt definition. An empty selection reports
 `no fixtures matched the filter` and exits 2. The stress tier now replays the synthetic auth-timeout
-refusal; plan-revision and filename-collision prompts still have no fixture.
+refusal, the plan-revision trace and the filename-collision trace.
 
 ### Filter by eval id (debugging)
 
@@ -358,6 +366,8 @@ When to run which tier:
 - **Full + smoke:** nightly, or before merging a significant change.
 - **Stress tier:** with the full suite, or when changing the orchestrator probe logic, filename validation, or plan-mode handling.
 - **All tiers:** before bumping the plugin version (any 2.x.0 release).
+
+These runners grade artifacts a run already produced; none of them can see whether a prompt reached `/genpage` in the first place. That is graded by the agent-in-the-loop **routing eval** (`evals/model-apps/routing/`, see its `EVAL_GUIDE.md`), which runs on a PR labelled `run-agent-evals`, weekly, and on demand — label any PR that edits the skill's `description:`.
 
 ---
 

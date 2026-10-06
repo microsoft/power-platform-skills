@@ -90,11 +90,11 @@ Two rules for evidence files:
 
 ## Current state
 
-This directory has **20 fixtures, 26 top-level TSX files and 18 represented
+This directory has **27 fixtures, 34 top-level TSX files and 25 represented
 prompt IDs**. All are green under both runners. Directories listed in
 `contracts.json` are historical contract-1 evidence; every other directory is a
 current contract-2 synthetic. Registered prompts with no fixture:
-**3, 6, 8, 9, 12, 14, 16**. `evals/model-apps/tests/eval-coverage-contract.test.js`
+**none**. `evals/model-apps/tests/eval-coverage-contract.test.js`
 fails when these figures, or the reasons recorded for the missing prompts, fall out
 of step with the fixtures.
 
@@ -120,6 +120,13 @@ of step with the fixtures.
 | `23-worker-completeness/` | 23 | Current synthetic | green | Failed production gate blocks upload until fresh complete regeneration |
 | `24-custom-api-lifecycle/` | 24 | Current synthetic | green | Bound Action/global Function discovery, re-probe, runtime, preserve and clear |
 | `25-solution-package/` | 25 | Current synthetic | green | Every deployed page, dynamic component types, app-first writes, read-back and invalid-id refusal |
+| `3-contacts-edit-search-sort/` | 3 | Current synthetic | green | Edit flow: discovered app/page, download snapshot in `before/`, inline edit adding SearchBox + header sorting, `--page-id` delta upload without `--add-to-sitemap` |
+| `6-traffic-analytics-mock/` | 6 | Current synthetic | green | Clean, minimal mock-data analytics with D3 only; no entity work; upload omits `--data-sources` |
+| `8-account-metrics-new-app/` | 8 | Current synthetic | green | Zero apps → create-new-app choice, solution question, `pac model create --solution`, new app-id used for upload |
+| `9-project-tracker-new-entities/` | 9 | Current synthetic | green | Two new related tables, auth gate, dependency-ordered provisioning, `$parent`/match sample data, both tables as data sources |
+| `12-account-plan-revision/` | 12 | Current synthetic | green | First plan rejected, revised plan re-presented and approved; page has both search box and filter toolbar |
+| `14-account-list-edit-collision/` | 14 | Current synthetic | green | Colliding file names refused by the Phase 5a gate, re-plan, two parallel builders, Phase 6.5 navigation fix-up |
+| `16-account-list/` | 16 | Current synthetic | green | Minimal single list page over an existing table; code-only, no solution question or auth gate |
 
 Historical captures remain compatibility/parser evidence, not proof of today's
 file transport, binding preservation or full skill compliance. Their current

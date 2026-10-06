@@ -1,0 +1,20 @@
+{
+  "contractVersion": 2,
+  "provenance": "synthetic",
+  "description": "Constructed trace of a compliant attended edit run for eval 3, not an agent capture. The user routes to Edit existing, picks the Sales Hub app and its contacts page from pac model list / genpage list output, and the edit planner's approved genpage-edit-plan.md adds a SearchBox and header sorting with a Company name default. before/ is the downloaded <page-id>/ snapshot; the top-level page.tsx is the edited <working-dir>/<page-id>/page.tsx. The update upload uses --page-id without --add-to-sitemap, file transport and a delta-only prompt; bindings are preserved by omission.",
+  "contracts": [
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 1: Plan (Steps 1-2, on edit jump to the Edit Flow)",
+    "plugins/model-apps/skills/genpage/edit-flow.md Edit Phase 1: Discover and Select Target App + Page",
+    "plugins/model-apps/skills/genpage/edit-flow.md Edit Phase 2: Download Existing Page",
+    "plugins/model-apps/skills/genpage/edit-flow.md Edit Phase 3: Generate RuntimeTypes (Conditional)",
+    "plugins/model-apps/skills/genpage/edit-flow.md Edit Phase 4: Plan the Edit",
+    "plugins/model-apps/skills/genpage/edit-flow.md Edit Phase 5: Apply the Edit",
+    "plugins/model-apps/skills/genpage/edit-flow.md Edit Phase 6: Deploy Updated Page",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 6: Deploy and Prompt semantics",
+    "plugins/model-apps/agents/genpage-edit-planner.md Step 4: Write genpage-edit-plan.md",
+    "plugins/model-apps/references/rules.md DataAPI Rules and DataGrid Requirements"
+  ],
+  "expectedOutcome": "deployed",
+  "toolResults": "tool-results.json",
+  "artifacts": ["before/page.tsx", "before/config.json", "before/prompt.txt", "prompt.txt", "agent-message.txt"]
+}

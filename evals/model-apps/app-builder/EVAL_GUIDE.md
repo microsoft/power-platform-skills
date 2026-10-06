@@ -155,6 +155,8 @@ exit 1; malformed fixtures and argument errors return exit 2.
 The live smoke (`plugins/model-apps/scripts/smoke-eval.js`) grades actual Dataverse provisioning.
 These offline evals complement it; they do not certify live deployment, SDK serialization or runtime UI behavior.
 
+Nor do they grade the *skill's* judgment: each fixture is a hand-authored App Spec, so the suite tests the deterministic engine (spec → plan → facts), not whether `/app-builder` authors a good spec from a user's intent. Whether a prompt reaches `/app-builder` at all is graded by the agent-in-the-loop routing eval in `evals/model-apps/routing/`.
+
 ## Cross-links
 
 - Plugin `AGENTS.md` → *Eval Suite*

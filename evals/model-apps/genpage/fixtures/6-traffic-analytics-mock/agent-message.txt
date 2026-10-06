@@ -1,0 +1,1 @@
+Created a clean, minimal website analytics dashboard from mock data: four KPI figures, a D3 line chart of weekly visitors and page views, and D3 bar charts of visitors by age group and top country.

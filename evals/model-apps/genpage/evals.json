@@ -387,9 +387,9 @@
       "expectations": [
         "Phase 1 (Planner): Plan initially contains a Pages table with 2 pages",
         "Phase 5a: Orchestrator reads the Pages table and detects duplicate filenames",
-        "Phase 5a: Orchestrator rewrites genpage-plan.md with unique filenames (e.g., account-list.tsx, account-edit.tsx) before dispatching builders",
-        "Phase 5b: Two page-builders are invoked in parallel with distinct target filenames",
-        "Phase 5b: No builder overwrites another builder's output (both .tsx files exist after Phase 5)",
+        "Phase 5a: check-page-files.js refuses the colliding plan and the orchestrator halts and re-plans through the planner (it never renames files itself), so genpage-plan.md carries unique, re-approved filenames (e.g., account-list.tsx, account-edit.tsx) before any builder is dispatched",
+        "Phase 5c: Two page-builders are invoked in parallel with distinct target filenames",
+        "Phase 5c: No builder overwrites another builder's output (both .tsx files exist after Phase 5)",
         "Phase 6: Both pages are deployed with their distinct filenames"
       ]
     },

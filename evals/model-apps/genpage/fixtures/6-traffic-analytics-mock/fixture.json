@@ -1,0 +1,16 @@
+{
+  "contractVersion": 2,
+  "provenance": "synthetic",
+  "description": "Constructed trace of an attended /genpage create run for eval 6, not an agent capture: a clean, minimal mock-data website analytics dashboard (weekly traffic trend plus age and country demographics) drawn with D3 only, deployed to an existing app. No entity work, no RuntimeTypes, no connector or Custom API bindings, and the upload omits --data-sources. Upload text travels by file through genpage-upload.js.",
+  "contracts": [
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 1: Plan",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 4: Generate RuntimeTypes (Conditional) — mock data pages skip",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 5b: Single-page fast path",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 6: Deploy — For mock data pages, omit --data-sources",
+    "plugins/model-apps/agents/genpage-planner.md Solution Selection — code-only flows skip the question",
+    "plugins/model-apps/references/rules.md Charts and Visualization"
+  ],
+  "expectedOutcome": "deployed",
+  "toolResults": "tool-results.json",
+  "artifacts": ["prompt.txt", "agent-message.txt", "page-name.txt"]
+}
