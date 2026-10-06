@@ -18,6 +18,8 @@ const { resolve: resolveRegion, mapToRegion } = require("./region/region-resolve
 // is also no org (PAC signed out): nothing identifies a region then, so the event takes the public default
 // like power-pages does. A signed-in org with no cloud line is handled in resolve() below.
 const PUBLIC_CLOUDS = new Set(["", "public"]);
+// Never a key in ikey.json `regions`; see the public-org branch of resolve().
+const NO_FALLBACK_REGION = "__no_fallback__";
 const STAMPED_CLOUDS = new Set([
   "usgov", "usgovgcc", "gcc", "gov",
   "usgovhigh", "high",
@@ -58,12 +60,21 @@ async function resolve({ event, cfg, cloud, configDir }) {
   // the US public collector — so send nothing instead.
   if (!c && orgId) return null;
 
-  // Public cloud: US vs EU data boundary comes from the org's geo (Artemis gateway), cached per org.
+  // PAC signed out: no org, so nothing places the event in a data boundary and nothing org-identifying
+  // is in it — take the configured public default, like power-pages.
+  if (!orgId) return entryFromMap(regionsMap, defaultRegion);
+
+  // Public cloud with an org: the US vs EU data boundary comes ONLY from the org's geo (Artemis gateway,
+  // cached per org). The shared router falls back to its defaultRegion when Artemis fails or reports a
+  // geo it doesn't recognize, which would send an EU org's event to the US collector during an outage.
+  // Passing a region name that has no entry makes every such fallback resolve to null — send nothing,
+  // keep the local mirror — while a recognized geo (fresh or cached) still routes normally. The router
+  // caches only a DERIVED region, so this sentinel is never written to the shared org→region cache.
   return resolveRegion({
     orgId,
     cloud,
     regionsMap,
-    defaultRegion,
+    defaultRegion: NO_FALLBACK_REGION,
     configDir,
   });
 }

@@ -90,6 +90,34 @@ test("Public cloud with an org → routed by the org's geo (EU data boundary)", 
   assert.match(calls[0], /\.organization\.api\.powerplatform\.com$/);
 });
 
+// An org's data boundary must come from its geo; the router's US default is only for a signed-out PAC.
+for (const [label, geo] of [["the Artemis lookup fails", ""], ["Artemis reports an unrecognized geo", "mars"]]) {
+  test(`Public cloud with an org → null (never the US default) when ${label}`, async () => {
+    const configDir = mkTemp();
+    const { result, calls } = await withFakeHttps(geo, () =>
+      resolver.resolve({ event: { data: { orgId: ORG_ID } }, cfg: CFG, cloud: "Public", configDir })
+    );
+    assert.equal(result, null);
+    assert.equal(calls.length, 1);
+    // Nothing is cached: the next event retries the lookup instead of inheriting a non-derived region.
+    assert.equal(fs.existsSync(path.join(configDir, "region-cache", `${ORG_ID}.json`)), false);
+  });
+}
+
+test("Public cloud with an org → a cached geo routes without a gateway call", async () => {
+  const configDir = mkTemp();
+  fs.mkdirSync(path.join(configDir, "region-cache"), { recursive: true });
+  fs.writeFileSync(
+    path.join(configDir, "region-cache", `${ORG_ID}.json`),
+    JSON.stringify({ region: "eu", expiresAt: Date.now() + 60_000 })
+  );
+  const { result, calls } = await withFakeHttps("us", () =>
+    resolver.resolve({ event: { data: { orgId: ORG_ID } }, cfg: CFG, cloud: "Public", configDir })
+  );
+  assert.equal(result.iKey, "ik-eu");
+  assert.deepEqual(calls, []);
+});
+
 for (const [cloud, region] of [
   ["UsGov", "gov"],
   ["UsGovHigh", "high"],

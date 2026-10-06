@@ -1076,7 +1076,9 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
   `region/` change). A public-cloud
   org routes to `us`/`eu` by its geo (cached per org for 24 h under
   `~/.power-platform-skills/region-cache/`, shared with power-pages — it stores only the
-  region, never a key). Unlike power-pages, a sovereign or internal PAC cloud (`UsGov`,
+  region, never a key); if its geo can't be determined (Artemis down, unknown geo) it sends
+  nothing rather than defaulting to US, and only a signed-out PAC (no org) takes the `us`
+  default. Unlike power-pages, a sovereign or internal PAC cloud (`UsGov`,
   `UsGovHigh`, `UsGovDod`, `China`, `Tip1`/`Tip2`/`Test`/`Preprod`) routes from the stamp
   alone, with no Artemis call and **never** a fallback to the public collector; an
   unrecognized cloud, or a signed-in org with no cloud line, sends nothing. `ikey.json`
