@@ -121,7 +121,10 @@ test('plugin content never runs npx without --no-install', () => {
     const relPath = path.relative(pluginRoot, file).split(path.sep).join('/');
     const text = fs.readFileSync(file, 'utf8');
     for (const hit of findBareNpx(text, relPath.endsWith('.md'))) {
-      const allowed = USER_RUN.some(([allowedFile, command]) => allowedFile === relPath && hit.text.includes(command));
+      const bareNpxCount = [...hit.text.matchAll(BARE_NPX)].length;
+      const allowed = bareNpxCount === 1 && USER_RUN.some(
+        ([allowedFile, command]) => allowedFile === relPath && hit.text.startsWith(command),
+      );
       if (!allowed) offenders.push(`${relPath}:${hit.line}: ${hit.text}`);
     }
   }
