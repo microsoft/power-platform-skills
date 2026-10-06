@@ -195,11 +195,11 @@ Purely mechanical cross-checks over the parsed YAML + data model + Web API artif
 | Permission has **no scope** (`scope < 0`) | SC | scope-correctness | major |
 | Permission scope code **unrecognized** (`Unknown(code)`) | SC | scope-correctness | minor |
 | Permission grants **write/create/delete to an Anonymous role** | AH | anonymous-access-hygiene | major |
-| Permission targets a table **not in the data model** | DM | data-model-alignment | major |
+| Permission targets a table **not in the data model** (only when a valid data-model manifest exists) | DM | data-model-alignment | major |
 | Web API site-setting YAML parse error | IS | internal-consistency | major |
 | `-enabled` entity set with **no matching `-fields`** whitelist | IS | internal-consistency | major |
 | `-fields` whitelist with **no matching `-enabled`** setting | IS | internal-consistency | major |
-| Type file declaring 1–6 properties absent from the data model | DM | data-model-alignment | minor |
+| Type file declaring 1–6 properties absent from the data model (only when a valid data-model manifest exists) | DM | data-model-alignment | minor |
 
 ---
 
@@ -275,7 +275,7 @@ If any script exits with code 1, skip the API-dependent checks and note which ch
 
 ## Step 4: Run Audit Checks
 
-Use per-table task tracking to systematically run every audit check. **These code- and Dataverse-grounded checks are the primary issue detectors** — they catch concrete problems (missing CRUD, append/appendto, `$expand` gaps, broken parent chains, over-provisioned grants) that rubric judgment alone would miss, which is what makes the issue set richer and the score more faithful. Each failed check produces **one issue** with a severity of **major** or **minor** only — there is no critical/warning/info/pass tier — plus a title, the responsible table, its dimension, evidence, and a suggested fix. A check that passes produces **no issue**.
+Use per-table task tracking to systematically run every audit check. **These code- and Dataverse-grounded checks are the primary issue detectors** — they catch concrete problems (missing CRUD, append/appendto, `$expand` gaps, broken parent chains, over-provisioned grants) that rubric judgment alone would miss, which is what makes the issue set richer and the score more faithful. Each failed check emits **one provisional candidate** (title, responsible table, evidence, and a suggested fix); Step 5 assigns its final **major**/**minor** severity and dimension. A check that passes produces **no candidate**. Where a check says to search the service code, look the fact up in the evidence ledger (Step 2.6); search the source only when the ledger lacks it.
 
 ### 4.1 Build Audit Inventory
 
@@ -557,11 +557,11 @@ Number LLM-derived issue ids per canonical dimension prefix (`IC`, `PC`, `SC`, `
 
 Consolidate the full pooled issue list into **distinct root causes**, then classify each into exactly ONE category by **dominant impact**. The number of issues after this step equals the number of root causes.
 
-- **Merge** issues describing the SAME underlying misconfiguration into ONE — even across dimensions/categories, and even when one cites a superset of another's tables (a broad "all tables Global" absorbs a narrow "student Global"). Enumerate all impacts in the description; set severity to the **highest** among merged.
+- **Merge** issues describing the SAME underlying misconfiguration on the same table(s) for the same audience into ONE — even across dimensions/categories. Never let a broad description ("all tables Global") absorb separate per-table exposures; C3 issues stay one per affected table. Enumerate all impacts in the description; set severity to the **highest** among merged.
 - **One category per root cause — by DOMINANT IMPACT:** over-exposure = too much access (data exposed to the wrong audience, anonymous mutation, PII readable too widely, Global on per-owner data); under-exposure = too little access (missing required CRUD flow, user-facing table with no permission, missing persona/role); correctness = structural (references a table absent from the model, dangling role link, wrong/invalid scope, missing design doc). When a root cause could touch two categories, pick its WORST real-world consequence. Reassign the merged issue a `dimension` within the chosen category.
 - **Under-exposure dimension tie-breaker (first match wins):** missing persona role spanning one or more reachable capabilities → `role-completeness`; existing persona role but missing table permission → `table-coverage`; existing role and table permission but missing CRUD/append bit → `intent-coverage`. Never choose among these dimensions by prose emphasis.
 - **Plan/code conflict tie-breaker:** for `reachable` capabilities, implementation wins and the applicable C6/C7/C15 issue remains major; for `disabled` capabilities, the plan wins and no under-exposure issue is raised; for `ambiguous` capabilities, raise only the minor `internal-consistency` conflict.
-- **Do NOT merge distinct exposures on different tables.** Two exposure/PII issues on DISJOINT table sets, or with different audiences/severities, are SEPARATE root causes — keep BOTH (e.g. anonymous-PII on student/teacher tables (major) vs over-broad Global read of public announcements/facilities (minor)). Only merge on the same or subset/superset tables. When in doubt, keep separate. C16 and C18 are one issue per role by definition.
+- **Do NOT merge distinct exposures on different tables.** Two exposure/PII issues on DISJOINT table sets, or with different audiences/severities, are SEPARATE root causes — keep BOTH (e.g. anonymous-PII on student/teacher tables (major) vs over-broad Global read of public announcements/facilities (minor)). Only merge on the same tables. When in doubt, keep separate. C16 and C18 are one issue per role by definition.
 - **Preserve every preflight issue** (Step 2.5) as its own standalone issue with its fixed id + severity. If an audit/rubric issue duplicates a preflight one, merge it **into** the preflight issue (keep the preflight id; severity is the higher of the two).
 - Never invent new problems; every consolidated issue traces to at least one source issue. Never downgrade a major to shrink the count.
 
