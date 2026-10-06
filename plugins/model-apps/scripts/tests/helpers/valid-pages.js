@@ -164,6 +164,9 @@ const PARENTHESISED_ELEMENTS = [
   // A label and an element with attributes, or a phrase: in a type the `<` opens type parameters and a name is a type reference, and a second name after either is no type.
   '<small>(Note: <a href="/help">see help</a>)</small>', '<p>(Status: <Badge color="green">OK</Badge>)</p>', '<p>(Owner: <Avatar src={url} />)</p>',
   '<p>(Note: see the <a href="/help">docs</a>)</p>', '<p>(Tip: get the <b>app</b>)</p>',
+  // A word before a tag with attributes is a type reference whose first type argument is two names; an `===` is no initializer's `=`.
+  '<small>(Note: see <a href="/docs">the docs</a>)</small>', '<p>(Tip: click <a href="/x">here</a>)</p>', '<p>(Note: requires <a href="/x">admin</a> access)</p>',
+  '<p>(Status: {status === "ok" ? <b>OK</b> : <i>Down</i>})</p>', '<p>(Status: {status !== "ok" ? <b>Fix</b> : null})</p>', '<p>(Status: {status != "ok" ? <b>Fix</b> : null})</p>',
   // Text in which something may start an expression — an `=`, a `[`, an `@`, `import` — but no `/`, `<` or back-tick follows it: read exactly, as code holds no regex, JSX or template there.
   '<p>(x = 5)</p>', '<p>(a: [b])</p>', '<p>(Ctrl = \u2318 on Mac)</p>', '<span>(@username)</span>', '<span>([optional])</span>', '<p>(tags: [a, b])</p>', '<button>(import)</button>',
   '<li>(optional, <a href="/docs">see docs</a>)</li>',

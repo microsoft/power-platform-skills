@@ -1349,7 +1349,7 @@ rejected a complete page saved with CRLF endings.
   list too long to scan: the guess `generic`, and everything after it not trusted. The list is matched as JavaScript reads it, with comments, strings and
   templates skipped (a template whole only where each substitution closes, and holds no `<` after something that may start an expression, where JSX —
   whose quotes are no strings — may stand: `templateSkipIsWhole`). In a type that reading is exact until something in the
-  list may start an expression — an initializer's `=` (any `=` but the `=>` of a function type), a `[` other than `[]`, a decorator's `@`, an import
+  list may start an expression — an initializer's `=` (any `=` but the `=>` of a function type and the `=` of `==`, `===`, `!=` and `!==`, which stand only in an expression already entered), a `[` other than `[]`, a decorator's `@`, an import
   type's `import`, an accessor's body in a type literal (`get`/`set` before an accessor's name — a `[`, a name, a string or a number; before a `:`, a `?`,
   a `(` or a `<` each is a name and starts nothing; TypeScript parses a block after an accessor and only its checker objects), a type parameter's
   constraint (`extends` before what starts no type — a `/`, `class`, `super`, `delete`, an operator, a `#` or an `@` — for a constraint that starts a
@@ -1370,9 +1370,10 @@ rejected a complete page saved with CRLF endings.
   `class`, …) fail the list — but `default`, a modifier before what it can head (`interface`, `class`, `function`, `abstract`, `async` or a
   decorator), ends the reading there — and every other keyword (`get`, `set`, `of`, `type`, …) is a name. A type is read to its second token
   (`typeStartFails`): a name after a type reference is TS1005 unless the first word takes a type (`keyof`, `typeof`, `readonly`, `unique`, `infer`,
-  `asserts`) or the second is a conditional's `extends`, and a name after a generic function type's first type parameter is TS1005 unless the first
-  word is a modifier, which TypeScript parses there whatever it is (`<private x>`). Tests measure the classes over every keyword TypeScript has,
-  every keyword before every other one, and every two-word type start. One place settles even those: **directly after the head of a type alias, `type Name =` at a
+  `asserts`, and `this` before `is`, a type predicate TypeScript reads in any type) or the second is a conditional's `extends`; a type reference's first
+  type argument is read the same way (`see<a href` fails at `href`); and a name after a generic function type's first type parameter is TS1005 unless
+  the first word is a modifier, which TypeScript parses there whatever it is (`<private x>`). Tests measure the classes over every keyword TypeScript has,
+  every keyword before every other one, and every two-word type start with the endings that could complete it. One place settles even those: **directly after the head of a type alias, `type Name =` at a
   statement start** (after any `export` and `declare`), where `type Name` — two names side by side — cannot be
   an expression, so a `<` is a function type's type parameters, for certain, whatever follows it
   (`afterTypeAliasHead`; a head with type parameters, `type Fn<A> =`, is not read, and its right side is decided

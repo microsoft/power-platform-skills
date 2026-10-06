@@ -2340,11 +2340,12 @@ const ELEMENT_READING_UNSURE = [
   // A container with a character in it that could open a nested construct holding a `}` — an object, a string, a template, a regex, a comment, an escape, an element — and none of the shapes
   // read, is not skipped: it may end elsewhere than at its first `}`.
   '<T>(x: { <U>(y: U): U }) => T', "<T>(x: { 'a'?(y: T): T }) => T", "<T>(x: { 'a'<U>(y: U): T }) => T", '<T>(x: { (y: { a: T }): T }) => T', '<T>(x: { function (y: T) {} }) => T', '<T>(x: { a, `b` }) => T',
-  '<T>(x: A<a-b>) => T', '<T>(x: A<a:b>) => T', '<T>(x: A<b /* c */>) => T', '<T>(x: A<b {...c}>) => T', '<T>(x: A<b<{ a: T }>>) => T', '<T>(x: A<b c={d}>) => T',
-  '<T>(x: A<b c=<d/>>) => T',
+  '<T>(x: A<a-b>) => T', '<T>(x: A<a:b>) => T', '<T>(x: A<b /* c */>) => T', '<T>(x: A<b {...c}>) => T', '<T>(x: A<b<{ a: T }>>) => T',
   // The text between the `>` of `<Name>` and the parenthesis is the element's text too: a comment there is text, and a `</` in it is a closing tag.
   '<T> /* </ */ (x: T) => T',
 ];
+// ... and what is no type for certain, whichever way the element reads: a type argument that is two names fails at the second (typeStartFails), so the head is the element.
+const TYPE_READING_FAILS = ['<T>(x: A<b c={d}>) => T', '<T>(x: A<b c=<d/>>) => T'];
 
 const ELEMENT_READING_GUESS = { generic: false, ambiguity: 'generic' };
 const TYPE_READING_GUESS = { generic: true, ambiguity: 'generic' };
@@ -2352,6 +2353,7 @@ const TYPE_READING_GUESS = { generic: true, ambiguity: 'generic' };
 test('"<Name>(…) =>" is a function type for certain wherever its element reading cannot parse, and a read type with a guess where that cannot be shown', () => {
   for (const [reason, , bodies] of ELEMENT_READING_FAILS) for (const body of bodies) assert.deepStrictEqual(opens(body), GENERIC, `${reason}: ${body}`);
   for (const body of ELEMENT_READING_UNSURE) assert.deepStrictEqual(opens(body), TYPE_READING_GUESS, body);
+  for (const body of TYPE_READING_FAILS) assert.deepStrictEqual(opens(body), ELEMENT, body);
   // An element that is not followed by an arrow is no function type: a parameter-like text in an element, which compiles. The colon form, and a list too long to scan, are
   // what no rule settles: the element is read, and it is a guess.
   for (const body of ['<W>({() => 1})</W>', '<W>({ a }: X) </W>', '<b>(optional)</b>']) assert.deepStrictEqual(opens(body), ELEMENT, body);
@@ -3193,6 +3195,9 @@ const PLAIN_LIST_ELEMENTS = [
   // A label and an element with attributes, or a phrase: in a type the `<` opens type parameters and a name is a type reference, and a second name after either is no type.
   '<small>(Note: <a href="/help">see help</a>)</small>', '<p>(Status: <Badge color="green">OK</Badge>)</p>', '<p>(Owner: <Avatar src={url} />)</p>',
   '<p>(Note: see the <a href="/help">docs</a>)</p>', '<p>(Tip: get the <b>app</b>)</p>',
+  // A word before a tag with attributes is a type reference with type arguments to a type, whose first is two names; an `===` is no initializer's `=`.
+  '<small>(Note: see <a href="/docs">the docs</a>)</small>', '<p>(Tip: click <a href="/x">here</a>)</p>', '<p>(Note: requires <a href="/x">admin</a> access)</p>',
+  '<p>(Status: {status === "ok" ? <b>OK</b> : <i>Down</i>})</p>', '<p>(Status: {status !== "ok" ? <b>Fix</b> : null})</p>', '<p>(Status: {status != "ok" ? <b>Fix</b> : null})</p>',
 ];
 // ... and the text in which something may start an expression and a `/`, a `<` or a back-tick follows, which a signature's parameter list shares: the guess.
 const INITIALIZER_LIST_ELEMENTS = ['<p>(a = /x/)</p>', '<p>(a = b/(c))</p>', '<p>(a = /(x)/)</p>', '<p>(a = <b>c</b>)</p>', '<p>(a = `x`)</p>'];
@@ -3379,6 +3384,11 @@ test('a parameter type that fails at its second token fails the list, wherever T
     ['a: keyof T', GUESS], ['a: typeof x', GUESS], ['a: readonly T[]', GUESS], ['a: unique symbol', GUESS], ['a: infer U', GUESS], ['a: asserts x', GUESS], ['a: new () => T', GUESS],
     ['a: A extends B ? C : D', GUESS], ['a: <private x>() => x', GUESS], ['a: <static x>() => x', GUESS], ['a: <in out x>() => x', GUESS], ['a: x\u00e9 y', GUESS], ['a: x\\u0079 z', GUESS],
     ['a: A.B c', GUESS], ['a: 1 2', GUESS],
+    // `this is` is a type predicate in any type, with trivia or a comment between the words; anything else after `this` is no type either way, and is left to the scan.
+    ['a: this is string', GUESS], ['a?: this is T', GUESS], ['...a: this is T', GUESS], ['x, a: this is T', GUESS], ['a: this /* c */ is T', GUESS], ['a: this\u00a0is T', GUESS], ['a: Foo<this is T>', GUESS],
+    // A type reference's first type argument is a type, read the same way.
+    ['Note: see <a href="/docs">the docs</a>', ELEMENT], ['Tip: click <a href="/x">here</a>', ELEMENT], ['a: Foo<b c>', ELEMENT], ['a: Foo<<b c>() => b>', ELEMENT], ['a: Foo < /* c */ b c>', ELEMENT],
+    ['a: Array<keyof T>', GUESS], ['a: Foo<T extends U ? X : Y>', GUESS], ['a: Foo<<T>() => T>', GUESS], ['a: Foo<infer U>', GUESS], ['a: Foo<a, b c>', GUESS], ['a: Foo<<private x>() => x>', GUESS],
   ]) assert.deepStrictEqual(opensTypeParameters(`<T>(${list}): x</T>`, 0), expected, list);
   const ts = loadTypescriptOracle();
   if (!ts) return t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the readings');
@@ -3388,19 +3398,23 @@ test('a parameter type that fails at its second token fails the list, wherever T
   const words = [...keywords, 'x', 'Note', 'see'];
   const unsound = [];
   let failed = 0;
+  // The lexer reads two names; what follows them may complete a type that the pair alone does not (`this is` needs the type after it), so each list is tried with a few endings.
+  const shapes = [(pair) => pair, (pair) => `<${pair}>() => void`, (pair) => `Foo<${pair}>`];
   for (const first of words) {
     for (const second of words) {
-      for (const type of [`${first} ${second}`, `<${first} ${second}>() => void`]) {
-        const list = `x: ${type}`;
-        const read = opensTypeParameters(`<T>(${list}): x</T>`, 0);
-        if (read.generic || read.ambiguity !== null) continue;
-        failed += 1;
-        if (frames.some((frame) => parseDiagnosticMessages(ts, frame(list)).length === 0)) unsound.push(list);
+      for (const shape of shapes) {
+        for (const ending of ['', ' T', ' T ? T : T', '[]']) {
+          const list = `x: ${shape(`${first} ${second}${ending}`)}`;
+          const read = opensTypeParameters(`<T>(${list}): x</T>`, 0);
+          if (read.generic || read.ambiguity !== null) continue;
+          failed += 1;
+          if (frames.some((frame) => parseDiagnosticMessages(ts, frame(list)).length === 0)) unsound.push(list);
+        }
       }
     }
   }
   assert.deepStrictEqual(unsound, [], 'a list read as no list that TypeScript parses as one');
-  assert.ok(failed >= 10000, `only ${failed} lists were read as no list`);
+  assert.ok(failed >= 60000, `only ${failed} lists were read as no list`);
 });
 
 // readChildren in closing mode, through elementChildren: the children of `<T>` read from its `>` to the closing tag of its own. `fails` is a text no element has, `closes` the closing tag found, `hidden` one that

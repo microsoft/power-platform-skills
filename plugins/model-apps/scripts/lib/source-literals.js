@@ -1824,15 +1824,17 @@ function defaultMayModify(src, end) {
   return c === '@' || c === '\\' || (c !== undefined && c.charCodeAt(0) > 0x7f) || /^(?:class|function|interface|abstract|async)(?![\w$])/.test(src.slice(next, next + 10));
 }
 
-// The words a type may start with that take a type after them: `keyof T`, `typeof x`, `readonly T[]`, `unique symbol`, `infer U`, `asserts x`, measured over every keyword
-// TypeScript has; `new`, `abstract`, `function` and `import`, which start a type that a name does not follow, are kept as well.
-const TYPE_OPERATOR_WORDS = new Set(['keyof', 'typeof', 'readonly', 'unique', 'infer', 'asserts', 'new', 'abstract', 'function', 'import']);
+// The words a type may start with that take a type after them: `keyof T`, `typeof x`, `readonly T[]`, `unique symbol`, `infer U`, `asserts x`, and `this` before `is` (a type
+// predicate, which TypeScript reads in any type: `(a: this is string)` parses, and only the checker objects), measured over every keyword TypeScript has; `new`, `abstract`,
+// `function` and `import`, which start a type that a name does not follow, are kept as well.
+const TYPE_OPERATOR_WORDS = new Set(['keyof', 'typeof', 'readonly', 'unique', 'infer', 'asserts', 'this', 'new', 'abstract', 'function', 'import']);
 
-// Whether the type that starts at `t`, a parameter's, fails at its second token, a name. A name there that follows a type reference is TS1005 (the list wants a `,`, a `)`, an `=`, a
-// `?` or an operator), unless the first word takes a type after it (TYPE_OPERATOR_WORDS) or the second is a conditional type's `extends`. A `<` there opens a generic function type's
-// type parameters, which after their first name want `,`, `>`, `=` or `extends` (parseTypeParameter), unless the first word is a modifier — TypeScript parses every one there, and
-// only the checker objects (`<private x>`). A name that a character beyond ASCII or a backslash goes on with ends the reading: false. Both are measured against TypeScript over
-// every pair of keywords.
+// Whether the type that starts at `t`, a parameter's, fails at the second name it holds. A name there that follows a type reference is TS1005 (the list wants a `,`, a `)`, an
+// `=`, a `?` or an operator), unless the first word takes a type after it (TYPE_OPERATOR_WORDS) or the second is a conditional type's `extends`. A `<` there opens a generic
+// function type's type parameters, which after their first name want `,`, `>`, `=` or `extends` (parseTypeParameter), unless the first word is a modifier — TypeScript parses
+// every one there, and only the checker objects (`<private x>`). A `<` after a type reference opens its type arguments, whose first is a type and is read the same way
+// (`see<a href` fails at `href`). A name that a character beyond ASCII or a backslash goes on with ends the reading, as anything else does: false. Both are measured against
+// TypeScript over every pair of keywords.
 function typeStartFails(src, t) {
   const nameEnd = (at) => {
     let e = at;
@@ -1840,15 +1842,22 @@ function typeStartFails(src, t) {
     if (e === at || /[0-9]/.test(src[at]) || src[e] === '\\' || (e < src.length && src[e].charCodeAt(0) > 0x7f && !isTrivia(src[e]))) return -1;
     return e;
   };
-  const parameters = src[t] === '<';
-  const first = parameters ? skipSpaceAndComments(src, t + 1) : t;
-  const firstEnd = nameEnd(first);
-  if (firstEnd === -1) return false;
-  const word = src.slice(first, firstEnd);
-  if (parameters ? word === 'const' || PARAMETER_MODIFIERS.has(word) : TYPE_OPERATOR_WORDS.has(word)) return false;
-  const second = skipSpaceAndComments(src, firstEnd);
-  const secondEnd = nameEnd(second);
-  return secondEnd !== -1 && src.slice(second, secondEnd) !== 'extends';
+  // Each step reads one type: the parameter's, then the first type argument of a type reference that a `<` follows. Every step consumes text, so the loop ends.
+  for (let start = t; ;) {
+    const parameters = src[start] === '<';
+    const first = parameters ? skipSpaceAndComments(src, start + 1) : start;
+    const firstEnd = nameEnd(first);
+    if (firstEnd === -1) return false;
+    const word = src.slice(first, firstEnd);
+    if (parameters ? word === 'const' || PARAMETER_MODIFIERS.has(word) : TYPE_OPERATOR_WORDS.has(word)) return false;
+    const second = skipSpaceAndComments(src, firstEnd);
+    if (!parameters && src[second] === '<') {
+      start = skipSpaceAndComments(src, second + 1);
+      continue;
+    }
+    const secondEnd = nameEnd(second);
+    return secondEnd !== -1 && src.slice(second, secondEnd) !== 'extends';
+  }
 }
 
 // Whether the character at `k`, in a parameter list read as a type, may start an expression or a statement there. TypeScript's parser does so from a type only at these places (parser.ts,
@@ -1860,7 +1869,9 @@ function typeStartFails(src, t) {
 // the scan untrusted sooner where a `/`, a `<` or a back-tick follows. `typeof` takes a name.
 function expressionMayStart(src, k) {
   const c = src[k];
-  if (c === '=') return src[k + 1] !== '>';
+  // An initializer's `=`, not the `=>` of a function type, nor a part of `==`, `===`, `!=` or `!==`, which no type holds and which stand only in an expression entered at an
+  // earlier start: `(Status: {status === "ok" ? <b>OK</b> : <i>Down</i>})` holds none. (`>=` stays one: after type arguments it is a `>` and an initializer's `=`.)
+  if (c === '=') return src[k + 1] !== '>' && src[k + 1] !== '=' && src[k - 1] !== '=' && src[k - 1] !== '!';
   if (c === '@') return true;
   if (c === '[') return src[skipSpaceAndComments(src, k + 1)] !== ']';
   if (/[\w$\\]/.test(src[k - 1] || '') || !/[eigs]/.test(c)) return false;
