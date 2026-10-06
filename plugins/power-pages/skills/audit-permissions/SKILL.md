@@ -95,7 +95,7 @@ Read all files matching `**/.powerpages-site/table-permissions/*.tablepermission
 
 - `entityname` (permission name)
 - `entitylogicalname` (table)
-- `scope` (numeric code) → map to a label: `756150000 = Global`, `756150001 = Contact`, `756150002 = Account`, `756150003 = Parental`, `756150004 = Parent`; anything else → `Unknown(<code>)`; missing → scope `-1`, label `Unknown`
+- `scope` (numeric code) → map to a label: `756150000 = Global`, `756150001 = Contact`, `756150002 = Account`, `756150003 = Parent`, `756150004 = Self`; anything else → `Unknown(<code>)`; missing → scope `-1`, label `Unknown`
 - `read`, `create`, `write`, `delete`, `append`, `appendto` (boolean flags)
 - `adx_entitypermission_webrole` (array of web role UUIDs) → resolve each GUID to a role name via §2.1; unresolved → mark `<unresolved:…>`
 - `contactrelationship`, `accountrelationship` (if Contact/Account scope)
@@ -217,7 +217,7 @@ Use deterministic Node.js scripts for all Dataverse API calls. These scripts han
 
 Before calling `pac env who` or any Dataverse query script, compute `needsLiveDiscovery`. It is `true` only when at least one reachable capability has one of these unresolved dependencies:
 
-- Contact, Account, Parent, or Parental scope whose relationship name must be verified
+- Contact, Account, or Parent scope whose relationship name must be verified
 - create/write code that binds or changes a lookup
 - `$expand` or related-table access whose target cannot be resolved from local metadata
 - file/image upload whose relationship or target metadata is unresolved
@@ -349,7 +349,7 @@ Is the scope the least-privileged option that fits?
   - **Severity:** `critical`
   - **Title:** `Self-registered users can read all <table> records`
   - **Reasoning:** State the full evidence chain: registration setting(s) → automatic Authenticated Users membership → permission role binding → Global scope → exposed columns/intended audience. Authentication alone does not establish trusted-persona membership.
-  - **Fix:** Remove the baseline Authenticated Users role from this permission and assign a purpose-specific role provisioned only to verified users; where access is record-relative, use Contact, Account, Parent, or Parental scope instead of Global.
+  - **Fix:** Remove the baseline Authenticated Users role from this permission and assign a purpose-specific role provisioned only to verified users; where access is record-relative, use Contact, Account, Parent, or Self scope instead of Global.
 - If Global scope (`756150000`) with `write` or `delete` enabled → finding:
   - **Severity:** `warning`
   - **Title:** `Global scope with write/delete on <table>`
@@ -545,7 +545,7 @@ Assess the **3 categories**; within each, reason across its 3 dimensions togethe
 - **[C7]** The site needs purpose-specific personas (e.g. distinct student / teacher / staff / admin audiences) but only generic Anonymous/Authenticated roles exist → dim `role-completeness` · **major** *(a missing `Administrators` role/persona is NOT a gap — see the ADMINISTRATORS EXCEPTION)*.
 - **[C8]** A web role is defined but referenced by NO table permission (orphaned) while every persona the site needs is still served by another role → dim `role-completeness` · **minor**.
 - **[C9]** GLOBAL-scope READ of inherently-public / non-sensitive shared reference data (announcements, facilities, public faculty/leadership listings) → dim `security-posture` · **minor**.
-- **[C10]** A scope/permission that only matters under a HYPOTHETICAL future change ("if guardians authenticate later, a Contact/Parental scope would be better") → dim `scope-correctness` · **minor**.
+- **[C10]** A scope/permission that only matters under a HYPOTHETICAL future change ("if guardians authenticate later, a Contact or Parent scope would be better") → dim `scope-correctness` · **minor**.
 - **[C11]** No `permission-plan.html` present, or only a generic/boilerplate plan ("Global is the broadest scope") → dim `internal-consistency` · **minor**.
 - **[C12]** A data-model table with no permission that is NOT clearly user-facing (not referenced by code, not an obvious end-user entity) → dim `table-coverage` · **minor**.
 - **[C13]** **Wildcard column exposure** — a Web API `fields` site setting, a `$select`, or any other column list is set to the wildcard `*` instead of naming columns → dim `security-posture` · **major**. `*` grants every column, including sensitive ones and any column added to the table later, so the exposure grows silently with the schema. Raise this **per affected table**. **Explicitly enumerating column names is NOT this pattern** — a hand-written list covering all of a table's columns is fine and must never be flagged under C13; only the wildcard itself is the issue.
@@ -705,18 +705,18 @@ Run the render script (it creates the output directory if needed):
 node "${PLUGIN_ROOT}/scripts/render-audit-report.js" --output "<OUTPUT_PATH>" --data "<DATA_JSON_PATH>"
 ```
 
-The render script refuses to overwrite existing files. Before calling it, check if the default output path (`<PROJECT_ROOT>/docs/permissions-audit.html`) already exists. If it does, choose a new descriptive filename based on context — e.g., `permissions-audit-apr-2026.html`, `permissions-audit-post-migration.html`. Pass the chosen name via `--output`.
+The render script refuses to overwrite existing files. Before calling it, check if the default output path (`<PROJECT_ROOT>/docs/permissions-audit.html`) already exists. If it does, choose a new descriptive filename based on context — e.g., `permissions-audit-apr-2026.html`, `permissions-audit-post-migration.html`. Pass the chosen name via `--output`, and use the same name for the `reportPaths` entries and the JSON result in Step 7.4.
 
 ### 7.4 Write the JSON result
 
-Alongside the HTML (same output directory), write a machine-readable result named `permissions-audit-result.json`. The key list below and the formats above are the complete authoring contract; the validator is the format authority.
+Alongside the HTML (same output directory), write a machine-readable result named after the report with `-result.json` in place of `.html` — `permissions-audit.html` → `permissions-audit-result.json`, `permissions-audit-apr-2026.html` → `permissions-audit-apr-2026-result.json`. The validator pairs the two files by this name. The key list below and the formats above are the complete authoring contract; the validator is the format authority.
 
 Top-level keys: `dimensionResults[]`, `categoryResults[]`, `verdict`, `overallSummary`, `issueCounts`, `deterministic`, `crossTrackPropagations[]`, `modelInfo`. Order `dimensionResults` per Appendix B and `categoryResults` as Over-Exposure, Under-Exposure, Correctness. Every issue requires `id`, `dimension`, `severity`, `description`, `suggestion`, and non-empty `mergedFrom`; `evidence` is optional. Every major issue requires exactly one propagation entry; minor issues have none.
 
 Run the semantic validator after writing both artifacts:
 
 ```bash
-node "${PLUGIN_ROOT}/skills/audit-permissions/scripts/validate-audit.js" --result "<OUTPUT_DIR>/permissions-audit-result.json"
+node "${PLUGIN_ROOT}/skills/audit-permissions/scripts/validate-audit.js" --result "<RESULT_JSON_PATH>"
 ```
 
 Do not present or copy a report until validation succeeds. The validator recomputes issue/category counts, scores, verdict, canonical dimension order, issue-id prefixes, and one-to-one major-issue propagation coverage, and checks that every HTML finding uses a JSON issue id and that each major finding shows the same root cause.
@@ -817,7 +817,7 @@ Use each dimension's definition to decide where an issue belongs. Order is canon
 
 **2. Privilege Calibration** — `PC` · *Over-Exposure* — Per (role, table, op): is each CRUD bit right-sized — not over- or under-granted?
 
-**3. Scope Correctness** — `SC` · *Correctness* — Does scope (Global/Contact/Account/Parental) match the data-ownership model? Per-user → Contact; public bulletin → Global; parent-viewing-own-child → Parental.
+**3. Scope Correctness** — `SC` · *Correctness* — Does scope (Global/Contact/Account/Parent/Self) match the data-ownership model? Per-user → Contact; public bulletin → Global; child records reached through a parent record → Parent; the user's own contact record → Self.
 
 **4. Role Completeness** — `RC` · *Under-Exposure* — Are all personas implied by the request present as web roles? Spurious roles? Anonymous + Authenticated correct?
 

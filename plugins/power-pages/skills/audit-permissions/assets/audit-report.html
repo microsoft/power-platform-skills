@@ -190,10 +190,6 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
           <div id="ovVerdictNote" style="font-size:11px;color:var(--text-dim);margin-bottom:4px;">&nbsp;</div>
           <h3 style="margin-top:18px;">Category Scores</h3>
           <div class="card" id="ovCategoryBox" style="line-height:1.7;"></div>
-          <div id="ovSimWrap" style="display:none;">
-            <h3 style="margin-top:18px;">Permission Test Simulation</h3>
-            <div class="card" id="ovSimBox" style="line-height:1.7;"></div>
-          </div>
         </div>
 
         <div id="ovReportWrap" style="display:none;">
@@ -279,13 +275,7 @@ const INVENTORY = __JSON_INVENTORY_DATA__;
 // Each item: { name, table, scope, roles, read, create, write, delete, append, appendto }
 
 const SCORECARD = __JSON_SCORECARD_DATA__;
-// null when scoring was skipped, else:
-// { verdict, summary, categories:[{name,weight,score,major,minor}],
-//   dimensions:[{dimension,category,major,minor}], issues:[{id,dimension,severity}],
-//   propagation:[{issueId,rootCause,confidence,explanation}],
-//   reportPaths:[{label,path}],   // links shown in the Overview tab to the full JSON/MD/HTML artifacts
-//   permissionTest:{ total, passed, failed, overPermissive, underPermissive, passRate } | null }
-//   (full per-case detail lives in permissions-audit-result.json, not the HTML)
+// null when scoring was skipped, else { categories:[{name,score}], reportPaths:[{label,path}] }
 
 // Tab navigation
 document.querySelectorAll('.nav-btn').forEach(btn => {
@@ -308,7 +298,7 @@ const sevConfig = {
 const scopeNames = { 756150000:'Global', 756150001:'Contact', 756150002:'Account', 756150003:'Parent', 756150004:'Self' };
 function scopeName(s) { return scopeNames[s] || s; }
 
-// Root cause (Step 6): taken from the finding, falling back to SCORECARD.propagation by issue id.
+// Root cause (Step 6) of each major finding.
 const rootCauseConfig = {
   'permissions':     { label: 'Permissions only',            cls: 'rc-permissions' },
   'mixed':           { label: 'Permissions + upstream',      cls: 'rc-mixed' },
@@ -316,13 +306,9 @@ const rootCauseConfig = {
   'webapi-code':     { label: 'Upstream: site code',         cls: 'rc-upstream' },
   'webapi-settings': { label: 'Upstream: Web API settings',  cls: 'rc-upstream' }
 };
-const propagationById = {};
-((SCORECARD && SCORECARD.propagation) || []).forEach(p => { if (p && p.issueId) propagationById[p.issueId] = p; });
 function rootCauseOf(f) {
-  const p = propagationById[f.id] || {};
-  const key = f.rootCause || p.rootCause;
-  const cfg = rootCauseConfig[key];
-  return cfg ? { cfg: cfg, reason: f.rootCauseReason || p.explanation || '' } : null;
+  const cfg = rootCauseConfig[f.rootCause];
+  return cfg ? { cfg: cfg, reason: f.rootCauseReason || '' } : null;
 }
 
 // Stats
@@ -469,22 +455,6 @@ function renderOverviewScore() {
     '</div>';
   }).join('') || '<div style="color:var(--text-dim);">No category data.</div>';
   var cbox = document.getElementById('ovCategoryBox'); if (cbox) cbox.innerHTML = catHtml;
-
-  // Permission-test simulation score
-  var t = S.permissionTest;
-  var simWrap = document.getElementById('ovSimWrap');
-  var simBox = document.getElementById('ovSimBox');
-  if (t && simBox) {
-    if (simWrap) simWrap.style.display = '';
-    var rate = Math.round((t.passRate || 0) * 100);
-    simBox.innerHTML =
-      '<div style="display:flex;gap:28px;flex-wrap:wrap;font-size:14px;align-items:baseline;">' +
-        '<div><span style="font-size:22px;font-weight:700;color:var(--accent);font-family:var(--mono)">' + rate + '%</span> <span style="color:var(--text-dim);font-size:12px;">pass rate</span></div>' +
-        '<div><strong style="color:var(--text-bright)">' + (t.passed||0) + '</strong> / ' + (t.total||0) + ' passed</div>' +
-        '<div style="color:var(--critical)"><strong>' + (t.overPermissive||0) + '</strong> over-permissive</div>' +
-        '<div style="color:var(--warning)"><strong>' + (t.underPermissive||0) + '</strong> under-permissive</div>' +
-      '</div>';
-  }
 
   // Full evaluation report paths
   var paths = S.reportPaths || [];

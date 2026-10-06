@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { findProjectRoot } = require('../../../scripts/lib/validation-helpers');
 
 const DIMENSIONS = [
   'intent-coverage',
@@ -63,6 +64,14 @@ function assertCounts(actual, expected, label) {
   }
 }
 
+function requireText(record, fields, label) {
+  for (const field of fields) {
+    if (typeof record[field] !== 'string' || !record[field].trim()) {
+      throw new Error(`${label} needs a non-empty ${field}.`);
+    }
+  }
+}
+
 function validateResult(result) {
   if (!result || typeof result !== 'object') throw new Error('Result must be a JSON object.');
   if (!Array.isArray(result.dimensionResults) || result.dimensionResults.length !== DIMENSIONS.length) {
@@ -96,6 +105,7 @@ function validateResult(result) {
       if (!Array.isArray(issue.mergedFrom) || issue.mergedFrom.length === 0) {
         throw new Error(`Issue ${issue.id} must include non-empty mergedFrom.`);
       }
+      requireText(issue, ['description', 'suggestion'], `Issue ${issue.id}`);
       issueIds.add(issue.id);
       issues.push(issue);
     }
@@ -149,15 +159,19 @@ function validateResult(result) {
   return { issueCounts: expectedTotalCounts, verdict: expectedVerdict };
 }
 
-function findProjectRoot(directory) {
-  let current = path.resolve(directory);
-  while (true) {
-    if (fs.existsSync(path.join(current, 'powerpages.config.json')) ||
-        fs.existsSync(path.join(current, '.powerpages-site'))) return current;
-    const parent = path.dirname(current);
-    if (parent === current) return null;
-    current = parent;
-  }
+function htmlPathFor(resultPath) {
+  if (/-result\.json$/i.test(resultPath)) return resultPath.replace(/-result\.json$/i, '.html');
+  return path.join(path.dirname(resultPath), 'permissions-audit.html');
+}
+
+function latestResultPath(docsDirectory) {
+  if (!fs.existsSync(docsDirectory)) return null;
+  const candidates = fs.readdirSync(docsDirectory)
+    .filter((name) => /^permissions-audit.*-result\.json$/i.test(name))
+    .map((name) => path.join(docsDirectory, name));
+  if (candidates.length === 0) return null;
+  return candidates.reduce((latest, candidate) =>
+    (fs.statSync(candidate).mtimeMs > fs.statSync(latest).mtimeMs ? candidate : latest));
 }
 
 function readFindings(html) {
@@ -185,6 +199,7 @@ function validateHtmlFindings(html, result) {
     if (!issue) {
       throw new Error(`Audit report finding ${finding.id} does not match a JSON issue id.`);
     }
+    requireText(finding, ['title', 'reasoning', 'fix'], `Audit report finding ${finding.id}`);
     if (issue.severity === 'major' && finding.rootCause !== rootCauseById[finding.id]) {
       throw new Error(`Audit report finding ${finding.id} has rootCause ${finding.rootCause}; expected ${rootCauseById[finding.id]}.`);
     }
@@ -217,7 +232,7 @@ const explicitResult = resultFlagIndex >= 0 ? process.argv[resultFlagIndex + 1] 
 if (explicitResult) {
   try {
     const resultPath = path.resolve(explicitResult);
-    const htmlPath = path.join(path.dirname(resultPath), 'permissions-audit.html');
+    const htmlPath = htmlPathFor(resultPath);
     const summary = validateFiles(resultPath, htmlPath);
     process.stdout.write(`${JSON.stringify({ valid: true, resultPath, ...summary })}\n`);
   } catch (error) {
@@ -231,11 +246,9 @@ if (explicitResult) {
       const cwd = JSON.parse(input).cwd;
       const projectRoot = cwd && findProjectRoot(cwd);
       if (!projectRoot) process.exit(0);
-      const docsDirectory = path.join(projectRoot, 'docs');
-      const resultPath = path.join(docsDirectory, 'permissions-audit-result.json');
-      const htmlPath = path.join(docsDirectory, 'permissions-audit.html');
-      if (!fs.existsSync(resultPath) || !fs.existsSync(htmlPath)) process.exit(0);
-      validateFiles(resultPath, htmlPath);
+      const resultPath = latestResultPath(path.join(projectRoot, 'docs'));
+      if (!resultPath) process.exit(0);
+      validateFiles(resultPath, htmlPathFor(resultPath));
       process.exit(0);
     } catch (error) {
       fail(error, true);
