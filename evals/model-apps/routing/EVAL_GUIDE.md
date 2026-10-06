@@ -48,10 +48,15 @@ canvas/Power Fx, Power Automate, a generic React dashboard, and a pure knowledge
   session offers more tools, so the model sees a slightly smaller menu.
 - **Stopped at the decision.** The JSONL transcript is parsed as it streams, and the agent is killed
   the moment it invokes a model-apps skill, so a positive trial costs about one model turn.
-- **Guarded.** Claude reports the skills it loaded; if the plugin's skills are missing, the trial is
-  a harness **error**, not a passing "none". A CLI that exits non-zero before deciding (not signed
-  in, not installed), or a run cut off by `--timeout` before choosing a skill, is also an error —
-  only a run that **finishes** without invoking a model-apps skill counts as "none".
+- **Guarded.** Every trial proves the plugin's skills were loaded before its outcome counts; if they
+  were not, the trial is a harness **error**, not a passing "none". Claude reports its loaded
+  skills in the transcript's init event. Copilot's transcript does not, so each Copilot trial first
+  runs `copilot --plugin-dir <dir> skill list --json` with the trial's own isolated `COPILOT_HOME`.
+  That fails the trial, before any model call, if a plugin skill is missing or any non-builtin skill
+  from outside the plugin is present (an isolation leak). A CLI that exits non-zero or reports a
+  failed result before deciding (not signed in, not installed, crashed), or a run cut off by
+  `--timeout` before choosing a skill, is also an error. Only a run that **finishes successfully**
+  without invoking a model-apps skill counts as "none".
 
 Every flag is in `lib/agents.js`; every transcript shape the parser understands is documented in
 `lib/transcript.js`.

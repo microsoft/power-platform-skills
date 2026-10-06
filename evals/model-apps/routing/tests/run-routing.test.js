@@ -155,11 +155,11 @@ test('CLI --dry-run prints the isolated invocation and launches nothing', () => 
 
 // ---------- spawnTrial against a fake agent (real process plumbing) ----------
 
-function fakeTrial(mode, { prompt = 'build me a page', timeoutMs = 20000, agent = 'claude', env = {} } = {}) {
+function fakeTrial(mode, { prompt = 'build me a page', timeoutMs = 20000, agent = 'claude', env = {}, loadedSkills, loadError } = {}) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'routing-fake-'));
   return spawnTrial({
     agent, bin: process.execPath, binArgs: [FAKE], args: [], env: { FAKE_AGENT_MODE: mode, ...env },
-    prompt, cwd, timeoutMs, plugin: PLUGIN,
+    prompt, cwd, timeoutMs, plugin: PLUGIN, loadedSkills, loadError,
   }).finally(() => fs.rmSync(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 }
 
@@ -262,4 +262,44 @@ test('spawnTrial: a missing executable resolves with an error instead of throwin
     prompt: 'x', cwd: os.tmpdir(), timeoutMs: 5000, plugin: PLUGIN,
   });
   assert.match(t.error, /could not start|exited/);
+});
+
+// ---------- Copilot skill-load preflight ----------
+
+const { copilotSkillInventory } = require('../run-routing.js');
+
+function inventory(shape) {
+  const pluginDir = path.join(os.tmpdir(), 'fake plugin dir', 'model-apps');
+  return copilotSkillInventory({ bin: process.execPath, binArgs: [FAKE], pluginDir, env: { FAKE_SKILL_LIST: shape }, cwd: os.tmpdir() });
+}
+
+test('copilotSkillInventory: plugin skills come from the plugin dir; builtins are neither loaded-plugin nor leaks', () => {
+  const inv = inventory('ok');
+  assert.deepEqual(inv.names, ['app-builder', 'genpage', 'report-issue', 'telemetry']);
+  assert.deepEqual(inv.leaks, []);
+  assert.equal(inv.error, undefined);
+});
+
+test('copilotSkillInventory: missing plugin skills, a leaked personal skill, and a failed or garbled listing', () => {
+  assert.deepEqual(inventory('missing').names, []);
+  assert.deepEqual(inventory('leak').leaks, ['brainstorming (personal)']);
+  assert.match(inventory('broken').error, /could not verify Copilot skill loading \(`skill list` exit 2\): Error: not signed in/);
+  assert.match(inventory('garbage').error, /unparseable output/);
+});
+
+test('spawnTrial(copilot): a successful text answer with the plugin skills NOT loaded is an error, not a "none"', async () => {
+  // The case Copilot's transcript cannot reveal: without the preflight inventory this run would
+  // grade as a clean "none" and pass every negative case.
+  const t = await fakeTrial('copilot-answer', { agent: 'copilot', loadedSkills: ['customize-cloud-agent'] });
+  assert.match(t.error || '', /plugin skills not loaded: app-builder, genpage, report-issue, telemetry/);
+  const ok = await fakeTrial('copilot-answer', { agent: 'copilot', loadedSkills: ['app-builder', 'genpage', 'report-issue', 'telemetry'] });
+  assert.equal(ok.error, null);
+  assert.equal(ok.routedTo, null);
+});
+
+test('spawnTrial: a preflight loadError fails the trial without launching the agent', async () => {
+  const t = await fakeTrial('route-then-hang', { agent: 'copilot', loadError: 'isolation leak: skills from outside the plugin are loaded: brainstorming (personal)' });
+  assert.match(t.error, /isolation leak/);
+  assert.equal(t.stdout, '', 'nothing was spawned');
+  assert.equal(t.routedTo, null);
 });

@@ -167,20 +167,66 @@ function killTree(child) {
 }
 
 /**
+ * How to launch `bin` with `argv`. Windows: a bare name (PATH lookup) or a .cmd/.bat shim must go
+ * through cmd.exe — Node refuses to spawn a batch file without a shell (EINVAL) — so the command
+ * itself is quoted too. Shared by the trial and the Copilot skill preflight so both resolve the
+ * same executable the same way.
+ */
+function commandFor(bin, argv) {
+  const useShell = process.platform === 'win32' && (!path.isAbsolute(bin) || /\.(cmd|bat)$/i.test(bin));
+  return { cmd: useShell ? quoteForCmd(bin) : bin, args: useShell ? argv.map(quoteForCmd) : argv, shell: useShell };
+}
+
+/**
+ * Copilot CLI does not report its loaded skills in the JSONL stream (Claude's init event does), so
+ * ask the CLI itself, with the trial's plugin dir and isolated COPILOT_HOME — the same inputs the
+ * session resolves skills from:
+ *   copilot --plugin-dir <dir> --no-auto-update skill list --json
+ *   → [{ "name": "genpage", "source": "plugin", "path": "<dir>\\skills\\genpage", "enabled": true },
+ *      { "name": "customize-cloud-agent", "source": "builtin", "path": "...", "enabled": true }, …]
+ * `names` are the enabled skills that come from the plugin under test; `leaks` are enabled skills
+ * from anywhere else except the CLI's own builtins (a personal, project or other plugin's skill
+ * reaching the trial means the isolation failed and routing could be steered by it).
+ * @returns {{names?: string[], leaks?: string[], error?: string}}
+ */
+function copilotSkillInventory({ bin, binArgs = [], pluginDir, env, cwd }) {
+  const { cmd, args, shell } = commandFor(bin, [...binArgs, '--plugin-dir', pluginDir, '--no-auto-update', 'skill', 'list', '--json']);
+  const r = spawnSync(cmd, args, { cwd, env: { ...process.env, ...env }, shell, encoding: 'utf8', timeout: 60000, windowsHide: true });
+  if (r.error || r.status !== 0) {
+    const tail = String(r.stderr || (r.error && r.error.message) || '').trim().split(/\r?\n/).slice(-2).join(' | ');
+    return { error: `could not verify Copilot skill loading (\`skill list\` exit ${r.status})${tail ? `: ${tail}` : ''}` };
+  }
+  let list;
+  try { list = JSON.parse(r.stdout); } catch { return { error: 'could not verify Copilot skill loading: `skill list --json` returned unparseable output' }; }
+  if (!Array.isArray(list)) return { error: 'could not verify Copilot skill loading: `skill list --json` did not return an array' };
+  const norm = (p) => { const s = path.resolve(String(p || '')); return process.platform === 'win32' ? s.toLowerCase() : s; };
+  const root = norm(pluginDir) + path.sep;
+  const fromPlugin = (s) => s.source === 'plugin' && norm(s.path).startsWith(root);
+  const enabled = list.filter((s) => s && s.enabled !== false);
+  return {
+    names: enabled.filter(fromPlugin).map((s) => s.name),
+    leaks: enabled.filter((s) => s.source !== 'builtin' && !fromPlugin(s)).map((s) => `${s.name} (${s.source})`),
+  };
+}
+
+/**
  * Launch one agent run and resolve when it ROUTED, finished, timed out, or failed to start.
  * Never rejects: every failure becomes `trial.error`, which grading excludes from the pass rate.
+ * `loadedSkills` / `loadError` carry a preflight's skill inventory for agents whose transcript does
+ * not report it (Copilot); a `loadError` fails the trial before any model call is made.
  */
-function spawnTrial({ bin, binArgs = [], args, env, prompt, cwd, timeoutMs, plugin, agent }) {
+function spawnTrial({ bin, binArgs = [], args, env, prompt, cwd, timeoutMs, plugin, agent, loadedSkills = null, loadError = null }) {
   return new Promise((resolve) => {
     const started = Date.now();
     const parser = new TranscriptParser(agent, plugin);
-    // Windows: a bare name (PATH lookup) or a .cmd/.bat shim must go through cmd.exe — Node
-    // refuses to spawn a batch file without a shell (EINVAL) — so the command itself is quoted too.
-    const useShell = process.platform === 'win32' && (!path.isAbsolute(bin) || /\.(cmd|bat)$/i.test(bin));
-    const argv = [...binArgs, ...args];
+    if (loadError) {
+      resolve({ error: loadError, routedTo: null, skillCalls: [], loadedSkills, durationMs: 0, stdout: '' });
+      return;
+    }
+    const { cmd, args: argv, shell: useShell } = commandFor(bin, [...binArgs, ...args]);
     let child;
     try {
-      child = spawn(useShell ? quoteForCmd(bin) : bin, useShell ? argv.map(quoteForCmd) : argv, {
+      child = spawn(cmd, argv, {
         cwd,
         env: { ...process.env, ...env },
         shell: useShell,
@@ -219,16 +265,19 @@ function spawnTrial({ bin, binArgs = [], args, env, prompt, cwd, timeoutMs, plug
           error = `${parser.resultError} before any routing decision`;
         }
       }
-      // Isolation guard (Claude reports its loaded skills): if the plugin's skills are not all
-      // present, every negative case would "pass" for the wrong reason — so fail loudly instead.
-      if (!error && parser.loadedSkills) {
-        const missing = plugin.pluginSkills.filter((s) => !parser.loadedSkills.includes(`${plugin.pluginName}:${s}`));
+      // Isolation guard: if the plugin's skills are not all loaded, every negative case would
+      // "pass" for the wrong reason and positives would look like routing failures — so fail
+      // loudly instead. Claude reports its skills in the init event (namespaced
+      // `model-apps:genpage`); Copilot's come from the skill-list preflight (bare `genpage`).
+      const loaded = parser.loadedSkills || loadedSkills;
+      if (!error && loaded) {
+        const missing = plugin.pluginSkills.filter((s) => !loaded.includes(`${plugin.pluginName}:${s}`) && !loaded.includes(s));
         if (missing.length) error = `plugin skills not loaded: ${missing.join(', ')} (check --plugin-dir)`;
       }
       resolve({
         routedTo: parser.routedTo,
         skillCalls: parser.skillCalls,
-        loadedSkills: parser.loadedSkills,
+        loadedSkills: loaded,
         result: parser.result,
         timedOut,
         error,
@@ -282,15 +331,28 @@ async function runTrialWithAgent(opts, evalCase, plugin) {
   const copilotHome = opts.agent === 'copilot' ? mkTemp('mapps-routing-home-') : undefined;
   try {
     const inv = buildInvocation(opts.agent, { pluginDir: PLUGIN_DIR, model: opts.model, copilotHome });
+    const bin = opts.agentBin || inv.bin;
+    // Copilot's transcript never lists loaded skills, so verify them up front with the same
+    // isolated home and plugin dir; a missing skill or a leaked one is a trial error, not a grade.
+    let preflight = {};
+    if (opts.agent === 'copilot') {
+      const inventory = copilotSkillInventory({ bin, pluginDir: PLUGIN_DIR, env: inv.env, cwd });
+      preflight = inventory.error
+        ? { loadError: inventory.error }
+        : inventory.leaks.length
+          ? { loadError: `isolation leak: skills from outside the plugin are loaded: ${inventory.leaks.join(', ')}` }
+          : { loadedSkills: inventory.names };
+    }
     return await spawnTrial({
       agent: opts.agent,
-      bin: opts.agentBin || inv.bin,
+      bin,
       args: inv.args,
       env: inv.env,
       prompt: evalCase.prompt,
       cwd,
       timeoutMs: opts.timeout * 1000,
       plugin,
+      ...preflight,
     });
   } finally {
     rmQuiet(cwd);
@@ -421,4 +483,4 @@ if (require.main === module) {
   main().catch((err) => { console.error(`error: ${err.stack || err.message}`); process.exit(2); });
 }
 
-module.exports = { parseArgs, runRouting, spawnTrial, pluginSkills, descriptionFingerprint, frontmatterDescription, DEFAULTS };
+module.exports = { parseArgs, runRouting, spawnTrial, copilotSkillInventory, pluginSkills, descriptionFingerprint, frontmatterDescription, DEFAULTS };
