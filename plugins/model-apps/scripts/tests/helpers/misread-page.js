@@ -165,38 +165,6 @@ const MISREAD_PAGES = {
       '}',
     ),
   },
-  // `<Wrapper>(<Child x="\" y=") =>" />)</Wrapper>` is one element, and TypeScript reads it with no diagnostic: a `>` is barred only in the text of an element's
-  // children, and a JSX attribute string has no escapes, so the `)` in the second attribute and the `=>` after it are inside a string. To a lexer that scanned the
-  // parameter list with JavaScript's rules they were a list and an arrow, `<Wrapper>(…) =>` a generic function type — code — and the regex after the element was
-  // read as code, and its token rewritten. The element is read right, but a `<Name>` followed by a list and an arrow that holds a `<` or `{` is a guess (`generic`).
-  'generic, in a nested element': {
-    kind: 'generic',
-    frontier: (code) => code.indexOf('<Wrapper>'),
-    code: page(
-      'export default function Page() {',
-      `  ${CALL}`,
-      '  const element = <Wrapper>(<Child x="\\" y=") =>" />)</Wrapper>; const re = /navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})/;',
-      `  ${CALL}`,
-      '  return element;',
-      '}',
-    ),
-  },
-  // The same element with an attribute value that does not start right after its `=`: TypeScript's scanner skips white space before the value, and not only the ASCII
-  // kind — a no-break space, U+2028, a byte order mark and the rest are skipped too — so `x=` and a no-break space and `"a"` is an attribute whose value is "a", and the
-  // element still compiles. A reading that takes any character beyond ASCII there for a value that is no value calls the element unparseable, and the shape a function type,
-  // for certain. A character it cannot tell from such white space leaves the reading undecided: the guess (`generic`) is reported at the `<`.
-  'generic, in a nested element, with white space beyond ASCII before an attribute value': {
-    kind: 'generic',
-    frontier: (code) => code.indexOf('<Wrapper>'),
-    code: page(
-      'export default function Page() {',
-      `  ${CALL}`,
-      '  const element = <Wrapper>(<Child x=\u00A0"a" /><Other p="\\" q=") =>" />)</Wrapper>; const re = /navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})/;',
-      `  ${CALL}`,
-      '  return element;',
-      '}',
-    ),
-  },
   // The first name after a `<` is an identifier to TypeScript except `await` in an async function and `yield` in a generator, where `<await extends X>` is an
   // element: TypeScript reads `<await extends SomeType>text</await>` here as one, with the regex after it a regex. A lexer that took it for a generic arrow's
   // type parameters read the regex as code. The lexer does not know what function it is in, so it is a guess (`generic`), and the element is read.
@@ -343,6 +311,10 @@ const ELEMENT_AFTER_OPERATOR_PAGES = [
 // The last two are no element at all: `function*` takes type parameters (parser.ts, parseFunctionExpression: `function`, an optional `*`, an optional name, then the type
 // parameters), so `<T>` there is TypeScript's and the string after it, which holds a closing tag and a call, is data. A lexer that took the `<T>` for an element ended it at the
 // `</T>` inside the string and read the call after that as code. The string's token is stray with no guess named, and never rewritten.
+// The two nested elements are one element each, which TypeScript reads with no diagnostic: a JSX attribute string has no escapes, so the `)` in it and the `=>` after it are inside the
+// string. A lexer that scanned the parameter list with JavaScript's rules found a list and an arrow, took `<Wrapper>(…) =>` for a generic function type, read the regex after the
+// element as code and rewrote its token. A list whose first token is a `<` holds no parameters (parameterListMayStart), so the element is certain — with a no-break space before an
+// attribute value too, which TypeScript's scanner skips.
 const STRING_OF_A_CALL = `const s = '</T>;${CALL}//';`;
 const ELEMENT_LOOKALIKE_PAGES = [
   ['an expression container that holds an arrow', 'const k = <W>({() => 1})</W>;'],
@@ -351,6 +323,8 @@ const ELEMENT_LOOKALIKE_PAGES = [
   ['a head cut by a zero-width space, which TypeScript skips as white space', 'const k = <T extends\u200B>text</T>;'],
   ['the type parameters of a generator expression, and a string that holds a closing tag and a call', 'const g = function* <T>(x: T) { yield x; };', STRING_OF_A_CALL],
   ['the type parameters of an async generator expression, and a string that holds a closing tag and a call', 'const g = async function* <T>(x: T) { yield x; };', STRING_OF_A_CALL],
+  ['a nested element whose attribute string holds a parenthesis and an arrow', 'const element = <Wrapper>(<Child x="\\" y=") =>" />)</Wrapper>;'],
+  ['the same, with a no-break space before an attribute value', 'const element = <Wrapper>(<Child x=\u00A0"a" /><Other p="\\" q=") =>" />)</Wrapper>;'],
 ].map(([name, element, data = `const re = ${REGEX_OF_A_CALL};`]) => ({
   name,
   code: page(

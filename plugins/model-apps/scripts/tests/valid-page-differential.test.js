@@ -18,7 +18,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const { loadTypescriptOracle } = require('./helpers/typescript-oracle.js');
-const { validPages, NAVIGATION_CALL, SIGNATURE_MEMBERS, HIDDEN_CLOSING_MEMBERS, HIDING_ELEMENTS } = require('./helpers/valid-pages.js');
+const { validPages, NAVIGATION_CALL, SIGNATURE_MEMBERS, HIDDEN_CLOSING_MEMBERS, HIDING_ELEMENTS, INITIALIZER_ELEMENTS } = require('./helpers/valid-pages.js');
 const next = require('../lib/pageref-resolver.js');
 
 const SKIP = 'no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it';
@@ -81,6 +81,12 @@ const REFUSAL_CLASSES = [
     matches: (page) => page.group === 'parenthesised element' && HIDING_ELEMENTS.includes(page.element),
   },
   {
+    id: 'JSX text that starts with a parenthesis, where something may start an expression before its `)` and a `/`, a `<` or a back-tick follows',
+    kind: 'generic',
+    what: 'the parenthesised text could be the parameter list of a call signature with a default, a computed name, a decorator, an accessor\'s body or a constraint, and what follows may be a regex, JSX or a template that holds a `)` of its own: `interface P { <U>(a = /[)]/); m: \'</U>\' }` and `<U>(a = /[)]/); m: \'</U>` share their text, and the `)` that ends the list is another one in each.',
+    matches: (page) => page.group === 'parenthesised element' && INITIALIZER_ELEMENTS.includes(page.element),
+  },
+  {
     id: 'a division on the next line',
     kind: 'newline',
     what: 'a `/` on a later line than the operand before it, where a regex could close on its line: a division that continues the statement, or (after a type) a regex that begins the next one. `const q = x` LF `/ y / z` and `let v: number` LF `/ y /.test(z)` are the same text.',
@@ -112,6 +118,9 @@ const TWO_WAY = [
       ['an element whose text starts with a parenthesis, which ends at the closing tag in what is a string to the type, then the call', `const el = <U>(x: U); a: '</U>;${CALL};//'`, 1],
       ['an interface with a call signature with no return type, and a comment that holds the closing tag and the call', `interface P { <U>(x: U); // </U>;${CALL};\n}`, 0],
       ['an element whose text starts with a parenthesis, which ends at the closing tag in what is a comment to the type, then the call', `const el = <U>(x: U); // </U>;${CALL};`, 1],
+      // A default in the parameter list: the regex holds a `)`, which ends the list in a scan of it and is the regex's to the type.
+      ['an interface with a call signature whose default is a regex that holds a `)`, and a string that holds the closing tag and the call', `interface P { <U>(a = /[)]/); m: '</U>;${CALL};//'; }`, 0],
+      ['an element whose text starts with a parenthesis and holds the same default, then the call', `const el = <U>(a = /[)]/); m: '</U>;\n${CALL};`, 1],
     ],
   },
   {
@@ -163,7 +172,7 @@ const CERTAIN_SHAPES = [
   ['a method named `async` that has type parameters, or `async` and a comparison', (page) => page.group.startsWith('declaration') && /^(const o[34]|class F2|const r[234])\b/.test(page.name)],
   ['a quoted method signature in an object type', (page) => /^type literal in a (parameter|generic function type)/.test(page.group) && /^(['"])(?:m|a\\'b)\1\(/.test(page.name)],
   ['a call or construct signature with no return type', (page) => /^type literal in a generic function type|^interface member|^type literal member|^class implements|^type literal in a parameter/.test(page.group) && SIGNATURE_MEMBERS.includes(page.name)],
-  ['an element whose text starts with a parenthesis', (page) => page.group === 'parenthesised element' && !HIDING_ELEMENTS.includes(page.element)],
+  ['an element whose text starts with a parenthesis', (page) => page.group === 'parenthesised element' && !HIDING_ELEMENTS.includes(page.element) && !INITIALIZER_ELEMENTS.includes(page.element)],
 ];
 
 test('valid pages: this lexer never reads the text of a call as a call, and refuses a page that compiles only in the recorded classes, naming its guess', (t) => {

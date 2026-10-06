@@ -1831,8 +1831,8 @@ test('the page whose "/" after an object literal hid a call is refused, naming t
 
 test('each misread page is refused at its first guess: every token at or after it, or in a call that reaches it, is stray, and nothing there is rewritten', () => {
   assert.deepStrictEqual(Object.keys(MISREAD_PAGES), [
-    'brace', 'paren', 'keyword', 'identifier', 'angle', 'jsx-type-arguments', 'newline', 'generic', 'generic, in JSX text', 'generic, in a nested element',
-    'generic, in a nested element, with white space beyond ASCII before an attribute value', 'generic, with await', 'generic, with yield', 'operator, after ">="',
+    'brace', 'paren', 'keyword', 'identifier', 'angle', 'jsx-type-arguments', 'newline', 'generic', 'generic, in JSX text',
+    'generic, with await', 'generic, with yield', 'operator, after ">="',
     'operator, after ">>=" that ends type arguments', 'operator, after ">>>=" that ends nested type arguments', 'operator, after ">>=" that ends the type arguments of satisfies', 'jsx-attribute',
     'inside an options object',
   ]);
@@ -1989,14 +1989,14 @@ test('a "<" after a unary or binary operator opens an element whatever follows i
   }
 });
 
-// Where the arrow rule alone cannot settle a `<`, the lexer reads the element and says it is guessing, and nothing after the `<` is trusted: a `<Name>` and a
-// parameter list and an arrow that holds a `<` or `{` (the arrow may be in a nested element), `<await …>` and `<yield …>` (an identifier or
+// Where the arrow rule alone cannot settle a `<`, the lexer reads the element and says it is guessing, and nothing after the `<` is trusted: `<await …>` and `<yield …>` (an identifier or
 // not, by the function around them), and a `<` after the cut `>=` whose head has a constraint and a parameter list that a `:` follows (a comparison and an element whose text
-// starts with a parenthesis, or the end of type arguments and an initialiser that is an arrow with a return type).
+// starts with a parenthesis, or the end of type arguments and an initialiser that is an arrow with a return type). (A `<Name>` and a list whose first token is a `<`, with an arrow in
+// a nested element's attribute string, holds no parameters, and is read as the element for certain: ELEMENT_LOOKALIKE_PAGES.)
 // In each page the regex after the element holds a token, and so does a real call after it: both are refused, naming the guess, and neither is rewritten.
 test('a "<" the arrow rule cannot settle is a guess that names itself: the regex after it keeps its token and no call after it is rewritten', () => {
   for (const [name, kind] of [
-    ['generic, in a nested element', 'generic'], ['generic, with await', 'generic'], ['generic, with yield', 'generic'],
+    ['generic, with await', 'generic'], ['generic, with yield', 'generic'],
     ['operator, after ">="', 'operator'], ['operator, after ">>=" that ends type arguments', 'operator'], ['operator, after ">>>=" that ends nested type arguments', 'operator'],
     ['operator, after ">>=" that ends the type arguments of satisfies', 'operator'],
   ]) {
@@ -2085,7 +2085,7 @@ test('a generic function type the element reading cannot rule out is a guess rea
 // JSX that holds what looks like a function type's parameter list compiles as an element (an expression container that holds an arrow; a container, and a colon in the
 // text after it): the lexer reads it right, so the regex after it is data, its token is stray with no guess named, and it is never rewritten; the real call before it is.
 test('an element whose text looks like a parameter list is read right: the regex after it is data, its token stray with no guess named, and never rewritten', () => {
-  assert.strictEqual(ELEMENT_LOOKALIKE_PAGES.length, 6);
+  assert.strictEqual(ELEMENT_LOOKALIKE_PAGES.length, 8);
   for (const { name, code } of ELEMENT_LOOKALIKE_PAGES) {
     assert.deepStrictEqual(extractNavTargets(code).map((t) => [t.kind, t.key]), [['pageref', 'detail']], `${name}: one real call; the regex is not a call`);
     assert.strictEqual(navigationFrontier(code), null, `${name}: no guess is involved`);

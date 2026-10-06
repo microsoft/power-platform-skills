@@ -833,7 +833,11 @@ function opensTypeParameters(src, i, budget = null) {
   const third = read(identifier.end);
   if (third.kind === 'word' && third.text === 'extends') {
     const fourth = read(third.end);
-    return verdict(!(fourth.kind === 'equals' || fourth.kind === 'gt' || fourth.kind === 'slash'));
+    // TypeScript's rule makes `<T extends` and a `=`, a `>` or a `/` an element where an expression starts. In a type a `=` or a `>` there is no constraint (TS1110), but a `/` starts one:
+    // parseTypeParameter reads a constraint that starts no type as an expression, a regex, and only the checker objects (`let f: <T extends />;…/>(a: T) => T` is a FunctionType). The lexer
+    // cannot tell a type from an expression there, so the `/` is the guess, with the element read.
+    if (fourth.kind === 'slash') return verdict(false, 'generic');
+    return verdict(!(fourth.kind === 'equals' || fourth.kind === 'gt'));
   }
   if (third.kind === 'comma' || third.kind === 'equals') return verdict(true);
   if (third.kind === 'gt' && identifier.kind === 'word') {
@@ -1254,14 +1258,17 @@ function commentEnd(src, open, last) {
 }
 
 // Whether the `/` at `at` follows a word or a number that is no keyword before an expression (EXPR_START_WORDS): the `/` divides there, and in a type, which has no division, it is an error — in no
-// reading that parses does a regex start after it. After anything else — a bracket, an operator, a quote, a tag, a keyword — one may.
-//   and/or      1/2      a / b          (not: `(a) /x/`, `= /x/`, `return /x/`, `</b> /x/`)
+// reading that parses does a regex start after it. After anything else — a bracket, an operator, a quote, a tag, a keyword — one may. `implements` is such a keyword too, though the lexer's table
+// leaves it out (it is a contextual word there, a guess): its heritage clause takes an expression, as `extends` does, so in a computed name a type may hold `[class C implements /re/ {}]`, and the
+// closing tag in that regex (parseHeritageClause, parseExpressionWithTypeArguments, https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts).
+//   and/or      1/2      a / b          (not: `(a) /x/`, `= /x/`, `return /x/`, `implements /x/`, `</b> /x/`)
 function slashFollowsAnOperand(src, at) {
   const before = prevSignificant(src, at);
   if (!/[\w$]/.test(before.ch)) return false;
   let start = before.index;
   while (start > 0 && /[\w$]/.test(src[start - 1])) start -= 1;
-  return !EXPR_START_WORDS.has(src.slice(start, before.index + 1));
+  const word = src.slice(start, before.index + 1);
+  return !EXPR_START_WORDS.has(word) && word !== 'implements';
 }
 
 // The words that can stand before a member's name in a type, so that a name after one is no second name: every reserved word, every contextual one, and the modifiers TypeScript takes.
@@ -1270,11 +1277,14 @@ const MEMBER_MODIFIERS = new Set(['public', 'private', 'protected', 'const', 'in
 // Whether the text from `from` to `to` cannot be the members of a type. It is what follows the `)` of a call or construct signature, up to the first place that could hide the closing tag the text reaches
 // (a string, a template, a comment, a regex): where no type can be valid up to there, no program has one that holds the closing tag in anything, and nothing after it hides it. A member is a name, and what follows
 // a name on its line is `:`, `?`, `(`, `<`, a separator or the end of the line (parseTypeMemberSemicolon, https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts); a second name or a string
-// there is TS1005, and a `/` has no place after a name in a type (it divides in an expression, where a name may stand but a member does not). Only plain prose is read — names, numbers, `,` and `;` — and a word that may be a
-// modifier, or any other character, leaves it undecided (false):
+// there is TS1005, and a `/` has no place after a name in a type (it divides in an expression, where a name may stand but a member does not). A template or a regex that opens at `to` is no member's
+// start either (TS1131, "Property or signature expected"; parseTypeMember): with only names and separators before it, it stands where a member begins or right after a name. (After a `:` a template is
+// a type, `m: \`a${string}\``, and the reading stops at the colon, undecided.) Only plain prose is read — names, numbers, `,` and `;` — and a word that may be a modifier, or any other character, leaves it
+// undecided (false):
 //   (a), see https://x.y           `see` and `https`, two names on a line
 //   (a); and/or more               a name and a `/`
 //   (a), see 'x                    a name and the string that opens at `to`
+//   (a); `x ${y}                   a template where a member begins
 function typeMembersFail(src, from, to, opener) {
   let named = false;                           // a member's name was read on this line
   let k = from;
@@ -1298,18 +1308,22 @@ function typeMembersFail(src, from, to, opener) {
       return c === '/' && named && src[k + 1] !== '/' && src[k + 1] !== '*';
     }
   }
-  return named && (opener === '"' || opener === "'" || opener === '`');
+  // Only an opener after the parameter list stands where a member does: one inside it (a default value's template, `(a = \`x</p>\`)`) is the type's too.
+  if (from <= to && (opener === '`' || (opener === '/' && src[to + 1] !== '/' && src[to + 1] !== '*'))) return true;
+  return named && (opener === '"' || opener === "'");
 }
 
 // Whether the quote at `at` comes right after a word that is no keyword: an apostrophe in prose (`it's`) or an inch mark (`5" wide`). A type has no string right after a name or a number — what follows
-// one with no white space between is a keyword's operand (`readonly'a': T`, `keyof'a'`, `[K in'a']`), and a keyword is a reserved word or a contextual one — so a quote like this opens no string that
-// could hold a closing tag. (A character beyond ASCII before the quote is not a word here, and the quote is read as one that may open a string.)
+// one with no white space between is a keyword's operand (`readonly'a': T`, `keyof'a'`, `[K in'a']`) or a member's quoted name after its modifier (`public'a': T`), and a keyword is a reserved word, a
+// contextual one or a modifier — so a quote like this opens no string that could hold a closing tag. The modifiers are the words typeMembersFail reads (MEMBER_MODIFIERS): `public`, `private` and
+// `protected` are in neither of the other sets, and TypeScript's parser takes them before any member of a type, leaving the misplaced modifier to the checker (TS1070), so
+// `interface I { <T>(); public'</T>…' }` parses with the closing tag in a string. (A character beyond ASCII before the quote is not a word here, and the quote is read as one that may open a string.)
 function quoteEndsAWord(src, at) {
   let start = at;
   while (isTagNamePart(src[start - 1])) start -= 1;
   if (start === at) return false;
   const word = src.slice(start, at);
-  return !RESERVED_WORDS.has(word) && !CONTEXTUAL_WORDS.has(word);
+  return !RESERVED_WORDS.has(word) && !CONTEXTUAL_WORDS.has(word) && !MEMBER_MODIFIERS.has(word);
 }
 
 // A `{` in the text of an element, at `open`, which is an expression container — `{ label: T }`, `{ [k: string]: T }` — read for the one thing this reading knows about it:
@@ -1693,26 +1707,166 @@ function elementChildren(src, from, name, budget = null, typeFrom = -1) {
 // string, a tag with a closing tag or a spread, an expression container that is neither shape — the text is read as the type it almost always is, and the guess is reported
 // (`generic`), so nothing after the `<` is trusted: the page is complete to the structure gate, and a call after it is refused, naming the kind. A `:` after the list is a call
 // signature (`<T>(x: T): T`) and also JSX text that starts with a parenthesis (`<span>(required): Name</span>`); both compile, and only a parser that knows whether a type or an
-// expression is being parsed can tell them apart: that is the same guess, and the element is read, as the rule says. A list that runs past the window cannot be told at all: the
+// expression is being parsed can tell them apart: that is the same guess, and the element is read, as the rule says. (Where the list can hold no parameters — `<li>(1): First</li>` — only the
+// element compiles, and it is certain: parameterListMayStart.) A list that runs past the window cannot be told at all: the
 // same. The parentheses are matched with comments and strings skipped, which is JavaScript's reading and not JSX's — the reason an arrow can be found where there is none.
+// In a type the list is read exactly that way until something in it may start an expression (expressionMayStart: an initializer's `=`, a computed name's `[`, a decorator's `@`, an import
+// type's attributes, an accessor's body, a type parameter's constraint). A type holds no regex, no JSX and no statement, so before one the `)` the scan finds is the type's, and a `/` that
+// starts no comment is in no type at all: the text is the element's. After one, the scan is still exact while it reads no `/`, `<` or back-tick — with no regex, no JSX and no template, every
+// quote opens a string and every parenthesis is code — and once it reads one, the expression may hold what the scan misreads (a regex with a `)` in it, JSX text, a template in a template),
+// so the `)` it finds is not trusted, and a list with no arrow after it is the guess (`interface I { <T>(a = /[)]/); m: '</T>…' }` ended the list at the `)` in the regex's class, and the
+// `]` after it read as the text of an element). A list whose parameters fail before any of that has no type reading either (parameterSyntaxFails).
 // Parentheses followed by neither `=>` nor `:` are JSX text (`<b>(optional)</b>`) or a call signature with no return type: callSignatureOrElement says which, where it can.
 function genericFunctionTypeFollows(src, after, head, budget = null) {
   const open = skipSpaceAndComments(src, after);
   if (src[open] !== '(') return { generic: false, ambiguity: null };
+  // A list that can hold no parameters, or whose parameters fail before a type, a default, a pattern or a decorator, belongs to no signature and no function type: the text is an element,
+  // for certain (`<li>(1): First</li>`, `<span>(press [/] to search)</span>`).
+  if (!parameterListMayStart(src, open) || parameterSyntaxFails(src, open)) return { generic: false, ambiguity: null };
   const end = Math.min(src.length, open + LOOKAHEAD);
   let depth = 0;
   let k = open;
+  let expression = false;   // something that may start an expression was read (expressionMayStart)
+  let unsafe = false;       // ... and after it a `/`, a `<` or a back-tick: a regex, JSX or a template, which may hold what the scan misreads
   for (; k < end; k += 1) {
     const skipped = skipTrivia(src, k);
-    if (skipped !== k) { k = skipped - 1; continue; }
-    if (src[k] === '(') depth += 1;
-    else if (src[k] === ')' && --depth === 0) break;
+    if (skipped !== k) {
+      if (src[k] === '`') {
+        // skipTrivia ends a template at its first back-tick, which may be the start of one nested in a substitution: ``(a: `${`)`}`)``.
+        if (!templateSkipIsWhole(src, k, skipped - 1)) return { generic: false, ambiguity: 'generic' };
+        if (expression) unsafe = true;
+      }
+      k = skipped - 1;
+      continue;
+    }
+    const c = src[k];
+    if (c === '(') depth += 1;
+    else if (c === ')' && --depth === 0) break;
+    else if (expression) {
+      if (c === '/' || c === '<') unsafe = true;
+    } else if (expressionMayStart(src, k)) {
+      expression = true;
+    } else if (c === '/') {
+      // No type holds a `/` that starts no comment: only the element compiles (`<p>(see: /docs)</p>`, `<span>({done}/{total})</span>`).
+      return { generic: false, ambiguity: null };
+    }
   }
-  if (k >= end) return { generic: false, ambiguity: k >= src.length ? null : 'generic' };
+  if (k >= end) return { generic: false, ambiguity: k >= src.length && !unsafe ? null : 'generic' };
   const next = skipSpaceAndComments(src, k + 1);
   if (src[next] === '=' && src[next + 1] === '>') return { generic: true, ambiguity: elementFailsAt(src, after, next) === -1 ? 'generic' : null };
-  if (src[next] === ':') return { generic: false, ambiguity: 'generic' };
+  if (src[next] === ':' || unsafe) return { generic: false, ambiguity: 'generic' };
   return callSignatureOrElement(src, after, head, k, next, budget);
+}
+
+// Whether the parameter list whose `(` is at `open` can hold what TypeScript parses as parameters (parseParameters, parseParameterWorker,
+// https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts): its first token is the `)` of an empty list, a name or a modifier (a letter, `_`, `$` or the `\` of a Unicode escape),
+// a binding pattern's `{` or `[`, the `.` of a rest parameter or the `@` of a decorator. A number, a string, a template, a `#` or an operator first is TS1003 in a call signature, a construct
+// signature and a function type alike — `interface I { <b>(1): text }` has none — so where one stands the text is JSX that starts with a parenthesis. A character beyond ASCII is not judged
+// (TypeScript reads more of them as names or as white space than this does), nor is a `.`, which may be the start of `...` (`.5` is a number, and TS1003 too).
+function parameterListMayStart(src, open) {
+  const c = src[skipSpaceAndComments(src, open + 1)];
+  return c === undefined || c.charCodeAt(0) > 0x7f || /^[A-Za-z_$\\{[.@)]$/.test(c);
+}
+
+// The words TypeScript's parser takes before a parameter's name (parseParameterWorker reads modifiers there, and only the checker rejects a misplaced one), measured over every keyword
+// TypeScript 5.8 has, each in a call signature, a construct signature and a function type, followed by a name: all three parse. A parameter that starts with one is not read.
+const PARAMETER_MODIFIERS = new Set(['abstract', 'accessor', 'async', 'declare', 'export', 'in', 'out', 'override', 'private', 'protected', 'public', 'readonly', 'static']);
+// The keywords that are no parameter's name in any of those places, alone or with a type (TS1359, TS1390 and the like are parse diagnostics): a parameter that starts with one fails. Every
+// other keyword — `get`, `set`, `of`, `type`, `let`, `await` and the rest — parses as a name there, alone, with a type, optional, and after a `,`. The test of these sets measures them again.
+const NOT_PARAMETER_NAMES = new Set(['break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'else', 'enum', 'extends', 'false', 'finally', 'for',
+  'function', 'if', 'import', 'instanceof', 'new', 'null', 'return', 'super', 'switch', 'throw', 'true', 'try', 'typeof', 'var', 'void', 'while', 'with']);
+
+// Whether the parameter list whose `(` is at `open` fails as parameters before anything this does not read. Each parameter is read up to its type, its default, a pattern, a decorator or a
+// modifier, which end the reading (false): an optional `...` and a name, then an optional `?`, then `:`, `=`, `,` or `)` — what TypeScript wants after the name (parseParameterWorker,
+// https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts; anything else is TS1005). A character beyond ASCII that is not white space to TypeScript (isTrivia) or a backslash
+// may go on with the name, and ends the reading too. Any other ASCII character
+// after a name is no parameter's in a call signature, a construct signature and a function type alike, and neither is one that no parameter starts with after a `,` (a number, a quote, a
+// back-tick, a `<`, a `#`, an operator: TS1003, as parameterListMayStart says of the first), so only the element compiles:
+// `(press [/] to search)`, `(see @/components)`, `(it's)`, `(N/A)`, `(see docs)`, `(a.b)`. A keyword is read as TypeScript reads it there: a modifier (PARAMETER_MODIFIERS) or `this`, which is a
+// name only first and alone, ends the reading; one that is no parameter's name (NOT_PARAMETER_NAMES: `(extends <code>Base</code>)`, `(import from <b>CSV</b>)`) fails; every other keyword
+// is a name (`(get the <b>app</b>)`, `(set in <b>Settings</b>)`).
+function parameterSyntaxFails(src, open) {
+  let k = skipSpaceAndComments(src, open + 1);
+  for (;;) {
+    if (src.startsWith('...', k)) k = skipSpaceAndComments(src, k + 3);
+    let end = k;
+    while (end < src.length && /[A-Za-z0-9_$]/.test(src[end])) end += 1;
+    if (end === k || /[0-9]/.test(src[k])) return false;
+    if (end < src.length && (src[end] === '\\' || (src[end].charCodeAt(0) > 0x7f && !isTrivia(src[end])))) return false;
+    const word = src.slice(k, end);
+    if (PARAMETER_MODIFIERS.has(word) || word === 'this') return false;
+    if (NOT_PARAMETER_NAMES.has(word)) return true;
+    k = skipSpaceAndComments(src, end);
+    if (src[k] === '?') k = skipSpaceAndComments(src, k + 1);
+    const c = src[k];
+    if (c === ',') {
+      k = skipSpaceAndComments(src, k + 1);
+      // The next parameter starts as the first does (parameterListMayStart): a number, a quote, a back-tick, a `<`, a `#` or an operator there is TS1003.
+      const n = src[k];
+      if (n !== undefined && n.charCodeAt(0) <= 0x7f && !/^[A-Za-z_$\\{[.@)]$/.test(n)) return true;
+      continue;
+    }
+    return c !== undefined && c !== ')' && c !== ':' && c !== '=' && c.charCodeAt(0) <= 0x7f;
+  }
+}
+
+// Whether the character at `k`, in a parameter list read as a type, may start an expression or a statement there. TypeScript's parser does so from a type only at these places (parser.ts,
+// https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts): an initializer's `=` (any `=` that is not the `=>` of a function type — `a: A<B>= /re/` is an initializer
+// after type arguments), a computed name's `[` (any `[` but the `[]` of an array type, which this does not tell from a tuple, an index signature or an indexed access), a decorator's `@`,
+// an import type's attributes (`import("m", { with: { k: v } })`), an accessor's body in a type literal (`{ get x() { return 1 / 2 } }`: parseAccessorDeclaration parses a block, and only the
+// checker objects), and a type parameter's constraint, which is read as an expression where its first token starts no type (`<U extends /x/>`: parseTypeParameter). So `import` and `extends`
+// count as whole words wherever they stand, and `get` and `set` wherever an accessor's name may follow them: more starts only leave the scan untrusted sooner where a `/`, a `<` or a back-tick
+// follows. `typeof` takes a name.
+function expressionMayStart(src, k) {
+  const c = src[k];
+  if (c === '=') return src[k + 1] !== '>';
+  if (c === '@') return true;
+  if (c === '[') return src[skipSpaceAndComments(src, k + 1)] !== ']';
+  if (/[\w$\\]/.test(src[k - 1] || '') || !/[eigs]/.test(c)) return false;
+  const word = /^(?:import|extends|get|set)(?![\w$\\])/.exec(src.slice(k, k + 8));
+  if (word === null) return false;
+  if (word[0] !== 'get' && word[0] !== 'set') return true;
+  // `get` and `set` begin an accessor only before its name — a `[`, a name or a keyword, a string or a number (canFollowGetOrSetKeyword). Before a `:`, a `?`, a `(`, a `<` or a `,` each is
+  // a name, a property's (`{ get: T }`), a method's (`{ get(url: string): T }`) or a parameter's (`(get: /docs)`), and starts nothing.
+  const next = src[skipSpaceAndComments(src, k + 3)];
+  return next !== undefined && (next.charCodeAt(0) > 0x7f || /^[\w$\\['"#.]$/.test(next));
+}
+
+// Whether the template that opens with the back-tick at `open` ends at the back-tick at `close`, the first one after it that no backslash escapes, where skipTrivia ends it, and not at the start of a
+// template nested in one of its substitutions (TemplateLiteral, https://tc39.es/ecma262/#sec-template-literal-lexical-components): each `${` is followed to its `}`, with the braces in it counted and the
+// strings in it skipped. A `/` in a substitution (a comment, a regex or a division, which may hold a brace) leaves it unsaid, and so does a string that does not close before `close`: false.
+// So does a `<` after anything in a substitution that may start an expression (expressionMayStart), as in the parameter list around it: in a template literal type JSX enters a substitution
+// only through one — an accessor's body, a constraint, a default, a computed name — and starts with a `<`, and a quote in its text is no string, so the strings this skips would be the wrong
+// ones (`${{ get x() { return <p>it's</p> } y: '}}}' | `)` }}` read `it's</p> … '` as a string and found the `}` of the substitution in the wrong place). No back-tick comes before `close`.
+// A template literal type, x: `a${string}`, `${Lowercase<T>}` or `${T extends string ? 'a' : 'b'}`, is whole; a = `${`)`}` is not.
+function templateSkipIsWhole(src, open, close) {
+  let depth = 0;
+  let expression = false;
+  for (let k = open + 1; k < close; k += 1) {
+    const c = src[k];
+    if (c === '\\') {
+      k += 1;
+    } else if (depth === 0) {
+      if (c === '$' && src[k + 1] === '{') {
+        depth = 1;
+        k += 1;
+      }
+    } else if (c === '{') {
+      depth += 1;
+    } else if (c === '}') {
+      depth -= 1;
+    } else if (c === '"' || c === "'") {
+      let j = k + 1;
+      while (j < close && src[j] !== c && !isLineTerminator(src[j])) j += src[j] === '\\' ? 2 : 1;
+      if (j >= close || src[j] !== c) return false;
+      k = j;
+    } else if (c === '/' || (c === '<' && expression)) {
+      return false;
+    } else if (expressionMayStart(src, k)) {
+      expression = true;
+    }
+  }
+  return depth === 0;
 }
 
 // The name of the tag whose `<` is at `head`, or null where white space or a comment stands between them: the name of its closing tag is not known then. (A name that a `-` or a `:` continues never

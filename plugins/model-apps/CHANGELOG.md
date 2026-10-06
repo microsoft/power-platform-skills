@@ -106,10 +106,22 @@ where the build reads its code for certain.
     treats as white space;
   - a generic generator function, `function* <T>(…)`;
   - a generic call signature with no return type (`interface I { <T>(x) }`);
+  - a generic call signature followed by a member name quoted right after `public`, `private` or
+    `protected` (`public'…'`), or by a regular expression right after `implements`;
+  - a generic call signature whose parameter list holds a default value, a computed name, a decorator,
+    an import type, an accessor's body or a type parameter's constraint (`<T>(a = /[)]/)`), or a
+    template nested in another or holding JSX;
+  - a type parameter whose constraint is a regular expression (`<T extends /…/>`), which begins like
+    the self-closing tag `<T extends />`;
   - a `#!` line at the start of the page.
 
   Such a page now halts, naming the line. So does an attribute value written after white space that
-  follows its `=` and holds a backslash, which TypeScript and other compilers end in different places.
+  follows its `=` and holds a backslash, which TypeScript and other compilers end in different places;
+  an element whose first attribute is named `extends` and closes at once (`<T extends />`); and JSX
+  text that opens with a parenthesis and holds an `=`, a `[` or an `@` (or, in rarer text, a type
+  keyword such as `extends` after a colon) followed by a `/`, a `<` or a back-tick before its `)`
+  (`<p>(a = b/c)</p>`), which a call signature's parameter list can share; write such text inside an
+  expression container (`<p>{"(a = b/c)"}</p>`) to keep the page building.
 - **A navigation call after a generic generator function (`function* <T>(…)`) is now found.** The build
   refused such a page with a navigation parity mismatch.
 - **Connector discovery refuses output it cannot read.** Text on stderr after a successful exit, a

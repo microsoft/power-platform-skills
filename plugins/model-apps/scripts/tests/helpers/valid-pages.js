@@ -151,10 +151,26 @@ const PARENTHESISED_ELEMENTS = [
   '<p>(a);\n  <b style={{ color: "red" }}>y</b></p>', '<Text>(it\'s fine)</Text>', '<Text>(a), it\'s fine</Text>', '<p>({`x`})</p>', '<p>(a) text with a/b and https://x.y</p>', '<p>(a)\n</p>', '<p>\n  (a)\n</p>',
   // A `,`, `;` or line break after the `)`, and then prose with a `/`, a URL or a back-tick: no type has such text for its members, or the comment, template or regex is closed before the closing tag.
   '<p>(a), see https://x.y</p>', '<p>(a);\n  and/or more</p>', '<p>(a)\n  `x`</p>', '<p>(a), 1/2 done</p>', '<p>(a)\n  see https://x.y\n</p>', '<p>(a); /* note */ more</p>', '<p>(a),\n  // note\n  more\n</p>',
+  // A template or a regex where a member would begin, which no member does (TS1131), and a list that holds no parameters (TS1003 in every signature): the element is the only reading.
+  '<p>(a); `x ${y} </p>', '<p>(a);\n  /x </p>', '<li>(1): first</li>', '<p>("a"): b</p>', '<li>(2) step two</li>',
+  // A `/` in the list that divides, or a regex where none can start (the list holds no `=`, `[` or `@` before it, or it follows a `<`), or one that holds nothing the scan misreads.
+  '<span>({done}/{total})</span>', '<p>(see: /docs)</p>', '<p>(<b>x</b>/2)</p>',
+  // Text whose parameters fail before a type, a default or a pattern, or whose first token starts none: no signature has it.
+  '<span>(press [/] to search)</span>', '<p>(see @/components)</p>', '<p>(? = help, / = search)</p>', '<code>(`${a/b}`)</code>',
+  // ... with a keyword read as TypeScript reads it at the start of a parameter: `get` and `set` are names there (and a `get` before a `:`, or a word that only ends in one, is no
+  // accessor), `extends` and `import` no name at all.
+  '<p>(get the <b>app</b>)</p>', '<p>(set in <b>Settings</b>)</p>', '<p>(set it to <em>on</em>)</p>', '<p>(extends <code>Base</code>)</p>', '<p>(get help: /docs)</p>', '<p>(import from <b>CSV</b>)</p>',
+  '<p>(get: /docs)</p>', '<p>(tip: reset the <b>filter</b>)</p>', '<p>(note: offset in <b>px</b>)</p>', '<p>(hint: widget names/ids)</p>',
+  // Text in which something may start an expression — an `=`, a `[`, an `@`, `import` — but no `/`, `<` or back-tick follows it: read exactly, as code holds no regex, JSX or template there.
+  '<p>(x = 5)</p>', '<p>(a: [b])</p>', '<p>(Ctrl = \u2318 on Mac)</p>', '<span>(@username)</span>', '<span>([optional])</span>', '<p>(tags: [a, b])</p>', '<button>(import)</button>',
+  '<li>(optional, <a href="/docs">see docs</a>)</li>',
 ];
+// The same, where something before the `)` may start an expression in a signature's parameter list (a default, a computed name, a decorator, an accessor's body, a constraint) and a `/`,
+// a `<` or a back-tick follows it, which may begin a regex, JSX or a template that holds a `)` of its own: the `)` that ends the list may be another, so the reading of the head is a guess.
+const INITIALIZER_ELEMENTS = ['<p>(a = /x/)</p>', '<p>(a = b/(c))</p>', '<p>(a = <b>c</b>)</p>', '<p>(a = `x`)</p>'];
 // The same, where a `,`, `;` or line break follows the `)` and the text holds a comment, a template or a regex that is open at the closing tag, after text that a type could hold for its members: the closing tag
-// could be inside it, in a type that has the same text, so the reading of the head is a guess.
-const HIDING_ELEMENTS = ['<p>(a); // c </p>', '<p>(a);\n  /* c </p>', '<p>(a), x // c </p>', '<p>(a); `x ${y} </p>'];
+// could be inside it, in a type that has the same text, so the reading of the head is a guess. (A template after a member's colon is a type, `m: \`a${string}\``.)
+const HIDING_ELEMENTS = ['<p>(a); // c </p>', '<p>(a);\n  /* c </p>', '<p>(a), x // c </p>', '<p>(a); m: `x ${y} </p>'];
 
 // Types that are not function types and hold a `<`, `>` or `{`.
 const TYPE_DECLARATIONS = [
@@ -333,7 +349,7 @@ function* validPages() {
   }
   for (const declaration of TYPE_ARGUMENT_EXPRESSIONS) yield { group: 'type arguments in an expression', name: declaration, code: page({ body: declaration }) };
   for (const declaration of COMPONENTS) yield { group: 'component or hook', name: declaration, code: page({ body: declaration }) };
-  for (const [position, place] of VALUE_POSITIONS) for (const element of [...PARENTHESISED_ELEMENTS, ...HIDING_ELEMENTS]) yield { group: 'parenthesised element', name: `${element} / ${position}`, element, code: page(place(element)) };
+  for (const [position, place] of VALUE_POSITIONS) for (const element of [...PARENTHESISED_ELEMENTS, ...HIDING_ELEMENTS, ...INITIALIZER_ELEMENTS]) yield { group: 'parenthesised element', name: `${element} / ${position}`, element, code: page(place(element)) };
   for (const member of MEMBERS) {
     yield { group: 'interface member', name: member, code: page({ top: `interface P1<T, U> { ${member} }` }) };
     yield { group: 'type literal member', name: member, code: page({ top: `type P2<T, U> = { ${member} };` }) };
@@ -347,4 +363,4 @@ function* validPages() {
   for (const form of PARAMETER_FORMS) yield { group: 'parameter form', name: form, code: page({ top: form }) };
 }
 
-module.exports = { validPages, functionTypes, NAVIGATION_CALL, page, ARROWS, FUNCTION_VALUES, CASTS, OPERATORS, OPERANDS, MEMBERS, SIGNATURE_MEMBERS, HIDDEN_CLOSING_MEMBERS, PARENTHESISED_ELEMENTS, HIDING_ELEMENTS, TYPE_POSITIONS, VALUE_POSITIONS, EVERYDAY };
+module.exports = { validPages, functionTypes, NAVIGATION_CALL, page, ARROWS, FUNCTION_VALUES, CASTS, OPERATORS, OPERANDS, MEMBERS, SIGNATURE_MEMBERS, HIDDEN_CLOSING_MEMBERS, PARENTHESISED_ELEMENTS, HIDING_ELEMENTS, INITIALIZER_ELEMENTS, TYPE_POSITIONS, VALUE_POSITIONS, EVERYDAY };

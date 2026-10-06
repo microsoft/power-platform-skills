@@ -218,8 +218,11 @@ const SIGNATURE_ENDINGS = [
   '\n  <U>(y)', '\n  new <U>(y)', ';\n  m: (a: T) => void', ';\n  m: Array<string>', ';\n  m(): void', ';\n  [k: string]: T', ';\n  readonly m?: 1', ';\n  m: <U>(y: U) => void', ',\n  m: 1',
 ];
 // What may follow it that a closing tag could be inside of: a string, a template, a comment or a JSDoc comment that holds the closing tag of the head's name; and an object type with a signature of its own
-// (`{ <U>(y: U): void }`), which the reading of the text does not read. `<T>` and `</T>` stand for the head's name.
-const HIDING_ENDINGS = [";\n  m: '</T>'", ';\n  m: "a</T>b"', ';\n  m: `</T>`', ';\n  // </T>\n  m: number', ';\n  /* </T> */', ';\n  /** </T> */ m: number', ";\n  m: '</T>' | '<T>'", ';\n  m: { <U>(y: U): void }'];
+// (`{ <U>(y: U): void }`), which the reading of the text does not read. A string or a regex can stand right after a keyword, which the reading must not take for a word of prose: a member's quoted name after
+// its modifier (`public'…'`, which TypeScript parses before any member and leaves to the checker), and a regex in the heritage clause of a class in a computed name (`implements /…/`). `<T>` and `</T>`
+// stand for the head's name.
+const HIDING_ENDINGS = [";\n  m: '</T>'", ';\n  m: "a</T>b"', ';\n  m: `</T>`', ';\n  // </T>\n  m: number', ';\n  /* </T> */', ';\n  /** </T> */ m: number', ";\n  m: '</T>' | '<T>'", ';\n  m: { <U>(y: U): void }',
+  ";\n  public'</T>': number", ';\n  [class C implements /[</T>]/ {}]: 1'];
 
 // What follows the type or the element and holds the closing tag of the head's name (NAME) and the text of a call, which is data in every one.
 const DECOYS = {
@@ -263,9 +266,15 @@ const CERTAIN_ELEMENTS = [
   '<p>(a); // c\n</p>', '<p>(a);\n  /* c */ more /* d */</p>', '<p>(a); {t("x")} a/b</p>', "<p>(a); it's a/b</p>", '<p>(a)\n  {/* c */}\n</p>', '<p>(a);\n  <b>x</b> and/or <i>y</i></p>',
   // Prose that no type holds the members of — two names on a line, a name and a `/` — leaves no type for the closing tag to be hidden in, whatever it holds after it.
   '<p>(a), see https://x.y</p>', '<p>(a), a b // c </p>', '<p>(a), 1 2 `x ${y} </p>', '<p>(a), see a/b = /re/ </p>',
+  // A template or a regex where a member would begin, which no member does (TS1131), and a list that holds no parameters (TS1003 in every signature).
+  '<p>(a); `x ${y} </p>', '<p>(a);\n  /x </p>', '<li>(1): first</li>', '<p>("a"); // c </p>',
+  // A `/` in the list that divides, or a regex that holds nothing the parenthesis scan misreads; text whose parameters fail before a type, a default or a pattern.
+  '<span>({done}/{total})</span>', '<span>(press [/] to search)</span>', '<p>(see @/components)</p>',
 ];
 // The same, where the closing tag could be inside a comment, a template or a regex that the text opens, and is not closed before it, and the text before it could be the members of a type: a guess.
-const GUESSED_ELEMENTS = ['<p>(a); // c </p>', '<p>(a);\n  /* c </p>', '<p>(a); `x ${y} </p>', '<p>(a), = /re/ </p>', '<p>(a), x // c </p>', '<p>(a),\n  see\n  x // c </p>', '<p>(a), readonly x // c </p>', '<p>(a);\n  see /* c </p>'];
+// (A template after a member's colon is a type: `m: \`a${string}\``.) And where the text holds an `=` or a `[` before its `)`, which may start an expression in a parameter list: a guess.
+const GUESSED_ELEMENTS = ['<p>(a); // c </p>', '<p>(a);\n  /* c </p>', '<p>(a); m: `x ${y} </p>', '<p>(a), = /re/ </p>', '<p>(a), x // c </p>', '<p>(a),\n  see\n  x // c </p>', '<p>(a), readonly x // c </p>', '<p>(a);\n  see /* c </p>',
+  '<p>(a = b/(c))</p>', '<p>(a = /x/)</p>'];
 
 function elementPage(frame, element, decoy = DECOYS.string) {
   const name = /^<([\w.]+)>/.exec(element)[1];

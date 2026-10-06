@@ -737,7 +737,7 @@ test('the committed misread pages are valid to TypeScript, and those that hold a
   for (const [name, { code }] of Object.entries(MISREAD_PAGES)) assert.ok(cleanSourceFile(ts, code), `${name}: a page TypeScript parses`);
   for (const { name, code } of [...FUNCTION_TYPE_PAGES, ...ELEMENT_LOOKALIKE_PAGES]) assert.ok(cleanSourceFile(ts, code), `${name}: a page TypeScript parses`);
   for (const name of [
-    'generic, in a nested element', 'generic, with await', 'generic, with yield', 'operator, after ">="',
+    'generic, with await', 'generic, with yield', 'operator, after ">="',
     'operator, after ">>=" that ends type arguments', 'operator, after ">>>=" that ends nested type arguments', 'operator, after ">>=" that ends the type arguments of satisfies',
   ]) {
     assert.strictEqual(regexTokens(cleanSourceFile(ts, MISREAD_PAGES[name].code)), 1, `${name}: TypeScript reads the token as text in a regex`);

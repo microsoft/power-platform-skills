@@ -1214,7 +1214,11 @@ rejected a complete page saved with CRLF endings.
   parameters only when, after an optional `const`, the token after the first identifier is `extends` (and the
   token after that is not `=`, `>` or `/`), or `,` or `=`; otherwise it begins an element — so `<T,>(x: T) => x`,
   `<T extends X>(…) => …` and `<const T,>(…) => …` are arrows, and `<T>`, `<T extends>`, `<T extends/>` and
-  `<div data-active={e}>` are elements. A lexer that searched for a parameter list and a later `=>` took the
+  `<div data-active={e}>` are elements. The `/` is the one that rule does not settle for the lexer: in a type the same
+  `<T extends /` opens type parameters, whose constraint is read as an expression where it starts no type
+  (`parseTypeParameter`), here a regex — `let f: <T extends />;…[/]/>(a: T) => T` is a function type — and the lexer
+  does not always know which of the two it is in, so `extends` and a `/` is the guess `generic`, read as the element
+  (`/=` is another token, and type parameters in both). A lexer that searched for a parameter list and a later `=>` took the
   JSX text `(a): Title` in `isVisible(<div data-active={e}>(a): Title</div>) ? (() => /navigateTo(…)/.test(t)) : …`
   for parameters, and read the regex after the next arrow as code: a call, whose token was rewritten. Three
   things go beyond the three-token rule, and a test checks each against TypeScript's parser when
@@ -1327,7 +1331,8 @@ rejected a complete page saved with CRLF endings.
   alphabets hold white space of every kind TypeScript skips — which an ASCII-only fuzz cannot reach — and the
   test asserts that each kind was put next to an `=` and into the heads of valid function types, and that quoted method signatures were put into their object types). **Where the reading
   cannot show the failure** — the arrow lies inside a tag or an attribute string (a JSX attribute string has no
-  escapes, so `<Wrapper>(<Child x="\" y=") =>" />)</Wrapper>` is one JsxElement with no diagnostic); the text holds
+  escapes, so `<Wrapper>(<Child x="\" y=") =>" />)</Wrapper>` is one JsxElement with no diagnostic; where the list's
+  first token is the `<`, as there, it holds no parameters and the element is certain — see `parameterListMayStart` below); the text holds
   a closing tag, a fragment, a comment, a spread, a name with a `-` or a `:`, or an attribute string that does not
   follow its `=` at once (TypeScript scans `x = "a\"` as a JavaScript string, with escapes); a character beyond
   ASCII where a token could start or end in a tag — TypeScript's scanner skips trivia between a tag's tokens, and
@@ -1341,7 +1346,27 @@ rejected a complete page saved with CRLF endings.
   that holds one is as complete to the structure gate as any other. What stays two-way, with the element read,
   is a `:` after the parameter list — a call signature
   (`interface I { <T>(x: T): T }`) and JSX text (`<span>(required): Name</span>`) both compile — and a parameter
-  list too long to scan: the guess `generic`, and everything after it not trusted. One place settles even those: **directly after the head of a type alias, `type Name =` at a
+  list too long to scan: the guess `generic`, and everything after it not trusted. The list is matched as JavaScript reads it, with comments, strings and
+  templates skipped (a template whole only where each substitution closes, and holds no `<` after something that may start an expression, where JSX —
+  whose quotes are no strings — may stand: `templateSkipIsWhole`). In a type that reading is exact until something in the
+  list may start an expression — an initializer's `=` (any `=` but the `=>` of a function type), a `[` other than `[]`, a decorator's `@`, an import
+  type's `import`, an accessor's body in a type literal (`get`/`set` before an accessor's name — a `[`, a name, a string or a number; before a `:`, a `?`,
+  a `(` or a `<` each is a name and starts nothing; TypeScript parses a block after an accessor and only its checker objects), a type parameter's
+  constraint (`extends`: read as an expression where it starts no type) (`expressionMayStart`) — and a type holds no `/` outside a comment, a string or a
+  template, so a `/` before one leaves only the element (`<p>(see: /docs)</p>`, `<span>({done}/{total})</span>`). After one the scan is still exact while
+  it reads no `/`, `<` or back-tick (no regex, no JSX, no template: every quote is a string and every parenthesis code), so `<span>(@username)</span>` and
+  `<p>(x = 5)</p>` are read as before; once it reads one, the expression may hold a `)` of its own — a regex's, JSX text's, a nested template's — and
+  with no arrow after the `)` it found, the list is the guess (`interface I { <T>(a = /[)]/); m: '</T>…' }` ended the list at the `)` in the regex's class).
+  A list that can hold no parameters is
+  the element's alone, with a `:` after it or without: its first token a number, a string, a template, a `#` or an operator
+  (`<li>(1): First</li>`) is TS1003 in every signature and function type (`parameterListMayStart`; a character beyond ASCII and a
+  `.`, which may start `...`, are not judged); so is one whose parameters fail before a type, a default, a pattern or a modifier — a name followed by
+  anything but `?`, `:`, `=`, `,` or `)`, a keyword that is no parameter's name, or a later parameter that starts as no parameter does
+  (`<span>(press [/] to search)</span>`, `(see docs)`, `(optional, <a>…</a>)`, `(get the <b>app</b>)`, `(extends <code>Base</code>)`: TS1005/TS1003;
+  `parameterSyntaxFails`). A keyword there is read as TypeScript reads it: the thirteen modifiers it takes before a parameter's name (`public`,
+  `readonly`, `async`, `in`, `out`, …) and `this` end the reading, the thirty-three words that are no parameter's name (`extends`, `import`, `new`,
+  `class`, …) fail the list, and every other keyword (`get`, `set`, `of`, `type`, …) is a name; a test measures the classes over every keyword
+  TypeScript has. One place settles even those: **directly after the head of a type alias, `type Name =` at a
   statement start** (after any `export` and `declare`), where `type Name` — two names side by side — cannot be
   an expression, so a `<` is a function type's type parameters, for certain, whatever follows it
   (`afterTypeAliasHead`; a head with type parameters, `type Fn<A> =`, is not read, and its right side is decided
@@ -1374,9 +1399,12 @@ rejected a complete page saved with CRLF endings.
   is not closed before the closing tag hides it (`hideable`), and where none is open at the closing tag, the tag is code in the type
   reading too, no type reads `</` as code, and the element is the only reading: certain (`<b>(optional)</b>`, `<span>(total: {count})</span>`,
   `<p>({t("label")})</p>`, nested children). What opens one: a back-tick (a template with a `${`, which opens code that is not read, may), a `//` or a `/*`,
-  a `/` that no word or number stands before and that so may start a regex, and a quote that starts a string closing on its line and covers the
-  closing tag (a quote right after a word that is no keyword, an apostrophe or an inch mark, opens none). Where the text up to the first
-  such opener cannot be the members of a type, though — two names on a line, a name and a `/`, a name and a quote (`<p>(a), see https://x.y</p>`: TS1005 in a type) —
+  a `/` that no word or number stands before and that so may start a regex (a keyword that an expression follows is no such word: `return`, `typeof`, and
+  `implements`, whose heritage clause takes one, as in a computed name `[class C implements /…/ {}]`), and a quote that starts a string closing on its line and
+  covers the closing tag (a quote right after a word that is no keyword, an apostrophe or an inch mark, opens none; a keyword is a reserved word, a contextual one,
+  or a modifier, which TypeScript takes before a quoted member name: `public'…'`). Where the text up to the first
+  such opener cannot be the members of a type, though — two names on a line, a name and a `/`, a name and a quote (`<p>(a), see https://x.y</p>`: TS1005 in a type),
+  a template or a regex where a member would begin (``<p>(a); `x ${y} </p>``: TS1131; after a member's colon a template is a type and stays possible) —
   no type holds the closing tag in anything, nothing that follows can hide it, and it is an element (`typeMembersFail`; a word that may be a modifier or any other
   character leaves it undecided). Where one is open at the closing tag, or the reading cannot say (a container or a tag it
   does not read, a window of 2,000 characters, a spent budget), both programs compile and the text up to the decision
@@ -1401,7 +1429,7 @@ rejected a complete page saved with CRLF endings.
   | `jsx-type-arguments` | a JSX element whose type arguments hold a string, template, object or function type: TypeScript's rules apply there and the tag is scanned by a JSX attribute's | `<Component<"quote\"\<LF>/*"> …/>` |
   | `jsx-attribute` | a JSX attribute value whose quote does not follow its `=` at once (white space or a comment stands between them) and whose text holds a backslash: TypeScript scans it as a JavaScript string, with escapes, and other compilers as a JSX string, with none, so the two end it at different quotes and read different calls after it | `<C x= '\'/>;navigateTo(…);//' />` |
   | `jsx-open` | a `<` where an element may start that is not read as one (a space after it, or a name beyond ASCII: in code, in JSX text and as an attribute's value), or a closing tag that holds anything but trivia, comments and a name (dotted, or namespaced) before its `>`, so that where it ends is not known | `< div>x</div>`, `<A x=< B/>>…</A>`, `<A></A b>` |
-  | `generic` | `<Name>` and a parameter list followed by `:`, which is the call signature of a type or JSX text that starts with a parenthesis (both compile); or one followed by no return type, where a string, a template, a comment or a regex after it could hold its closing tag, or its text cannot be read to the end of an element, or the pass's budget of readings is spent (a signature with no return type is otherwise code, for certain, and JSX text that starts with a parenthesis an element: `callSignatureOrElement`); or a parameter list too long to scan (2,000 characters) — except directly after `type Name =`, where it is certainly a type. A `=>` after the list is a generic function type for certain when the element reading of the text up to the arrow cannot parse (`elementFailsAt`: a `>` or `}` in the text, a container that starts with a name, a number or a quoted name and a colon, two names, a bracket, a call or a quoted name and a call and a colon, a `<` and a character that cannot start a tag, …), and a guess, read as a type, when it may: the arrow inside the attribute string of a nested tag (TypeScript scans a JSX attribute string with no escapes), a closing tag, a fragment, a spread, a comment, an attribute value that does not follow its `=` at once, a character beyond ASCII where a token could start or end in a tag, or a container that holds a brace, a quote, a back-tick, a `/`, a backslash or a `<` and none of the shapes `elementFailsAt` knows; a `<` followed by `await` or `yield`, which are identifiers or not by the function around them | `interface I { <T>(x: T): T }`, `interface I { <T>(x); m: '</T>' }`, `<span>(required): Name</span>`, `<p>(a), b/c</p>`, `const f: <T>({ a = {} }: P) => T = g`, `const f: <T>(x: { 'a'?(y: T): T }) => T = g`, `<Wrapper>(<Child x="\" y=") =>" />)</Wrapper>`, `async function p() { <await extends X>t</await> }` |
+  | `generic` | `<Name>` and a parameter list followed by `:`, which is the call signature of a type or JSX text that starts with a parenthesis (both compile; a list that can hold no parameters, `<li>(1): First</li>`, is the element's alone); or one followed by no return type, where a string, a template, a comment or a regex after it could hold its closing tag, or its text cannot be read to the end of an element, or the pass's budget of readings is spent (a signature with no return type is otherwise code, for certain, and JSX text that starts with a parenthesis an element: `callSignatureOrElement`); or a parameter list too long to scan (2,000 characters), or one with no arrow after it in which something may start an expression (`expressionMayStart`: an `=`, a `[` other than `[]`, an `@`, `import`, `extends`, and `get` or `set` before an accessor's name) and a `/`, a `<` or a back-tick follows, or a template whose substitutions do not close or hold a `<` after an expression start (`templateSkipIsWhole`), or `<T extends` and a `/` (an element where an expression starts, type parameters with a regex constraint in a type) — except directly after `type Name =`, where it is certainly a type. A `=>` after the list is a generic function type for certain when the element reading of the text up to the arrow cannot parse (`elementFailsAt`: a `>` or `}` in the text, a container that starts with a name, a number or a quoted name and a colon, two names, a bracket, a call or a quoted name and a call and a colon, a `<` and a character that cannot start a tag, …), and a guess, read as a type, when it may: the arrow inside the attribute string of a nested tag (TypeScript scans a JSX attribute string with no escapes), a closing tag, a fragment, a spread, a comment, an attribute value that does not follow its `=` at once, a character beyond ASCII where a token could start or end in a tag, or a container that holds a brace, a quote, a back-tick, a `/`, a backslash or a `<` and none of the shapes `elementFailsAt` knows; a `<` followed by `await` or `yield`, which are identifiers or not by the function around them | `interface I { <T>(x: T): T }`, `interface I { <T>(x); m: '</T>' }`, `<span>(required): Name</span>`, `<p>(a), b/c</p>`, `const f: <T>({ a = {} }: P) => T = g`, `const f: <T>(x: { 'a'?(y: T): T }) => T = g`, `async function p() { <await extends X>t</await> }` |
   | `fallback` | a quote with no closing quote on its line, read as an ordinary character; a `/` after a character that begins nothing in code | `const a = 'unterminated`, `# / 2 / 3` |
 
   Names alone in a tag's type arguments (`<DataGridRow<Row>`, `<Select<string | number>`) are certain: the scan
@@ -1437,7 +1465,8 @@ rejected a complete page saved with CRLF endings.
   call or construct signature with no return type and JSX text that starts with a parenthesis (each in every place a type
   with members or an element stands, followed by every ending that ends a member or goes on to another, and by a decoy —
   a string, a template, a comment or a regex that holds the closing tag of its head and the text of a call, and a type that
-  holds the closing tag in a string as the text of a call signature's parameter)
+  holds the closing tag in a string as the text of a call signature's parameter, in a member name quoted after `public`, or in
+  a regex after `implements`)
   — each read token by token against TypeScript's parser — and a differential fuzz
   (`tests/jsx-element-reading.test.js`; `JSX_FUZZ_SCALE` multiplies it) checks every verdict of the element
   reading of a head and of a function type against it, and puts the text after a parameter list that neither an arrow

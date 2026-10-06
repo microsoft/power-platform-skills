@@ -396,6 +396,10 @@ function signatureTail(rng, name) {
 
 // The characters of white space and comments before the first token after the `)`: a `:` there makes the head a call signature with a return type as much as JSX text, which is its own, documented guess.
 const COLON_NEXT = new RegExp(`^(?:[${ANY_SPACE.join('')}]|/\\*[^]*?\\*/|//[^\\n]*\\n)*:`);
+// A parameter list in which something may start an expression — an `=` that is not the `=>` of a function type, a `[` that is not the `[]` of an array type, an `@`, `import`, `extends`,
+// `get` or `set` — and a `/`, a `<` or a back-tick follows it is read with the guess (genericFunctionTypeFollows): a regex, JSX or a template there may move the `)` that ends the list. This
+// errs toward naming more lists than the lexer does (an `=` in a string, a comment in `[ ]`), which only leaves an element out of the precise ones.
+const MAY_HOLD_EXPRESSION = /(?:=(?!>)|\[(?!\s*\])|@|\b(?:import|extends|get|set)\b)[^]*[/<`]/;
 
 // A program per head: `kind` is where the head stands, in a type (`signature`) or as an element, which is the same text with the closing tag of the head after it. `at` is the offset of the `<`,
 // `after` the offset just past the `>` of `<Name>`, and `precise` marks an element that holds nothing the lexer may be unable to read: it must be read as an element, for certain, where it parses.
@@ -417,7 +421,7 @@ function* signaturePrograms(seed, count) {
     // A `<` in the parameters opens a tag of its own, and a slash in the white space is a comment or a division: neither is a text the lexer must be able to read.
     yield {
       kind: 'element', code: `${elementFrame.replace('@', `${head}${parameters}${separator}${tail.text}</${name}>`)}\n${decoy}\n${CALL};\n`, at, after: at + name.length + 2, name,
-      precise: tail.plain && !tail.risky && !head.includes('/') && !separator.includes('/') && !parameters.includes('<') && !COLON_NEXT.test(`${separator}${tail.text}`),
+      precise: tail.plain && !tail.risky && !head.includes('/') && !separator.includes('/') && !parameters.includes('<') && !MAY_HOLD_EXPRESSION.test(parameters) && !COLON_NEXT.test(`${separator}${tail.text}`),
     };
   }
 }
