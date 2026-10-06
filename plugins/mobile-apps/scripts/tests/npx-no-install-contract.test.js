@@ -5,9 +5,10 @@
 // decides which registry serves it. Every runnable `npx` in this plugin must therefore be
 // `npx --no-install …`, apart from the developer-run commands in USER_RUN.
 //
-// "Runnable" means a command line in a fenced code block, or an inline code span that is not part
-// of a prohibition: "Never run `npx expo install`" names a command to avoid, while
-// "Run `npx foo lint` after edits" is an instruction and fails this test.
+// "Runnable" means any line of a script or config (.js/.cjs/.mjs/.sh/.json), a command line in a
+// fenced code block, or an inline code span — unless an explicit prohibition comes first in the
+// same clause: "Never run `npx expo install`" names a command to avoid, while
+// "If the tool is not installed, run `npx foo`" is an instruction and fails this test.
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -28,7 +29,9 @@ const USER_RUN = [
 ];
 
 const BARE_NPX = /\bnpx\s+(?!--no-install\b)/g;
-const NEGATION = /\b(?:never|not|don't)\b/i;
+// Explicit prohibitions only: a bare "not" would also waive conditions such as
+// "If the tool is not installed, run `npx foo`".
+const NEGATION = /\b(?:never|(?:do|must|should)\s+not|don['’]t)\b/i;
 
 // Only the clause before a match decides whether it is a prohibition, so
 // "Do not edit it; run `npx foo`" still counts as an instruction.
@@ -44,7 +47,7 @@ function listFiles(dir) {
       // Tests quote bare `npx` inside assertion regexes; installed packages are not plugin content.
       if (entry.name === 'node_modules' || entry.name.startsWith('.') || full === testsDir) continue;
       files.push(...listFiles(full));
-    } else if (/\.(?:md|js|cjs|mjs)$/.test(entry.name)) {
+    } else if (/\.(?:md|js|cjs|mjs|sh|json)$/.test(entry.name)) {
       files.push(full);
     }
   }
@@ -55,7 +58,15 @@ function findBareNpx(text, isMarkdown) {
   const hits = [];
   let inFence = false;
   text.split(/\r?\n/).forEach((line, index) => {
-    if (isMarkdown && /^\s*(?:```|~~~)/.test(line)) {
+    // Scripts and configs have no fences or code spans, and any line can build a command string
+    // such as execSync('npx some-tool'), so scan every line in full.
+    if (!isMarkdown) {
+      if ([...line.matchAll(BARE_NPX)].some((match) => !isProhibited(line, match.index))) {
+        hits.push({ line: index + 1, text: line.trim() });
+      }
+      return;
+    }
+    if (/^\s*(?:```|~~~)/.test(line)) {
       inFence = !inFence;
       return;
     }
@@ -82,6 +93,7 @@ test('bare-npx detector flags instructions and fenced commands, not prohibitions
     'Run `npx foo lint` after edits.',
     'Never run `npx expo install`. Do not use `npx --yes`.',
     'Do not edit it; run `npx baz`.',
+    'If the tool is not installed, run `npx qux`.',
     'Run `npx --no-install tsc --noEmit` first.',
     '```bash',
     '# npx in a comment is fine',
@@ -90,7 +102,17 @@ test('bare-npx detector flags instructions and fenced commands, not prohibitions
     '1. Read-only parse (NEVER run npm/npx against target)',
     '```',
   ].join('\n');
-  assert.deepEqual(findBareNpx(sample, true).map((hit) => hit.line), [1, 3, 7]);
+  assert.deepEqual(findBareNpx(sample, true).map((hit) => hit.line), [1, 3, 4, 8]);
+});
+
+test('bare-npx detector scans whole lines of scripts', () => {
+  const script = [
+    "execSync('npx untrusted-tool');",
+    "execSync('npx --no-install tsc --noEmit');",
+    '// Never shell out to npx tools here.',
+    '"lint": "npx eslint ."',
+  ].join('\n');
+  assert.deepEqual(findBareNpx(script, false).map((hit) => hit.line), [1, 4]);
 });
 
 test('plugin content never runs npx without --no-install', () => {
