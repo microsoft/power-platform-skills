@@ -38,6 +38,11 @@ const COPY_SETS = [
       copy: path.posix.join('plugins/pcf', copy),
     })).concat([
       {
+        source: 'plugins/model-apps/scripts/lib/telemetry/ikey.json',
+        copy: 'plugins/pcf/scripts/lib/telemetry/ikey.json',
+        byteIdentical: true,
+      },
+      {
         source: 'shared/skills/report-issue/report-issue-workflow.md',
         copy: 'plugins/pcf/skills/report-issue/report-issue-workflow.md',
       },
@@ -121,7 +126,12 @@ function checkVerbatimPair(repoRoot, setName, pair) {
   if (!fs.existsSync(copyPath)) {
     return finding(setName, 'missing-copy', pair.source, pair.copy, copyFileFix(pair));
   }
-  if (normalizeText(readText(sourcePath)) !== normalizeText(readText(copyPath))) {
+  // Shared tenant configuration must retain the source bytes, including EOLs,
+  // so key rotations cannot leave either shipped config different from the other.
+  const matches = pair.byteIdentical
+    ? fs.readFileSync(sourcePath).equals(fs.readFileSync(copyPath))
+    : normalizeText(readText(sourcePath)) === normalizeText(readText(copyPath));
+  if (!matches) {
     return finding(setName, 'drift', pair.source, pair.copy, copyFileFix(pair));
   }
   return null;

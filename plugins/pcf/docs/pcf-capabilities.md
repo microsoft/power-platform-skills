@@ -4,7 +4,7 @@ What the `/pcf:pcf` skill can do today, and how far each capability has been pro
 
 This file records **shipped** behaviour only. Planned and unbuilt work is tracked in GitHub issues — the pcf backlog is [#656](https://github.com/microsoft/power-platform-skills/issues/656). A roadmap committed alongside the code goes stale silently and states intent the code does not yet support, so the two are kept apart deliberately.
 
-**Usage telemetry:** wired end to end but ships disabled, with no network or local telemetry logging; see [Telemetry](../README.md#telemetry).
+**Usage telemetry:** enabled and default-on on model-apps' shared tenant, with base fields only, transmission opt-outs and a local diagnostic mirror; see [Telemetry](../README.md#telemetry).
 
 **Evidence legend**
 - ✅ **verified live** — exercised end to end on a real Dataverse environment, then cleaned up.

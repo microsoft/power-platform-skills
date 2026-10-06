@@ -21,11 +21,11 @@ function run(t, args = [], extra = {}, root = tempRoot(t)) {
   return { ...result, root, configDir };
 }
 
-test('PCF telemetry status plainly reports the disabled build and writes nothing', (t) => {
+test('PCF telemetry status reports the shipped build ON without writing anything', (t) => {
   const result = run(t, ['--action', 'status']);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Telemetry \(pcf\): DISABLED in this build/);
-  assert.match(result.stdout, /nothing is sent or logged until a provisioned release/i);
+  assert.match(result.stdout, /Telemetry \(pcf\): ON/);
+  assert.doesNotMatch(result.stdout, /DISABLED|UNPROVISIONED/);
   assert.match(result.stdout, /no (?:signed-in )?user object (?:ID|identifier)/i);
   assert.deepEqual(fs.readdirSync(result.configDir), []);
 });
@@ -33,12 +33,12 @@ test('PCF telemetry status plainly reports the disabled build and writes nothing
 test('PCF telemetry CLI defaults to status', (t) => {
   const result = run(t);
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /DISABLED in this build/);
+  assert.match(result.stdout, /Telemetry \(pcf\): ON/);
   assert.deepEqual(fs.readdirSync(result.configDir), []);
 });
 
 for (const action of ['on', 'off']) {
-  test(`telemetry ${action} merge-writes only the PCF preference without enabling this build`, (t) => {
+  test(`telemetry ${action} merge-writes only the PCF preference and reports the live state`, (t) => {
     const root = tempRoot(t);
     const configDir = path.join(root, 'config');
     fs.mkdirSync(configDir);
@@ -48,10 +48,21 @@ for (const action of ['on', 'off']) {
     assert.equal(result.status, 0, result.stderr);
     const actual = JSON.parse(fs.readFileSync(path.join(configDir, 'config.json'), 'utf8'));
     assert.deepEqual(actual, { setting: 'keep', telemetry: { 'example-plugin': 'off', pcf: action } });
-    assert.match(result.stdout, /DISABLED in this build/);
+    assert.match(result.stdout, new RegExp(`Telemetry \\(pcf\\): ${action.toUpperCase()}`));
     assert.deepEqual(fs.readdirSync(configDir), ['config.json']);
   });
 }
+
+test('an explicitly disabled config still reports hard-off without local writes', (t) => {
+  const root = tempRoot(t);
+  const result = run(t, ['--action', 'status'], {
+    POWER_PLATFORM_SKILLS_IKEY_JSON: writeConfig(root, { ...FAKE_CONFIG, disabled: true }),
+  }, root);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /DISABLED in this build/);
+  assert.match(result.stdout, /nothing is sent or logged/i);
+  assert.deepEqual(fs.readdirSync(result.configDir), []);
+});
 
 test('a provisioned status honours the highest-precedence PCF environment opt-out', (t) => {
   const root = tempRoot(t);
@@ -99,7 +110,7 @@ test('telemetry preference write errors are explicit, not success-shaped fallbac
   assert.match(result.stderr, /could not update.*telemetry/i);
 });
 
-test('the telemetry skill is installable and points to its own staged control workflow', () => {
+test('the telemetry skill is installable and discloses its live shared-tenant controls', () => {
   const file = path.join(PLUGIN_ROOT, 'skills', 'telemetry', 'SKILL.md');
   assert.ok(fs.existsSync(file), 'pcf needs an installed telemetry control skill');
   const skill = fs.readFileSync(file, 'utf8');
@@ -112,7 +123,10 @@ test('the telemetry skill is installable and points to its own staged control wo
   assert.doesNotMatch(skill, /check-version\.js/, 'the telemetry control path must not make a network call');
   const workflow = fs.readFileSync(path.join(path.dirname(file), 'telemetry-workflow.md'), 'utf8');
   assert.match(workflow, /\$\{PLUGIN_ROOT\}\/scripts\/telemetry-config\.js/);
-  assert.match(workflow, /ships disabled/i);
+  assert.match(workflow, /enabled.*default-on/i);
+  assert.match(workflow, /shares model-apps.*tenant/i);
+  assert.match(workflow, /status.*(?:actual|real|effective)/i);
+  assert.doesNotMatch(workflow, /ships disabled|provisioned release/i);
   assert.match(workflow, /POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT=1/);
   assert.match(workflow, /no (?:signed-in )?user object (?:ID|identifier)/i);
 });

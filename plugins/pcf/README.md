@@ -105,8 +105,8 @@ The plugin registers lifecycle hooks (in `hooks/hooks.json`) that run automatica
 | Hook | When | What it does |
 |---|---|---|
 | Write-safety | before Write/Edit/MultiEdit | **Flags (non-blocking)** writes outside the cwd only during a PCF authoring session. Never blocks; silent in unrelated projects. |
-| Skill telemetry | before Skill/skill | Wired for `skill_started`; hard-disabled in this release. |
-| Prompt telemetry | on UserPromptSubmit | Wired for tracked PCF slash commands; hard-disabled in this release. |
+| Skill telemetry | before Skill/skill | Emits `skill_started` for tracked PCF skills; see [Telemetry](#telemetry). |
+| Prompt telemetry | on UserPromptSubmit | Emits `skill_started` for tracked PCF slash commands; see [Telemetry](#telemetry). |
 
 **Escape hatches** (environment variables — set to `1` or `true`):
 
@@ -127,9 +127,9 @@ export PCF_DISABLE_HOOKS=1
 
 ## Telemetry
 
-This release **ships disabled** (`disabled: true`, placeholder keys): **nothing is sent or written** by the telemetry hooks, including the local mirror, and no PAC telemetry enrichment runs. `/pcf:telemetry on` cannot override this build's hard-off.
+Usage telemetry is **enabled and default-on** for transmission, with **no first-run prompt**. PCF shares model-apps' 1DS tenant and instrumentation keys; its bundled `ikey.json` is a byte-identical copy.
 
-A provisioned, enabled release would send **`skill_started` only**, with these approved base fields:
+The hooks send **`skill_started` only**, with these approved base fields:
 
 - `pluginName`, `pluginVersion`, `skillName` - plugin and invoked skill identity.
 - `sessionId`, `correlationId` - session and per-invocation correlation.
@@ -139,11 +139,13 @@ A provisioned, enabled release would send **`skill_started` only**, with these a
 
 There is **no user object ID** and **no `eventInfo` payload**. The Power Apps client `event` envelope uses `clientType: "PcfAIPlugin"` and `pluginName: "pcf"` so PCF usage stays separate from other plugins and native-client traffic.
 
+**Routing matches model-apps:** a public-cloud organization routes by its geo to the US or EU collector, with no public-default fallback when its geo is unknown. Only signed-out PAC uses the configured US default. Sovereign or internal clouds route from the PAC cloud stamp alone, never to a public collector; unknown clouds and signed-in organizations without a cloud stamp send nothing.
+
 **Never sent:** file paths, cwd, environment variables, prompts, skill arguments, tool inputs, site names, Dataverse URLs, stack traces, error-message text, credentials, usernames or hostnames.
 
-**Transmission opt-outs:** `/pcf:telemetry off` saves `telemetry["pcf"] = "off"` in `~/.power-platform-skills/config.json`; `POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT=1` (or `true`) has the **highest precedence**, including over `/pcf:telemetry on`. `/pcf:telemetry status` shows the build state and preference. Preferences can be saved while this build remains disabled.
+**Transmission opt-outs:** `/pcf:telemetry off` saves `telemetry["pcf"] = "off"` in `~/.power-platform-skills/config.json`; `POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT=1` (or `true`) has the **highest precedence**, including over `/pcf:telemetry on`. `/pcf:telemetry status` shows the actual build state and effective preference.
 
-**Local mirror, once enabled:** `~/.power-platform-skills/telemetry/pcf/sessions/<sessionId>/events.jsonl` retains the same approved fields even after a transmission opt-out. Sessions older than 14 days are pruned best-effort, and logs rotate above 10 MB. This disabled release writes no mirror.
+**Local mirror:** `~/.power-platform-skills/telemetry/pcf/sessions/<sessionId>/events.jsonl` retains the same approved fields even after a transmission opt-out. Sessions older than 14 days are pruned best-effort, and logs rotate above 10 MB.
 
 ## Relation to model-apps
 

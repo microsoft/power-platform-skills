@@ -35,7 +35,7 @@ function main(argv = process.argv.slice(2)) {
 
   // The shared CLI reports the user's transmission preference, not the committed
   // build's provisioning state. Keep the shared library verbatim and use its
-  // config/log helpers here so /pcf:telemetry never misleadingly calls this build ON.
+  // config/log helpers here so /pcf:telemetry reports the actual build state.
   const provisioned = isProvisioned(cfg);
   const off = effectiveTelemetryChoice(configDir, 'pcf') === 'off';
   if (cfg.disabled === true) {

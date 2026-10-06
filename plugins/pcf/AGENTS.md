@@ -18,7 +18,7 @@ Primary references: [`references/pcf-hosts.md`](references/pcf-hosts.md), [`refe
 - `skills/pcf/` — skill workflow files.
 - `skills/report-issue/` — bundled shared bug-report workflow.
 - `skills/telemetry/` - `/pcf:telemetry on|off|status`, backed by `scripts/telemetry-config.js`.
-- `scripts/lib/telemetry/` - staged placeholder config, PCF resolver, bundled shared library and Power Pages region router.
+- `scripts/lib/telemetry/` - shared-tenant config, PCF resolver, bundled shared library and Power Pages region router.
 - `references/`, `docs/pcf-design.md`, and `docs/pcf-capabilities.md` — user-facing guidance, the shipped design record, and capability evidence.
 - `evals/pcf/` — offline structural and generated-project eval fixtures.
 
@@ -104,25 +104,19 @@ When a CLI test harness maps `parseArgs` to a fixed result, use `scripts/tests/h
 
 Marketplace installs copy only one plugin directory, so pcf carries physical copies of model-apps helpers needed by PCF scripts. `scripts/validate-plugin-copies.js` is the source of truth for the copy list and subset rules, including the PCF-specific `emitResult` JSON error contract in `dataverse-auth.js`. The subset check also requires every top-level declaration a retained function closes over, so deleting an import such as `nearestName` fails even when the function text still matches.
 
-Run `node --test scripts/tests/model-apps-copies.test.js` after changing any copied source. Refresh verbatim copies with `Copy-Item` from `plugins/model-apps`; refresh the SDK by re-vendoring it in model-apps first, then copying the resulting bundle into pcf. Never copy model-apps' telemetry configuration or instrumentation keys into pcf.
+Run `node --test scripts/tests/model-apps-copies.test.js` after changing any copied source. Refresh verbatim copies with `Copy-Item` from `plugins/model-apps`; refresh the SDK by re-vendoring it in model-apps first, then copying the resulting bundle into pcf. Telemetry configuration follows the shared-tenant rule below.
 
 ## Telemetry
 
-PCF telemetry is **staged and hard-disabled**: `scripts/lib/telemetry/ikey.json` has `disabled: true`, placeholder keys only, `default_region: "us"` and `event_stream_name: "event"`. Disabled or unprovisioned hooks exit before PAC and produce no network or local telemetry side effects. They also honor the existing `PCF_DISABLE_HOOKS` master switch.
+PCF telemetry is **live on the shared model-apps tenant** and default-on for transmission: `scripts/lib/telemetry/ikey.json` has `disabled: false`, `default_region: "us"` and `event_stream_name: "event"`. The same team owns both plugins and their tenant. Disabled or unprovisioned configs still gate before PAC, with no network or local telemetry side effects; hooks honor the existing `PCF_DISABLE_HOOKS` master switch.
 
+- **Shared tenant and rotation:** change model-apps' `ikey.json`, then copy it into pcf in the same PR. `scripts/validate-plugin-copies.js` enforces this byte-identical config pair; `SHARED_KEY_GROUPS` in the key validator permits only model-apps + pcf, never an outsider.
 - **Copies:** `scripts/lib/telemetry/lib/` is byte-identical to `shared/telemetry/lib/`; `region/` is byte-identical to Power Pages' telemetry region router. Refresh by copying source bytes, never editing a bundled file. `scripts/tests/telemetry-lib-copy.test.js` guards both, and PCF script CI watches both source paths.
-- **Identity and schema:** `clientType: "PcfAIPlugin"`, `pluginName: "pcf"` in the Power Apps client `event` envelope. Emit `skill_started` with base fields only, including `orgId`/`tenantId` when available, never the signed-in user's object ID or any `eventInfo` payload. New dimensions or event types require privacy review first.
+- **Identity and schema:** `clientType: "PcfAIPlugin"`, `pluginName: "pcf"` in the Power Apps client `event` envelope. Emit `skill_started` with base fields only, including `orgId`/`tenantId` when available, never the signed-in user's object ID or any `eventInfo` payload. PCF-specific `eventInfo` fields or new event types require privacy review first.
 - **Routing:** PCF owns `resolver.js`. Sovereign/internal clouds route by PAC stamp alone; unknown clouds and signed-in organizations without a cloud stamp send nothing. A public organization routes by Artemis geo through the region-only shared cache, with no public-default fallback when its geo is unknown. Only signed-out PAC uses the configured default.
 - **Hooks:** `run-skill-pretool-telemetry.js` and `run-user-prompt-telemetry.js` share `pcf-hook-utils.js`, which discovers installed `skills/*/SKILL.md` and excludes the telemetry control skill. No validator discovery is needed. Emission failures exit 0 and never block authoring.
-- **Controls:** `scripts/telemetry-config.js` reuses the bundled user-config and local-log helpers without changing the shared library. `/pcf:telemetry on|off|status` merge-writes `telemetry["pcf"]` or reports the build state. The `POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT=1` environment opt-out has highest precedence. Once enabled, opt-outs suppress transmission only; the local diagnostic mirror remains.
-- **Tests and CI:** hook tests use fake keys, native offline PAC stubs, seeded region caches and fake HTTPS probes, never production collectors. Every PCF CI job and the shared telemetry test job sets the PCF opt-out.
-
-### Enable checklist
-
-1. Provision pcf's own per-region instrumentation keys; never reuse another plugin's keys.
-2. Fill in `scripts/lib/telemetry/ikey.json` with those keys and verify the regional collector mapping.
-3. Flip `disabled` to `false` only after PCF's ingestion is provisioned.
-4. Update the adopters table, staged-state disclosures and tests that pin the shipped config in the same change.
+- **Controls:** `scripts/telemetry-config.js` reuses the bundled user-config and local-log helpers without changing the shared library. `/pcf:telemetry on|off|status` merge-writes `telemetry["pcf"]` or reports the actual build state. The `POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT=1` environment opt-out has highest precedence. Opt-outs suppress transmission only; the local diagnostic mirror remains.
+- **Tests and CI:** hook fixtures reject any spawn without a fake HTTPS probe and their temporary config directory. Native offline PAC stubs, seeded caches and a mandatory hook/dispatcher network blocker isolate emission; probes capture only fake keys. Every PCF CI job, repository metadata validation and the shared telemetry test job sets the PCF opt-out.
 
 ## Working with /model-apps:app-builder
 

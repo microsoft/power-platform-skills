@@ -7,7 +7,7 @@ const path = require('node:path');
 const https = require('node:https');
 const { EventEmitter } = require('node:events');
 const {
-  TELEMETRY_DIR, FAKE_CONFIG, FAKE_REGIONS, ORG_ID, TENANT_ID, tempRoot, seedRegion,
+  PLUGIN_ROOT, TELEMETRY_DIR, FAKE_CONFIG, FAKE_REGIONS, ORG_ID, TENANT_ID, tempRoot, seedRegion,
 } = require('./helpers/telemetry-fixtures.js');
 
 function resolver() {
@@ -44,10 +44,10 @@ function expected(region) {
   };
 }
 
-test('placeholder PCF config is not provisioned', () => {
+test('shipped PCF config is provisioned', () => {
   const ownResolver = resolver();
   const cfg = JSON.parse(fs.readFileSync(path.join(TELEMETRY_DIR, 'ikey.json'), 'utf8'));
-  assert.equal(ownResolver.isProvisioned(cfg), false);
+  assert.equal(ownResolver.isProvisioned(cfg), true);
 });
 
 test('provisioning needs a non-placeholder default-region key and collector', () => {
@@ -194,4 +194,43 @@ test('the wire envelope omits absent tenant identity and defaults to the event s
   assert.equal(envelope.name, 'event');
   assert.equal(Object.hasOwn(envelope.data, 'tenantId'), false);
   assert.equal(envelope.data.session_Id, '');
+});
+
+test('model-apps and pcf share a destination but keep their base event identities separable', async (t) => {
+  const modelDir = path.resolve(PLUGIN_ROOT, '..', 'model-apps', 'scripts', 'lib', 'telemetry');
+  if (!fs.existsSync(modelDir)) { t.skip('model-apps source is not present in an installed plugin'); return; }
+  const modelResolver = require(path.join(modelDir, 'resolver.js'));
+  const pcfResolver = resolver();
+  const fakeData = {
+    eventName: 'skill_started', eventType: 'Trace', severity: 'Info',
+    pluginVersion: '1.0.0', skillName: 'fake-skill',
+    sessionId: 'fake-session', correlationId: 'fake-correlation',
+    osName: 'Windows', osVersion: '10.0', nodeVersion: 'v22',
+  };
+  const input = { time: '2026-10-06T00:00:00.000Z', iKey: FAKE_REGIONS.us.instrumentation_key, eventStreamName: 'event' };
+  // Each hook supplies its pluginName; all other fake base data is identical.
+  const modelEnvelope = modelResolver.formatEnvelope({ ...input, data: { ...fakeData, pluginName: 'model-apps' } });
+  const pcfEnvelope = pcfResolver.formatEnvelope({ ...input, data: { ...fakeData, pluginName: 'pcf' } });
+  assert.equal(modelEnvelope.data.clientType, 'ModelAppsAIPlugin');
+  assert.equal(pcfEnvelope.data.clientType, 'PcfAIPlugin');
+  assert.notEqual(modelEnvelope.data.clientType, pcfEnvelope.data.clientType);
+  const modelDimensions = JSON.parse(modelEnvelope.data.customDimensions);
+  const pcfDimensions = JSON.parse(pcfEnvelope.data.customDimensions);
+  assert.equal(modelDimensions.pluginName, 'model-apps');
+  assert.equal(pcfDimensions.pluginName, 'pcf');
+  assert.notEqual(modelDimensions.pluginName, pcfDimensions.pluginName);
+  assert.deepEqual({ ...modelDimensions, pluginName: 'same' }, { ...pcfDimensions, pluginName: 'same' });
+  assert.equal(Object.hasOwn(pcfDimensions, 'eventInfo'), false);
+  const context = { event: { data: fakeData }, cloud: 'Public', configDir: tempRoot(t) };
+  const { result: [modelDestination, pcfDestination], calls } = await withGeo(t, 'us', () => Promise.all([
+    modelResolver.resolve({ ...context, cfg: JSON.parse(fs.readFileSync(path.join(modelDir, 'ikey.json'), 'utf8')) }),
+    pcfResolver.resolve({ ...context, cfg: JSON.parse(fs.readFileSync(path.join(TELEMETRY_DIR, 'ikey.json'), 'utf8')) }),
+  ]));
+  assert.ok(modelDestination && pcfDestination);
+  // Compare real keys only as booleans so a regression cannot print them.
+  assert.ok(modelDestination.iKey === pcfDestination.iKey, 'the shared tenant must resolve the same instrumentation key');
+  assert.equal(modelDestination.collectorUrl, pcfDestination.collectorUrl);
+  assert.equal(modelDestination.region, 'us');
+  assert.equal(pcfDestination.region, 'us');
+  assert.deepEqual(calls, [], 'a public signed-out event must not use Artemis');
 });

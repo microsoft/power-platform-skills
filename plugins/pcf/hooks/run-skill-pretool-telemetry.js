@@ -2,8 +2,8 @@
 'use strict';
 
 // Usage telemetry is non-blocking and fail-closed: errors exit 0 without emission.
-// This build is staged (disabled + placeholders), so neither PAC nor a dispatcher
-// runs. A provisioned release uses only the approved skill_started base fields.
+// Disabled or unprovisioned configs gate before PAC or dispatcher work.
+// Enabled telemetry uses only the approved skill_started base fields.
 if (process.env.PCF_DISABLE_HOOKS === '1' || process.env.PCF_DISABLE_HOOKS === 'true') {
   process.exit(0);
 }
@@ -30,7 +30,7 @@ try {
 
 function readIkey() {
   // The same override seam is read by the dispatcher, so an offline test never
-  // edits the committed placeholder config or falls back to another plugin's key.
+  // edits the committed shared-tenant config or falls back to another plugin's key.
   const override = process.env.POWER_PLATFORM_SKILLS_IKEY_JSON;
   const ikeyPath = override && override.trim() ? override : path.join(TELEMETRY_DIR, 'ikey.json');
   try {

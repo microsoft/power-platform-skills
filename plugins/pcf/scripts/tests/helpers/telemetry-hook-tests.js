@@ -28,25 +28,18 @@ function registerHookTests(hookName, payloadFor, { noEmitPayloads = [] } = {}) {
     assert.deepEqual(fs.readdirSync(configDir), [], 'hard-off must create no config, mirror or probe files');
     assert.equal(fs.existsSync(marker), false, 'hard-off must gate before any PAC invocation');
   };
-  const provision = (root, cfg = FAKE_CONFIG) => {
+  const seed = (root) => {
     const configDir = path.join(root, 'config');
     fs.mkdirSync(configDir);
     seedRegion(configDir);
+  };
+  const provision = (root, cfg = FAKE_CONFIG) => {
+    seed(root);
     return writeConfig(root, cfg);
   };
-
-  test('shipped config is a fast no-op: no emission, local files or PAC', (t) => {
-    const root = tempRoot(t);
-    const { configDir } = runHook(hookName, root, toolsDir, { payload: payload() });
-    assertNoWork(configDir);
-  });
-
-  test('fake provisioned config emits one region-routed skill_started with only PCF base fields', (t) => {
-    const root = tempRoot(t);
-    const ikeyPath = provision(root);
-    const { configDir, probe } = runHook(hookName, root, toolsDir, { payload: payload(), ikeyPath });
+  const assertBaseEvent = ({ configDir, probe }) => {
     const captured = waitForJson(probe);
-    waitForDispatcher(ikeyPath);
+    waitForDispatcher(configDir);
     const envelope = JSON.parse(captured.body);
     assert.equal(envelope.name, 'event');
     assert.equal(envelope.data.clientType, 'PcfAIPlugin');
@@ -68,7 +61,7 @@ function registerHookTests(hookName, payloadFor, { noEmitPayloads = [] } = {}) {
     ]);
     const log = path.join(configDir, 'telemetry', 'pcf', 'sessions', dimensions.sessionId, 'events.jsonl');
     const records = waitForJson(log, 5000, true);
-    waitForDispatcher(ikeyPath);
+    waitForDispatcher(configDir);
     assert.equal(records.length, 1, 'one hook invocation must write one skill_started');
     assert.equal(records[0].data.eventName, 'skill_started');
     assert.equal(records[0].data.eventInfo, undefined);
@@ -76,37 +69,78 @@ function registerHookTests(hookName, payloadFor, { noEmitPayloads = [] } = {}) {
     for (const forbidden of [OBJECT_ID, USER, 'aadObjectId', 'private arguments', 'https://contoso.crm.dynamics.com']) {
       assert.equal(raw.includes(forbidden), false, `${forbidden} must not reach the mirror or envelope`);
     }
+    const shipped = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, 'scripts', 'lib', 'telemetry', 'ikey.json'), 'utf8'));
+    for (const entry of Object.values(shipped.regions)) {
+      assert.equal(raw.includes(entry.instrumentation_key), false, 'real keys must not be persisted in a probe or mirror');
+    }
     assert.ok(fs.existsSync(marker), 'enrichment must have exercised the offline native PAC parser');
+  };
+
+  test('shipped enabled config emits one region-routed skill_started to the fake probe with only PCF base fields', (t) => {
+    const root = tempRoot(t);
+    seed(root);
+    const result = runHook(hookName, root, toolsDir, { payload: payload() });
+    assertBaseEvent(result);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(result.configDir, 'routing-proof.json'), 'utf8')), {
+      region: 'eu',
+      collectorUrl: 'https://eu-mobile.events.data.microsoft.com/OneCollector/1.0/',
+      usesConfiguredKey: true,
+    });
   });
 
-  for (const optOut of ['1', 'true']) {
-    test(`environment opt-out ${optOut} keeps the local mirror but never POSTs`, (t) => {
+  test('fake provisioned config emits one region-routed skill_started with only PCF base fields', (t) => {
+    const root = tempRoot(t);
+    const ikeyPath = provision(root);
+    assertBaseEvent(runHook(hookName, root, toolsDir, { payload: payload(), ikeyPath }));
+  });
+
+  for (const shipped of [true, false]) {
+    const label = shipped ? 'shipped' : 'fake provisioned';
+    const prepare = (root) => {
+      if (!shipped) return provision(root);
+      seed(root);
+      return '';
+    };
+    for (const optOut of ['1', 'true']) {
+      test(`${label} config: environment opt-out ${optOut} keeps the local mirror but never POSTs`, (t) => {
+        const root = tempRoot(t);
+        const ikeyPath = prepare(root);
+        const { configDir, probe } = runHook(hookName, root, toolsDir, { payload: payload(), ikeyPath, optOut });
+        const log = path.join(configDir, 'telemetry', 'pcf', 'sessions', 'pcf-offline-session', 'events.jsonl');
+        const records = waitForJson(log, 5000, true);
+        // The mirror precedes the transmission gate. Wait for dispatcher exit
+        // so a late POST cannot arrive after an apparently successful assertion.
+        waitForDispatcher(configDir);
+        assert.equal(records.length, 1);
+        assert.equal(records[0].data.pluginName, 'pcf');
+        assert.equal(records[0].data.eventName, 'skill_started');
+        assert.equal(records[0].data.eventInfo, undefined);
+        assert.equal(fs.existsSync(probe), false);
+      });
+    }
+
+    test(`${label} config: a saved PCF opt-out keeps the mirror without transmission`, (t) => {
       const root = tempRoot(t);
-      const ikeyPath = provision(root);
-      const { configDir, probe } = runHook(hookName, root, toolsDir, { payload: payload(), ikeyPath, optOut });
-      const log = path.join(configDir, 'telemetry', 'pcf', 'sessions', 'pcf-offline-session', 'events.jsonl');
-      const records = waitForJson(log, 5000, true);
-      // The mirror is written before the transmission gate, so wait for the detached dispatcher
-      // to exit before asserting that no POST reached the probe; a late POST would otherwise
-      // land after the assertion and the test would pass anyway.
-      waitForDispatcher(ikeyPath);
+      const ikeyPath = prepare(root);
+      fs.writeFileSync(path.join(root, 'config', 'config.json'), JSON.stringify({ telemetry: { pcf: 'off' } }));
+      const { configDir, probe } = runHook(hookName, root, toolsDir, { payload: payload(), ikeyPath });
+      const records = waitForJson(path.join(configDir, 'telemetry', 'pcf', 'sessions', 'pcf-offline-session', 'events.jsonl'), 5000, true);
+      waitForDispatcher(configDir);
       assert.equal(records.length, 1);
       assert.equal(records[0].data.pluginName, 'pcf');
       assert.equal(records[0].data.eventName, 'skill_started');
       assert.equal(records[0].data.eventInfo, undefined);
       assert.equal(fs.existsSync(probe), false);
+      assert.equal(fs.existsSync(path.join(configDir, 'routing-proof.json')), false,
+        'opt-out must gate before resolving a transmission destination');
     });
   }
 
-  test('a saved PCF opt-out also keeps the mirror without transmission', (t) => {
+  test('disabled config performs no emission, local writes or PAC enrichment', (t) => {
     const root = tempRoot(t);
-    const ikeyPath = provision(root);
-    fs.writeFileSync(path.join(root, 'config', 'config.json'), JSON.stringify({ telemetry: { pcf: 'off' } }));
-    const { configDir, probe } = runHook(hookName, root, toolsDir, { payload: payload(), ikeyPath });
-    const records = waitForJson(path.join(configDir, 'telemetry', 'pcf', 'sessions', 'pcf-offline-session', 'events.jsonl'), 5000, true);
-    waitForDispatcher(ikeyPath);
-    assert.equal(records.length, 1);
-    assert.equal(fs.existsSync(probe), false);
+    const ikeyPath = writeConfig(root, { ...FAKE_CONFIG, disabled: true });
+    const { configDir } = runHook(hookName, root, toolsDir, { payload: payload(), ikeyPath });
+    assertNoWork(configDir);
   });
 
   for (const skill of ['other-plugin:pcf', 'pcf:telemetry']) {
@@ -173,9 +207,9 @@ function registerHookTests(hookName, payloadFor, { noEmitPayloads = [] } = {}) {
   test('the bare PCF host spelling is tracked too', (t) => {
     const root = tempRoot(t);
     const ikeyPath = provision(root);
-    const { probe } = runHook(hookName, root, toolsDir, { payload: payload('pcf'), ikeyPath });
+    const { configDir, probe } = runHook(hookName, root, toolsDir, { payload: payload('pcf'), ikeyPath });
     const envelope = JSON.parse(waitForJson(probe).body);
-    waitForDispatcher(ikeyPath);
+    waitForDispatcher(configDir);
     assert.equal(envelope.data.clientType, 'PcfAIPlugin');
     assert.equal(JSON.parse(envelope.data.customDimensions).skillName, 'pcf');
   });

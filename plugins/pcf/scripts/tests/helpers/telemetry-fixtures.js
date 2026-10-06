@@ -19,10 +19,15 @@ const FAKE_REGIONS = Object.fromEntries(
   }]),
 );
 const FAKE_CONFIG = { disabled: false, event_stream_name: 'event', default_region: 'us', regions: FAKE_REGIONS };
+const TEST_ROOTS = new Set();
 
 function tempRoot(t, prefix = 'pcf-telemetry-') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  TEST_ROOTS.add(root);
+  t.after(() => {
+    TEST_ROOTS.delete(root);
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
   return root;
 }
 
@@ -38,17 +43,10 @@ function writeConfig(root, cfg = FAKE_CONFIG) {
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, 'ikey.json');
   fs.writeFileSync(file, JSON.stringify(cfg));
-  // The override loads the REAL pcf resolver, not a stand-in. Block HTTPS before
-  // loading it in both the hook and dispatcher: a missing cache must fail this
-  // test, never make an Artemis request. POSTs use the shared fake-probe seam.
-  fs.writeFileSync(path.join(dir, 'resolver.js'), [
-    "require('node:https').request = () => { throw new Error('offline test forbids HTTPS'); };",
-    // The local mirror precedes the transmission gate. Wait for the dispatcher
-    // to exit before asserting no probe, rather than racing its next instruction.
-    `if (require('node:path').basename(process.argv[1] || '') === 'emit-dispatcher.js') process.on('exit', () => require('node:fs').writeFileSync(${JSON.stringify(path.join(dir, 'dispatcher-exited.json'))}, '{"exited":true}'));`,
-    `module.exports = require(${JSON.stringify(path.join(TELEMETRY_DIR, 'resolver.js'))});`,
-    '',
-  ].join('\n'));
+  // The override still exercises the real resolver. The mandatory preload owns
+  // network blocking and dispatcher completion for both shipped and fake configs.
+  fs.writeFileSync(path.join(dir, 'resolver.js'),
+    `module.exports = require(${JSON.stringify(path.join(TELEMETRY_DIR, 'resolver.js'))});\n`);
   return file;
 }
 
@@ -68,8 +66,39 @@ function waitForJson(file, timeout = 5000, jsonLines = false) {
   assert.fail(`dispatcher did not finish writing ${path.basename(file)}`);
 }
 
-function waitForDispatcher(ikeyPath) {
-  assert.deepEqual(waitForJson(path.join(path.dirname(ikeyPath), 'dispatcher-exited.json')), { exited: true });
+function waitForDispatcher(configDir) {
+  assert.deepEqual(waitForJson(path.join(configDir, 'dispatcher-exited.json')), { exited: true });
+  assert.equal(fs.existsSync(path.join(configDir, 'blocked-network.jsonl')), false,
+    'a caught network error must still fail the offline test');
+}
+
+function inside(parent, child) {
+  const relative = path.relative(parent, child);
+  return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative);
+}
+
+function assertHookIsolation(env, expectedConfigDir) {
+  const configDir = env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+  const probe = env.POWER_PLATFORM_SKILLS_FAKE_HTTPS;
+  assert.ok(typeof configDir === 'string' && configDir.trim() && path.isAbsolute(configDir),
+    'hook tests require a temporary config directory');
+  if (expectedConfigDir) {
+    assert.equal(path.resolve(configDir), path.resolve(expectedConfigDir),
+      'hook tests must use their own temporary config directory');
+  }
+  assert.ok(fs.existsSync(configDir) && fs.statSync(configDir).isDirectory(),
+    'hook tests require an existing temporary config directory');
+  const physicalConfigDir = fs.realpathSync(configDir);
+  assert.ok(inside(fs.realpathSync(os.tmpdir()), physicalConfigDir),
+    'hook tests require a temporary config directory, never the real home');
+  assert.ok(typeof probe === 'string' && probe.trim() && path.isAbsolute(probe),
+    'hook tests require a fake HTTPS probe path');
+  assert.ok(fs.existsSync(path.dirname(probe)), 'fake HTTPS probe parent must exist');
+  const physicalProbe = fs.existsSync(probe) ? fs.realpathSync(probe)
+    : path.join(fs.realpathSync(path.dirname(probe)), path.basename(probe));
+  assert.ok(inside(physicalConfigDir, physicalProbe),
+    'fake HTTPS probe must stay inside the temporary config directory');
 }
 
 function isolatedEnv(configDir, toolsDir, extra = {}) {
@@ -148,27 +177,46 @@ function writePacStub(dir) {
   return marker;
 }
 
-function runHook(hookName, root, toolsDir, { payload, ikeyPath = '', optOut = '', killSwitch = '' }) {
+function runHook(hookName, root, toolsDir, {
+  payload, ikeyPath = '', optOut = '', killSwitch = '', envOverrides = {},
+}) {
+  assert.ok(TEST_ROOTS.has(root), 'hook tests require a registered temporary config directory root');
   const configDir = path.join(root, 'config');
   fs.mkdirSync(configDir, { recursive: true });
-  const result = spawnSync(process.execPath, [path.join(PLUGIN_ROOT, 'hooks', hookName)], {
+  const env = isolatedEnv(configDir, toolsDir, {
+    POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath,
+    POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT: optOut,
+    PCF_DISABLE_HOOKS: killSwitch,
+    ...envOverrides,
+  });
+  // Validate after overrides and before spawn, even for malformed/kill-switch
+  // cases: enabling the shipped config must never make a forgotten seam unsafe.
+  assertHookIsolation(env, configDir);
+  const audit = process.env.PCF_TELEMETRY_TEST_SPAWN_AUDIT;
+  if (audit) {
+    assert.ok(path.isAbsolute(audit) && inside(fs.realpathSync(os.tmpdir()), path.resolve(audit)),
+      'fixture spawn audit must stay in a temporary directory');
+    fs.appendFileSync(audit, JSON.stringify({
+      hookName, configDir, probe: env.POWER_PLATFORM_SKILLS_FAKE_HTTPS, guarded: true,
+    }) + '\n');
+  }
+  const preload = path.join(__dirname, 'telemetry-offline-preload.js');
+  const result = spawnSync(process.execPath, ['--require', preload, path.join(PLUGIN_ROOT, 'hooks', hookName)], {
     input: typeof payload === 'string' ? payload : JSON.stringify(payload),
     encoding: 'utf8',
     timeout: 15_000,
-    env: isolatedEnv(configDir, toolsDir, {
-      POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath,
-      POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT: optOut,
-      PCF_DISABLE_HOOKS: killSwitch,
-    }),
+    env,
   });
   assert.equal(result.status, 0, result.stderr || String(result.error));
   assert.equal(result.stdout, '', 'telemetry must not interfere with the host protocol');
   assert.equal(result.stderr, '');
+  assert.equal(fs.existsSync(path.join(configDir, 'blocked-network.jsonl')), false,
+    'a hook must not attempt real network I/O');
   return { configDir, probe: path.join(configDir, 'probe.json') };
 }
 
 module.exports = {
   PLUGIN_ROOT, TELEMETRY_DIR, ORG_ID, TENANT_ID, OBJECT_ID, USER,
   FAKE_CONFIG, FAKE_REGIONS, tempRoot, seedRegion, writeConfig,
-  waitForJson, waitForDispatcher, isolatedEnv, writePacStub, runHook,
+  waitForJson, waitForDispatcher, assertHookIsolation, isolatedEnv, writePacStub, runHook,
 };

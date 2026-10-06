@@ -25,6 +25,7 @@ function workflow(t, name) {
 
 for (const name of [
   'pcf-script-tests.yml', 'pcf-projects.yml', 'pcf-matrix-drift.yml', 'shared-telemetry-tests.yml',
+  'validate-repository-metadata.yml',
 ]) {
   test(`${name} opts out of PCF telemetry transmission on every job`, (t) => {
     const text = workflow(t, name);
@@ -47,6 +48,26 @@ for (const name of [
     }
   });
 }
+
+test('repository metadata CI tests the key exception before running its validator', (t) => {
+  const text = workflow(t, 'validate-repository-metadata.yml');
+  if (text === null) return;
+  const testsAt = text.indexOf('run: node --test scripts/tests/validate-telemetry-ikeys.test.js');
+  const validatorAt = text.indexOf('run: node scripts/validate-telemetry-ikeys.js');
+  assert.ok(testsAt >= 0 && testsAt < validatorAt, 'synthetic key-collision regressions must run before validation');
+});
+
+test('both plugin workflows watch the corresponding shared telemetry config path', (t) => {
+  for (const [name, watched] of [
+    ['pcf-script-tests.yml', 'plugins/model-apps/scripts/lib/telemetry/ikey.json'],
+    ['model-apps-script-tests.yml', 'plugins/pcf/scripts/lib/telemetry/ikey.json'],
+  ]) {
+    const text = workflow(t, name);
+    if (text === null) return;
+    assert.ok(text.slice(text.indexOf('paths:'), text.indexOf('jobs:')).includes(`- "${watched}"`),
+      `${name} must watch ${watched} for same-PR key rotations`);
+  }
+});
 
 test('PCF script CI watches every bundled telemetry source without widening unrelated scope', (t) => {
   const text = workflow(t, 'pcf-script-tests.yml');

@@ -1059,6 +1059,7 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
   `event` stream. `disabled: true` is the repo-wide hard-off (no POST,
   no local log). **Provision a fresh key; never copy another plugin's `ikey.json`**
   (CI-enforced: `node scripts/validate-telemetry-ikeys.js`).
+  The sole exception is pcf, which ships a verbatim copy of this `ikey.json` (the same tenant); a key rotation must update both, as the copy check enforces.
 - **Wire shape:** these tenants ingest **only** the `event` stream, into the Power Apps client
   `event` table; any other stream name is accepted by the collector and then dropped. So
   `resolver.js` also exports `formatEnvelope`, which mirrors mobile-apps' envelope:

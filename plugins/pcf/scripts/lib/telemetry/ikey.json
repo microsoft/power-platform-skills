@@ -1,34 +1,34 @@
 {
   "event_stream_name": "event",
-  "disabled": true,
+  "disabled": false,
   "default_region": "us",
   "regions": {
     "internal": {
-      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "instrumentation_key": "3fb21f3df5c44380bf452fd710f4d50c-17e2cd1c-a046-4060-8b2a-73d6bf01da2e-7604",
       "collector_url": "https://us-mobile.events.data.microsoft.com/OneCollector/1.0/"
     },
     "us": {
-      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "instrumentation_key": "5c3a61f48d7c4522912765ae7465ab5c-2775e155-1343-4cc0-83a7-85f4045a3b64-6591",
       "collector_url": "https://us-mobile.events.data.microsoft.com/OneCollector/1.0/"
     },
     "eu": {
-      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "instrumentation_key": "5c3a61f48d7c4522912765ae7465ab5c-2775e155-1343-4cc0-83a7-85f4045a3b64-6591",
       "collector_url": "https://eu-mobile.events.data.microsoft.com/OneCollector/1.0/"
     },
     "gov": {
-      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "instrumentation_key": "0d7685a948a140789ac92933d3dc2d87-4bcebc5d-76e8-402c-8570-4d177c226283-7136",
       "collector_url": "https://tb.events.data.microsoft.com/OneCollector/1.0/"
     },
     "high": {
-      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "instrumentation_key": "d31229fb23b0406790b9332e5f465dfc-8c249ffd-0fb2-4e76-8284-86f7bb09662d-7998",
       "collector_url": "https://tb.events.data.microsoft.com/OneCollector/1.0/"
     },
     "dod": {
-      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "instrumentation_key": "41cc10dad35043adbcdace2896484ab4-b07b9a09-6aa2-46ba-b922-e1475ec4d45a-7452",
       "collector_url": "https://pf.events.data.microsoft.com/OneCollector/1.0/"
     },
     "mooncake": {
-      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "instrumentation_key": "1c1d139788f74386bd95e752dd781371-2a869201-8cb8-44bc-8c25-87b87c9eab9d-6996",
       "collector_url": "https://collector.azure.cn/OneCollector/1.0/"
     }
   }

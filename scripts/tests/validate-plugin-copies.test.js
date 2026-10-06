@@ -16,6 +16,13 @@ const {
   checkCopySets,
 } = require(VALIDATOR);
 
+const TELEMETRY_PAIR = {
+  source: 'plugins/model-apps/scripts/lib/telemetry/ikey.json',
+  copy: 'plugins/pcf/scripts/lib/telemetry/ikey.json',
+  byteIdentical: true,
+};
+const CRLF = String.fromCharCode(13, 10);
+
 function writeText(root, relPath, content) {
   const fullPath = path.join(root, relPath);
   fs.mkdirSync(path.dirname(fullPath), { recursive: true });
@@ -82,6 +89,34 @@ test('CRLF-only differences pass', () => withTempRepo((root) => {
   const result = runCheck(root);
   assert.equal(result.ok, true);
   assert.equal(result.findings.length, 0);
+}));
+
+test('the shared telemetry config belongs to the byte-identical model-apps copy set', () => {
+  const set = COPY_SETS.find(item => item.name === 'pcf-from-model-apps');
+  assert.ok(set);
+  const pair = set.verbatim.find(item => item.source === TELEMETRY_PAIR.source);
+  assert.deepEqual(pair, TELEMETRY_PAIR);
+});
+
+test('byte-identical telemetry config copies reject EOL-only drift', () => withTempRepo((root) => {
+  const content = '{"disabled":false,"instrumentationKey":"fake-rotation-key"}';
+  writeText(root, TELEMETRY_PAIR.source, content + CRLF);
+  writeText(root, TELEMETRY_PAIR.copy, content + '\n');
+  const result = checkCopySets({
+    repoRoot: root, sets: [{ name: 'pcf-from-model-apps', verbatim: [TELEMETRY_PAIR] }],
+  });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.findings.map(item => item.kind), ['drift']);
+}));
+
+test('byte-identical telemetry config copies reject a one-sided key rotation', () => withTempRepo((root) => {
+  writeText(root, TELEMETRY_PAIR.source, '{"instrumentationKey":"fake-rotated-key"}' + CRLF);
+  writeText(root, TELEMETRY_PAIR.copy, '{"instrumentationKey":"fake-original-key"}' + CRLF);
+  const result = checkCopySets({
+    repoRoot: root, sets: [{ name: 'pcf-from-model-apps', verbatim: [TELEMETRY_PAIR] }],
+  });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.findings.map(item => item.kind), ['drift']);
 }));
 
 test('CRLF-only differences in subset function bodies pass', () => withTempRepo((root) => {
