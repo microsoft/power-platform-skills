@@ -6,7 +6,7 @@ Primary Learn sources: [Code components for canvas apps](https://learn.microsoft
 
 ## Support boundary
 
-- Canvas support is guided in this release. Build and gate a canvas-targeted control with the model-driven profile: `pcf-gates.js` without `--hosts` defaults to `model`, and record `hosts` as `["model"]` in `pcf-intent.json`. For canvas-only targets, leave model-driven form bindings empty.
+- Canvas support is guided in this release. Build and gate a canvas-targeted control with the model-driven profile. For a canvas-only target, `pcf-gates.js` without `--hosts` defaults to `model`; record `hosts` as `["model"]` in `pcf-intent.json` and leave model-driven form bindings empty. If the control also targets Power Pages, keep `pages` in `hosts` and gate with `--hosts model,pages` so the Pages rules still apply.
 - That profile covers standard and virtual controls. Learn's [React controls FAQ](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/react-controls-platform-libraries#faq) says React controls and platform libraries are supported in canvas and model-driven apps.
 - `canvas` is not a `--hosts` or intent host value in this release. The automated hosts remain `model` and `pages`; the compatibility matrix is unchanged.
 - Canvas API limits are not checked automatically. Review them by hand with the user, deploy through the normal push flow, then guide the environment setting and Studio steps below.
@@ -33,7 +33,8 @@ The **Insert → Custom → Import component** path is deprecated.
 
 - Change the manifest `version` for every change. Publish all customizations first, or the update does not appear.
 - Studio updates an existing code component only when the app is closed and reopened; it then asks to update.
-- To make re-imported properties appear on the default **Properties** tab, update the manifest version; they stay available on the **Advanced** tab.
+- To make re-imported properties appear on the default **Properties** tab, update the manifest version; they stay available on the **Advanced** properties tab.
+- Deleting the component and adding it again doesn't update it; close and reopen the app instead.
 
 ## API limits
 

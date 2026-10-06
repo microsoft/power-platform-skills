@@ -17,7 +17,7 @@ For canvas apps, use the model-driven profile and read [canvas guidance](../../r
 
 ## 2. Write `pcf-intent.json`
 
-Read `scripts/lib/pcf-intent.js` as the contract. For a canvas-only target, record `hosts` as `["model"]` and leave `bindings` empty rather than inventing a model-driven form binding. `canvas` is not a `--hosts` or intent host value. Keep the intended canvas target and manual-review decisions in `workflow-log.md`; do not add schema fields.
+Read `scripts/lib/pcf-intent.js` as the contract. For a canvas-only target, record `hosts` as `["model"]` and leave `bindings` empty rather than inventing a model-driven form binding. If the control also targets Power Pages, keep `pages` in `hosts` as well. `canvas` is not a `--hosts` or intent host value. Keep the intended canvas target and manual-review decisions in `workflow-log.md`; do not add schema fields.
 
 Minimal valid model-driven + Pages example:
 
@@ -67,7 +67,7 @@ node "${PLUGIN_ROOT}/scripts/write-pcf-plan.js" --intent @pcf-intent.json [--man
 
 Show the plan. In attended runs use plan mode; in unattended runs log the approval default only when the request supplied enough safe detail. If the intent lint reports a Pages or binding error, fix intent before scaffold.
 
-At plan approval, explain that canvas is the intended runtime target but `model` is the automated gate profile. State that canvas setup is guided; a canvas gate profile, reading the environment setting and automated runtime evidence are not implemented. Confirm the manual API review and admin/Studio setup expectations with the user.
+For a canvas target, explain at plan approval that canvas is the intended runtime target but `model` is the automated gate profile. State that canvas setup is guided; a canvas gate profile, reading the environment setting and automated runtime evidence are not implemented. Confirm the manual API review and admin/Studio setup expectations with the user. Skip this explanation when canvas is not a target.
 
 ## 4. Scaffold
 
@@ -87,7 +87,7 @@ Current-record controls must use maker-configured `entityId` and `entityName` in
 
 ## 6. Gates loop
 
-For a canvas target, run `pcf-gates.js` without `--hosts` to use the default `model` profile. Review canvas API limits by hand alongside these gates; green gates do not check canvas API compatibility.
+For a canvas-only target, run `pcf-gates.js` without `--hosts` to use the default `model` profile. If the control also targets Power Pages, pass `--hosts model,pages` so the Pages gate still runs. Review canvas API limits by hand alongside these gates; green gates do not check canvas API compatibility.
 
 ```powershell
 node "${PLUGIN_ROOT}/scripts/pcf-gates.js" --project <dir> [--hosts model,pages] [--skip lint,test,build]

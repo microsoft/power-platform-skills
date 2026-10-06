@@ -312,7 +312,7 @@ If project lint reports that no `ControlManifest.Input.xml` files were found, pa
 
 **Discriminating checks**: Compare the push target with Studio's environment, check the completed push/publish result, and ask an admin to confirm the feature under Power Platform admin center → **Environments** → the environment → **Settings** → **Product** → **Features**. The skill does not read the setting automatically.
 
-**Fix**: Have an admin turn on the feature and save it in the intended environment, let push/publish complete, then follow the current **Add → Get more components → Code → Import** steps in [pcf-canvas.md](pcf-canvas.md). System administrator privileges and a Power Apps license are required to turn on the feature: [canvas code components](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/component-framework-for-canvas-apps).
+**Fix**: Have an admin turn on the feature and save it in the intended environment, let push/publish complete, then follow the current **Add → Get more components → Code → Import** steps in [pcf-canvas.md](pcf-canvas.md). System administrator privileges are required to turn on the feature, and a Power Apps license is required: [canvas code components](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/component-framework-for-canvas-apps).
 
 **Verify**: The user sees the control on the **Code** tab, imports it, and adds it from **Code components**. Keep runtime `runtime-not-checked` until the user checks the control's behavior in Studio.
 
@@ -324,6 +324,6 @@ If project lint reports that no `ControlManifest.Input.xml` files were found, pa
 
 **Discriminating checks**: Compare the manifest version with the deployed version, confirm that all customizations were published, and ask whether the user closed and reopened the app in Studio.
 
-**Fix**: Change the manifest `version` for every change, publish all customizations first, then close and reopen the app and accept Studio's update prompt. For re-imported properties missing from the default **Properties** tab, update the manifest version; they remain on **Advanced**. See [canvas updates](pcf-canvas.md#updates).
+**Fix**: Change the manifest `version` for every change, publish all customizations first, then close and reopen the app and accept Studio's update prompt. For re-imported properties missing from the default **Properties** tab, update the manifest version; they remain on the **Advanced** properties tab. Deleting the component and adding it again does not update it. See [canvas updates](pcf-canvas.md#updates).
 
 **Verify**: After reopening and accepting the update, the user observes the new control behavior and expected properties in Studio. Report only the runtime behavior the user checked.

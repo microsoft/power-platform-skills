@@ -62,7 +62,7 @@ This file records **shipped** behaviour only. Planned and unbuilt work is tracke
 
 ### Canvas apps — 📋 guided
 - Guides the **Power Apps component framework for canvas apps** environment setting and Studio import/updates; see [canvas setup](../references/pcf-canvas.md).
-- Uses the model-driven gate profile for standard and virtual controls, records `model` in intent, and reviews canvas API limits by hand with the user. `canvas` is not an automated host value.
+- Uses the model-driven gate profile for standard and virtual controls, records `model` in intent, and reviews canvas API limits by hand with the user. `canvas` is not a `--hosts` or intent host value.
 - Deploys through the normal push flow. Canvas runtime stays `runtime-not-checked` unless the user checks the control in Power Apps Studio.
 - A canvas gate profile, reading the environment setting and automated runtime evidence are not implemented in this release. See [#656](https://github.com/microsoft/power-platform-skills/issues/656).
 

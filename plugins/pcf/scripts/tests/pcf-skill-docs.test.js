@@ -208,9 +208,15 @@ test('canvas reference names the environment feature and exact Learn sources', (
 test('canvas setup uses the current Studio path and documented update flow', () => {
   const canvas = readCanvasReference();
 
-  assert.match(canvas, /Power Platform admin center.*\*\*Environments\*\*.*\*\*Settings\*\*.*\*\*Product\*\*.*\*\*Features\*\*.*\*\*Power Apps component framework for canvas apps\*\*.*\*\*Save\*\*/);
-  assert.match(canvas, /\*\*Add\*\*.*\*\*Get more components\*\*.*\*\*Code\*\*.*\*\*Import\*\*/);
-  assert.match(canvas, /\*\*Code components\*\*/);
+  // Check each fact on its own: the setting's path can be a sentence or a numbered list, and
+  // emphasis is styling — neither change should fail this test while the facts are still there.
+  for (const step of ['Power Platform admin center', 'Environments', 'Settings', 'Product', 'Features', 'Power Apps component framework for canvas apps', 'Save']) {
+    assert.ok(canvas.includes(step), `canvas setup must name the admin center step "${step}"`);
+  }
+  for (const step of ['Get more components', 'Code', 'Import', 'Code components']) {
+    assert.ok(canvas.includes(step), `canvas setup must name the Studio step "${step}"`);
+  }
+  assert.match(canvas, /deleting the component and adding it again[^.\n]*(?:doesn't|does not) update/i);
   assert.match(canvas, /manifest `version` for every change/);
   assert.match(canvas, /closed and reopened/);
   assert.match(canvas, /Publish all customizations first/);
@@ -226,6 +232,8 @@ test('canvas support stays guided without adding an automated host profile', () 
   assert.match(canvas, /`canvas` is not a `--hosts` or intent host value/);
   assert.match(canvas, /`pcf-gates\.js` without `--hosts` defaults to `model`/);
   assert.match(canvas, /`hosts`.*`\["model"\]`/);
+  // A control for canvas apps AND Power Pages must keep the Pages host, or the Pages gate never runs.
+  assert.match(canvas, /also targets Power Pages[^\n]*`pages`[^\n]*`--hosts model,pages`/);
   assert.match(canvas, /standard and virtual/);
   assert.ok(canvas.includes('https://learn.microsoft.com/en-us/power-apps/developer/component-framework/react-controls-platform-libraries#faq'));
   assert.match(canvas, /canvas API limits are not checked automatically/i);
@@ -241,6 +249,9 @@ test('canvas create flow uses model intent and gates with manual API review', ()
   assert.match(create, /`pcf-gates\.js` without `--hosts`/);
   assert.match(create, /review canvas API limits by hand with the user/i);
   assert.match(create, /plan approval[^\n]*canvas/i);
+  // The canvas expectations apply only when canvas is a target, not to every model or Pages plan.
+  assert.match(create, /For a canvas target, explain at plan approval/);
+  assert.match(create, /also targets Power Pages[^\n]*`--hosts model,pages`/);
   assert.match(create, /pcf-canvas\.md/);
   for (const file of PCF_DOC_FILES) {
     assert.doesNotMatch(readPluginFile(file), /--hosts(?:=|\s+)canvas\b/, `${file} must not pass canvas as an automated host`);
@@ -312,6 +323,13 @@ test('canvas troubleshooting covers missing components and stale versions', () =
     assert.equal(matches.length, 1, `expected one troubleshooting entry for ${title}`);
     assertTroubleshootingEntry(matches[0]);
   }
+  const byTitle = new Map(entries.map((entry) => [entry.title, entry.body]));
+  const missing = byTitle.get("A pushed control isn't listed under Get more components \u2192 Code in Power Apps Studio");
+  const stale = byTitle.get('A canvas app still shows the old version');
+  assert.ok(missing.includes('Power Apps component framework for canvas apps'), 'the missing-component entry must name the environment feature');
+  assert.match(stale, /manifest `version`/, 'the stale-version entry must name the manifest version bump');
+  assert.match(stale, /close and reopen/i, 'the stale-version entry must say to close and reopen the app');
+  assert.match(stale, /deleting the component and adding it again[^.\n]*(?:doesn't|does not) update/i);
 });
 
 test('/pcf Pages compatibility gate precedes deploy phase', () => {
