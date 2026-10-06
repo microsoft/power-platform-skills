@@ -1711,7 +1711,7 @@ test('`<T extends` and a `/` is an element where an expression starts and type p
   for (const code of GUESSED) assert.deepStrictEqual(opens(code), GUESS, code);
   for (const code of ['<T extends /=x/>(a: T) => a', '<T extends/=x/>(a: T) => a']) assert.deepStrictEqual(opens(code), GENERIC, code);
   const ts = loadTypescriptOracle();
-  if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
+  if (!ts) return t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the readings');
   const reading = (code) => {
     const source = cleanSourceFile(ts, code);
     assert.ok(source, `TypeScript parses ${JSON.stringify(code)}`);
@@ -3248,7 +3248,7 @@ test('`get` and `set` start an accessor only before its name, as TypeScript read
   for (const member of ACCESSOR_MEMBERS) assert.deepStrictEqual(opensTypeParameters(`<T>(a: ${member}, y/z): x</T>`, 0), { generic: false, ambiguity: 'generic' }, member);
   for (const member of NAMED_MEMBERS) assert.deepStrictEqual(opensTypeParameters(`<T>(a: ${member}, y/z): x</T>`, 0), { generic: false, ambiguity: null }, member);
   const ts = loadTypescriptOracle();
-  if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
+  if (!ts) return t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the readings');
   const memberKind = (member) => {
     const source = cleanSourceFile(ts, `declare const k: 'a'; type T = 1; type L = ${member};`);
     assert.ok(source, `TypeScript parses ${JSON.stringify(member)}`);
@@ -3267,7 +3267,7 @@ test('`get` and `set` start an accessor only before its name, as TypeScript read
 // parameterSyntaxFails reads a keyword at the start of a parameter as TypeScript's parser reads it there (parseParameterWorker): a modifier before the name ends the reading, as `this` does;
 // a keyword that is no parameter's name fails the list, so only the element compiles; every other keyword is a name, and what follows it decides. Measured here over every keyword TypeScript
 // has, in a call signature, a construct signature and a function type, so a keyword a later TypeScript adds is classed before it is trusted.
-test('TypeScript: a keyword at the start of a parameter is a modifier, no name or a name, and the lexer reads the list by that class', (t) => {
+test('a keyword at the start of a parameter is a modifier, no name or a name, as TypeScript reads it there, and the lexer reads the list by that class', (t) => {
   const ELEMENT = { generic: false, ambiguity: null };
   const GUESS = { generic: false, ambiguity: 'generic' };
   for (const [list, expected] of [
@@ -3287,7 +3287,7 @@ test('TypeScript: a keyword at the start of a parameter is a modifier, no name o
     assert.deepStrictEqual([opensTypeParameters(`<T>(${word}): x</T>`, 0), opensTypeParameters(`<T>(${word} x): x</T>`, 0)], [GUESS, ELEMENT], `a name: ${word}`);
   }
   const ts = loadTypescriptOracle();
-  if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
+  if (!ts) return t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the classes');
   const frames = [(list) => `interface I { <T>(${list}): string }`, (list) => `interface C { new <T>(${list}): string }`, (list) => `type F = <T>(${list}) => string;`];
   const parses = (list) => frames.map((frame) => parseDiagnosticMessages(ts, frame(list)).length === 0);
   const everywhere = (list) => parses(list).every(Boolean);
