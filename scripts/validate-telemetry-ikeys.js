@@ -60,6 +60,15 @@ function isPlaceholder(value) {
   return false;
 }
 
+// Stream names that are a SHARED ingestion table by design, so several plugins may
+// name them. "event" is the Power Apps client telemetry table: the 1DS tenants that
+// mobile-apps and model-apps send to ingest only that stream, and any other stream
+// name is accepted by the collector and then dropped. Plugins sharing it must make
+// their rows separable in the payload — each sets its own `clientType` and puts its
+// `pluginName` in `customDimensions` (see each plugin's telemetry envelope builder).
+// Instrumentation keys are still never shareable; only the stream name is exempt.
+const SHARED_INGESTION_STREAMS = new Set(['event']);
+
 function toPosix(relativePath) {
   return relativePath.replace(/\\/g, '/');
 }
@@ -145,7 +154,7 @@ for (const filePath of findIkeyFiles(PLUGINS_DIR)) {
     record(keyOwners, value, pluginName, `${relPath} (${context})`);
   }
 
-  if (!isPlaceholder(config.event_stream_name)) {
+  if (!isPlaceholder(config.event_stream_name) && !SHARED_INGESTION_STREAMS.has(config.event_stream_name.trim())) {
     record(streamOwners, config.event_stream_name, pluginName, `${relPath} (event_stream_name)`);
   }
 }

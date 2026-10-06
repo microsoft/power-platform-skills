@@ -73,26 +73,27 @@ connector wiring.
 
 	Create the registration on that page, copy its **Application (client) ID**,
 	and paste it when `/create-mobile-app` asks. The Wrap experience configures
-	the native app registration for this flow. You do not need to add redirect
-	URIs or API permissions manually, and tenant-wide admin consent is not
-	required.
+	the native app registration for this flow. Do not add redirect URIs or API
+	permissions manually; use Wrap to repair missing configuration. Some repairs
+	and consent operations require an Azure tenant admin.
 
 	If the app was created without a client ID, run
-	`/set-app-registration-native` later from the app folder. It opens the same
-	environment-specific page and writes the pasted client ID to
-	`auth.config.json`.
+	`/set-app-registration-native` later from the app folder. It discovers
+	tenant-visible registrations, checks the required permission profile, and
+	writes the selected client ID to `auth.config.json`.
 
 	### Required API permissions
 
-	The Microsoft Entra app registration requires these delegated permissions
-	from the **Power Platform API**:
-
-	- `PowerApps.Apps.Play`
-	- `PowerApps.Apps.Read`
-	- `Connectivity.Connectors.Read`
-	- `Connectivity.Connections.Read`
-	- `Connectivity.Connections.Write`
-	- `Connectivity.Connections.UserConsent`
+	The read-only checker validates the native runtime profile. The baseline is
+	Dynamics CRM `user_impersonation` plus Power Platform API
+	`PowerApps.Apps.Read`. Apps using Power Platform connectors additionally
+	require Azure API Connections `Runtime.All` and the Power Platform API
+	`Connectivity.Connectors.Read`, `Connectivity.Connections.Read`,
+	`Connectivity.Connections.Write`, and
+	`Connectivity.Connections.UserConsent` scopes. The checker does not require
+	unrelated Wrap packaging permissions. Redirect platforms, packaging
+	permissions, third-party-app allowlisting, and admin consent are finalized in
+	Wrap.
 
 
 5. Start mobile app:
@@ -109,6 +110,39 @@ connector wiring.
 	```bash
 	npm run dev
 	```
+
+	### Multi-tenant support
+
+	To let users choose among environments in multiple Microsoft Entra tenants,
+	set the app registration's supported account type to accounts in any
+	organizational directory and add the following fields under
+	`expo.extra.powerappsNative` in `app.json`:
+
+	```json
+	{
+	  "tenantMode": "multi",
+	  "appDisplayName": "My App",
+	  "appName": "MyApp",
+	  "tenantPolicy": "organizations"
+	}
+	```
+
+	Use `{ "allowedTenantIds": ["<tenant-guid>"] }` for `tenantPolicy` to
+	restrict access to specific tenants. The native host supplies the sign-in,
+	environment discovery, and environment-selection screens.
+
+	### Dev tunneling
+
+	When a device cannot reach the workstation over the local network, start an
+	authenticated Microsoft Dev Tunnel:
+
+	```bash
+	az login
+	npm run dev -- --tunnel
+	```
+
+	Pass `--tunnel-tenant <tenant-id>` to select an Entra tenant. The command
+	creates no anonymous access rule and deletes the tunnel when Metro exits.
 
 
 6. Preview the app by scanning the QR code with the Power Apps Mobile Preview app

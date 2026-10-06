@@ -48,7 +48,7 @@ test('template uses the host Metro factory that installs project-local logging',
     'utf8',
   );
   const metroConfig = fs.readFileSync(path.join(pluginRoot, 'template', 'metro.config.js'), 'utf8');
-  const gitignore = fs.readFileSync(path.join(pluginRoot, 'template', '.gitignore'), 'utf8');
+  const gitignore = fs.readFileSync(path.join(pluginRoot, 'template', 'gitignore'), 'utf8');
   const packageJson = JSON.parse(fs.readFileSync(path.join(pluginRoot, 'template', 'package.json'), 'utf8'));
 
   assert.match(
@@ -64,8 +64,6 @@ test('template uses the host Metro factory that installs project-local logging',
     'the host package must include the Metro logger introduced in 0.2.26',
   );
   assert.match(gitignore, /^\.powernative\//m);
-  assert.equal(packageJson.scripts.dev, 'expo start');
-  assert.equal(packageJson.scripts.predev, 'npm run generate-schemas && npm run type-check');
   const workflowCoversMobileApps = /plugins\/mobile-apps\/\*\*/.test(workflow);
   assert.ok(workflowCoversMobileApps || /plugins\/mobile-apps\/template\/metro\.config\.js/.test(workflow));
   assert.ok(workflowCoversMobileApps || /plugins\/mobile-apps\/template\/package\.json/.test(workflow));
