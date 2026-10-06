@@ -99,24 +99,95 @@ test('slugForRoute names screenshot files after the route', () => {
   assert.equal(review.slugForRoute('/help/Moving-Home/'), 'help-moving-home');
 });
 
-test('buildMobileSheet lays a long mobile page out in columns two screens tall', () => {
+test('planMobileSheets slices a page into columns two screens tall, six to a sheet', () => {
   const segment = review.SHEET_SEGMENT_HEIGHT;
-  const short = review.buildMobileSheet('AAAA', 1200);
-  assert.equal(short.columns, 1);
-  assert.equal(short.width, 390);
-  assert.equal(short.height, 1200);
+  const short = review.planMobileSheets(1200);
+  assert.deepEqual(short.sheets, [[{ x: 0, y: 0, width: 390, height: 1200 }]]);
+  assert.equal(short.truncated, false);
 
-  const long = review.buildMobileSheet('AAAA', segment * 2 + 10);
-  assert.equal(long.columns, 3);
-  assert.equal(long.width, 3 * 390 + 2 * 16);
-  assert.equal(long.height, segment);
-  assert.match(long.html, new RegExp(`background-position:0 -${segment * 2}px`));
-  assert.match(long.html, /\.fold\{[^}]*top:844px/);
-  assert.equal(long.truncated, false);
+  const long = review.planMobileSheets(segment * 10 + 100);
+  assert.deepEqual(long.sheets.map((sheet) => sheet.length), [6, 5]);
+  assert.deepEqual(long.sheets[1][0], { x: 0, y: segment * 6, width: 390, height: segment });
+  assert.deepEqual(long.sheets[1][4], { x: 0, y: segment * 10, width: 390, height: 100 }, 'the last slice ends at the page end');
+  assert.equal(long.truncated, false, 'the end of a 17,000 px page is still shown');
 
-  const huge = review.buildMobileSheet('AAAA', segment * 10);
-  assert.equal(huge.columns, 6);
-  assert.equal(huge.truncated, true);
+  const endless = review.planMobileSheets(segment * 40);
+  assert.equal(endless.sheets.length, review.SHEET_MAX_SHEETS);
+  assert.equal(endless.truncated, true);
+});
+
+test('buildMobileSheet places column images side by side with the fold only on the first sheet', () => {
+  const segment = review.SHEET_SEGMENT_HEIGHT;
+  const columns = [{ base64: 'AAAA', height: segment }, { base64: 'BBBB', height: segment }, { base64: 'CCCC', height: 300 }];
+  const first = review.buildMobileSheet(columns);
+  assert.equal(first.width, 3 * 390 + 2 * 16);
+  assert.equal(first.height, segment);
+  assert.match(first.html, /left:812px;height:300px" src="data:image\/png;base64,CCCC"/);
+  assert.match(first.html, /\.fold\{[^}]*top:844px/);
+  assert.match(first.html, /class="fold"/);
+
+  const later = review.buildMobileSheet([{ base64: 'DDDD', height: 500 }], { fold: false });
+  assert.equal(later.width, 390);
+  assert.equal(later.height, 500);
+  assert.doesNotMatch(later.html, /class="fold"/);
+});
+
+test('captureDesignReview writes every mobile sheet and reports a truncated page', async () => {
+  const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-test-'));
+  try {
+    const segment = review.SHEET_SEGMENT_HEIGHT;
+    const long = fakePlaywright({ pageHeight: segment * 10 });
+    const result = await review.captureDesignReview({
+      playwright: long.playwright, channel: 'chrome', url: 'http://localhost:5173', routes: ['/'], outputDir, checksOnly: false,
+    });
+    assert.deepEqual(result.routes[0].mobile.sheets, [
+      path.join(outputDir, 'home-mobile-sheet.png'),
+      path.join(outputDir, 'home-mobile-sheet-2.png'),
+    ]);
+    // Each column is its own clipped capture, so the last one is taken at the page's end.
+    const clips = long.calls.screenshots.filter((shot) => shot.clip).map((shot) => shot.clip.y);
+    assert.deepEqual(clips, Array.from({ length: 10 }, (_, i) => i * segment));
+    assert.ok(result.summary.images.includes(path.join(outputDir, 'home-mobile-sheet-2.png')));
+    assert.deepEqual(result.summary.truncated, []);
+
+    const endless = fakePlaywright({ pageHeight: segment * 40 });
+    const feed = await review.captureDesignReview({
+      playwright: endless.playwright, channel: 'chrome', url: 'http://localhost:5173', routes: ['/feed'], outputDir, checksOnly: false,
+    });
+    assert.equal(feed.routes[0].mobile.sheets.length, review.SHEET_MAX_SHEETS);
+    assert.deepEqual(feed.summary.truncated, ['/feed @ mobile']);
+  } finally {
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  }
+});
+
+test('findSyntheticWeights checks every heading level against the loaded faces', () => {
+  // Stands in for the browser globals the in-page function reads.
+  const headings = [
+    { tagName: 'H1', style: { fontFamily: '"Instrument Serif", serif', fontWeight: '400' } },
+    { tagName: 'H2', style: { fontFamily: 'Fraunces, serif', fontWeight: '800' } },
+    { tagName: 'H5', style: { fontFamily: '"Instrument Serif", serif', fontWeight: '700' } },
+    { tagName: 'H6', style: { fontFamily: 'system-ui', fontWeight: 'bold' } },
+  ];
+  const saved = { document: global.document, getComputedStyle: global.getComputedStyle };
+  global.document = {
+    fonts: [
+      { family: '"Instrument Serif"', weight: '400', status: 'loaded' },
+      { family: 'Fraunces', weight: '100 900', status: 'loaded' },
+    ],
+    querySelectorAll: (selector) => {
+      const tags = selector.split(',').map((tag) => tag.trim().toUpperCase());
+      return headings.filter((h) => tags.includes(h.tagName));
+    },
+  };
+  global.getComputedStyle = (el) => el.style;
+  try {
+    // h6 uses a family the page never loaded (a system font), so there is nothing to compare.
+    assert.deepEqual(review.findSyntheticWeights(), ['h5: Instrument Serif 700']);
+  } finally {
+    global.document = saved.document;
+    global.getComputedStyle = saved.getComputedStyle;
+  }
 });
 
 test('captureDesignReview captures every route at both widths into the output directory', async () => {
@@ -136,7 +207,7 @@ test('captureDesignReview captures every route at both widths into the output di
     assert.equal(home.desktop.viewport, path.join(outputDir, 'home-desktop.png'));
     assert.equal(home.desktop.fullPage, path.join(outputDir, 'home-desktop-full.png'));
     assert.equal(home.mobile.viewport, path.join(outputDir, 'home-mobile.png'));
-    assert.equal(home.mobile.sheet, path.join(outputDir, 'home-mobile-sheet.png'));
+    assert.deepEqual(home.mobile.sheets, [path.join(outputDir, 'home-mobile-sheet.png')]);
     assert.deepEqual(home.desktop.fonts, ['Public Sans', 'Schibsted Grotesk']);
     for (const image of result.summary.images) {
       assert.equal(fs.existsSync(image), true, `${image} should be written`);
@@ -375,11 +446,34 @@ test('captureDesignReview reports a sign-in redirect and discovers nothing from 
   });
 
   assert.deepEqual(result.routes.map((r) => r.route), ['/']);
-  assert.equal(result.routes[0].desktop.redirectedTo, 'https://login.microsoftonline.com');
-  assert.deepEqual(result.summary.redirects, [
-    '/ @ desktop -> https://login.microsoftonline.com',
-    '/ @ mobile -> https://login.microsoftonline.com',
-  ]);
+  assert.equal(result.routes[0].desktop.redirectedTo, login);
+  assert.deepEqual(result.summary.redirects, [`/ @ desktop -> ${login}`, `/ @ mobile -> ${login}`]);
+});
+
+test('captureDesignReview follows a canonical redirect and discovers from the landed origin', async () => {
+  const fake = fakePlaywright({
+    discovered: ['/', '/services'],
+    redirects: { '/': 'https://www.contoso.example/', '/services': 'https://www.contoso.example/services' },
+  });
+  const result = await review.captureDesignReview({
+    playwright: fake.playwright, channel: 'chrome', url: 'http://contoso.example', discover: 6, outputDir: null, checksOnly: true,
+  });
+
+  assert.equal(result.baseUrl, 'https://www.contoso.example');
+  assert.deepEqual(result.routes.map((r) => r.route), ['/', '/services']);
+  assert.equal(fake.calls.gotos[1], 'https://www.contoso.example/', 'captures use the canonical origin');
+  assert.deepEqual(result.summary.redirects, []);
+});
+
+test('classifyLanding tells canonical redirects from sign-in redirects', () => {
+  assert.equal(review.classifyLanding('http://contoso.example/', 'https://contoso.example/'), 'same-site');
+  assert.equal(review.classifyLanding('https://contoso.example/about', 'https://www.contoso.example/about'), 'same-site');
+  assert.equal(review.classifyLanding('https://www.contoso.example/', 'https://contoso.example/en-US/'), 'same-site');
+  assert.equal(review.classifyLanding('https://contoso.example/', 'https://login.microsoftonline.com/common/oauth2/authorize?state=x'), 'left-site');
+  assert.equal(review.classifyLanding('https://contoso.example/', 'https://contoso.b2clogin.com/contoso.onmicrosoft.com/oauth2'), 'left-site');
+  assert.equal(review.classifyLanding('https://contoso.example/profile', 'https://contoso.example/SignIn?returnUrl=%2Fprofile'), 'sign-in');
+  assert.equal(review.classifyLanding('https://contoso.example/signin', 'https://contoso.example/signin'), 'same-site', 'a requested sign-in page is the page itself');
+  assert.equal(review.classifyLanding('http://localhost:5173/', 'http://localhost:4200/'), 'left-site', 'another port is another site');
 });
 
 test('captureDesignReview records no redirect when the page stays on the site', async () => {

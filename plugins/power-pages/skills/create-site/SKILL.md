@@ -810,7 +810,7 @@ Immediately after the dev server starts, verify the scaffold is working:
    | What's the overall mood? | Mood | Professional & Trustworthy (Recommended), Creative & Playful, Technical & Precise, Elegant & Premium |
    | Is there an existing brand the site should match? | Brand | No, create a fresh identity (Recommended), Match my existing website, Use my brand colors or logo |
 
-   **Brand follow-up.** Record the answer as `BRAND_SOURCE` (`fresh`, `website`, or `assets`). For **Match my existing website**, use `AskUserQuestion` to ask for the URL (free text - use a single generic option so the user types it via "Other"). For **Use my brand colors or logo**, ask the same way for the hex colors and/or the absolute path of a logo file. On the template customization path, skip this sub-prompt (see Phase 1.5 step 20).
+   **Brand follow-up.** Record the answer as `BRAND_SOURCE` (`fresh`, `website`, or `assets`). For **Match my existing website**, use `AskUserQuestion` to ask for the URL (free text - use a single generic option so the user types it via "Other"); accept only an `http://` or `https://` URL and ask again otherwise. For **Use my brand colors or logo**, ask the same way for the hex colors and/or the absolute path of a logo file. On the template customization path, skip this sub-prompt (see Phase 1.5 step 20).
 
    > **Feature options are NOT hardcoded.** Infer relevant features from Phase 1 answers. For example:
    > - "HR Dashboard" + Internal → Employee Directory, Leave Requests, Announcements, Org Chart
@@ -1145,7 +1145,7 @@ Run the audit script via `Bash`, passing the dev server URL and all site routes:
 node "${PLUGIN_ROOT}/scripts/axe-audit.js" --url <DEV_SERVER_URL> --routes /,/about,/services,/contact --project-root "<PROJECT_ROOT>"
 ```
 
-Parse the returned JSON array of per-route results. Each result contains `violations` (with `id`, `impact`, `description`, `helpUrl`, and affected `nodes`), `passes` count, and `incomplete` count. A nonzero exit means at least one `critical` or `serious` violation was found.
+Parse the returned JSON array of per-route results. Each result contains `violations` (with `id`, `impact`, `description`, `helpUrl`, and affected `nodes`), `passes` count, and `incomplete` count. A nonzero exit means at least one `critical` or `serious` violation was found, or a route could not be audited - its result has `error` instead of violations, so fix the cause (a broken route, or the dev server down) and audit it again.
 
 Parse the JSON output and record all violations.
 
@@ -1176,8 +1176,8 @@ git commit -m "Fix accessibility: <violation description>"
 After all fixes are applied, re-run the audit script (same command as 6.2) to confirm violations are resolved:
 
 1. If new violations appear (e.g., a fix introduced a regression), repeat 6.3–6.4
-2. Continue until the script exits with code 0 (zero `critical` and `serious` violations)
-3. If a fix changed colors, spacing, or layout, run a review round on the affected routes and confirm the scorecard still holds
+2. Continue until the script exits with code 0 (every route audited, zero `critical` and `serious` violations)
+3. If a fix changed colors, spacing, or layout, run a review round on the affected routes and confirm the scorecard still holds. A review round can change source too, so when it does, re-run the audit on those routes; Phase 6 is done only when the last audit and the last review round both pass without a further fix
 
 Present a summary table to the user:
 

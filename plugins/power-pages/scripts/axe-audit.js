@@ -9,7 +9,8 @@
 // Playwright comes from the project's dev dependency when --project-root has one, and
 // otherwise from the plugin's pinned @playwright/mcp package, so nothing is installed.
 // Output: JSON array of per-route results on stdout.
-// Exit code: 1 when a critical or serious violation is found or the audit cannot run, 0 otherwise.
+// Exit code: 1 when a critical or serious violation is found, a route could not be audited, or
+// the audit cannot run at all; 0 only when every route was audited and passed.
 
 const { detectBrowser } = require('./lib/detect-browser');
 const { loadPlaywright } = require('./lib/load-playwright');
@@ -78,8 +79,10 @@ async function auditRoutes({ playwright, channel, url, routes }) {
   return results;
 }
 
-function hasBlockingViolation(results) {
-  return results.some((r) => r.violations.some((v) => BLOCKING_IMPACTS.has(v.impact)));
+// A route that failed to load or to inject axe has an empty `violations` list, which would
+// otherwise read as a pass; an unaudited route blocks just like a serious violation.
+function hasBlockingResult(results) {
+  return results.some((r) => Boolean(r.error) || r.violations.some((v) => BLOCKING_IMPACTS.has(v.impact)));
 }
 
 async function main(argv = process.argv.slice(2), {
@@ -101,14 +104,14 @@ async function main(argv = process.argv.slice(2), {
   try {
     const results = await auditRoutes({ playwright, channel: channel(), url: args.url, routes: args.routes });
     write(`${JSON.stringify(results, null, 2)}\n`);
-    return hasBlockingViolation(results) ? 1 : 0;
+    return hasBlockingResult(results) ? 1 : 0;
   } catch (error) {
     writeError(`${error.message}\n`);
     return 1;
   }
 }
 
-module.exports = { AXE_CDN_URL, WCAG_TAGS, auditRoutes, hasBlockingViolation, main, parseArgs, runAxe };
+module.exports = { AXE_CDN_URL, WCAG_TAGS, auditRoutes, hasBlockingResult, main, parseArgs, runAxe };
 
 if (require.main === module) {
   main().then((code) => process.exit(code));

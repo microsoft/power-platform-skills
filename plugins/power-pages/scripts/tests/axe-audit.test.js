@@ -64,9 +64,9 @@ test('auditRoutes bypasses CSP, injects axe on every route, and records navigati
   assert.equal(calls.closed, true);
 });
 
-test('main exits 1 only for critical or serious violations', async () => {
-  const run = async (impact) => {
-    const { playwright } = fakePlaywright({ violationsFor: (route) => (route === '/about' ? [{ id: 'x', impact, nodes: [] }] : []) });
+test('main exits 1 for critical or serious violations and for routes it could not audit', async () => {
+  const run = async (impact, failRoutes = []) => {
+    const { playwright } = fakePlaywright({ failRoutes, violationsFor: (route) => (route === '/about' ? [{ id: 'x', impact, nodes: [] }] : []) });
     let out = '';
     const code = await axe.main(['--url', 'http://localhost:5173', '--routes', '/,/about'], {
       write: (s) => { out += s; },
@@ -81,6 +81,10 @@ test('main exits 1 only for critical or serious violations', async () => {
   const serious = await run('serious');
   assert.equal(serious.code, 1);
   assert.equal(serious.results[1].violations[0].impact, 'serious');
+
+  const unaudited = await run('minor', ['/about']);
+  assert.equal(unaudited.code, 1, 'a route that never loaded must not read as a pass');
+  assert.match(unaudited.results[1].error, /ERR_FAILED/);
 });
 
 test('main passes --project-root to the Playwright loader and fails when none loads', async () => {

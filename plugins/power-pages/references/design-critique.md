@@ -27,17 +27,18 @@ Per route:
 | `<page>-desktop.png` | The desktop first screen at load | The five-second test, focal point, type, alignment, imagery |
 | `<page>-desktop-full.png` | The whole desktop page, after scroll reveals ran | Rhythm, section order, transitions, the ending |
 | `<page>-mobile.png` | The mobile first screen at load | The mobile five-second test and whether the primary CTA is above the fold |
-| `<page>-mobile-sheet.png` | The whole mobile page cut into columns two screens tall, read left to right; a dashed pink line marks the fold in the first column | Mobile reprioritization, stacking, overlap, clipped text, tap targets |
+| `<page>-mobile-sheet.png` | The whole mobile page cut into columns two screens tall, read left to right; a dashed pink line marks the fold in the first column. A page longer than six columns continues on `<page>-mobile-sheet-2.png` and onward - read them in order | Mobile reprioritization, stacking, overlap, clipped text, tap targets |
 
 Automated checks per route and width:
 
 - **`fonts`** - the families that actually loaded. Both chosen families must be listed; a missing one means the font `<link>` names it wrong or requests a weight range from a static family (see [design-aesthetics.md](design-aesthetics.md#4-typography)).
-- **`syntheticWeights`** - headings drawn at a weight their family does not ship, so the browser fakes it (e.g., `h1: Instrument Serif 700`). Set them at a weight the family publishes.
+- **`syntheticWeights`** - headings (`h1` to `h6`) drawn at a weight their family does not ship, so the browser fakes it (e.g., `h1: Instrument Serif 700`). Set them at a weight the family publishes.
 - **`overflow`** - measured after scrolling through, so content revealed on scroll is included. `{ "overflow": true }` with an empty `culprits` list means a pseudo-element or a `100vw` width is responsible - look for `::before`/`::after` with negative offsets (e.g., a decorative frame corner at `right: -8px`). The fix belongs on the element; `overflow-x: hidden` on `html` or `body` only hides the break and clips content.
 - **`pageErrors`** - uncaught exceptions, console errors, HTTP error responses, and requests that failed outright (DNS or connection errors), each with its URL.
-- **`redirectedTo`** - present when the route landed on another origin, usually an identity provider's sign-in page for a private site or a signed-in page. The headless capture cannot sign in, so those screenshots show the login page, not the design.
+- **`redirectedTo`** - present when the route was sent to sign in: to another host (an identity provider) or to the site's own sign-in page. The headless capture cannot sign in, so those screenshots show the login page, not the design. Canonical redirects (http to https, with or without `www.`) are followed and not reported.
 
 `summary` lists the routes that overflow, have page errors, redirected, or failed to capture.
+`summary.truncated` lists mobile pages too long for their sheets (over about 30,000 px, usually an endless feed); judge their end from the desktop full page and say the mobile end was not seen.
 
 ## First-impression review
 

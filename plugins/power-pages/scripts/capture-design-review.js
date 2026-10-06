@@ -29,10 +29,13 @@ const VIEWPORTS = {
   mobile: { width: 390, height: 844 },
 };
 // A whole mobile page is long and narrow; viewed as one image it is downscaled to an
-// unreadable sliver. The sheet cuts it into columns two mobile screens tall, side by side,
-// so the full page stays legible in one image. The first column starts at the fold line.
+// unreadable sliver. A sheet cuts it into columns two mobile screens tall, side by side,
+// so the page stays legible. Six columns keep a sheet readable; a longer page continues on
+// further sheets so its closing sections are never dropped. Past SHEET_MAX_SHEETS (about
+// 30,000 px - an endless feed rather than a page) the rest is reported as truncated.
 const SHEET_SEGMENT_HEIGHT = VIEWPORTS.mobile.height * 2;
 const SHEET_MAX_COLUMNS = 6;
+const SHEET_MAX_SHEETS = 3;
 const SHEET_GAP = 16;
 const SETTLE_MS = 1200;
 const NAVIGATION_TIMEOUT_MS = 20000;
@@ -64,22 +67,35 @@ function slugForRoute(route) {
   return slug || 'home';
 }
 
-function buildMobileSheet(base64Png, pageHeight) {
-  const columnWidth = VIEWPORTS.mobile.width;
+// Splits a mobile page of `pageHeight` px into sheets of column clips, each column one
+// SHEET_SEGMENT_HEIGHT slice of the page. `truncated` says the page ran past the last sheet.
+function planMobileSheets(pageHeight) {
   const needed = Math.max(1, Math.ceil(pageHeight / SHEET_SEGMENT_HEIGHT));
-  const columns = Math.min(needed, SHEET_MAX_COLUMNS);
-  const height = Math.min(SHEET_SEGMENT_HEIGHT, pageHeight);
-  const width = columns * columnWidth + (columns - 1) * SHEET_GAP;
-  const cells = [];
-  for (let i = 0; i < columns; i++) {
-    cells.push(`<div class="col" style="left:${i * (columnWidth + SHEET_GAP)}px;background-position:0 -${i * SHEET_SEGMENT_HEIGHT}px"></div>`);
+  const kept = Math.min(needed, SHEET_MAX_SHEETS * SHEET_MAX_COLUMNS);
+  const sheets = [];
+  for (let i = 0; i < kept; i++) {
+    if (i % SHEET_MAX_COLUMNS === 0) sheets.push([]);
+    const y = i * SHEET_SEGMENT_HEIGHT;
+    sheets[sheets.length - 1].push({ x: 0, y, width: VIEWPORTS.mobile.width, height: Math.min(SHEET_SEGMENT_HEIGHT, pageHeight - y) });
   }
+  return { sheets, truncated: needed > kept };
+}
+
+// Lays column screenshots (base64 PNGs, top to bottom) side by side. Each column is its own
+// clipped capture rather than one slice of a single full-page image: Chrome renders a very
+// tall image (about 16,000 px and up) wrongly, repeating the top of the page where its end
+// should be. Only the sheet that starts at the top of the page gets the dashed fold line.
+function buildMobileSheet(columns, { fold = true } = {}) {
+  const columnWidth = VIEWPORTS.mobile.width;
+  const height = Math.min(SHEET_SEGMENT_HEIGHT, Math.max(...columns.map((c) => c.height)));
+  const width = columns.length * columnWidth + (columns.length - 1) * SHEET_GAP;
+  const cells = columns.map((column, i) => `<img class="col" style="left:${i * (columnWidth + SHEET_GAP)}px;height:${column.height}px" src="data:image/png;base64,${column.base64}">`);
   const html = `<!doctype html><html><head><style>
 html,body{margin:0;background:#8a8a8a}
-.col{position:absolute;top:0;width:${columnWidth}px;height:${height}px;background-image:url(data:image/png;base64,${base64Png});background-repeat:no-repeat}
+.col{position:absolute;top:0;width:${columnWidth}px;display:block}
 .fold{position:absolute;left:0;top:${VIEWPORTS.mobile.height}px;width:${columnWidth}px;border-top:2px dashed #ff00aa}
-</style></head><body>${cells.join('')}<div class="fold"></div></body></html>`;
-  return { html, width, height, columns, truncated: needed > SHEET_MAX_COLUMNS };
+</style></head><body>${cells.join('')}${fold ? '<div class="fold"></div>' : ''}</body></html>`;
+  return { html, width, height };
 }
 
 // --- In-page functions (serialized into the browser by page.evaluate) ---
@@ -114,7 +130,7 @@ function findSyntheticWeights() {
   const toNumber = (value) => ({ normal: 400, bold: 700 }[value] || Number(value));
   const faces = [...document.fonts].filter((face) => face.status === 'loaded');
   const found = new Set();
-  for (const el of document.querySelectorAll('h1, h2, h3')) {
+  for (const el of document.querySelectorAll('h1, h2, h3, h4, h5, h6')) {
     const style = getComputedStyle(el);
     const family = style.fontFamily.split(',')[0].trim().replace(/["']/g, '');
     const weight = toNumber(style.fontWeight);
@@ -169,6 +185,23 @@ function discoverLinks(limit) {
   return routes;
 }
 
+// Sign-in pages the site serves itself, e.g. /SignIn?returnUrl=... or /Account/Login.
+const SIGN_IN_PATH = /(^|\/)(sign-?in|log-?in|account\/login|\.auth\/login)(\/|$)/i;
+
+// Decides whether a navigation that ended at `landedUrl` still shows the site requested at
+// `requestedUrl`. Canonical redirects stay on the site: http -> https, and apex <-> www.
+// Leaving for another host (an identity provider such as login.microsoftonline.com or
+// *.b2clogin.com) or bouncing to the site's own sign-in page means the headless browser,
+// which cannot sign in, is looking at a login form instead of the design.
+function classifyLanding(requestedUrl, landedUrl) {
+  const requested = new URL(requestedUrl);
+  const landed = new URL(landedUrl);
+  const site = (u) => u.host.toLowerCase().replace(/^www\./, '');
+  if (site(requested) !== site(landed)) return 'left-site';
+  if (SIGN_IN_PATH.test(landed.pathname) && !SIGN_IN_PATH.test(requested.pathname)) return 'sign-in';
+  return 'same-site';
+}
+
 // --- Capture ---
 
 async function captureRouteAtWidth({ browser, page, url, route, width, outputDir, checksOnly }) {
@@ -203,10 +236,10 @@ async function captureRouteAtWidth({ browser, page, url, route, width, outputDir
   try {
     await page.goto(`${url}${route}`, { waitUntil: 'networkidle', timeout: NAVIGATION_TIMEOUT_MS });
     await page.waitForTimeout(SETTLE_MS);
-    // A private site or a signed-in page redirects to an identity provider. The headless
-    // browser cannot sign in, so the screenshots show a login page rather than the design.
-    const landed = new URL(page.url()).origin;
-    if (landed !== new URL(url).origin) result.redirectedTo = landed;
+    // The query is dropped from the reported URL: sign-in redirects carry state, nonce,
+    // and return-URL parameters that add noise and say nothing about the design.
+    const landed = new URL(page.url());
+    if (classifyLanding(`${url}${route}`, landed.href) !== 'same-site') result.redirectedTo = `${landed.origin}${landed.pathname}`;
     if (!checksOnly) {
       // The first screen is captured before scrolling so it shows what a visitor sees at load.
       result.viewport = path.join(outputDir, `${slug}-${width}.png`);
@@ -221,17 +254,26 @@ async function captureRouteAtWidth({ browser, page, url, route, width, outputDir
         result.fullPage = path.join(outputDir, `${slug}-desktop-full.png`);
         await page.screenshot({ path: result.fullPage, fullPage: true });
       } else {
-        const full = await page.screenshot({ fullPage: true });
-        const sheet = buildMobileSheet(Buffer.from(full).toString('base64'), await page.evaluate(pageHeight));
-        const sheetPage = await browser.newPage({ viewport: { width: sheet.width, height: sheet.height } });
-        try {
-          await sheetPage.setContent(sheet.html, { waitUntil: 'load' });
-          result.sheet = path.join(outputDir, `${slug}-mobile-sheet.png`);
-          await sheetPage.screenshot({ path: result.sheet });
-          if (sheet.truncated) result.sheetTruncated = true;
-        } finally {
-          await sheetPage.close();
+        const plan = planMobileSheets(await page.evaluate(pageHeight));
+        result.sheets = [];
+        for (const [index, clips] of plan.sheets.entries()) {
+          const columns = [];
+          for (const clip of clips) {
+            const shot = await page.screenshot({ fullPage: true, clip });
+            columns.push({ base64: Buffer.from(shot).toString('base64'), height: clip.height });
+          }
+          const sheet = buildMobileSheet(columns, { fold: index === 0 });
+          const sheetPage = await browser.newPage({ viewport: { width: sheet.width, height: sheet.height } });
+          try {
+            await sheetPage.setContent(sheet.html, { waitUntil: 'load' });
+            const sheetPath = path.join(outputDir, `${slug}-mobile-sheet${index === 0 ? '' : `-${index + 1}`}.png`);
+            await sheetPage.screenshot({ path: sheetPath });
+            result.sheets.push(sheetPath);
+          } finally {
+            await sheetPage.close();
+          }
         }
+        if (plan.truncated) result.sheetTruncated = true;
       }
     }
   } catch (error) {
@@ -258,11 +300,16 @@ async function captureDesignReview({ playwright, channel, url, routes, discover,
       const page = await browser.newPage({ viewport: VIEWPORTS.desktop });
       try {
         await page.goto(url, { waitUntil: 'networkidle', timeout: NAVIGATION_TIMEOUT_MS });
-        // Links on an identity provider's login page are not the site's pages, so a
-        // redirected start page yields only itself; its capture records the redirect.
-        results = new URL(page.url()).origin === start.origin
-          ? (await page.evaluate(discoverLinks, discover)).map((route) => ({ route }))
-          : [{ route: start.pathname.replace(/\/+$/, '') || '/' }];
+        if (classifyLanding(url, page.url()) === 'same-site') {
+          // A canonical redirect (http -> https, apex <-> www) is still the site, so discovery
+          // continues from where the browser landed and later captures use that origin.
+          base = new URL(page.url()).origin;
+          results = (await page.evaluate(discoverLinks, discover)).map((route) => ({ route }));
+        } else {
+          // Links on a login page are not the site's pages, so a start page that needs
+          // sign-in yields only itself; its capture records the redirect.
+          results = [{ route: start.pathname.replace(/\/+$/, '') || '/' }];
+        }
       } finally {
         await page.close();
       }
@@ -285,7 +332,7 @@ async function captureDesignReview({ playwright, channel, url, routes, discover,
 }
 
 function summarize(results) {
-  const summary = { fonts: [], syntheticWeights: [], overflow: [], pageErrors: [], captureErrors: [], redirects: [], images: [] };
+  const summary = { fonts: [], syntheticWeights: [], overflow: [], pageErrors: [], captureErrors: [], redirects: [], truncated: [], images: [] };
   const fonts = new Set();
   for (const entry of results) {
     for (const width of Object.keys(VIEWPORTS)) {
@@ -299,9 +346,11 @@ function summarize(results) {
       if (r.pageErrors && r.pageErrors.length) summary.pageErrors.push(`${entry.route} @ ${width}: ${r.pageErrors.length}`);
       if (r.captureError) summary.captureErrors.push(`${entry.route} @ ${width}: ${r.captureError}`);
       if (r.redirectedTo) summary.redirects.push(`${entry.route} @ ${width} -> ${r.redirectedTo}`);
-      for (const key of ['viewport', 'fullPage', 'sheet']) {
+      if (r.sheetTruncated) summary.truncated.push(`${entry.route} @ ${width}`);
+      for (const key of ['viewport', 'fullPage']) {
         if (r[key]) summary.images.push(r[key]);
       }
+      summary.images.push(...(r.sheets || []));
     }
   }
   summary.fonts = [...fonts].sort();
@@ -356,8 +405,12 @@ module.exports = {
   OUTPUT_DIR_PREFIX,
   SHEET_SEGMENT_HEIGHT,
   VIEWPORTS,
+  SHEET_MAX_COLUMNS,
+  SHEET_MAX_SHEETS,
   buildMobileSheet,
+  planMobileSheets,
   captureDesignReview,
+  classifyLanding,
   findSyntheticWeights,
   discoverLinks,
   loadedFonts,
