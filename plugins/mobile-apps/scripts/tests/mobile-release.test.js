@@ -276,6 +276,28 @@ test('requirements reads return only validated protected fields without consulti
   blocked(runCli(fixture, ['--project-root', fixture.projectRoot]));
 });
 
+test('requirements planning preserves tenant configuration and returns only protected version fields', (t) => {
+  const fixture = createFixture(t);
+  const file = path.join(fixture.projectRoot, 'app.json');
+  modifyJson(file, config => Object.assign(config.expo.extra.powerappsNative, {
+    tenantMode: 'multi',
+    appDisplayName: 'Customer-specific label',
+    appName: 'customer_app',
+    tenantPolicy: { allowedTenantIds: ['11111111-1111-4111-8111-111111111111'] },
+  }));
+  const before = fs.readFileSync(file, 'utf8');
+  assert.deepEqual(readProjectRequirements(fixture.projectRoot), {
+    schemaVersion: 1,
+    templateVersion: fixture.release.templateVersion,
+    nativeRuntimeVersions: fixture.release.nativeRuntimeVersions,
+  });
+  assert.equal(selectProjectRelease(fixture.projectRoot, fixture.catalog), fixture.release);
+  const result = runCli(fixture, ['--project-root', fixture.projectRoot, '--requirements-only']);
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stdout, /tenantMode|tenantPolicy|Customer-specific|customer_app|11111111/);
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+});
+
 test('requirements-only selection preserves the source record despite manual host drift', (t) => {
   const old = fixtureRelease();
   const newest = fixtureRelease(2);

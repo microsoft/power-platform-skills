@@ -24,6 +24,11 @@ edits. Only a successful host migration may advance them. Missing, malformed,
 or unknown state blocks native work; do not backfill it from installed packages.
 App-owned extras, telemetry preferences, branding, navigation, authentication,
 offline settings, and custom instruction files remain customer-owned.
+Tenant settings such as `tenantMode`, `appDisplayName`, `appName` and
+`tenantPolicy` may share the `powerappsNative` object. Read only the three
+protected compatibility fields for release selection, and preserve the
+remaining app-owned configuration. Tenant configuration is not native release
+evidence and must not be included in sanitized release/telemetry summaries.
 
 `--requirements-only` resolves the recorded source for **upgrade planning**,
 even when installed dependencies have drifted. It is not a native admission or

@@ -404,7 +404,7 @@ function readProjectRequirements(projectRoot) {
   requireValue(typeof projectRoot === 'string' && projectRoot.length > 0, 'A project root is required.');
   const config = readJson(path.join(projectRoot, 'app.json'), 'app.json');
   const metadata = config.expo?.extra?.powerappsNative;
-  requireValue(keys(metadata, ['schemaVersion', 'templateVersion', 'nativeRuntimeVersions'])
+  requireValue(object(metadata)
     && metadata.schemaVersion === 1 && positiveInteger(metadata.templateVersion)
     && keys(metadata.nativeRuntimeVersions, ['android', 'ios'])
     && Object.values(metadata.nativeRuntimeVersions).every(positiveInteger), 'Missing or invalid protected app.json expo.extra.powerappsNative metadata. Use a verified template; do not invent or rewrite runtime versions.');
