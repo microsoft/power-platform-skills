@@ -7,9 +7,14 @@
 // the whole conversation.
 //
 // Usage:
-//   node capture-design-review.js --url http://localhost:5173 --routes /,/about [--project-root <path>] [--checks-only]
+//   node capture-design-review.js --url http://localhost:5173 --routes /,/about [--project-root <path>] [--checks-only] [--axe]
 //   node capture-design-review.js --url https://contoso.powerappsportals.com --discover 6
+//   node capture-design-review.js --input - [--axe]   (request as JSON on stdin, see parseRequest)
 //   node capture-design-review.js --cleanup <outputDir>
+//
+// --axe also runs the axe-core accessibility audit (axe-audit.js) on every captured route that
+// did not redirect to sign-in, so routes discovered on an untrusted page reach the audit
+// without the agent copying them into another shell command.
 //
 // Playwright comes from the project's dev dependency when --project-root has one, and
 // otherwise from the plugin's pinned @playwright/mcp package in npm's cache, so nothing is
@@ -22,7 +27,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { detectBrowser } = require('./lib/detect-browser');
 const { loadPlaywright } = require('./lib/load-playwright');
-const { gotoSettled, parseRouteList } = require('./lib/review-navigation');
+const { auditRoutes, loadAxeSource } = require('./axe-audit');
+const { gotoSettled, normalizeSiteUrl, parseRouteList } = require('./lib/review-navigation');
 const { createPrivateTempDir, isOwnTempDir, removeDir, sweepStaleTempDirs } = require('./lib/private-temp-dir');
 
 // Screenshots go to a private temp directory so they never land in the user's project.
@@ -42,25 +48,72 @@ const SHEET_MAX_SHEETS = 3;
 const SHEET_GAP = 16;
 const SETTLE_MS = 1200;
 
-function parseArgs(argv) {
+const USAGE = 'Usage: node capture-design-review.js --url <base-url> (--routes <comma-separated> | --discover <max-pages>) [--project-root <path>] [--checks-only] [--axe]\n'
+  + '       node capture-design-review.js --input - [--axe]   (JSON request on stdin)\n'
+  + '       node capture-design-review.js --cleanup <outputDir>';
+
+// Reads the request a caller sends on stdin with `--input -`, e.g.
+//   {"url": "https://contoso.example/?lang=en&x=1", "discover": 6, "projectRoot": "C:\\Sites\\Contoso"}
+// A site URL from a user, a folder path, or routes found on a page can hold characters a
+// shell would act on (`&`, `;`, `$(...)`, quotes). Sent as JSON in a quoted heredoc, they
+// stay data: the shell never parses them, and this function type-checks every field.
+const REQUEST_FIELDS = {
+  url: (v) => typeof v === 'string',
+  routes: (v) => Array.isArray(v) && v.every((r) => typeof r === 'string'),
+  discover: (v) => Number.isInteger(v),
+  projectRoot: (v) => typeof v === 'string',
+  checksOnly: (v) => typeof v === 'boolean',
+  axe: (v) => typeof v === 'boolean',
+};
+
+function parseRequest(text) {
+  let request;
+  try {
+    request = JSON.parse(text);
+  } catch (error) {
+    return { error: `The stdin request is not valid JSON: ${error.message}` };
+  }
+  if (!request || typeof request !== 'object' || Array.isArray(request)) {
+    return { error: 'The stdin request must be a JSON object.' };
+  }
+  for (const [key, value] of Object.entries(request)) {
+    if (!REQUEST_FIELDS[key]) return { error: `Unknown field in the stdin request: ${key}` };
+    if (!REQUEST_FIELDS[key](value)) return { error: `Field ${key} in the stdin request has the wrong type.` };
+  }
+  return { request };
+}
+
+function parseArgs(argv, { readStdin = () => fs.readFileSync(0, 'utf8') } = {}) {
   const parsed = { checksOnly: false };
+  let fromStdin = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === '--url' && argv[i + 1]) parsed.url = argv[++i].replace(/\/+$/, '');
+    if (arg === '--url' && argv[i + 1]) parsed.url = argv[++i];
     else if (arg === '--routes' && argv[i + 1]) parsed.routes = parseRouteList(argv[++i]);
     else if (arg === '--project-root' && argv[i + 1]) parsed.projectRoot = argv[++i];
     else if (arg === '--checks-only') parsed.checksOnly = true;
+    else if (arg === '--axe') parsed.axe = true;
     else if (arg === '--discover' && argv[i + 1]) parsed.discover = Number.parseInt(argv[++i], 10);
     else if (arg === '--cleanup' && argv[i + 1]) parsed.cleanup = argv[++i];
+    else if (arg === '--input' && argv[i + 1] === '-') { fromStdin = true; i++; }
   }
   if (parsed.cleanup) {
     return parsed;
   }
+  if (fromStdin) {
+    const { request, error } = parseRequest(readStdin());
+    if (error) return { error };
+    Object.assign(parsed, request);
+    if (request.routes) parsed.routes = parseRouteList(request.routes);
+  }
   const hasRoutes = Boolean(parsed.routes && parsed.routes.length > 0);
   const hasDiscover = Number.isInteger(parsed.discover) && parsed.discover > 0;
   if (!parsed.url || hasRoutes === hasDiscover) {
-    return { error: 'Usage: node capture-design-review.js --url <base-url> (--routes <comma-separated> | --discover <max-pages>) [--project-root <path>] [--checks-only]\n       node capture-design-review.js --cleanup <outputDir>' };
+    return { error: USAGE };
   }
+  const site = normalizeSiteUrl(parsed.url);
+  if (site.error) return { error: site.error };
+  parsed.url = site.url;
   return parsed;
 }
 
@@ -222,21 +275,42 @@ function classifyLanding(requestedUrl, landedUrl) {
   return 'same-site';
 }
 
+// Error reports keep a failing URL's origin and path and drop the rest. Query strings and
+// fragments on real sites carry tokens - signed storage URLs (`?sv=...&sig=...`), presigned
+// image links, session ids - and this output is read into the agent's conversation.
+//   https://contoso.blob.core.windows.net/media/hero.jpg?sv=2024&sig=abc  ->  https://contoso.blob.core.windows.net/media/hero.jpg
+//   data:image/png;base64,iVBOR...                                       ->  data:
+function redactUrl(value) {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return parsed.protocol;
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return String(value);
+  }
+}
+
+// Console and exception messages can quote a URL too, e.g. "Access to fetch at
+// 'https://api.contoso.example/x?token=...' has been blocked by CORS policy".
+function redactUrlsInText(text) {
+  return String(text).replace(/\bhttps?:\/\/[^\s'"<>()]+/g, redactUrl);
+}
+
 // --- Capture ---
 
 async function captureRouteAtWidth({ browser, page, url, route, slug = slugForRoute(route), width, outputDir, checksOnly }) {
   const result = { pageErrors: [] };
-  const onPageError = (error) => result.pageErrors.push(String(error && error.message ? error.message : error));
+  const onPageError = (error) => result.pageErrors.push(redactUrlsInText(error && error.message ? error.message : error));
   // Chrome logs a failed fetch as the bare console text "Failed to load resource: ...
   // status of 404", with no URL. The response listener records the URL instead, so the
   // generic console line is skipped to avoid reporting the same failure twice.
   const onConsole = (message) => {
-    if (message.type() === 'error' && !/^Failed to load resource/.test(message.text())) result.pageErrors.push(message.text());
+    if (message.type() === 'error' && !/^Failed to load resource/.test(message.text())) result.pageErrors.push(redactUrlsInText(message.text()));
   };
   // A missing favicon is /add-seo's job, not a design defect, so its 404 is not reported.
   const onResponse = (response) => {
     if (response.status() >= 400 && !/\/favicon\.ico(\?|$)/.test(response.url())) {
-      result.pageErrors.push(`HTTP ${response.status()} ${response.url()}`);
+      result.pageErrors.push(`HTTP ${response.status()} ${redactUrl(response.url())}`);
     }
   };
   // DNS and connection failures produce no response at all, only a failed request. Requests
@@ -245,7 +319,7 @@ async function captureRouteAtWidth({ browser, page, url, route, slug = slugForRo
   const onRequestFailed = (request) => {
     const errorText = (request.failure() || {}).errorText || 'failed';
     if (!/ERR_ABORTED/.test(errorText) && !/\/favicon\.ico(\?|$)/.test(request.url())) {
-      result.pageErrors.push(`FAILED ${request.url()} (${errorText})`);
+      result.pageErrors.push(`FAILED ${redactUrl(request.url())} (${errorText})`);
     }
   };
   page.on('pageerror', onPageError);
@@ -308,7 +382,10 @@ async function captureRouteAtWidth({ browser, page, url, route, slug = slugForRo
   return result;
 }
 
-async function captureDesignReview({ playwright, channel, url, routes, discover, outputDir, checksOnly }) {
+async function captureDesignReview({
+  playwright, channel, url, routes, discover, outputDir, checksOnly, axe = false,
+  auditFn = auditRoutes, loadAxeSourceFn = loadAxeSource,
+}) {
   const browser = await playwright.chromium.launch({ channel, headless: true });
   let base = url;
   let results = (routes || []).map((route) => ({ route }));
@@ -350,7 +427,37 @@ async function captureDesignReview({ playwright, channel, url, routes, discover,
   } finally {
     await browser.close();
   }
-  return { outputDir: checksOnly ? null : outputDir, baseUrl: base, routes: results, summary: summarize(results) };
+  const summary = summarize(results);
+  const output = { outputDir: checksOnly ? null : outputDir, baseUrl: base, routes: results, summary };
+  if (axe) {
+    // A route that landed on a sign-in page would only audit the login form.
+    const auditable = results.filter((e) => !(e.desktop && e.desktop.redirectedTo)).map((e) => e.route);
+    try {
+      const axeSource = await loadAxeSourceFn();
+      output.accessibility = auditable.length ? await auditFn({ playwright, channel, url: base, routes: auditable, axeSource }) : [];
+      summary.accessibility = summarizeAccessibility(output.accessibility);
+    } catch (error) {
+      output.accessibility = [];
+      summary.accessibility = { error: error.message, violations: [], unaudited: auditable };
+    }
+  }
+  return output;
+}
+
+// One line per violation, critical and serious first, so the summary stays scannable:
+//   "/contact: label (critical, 2 elements)"
+function summarizeAccessibility(audit) {
+  const rank = { critical: 0, serious: 1, moderate: 2, minor: 3 };
+  const violations = [];
+  const unaudited = [];
+  for (const r of audit) {
+    if (r.error) unaudited.push(`${r.route}: ${r.error.split('\n')[0]}`);
+    for (const v of r.violations) {
+      violations.push({ rank: rank[v.impact] ?? 4, text: `${r.route}: ${v.id} (${v.impact}, ${v.nodes.length} element${v.nodes.length === 1 ? '' : 's'})` });
+    }
+  }
+  violations.sort((a, b) => a.rank - b.rank);
+  return { violations: violations.map((v) => v.text), unaudited };
 }
 
 function summarize(results) {
@@ -385,8 +492,11 @@ async function main(argv = process.argv.slice(2), {
   loadPlaywrightFn = loadPlaywright,
   channel = detectBrowser,
   removeDirFn = removeDir,
+  readStdin,
+  auditFn,
+  loadAxeSourceFn,
 } = {}) {
-  const args = parseArgs(argv);
+  const args = parseArgs(argv, { readStdin });
   if (args.error) {
     writeError(`${args.error}\n`);
     return 1;
@@ -417,6 +527,7 @@ async function main(argv = process.argv.slice(2), {
   try {
     const result = await captureDesignReview({
       playwright, channel: channel(), url: args.url, routes: args.routes, discover: args.discover, outputDir, checksOnly: args.checksOnly,
+      axe: Boolean(args.axe), auditFn, loadAxeSourceFn,
     });
     write(`${JSON.stringify(result, null, 1)}\n`);
     return 0;
@@ -446,6 +557,10 @@ module.exports = {
   loadedFonts,
   main,
   measureOverflow,
+  parseRequest,
+  redactUrl,
+  redactUrlsInText,
+  summarizeAccessibility,
   pageHeight,
   parseArgs,
   scrollThrough,

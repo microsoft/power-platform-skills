@@ -239,9 +239,9 @@ test('captureDesignReview records page errors with URLs and skips favicon and du
     events: {
       pageerror: (url) => (url.endsWith('/') ? [new Error('boom')] : []),
       console: () => [consoleMessage('error', 'Failed to load resource: the server responded with a status of 404'), consoleMessage('warning', 'ignored'), consoleMessage('error', 'Uncaught TypeError')],
-      response: () => [response(404, 'http://localhost:5173/missing.png'), response(404, 'http://localhost:5173/favicon.ico'), response(200, 'http://localhost:5173/ok.js')],
+      response: () => [response(404, 'http://localhost:5173/missing.png?sig=SECRET#frag'), response(404, 'http://localhost:5173/favicon.ico'), response(200, 'http://localhost:5173/ok.js')],
       requestfailed: () => [
-        failedRequest('https://cdn.example/font.woff2', 'net::ERR_NAME_NOT_RESOLVED'),
+        failedRequest('https://cdn.example/font.woff2?token=SECRET', 'net::ERR_NAME_NOT_RESOLVED'),
         failedRequest('https://images.example/lazy.jpg', 'net::ERR_ABORTED'),
         failedRequest('http://localhost:5173/favicon.ico', 'net::ERR_CONNECTION_REFUSED'),
       ],
@@ -254,6 +254,7 @@ test('captureDesignReview records page errors with URLs and skips favicon and du
   const failed = 'FAILED https://cdn.example/font.woff2 (net::ERR_NAME_NOT_RESOLVED)';
   assert.deepEqual(result.routes[0].desktop.pageErrors, ['boom', 'Uncaught TypeError', 'HTTP 404 http://localhost:5173/missing.png', failed]);
   assert.deepEqual(result.routes[1].desktop.pageErrors, ['Uncaught TypeError', 'HTTP 404 http://localhost:5173/missing.png', failed]);
+  assert.equal(JSON.stringify(result).includes('SECRET'), false, 'query strings and fragments are dropped from reported URLs');
   for (const page of fake.browser.pages) {
     for (const event of ['pageerror', 'console', 'response', 'requestfailed']) {
       assert.equal(page.listenerCount(event), 0, `${event} listeners must not accumulate across routes`);
@@ -537,4 +538,89 @@ test('captureDesignReview records no redirect when the page stays on the site', 
   });
   assert.equal(result.routes[0].desktop.redirectedTo, undefined);
   assert.deepEqual(result.summary.redirects, []);
+});
+
+test('redactUrl keeps origin and path and drops credentials, query, and fragment', () => {
+  assert.equal(review.redactUrl('https://contoso.blob.core.windows.net/media/hero.jpg?sv=2024&sig=abc#x'), 'https://contoso.blob.core.windows.net/media/hero.jpg');
+  assert.equal(review.redactUrl('https://user:pass@contoso.example/a'), 'https://contoso.example/a');
+  assert.equal(review.redactUrl('data:image/png;base64,AAAA'), 'data:');
+  assert.equal(review.redactUrl('not a url'), 'not a url');
+  assert.equal(
+    review.redactUrlsInText("Access to fetch at 'https://api.contoso.example/x?token=abc' from origin 'http://localhost:5173' has been blocked"),
+    "Access to fetch at 'https://api.contoso.example/x' from origin 'http://localhost:5173/' has been blocked",
+    'a bare origin is normalized with a trailing slash',
+  );
+});
+
+test('parseArgs reads a JSON request from stdin and keeps shell characters as data', () => {
+  // Characters a shell would act on, inside values a user or a page supplied.
+  const request = {
+    url: 'https://contoso.example/search?q=a&lang=en;x=$(echo hi)',
+    routes: ['/a;b', 'c&d', '/$HOME', "/it's"],
+    projectRoot: 'C:\\Sites\\Contoso & Co',
+    axe: true,
+  };
+  const parsed = review.parseArgs(['--input', '-'], { readStdin: () => JSON.stringify(request) });
+  assert.equal(parsed.error, undefined);
+  assert.equal(parsed.url, request.url);
+  assert.deepEqual(parsed.routes, ['/a;b', '/c&d', '/$HOME', "/it's"]);
+  assert.equal(parsed.projectRoot, request.projectRoot);
+  assert.equal(parsed.axe, true);
+
+  const discover = review.parseArgs(['--input', '-', '--axe'], { readStdin: () => '{"url":"https://contoso.example/","discover":6}' });
+  assert.deepEqual(discover, { checksOnly: false, axe: true, url: 'https://contoso.example', discover: 6 });
+});
+
+test('parseArgs fails closed on a malformed stdin request or an unsafe URL', () => {
+  const parse = (text) => review.parseArgs(['--input', '-'], { readStdin: () => text });
+  assert.match(parse('not json').error, /not valid JSON/);
+  assert.match(parse('["https://contoso.example"]').error, /must be a JSON object/);
+  assert.match(parse('{"url":"https://contoso.example","discover":6,"command":"x"}').error, /Unknown field.*command/);
+  assert.match(parse('{"url":"https://contoso.example","routes":"/a"}').error, /routes.*wrong type/);
+  assert.match(parse('{"url":"javascript:alert(1)","discover":6}').error, /http and https/);
+  assert.match(parse('{"url":"file:///etc/hosts","discover":6}').error, /http and https/);
+  assert.match(parse('{"url":"https://maker:pw@contoso.example","discover":6}').error, /user name and password/);
+  assert.match(review.parseArgs(['--url', 'ftp://contoso.example', '--discover', '3']).error, /http and https/);
+});
+
+test('captureDesignReview --axe audits the routes it captured, skipping sign-in redirects', async () => {
+  const login = 'https://login.microsoftonline.com/common/oauth2/authorize';
+  const fake = fakePlaywright({ redirects: { '/account': login } });
+  const audits = [];
+  const result = await review.captureDesignReview({
+    playwright: fake.playwright, channel: 'chrome', url: 'https://contoso.example', routes: ['/', '/contact', '/account'], outputDir: null, checksOnly: true,
+    axe: true,
+    loadAxeSourceFn: async () => 'VERIFIED_AXE',
+    auditFn: async (args) => {
+      audits.push(args);
+      return [
+        { route: '/', violations: [{ id: 'region', impact: 'moderate', nodes: [{}] }], passes: 9, incomplete: 0 },
+        { route: '/contact', violations: [{ id: 'label', impact: 'critical', nodes: [{}, {}] }], passes: 9, incomplete: 0 },
+      ];
+    },
+  });
+
+  assert.equal(audits.length, 1);
+  assert.deepEqual(audits[0].routes, ['/', '/contact'], 'the sign-in route is not audited');
+  assert.equal(audits[0].url, 'https://contoso.example');
+  assert.equal(audits[0].axeSource, 'VERIFIED_AXE');
+  assert.equal(result.accessibility.length, 2);
+  assert.deepEqual(result.summary.accessibility, {
+    violations: ['/contact: label (critical, 2 elements)', '/: region (moderate, 1 element)'],
+    unaudited: [],
+  });
+});
+
+test('captureDesignReview --axe reports an axe-core that fails verification instead of failing the capture', async () => {
+  const fake = fakePlaywright();
+  const result = await review.captureDesignReview({
+    playwright: fake.playwright, channel: 'chrome', url: 'http://localhost:5173', routes: ['/'], outputDir: null, checksOnly: true,
+    axe: true,
+    loadAxeSourceFn: async () => { throw new Error('does not match its pinned sha512 hash'); },
+    auditFn: async () => { throw new Error('must not run'); },
+  });
+  assert.deepEqual(result.accessibility, []);
+  assert.match(result.summary.accessibility.error, /pinned sha512 hash/);
+  assert.deepEqual(result.summary.accessibility.unaudited, ['/']);
+  assert.ok(result.routes[0].desktop, 'the capture itself still completes');
 });

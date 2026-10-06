@@ -6,12 +6,32 @@ const NAVIGATION_TIMEOUT_MS = 20000;
 // page as it is. Long enough for an SPA's first data fetches and web fonts on a normal site.
 const NETWORK_IDLE_GRACE_MS = 5000;
 
+// Validates a site URL taken from a user or a page before any browser is pointed at it.
+// Only http(s) is a website; file:, data:, and javascript: URLs are rejected. Credentials in
+// the URL are rejected too, because the URL is echoed into the JSON the agent reads.
+// Returns the URL without trailing slashes, ready to have a route appended.
+function normalizeSiteUrl(value) {
+  const text = String(value || '').trim();
+  let parsed;
+  try {
+    parsed = new URL(text);
+  } catch {
+    return { error: `Not a valid URL: ${text}` };
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { error: `Only http and https URLs can be reviewed, not ${parsed.protocol}` };
+  }
+  if (parsed.username || parsed.password) {
+    return { error: 'Remove the user name and password from the URL; the review cannot sign in.' };
+  }
+  return { url: text.replace(/\/+$/, '') };
+}
+
 // Turns a --routes value such as "/, about,/contact/" into ["/", "/about", "/contact/"].
 // A route without a leading slash would be glued onto the base URL as
 // "http://localhost:5173about", so every entry is anchored to the site root.
 function parseRouteList(value) {
-  return String(value || '')
-    .split(',')
+  return (Array.isArray(value) ? value.map(String) : String(value || '').split(','))
     .map((route) => route.trim())
     .filter(Boolean)
     .map((route) => (route.startsWith('/') ? route : `/${route}`));
@@ -35,5 +55,6 @@ module.exports = {
   NAVIGATION_TIMEOUT_MS,
   NETWORK_IDLE_GRACE_MS,
   gotoSettled,
+  normalizeSiteUrl,
   parseRouteList,
 };

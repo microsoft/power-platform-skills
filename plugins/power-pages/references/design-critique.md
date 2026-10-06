@@ -14,7 +14,9 @@ One command captures every route at desktop (1440 x 900) and mobile (390 x 844) 
 node "${PLUGIN_ROOT}/scripts/capture-design-review.js" --url <SITE_URL> --routes <comma-separated routes> --project-root "<PROJECT_ROOT>"
 ```
 
-`<SITE_URL>` is the dev server or a deployed site.
+`<SITE_URL>` is the dev server or a deployed site, `http` or `https` only.
+When the URL, the routes, or the folder came from a user or a page, send them as a JSON request on stdin (`--input -`) rather than as arguments, so the shell never interprets them - `exceptional-web-design` step 4 shows the form.
+`--axe` adds the axe-core accessibility audit of the captured pages (`accessibility`, summarized in `summary.accessibility`).
 For a site whose routes are unknown, `--discover <max-pages>` replaces `--routes` and collects same-origin pages from the start page's navigation, then its main content, then its footer.
 Without `--project-root`, or when the project has no `playwright` dev dependency, the script borrows the Playwright inside the plugin's pinned `@playwright/mcp` package - the one its MCP server runs, kept in npm's cache - so nothing is installed into the project. On a machine where that package is not cached yet, npm downloads it there on first use.
 
@@ -35,7 +37,7 @@ Automated checks per route and width:
 - **`fonts`** - the families that actually loaded. Both chosen families must be listed; a missing one means the font `<link>` names it wrong or requests a weight range from a static family (see [design-aesthetics.md](design-aesthetics.md#4-typography)).
 - **`syntheticWeights`** - headings (`h1` to `h6`) drawn at a weight their family does not ship, so the browser fakes it (e.g., `h1: Instrument Serif 700`). Set them at a weight the family publishes.
 - **`overflow`** - measured after scrolling through, so content revealed on scroll is included. `{ "overflow": true }` with an empty `culprits` list means a pseudo-element or a `100vw` width is responsible - look for `::before`/`::after` with negative offsets (e.g., a decorative frame corner at `right: -8px`). The fix belongs on the element; `overflow-x: hidden` on `html` or `body` only hides the break and clips content.
-- **`pageErrors`** - uncaught exceptions, console errors, HTTP error responses, and requests that failed outright (DNS or connection errors), each with its URL.
+- **`pageErrors`** - uncaught exceptions, console errors, HTTP error responses, and requests that failed outright (DNS or connection errors), each with its URL. URLs are cut to origin and path, because query strings can carry tokens.
 - **`redirectedTo`** - present when the route was sent to sign in: to another host (an identity provider) or to the site's own sign-in page. The headless capture cannot sign in, so those screenshots show the login page, not the design. Canonical redirects (http to https, with or without `www.`) are followed and not reported.
 
 `summary` lists the routes that overflow, have page errors, redirected, or failed to capture.

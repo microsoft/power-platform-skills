@@ -8,16 +8,25 @@
 //
 // Playwright comes from the project's dev dependency when --project-root has one, and
 // otherwise from the plugin's pinned @playwright/mcp package in npm's cache, so nothing is
-// installed into the project.
+// installed into the project. axe-core itself is downloaded once per run and injected only
+// when its bytes match the hash pinned below.
 // Output: JSON array of per-route results on stdout.
 // Exit code: 1 when a critical or serious violation is found, a route could not be audited, or
 // the audit cannot run at all; 0 only when every route was audited and passed.
 
 const { detectBrowser } = require('./lib/detect-browser');
 const { loadPlaywright } = require('./lib/load-playwright');
-const { gotoSettled, parseRouteList } = require('./lib/review-navigation');
+const { downloadPinned } = require('./lib/pinned-download');
+const { gotoSettled, normalizeSiteUrl, parseRouteList } = require('./lib/review-navigation');
 
-const AXE_CDN_URL = 'https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.10.3/axe.min.js';
+// axe-core 4.10.3 (MPL-2.0). The integrity value is the hash cdnjs publishes for this file,
+// and it matches axe.min.js in the axe-core@4.10.3 npm package byte for byte. To upgrade,
+// change the version in the URL and take the new hash from both of those sources.
+const AXE_SCRIPT = {
+  url: 'https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.10.3/axe.min.js',
+  integrity: 'sha512-Y6Vva0IT8gxKyqgZjlEfG76U48eXakSZ8UqY6vMQMe6xES2So8WuItGYcHi3tH1OAlMKjTWjSeN/5x2aysOXIQ==',
+  maxBytes: 2 * 1024 * 1024,
+};
 // WCAG 2.2 AA is cumulative, so the 2.0 and 2.1 A/AA tags are listed too.
 // See: https://github.com/dequelabs/axe-core/blob/develop/doc/API.md#axe-core-tags
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
@@ -27,14 +36,16 @@ const BLOCKING_IMPACTS = new Set(['critical', 'serious']);
 function parseArgs(argv) {
   const parsed = {};
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--url' && argv[i + 1]) parsed.url = argv[++i].replace(/\/+$/, '');
+    if (argv[i] === '--url' && argv[i + 1]) parsed.url = argv[++i];
     else if (argv[i] === '--routes' && argv[i + 1]) parsed.routes = parseRouteList(argv[++i]);
     else if (argv[i] === '--project-root' && argv[i + 1]) parsed.projectRoot = argv[++i];
   }
   if (!parsed.url || !parsed.routes || parsed.routes.length === 0) {
     return { error: 'Usage: node axe-audit.js --url <base-url> --routes <comma-separated> [--project-root <path>]' };
   }
-  return parsed;
+  const site = normalizeSiteUrl(parsed.url);
+  if (site.error) return { error: site.error };
+  return { ...parsed, url: site.url };
 }
 
 // Runs in the page after axe-core is injected.
@@ -53,22 +64,49 @@ async function runAxe(tags) {
   };
 }
 
-async function auditRoutes({ playwright, channel, url, routes }) {
+// axe reports each failing element as a markup snippet and a CSS selector, e.g.
+//   <img src="https://contoso.blob.core.windows.net/a.jpg?sv=2024&amp;sig=..." class="hero">
+//   a[href="/files/report.pdf?token=..."]
+// Query strings and fragments in URL attributes can carry tokens, and this output is read
+// into the agent's conversation, so they are dropped; the element stays identifiable by its
+// tag, path, and other attributes. srcset holds several comma-separated URLs, each cleaned.
+const URL_ATTRIBUTE = /\b(src|href|srcset|action|formaction|poster|data-src|data-href)(\s*=\s*)("[^"]*"|'[^']*')/gi;
+
+function stripUrlQueries(text) {
+  return String(text).replace(URL_ATTRIBUTE, (_, name, equals, quoted) => `${name}${equals}${quoted.replace(/[?#][^\s,"']*/g, '')}`);
+}
+
+function redactAxeResult(result) {
+  return {
+    ...result,
+    violations: result.violations.map((v) => ({
+      ...v,
+      nodes: v.nodes.map((n) => ({ ...n, html: stripUrlQueries(n.html), target: (n.target || []).map(stripUrlQueries) })),
+    })),
+  };
+}
+
+// Downloads axe-core and returns its source only when it matches the pinned hash.
+async function loadAxeSource({ download = downloadPinned } = {}) {
+  return (await download(AXE_SCRIPT)).toString('utf8');
+}
+
+async function auditRoutes({ playwright, channel, url, routes, axeSource }) {
   const browser = await playwright.chromium.launch({ channel, headless: true });
   const results = [];
   try {
-    // A deployed site can send a Content-Security-Policy that forbids scripts from the axe
-    // CDN, which would block the injected <script>. Bypassing CSP for this audit-only
-    // browser lets the same command audit a dev server and a live site alike.
+    // axe is injected as an inline <script> holding the verified source. A deployed site's
+    // Content-Security-Policy usually forbids inline scripts, so this audit-only browser
+    // bypasses CSP; the script it runs is the hash-checked axe-core and nothing else.
     const context = await browser.newContext({ bypassCSP: true });
     const page = await context.newPage();
     for (const route of routes) {
       const pageUrl = `${url}${route}`;
       try {
         await gotoSettled(page, pageUrl, { settleMs: SETTLE_MS });
-        await page.addScriptTag({ url: AXE_CDN_URL });
+        await page.addScriptTag({ content: axeSource });
         await page.waitForFunction(() => typeof window.axe !== 'undefined', null, { timeout: 10000 });
-        results.push({ route, url: pageUrl, ...(await page.evaluate(runAxe, WCAG_TAGS)) });
+        results.push({ route, url: pageUrl, ...redactAxeResult(await page.evaluate(runAxe, WCAG_TAGS)) });
       } catch (error) {
         results.push({ route, url: pageUrl, error: error.message, violations: [], passes: 0, incomplete: 0 });
       }
@@ -89,11 +127,19 @@ async function main(argv = process.argv.slice(2), {
   write = (s) => process.stdout.write(s),
   writeError = (s) => process.stderr.write(s),
   loadPlaywrightFn = loadPlaywright,
+  loadAxeSourceFn = loadAxeSource,
   channel = detectBrowser,
 } = {}) {
   const args = parseArgs(argv);
   if (args.error) {
     writeError(`${args.error}\n`);
+    return 1;
+  }
+  let axeSource;
+  try {
+    axeSource = await loadAxeSourceFn();
+  } catch (error) {
+    writeError(`axe-core could not be loaded: ${error.message}\n`);
     return 1;
   }
   const playwright = loadPlaywrightFn(args.projectRoot);
@@ -102,7 +148,7 @@ async function main(argv = process.argv.slice(2), {
     return 1;
   }
   try {
-    const results = await auditRoutes({ playwright, channel: channel(), url: args.url, routes: args.routes });
+    const results = await auditRoutes({ playwright, channel: channel(), url: args.url, routes: args.routes, axeSource });
     write(`${JSON.stringify(results, null, 2)}\n`);
     return hasBlockingResult(results) ? 1 : 0;
   } catch (error) {
@@ -111,7 +157,7 @@ async function main(argv = process.argv.slice(2), {
   }
 }
 
-module.exports = { AXE_CDN_URL, WCAG_TAGS, auditRoutes, hasBlockingResult, main, parseArgs, runAxe };
+module.exports = { AXE_SCRIPT, WCAG_TAGS, auditRoutes, hasBlockingResult, loadAxeSource, main, parseArgs, runAxe, stripUrlQueries };
 
 if (require.main === module) {
   main().then((code) => process.exit(code));

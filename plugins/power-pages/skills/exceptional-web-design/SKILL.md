@@ -84,7 +84,7 @@ Check what is available first:
 Use `AskUserQuestion` - *"How should I see the site running?"* - offering only the available options, the first one marked **(Recommended)**:
 
 - **Start the dev server** - run `npm run dev` from `<PROJECT_ROOT>` with `Bash` in the background, and take `SITE_URL` from the local URL it prints (typically `http://localhost:5173` for Vite, `http://localhost:4200` for Angular, `http://localhost:4321` for Astro). Dev servers write only their own caches, which a site's `.gitignore` normally excludes; step 6 confirms it.
-- **Use the deployed site** - read `id` from `.powerpages-site/website.yml` and run `node "${PLUGIN_ROOT}/scripts/website.js" --websiteId "<id>"`; `WebsiteUrl` is `SITE_URL`. When it exits `2` (sign-in required) or prints `null`, ask the user for the URL.
+- **Use the deployed site** - read `id` from `.powerpages-site/website.yml` - use it only when it is a GUID - and run `node "${PLUGIN_ROOT}/scripts/website.js" --websiteId "<id>"`; `WebsiteUrl` is `SITE_URL`. When it exits `2` (sign-in required) or prints `null`, ask the user for the URL.
 - **Review the code only** - no screenshots. The review rests on the source alone and says so.
 
 The user can also paste a URL where the site already runs.
@@ -108,20 +108,27 @@ Skip this step in code-only mode.
 
 Choose the routes:
 
-- With `PROJECT_ROOT`, take them from the router (`${PLUGIN_ROOT}/references/framework-conventions.md`, Route Discovery) and pass `--routes`.
-- With only a URL, pass `--discover 6` to collect pages from the start page's navigation.
+- With `PROJECT_ROOT`, take them from the router (`${PLUGIN_ROOT}/references/framework-conventions.md`, Route Discovery) as `routes`.
+- With only a URL, set `discover` to 6 to collect pages from the start page's navigation.
 - Pages the user named come first either way. Keep the list to eight pages or fewer - each page adds four images to the conversation.
 
-Run the capture, then the accessibility audit on the capture's `baseUrl` and the routes it returned (`routes[].route`) - discovered routes are paths from the site's origin, so `baseUrl` can differ from `SITE_URL`.
-Add `--project-root "<PROJECT_ROOT>"` to both only when `PROJECT_ROOT` is set:
+Run one command: it captures every page and, with `--axe`, runs the accessibility audit on the pages it captured.
+Send the site URL, the routes, and the folder as a JSON request on stdin inside a quoted heredoc, exactly as below - never as command-line arguments.
+They come from the user or from a page, and a shell would act on characters such as `&`, `;`, `$`, and quotes; the quoted `'REQUEST'` delimiter turns off all expansion, so they arrive as data.
+Write each value as a JSON string (escape `"` and `\`), and include only the fields that apply - `url`, then `routes` (an array) or `discover`, then `projectRoot` when `PROJECT_ROOT` is set:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/capture-design-review.js" --url <SITE_URL> --routes <routes>   # or --discover 6
-node "${PLUGIN_ROOT}/scripts/axe-audit.js" --url <baseUrl> --routes <captured routes>
+node "${PLUGIN_ROOT}/scripts/capture-design-review.js" --input - --axe <<'REQUEST'
+{"url": "<SITE_URL>", "routes": ["/", "/about"], "projectRoot": "<PROJECT_ROOT>"}
+REQUEST
 ```
 
-The audit exits `1` when it finds a critical or serious violation or cannot audit a route; that is a finding, not a failed run.
-A route whose result has `error` was not audited - list it under **Not reviewed**.
+With only a URL, the request line is `{"url": "<SITE_URL>", "discover": 6}`.
+
+The script accepts only `http` and `https` URLs without a user name or password, and rejects any other field; on a rejection, fix the request rather than moving values onto the command line.
+Discovered routes are paths from the site's origin, so the output's `baseUrl` can differ from `SITE_URL`.
+The audit results are in `accessibility`, one entry per audited page, and `summary.accessibility.violations` lists them one per line, critical first.
+A page in `summary.accessibility.unaudited`, or `summary.accessibility.error` set (axe-core could not be downloaded or failed its hash check), means the audit did not run there - list those pages under **Not reviewed**.
 Open every path in the capture's `summary.images` in parallel, in one turn.
 
 When `summary.redirects` lists routes, those pages sent the browser to sign in and their screenshots show a login page.
@@ -134,7 +141,7 @@ First remove that capture (`--cleanup <outputDir>`), then:
 - With `PROJECT_ROOT`, return to the step 2 gate and ask again, offering only the options not yet tried - the dev server when it is available, and code only - and continue from step 4 with the answer. When the dev server also redirects every route, continue in code-only mode.
 - Without `PROJECT_ROOT`, tell the user the capture cannot sign in, suggest pointing the review at the project folder so it can use a local dev server, and stop.
 
-**Done when** every image is open, and the audit results and the capture's automated checks are noted.
+**Done when** every image is open, and the accessibility results and the capture's automated checks are noted.
 
 ## 5. Judge
 
