@@ -192,6 +192,11 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
           <div class="card" id="ovCategoryBox" style="line-height:1.7;"></div>
         </div>
 
+        <div id="ovPartialWrap" style="display:none;">
+          <h3>Verdict</h3>
+          <div class="card" style="line-height:1.7;"><strong>Partial audit:</strong> the data model was not available, so no verdict or scores were produced. The issues listed were found from the permissions, web roles, site code, and site settings.</div>
+        </div>
+
         <div id="ovReportWrap" style="display:none;">
           <h3>Full evaluation reports</h3>
           <div class="card" id="ovReportBox" style="line-height:1.9;"></div>
@@ -427,7 +432,11 @@ function renderInventory() {
 
 // Render grader score into the Overview tab (no separate scorecard tab)
 function renderOverviewScore() {
-  if (!SCORECARD) return;
+  if (!SCORECARD) {
+    var partial = document.getElementById('ovPartialWrap');
+    if (partial) partial.style.display = '';
+    return;
+  }
   var S = SCORECARD;
 
   var ovWrap = document.getElementById('ovScoreWrap');
@@ -457,7 +466,9 @@ function renderOverviewScore() {
   var cbox = document.getElementById('ovCategoryBox'); if (cbox) cbox.innerHTML = catHtml;
 
   // Full evaluation report paths
-  var paths = S.reportPaths || [];
+  var paths = (Array.isArray(S.reportPaths) ? S.reportPaths : []).filter(function(p){
+    return p && typeof p.path === 'string' && p.path;
+  });
   var rWrap = document.getElementById('ovReportWrap');
   var rBox = document.getElementById('ovReportBox');
   if (paths.length && rBox) {

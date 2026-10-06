@@ -68,7 +68,9 @@ test('renders a report with a scorecard that passes validation', (t) => {
 test('renders a null scorecard when scoring was skipped', (t) => {
   const { result, outputPath } = render(t, { ...SAMPLE_DATA, SCORECARD_DATA: null });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(fs.readFileSync(outputPath, 'utf8'), /const SCORECARD = null;/);
+  const html = fs.readFileSync(outputPath, 'utf8');
+  assert.match(html, /const SCORECARD = null;/);
+  assert.match(html, /id="ovPartialWrap"[\s\S]*Partial audit:/);
 });
 
 test('fails when SCORECARD_DATA is missing', (t) => {

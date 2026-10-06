@@ -205,6 +205,8 @@ Purely mechanical cross-checks over the parsed YAML + data model + Web API artif
 
 ### 2.6 Freeze the Evidence Ledger
 
+`<OUTPUT_DIR>` is `<PROJECT_ROOT>/docs/` when working in a website (a project root with `powerpages.config.json`); otherwise it is the system temp directory. The temporary files and the final report all go there.
+
 Before running judgment-based checks, write a temporary `<OUTPUT_DIR>/audit-evidence.json` containing the normalized facts gathered so far: roles, permissions, data-model tables/columns, service operations, route/component reachability, capability matrix, lookup/expand usage, client-side row filters, implementation-plan claims, authentication reachability, and preflight issues. Sort tables, permissions, routes, and capabilities by stable identifiers.
 
 Steps 4–6 MUST reason from this ledger instead of rescanning and selectively rediscovering evidence. If live Dataverse discovery adds facts in Step 3, append those facts and rewrite the ledger once before Step 4. Do not change a `reachability` classification during scoring unless new evidence is added to the ledger. Delete `audit-evidence.json` after the final HTML report passes validation.
@@ -601,6 +603,8 @@ For each major issue decide `rootCause` and write `explanation`; they become the
 - **If working in context of a website** (project root with `powerpages.config.json` exists): write to `<PROJECT_ROOT>/docs/permissions-audit.html`
 - **Otherwise**: write to the system temp directory
 
+This folder is the `<OUTPUT_DIR>` defined in Step 2.6.
+
 ### 7.2 Prepare Data
 
 **Do NOT generate HTML manually or read/modify the template yourself.** Use the `render-audit-report.js` script which mechanically reads the template and replaces placeholder tokens with your data.
@@ -872,5 +876,5 @@ Map each Step-4 finding into a dimension, then apply the severity policy above t
 - **Deterministic API calls**: Always use the Node.js scripts (`query-table-lookups.js`, `query-table-relationships.js`) for Dataverse API queries — never use inline PowerShell `Invoke-RestMethod` calls.
 - **No questions during analysis**: Autonomously gather all data, run checks, score, and present findings. Only ask the user at the end about fixing issues.
 - **Security**: Never log or display auth tokens. The scripts handle token acquisition internally via `getAuthToken()`.
-- **Graceful degradation**: If Dataverse API scripts fail (exit code 1), skip API-dependent checks (H/H2 append/appendto validation, I parent chain integrity) and note in the report which checks were skipped. If scoring inputs are too thin (e.g., no data model), still emit the audit findings; set `SCORECARD_DATA` to `null` rather than fabricating a score.
+- **Graceful degradation**: If Dataverse API scripts fail (exit code 1), skip API-dependent checks (H/H2 append/appendto validation, I parent chain integrity) and note in the report which checks were skipped. If the data-model manifest is missing, still emit the audit findings; set `SCORECARD_DATA` to `null` rather than fabricating a score — the report then shows a partial-audit notice instead of a verdict and scores.
 - **Don't invent files or tables** not present in the inputs.
