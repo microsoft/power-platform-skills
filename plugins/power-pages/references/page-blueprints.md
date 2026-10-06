@@ -1,7 +1,7 @@
 # Page Blueprints
 
 What goes on each page of a Power Pages code site, and in what order.
-Used by `create-site` Phase 3 (page narratives and hero concept) and Phase 5 (building pages).
+Used by `create-site` Phase 3 (page narratives and hero concept) and Phase 5 (building pages), and by `exceptional-web-design` to judge an existing site's pages.
 The leading words - **first impression**, **focal point**, **design thesis**, **signature moment**, **point of doubt**, **template look** - are defined in [`design-aesthetics.md`](design-aesthetics.md#the-bar).
 
 ## The first screen

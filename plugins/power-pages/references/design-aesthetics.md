@@ -1,11 +1,12 @@
 # Design Aesthetics Reference
 
-The design system for Power Pages code sites built by `create-site`.
-Phase 3 uses it to write the experience brief and pick tokens, Phase 4 to fill the plan, and Phase 5 to build.
+The design system for Power Pages code sites.
+`create-site` uses it to write the experience brief and pick tokens (Phase 3), fill the plan (Phase 4), and build (Phase 5).
+`exceptional-web-design` uses it as the standard an existing site is reviewed against.
 Two sibling references complete it:
 
 - [`page-blueprints.md`](page-blueprints.md) - what goes on each page and in what order: first screen, hero patterns, narrative blueprints, section rhythm, copy.
-- [`design-critique.md`](design-critique.md) - how the finished site is judged in Phases 5.2 and 5.7: the capture, the two-pass critique, and the rubric.
+- [`design-critique.md`](design-critique.md) - how a site is judged from screenshots: the capture, the two-pass critique, and the rubric.
 
 ## The bar
 

@@ -11,9 +11,8 @@ const os = require('node:os');
 const path = require('path');
 const { detectBrowser } = require('./lib/detect-browser');
 const { createPrivateTempDir, removeDir, sweepStaleTempDirs } = require('./lib/private-temp-dir');
+const { PLAYWRIGHT_MCP_PACKAGE, resolveNpxCli } = require('./lib/playwright-mcp-package');
 
-const PLAYWRIGHT_MCP_VERSION = '0.0.78';
-const PLAYWRIGHT_MCP_PACKAGE = `@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}`;
 const OUTPUT_DIR_ENV = 'PLAYWRIGHT_MCP_OUTPUT_DIR';
 const OUTPUT_DIR_PREFIX = 'power-pages-playwright-mcp-';
 const FORWARDED_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP'];
@@ -89,30 +88,6 @@ function sweepStaleOutputDirs({ tmpdir = os.tmpdir, homedir = os.homedir, ...opt
   for (const root of outputDirRoots({ tmpdir, homedir })) {
     sweepStaleTempDirs(OUTPUT_DIR_PREFIX, { ...options, tmpdir: () => root });
   }
-}
-
-function resolveNpxCli({
-  execPath = process.execPath,
-  platform = process.platform,
-  existsSync = fs.existsSync,
-} = {}) {
-  // Windows exposes npx as a .cmd shim that cannot run with shell:false. Invoking
-  // npm's JavaScript entrypoint through Node preserves raw argv on every platform.
-  const pathApi = platform === 'win32' ? path.win32 : path.posix;
-  const nodeDir = pathApi.dirname(execPath);
-  const candidates = [
-    pathApi.resolve(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npx-cli.js'),
-    pathApi.join(nodeDir, 'node_modules', 'npm', 'bin', 'npx-cli.js'),
-  ];
-  const match = candidates.find((candidate) => existsSync(candidate));
-
-  if (!match) {
-    throw new Error(
-      'Could not locate npm/bin/npx-cli.js beside the current Node installation. Install Node.js with npm before starting the Playwright MCP server.',
-    );
-  }
-
-  return match;
 }
 
 function launch({

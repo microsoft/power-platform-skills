@@ -1,24 +1,26 @@
 #!/usr/bin/env node
 
-// Captures a create-site design review in one call: every route at desktop (1440x900) and
+// Captures a design review in one call: every route at desktop (1440x900) and
 // mobile (390x844), with screenshots plus the font, overflow, and page-error checks from
 // references/design-critique.md. One call replaces the dozens of single-step browser tool
 // calls (navigate, resize, scroll, screenshot, evaluate) that would otherwise each re-send
 // the whole conversation.
 //
 // Usage:
-//   node capture-design-review.js --url http://localhost:5173 --routes /,/about --project-root <path> [--checks-only]
+//   node capture-design-review.js --url http://localhost:5173 --routes /,/about [--project-root <path>] [--checks-only]
+//   node capture-design-review.js --url https://contoso.powerappsportals.com --discover 6
 //   node capture-design-review.js --cleanup <outputDir>
 //
-// Prerequisites: npm install --save-dev playwright (in the project directory).
+// Playwright comes from the project's dev dependency when --project-root has one, and
+// otherwise from the plugin's pinned @playwright/mcp package, so nothing is installed.
 // Output: JSON on stdout. Exit 0 when the capture ran - findings are data, not failures;
 // exit 1 on usage errors or when no browser can be launched.
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { detectBrowser } = require('../../../scripts/lib/detect-browser');
-const { loadProjectPlaywright } = require('../../../scripts/lib/load-project-playwright');
-const { createPrivateTempDir, isOwnTempDir, removeDir, sweepStaleTempDirs } = require('../../../scripts/lib/private-temp-dir');
+const { detectBrowser } = require('./lib/detect-browser');
+const { loadPlaywright } = require('./lib/load-playwright');
+const { createPrivateTempDir, isOwnTempDir, removeDir, sweepStaleTempDirs } = require('./lib/private-temp-dir');
 
 // Screenshots go to a private temp directory so they never land in the user's project.
 const OUTPUT_DIR_PREFIX = 'power-pages-design-review-';
@@ -43,13 +45,16 @@ function parseArgs(argv) {
     else if (arg === '--routes' && argv[i + 1]) parsed.routes = argv[++i].split(',').map((r) => r.trim()).filter(Boolean);
     else if (arg === '--project-root' && argv[i + 1]) parsed.projectRoot = argv[++i];
     else if (arg === '--checks-only') parsed.checksOnly = true;
+    else if (arg === '--discover' && argv[i + 1]) parsed.discover = Number.parseInt(argv[++i], 10);
     else if (arg === '--cleanup' && argv[i + 1]) parsed.cleanup = argv[++i];
   }
   if (parsed.cleanup) {
     return parsed;
   }
-  if (!parsed.url || !parsed.routes || parsed.routes.length === 0 || !parsed.projectRoot) {
-    return { error: 'Usage: node capture-design-review.js --url <base-url> --routes <comma-separated> --project-root <path> [--checks-only]\n       node capture-design-review.js --cleanup <outputDir>' };
+  const hasRoutes = Boolean(parsed.routes && parsed.routes.length > 0);
+  const hasDiscover = Number.isInteger(parsed.discover) && parsed.discover > 0;
+  if (!parsed.url || hasRoutes === hasDiscover) {
+    return { error: 'Usage: node capture-design-review.js --url <base-url> (--routes <comma-separated> | --discover <max-pages>) [--project-root <path>] [--checks-only]\n       node capture-design-review.js --cleanup <outputDir>' };
   }
   return parsed;
 }
@@ -140,6 +145,30 @@ function pageHeight() {
   return document.documentElement.scrollHeight;
 }
 
+// Collects the pages a visitor can reach from the start page: primary navigation first, then
+// main content, then the footer, same origin only. Sign-out links are skipped so a review
+// never ends a signed-in session, and file links are skipped because they are not pages.
+function discoverLinks(limit) {
+  const start = location.pathname.replace(/\/+$/, '') || '/';
+  const routes = [start];
+  const skip = /(sign-?out|log-?out|log-?off)|\.(pdf|png|jpe?g|gif|svg|webp|zip|docx?|xlsx?|pptx?)$/i;
+  for (const selector of ['header a[href], nav a[href]', 'main a[href]', 'footer a[href]']) {
+    for (const anchor of document.querySelectorAll(selector)) {
+      let url;
+      try {
+        url = new URL(anchor.getAttribute('href'), location.href);
+      } catch {
+        continue;
+      }
+      if (url.origin !== location.origin || skip.test(url.pathname)) continue;
+      const route = url.pathname.replace(/\/+$/, '') || '/';
+      if (!routes.includes(route)) routes.push(route);
+      if (routes.length >= limit) return routes;
+    }
+  }
+  return routes;
+}
+
 // --- Capture ---
 
 async function captureRouteAtWidth({ browser, page, url, route, width, outputDir, checksOnly }) {
@@ -174,6 +203,10 @@ async function captureRouteAtWidth({ browser, page, url, route, width, outputDir
   try {
     await page.goto(`${url}${route}`, { waitUntil: 'networkidle', timeout: NAVIGATION_TIMEOUT_MS });
     await page.waitForTimeout(SETTLE_MS);
+    // A private site or a signed-in page redirects to an identity provider. The headless
+    // browser cannot sign in, so the screenshots show a login page rather than the design.
+    const landed = new URL(page.url()).origin;
+    if (landed !== new URL(url).origin) result.redirectedTo = landed;
     if (!checksOnly) {
       // The first screen is captured before scrolling so it shows what a visitor sees at load.
       result.viewport = path.join(outputDir, `${slug}-${width}.png`);
@@ -212,16 +245,34 @@ async function captureRouteAtWidth({ browser, page, url, route, width, outputDir
   return result;
 }
 
-async function captureDesignReview({ playwright, channel, url, routes, outputDir, checksOnly }) {
+async function captureDesignReview({ playwright, channel, url, routes, discover, outputDir, checksOnly }) {
   const browser = await playwright.chromium.launch({ channel, headless: true });
-  const results = routes.map((route) => ({ route }));
+  let base = url;
+  let results = (routes || []).map((route) => ({ route }));
   try {
+    if (discover) {
+      // Discovered links are absolute paths, so captures use the origin as their base; a
+      // start URL with a path (e.g. /en-US/) keeps that path as the first route.
+      const start = new URL(url);
+      base = start.origin;
+      const page = await browser.newPage({ viewport: VIEWPORTS.desktop });
+      try {
+        await page.goto(url, { waitUntil: 'networkidle', timeout: NAVIGATION_TIMEOUT_MS });
+        // Links on an identity provider's login page are not the site's pages, so a
+        // redirected start page yields only itself; its capture records the redirect.
+        results = new URL(page.url()).origin === start.origin
+          ? (await page.evaluate(discoverLinks, discover)).map((route) => ({ route }))
+          : [{ route: start.pathname.replace(/\/+$/, '') || '/' }];
+      } finally {
+        await page.close();
+      }
+    }
     for (const [width, viewport] of Object.entries(VIEWPORTS)) {
       const context = await browser.newContext({ viewport, deviceScaleFactor: 1 });
       const page = await context.newPage();
       try {
         for (const entry of results) {
-          entry[width] = await captureRouteAtWidth({ browser, page, url, route: entry.route, width, outputDir, checksOnly });
+          entry[width] = await captureRouteAtWidth({ browser, page, url: base, route: entry.route, width, outputDir, checksOnly });
         }
       } finally {
         await context.close();
@@ -230,11 +281,11 @@ async function captureDesignReview({ playwright, channel, url, routes, outputDir
   } finally {
     await browser.close();
   }
-  return { outputDir: checksOnly ? null : outputDir, routes: results, summary: summarize(results) };
+  return { outputDir: checksOnly ? null : outputDir, baseUrl: base, routes: results, summary: summarize(results) };
 }
 
 function summarize(results) {
-  const summary = { fonts: [], syntheticWeights: [], overflow: [], pageErrors: [], captureErrors: [], images: [] };
+  const summary = { fonts: [], syntheticWeights: [], overflow: [], pageErrors: [], captureErrors: [], redirects: [], images: [] };
   const fonts = new Set();
   for (const entry of results) {
     for (const width of Object.keys(VIEWPORTS)) {
@@ -247,6 +298,7 @@ function summarize(results) {
       if (r.overflow && r.overflow.overflow) summary.overflow.push(`${entry.route} @ ${width}`);
       if (r.pageErrors && r.pageErrors.length) summary.pageErrors.push(`${entry.route} @ ${width}: ${r.pageErrors.length}`);
       if (r.captureError) summary.captureErrors.push(`${entry.route} @ ${width}: ${r.captureError}`);
+      if (r.redirectedTo) summary.redirects.push(`${entry.route} @ ${width} -> ${r.redirectedTo}`);
       for (const key of ['viewport', 'fullPage', 'sheet']) {
         if (r[key]) summary.images.push(r[key]);
       }
@@ -259,7 +311,7 @@ function summarize(results) {
 async function main(argv = process.argv.slice(2), {
   write = (s) => process.stdout.write(s),
   writeError = (s) => process.stderr.write(s),
-  loadPlaywright = loadProjectPlaywright,
+  loadPlaywrightFn = loadPlaywright,
   channel = detectBrowser,
 } = {}) {
   const args = parseArgs(argv);
@@ -277,14 +329,16 @@ async function main(argv = process.argv.slice(2), {
     return 0;
   }
   sweepStaleTempDirs(OUTPUT_DIR_PREFIX);
-  const playwright = loadPlaywright(args.projectRoot);
+  const playwright = loadPlaywrightFn(args.projectRoot);
   if (!playwright) {
-    writeError('playwright not found. Run: npm install --save-dev playwright\n');
+    writeError('Playwright could not be loaded from the project or from the pinned @playwright/mcp package. Check that npm can reach its registry.\n');
     return 1;
   }
   const outputDir = args.checksOnly ? null : createPrivateTempDir(OUTPUT_DIR_PREFIX);
   try {
-    const result = await captureDesignReview({ playwright, channel: channel(), url: args.url, routes: args.routes, outputDir, checksOnly: args.checksOnly });
+    const result = await captureDesignReview({
+      playwright, channel: channel(), url: args.url, routes: args.routes, discover: args.discover, outputDir, checksOnly: args.checksOnly,
+    });
     write(`${JSON.stringify(result, null, 1)}\n`);
     return 0;
   } catch (error) {
@@ -305,6 +359,7 @@ module.exports = {
   buildMobileSheet,
   captureDesignReview,
   findSyntheticWeights,
+  discoverLinks,
   loadedFonts,
   main,
   measureOverflow,

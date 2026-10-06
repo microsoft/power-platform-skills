@@ -40,7 +40,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 34 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, and platform migrations. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 35 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, and platform migrations. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -382,6 +382,20 @@ Surfaces PAC CLI upload errors and Dataverse async operation errors, pattern-mat
 - Offers auto-fixes with explicit per-fix user confirmation
 
 ### Polish
+
+#### `/exceptional-web-design`
+
+> "Review the design of https://contoso.powerappsportals.com"
+>
+> "Why does my site look generic? What should I change?"
+
+Reviews the design of an existing site - a live URL or a local project folder - and tells you what to change, without changing anything.
+It captures each page at desktop and mobile widths, runs an accessibility audit, and scores the site against the same ten-category design rubric `/create-site` builds to.
+The result is a scorecard plus prioritized recommendations, each naming the page and element, why it matters, and the exact change, with a redesign direction when the site needs more than fixes.
+
+- Works from a URL (pages are discovered from the site's navigation) or from a project folder (local dev server, deployed site, or code only)
+- Read-only: screenshots go to a temporary folder outside the project, nothing is installed, and the folder is checked for changes at the end
+- Pages that require sign-in are listed as not reviewed, because the capture cannot sign in
 
 #### `/add-seo`
 

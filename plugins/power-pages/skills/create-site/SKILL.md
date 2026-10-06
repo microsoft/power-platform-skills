@@ -20,7 +20,7 @@ Guide the user through creating a complete, production-quality Power Pages code 
 
 ## Core Principles
 
-- **Design for the first impression**: The site must make the user say "wow" the moment the Home page replaces the scaffold, and keep earning it on every page. Once the user answers the aesthetic, mood, and brand questions, make confident decisions about fonts, colors, layouts, imagery, and motion yourself - the design references (`design-aesthetics.md`, `page-blueprints.md`, `design-critique.md` under `${PLUGIN_ROOT}/skills/create-site/references/`) define the bar, and your own taste fills the rest.
+- **Design for the first impression**: The site must make the user say "wow" the moment the Home page replaces the scaffold, and keep earning it on every page. Once the user answers the aesthetic, mood, and brand questions, make confident decisions about fonts, colors, layouts, imagery, and motion yourself - the design references (`design-aesthetics.md`, `page-blueprints.md`, `design-critique.md` under `${PLUGIN_ROOT}/references/`) define the bar, and your own taste fills the rest.
 - **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the path-agnostic upfront tasks first, then append branch-specific tasks after the creation path is selected.
 - **Scaffold early, design with intention**: Get the dev server running immediately after discovery so the user has something to look at. Then plan the design and features while the scaffold is live — apply the chosen aesthetic during implementation.
 - **Live preview feedback loop**: The dev server MUST be running before any customization begins. Browse the site via Playwright (`browser_navigate` + `browser_snapshot`) to verify the structure of every significant change. Visual design review captures every page with one script call and opens the screenshots in one turn (see [5.7](#57-design-critique-pass)); use Playwright MCP screenshots only for brand extraction in Phase 3.
@@ -854,7 +854,7 @@ Immediately after the dev server starts, verify the scaffold is working:
 
    The `marker` string is the comment tag Phase 5 emits into the page source as a reserved anchor that `/add-ai-webapi` later finds. Keep the shape uniform — one marker per placement, always the same tag, so the follow-up skill's explore step can grep for them deterministically.
 
-5. Read the design references: `${PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md` and `${PLUGIN_ROOT}/skills/create-site/references/page-blueprints.md`.
+5. Read the design references: `${PLUGIN_ROOT}/references/design-aesthetics.md` and `${PLUGIN_ROOT}/references/page-blueprints.md`.
 6. **Write the experience brief** (design-aesthetics.md section 1) - audience and job, primary and secondary action, principal doubt, proof strategy, design thesis, hero concept, and signature moment. Resolve the brand source first (section 2): for `website`, extract the brand from the URL with the Playwright snippet there; for `assets`, build the palette around the supplied colors; for `fresh`, start from the matching cell of the aesthetic x mood map (section 11). Record the display and body fonts, color direction, geometry, and motion direction.
 7. Analyze requirements and determine needed components. Plan each page's content as narrative beats from `page-blueprints.md`, in order, one line per section with its purpose. If `AI_SUMMARY_PLACEMENTS` from step 4 implies a page that wasn't already in the plan (e.g., a `CaseDetail` page for a data-summarization pick on the support-case table), add it to the page list now. Present the component plan to the user as a table:
 
@@ -881,7 +881,7 @@ Immediately after the dev server starts, verify the scaffold is working:
 
 ### 4.1 Read the Design References
 
-Read `${PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md` and `${PLUGIN_ROOT}/skills/create-site/references/page-blueprints.md` if they are not already in context. Every field you populate below must trace back to the experience brief from Phase 3.
+Read `${PLUGIN_ROOT}/references/design-aesthetics.md` and `${PLUGIN_ROOT}/references/page-blueprints.md` if they are not already in context. Every field you populate below must trace back to the experience brief from Phase 3.
 
 > **AI Readiness in the plan.** If `AI_SUMMARY_PLACEMENTS` from Phase 3 is non-empty, reflect each placement in the matching `PAGES_DATA` entry's `description` or `content` — e.g., *"Reserved slot for an AI summary card; populated later by `/add-ai-webapi`. The page ships without AI."* This keeps the user's expectation honest: the site does not depend on generative-AI features being enabled on the tenant, and there is no "Run /add-ai-webapi" placeholder visible to end-users. If `AI_SUMMARY_PLACEMENTS` is empty, omit any AI references from the plan.
 
@@ -975,7 +975,7 @@ Use `AskUserQuestion`:
 
 > **Prerequisite:** The dev server MUST already be running and verified via Playwright (completed in Phase 2). If it is not, go back and complete Phase 2.
 >
-> **Design references:** Build from `${PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md` (the design system) and `${PLUGIN_ROOT}/skills/create-site/references/page-blueprints.md` (page narratives, hero patterns, copy). Read them now if they are not already in context. All pages and components carry the chosen typography, color tokens, imagery, motion, and backgrounds from the start - do NOT build with neutral styling first and redesign later.
+> **Design references:** Build from `${PLUGIN_ROOT}/references/design-aesthetics.md` (the design system) and `${PLUGIN_ROOT}/references/page-blueprints.md` (page narratives, hero patterns, copy). Read them now if they are not already in context. All pages and components carry the chosen typography, color tokens, imagery, motion, and backgrounds from the start - do NOT build with neutral styling first and redesign later.
 
 **Actions**:
 
@@ -1080,12 +1080,12 @@ Once the scaffold loader is gone, `public/scaffold-status.json` is just dead wei
 
 ### 5.7 Design Critique Pass
 
-Judge the site from screenshots against `${PLUGIN_ROOT}/skills/create-site/references/design-critique.md` (read it once, at the first review). Every tool call re-sends the whole conversation, so the review is built to take few calls: one script call captures every route at both widths and runs the automated checks, and one turn opens all the screenshots in parallel. Single-step browser calls (navigate, resize, screenshot, evaluate per page) cost many times more for the same review.
+Judge the site from screenshots against `${PLUGIN_ROOT}/references/design-critique.md` (read it once, at the first review). Every tool call re-sends the whole conversation, so the review is built to take few calls: one script call captures every route at both widths and runs the automated checks, and one turn opens all the screenshots in parallel. Single-step browser calls (navigate, resize, screenshot, evaluate per page) cost many times more for the same review.
 
 **Running a review** (used for the first-impression review in 5.2 step 4 and for each critique round):
 
 1. Make sure `playwright` is a dev dependency of the project (`npm install --save-dev playwright` in `<PROJECT_ROOT>`; Phase 6 reuses it).
-2. Capture: `node "${PLUGIN_ROOT}/skills/create-site/scripts/capture-design-review.js" --url <DEV_SERVER_URL> --routes <routes> --project-root "<PROJECT_ROOT>"`.
+2. Capture: `node "${PLUGIN_ROOT}/scripts/capture-design-review.js" --url <DEV_SERVER_URL> --routes <routes> --project-root "<PROJECT_ROOT>"`.
 3. Open every path in `summary.images` in one turn, and read the automated checks from the JSON.
 4. Judge as design-critique.md describes and write the compact scorecard and fix list it defines.
 5. Apply every fix from the scorecard, highest impact first, and commit. Capture again only at the start of the next round - one capture per round, after all of its fixes - rather than after each individual fix.
@@ -1094,7 +1094,7 @@ Judge the site from screenshots against `${PLUGIN_ROOT}/skills/create-site/refer
 
 - No critical gate fails and every category scores 3 or more - the pass is complete.
 - Three rounds have run and no critical gate fails - the pass is complete, with each category still below 3 recorded in the scorecard with its reason, so the Phase 7 summary shows it to the user.
-- Three rounds have run and a critical gate still fails - go to the gate below; a critical gate never passes silently. Keep the final scorecard for the Phase 7 summary, then remove each round's screenshots with `node "${PLUGIN_ROOT}/skills/create-site/scripts/capture-design-review.js" --cleanup <outputDir>`.
+- Three rounds have run and a critical gate still fails - go to the gate below; a critical gate never passes silently. Keep the final scorecard for the Phase 7 summary, then remove each round's screenshots with `node "${PLUGIN_ROOT}/scripts/capture-design-review.js" --cleanup <outputDir>`.
 
 <!-- gate: create-site:5.7.critique-blocked | category=progress | cancel-leaves=nothing -->
 
@@ -1142,7 +1142,7 @@ npm install --save-dev playwright
 Run the audit script via `Bash`, passing the dev server URL and all site routes:
 
 ```bash
-node "${PLUGIN_ROOT}/skills/create-site/scripts/axe-audit.js" --url <DEV_SERVER_URL> --routes /,/about,/services,/contact --project-root "<PROJECT_ROOT>"
+node "${PLUGIN_ROOT}/scripts/axe-audit.js" --url <DEV_SERVER_URL> --routes /,/about,/services,/contact --project-root "<PROJECT_ROOT>"
 ```
 
 Parse the returned JSON array of per-route results. Each result contains `violations` (with `id`, `impact`, `description`, `helpUrl`, and affected `nodes`), `passes` count, and `incomplete` count. A nonzero exit means at least one `critical` or `serious` violation was found.
@@ -1210,7 +1210,7 @@ Present a summary table to the user:
 
 **Actions**:
 
-1. Confirm every route still loads cleanly with one call - `node "${PLUGIN_ROOT}/skills/create-site/scripts/capture-design-review.js" --url <DEV_SERVER_URL> --routes <all routes> --project-root "<PROJECT_ROOT>" --checks-only` - and fix any route listed under `summary.pageErrors`, `summary.overflow`, or `summary.captureErrors`. The visual review already happened in Phase 5.7
+1. Confirm every route still loads cleanly with one call - `node "${PLUGIN_ROOT}/scripts/capture-design-review.js" --url <DEV_SERVER_URL> --routes <all routes> --project-root "<PROJECT_ROOT>" --checks-only` - and fix any route listed under `summary.pageErrors`, `summary.overflow`, or `summary.captureErrors`. The visual review already happened in Phase 5.7
 2. Present a summary of what was built, with the design scorecard from Phase 5.7:
 
    ```

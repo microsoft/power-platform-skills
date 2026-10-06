@@ -1,6 +1,8 @@
 # Design Critique
 
-How `create-site` judges what it built: the first-impression review after the Home page (Phase 5.2) and the full critique (Phase 5.7).
+How a Power Pages site is judged from screenshots.
+`create-site` uses it for the first-impression review after the Home page (Phase 5.2) and the full critique (Phase 5.7).
+`exceptional-web-design` uses the Capture, both passes, and the Rubric to review an existing site; the First-impression review, Scorecard, and Loop sections belong to `create-site`'s build loop.
 Review as a **skeptical art director** who did not build the site and sees it for the first time - the question is whether a visitor would say "wow", not whether the code works.
 The leading words and the design rules being checked live in [`design-aesthetics.md`](design-aesthetics.md) and [`page-blueprints.md`](page-blueprints.md).
 
@@ -9,8 +11,12 @@ The leading words and the design rules being checked live in [`design-aesthetics
 One command captures every route at desktop (1440 x 900) and mobile (390 x 844) and runs the automated checks:
 
 ```bash
-node "${PLUGIN_ROOT}/skills/create-site/scripts/capture-design-review.js" --url <DEV_SERVER_URL> --routes <comma-separated routes> --project-root "<PROJECT_ROOT>"
+node "${PLUGIN_ROOT}/scripts/capture-design-review.js" --url <SITE_URL> --routes <comma-separated routes> --project-root "<PROJECT_ROOT>"
 ```
+
+`<SITE_URL>` is the dev server or a deployed site.
+For a site whose routes are unknown, `--discover <max-pages>` replaces `--routes` and collects same-origin pages from the start page's navigation, then its main content, then its footer.
+Without `--project-root`, or when the project has no `playwright` dev dependency, the script borrows the Playwright inside the plugin's pinned `@playwright/mcp` package, so it installs nothing.
 
 It prints JSON and writes screenshots to a private temporary directory outside the project (`outputDir`).
 Open every path in `summary.images` - in parallel, in one turn - and read the checks from `routes[]`.
@@ -29,8 +35,9 @@ Automated checks per route and width:
 - **`syntheticWeights`** - headings drawn at a weight their family does not ship, so the browser fakes it (e.g., `h1: Instrument Serif 700`). Set them at a weight the family publishes.
 - **`overflow`** - measured after scrolling through, so content revealed on scroll is included. `{ "overflow": true }` with an empty `culprits` list means a pseudo-element or a `100vw` width is responsible - look for `::before`/`::after` with negative offsets (e.g., a decorative frame corner at `right: -8px`). The fix belongs on the element; `overflow-x: hidden` on `html` or `body` only hides the break and clips content.
 - **`pageErrors`** - uncaught exceptions, console errors, HTTP error responses, and requests that failed outright (DNS or connection errors), each with its URL.
+- **`redirectedTo`** - present when the route landed on another origin, usually an identity provider's sign-in page for a private site or a signed-in page. The headless capture cannot sign in, so those screenshots show the login page, not the design.
 
-`summary` lists the routes that overflow, have page errors, or failed to capture.
+`summary` lists the routes that overflow, have page errors, redirected, or failed to capture.
 
 ## First-impression review
 
@@ -131,4 +138,4 @@ List problems only; passing details need no mention.
 
 The pass is complete when no critical gate fails and every category scores 3 or more, or when three rounds have run and no critical gate fails - each category still below 3 is then recorded with its reason, and the Phase 7 summary shows it to the user.
 A critical gate still failing after three rounds goes to the user through the `create-site:5.7.critique-blocked` gate in `SKILL.md`; it never passes silently.
-Keep the final scorecard for the Phase 7 summary, then remove the screenshots with `node "${PLUGIN_ROOT}/skills/create-site/scripts/capture-design-review.js" --cleanup <outputDir>` for each round's `outputDir`.
+Keep the final scorecard for the Phase 7 summary, then remove the screenshots with `node "${PLUGIN_ROOT}/scripts/capture-design-review.js" --cleanup <outputDir>` for each round's `outputDir`.

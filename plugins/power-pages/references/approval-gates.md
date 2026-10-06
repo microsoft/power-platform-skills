@@ -731,6 +731,17 @@ Reviews traditional and SPA sites for deprecated Web API wildcard fields setting
 | `migrate-webapi-selectall:7.smoke-test` | gate | progress | 7 | Approves the listed read-path smoke test against the deployed site. Write, file, and image paths are never issued. | deployed migration unverified |
 
 ---
+
+### 6.33 `exceptional-web-design` (2 calls / 1 gate + 1 sub-prompt)
+
+Read-only design review of an existing site from a URL or a project folder. It writes nothing to the project, so no prompt can leave state behind.
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| Step 1 site prompt | sub-prompt | — | 1 | *"Which site should I review?"* - asked only when the request names no URL and no `powerpages.config.json` is found. Data-gathering. | nothing |
+| `exceptional-web-design:2.preview-source` | gate | plan | 2 | Folder without a URL - *"How should I see the site running?"* Start the dev server / Use the deployed site / Review the code only, offering only the available options. Starting a dev server runs the project's own scripts in the background; the skill stops it in step 6. | nothing |
+
+---
 ### Cross-plugin shared skills — out of catalog scope
 
 `report-issue` — Its prompts are cross-plugin, not power-pages-specific, so they are not catalogued here. If the shared workflow is ever governed by per-plugin approval-gate linting, add a `report-issue:*` section to this catalog.

@@ -5,25 +5,27 @@ const path = require('node:path');
 const test = require('node:test');
 const { EventEmitter } = require('node:events');
 
-const review = require('../../skills/create-site/scripts/capture-design-review');
-const { loadProjectPlaywright } = require('../lib/load-project-playwright');
+const review = require('../capture-design-review');
+const { findPinnedNodeModules, loadPinnedPlaywright, loadPlaywright, loadProjectPlaywright } = require('../lib/load-playwright');
 const { createPrivateTempDir, isOwnTempDir, sweepStaleTempDirs } = require('../lib/private-temp-dir');
 
 // A stand-in for the Playwright API surface the capture uses. In-page functions are
 // recognized by identity, so the fake answers exactly what the real browser would be asked.
-function fakePlaywright({ pageHeight = 3000, overflowRoutes = [], failRoutes = [], events = {}, synthetic = [] } = {}) {
+function fakePlaywright({ pageHeight = 3000, overflowRoutes = [], failRoutes = [], events = {}, synthetic = [], discovered = [], redirects = {} } = {}) {
   const calls = { launch: [], contexts: [], screenshots: [], sheets: [], gotos: [] };
   const makePage = (viewport) => {
     const page = new EventEmitter();
     let current = '';
     page.goto = async (url) => {
       calls.gotos.push(url);
-      current = url;
+      // `redirects` maps a requested path to where the server sends the browser instead.
+      current = redirects[new URL(url).pathname] || url;
       if (failRoutes.some((r) => url.endsWith(r))) throw new Error(`net::ERR_FAILED ${url}`);
       for (const [name, payloads] of Object.entries(events)) {
         for (const payload of payloads(url)) page.emit(name, payload);
       }
     };
+    page.url = () => current;
     page.waitForTimeout = async () => {};
     page.screenshot = async (options = {}) => {
       calls.screenshots.push({ viewport, ...options });
@@ -35,6 +37,7 @@ function fakePlaywright({ pageHeight = 3000, overflowRoutes = [], failRoutes = [
       if (fn === review.loadedFonts) return ['Public Sans', 'Schibsted Grotesk'];
       if (fn === review.pageHeight) return pageHeight;
       if (fn === review.findSyntheticWeights) return synthetic;
+      if (fn === review.discoverLinks) return discovered;
       if (fn === review.measureOverflow) {
         return overflowRoutes.some((r) => current.endsWith(r) && viewport.width === 390)
           ? { overflow: true, scrollWidth: 398, clientWidth: 390, culprits: [] }
@@ -81,6 +84,13 @@ test('parseArgs reads a capture request and trims the base URL and route list', 
   assert.equal(review.parseArgs(['--cleanup', '/tmp/x']).cleanup, '/tmp/x');
   assert.match(review.parseArgs(['--url', 'http://localhost:5173']).error, /Usage/);
   assert.match(review.parseArgs(['--url', 'u', '--routes', ',', '--project-root', '/p']).error, /Usage/);
+});
+
+test('parseArgs takes either routes or a discover limit, and the project root is optional', () => {
+  assert.deepEqual(review.parseArgs(['--url', 'https://contoso.example', '--discover', '6']), { checksOnly: false, url: 'https://contoso.example', discover: 6 });
+  assert.deepEqual(review.parseArgs(['--url', 'http://localhost:5173', '--routes', '/']).routes, ['/']);
+  assert.match(review.parseArgs(['--url', 'u', '--routes', '/', '--discover', '3']).error, /Usage/);
+  assert.match(review.parseArgs(['--url', 'u', '--discover', '0']).error, /Usage/);
 });
 
 test('slugForRoute names screenshot files after the route', () => {
@@ -224,8 +234,8 @@ test('main reports a missing playwright install and usage errors', async () => {
   let stderr = '';
   const writeError = (s) => { stderr += s; };
   const args = ['--url', 'http://localhost:5173', '--routes', '/', '--project-root', '/nowhere'];
-  assert.equal(await review.main(args, { write() {}, writeError, loadPlaywright: () => null }), 1);
-  assert.match(stderr, /npm install --save-dev playwright/);
+  assert.equal(await review.main(args, { write() {}, writeError, loadPlaywrightFn: () => null }), 1);
+  assert.match(stderr, /could not be loaded/);
   assert.equal(await review.main([], { write() {}, writeError }), 1);
   assert.match(stderr, /Usage/);
 });
@@ -235,13 +245,27 @@ test('main prints the capture as JSON and creates no directory in checks-only mo
   let stdout = '';
   const code = await review.main(
     ['--url', 'http://localhost:5173', '--routes', '/', '--project-root', '/p', '--checks-only'],
-    { write: (s) => { stdout += s; }, writeError() {}, loadPlaywright: () => fake.playwright, channel: () => 'msedge' },
+    { write: (s) => { stdout += s; }, writeError() {}, loadPlaywrightFn: () => fake.playwright, channel: () => 'msedge' },
   );
 
   assert.equal(code, 0);
   const result = JSON.parse(stdout);
   assert.equal(result.outputDir, null);
   assert.deepEqual(fake.calls.launch, [{ channel: 'msedge', headless: true }]);
+});
+
+test('captureDesignReview discovers pages from the start URL and captures them against its origin', async () => {
+  const fake = fakePlaywright({ discovered: ['/en-US', '/en-US/services', '/en-US/contact'] });
+  const result = await review.captureDesignReview({
+    playwright: fake.playwright, channel: 'chrome', url: 'https://contoso.example/en-US/', discover: 3, outputDir: null, checksOnly: true,
+  });
+
+  assert.deepEqual(result.routes.map((r) => r.route), ['/en-US', '/en-US/services', '/en-US/contact']);
+  assert.equal(result.baseUrl, 'https://contoso.example', 'discovered routes are paths from the origin');
+  assert.equal(fake.calls.gotos[0], 'https://contoso.example/en-US/', 'discovery starts at the given URL');
+  assert.deepEqual(fake.calls.gotos.slice(1, 4), [
+    'https://contoso.example/en-US', 'https://contoso.example/en-US/services', 'https://contoso.example/en-US/contact',
+  ]);
 });
 
 test('loadProjectPlaywright tries a global install, then the project, then playwright-core', () => {
@@ -289,4 +313,80 @@ test('sweepStaleTempDirs only touches directories with the given prefix', () => 
     uid: 1,
   });
   assert.deepEqual(removed, [path.join('/t', `${review.OUTPUT_DIR_PREFIX}old`)]);
+});
+
+test('findPinnedNodeModules reads the pinned npx install directory from PATH', () => {
+  const calls = [];
+  const posix = findPinnedNodeModules({
+    resolveNpxCliFn: () => '/node/lib/node_modules/npm/bin/npx-cli.js',
+    delimiter: ':',
+    spawnSyncFn(command, args, options) {
+      calls.push({ command, args, options });
+      return { status: 0, stdout: '/home/me/.npm/_npx/a5b920f00216d246/node_modules/.bin:/usr/local/bin:/usr/bin\n' };
+    },
+  });
+  assert.equal(posix, '/home/me/.npm/_npx/a5b920f00216d246/node_modules');
+  assert.equal(calls[0].command, process.execPath, 'npm runs on the current Node, never a PATH lookup');
+  assert.deepEqual(calls[0].args, ['/node/lib/node_modules/npm/bin/npx-cli.js', '--yes', '--ignore-scripts', '--package=@playwright/mcp@0.0.78', '-c', 'node -p process.env.PATH']);
+  assert.equal(calls[0].options.shell, false);
+
+  const windows = findPinnedNodeModules({
+    resolveNpxCliFn: () => 'C:\\npx-cli.js',
+    delimiter: ';',
+    spawnSyncFn: () => ({ status: 0, stdout: 'C:\\Users\\Power User\\AppData\\Local\\npm-cache\\_npx\\a5b9\\node_modules\\.bin;C:\\Windows' }),
+  });
+  assert.equal(windows, 'C:\\Users\\Power User\\AppData\\Local\\npm-cache\\_npx\\a5b9\\node_modules');
+
+  assert.equal(findPinnedNodeModules({ resolveNpxCliFn: () => 'x', spawnSyncFn: () => ({ status: 1, stdout: '' }) }), null);
+  assert.equal(findPinnedNodeModules({ resolveNpxCliFn: () => 'x', delimiter: ':', spawnSyncFn: () => ({ status: 0, stdout: '/usr/bin:/bin' }) }), null);
+});
+
+test('loadPlaywright prefers the project and falls back to the pinned package', () => {
+  const pinnedRun = { status: 0, stdout: `/c/_npx/abc/node_modules/.bin${path.delimiter}/usr/bin` };
+  const fromProject = loadPlaywright('/site', {
+    requireFn(id) {
+      if (id === path.join(path.resolve('/site'), 'node_modules', 'playwright')) return 'project';
+      throw new Error('missing');
+    },
+    spawnSyncFn() {
+      assert.fail('the pinned package is not needed when the project has Playwright');
+    },
+  });
+  assert.equal(fromProject, 'project');
+
+  const pinned = loadPlaywright(undefined, {
+    resolveNpxCliFn: () => 'npx-cli.js',
+    spawnSyncFn: () => pinnedRun,
+    requireFn(id) {
+      if (id === path.join('/c/_npx/abc/node_modules', 'playwright')) return 'pinned';
+      throw new Error('missing');
+    },
+  });
+  assert.equal(pinned, 'pinned');
+
+  assert.equal(loadPinnedPlaywright({ resolveNpxCliFn() { throw new Error('no npm'); } }), null);
+});
+
+test('captureDesignReview reports a sign-in redirect and discovers nothing from the login page', async () => {
+  const login = 'https://login.microsoftonline.com/common/oauth2/authorize';
+  const fake = fakePlaywright({ discovered: ['/common/oauth2/authorize', '/help'], redirects: { '/': login } });
+  const result = await review.captureDesignReview({
+    playwright: fake.playwright, channel: 'chrome', url: 'https://contoso.example', discover: 6, outputDir: null, checksOnly: true,
+  });
+
+  assert.deepEqual(result.routes.map((r) => r.route), ['/']);
+  assert.equal(result.routes[0].desktop.redirectedTo, 'https://login.microsoftonline.com');
+  assert.deepEqual(result.summary.redirects, [
+    '/ @ desktop -> https://login.microsoftonline.com',
+    '/ @ mobile -> https://login.microsoftonline.com',
+  ]);
+});
+
+test('captureDesignReview records no redirect when the page stays on the site', async () => {
+  const fake = fakePlaywright();
+  const result = await review.captureDesignReview({
+    playwright: fake.playwright, channel: 'chrome', url: 'http://localhost:5173', routes: ['/'], outputDir: null, checksOnly: true,
+  });
+  assert.equal(result.routes[0].desktop.redirectedTo, undefined);
+  assert.deepEqual(result.summary.redirects, []);
 });
