@@ -59,6 +59,10 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
 .chip-accent{background:var(--accent-bg);border-color:var(--accent-border);color:var(--accent);}
 
 /* Design tab */
+.thesis{background:linear-gradient(135deg,var(--accent-bg),transparent 70%),var(--surface);border:1px solid var(--accent-border);border-radius:12px;padding:22px 24px;margin-bottom:12px;font-size:16px;line-height:1.7;color:var(--text-bright);}
+.direction-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;}
+.direction-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;}
+.direction-text{font-size:13px;color:var(--text);line-height:1.6;}
 .type-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
 .type-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px 22px;box-shadow:var(--shadow-4);}
 .type-role{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;}
@@ -175,7 +179,11 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
     <!-- Design Tab -->
     <div class="section" id="tab-design">
       <h2>Design</h2>
-      <p class="section-desc">Typography, palette, motion, and background treatments</p>
+      <p class="section-desc">Design direction, typography, palette, motion, and background treatments</p>
+
+      <h3>Design direction</h3>
+      <div class="thesis" id="thesisBox"></div>
+      <div class="direction-grid" id="directionContainer"></div>
 
       <h3>Typography</h3>
       <div class="type-grid" id="typographyContainer"></div>
@@ -222,6 +230,7 @@ h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-top:24px;margi
   </div>
 </div>
 
+<script id="designDirectionData" type="application/json">__JSON_DESIGN_DIRECTION_DATA__</script>
 <script id="typographyData" type="application/json">__JSON_TYPOGRAPHY_DATA__</script>
 <script id="paletteData" type="application/json">__JSON_PALETTE_DATA__</script>
 <script id="motionData" type="application/json">__JSON_MOTION_DATA__</script>
@@ -238,6 +247,7 @@ function readJsonData(id){
   return node ? JSON.parse(node.textContent) : null;
 }
 
+const DIRECTION = readJsonData('designDirectionData') || {};
 const TYPOGRAPHY = readJsonData('typographyData');
 const PALETTE = readJsonData('paletteData');
 const MOTION = readJsonData('motionData');
@@ -288,14 +298,36 @@ document.getElementById('statComponents').textContent = COMPONENTS.length;
 document.getElementById('statRoutes').textContent = ROUTES.length;
 
 const nextSteps = [
-  { icon:'&#9998;', label:'Apply design tokens', desc:'Fonts, palette, motion, and backgrounds written into your theme' },
+  { icon:'&#9998;', label:'Apply design tokens', desc:'Color roles, fonts, spacing, motion, and backgrounds written into your theme' },
   { icon:'&#9638;', label:'Build shared components', desc:COMPONENTS.length+' reusable component'+(COMPONENTS.length===1?'':'s')+' used across pages' },
-  { icon:'&#128196;', label:'Create pages', desc:PAGES.length+' page'+(PAGES.length===1?'':'s')+' with routing and navigation' },
+  { icon:'&#128196;', label:'Create pages', desc:PAGES.length+' page'+(PAGES.length===1?'':'s')+' with routing and navigation, starting with Home and its hero' },
+  { icon:'&#128065;', label:'Critique the design', desc:'Desktop and mobile screenshots scored against a ten-category rubric and refined until every category is crafted' },
   { icon:'&#10003;', label:'Verify &amp; accessibility', desc:'axe-core audit, Playwright checks, and user review' },
 ];
 document.getElementById('nextStepsList').innerHTML = nextSteps.map(s =>
   '<div class="list-item"><div class="list-item-icon">'+s.icon+'</div><div><div class="list-item-label">'+s.label+'</div><div class="list-item-desc">'+s.desc+'</div></div></div>'
 ).join('');
+
+// --- Design: direction (the experience brief from Phase 3) ---
+const thesisBox = document.getElementById('thesisBox');
+thesisBox.textContent = DIRECTION.thesis || '';
+thesisBox.hidden = !DIRECTION.thesis;
+const directionFields = [
+  { key:'heroConcept', label:'Hero concept' },
+  { key:'signatureMoment', label:'Signature moment' },
+  { key:'primaryAction', label:'Primary action' },
+  { key:'secondaryAction', label:'Secondary action' },
+  { key:'principalDoubt', label:'Principal doubt' },
+  { key:'proofStrategy', label:'Proof strategy' },
+  { key:'audience', label:'Audience and job' },
+  { key:'brandSource', label:'Brand source' },
+];
+document.getElementById('directionContainer').innerHTML = directionFields
+  .filter(f => DIRECTION[f.key])
+  .map(f =>
+    '<div class="direction-card"><div class="field-label">'+f.label+'</div>'
+    + '<div class="direction-text">'+esc(DIRECTION[f.key])+'</div></div>'
+  ).join('');
 
 // --- Design: typography ---
 const typeContainer = document.getElementById('typographyContainer');

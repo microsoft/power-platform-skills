@@ -50,7 +50,7 @@ The plugin provides 34 skills that cover the full lifecycle of a Power Pages sit
 >
 > "Create a site from a Power Pages SPA template"
 
-Starts a complete code site either from a curated SPA template or from a fresh framework scaffold. The template path previews installable templates, imports the selected unmanaged solution into your environment, applies optional seed data, activates the site, and opens the live URL. The from-scratch path applies your design direction (fonts, colors, layout), builds out pages and components, and provides a live preview throughout development.
+Starts a complete code site either from a curated SPA template or from a fresh framework scaffold. The template path previews installable templates, imports the selected unmanaged solution into your environment, applies optional seed data, activates the site, and opens the live URL. The from-scratch path turns your aesthetic, mood, and optional brand (an existing website, or your colors and logo) into a design thesis and a page-by-page narrative, builds the pages and components with a live preview throughout, and then screenshots every page at desktop and mobile widths and refines it against a ten-category design rubric before the accessibility audit.
 
 - Start from a curated SPA template or scaffold from scratch
 - Choose from React, Vue, Angular, or Astro

@@ -18,6 +18,7 @@ Read `PLUGIN_DEVELOPMENT_GUIDE.md` for UX and reliability standards when creatin
 - **Azure CLI `--allow-no-subscriptions`** — this flag is only valid on `az login`. Other `az` subcommands (`az account get-access-token`, `az account show`, etc.) reject it as an unrecognized argument and exit 2, so do NOT add it to anything other than `az login`. When the user is not logged in to the Azure CLI, suggest plain `az login` first; only suggest `az login --allow-no-subscriptions` as a fallback if they don't have any associated Azure subscription, since that variant lets subscription-less accounts sign in and still mint AAD-scoped Dataverse/Power Platform tokens via subsequent `az account get-access-token` calls. Reuse the shared `getAuthToken` helper in `scripts/lib/validation-helpers.js` instead of shelling out to `az` directly.
 - **Reference docs** shared across skills live in `references/` — reference via `${PLUGIN_ROOT}/references/` paths, don't duplicate.
 - **Local scaffold templates** use `__PLACEHOLDER__` tokens (e.g., `__SITE_NAME__`) replaced during from-scratch scaffolding. The `gitignore` file is stored without the dot prefix and renamed to `.gitignore` during scaffolding.
+- **Playwright screenshots** go to a private per-launch temp directory: `scripts/launch-playwright-mcp.js` passes `--output-dir` (unless `PLAYWRIGHT_MCP_OUTPUT_DIR` is set), removes the directory on server exit or a host termination signal, and on each launch sweeps this user's launcher directories untouched for an hour, because hosts such as Copilot CLI SIGKILL the launcher before any in-process cleanup can run. Skills that call `browser_take_screenshot` leave `filename` unset so output never lands in the user's project.
 - **Hooks** are defined centrally in `hooks/hooks.json`, using `PostToolUse` with matcher `Skill` so validation runs when a tracked Power Pages skill completes.
 - **ALM split-decision thresholds** are intentionally tighter than the platform hard caps. `scripts/lib/alm-thresholds.js` recommends a split at 75 MB / 4000 components (vs platform caps of 95 MB / 6000), reserving ~20 MB / ~2000-component growth headroom in each split child. Override per-project via `.alm-config.json` if you have a justified reason to push closer to the caps.
 - **OAuth credential-style site settings** (ConsumerKey / ClientId / ClientSecret / etc.) are NOT excluded from solutions. `setup-solution` Phase 5 prompts per credential to choose between (a) Secret-typed env var (Key Vault per stage), (b) String-typed env var (plain text per stage), or (c) skip. The site-setting record is added to the solution and routed to an env var so secret values never ship in the solution zip. Plans generated before 2026-05-08 use the older `excluded` bucket — setup-solution's preloadedSettings handler treats those as `credentialNeedsDecision` for backward compatibility.
@@ -55,7 +56,9 @@ skills/
   create-site/
     SKILL.md                   ← Skill definition with frontmatter (model, allowed-tools)
     assets/{react,vue,angular,astro}/  ← Framework templates with __PLACEHOLDER__ tokens
-    references/design-aesthetics.md  ← Design principles, font/color/motion guidance for inline design step
+    references/design-aesthetics.md  ← Design system: experience brief, brand sourcing, tokens, verified Google Fonts, motion, states, aesthetic x mood map
+    references/page-blueprints.md    ← First screen, hero patterns, page narratives per site type, section rhythm, copy, honest proof
+    references/design-critique.md    ← Screenshot protocol, font check, two-pass critique, 10-category rubric (Phase 5.7)
     scripts/validate-site.js   ← Node script validating generated sites
   deploy-site/
     SKILL.md                   ← Deployment skill definition
@@ -144,7 +147,7 @@ Auto-triggered by the main conversation when relevant:
 
 User-invocable via `/power-pages:<skill-name>`:
 
-- `create-site`: 6-step workflow — gather requirements (including design direction), plan (with explicit scaffold prerequisites), scaffold from template, build pages/components/routing with design applied from the start using `skills/create-site/references/design-aesthetics.md` and live Playwright preview, review, deploy
+- `create-site`: 6-step workflow - gather requirements (including aesthetic, mood, and brand source), plan (an experience brief plus per-page narrative beats, rendered with a Design direction section), scaffold from template, build pages/components/routing with design applied from the start using `skills/create-site/references/design-aesthetics.md` and `page-blueprints.md` and live Playwright preview, run the screenshot-based design critique in `design-critique.md`, review, deploy
 - `deploy-site`: 6-step workflow — verify PAC CLI, authenticate, confirm environment, upload via `pac pages upload-code-site`, verify deployment (confirm `.powerpages-site` folder, commit, offer activation), handle blocked JS attachments
 - `setup-datamodel`: 7-step workflow — verify prerequisites, invoke data-model-architect agent, review proposal, pre-creation checks, create tables & columns via OData API, create relationships, publish & verify. Writes `.datamodel-manifest.json` for hook validation.
 - `add-sample-data`: 6-step workflow — verify prerequisites, discover tables (from `.datamodel-manifest.json` or OData API), select tables & configure record count, generate & review sample data plan, insert records via OData API with relationship handling, verify & summarize.

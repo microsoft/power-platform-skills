@@ -14,6 +14,17 @@ const SAMPLE_DATA = {
   AESTHETIC: 'Minimal & Clean',
   MOOD: 'Professional & Trustworthy',
   SUMMARY: 'An internal portal for Contoso consultants with directory, announcements, and docs.',
+  DESIGN_DIRECTION_DATA: {
+    thesis: 'Calm and precise: warm paper surfaces, Schibsted Grotesk headlines, one deep-teal action color.',
+    brandSource: 'Fresh identity',
+    audience: 'Contoso consultants staffing client projects',
+    primaryAction: 'Find a consultant',
+    secondaryAction: 'Browse announcements',
+    principalDoubt: 'Is this directory current?',
+    proofStrategy: 'An "updated today" stamp from live data beside the search',
+    heroConcept: 'Task-first welcome with search and live project counts',
+    signatureMoment: 'Directory filters instantly with an animated reflow',
+  },
   TYPOGRAPHY_DATA: {
     primary: { name: 'DM Sans', sample: 'Aa Bb Cc', reason: 'Neutral sans for body and UI' },
     secondary: { name: 'Space Grotesk', sample: 'Headings', reason: 'Geometric display for headings' },
@@ -87,6 +98,8 @@ test('render-createsite-plan renders HTML from --data file', () => {
   assert.match(html, /Directory/);
   assert.match(html, /Navbar/);
   assert.match(html, /Deploy now to Power Pages/);
+  assert.match(html, /<script id="designDirectionData" type="application\/json">\{"thesis":"Calm and precise/);
+  assert.match(html, /Directory filters instantly with an animated reflow/);
   assert.match(html, /<img class="logo" src="\.\/power-pages-icon\.png" alt="Power Pages" \/>/);
 
   const iconPath = path.join(tempDir, 'power-pages-icon.png');
@@ -187,6 +200,7 @@ test('render-createsite-plan fails when required keys are missing', () => {
   const incomplete = { ...SAMPLE_DATA };
   delete incomplete.PAGES_DATA;
   delete incomplete.ROUTES_DATA;
+  delete incomplete.DESIGN_DIRECTION_DATA;
 
   const result = spawnSync(
     process.execPath,
@@ -198,6 +212,7 @@ test('render-createsite-plan fails when required keys are missing', () => {
   assert.match(result.stderr, /Missing required keys/);
   assert.match(result.stderr, /PAGES_DATA/);
   assert.match(result.stderr, /ROUTES_DATA/);
+  assert.match(result.stderr, /DESIGN_DIRECTION_DATA/);
 });
 
 test('render-createsite-plan escapes </script> and < inside JSON data to prevent HTML injection', () => {
