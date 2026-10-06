@@ -8,7 +8,7 @@ description: >-
   template for, or scaffold a new Power Pages website or portal.
 user-invocable: true
 argument-hint: Optional site description
-allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click, mcp__plugin_power-pages_playwright__browser_take_screenshot, mcp__plugin_power-pages_playwright__browser_resize, mcp__plugin_power-pages_playwright__browser_evaluate
+allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click, mcp__plugin_power-pages_playwright__browser_take_screenshot, mcp__plugin_power-pages_playwright__browser_evaluate
 model: opus
 ---
 
@@ -23,7 +23,7 @@ Guide the user through creating a complete, production-quality Power Pages code 
 - **Design for the first impression**: The site must make the user say "wow" the moment the Home page replaces the scaffold, and keep earning it on every page. Once the user answers the aesthetic, mood, and brand questions, make confident decisions about fonts, colors, layouts, imagery, and motion yourself - the design references (`design-aesthetics.md`, `page-blueprints.md`, `design-critique.md` under `${PLUGIN_ROOT}/skills/create-site/references/`) define the bar, and your own taste fills the rest.
 - **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the path-agnostic upfront tasks first, then append branch-specific tasks after the creation path is selected.
 - **Scaffold early, design with intention**: Get the dev server running immediately after discovery so the user has something to look at. Then plan the design and features while the scaffold is live — apply the chosen aesthetic during implementation.
-- **Live preview feedback loop**: The dev server MUST be running before any customization begins. Browse the site via Playwright (`browser_navigate` + `browser_snapshot`) to verify the structure of every significant change. Take screenshots only for the visual design checks in `design-critique.md` (the first-impression check in Phase 5.2 and the critique pass in Phase 5.7) and for brand extraction in Phase 3 - the plugin's Playwright launcher writes them to a private temporary directory outside the user's project and cleans it up afterwards.
+- **Live preview feedback loop**: The dev server MUST be running before any customization begins. Browse the site via Playwright (`browser_navigate` + `browser_snapshot`) to verify the structure of every significant change. Visual design review captures every page with one script call and opens the screenshots in one turn (see [5.7](#57-design-critique-pass)); use Playwright MCP screenshots only for brand extraction in Phase 3.
 - **Keep the scaffold loader in sync with reality**: The scaffold loader polls `public/scaffold-status.json`. Update this file before every `AskUserQuestion` (to raise the "waiting for your input" banner so the user doesn't miss a terminal prompt) and before each implementation step in Phase 5 (so the progress-bar label matches what you're actually doing while the decorative spinner continues its default cycle). See [Live Preview Status Protocol](#live-preview-status-protocol).
 - **Use purposeful visuals**: Every image explains, orients, demonstrates, or reinforces identity. Prefer the site's own UI composed as a product moment, then bespoke inline SVG, then specific Unsplash photography with one art direction (see [5.3](#53-source-purposeful-visuals)). Never leave image placeholders or broken `<img>` tags pointing to nonexistent files.
 - **Git checkpoints**: Commit after every individual page and component — each gets its own commit so breaking changes can be reverted.
@@ -999,9 +999,9 @@ The scaffold is a temporary loading screen — it must be **completely replaced*
 > **Narrate progress in the loader**: Before each of the steps below, update `<PROJECT_ROOT>/public/scaffold-status.json` so the user — who may still be watching the Home page loader — sees what's actually happening instead of the hardcoded placeholder cycle. Use a short present-participle `message` (e.g., `"Creating Navbar component"`, `"Creating Contact page"`). Include any useful grouping context inline in the message itself. The loader picks up changes within ~1.5 seconds. Updates become no-ops once step 4 replaces the Home page.
 
 1. **Design foundations** - **Completely rewrite** `theme.css` (or `styles.css` for Angular) from scratch with the full token set from design-aesthetics.md section 3, base element styles, the interaction-state styles from section 8, a `prefers-reduced-motion` block, and the background treatments. Add the chosen Google Fonts to the entry HTML's font `<link>` (`index.html`, or `Layout.astro` for Astro) *alongside* the scaffold's DM Sans + Outfit, which the loader still uses until step 4. The scaffold's loading-screen CSS is discarded entirely. Commit after this step. *Before starting, set the loader status to `{ "message": "Applying design tokens" }`.*
-2. **Layout** - **Rewrite** the Layout component (and Header/Footer for Astro) with proper navigation, header, and footer that reflect the chosen design, with a link for every route in the approved plan so the header is final before the first-impression check. The scaffold's passthrough Layout is replaced with a real layout structure. *Set status to `{ "message": "Rewriting Layout" }`.*
+2. **Layout** - **Rewrite** the Layout component (and Header/Footer for Astro) with proper navigation, header, and footer that reflect the chosen design, with a link for every route in the approved plan so the header is final before the first-impression review. The scaffold's passthrough Layout is replaced with a real layout structure. *Set status to `{ "message": "Rewriting Layout" }`.*
 3. **Shared components** - Build reusable components (Navbar, Footer, ContactForm, etc.) that pages will use, each with every state in the design-aesthetics.md state table that applies to it. *For each component, set status to `{ "message": "Creating <Component> component" }`.*
-4. **Pages** - Create route components for each requested page, **replacing** the scaffold Home page and About placeholder entirely. **Build Home first, and its hero first**, following the hero concept from the brief. As soon as Home is built, run the **first-impression check** in `${PLUGIN_ROOT}/skills/create-site/references/design-critique.md` and fix the hero until it passes - every later page inherits that foundation. Build each page's sections in the order of its planned narrative beats. Each page component must update `document.title` on mount to reflect the current page (e.g., `"Contact — Contoso Portal"`). Use the framework's idiomatic lifecycle hook: `useEffect` (React), `onMounted` (Vue), `ngOnInit` (Angular), or a `<title>` tag in the frontmatter (Astro). Format: `"<Page Name> — <Site Name>"`, with the home page using just `"<Site Name>"`. *For each page, set status to `{ "message": "Creating <Page> page" }` before writing the file. The loader disappears when the Home page itself is replaced - no further status updates are needed after that.*
+4. **Pages** - Create route components for each requested page, **replacing** the scaffold Home page and About placeholder entirely. **Build Home first, and its hero first**, following the hero concept from the brief. As soon as Home is built, run a **first-impression review** of `/` (see "Running a review" in [5.7](#57-design-critique-pass)) and fix the hero until it passes, for at most three rounds - every later page inherits that foundation. Build each page's sections in the order of its planned narrative beats. Each page component must update `document.title` on mount to reflect the current page (e.g., `"Contact — Contoso Portal"`). Use the framework's idiomatic lifecycle hook: `useEffect` (React), `onMounted` (Vue), `ngOnInit` (Angular), or a `<title>` tag in the frontmatter (Astro). Format: `"<Page Name> — <Site Name>"`, with the home page using just `"<Site Name>"`. *For each page, set status to `{ "message": "Creating <Page> page" }` before writing the file. The loader disappears when the Home page itself is replaced - no further status updates are needed after that.*
 5. **Router** — Register all new routes (the scaffold only has `/` and `/about` — add all requested routes)
 6. **Navigation** - Confirm every Layout/Header link resolves to a registered route, and mark the current item with `aria-current="page"`
 7. **Entry HTML** - Remove the scaffold's DM Sans + Outfit from the font `<link>` in `index.html` (or `Layout.astro` for Astro) so only the chosen families load, and set `<meta name="theme-color">` to the `--color-bg` value
@@ -1046,11 +1046,13 @@ git add -A
 git commit -m "<short description of what was added/changed>"
 ```
 
+Every tool call re-sends the whole conversation, so save calls without merging commits: write a component's files (e.g., `Navbar.tsx` and `Navbar.css`) in one turn, and when several components are written in one turn, make their separate commits in one command (`git add src/components/Navbar.* && git commit -m "Add Navbar component" && git add src/components/Footer.* && git commit -m "Add Footer component"`).
+
 **When to commit:**
 
 - After applying design foundations (tokens, fonts, motion)
 - After creating each page (e.g., "Add Home page", "Add Contact page")
-- After the first-impression check fixes on the Home page
+- After the first-impression review fixes on the Home page
 - After creating each shared component (e.g., "Add Navbar component", "Add Footer component")
 - After updating routing and navigation
 - After each round of design critique fixes
@@ -1070,7 +1072,7 @@ After each significant change (new page or component), browse the site via Playw
 2. Use `mcp__plugin_power-pages_playwright__browser_snapshot` to verify the page structure and content are correct
 3. If something looks wrong in the snapshot, fix it before proceeding
 
-Visual judgement - screenshots at desktop and mobile widths - happens in the first-impression check (step 4 of 5.2) and the critique pass (5.7), following `design-critique.md`. The user is previewing in their own browser via the dev server URL shared in Phase 2.7.
+Visual judgement - screenshots at desktop and mobile widths - happens only in the first-impression review (step 4 of 5.2) and the critique pass (5.7). Screenshots stay in the conversation and are re-sent with every later call, so per-page checks during the build use `browser_snapshot`, not the capture script. The user is previewing in their own browser via the dev server URL shared in Phase 2.7.
 
 ### 5.6 Clean Up the Live Status File
 
@@ -1078,7 +1080,17 @@ Once the scaffold loader is gone, `public/scaffold-status.json` is just dead wei
 
 ### 5.7 Design Critique Pass
 
-Read `${PLUGIN_ROOT}/skills/create-site/references/design-critique.md` and run it end to end against every page: capture the desktop and mobile screenshot set, run the font and overflow checks, run both passes, score the ten rubric categories with evidence, and fix in rounds. The pass is complete when no critical gate fails and every category scores 3 or more. After three rounds, stop iterating on categories below 3 and record each with its reason. A critical gate still failing after three rounds goes to the gate below - it never passes silently. Keep the scorecard for the Phase 7 summary.
+Judge the site from screenshots against `${PLUGIN_ROOT}/skills/create-site/references/design-critique.md` (read it once, at the first review). Every tool call re-sends the whole conversation, so the review is built to take few calls: one script call captures every route at both widths and runs the automated checks, and one turn opens all the screenshots in parallel. Single-step browser calls (navigate, resize, screenshot, evaluate per page) cost many times more for the same review.
+
+**Running a review** (used for the first-impression review in 5.2 step 4 and for each critique round):
+
+1. Make sure `playwright` is a dev dependency of the project (`npm install --save-dev playwright` in `<PROJECT_ROOT>`; Phase 6 reuses it).
+2. Capture: `node "${PLUGIN_ROOT}/skills/create-site/scripts/capture-design-review.js" --url <DEV_SERVER_URL> --routes <routes> --project-root "<PROJECT_ROOT>"`.
+3. Open every path in `summary.images` in one turn, and read the automated checks from the JSON.
+4. Judge as design-critique.md describes and write the compact scorecard and fix list it defines.
+5. Apply every fix from the scorecard, highest impact first, and commit. Capture again only at the start of the next round - one capture per round, after all of its fixes - rather than after each individual fix.
+
+**The critique pass**: review every route. The pass is complete when no critical gate fails and every category scores 3 or more. Otherwise fix and review again, capturing only the routes that changed plus `/`. After three rounds, stop iterating on categories below 3 and record each with its reason. A critical gate still failing after three rounds goes to the gate below - it never passes silently. Keep the final scorecard for the Phase 7 summary, then remove each round's screenshots with `node "${PLUGIN_ROOT}/skills/create-site/scripts/capture-design-review.js" --cleanup <outputDir>`.
 
 <!-- gate: create-site:5.7.critique-blocked | category=progress | cancel-leaves=nothing -->
 
@@ -1114,7 +1126,7 @@ Use `AskUserQuestion`, naming each failing critical gate and its evidence in the
 
 ### 6.1 Install Playwright Dependency
 
-Install `playwright` as a dev dependency in the project so the audit script can launch a headless browser. This uses the system-installed browser (Edge/Chrome) — no browser download is needed:
+Phase 5 already installed `playwright` for the design review; skip this step when it is in `package.json`. Otherwise install it as a dev dependency so the audit script can launch a headless browser. This uses the system-installed browser (Edge/Chrome) — no browser download is needed:
 
 ```bash
 cd "<PROJECT_ROOT>"
@@ -1161,7 +1173,7 @@ After all fixes are applied, re-run the audit script (same command as 6.2) to co
 
 1. If new violations appear (e.g., a fix introduced a regression), repeat 6.3–6.4
 2. Continue until the script exits with code 0 (zero `critical` and `serious` violations)
-3. If a fix changed colors, spacing, or layout, re-take the affected 5.7 screenshots and confirm the scorecard still holds
+3. If a fix changed colors, spacing, or layout, run a review round on the affected routes and confirm the scorecard still holds
 
 Present a summary table to the user:
 
@@ -1194,7 +1206,7 @@ Present a summary table to the user:
 
 **Actions**:
 
-1. Browse through each page via Playwright (`browser_navigate` + `browser_snapshot`) to verify all pages load correctly - the visual review already happened in Phase 5.7
+1. Confirm every route still loads cleanly with one call - `node "${PLUGIN_ROOT}/skills/create-site/scripts/capture-design-review.js" --url <DEV_SERVER_URL> --routes <all routes> --project-root "<PROJECT_ROOT>" --checks-only` - and fix any route listed under `summary.pageErrors`, `summary.overflow`, or `summary.captureErrors`. The visual review already happened in Phase 5.7
 2. Present a summary of what was built, with the design scorecard from Phase 5.7:
 
    ```
@@ -1211,7 +1223,7 @@ Present a summary table to the user:
 3. Share the dev server URL with the user and list all available routes
 4. Ask the user to review using `AskUserQuestion`:
    > "The site is ready for review at `<dev server URL>`. Please check it out in your browser. Would you like any changes?"
-5. If the user requests changes, apply them and re-verify by browsing via `browser_snapshot`. When a change touches colors, spacing, layout, or imagery, also re-take the affected 5.7 screenshots, re-score the affected rubric categories, and re-run the axe-core audit (6.2) on the affected routes before moving on
+5. If the user requests changes, apply them and re-verify by browsing via `browser_snapshot`. When a change touches colors, spacing, layout, or imagery, also run a review round on the affected routes and re-run the axe-core audit (6.2) on them before moving on
 
 **Output**: User-approved site ready for deployment
 
@@ -1277,7 +1289,7 @@ Present a summary table to the user:
 - **Apply design from the start** — never build neutral then restyle
 - **Verify via Playwright** after every significant change
 - **Commit after every page and component** — each gets its own dedicated commit, never batch multiple together
-- **Screenshots only for design work** - use `browser_take_screenshot` for Phase 3 brand extraction, the first-impression check, and the 5.7 critique pass, with `filename` left unset so output goes to the launcher's temporary directory; use `browser_snapshot` for everything else. Give the user the dev server URL for their own visual preview.
+- **Capture screenshots with the review script** - visual review uses `capture-design-review.js` (one call for every route and width) rather than single-step Playwright MCP calls; the only `browser_take_screenshot` call is for Phase 3 brand extraction, with `filename` left unset so output goes to the launcher's temporary directory. Use `browser_snapshot` for everything else. Give the user the dev server URL for their own visual preview.
 
 ### Key Decision Points (Wait for User)
 
@@ -1408,7 +1420,7 @@ Every site must meet these standards before completion:
 ### Phase 5: Implementation
 
 - Todos created for each page, component, routing, navigation, design foundations, and the critique pass
-- Built in order: design tokens → layout → shared components → Home (hero first, then the first-impression check) → remaining pages → router → nav
+- Built in order: design tokens → layout → shared components → Home (hero first, then a first-impression review) → remaining pages → router → nav
 - Design critique round 1 scored Narrative 2 (three identical card sections on Home) and Detail 2 (mixed icon stroke widths); both fixed, round 2 scored every category 3 or more
 - Git commits after each major piece and each critique round
 

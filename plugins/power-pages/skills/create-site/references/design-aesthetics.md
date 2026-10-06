@@ -5,7 +5,7 @@ Phase 3 uses it to write the experience brief and pick tokens, Phase 4 to fill t
 Two sibling references complete it:
 
 - [`page-blueprints.md`](page-blueprints.md) - what goes on each page and in what order: first screen, hero patterns, narrative blueprints, section rhythm, copy.
-- [`design-critique.md`](design-critique.md) - how the finished site is judged in Phase 5.7: screenshots, the two-pass critique, and the rubric.
+- [`design-critique.md`](design-critique.md) - how the finished site is judged in Phases 5.2 and 5.7: the capture, the two-pass critique, and the rubric.
 
 ## The bar
 
@@ -202,7 +202,7 @@ Load both families in one `<link>` with `preconnect`, in `index.html` (`Layout.a
 Use a weight range (`wght@500..800`) only for variable families; a range on a static family such as DM Serif Display fails.
 Use a discrete list (`wght@400;600`) for static families.
 Google Fonts silently drops a misspelled or non-Google family from a combined request and still returns HTTP 200, so the page falls back to the system font with no error.
-Phase 5.7 catches this with the [font check](design-critique.md#font-check).
+The design review's capture lists the families that actually loaded, which catches this (see [design-critique.md](design-critique.md#capture)).
 
 ## 5. Color
 

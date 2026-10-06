@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('path');
 const { detectBrowser } = require('./lib/detect-browser');
+const { createPrivateTempDir, removeDir, sweepStaleTempDirs } = require('./lib/private-temp-dir');
 
 const PLAYWRIGHT_MCP_VERSION = '0.0.78';
 const PLAYWRIGHT_MCP_PACKAGE = `@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}`;
@@ -42,11 +43,9 @@ function buildMcpArgs(browser, {
 
 // Playwright MCP writes screenshots and other output files to `<cwd>/.playwright-mcp`
 // by default, and hosts start this server in the user's project directory. create-site
-// screenshots every page for its design critique, so the default would litter the
-// user's project. A per-launch mkdtemp directory is private to the current user (0700
-// on POSIX) and cannot collide with, or be pre-created by, another user on a shared
-// Linux /tmp. An explicit PLAYWRIGHT_MCP_OUTPUT_DIR is the server's own override, so it
-// wins and is left for the server to read; this launcher never deletes it.
+// takes screenshots during design work, so the default would litter the user's project.
+// An explicit PLAYWRIGHT_MCP_OUTPUT_DIR is the server's own override, so it wins and is
+// left for the server to read; this launcher never deletes it.
 function createOutputDir({
   env = process.env,
   mkdtempSync = fs.mkdtempSync,
@@ -55,62 +54,22 @@ function createOutputDir({
   if (env[OUTPUT_DIR_ENV]) {
     return null;
   }
-  return mkdtempSync(path.join(tmpdir(), OUTPUT_DIR_PREFIX));
+  return createPrivateTempDir(OUTPUT_DIR_PREFIX, { mkdtempSync, tmpdir });
 }
 
 function removeOutputDir(outputDir, { rmSync = fs.rmSync } = {}) {
-  if (!outputDir) {
-    return;
-  }
-  try {
-    rmSync(outputDir, { recursive: true, force: true });
-  } catch {
-    // Best effort: a leftover temp directory is harmless and the OS reclaims it,
-    // while a cleanup error must not mask the server's real exit code.
-  }
+  removeDir(outputDir, { rmSync });
 }
 
-// Hosts that stop the server with SIGKILL leave the launcher no chance to clean up.
 // GitHub Copilot CLI was observed sending SIGTERM and SIGKILL back to back, killing the
-// launcher before even a synchronous delete in its SIGTERM handler could run; Windows
-// does not deliver termination signals to Node at all. Each launch therefore sweeps this
-// user's own launcher directories that have sat untouched for an hour. Playwright adds a
-// snapshot or screenshot file on every browser action, which moves the directory mtime,
-// so active sessions keep a fresh directory. Sweeping an idle live session is harmless:
-// its images were already returned to the model, and the server recreates the directory
-// on its next write. lstat (never stat) keeps a planted symlink from redirecting the
-// delete, and the uid check leaves other users' directories on a shared /tmp alone.
-const STALE_OUTPUT_DIR_MS = 60 * 60 * 1000;
-
-function sweepStaleOutputDirs({
-  tmpdir = os.tmpdir,
-  readdirSync = fs.readdirSync,
-  lstatSync = fs.lstatSync,
-  rmSync = fs.rmSync,
-  now = Date.now,
-  uid = typeof process.getuid === 'function' ? process.getuid() : null,
-} = {}) {
-  let entries;
-  try {
-    entries = readdirSync(tmpdir());
-  } catch {
-    return;
-  }
-  for (const name of entries) {
-    if (!name.startsWith(OUTPUT_DIR_PREFIX)) {
-      continue;
-    }
-    const dir = path.join(tmpdir(), name);
-    try {
-      const stats = lstatSync(dir);
-      const ownedByUs = uid === null || stats.uid === uid;
-      if (stats.isDirectory() && ownedByUs && now() - stats.mtimeMs > STALE_OUTPUT_DIR_MS) {
-        rmSync(dir, { recursive: true, force: true });
-      }
-    } catch {
-      // Another launcher may be sweeping the same directory; skip it.
-    }
-  }
+// launcher before even a synchronous delete in its SIGTERM handler could run. Each launch
+// therefore sweeps directories left by killed sessions. Playwright adds a snapshot or
+// screenshot file on every browser action, which moves the directory mtime, so active
+// sessions keep a fresh directory. Sweeping an idle live session is harmless: its images
+// were already returned to the model, and the server recreates the directory on its next
+// write.
+function sweepStaleOutputDirs(options = {}) {
+  sweepStaleTempDirs(OUTPUT_DIR_PREFIX, options);
 }
 
 function resolveNpxCli({

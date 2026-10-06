@@ -14,6 +14,7 @@
 
 const path = require('path');
 const { detectBrowser } = require('../../../scripts/lib/detect-browser');
+const { loadProjectPlaywright } = require('../../../scripts/lib/load-project-playwright');
 
 const AXE_CDN_URL = 'https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.10.3/axe.min.js';
 
@@ -33,17 +34,12 @@ function parseArgs() {
 }
 
 function loadPlaywright(projectRoot) {
-  const attempts = [
-    () => require('playwright'),
-    () => require(path.join(projectRoot, 'node_modules', 'playwright')),
-    () => require('playwright-core'),
-    () => require(path.join(projectRoot, 'node_modules', 'playwright-core')),
-  ];
-  for (const attempt of attempts) {
-    try { return attempt(); } catch {}
+  const playwright = loadProjectPlaywright(projectRoot);
+  if (!playwright) {
+    console.error('playwright not found. Run: npm install --save-dev playwright');
+    process.exit(1);
   }
-  console.error('playwright not found. Run: npm install --save-dev playwright');
-  process.exit(1);
+  return playwright;
 }
 
 async function main() {
