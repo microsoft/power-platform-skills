@@ -1,0 +1,35 @@
+{
+  "event_stream_name": "event",
+  "disabled": true,
+  "default_region": "us",
+  "regions": {
+    "internal": {
+      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "collector_url": "https://us-mobile.events.data.microsoft.com/OneCollector/1.0/"
+    },
+    "us": {
+      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "collector_url": "https://us-mobile.events.data.microsoft.com/OneCollector/1.0/"
+    },
+    "eu": {
+      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "collector_url": "https://eu-mobile.events.data.microsoft.com/OneCollector/1.0/"
+    },
+    "gov": {
+      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "collector_url": "https://tb.events.data.microsoft.com/OneCollector/1.0/"
+    },
+    "high": {
+      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "collector_url": "https://tb.events.data.microsoft.com/OneCollector/1.0/"
+    },
+    "dod": {
+      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "collector_url": "https://pf.events.data.microsoft.com/OneCollector/1.0/"
+    },
+    "mooncake": {
+      "instrumentation_key": "PLACEHOLDER_REPLACE_BEFORE_SHIPPING",
+      "collector_url": "https://collector.azure.cn/OneCollector/1.0/"
+    }
+  }
+}
