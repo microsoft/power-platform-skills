@@ -1,0 +1,51 @@
+{
+  "id": "lookup-dropdown",
+  "title": "Lookup dropdown",
+  "summary": "Replace a lookup field with an accessible dropdown of configured target rows.",
+  "template": "field-standard",
+  "hosts": ["model"],
+  "whyWanted": "Lookup UX is the top community ask for PCF.",
+  "status": "available",
+  "certified": {
+    "model": {},
+    "pages": {}
+  },
+  "properties": [
+    {
+      "name": "lookupValue",
+      "displayNameKey": "LookupValue_Display_Key",
+      "descriptionKey": "LookupValue_Desc_Key",
+      "ofType": "Lookup.Simple",
+      "usage": "bound",
+      "required": true
+    },
+    {
+      "name": "targetTable",
+      "displayNameKey": "TargetTable_Display_Key",
+      "descriptionKey": "TargetTable_Desc_Key",
+      "ofType": "SingleLine.Text",
+      "usage": "input",
+      "required": true
+    },
+    {
+      "name": "selectableFilter",
+      "displayNameKey": "SelectableFilter_Display_Key",
+      "descriptionKey": "SelectableFilter_Desc_Key",
+      "ofType": "SingleLine.Text",
+      "usage": "input",
+      "required": false,
+      "defaultValue": ""
+    }
+  ],
+  "features": [
+    {
+      "name": "WebAPI",
+      "required": true
+    },
+    {
+      "name": "Utility",
+      "required": true
+    }
+  ],
+  "configuration": "Bind lookupValue to a single-table lookup column, set targetTable to that lookup target table's logical name, optionally set selectableFilter to an OData filter such as the table's active-row predicate, then add this component from the modern form designer Components pane or the classic Controls tab."
+}

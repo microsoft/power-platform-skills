@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<manifest>
+  <control namespace="Contoso.Controls" constructor="StarRating" version="1.0.0" display-name-key="StarRating" description-key="StarRating description">
+    <resources><code path="index.ts" /></resources><feature-usage><uses-feature name="WebAPI" required="false" /></feature-usage>
+  </control>
+</manifest>

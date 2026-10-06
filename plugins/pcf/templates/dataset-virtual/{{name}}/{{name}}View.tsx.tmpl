@@ -1,0 +1,120 @@
+import * as React from "react";
+
+type DataSetRecord = ComponentFramework.PropertyHelper.DataSetApi.EntityRecord;
+
+export interface {{name}}ViewProps {
+    cssClass: string;
+    messageClass: string;
+    dataSet: ComponentFramework.PropertyTypes.DataSet | null;
+    busy: boolean;
+    pagingCompletionVersion: number;
+    actionHeader: string;
+    openRecordLabel: string;
+    onNextPage: () => void;
+    onPreviousPage: () => void;
+    onOpenRecord: (record: DataSetRecord) => void;
+}
+
+export function {{name}}View(props: {{name}}ViewProps): React.ReactElement {
+    const dataSet = props.dataSet;
+    const [pagingPending, setPagingPending] = React.useState(false);
+    // A completion-only update can leave busy=false in both host renders. Its version
+    // clears the local click latch even when the host never rendered a loading state.
+    React.useLayoutEffect(() => {
+        setPagingPending(false);
+    }, [props.pagingCompletionVersion]);
+
+    const requestPage = (loadPage: () => void): void => {
+        if (pagingPending || props.busy || dataSet?.loading === true) return;
+        setPagingPending(true);
+        try {
+            loadPage();
+        } catch (error) {
+            setPagingPending(false);
+            throw error;
+        }
+    };
+    const pagingProps: {{name}}ViewProps = {
+        ...props,
+        busy: props.busy || pagingPending,
+        onNextPage: () => requestPage(props.onNextPage),
+        onPreviousPage: () => requestPage(props.onPreviousPage),
+    };
+
+    if (!dataSet) return message(pagingProps, "No dataset parameter was provided.");
+    if (dataSet.loading) return message(pagingProps, "Loading records...", dataSet);
+    if (dataSet.error) return message(pagingProps, dataSet.errorMessage || "The dataset could not be loaded.", dataSet);
+    if (dataSet.sortedRecordIds.length === 0) {
+        return React.createElement("div", { className: props.cssClass },
+            React.createElement("div", { className: props.messageClass }, "No records to show."),
+            pager(pagingProps, dataSet),
+        );
+    }
+
+    return React.createElement("div", { className: props.cssClass },
+        React.createElement("table", { className: "{{nameLower}}-table" },
+            React.createElement("thead", null,
+                React.createElement("tr", null,
+                    React.createElement("th", { scope: "col" }, displayColumnName(dataSet)),
+                    React.createElement("th", { scope: "col" }, props.actionHeader),
+                ),
+            ),
+            React.createElement("tbody", null, dataSet.sortedRecordIds.map((id) => row(dataSet, id, props))),
+        ),
+        pager(pagingProps, dataSet),
+    );
+}
+
+function message(
+    props: {{name}}ViewProps,
+    text: string,
+    dataSet?: ComponentFramework.PropertyTypes.DataSet,
+): React.ReactElement {
+    return React.createElement("div", { className: props.cssClass },
+        React.createElement("div", { className: props.messageClass }, text),
+        dataSet ? pager(props, dataSet) : null,
+    );
+}
+
+function row(
+    dataSet: ComponentFramework.PropertyTypes.DataSet,
+    id: string,
+    props: {{name}}ViewProps,
+): React.ReactElement | null {
+    const record = dataSet.records[id];
+    if (!record) return null;
+    const text = record.getFormattedValue("sampleProperty") || String(record.getValue("sampleProperty") ?? "");
+    return React.createElement("tr", { key: id },
+        React.createElement("td", null, text),
+        React.createElement("td", null,
+            React.createElement("button", {
+                type: "button",
+                "aria-label": props.openRecordLabel.replace("{0}", text),
+                onClick: () => props.onOpenRecord(record),
+            }, "Open"),
+        ),
+    );
+}
+
+function displayColumnName(dataSet: ComponentFramework.PropertyTypes.DataSet): string {
+    return dataSet.columns.find((column) => column.name === "sampleProperty")?.displayName || "Value";
+}
+
+function pager(
+    props: {{name}}ViewProps,
+    dataSet: ComponentFramework.PropertyTypes.DataSet,
+): React.ReactElement {
+    const busy = props.busy || dataSet.loading === true;
+    return React.createElement("div", { className: "{{nameLower}}-pager" },
+        React.createElement("button", {
+            type: "button",
+            disabled: busy || !dataSet.paging.hasPreviousPage,
+            onClick: props.onPreviousPage,
+        }, "Previous"),
+        React.createElement("button", {
+            type: "button",
+            disabled: busy || !dataSet.paging.hasNextPage,
+            onClick: props.onNextPage,
+        }, "Next"),
+    );
+}

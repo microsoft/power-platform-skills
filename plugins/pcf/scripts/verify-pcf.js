@@ -1,0 +1,290 @@
+#!/usr/bin/env node
+'use strict';
+
+const path = require('node:path');
+const { parseArgs, validateFlags, readJsonArg } = require('./lib/dataverse-auth.js');
+const {
+  makePcfSdk,
+  findCustomControl,
+  findForm,
+  readFormXml,
+} = require('./lib/pcf-dataverse.js');
+const {
+  parseOrgControlName,
+  validatePublisherPrefix,
+  validateNamespace,
+  validateControlName,
+  validateVersion,
+} = require('./lib/pcf-names.js');
+const { verifyBinding } = require('./lib/pcf-binding-verify.js');
+
+const USAGE = `Usage:
+  node scripts/verify-pcf.js --env <url> --control <prefix_ns.ctor> [--version <x.y.z>] --table <logical> --form <name|guid> (--column <col>|--control-id <id>) [--clients web,phone,tablet] [--param name=column:<col>] [--param name=static:<value>[:<type>]] [--workspace <dir>]
+  node scripts/verify-pcf.js --env <url> --control <prefix_ns.ctor> [--version <x.y.z>] --intent @pcf-intent.json [--workspace <dir>]`;
+
+const KNOWN = [
+  'env',
+  'control',
+  'version',
+  'table',
+  'form',
+  'column',
+  'control-id',
+  'clients',
+  'param',
+  'intent',
+  'workspace',
+];
+const NEED_VALUE = ['env', 'control', 'version', 'table', 'form', 'column', 'control-id', 'clients', 'param', 'intent', 'workspace'];
+const ALLOWED_CLIENTS = Object.freeze(new Set(['web', 'phone', 'tablet']));
+const CLIENTS_HINT = 'allowed values: web,phone,tablet';
+// systemform rows carry numeric type values, not the intent's semantic formType names.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/systemform#type
+const FORM_TYPE_CODES = Object.freeze({ main: 2, 'quick-create': 7, 'quick-view': 6, card: 11, other: 100 });
+
+function usageError(message) {
+  process.stderr.write(`${USAGE}\n${message}\n`);
+  process.exit(1);
+}
+
+async function main(argv = process.argv.slice(2)) {
+  const parsed = parseArgs(argv);
+  const flagError = validateFlags(argv, {
+    known: KNOWN,
+    needValue: NEED_VALUE,
+    hints: {
+      clients: 'comma-separated values: web,phone,tablet',
+      param: 'name=column:<col> or name=static:<value>[:<type>]',
+      intent: '@path-to-json',
+    },
+  });
+  if (flagError) usageError(flagError);
+
+  const { flags } = parsed;
+  if (!flags.env) usageError('--env is required');
+  if (!flags.control) usageError('--control is required');
+  validateControlFlag(String(flags.control));
+  if (flags.version) {
+    const versionError = validateVersion(String(flags.version));
+    if (versionError) usageError(versionError);
+  }
+
+  const bindings = readBindings(flags);
+  if (bindings.length === 0) usageError('--table and --form are required unless --intent is supplied');
+  for (const binding of bindings) {
+    if (!binding.table) usageError('--table is required');
+    if (!binding.form) usageError('--form is required');
+    if (!binding.target.column && !binding.target.controlId) usageError('--column or --control-id is required');
+  }
+  const cliParameters = parseRepeatedParams(argv);
+
+  const env = String(flags.env);
+  const workspace = flags.workspace ? String(flags.workspace) : path.resolve('.maker-workspace', 'pcf-verify');
+  let registered = { ok: false, version: null, expected: flags.version ? String(flags.version) : null, componentState: null };
+  const bindingResults = [];
+
+  try {
+    const sdk = await makePcfSdk(env, workspace);
+    registered = await registrationResult(sdk, String(flags.control), flags.version ? String(flags.version) : undefined);
+
+    for (const binding of bindings) {
+      const form = await findForm(sdk, {
+        table: binding.table,
+        form: binding.form,
+        ...(binding.formType !== undefined ? { types: [FORM_TYPE_CODES[binding.formType]] } : {}),
+      });
+      const expected = {
+        kind: binding.kind || 'field',
+        controlName: String(flags.control),
+        column: binding.target.column,
+        controlId: binding.target.controlId,
+        clients: binding.clients || parseClients(flags.clients),
+        parameters: binding.parameters || cliParameters,
+      };
+      const draftXml = await readFormXml(sdk, form.formid, { layer: 'draft' });
+      const publishedXml = await readFormXml(sdk, form.formid, { layer: 'published' });
+      const draft = verifyBinding(draftXml, expected);
+      const published = verifyBinding(publishedXml, expected);
+      const entry = {
+        table: binding.table,
+        form: { id: form.formid, name: form.name || binding.form },
+        target: binding.target.column ? { column: binding.target.column } : { controlId: binding.target.controlId },
+        draft,
+        published,
+      };
+      if (draft.status === 'bound' && published.status !== 'bound') {
+        entry.message = 'bound but not published - publish the form';
+      }
+      bindingResults.push(entry);
+    }
+  } catch (err) {
+    writeResult(false, {
+      ok: false,
+      error: errorMessage(err),
+      control: { registered },
+      bindings: bindingResults,
+      runtime: 'not-checked',
+    });
+    return;
+  }
+
+  const ok = !!registered.ok && bindingResults.every((binding) => binding.draft.status === 'bound' && binding.published.status === 'bound');
+  writeResult(ok, {
+    ok,
+    control: { registered },
+    bindings: bindingResults,
+    runtime: 'not-checked',
+  });
+}
+
+async function registrationResult(sdk, controlName, expectedVersion) {
+  const row = await findCustomControl(sdk, controlName);
+  if (!row) {
+    return { ok: false, version: null, expected: expectedVersion || null, componentState: null };
+  }
+  return {
+    ok: !expectedVersion || row.version === expectedVersion,
+    version: row.version || null,
+    expected: expectedVersion || null,
+    componentState: row.componentState,
+  };
+}
+
+function readBindings(flags) {
+  if (flags.intent) {
+    const intent = readJsonArg(String(flags.intent));
+    const rawBindings = Array.isArray(intent) ? intent : (intent && Array.isArray(intent.bindings) ? intent.bindings : []);
+    return rawBindings.map((binding) => normalizeBinding(binding));
+  }
+  return [normalizeBinding({
+    table: flags.table,
+    form: flags.form,
+    column: flags.column,
+    controlId: flags['control-id'],
+    clients: parseClients(flags.clients),
+  })];
+}
+
+function normalizeBinding(binding) {
+  const target = normalizeBindingTarget(binding);
+  if (binding.formType !== undefined && (typeof binding.formType !== 'string' || !Object.hasOwn(FORM_TYPE_CODES, binding.formType))) {
+    usageError(`intent binding formType '${binding.formType}' must be one of: ${Object.keys(FORM_TYPE_CODES).join(', ')}`);
+  }
+  return {
+    kind: binding.kind || 'field',
+    table: binding.table,
+    form: binding.form,
+    formType: binding.formType,
+    target,
+    clients: Array.isArray(binding.clients) ? parseIntentClients(binding.clients) : parseClients(binding.clients),
+    parameters: binding.parameters,
+  };
+}
+
+function normalizeBindingTarget(binding) {
+  const canonical = binding && binding.target && typeof binding.target === 'object' && !Array.isArray(binding.target)
+    ? binding.target
+    : {};
+  return {
+    // The intent contract uses `binding.target.column/controlId`. The flat fields are accepted only
+    // for direct CLI normalization and any older hand-authored JSON that copied the CLI flag names.
+    column: canonical.column || (binding && binding.column),
+    controlId: canonical.controlId || (binding && (binding.controlId || binding['control-id'])),
+  };
+}
+
+function parseClients(value) {
+  if (!value) return undefined;
+  const clients = String(value).split(',').map((client) => client.trim()).filter(Boolean);
+  for (const client of clients) {
+    if (!ALLOWED_CLIENTS.has(client)) usageError(`--clients contains unknown value '${client}' - ${CLIENTS_HINT}`);
+  }
+  return clients.length ? clients : undefined;
+}
+
+function parseIntentClients(value) {
+  const clients = value.map((client) => String(client).trim()).filter(Boolean);
+  if (clients.length === 0) usageError(`intent binding clients must include at least one of: ${CLIENTS_HINT.replace('allowed values: ', '')}`);
+  for (const client of clients) {
+    if (!ALLOWED_CLIENTS.has(client)) usageError(`intent binding clients contains unknown value '${client}' - ${CLIENTS_HINT}`);
+  }
+  return [...new Set(clients)];
+}
+
+function parseRepeatedParams(argv) {
+  const parameters = {};
+  // parseArgs intentionally keeps only the last repeated flag. PCF bindings can have many
+  // parameters, so this CLI reads raw argv for every --param occurrence after validateFlags has
+  // already proved each occurrence carries a value.
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    let raw = null;
+    if (arg === '--param') {
+      raw = argv[i + 1];
+      i++;
+    } else if (typeof arg === 'string' && arg.startsWith('--param=')) {
+      raw = arg.slice('--param='.length);
+    }
+    if (!raw) continue;
+    const parsed = parseParam(raw);
+    parameters[parsed.name] = parsed.value;
+  }
+  return parameters;
+}
+
+function parseParam(raw) {
+  const eq = String(raw).indexOf('=');
+  if (eq <= 0) usageError(`invalid --param '${raw}'`);
+  const name = String(raw).slice(0, eq);
+  const body = String(raw).slice(eq + 1);
+  if (body.startsWith('column:')) {
+    return { name, value: { column: body.slice('column:'.length) } };
+  }
+  if (body.startsWith('static:')) {
+    const rest = body.slice('static:'.length);
+    const colon = rest.lastIndexOf(':');
+    if (colon === -1) return { name, value: { static: rest } };
+    return { name, value: { static: rest.slice(0, colon), type: rest.slice(colon + 1) } };
+  }
+  usageError(`invalid --param '${raw}'`);
+}
+
+function validateControlFlag(controlName) {
+  const parsed = parseOrgControlName(controlName);
+  if (!parsed) usageError('--control must be shaped as <publisherPrefix>_<namespace>.<constructor>');
+  const prefixError = validatePublisherPrefix(parsed.prefix);
+  if (prefixError) usageError(prefixError);
+  const namespaceError = validateNamespace(parsed.namespace, parsed.constructor);
+  if (namespaceError) usageError(namespaceError);
+  const controlError = validateControlName(parsed.constructor, parsed.namespace);
+  if (controlError) usageError(controlError);
+}
+
+function errorMessage(err) {
+  return err && err.message ? String(err.message) : String(err);
+}
+
+function writeResult(ok, payload) {
+  if (ok) {
+    process.stdout.write(JSON.stringify(payload) + '\n');
+    process.exit(0);
+  }
+  if (payload instanceof Error) {
+    const errorPayload = { ok: false, error: payload.message || String(payload) };
+    process.stdout.write(JSON.stringify(errorPayload) + '\n');
+    process.stderr.write(errorPayload.error + '\n');
+  } else if (payload && typeof payload === 'object') {
+    process.stdout.write(JSON.stringify(payload) + '\n');
+    if (typeof payload.error === 'string') process.stderr.write(payload.error.trim() + '\n');
+    else process.stderr.write('Operation failed with an unstructured error; see stdout JSON\n');
+  } else {
+    process.stderr.write(String(payload) + '\n');
+  }
+  process.exit(1);
+}
+
+if (require.main === module) {
+  main().catch((err) => writeResult(false, err));
+}
+
+module.exports = { main };

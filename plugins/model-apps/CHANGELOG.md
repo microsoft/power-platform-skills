@@ -35,6 +35,7 @@ vendored SDK.
 
 ### Fixed
 
+- **A Dataverse response cut off mid-body is reported as an error** instead of leaving a script hanging.
 - **A field moved into a narrower section fits it.** Moved without a `colspan`, a two-column field
   kept its width in a one-column section, and the build wrote a layout `--verify` then failed. It
   keeps its width only where it fits, and is narrowed — and reported — where it does not.

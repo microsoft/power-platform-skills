@@ -11,6 +11,7 @@ jobs:
         env:
             POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "1"
             POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"
+            POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT: "1"
         steps:
             - name: checkout
               uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -34,6 +35,9 @@ jobs:
 
             - name: validate-skill-descriptions
               run: node scripts/validate-skill-descriptions.js
+
+            - name: test-telemetry-ikeys-validator
+              run: node --test scripts/tests/validate-telemetry-ikeys.test.js
 
             - name: validate-telemetry-ikeys
               run: node scripts/validate-telemetry-ikeys.js
@@ -72,3 +76,11 @@ jobs:
 
             - name: validate-no-real-environments
               run: node scripts/validate-no-real-environments.js
+
+            # pcf ships physical copies of model-apps/shared files. Copies must never drift, and this
+            # is the one check that runs whatever the PR touches.
+            - name: test-plugin-copies-validator
+              run: node --test scripts/tests/validate-plugin-copies.test.js
+
+            - name: validate-plugin-copies
+              run: node scripts/validate-plugin-copies.js

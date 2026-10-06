@@ -1,0 +1,104 @@
+# PCF project CI is deliberately separate from pcf-script-tests.yml.
+# These jobs need npm registry access for generated project installs; isolating
+# them keeps a transient registry outage from failing the dependency-free unit
+# matrix for unrelated pcf changes.
+name: pcf-projects
+
+on:
+    pull_request:
+        branches:
+            - main
+        paths:
+            - "plugins/pcf/compatibility-matrix.json"
+            - "plugins/pcf/lock/**"
+            - "plugins/pcf/templates/**"
+            - "plugins/pcf/shared/**"
+            - "plugins/pcf/recipes/**"
+            - "plugins/pcf/scripts/pcf-*.js"
+            - "plugins/pcf/scripts/lib/pcf-*.js"
+            - "plugins/pcf/scripts/lib/node-tool.js"
+            # The package smoke starts pac through these two, so a change to either must run it.
+            - "plugins/pcf/scripts/lib/pac-exec.js"
+            - "plugins/pcf/scripts/lib/process-runner.js"
+            - ".github/workflows/pcf-projects.yml"
+
+permissions:
+    contents: read
+
+jobs:
+    test-pcf-projects:
+        name: test-pcf-projects (${{ matrix.os }})
+        runs-on: ${{ matrix.os }}
+        # Each generated project takes well under two minutes on either OS once Windows builds on its
+        # local disk (see the build step); the cap turns a hung install or test into a failed check
+        # instead of a job that holds a runner for the platform's six-hour default.
+        timeout-minutes: 45
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT: "1"
+        strategy:
+            fail-fast: false
+            matrix:
+                os: [ubuntu-latest, windows-latest]
+        steps:
+            - name: checkout
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            - name: setup-node
+              uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+              with:
+                  node-version: 20
+                  cache: npm
+                  cache-dependency-path: |
+                      plugins/pcf/lock/standard/package-lock.json
+                      plugins/pcf/lock/virtual/package-lock.json
+
+            - name: build-pcf-templates-and-recipes
+              shell: bash
+              # pcf-ci-build.js generates each project under os.tmpdir(). On a hosted Windows runner the
+              # default TEMP is on C:, the OS disk, while runner.temp is on D:, the VM's local temporary
+              # disk: https://learn.microsoft.com/azure/virtual-machines/managed-disks-overview#temporary-disk
+              # A generated project's `npm ci` and gates are thousands of small file writes, and moving
+              # them to D: cut a Windows template from 213-521 seconds to 29-76. os.tmpdir() reads TEMP
+              # first on Windows and TMPDIR, then TMP, elsewhere, so ubuntu just builds under its runner
+              # temp directory instead of /tmp.
+              env:
+                  TEMP: ${{ runner.temp }}
+                  TMP: ${{ runner.temp }}
+              run: node plugins/pcf/scripts/pcf-ci-build.js --all
+
+    package-pcf-projects:
+        name: package-pcf-projects
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT: "1"
+        steps:
+            - name: checkout
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            - name: setup-node
+              uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+              with:
+                  node-version: 20
+                  cache: npm
+                  cache-dependency-path: |
+                      plugins/pcf/lock/standard/package-lock.json
+                      plugins/pcf/lock/virtual/package-lock.json
+
+            - name: setup-dotnet
+              uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+              with:
+                  dotnet-version: 8.0.x
+
+            # Microsoft Learn documents the .NET tool package id as
+            # Microsoft.PowerApps.CLI.Tool for cross-platform PAC CLI installs:
+            # https://learn.microsoft.com/power-platform/developer/cli/introduction
+            - name: install-pac-cli
+              shell: bash
+              run: |
+                  dotnet tool install --global Microsoft.PowerApps.CLI.Tool
+                  echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+            - name: package-pcf-managed-solutions
+              shell: bash
+              run: node plugins/pcf/scripts/pcf-ci-build.js --package

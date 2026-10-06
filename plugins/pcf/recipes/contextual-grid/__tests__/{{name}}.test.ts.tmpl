@@ -1,0 +1,367 @@
+import { {{name}} } from "../{{name}}";
+import { IInputs } from "../{{name}}/generated/ManifestTypes";
+import { mockContext, mockProperty, mockWebApi } from "../test/pcf-context";
+
+function withStrings(context: ComponentFramework.Context<IInputs>): ComponentFramework.Context<IInputs> {
+    (context as ComponentFramework.Context<IInputs> & { resources: ComponentFramework.Resources }).resources = {
+        getResource: (_id: string, success: (data: string) => void) => success(""),
+        getString: (key: string) => ({
+            ContextualGrid_Caption: "Related rows",
+            ContextualGrid_Loading: "Loading related rows...",
+            ContextualGrid_Unsaved: "Save this {0} record before related rows can be shown.",
+            ContextualGrid_Configure: "Configure entityId, entityName and FetchXML before using this grid.",
+            ContextualGrid_Permission: "You do not have permission to read this contextual grid configuration.",
+            ContextualGrid_InvalidRecord: "The current record id is not a valid GUID.",
+            ContextualGrid_MissingToken: "FetchXML must contain the {recordId} token.",
+            ContextualGrid_Empty: "No related rows were found.",
+            ContextualGrid_Error: "Unable to load related rows.",
+            ContextualGrid_LoadMore: "Load more rows",
+        }[key] ?? key),
+    } as ComponentFramework.Resources;
+    return context;
+}
+
+function response(entities: ComponentFramework.WebApi.Entity[], nextLink?: string): ComponentFramework.WebApi.RetrieveMultipleResponse {
+    return { entities, nextLink } as ComponentFramework.WebApi.RetrieveMultipleResponse;
+}
+
+function deferredResponse() {
+    let resolve!: (value: ComponentFramework.WebApi.RetrieveMultipleResponse) => void;
+    const promise = new Promise<ComponentFramework.WebApi.RetrieveMultipleResponse>((done) => {
+        resolve = done;
+    });
+    return { promise, resolve };
+}
+
+async function flushPromises(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await Promise.resolve();
+}
+
+const DATAVERSE_CRM_ANNOTATION = "Microsoft" + ".Dynamics.CRM";
+
+function mount(options: {
+    entityId?: IInputs["entityId"];
+    entityName?: IInputs["entityName"];
+    fetchXmlTemplate?: IInputs["fetchXmlTemplate"];
+    pageSize?: IInputs["pageSize"];
+    disabled?: boolean;
+    webAPI?: ComponentFramework.WebApi;
+} = {}) {
+    const control = new {{name}}();
+    const notify = jest.fn();
+    const container = document.createElement("div");
+    const retrieveMultipleRecords = jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([
+        { contactid: "11111111-1111-4111-8111-111111111111", fullname: "Adele Vance" },
+    ]));
+    const parameters: Partial<IInputs> = {};
+    if (Object.prototype.hasOwnProperty.call(options, "entityId")) parameters.entityId = options.entityId; else parameters.entityId = mockProperty("{00000000-0000-4000-8000-000000000001}") as IInputs["entityId"];
+    if (Object.prototype.hasOwnProperty.call(options, "entityName")) parameters.entityName = options.entityName; else parameters.entityName = mockProperty("account") as IInputs["entityName"];
+    if (Object.prototype.hasOwnProperty.call(options, "fetchXmlTemplate")) parameters.fetchXmlTemplate = options.fetchXmlTemplate; else parameters.fetchXmlTemplate = mockProperty("<fetch><entity name=\"contact\"><filter><condition attribute=\"parentcustomerid\" operator=\"eq\" value=\"{recordId}\" /></filter></entity></fetch>") as IInputs["fetchXmlTemplate"];
+    if (Object.prototype.hasOwnProperty.call(options, "pageSize")) parameters.pageSize = options.pageSize; else parameters.pageSize = mockProperty(25) as IInputs["pageSize"];
+    const context = withStrings(mockContext<IInputs>(parameters, {
+        disabled: options.disabled,
+        webAPI: options.webAPI ?? mockWebApi({ retrieveMultipleRecords }),
+    }));
+
+    control.init(context, notify, {}, container);
+
+    return {
+        control,
+        notify,
+        container,
+        context,
+        retrieveMultipleRecords,
+        status: () => container.querySelector("[role='status']") as HTMLDivElement,
+        rows: () => Array.from(container.querySelectorAll("tbody tr")),
+        loadMore: () => container.querySelector("button") as HTMLButtonElement | null,
+    };
+}
+
+test("loads FetchXML with an escaped current record id and renders returned rows", async () => {
+    const mounted = mount();
+
+    await flushPromises();
+
+    expect(mounted.retrieveMultipleRecords).toHaveBeenCalledWith(
+        "contact",
+        `?fetchXml=${encodeURIComponent("<fetch><entity name=\"contact\"><filter><condition attribute=\"parentcustomerid\" operator=\"eq\" value=\"00000000-0000-4000-8000-000000000001\" /></filter></entity></fetch>")}`,
+        25,
+    );
+    expect(mounted.container.querySelector("caption")?.textContent).toBe("Related rows");
+    expect(mounted.rows()).toHaveLength(1);
+    expect(mounted.container.textContent).toContain("Adele Vance");
+    expect(mounted.notify).not.toHaveBeenCalled();
+});
+
+test("missing parameter objects and unsaved records render safe disabled states", async () => {
+    const missing = mount({ entityId: undefined as unknown as IInputs["entityId"] });
+    const unsaved = mount({ entityId: mockProperty("") as IInputs["entityId"] });
+
+    await flushPromises();
+
+    expect(missing.status().textContent).toContain("Configure entityId");
+    expect(missing.retrieveMultipleRecords).not.toHaveBeenCalled();
+    expect(unsaved.status().textContent).toContain("Save this account record");
+    expect(unsaved.retrieveMultipleRecords).not.toHaveBeenCalled();
+});
+
+test("security and disabled states prevent Web API calls without leaking configuration", async () => {
+    const unreadable = mount({ fetchXmlTemplate: mockProperty("<fetch>{recordId}</fetch>", undefined, { readable: false }) as IInputs["fetchXmlTemplate"] });
+    const readOnly = mount({ entityId: mockProperty("{00000000-0000-4000-8000-000000000001}", undefined, { editable: false }) as IInputs["entityId"] });
+    const disabled = mount({ disabled: true });
+
+    await flushPromises();
+
+    expect(unreadable.status().textContent).toContain("permission");
+    expect(unreadable.container.textContent).not.toContain("<fetch>");
+    expect(unreadable.retrieveMultipleRecords).not.toHaveBeenCalled();
+    expect(readOnly.container.textContent).toContain("Adele Vance");
+    expect(readOnly.retrieveMultipleRecords).toHaveBeenCalledTimes(1);
+    expect(disabled.container.querySelector("table")?.getAttribute("aria-disabled")).toBe("true");
+});
+
+test("malformed GUID braces render the invalid-record state without querying", async () => {
+    const mounted = mount({ entityId: mockProperty("{00000000-0000-4000-8000-000000000001") as IInputs["entityId"] });
+
+    await flushPromises();
+
+    expect(mounted.status().textContent).toContain("not a valid GUID");
+    expect(mounted.retrieveMultipleRecords).not.toHaveBeenCalled();
+});
+test("Web API permission failures and empty results render messages without notifying", async () => {
+    const failed = mount({
+        webAPI: mockWebApi({ retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => { throw new Error("Access denied"); }) }),
+    });
+    const empty = mount({
+        webAPI: mockWebApi({ retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([])) }),
+    });
+
+    await flushPromises();
+
+    expect(failed.status().textContent).toContain("Unable to load related rows");
+    expect(empty.status().textContent).toContain("No related rows");
+    expect(failed.notify).not.toHaveBeenCalled();
+    expect(empty.notify).not.toHaveBeenCalled();
+});
+
+
+test("renders formatted choice, money and date annotations when present", async () => {
+    const mounted = mount({
+        webAPI: mockWebApi({
+            retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([{
+                statuscode: 1,
+                "statuscode@OData.Community.Display.V1.FormattedValue": "Active",
+                revenue: 1234.5,
+                "revenue@OData.Community.Display.V1.FormattedValue": "$1,234.50",
+                createdon: "2026-09-29T10:00:00Z",
+                "createdon@OData.Community.Display.V1.FormattedValue": "9/29/2026 10:00 AM",
+            }])),
+        }),
+    });
+
+    await flushPromises();
+
+    expect(mounted.container.textContent).toContain("Active");
+    expect(mounted.container.textContent).toContain("$1,234.50");
+    expect(mounted.container.textContent).toContain("9/29/2026 10:00 AM");
+    expect(mounted.container.textContent).not.toContain("1234.5");
+});
+
+test("falls back to raw choice, money and date values when formatted annotations are absent", async () => {
+    const mounted = mount({
+        webAPI: mockWebApi({
+            retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([{
+                statuscode: 2,
+                revenue: 987.65,
+                createdon: "2026-09-29T10:00:00Z",
+            }])),
+        }),
+    });
+
+    await flushPromises();
+
+    expect(mounted.container.textContent).toContain("2");
+    expect(mounted.container.textContent).toContain("987.65");
+    expect(mounted.container.textContent).toContain("2026-09-29T10:00:00Z");
+});
+
+test("renders lookup formatted names for FetchXML attribute result keys", async () => {
+    const mounted = mount({
+        webAPI: mockWebApi({
+            retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([{
+                _parentcustomerid_value: "22222222-2222-4222-8222-222222222222",
+                "_parentcustomerid_value@OData.Community.Display.V1.FormattedValue": "Litware, Inc.",
+            }])),
+        }),
+    });
+
+    await flushPromises();
+
+    expect(Array.from(mounted.container.querySelectorAll("th")).map((header) => header.textContent)).toContain("parentcustomerid");
+    expect(mounted.container.textContent).toContain("Litware, Inc.");
+    expect(mounted.container.textContent).not.toContain("22222222-2222-4222-8222-222222222222");
+});
+
+test("does not render raw lookup GUIDs when formatted lookup annotations are absent", async () => {
+    const mounted = mount({
+        webAPI: mockWebApi({
+            retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([{
+                _parentcustomerid_value: "22222222-2222-4222-8222-222222222222",
+            }])),
+        }),
+    });
+
+    await flushPromises();
+
+    expect(Array.from(mounted.container.querySelectorAll("th")).map((header) => header.textContent)).toContain("parentcustomerid");
+    expect(mounted.container.textContent).not.toContain("22222222-2222-4222-8222-222222222222");
+});
+
+
+test("renders aliased lookup formatted names and hides unformatted aliased GUIDs", async () => {
+    const mounted = mount({
+        webAPI: mockWebApi({
+            retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([{
+                "primary.ownerid": "33333333-3333-4333-8333-333333333333",
+                "primary.ownerid@OData.Community.Display.V1.FormattedValue": "MOD Administrator",
+                "alias.parentcustomerid": "22222222-2222-4222-8222-222222222222",
+            }])),
+        }),
+    });
+
+    await flushPromises();
+
+    expect(Array.from(mounted.container.querySelectorAll("th")).map((header) => header.textContent)).toEqual(expect.arrayContaining(["primary.ownerid", "alias.parentcustomerid"]));
+    expect(mounted.container.textContent).toContain("MOD Administrator");
+    expect(mounted.container.textContent).not.toContain("33333333-3333-4333-8333-333333333333");
+    expect(mounted.container.textContent).not.toContain("22222222-2222-4222-8222-222222222222");
+});
+
+test("renders aliased non-lookup text values", async () => {
+    const mounted = mount({
+        webAPI: mockWebApi({
+            retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([{
+                "contact.fullname": "Adele Vance",
+            }])),
+        }),
+    });
+
+    await flushPromises();
+
+    expect(Array.from(mounted.container.querySelectorAll("th")).map((header) => header.textContent)).toContain("contact.fullname");
+    expect(mounted.container.textContent).toContain("Adele Vance");
+});
+
+
+test("hides Dataverse annotation keys while keeping formatted lookup text", async () => {
+    const mounted = mount({
+        webAPI: mockWebApi({
+            retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([{
+                "alias.lookup": "44444444-4444-4444-8444-444444444444",
+                "alias.lookup@OData.Community.Display.V1.FormattedValue": "Tailspin Toys",                [`alias.lookup@${DATAVERSE_CRM_ANNOTATION}.lookuplogicalname`]: "account",
+                _ownerid_value: "33333333-3333-4333-8333-333333333333",
+                "_ownerid_value@OData.Community.Display.V1.FormattedValue": "MOD Administrator",                [`_ownerid_value@${DATAVERSE_CRM_ANNOTATION}.associatednavigationproperty`]: "ownerid",
+            }])),
+        }),
+    });
+
+    await flushPromises();
+
+    const headers = Array.from(mounted.container.querySelectorAll("th")).map((header) => header.textContent);
+    expect(headers).toEqual(expect.arrayContaining(["alias.lookup", "ownerid"]));
+    expect(headers).not.toContain(`alias.lookup@${DATAVERSE_CRM_ANNOTATION}.lookuplogicalname`);
+    expect(headers).not.toContain(`_ownerid_value@${DATAVERSE_CRM_ANNOTATION}.associatednavigationproperty`);
+    expect(mounted.container.textContent).toContain("Tailspin Toys");
+    expect(mounted.container.textContent).toContain("MOD Administrator");
+    expect(mounted.container.textContent).not.toContain("account");
+    expect(mounted.container.textContent).not.toContain("owneridownerid");
+});
+
+test("load more follows documented nextLink paging", async () => {
+    const retrieveMultipleRecords = jest.fn()
+        .mockResolvedValueOnce(response([{ contactid: "1", fullname: "First" }], "https://contoso.crm.dynamics.com/api/data/v9.2/contacts?fetchXml=page2"))
+        .mockResolvedValueOnce(response([{ contactid: "2", fullname: "Second" }]));
+    const mounted = mount({ webAPI: mockWebApi({ retrieveMultipleRecords }) });
+
+    await flushPromises();
+    mounted.loadMore()?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushPromises();
+
+    expect(retrieveMultipleRecords).toHaveBeenNthCalledWith(2, "contact", "?fetchXml=page2", 25);
+    expect(mounted.container.textContent).toContain("First");
+    expect(mounted.container.textContent).toContain("Second");
+});
+
+test("unchanged updateView keeps loaded rows and does not restart the query", async () => {
+    const retrieveMultipleRecords = jest.fn()
+        .mockResolvedValueOnce(response([{ contactid: "1", fullname: "First" }], "https://contoso.crm.dynamics.com/api/data/v9.2/contacts?fetchXml=page2"))
+        .mockResolvedValueOnce(response([{ contactid: "2", fullname: "Second" }]));
+    const mounted = mount({ webAPI: mockWebApi({ retrieveMultipleRecords }) });
+
+    await flushPromises();
+    mounted.loadMore()?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushPromises();
+    mounted.control.updateView(mounted.context);
+    await flushPromises();
+
+    expect(retrieveMultipleRecords).toHaveBeenCalledTimes(2);
+    expect(mounted.container.textContent).toContain("First");
+    expect(mounted.container.textContent).toContain("Second");
+});
+
+test("unchanged updateView during load more keeps the button disabled and appends once", async () => {
+    const loadMore = deferredResponse();
+    const retrieveMultipleRecords = jest.fn()
+        .mockResolvedValueOnce(response([{ contactid: "1", fullname: "First" }], "https://contoso.crm.dynamics.com/api/data/v9.2/contacts?fetchXml=page2"))
+        .mockReturnValueOnce(loadMore.promise);
+    const mounted = mount({ webAPI: mockWebApi({ retrieveMultipleRecords }) });
+
+    await flushPromises();
+    mounted.loadMore()?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flushPromises();
+    mounted.control.updateView(mounted.context);
+    await flushPromises();
+
+    expect(mounted.loadMore()?.disabled).toBe(true);
+    mounted.loadMore()?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(retrieveMultipleRecords).toHaveBeenCalledTimes(2);
+
+    loadMore.resolve(response([{ contactid: "2", fullname: "Second" }]));
+    await flushPromises();
+
+    expect(retrieveMultipleRecords).toHaveBeenCalledTimes(2);
+    expect(mounted.rows()).toHaveLength(2);
+    expect(mounted.container.textContent).toContain("First");
+    expect(mounted.container.textContent).toContain("Second");
+});
+
+test("changed query inputs restart contextual grid exactly once", async () => {
+    const retrieveMultipleRecords = jest.fn()
+        .mockResolvedValueOnce(response([{ contactid: "1", fullname: "First" }]))
+        .mockResolvedValueOnce(response([{ contactid: "2", fullname: "Changed" }]));
+    const mounted = mount({ webAPI: mockWebApi({ retrieveMultipleRecords }) });
+
+    await flushPromises();
+    mounted.context.parameters.entityId = mockProperty("{00000000-0000-4000-8000-000000000002}") as IInputs["entityId"];
+    mounted.control.updateView(mounted.context);
+    await flushPromises();
+
+    expect(retrieveMultipleRecords).toHaveBeenCalledTimes(2);
+    expect(mounted.container.textContent).toContain("Changed");
+    expect(mounted.container.textContent).not.toContain("First");
+});
+
+test("two instances keep independent state and paging", async () => {
+    const first = mount({ webAPI: mockWebApi({ retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([{ contactid: "1", fullname: "First" }])) }) });
+    const second = mount({ webAPI: mockWebApi({ retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([{ contactid: "2", fullname: "Second" }])) }) });
+
+    await flushPromises();
+
+    expect(first.container.textContent).toContain("First");
+    expect(first.container.textContent).not.toContain("Second");
+    expect(second.container.textContent).toContain("Second");
+    expect(first.container.querySelector(".{{cssClass}}")).not.toBe(second.container.querySelector(".{{cssClass}}"));
+});

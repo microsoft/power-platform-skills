@@ -39,12 +39,12 @@ change, not just the ones you add.
 
 **CI enforcement (partial).** `node scripts/validate-no-real-environments.js` (wired into the
 `validate-repository-metadata` workflow) fails the build when a real Dataverse host, tenant, or
-previously-removed identifier appears under `plugins/model-apps/**` or `evals/model-apps/**`. It
+previously-removed identifier appears under `plugins/model-apps/**`, `evals/model-apps/**`, `plugins/pcf/**`, or `evals/pcf/**`. It
 matches on *shape* — `org<8 hex>` is what Dataverse auto-generates, so it is rejected even though it
 starts with the otherwise-allowed word `org` — rather than only re-catching known strings. Run it
 locally after touching eval fixtures or any file that quotes an environment URL.
 
-The scan is **scoped to model-apps only**, and this is a real gap rather than an oversight: other
+The scan is **scoped to model-apps and pcf only**, and this is a real gap rather than an oversight: other
 plugins still carry pre-existing references of this class (for example real `org<8 hex>` orgs cited
 in power-pages provenance comments), so widening the scan today would fail unrelated PRs. Scrub a
 plugin first, then add it to `SCAN_PATHS`. The guard also cannot see the *local part* of a UPN, so
@@ -93,7 +93,8 @@ No root-level build, lint, or test commands exist. Build/test tooling lives insi
 Both are repo-wide and enforce metadata/marketplace rules, not behavior.
 
 **Every test workflow is path-filtered** — to a single plugin (`power-pages` → `plugins/power-pages/**`;
-`model-apps` → `plugins/model-apps/**` + `evals/model-apps/**` + the `shared/` sources it bundles), or,
+`model-apps` → `plugins/model-apps/**` + `evals/model-apps/**` + the `shared/` sources it bundles;
+`pcf` → `plugins/pcf/**` + `evals/pcf/**` + the model-apps/shared sources it bundles), or,
 for code no plugin owns, to that code (`shared-telemetry-tests` → `shared/telemetry/**`).
 This is deliberate — a PR should not spend CI on a plugin it never touched — but it has a corollary:
 *a green PR does not mean the repo is green*, only that the paths you touched are. A plugin that ships
@@ -110,6 +111,9 @@ telemetry-emitting hook or script (see `## Shared Telemetry`) — e.g.
 cannot change what a test asserts.
 
 ## Plugin Conventions
+
+When a plugin copies code from another plugin, add it to the `COPY_SETS` in `scripts/validate-plugin-copies.js`. That validator runs on every PR and in both affected plugins' suites, so a source-side or copy-side edit fails until the bundled copy is refreshed.
+
 
 Each plugin follows this structure:
 
@@ -143,9 +147,9 @@ Edit `shared/telemetry/` first, then refresh every adopting plugin's copied `scr
 
 `eventInfo` is a dynamic escape hatch whose nested keys are not enforced by `FIELD_TYPES`. Follow the approved schema in `shared/telemetry/README.md`; do not add nested fields or arbitrary payloads without privacy review and coordinated disclosure, schema, and test updates.
 
-**Never reuse another plugin's instrumentation key or event stream.** When adopting telemetry in a new plugin, copy only the routing-agnostic library (`shared/telemetry/lib` → `plugins/<plugin>/scripts/lib/telemetry/lib`) — do **not** copy an existing adopter's real `ikey.json` (or its `resolver.js`). Each plugin's `ikey.json` carries that plugin's own instrumentation key(s), collector routing, and `event_stream_name`; start from the placeholder `shared/telemetry/ikey.json` (every region key is `PLACEHOLDER_REPLACE_BEFORE_SHIPPING` and it ships `disabled: true`) and provision a fresh, plugin-specific key before shipping. Copying a key already committed to another plugin (e.g. lifting `power-pages`'s `ikey.json` wholesale) mis-attributes the new plugin's events to the other plugin's Kusto stream and pollutes it — the copy step must bring over library code only, never another plugin's provisioned `ikey.json`/`resolver.js`.
+**Never reuse another plugin's instrumentation key or event stream.** The sole sanctioned key-sharing exception is `model-apps` + `pcf`: the same team owns both plugins and their 1DS tenant, and PCF ships a byte-identical copy of model-apps' `ikey.json`, enforced by `scripts/validate-plugin-copies.js`. Both use the Power Apps client `event` shape, with rows separated by `clientType`/`pluginName`. For every other adopter, copy only the routing-agnostic library (`shared/telemetry/lib` → `plugins/<plugin>/scripts/lib/telemetry/lib`) — do **not** copy an existing adopter's real `ikey.json` (or its `resolver.js`). Each plugin's `ikey.json` carries its instrumentation key(s), collector routing, and `event_stream_name`; start from the placeholder `shared/telemetry/ikey.json` (every region key is `PLACEHOLDER_REPLACE_BEFORE_SHIPPING` and it ships `disabled: true`) and provision a fresh, plugin-specific key before shipping. Copying another adopter's key outside the sanctioned pair mis-attributes events and pollutes its stream.
 
-This invariant is CI-enforced: `node scripts/validate-telemetry-ikeys.js` (wired into the `validate-repository-metadata` workflow) scans every `plugins/*/**/ikey.json`, ignores placeholder/empty values, and fails if the same instrumentation key or `event_stream_name` appears under two different plugins. A single plugin reusing one key across regions is allowed; only cross-plugin reuse fails. The one exception is the stream name `event`: it is the shared Power Apps client telemetry table (the only stream the mobile-apps/model-apps tenants ingest), so several plugins may send to it, provided each makes its rows separable in the payload with its own `clientType` and its `pluginName` in `customDimensions`. Keys are never exempt. Run it locally after touching any plugin's `ikey.json`.
+This invariant is CI-enforced: `node scripts/validate-telemetry-ikeys.js` (wired into the `validate-repository-metadata` workflow) scans every `plugins/*/**/ikey.json` and ignores placeholder/empty values. A shared key is allowed only when **all** its plugin owners belong to one `SHARED_KEY_GROUPS` entry, currently exactly `model-apps` + `pcf`; any outsider still fails, even if both group members own the key. Adding a group is a deliberate, reviewed change. The copy check also enforces byte-identical configs, so a model-apps key rotation must refresh pcf in the same PR. A single plugin reusing one key across regions is allowed. The independent stream-name exemption remains `event`: it is the shared Power Apps client telemetry table, so several plugins may send to it, provided each makes its rows separable with its own `clientType` and `pluginName` in `customDimensions`. Every other cross-plugin stream-name reuse fails. Run both validators locally after touching either shared config.
 
 Per-plugin iKey/collector routing is pluggable via a `resolver.js` placed next to the plugin's `ikey.json` (implementing the `resolve`/`isProvisioned` contract); the shared library ships only that contract plus a static-key fallback, not any routing logic. A per-plugin opt-out env var `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` (derived as the uppercased plugin name with non-alphanumerics collapsed to `_`, suffixed `_OPTOUT`; the name is the manifest's `name`, not the directory — `plugins/mobile-apps` is `mobile-app`, so its variable ends `_MOBILE_APP_OPTOUT`) disables transmission for automation when set to `1`/`true` (dotnet `*_TELEMETRY_OPTOUT` convention); it has the **highest precedence**, overriding both the persisted `config.json` choice and `/<plugin>:telemetry on`.
 
@@ -166,7 +170,7 @@ jobs:
 
 This opt-out suppresses **transmission only** (the local diagnostic mirror is still written), so it is safe and has no effect on what the job actually tests. Tests that need to assert that emission *happens* clear the var in their own spawned-process env and route the event to a local `POWER_PLATFORM_SKILLS_FAKE_HTTPS` probe instead of the real collector — so the job-level opt-out never breaks them. Existing reference: `.github/workflows/power-pages-script-tests.yml`. When you add a new such workflow (or a new emitting step to an existing one), add this env var in the same change; treat a CI job that runs the tests without it as a production-telemetry leak.
 
-Current adopters: `power-pages`, `mobile-apps`, and `model-apps` (all transmitting). Others adopt on demand. The library's own tests (`shared/telemetry/tests`) run in `.github/workflows/shared-telemetry-tests.yml` on a change to the source or to any bundled copy, and its `bundled-copies.test.js` fails when any adopter's `plugins/<plugin>/scripts/lib/telemetry/lib` differs from `shared/telemetry/lib`. The workflow sets every adopter's opt-out — add a new adopter's variable there too. power-pages and model-apps also keep a `scripts/tests/telemetry-lib-copy.test.js` that runs the same comparison in their own suites (model-apps also checks its shared skill copies, and lists `shared/telemetry/**` in its workflow's path filter so a source edit runs it too).
+Current adopters: `power-pages`, `mobile-apps`, `model-apps`, and `pcf` (all transmitting; `pcf` shares model-apps' tenant). Others adopt on demand. The library's own tests (`shared/telemetry/tests`) run in `.github/workflows/shared-telemetry-tests.yml` on a change to the source or to any bundled copy, and its `bundled-copies.test.js` fails when any adopter's `plugins/<plugin>/scripts/lib/telemetry/lib` differs from `shared/telemetry/lib`. The workflow sets every adopter's opt-out — add a new adopter's variable there too. power-pages and model-apps also keep a `scripts/tests/telemetry-lib-copy.test.js` that runs the same comparison in their own suites (model-apps also checks its shared skill copies, and lists `shared/telemetry/**` in its workflow's path filter so a source edit runs it too).
 
 ## Legacy Marketplace Compatibility
 

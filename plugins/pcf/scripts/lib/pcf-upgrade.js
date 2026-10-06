@@ -1,0 +1,600 @@
+'use strict';
+
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawnResultSync: defaultSpawnResultSync } = require('./process-runner.js');
+const { checkProject, collectProject, dependencyFamily, hasErrors, pcfprojBuildMode } = require('./pcf-doctor.js');
+const { findControlProject } = require('./pcf-build.js');
+const { dependencySet, loadMatrix } = require('./pcf-matrix.js');
+const { parseManifest } = require('./pcf-manifest.js');
+const { runNpm: defaultRunNpm } = require('./node-tool.js');
+
+const BEST_PRACTICES = 'references/pcf-best-practices.md';
+const UPGRADE_FLOW = 'skills/pcf/upgrade-flow.md';
+const SAFE_APPLY = new Set(['DEPS_TO_MATRIX', 'BUILDMODE_PRODUCTION', 'PLATFORM_LIB_VERSION', 'REINSTALL']);
+// Pinning package.json without refreshing package-lock.json leaves the lockfile stale, so
+// DEPS_TO_MATRIX cannot be applied alone. requiresStep is the visible pairing; scopePlan
+// includes the required step. REINSTALL has no requirement, so --steps REINSTALL runs only
+// the reinstall.
+const STEP_REQUIRES = {
+  DEPS_TO_MATRIX: 'REINSTALL',
+};
+
+function planUpgrade(state, matrix = loadMatrix(), options = {}) {
+  const hosts = options.hosts || ['model'];
+  const findings = checkProject(state, matrix, { hosts, needs: ['build'], platform: options.platform || process.platform });
+  const steps = [];
+  const manual = [];
+  const family = state.family === 'standard' || state.family === 'virtual' ? state.family : dependencyFamily(state.manifestModels);
+  let needsReinstall = false;
+
+  addManualNotes(state, hosts, manual);
+
+  const packageStep = packageJsonStep(state, matrix, family);
+  if (packageStep) {
+    steps.push(packageStep);
+    needsReinstall = true;
+  }
+
+  const buildStep = buildModeStep(state);
+  if (buildStep) steps.push(buildStep);
+
+  steps.push(...platformLibrarySteps(state, matrix));
+  if (needsReinstall) {
+    steps.push({
+      id: 'REINSTALL',
+      file: 'package-lock.json',
+      why: 'Refresh package-lock.json after package.json is pinned to the PCF compatibility matrix.',
+    });
+  }
+
+  if (findings.some((finding) => finding.id === 'PROJ_ESLINT_LEGACY')) {
+    manual.push({
+      id: 'ESLINT_FLAT_CONFIG',
+      why: 'This release never replaces or deletes an existing ESLint config automatically; add eslint.config.mjs from the generated template, verify lint, then remove legacy .eslintrc files yourself.',
+      refs: [BEST_PRACTICES, UPGRADE_FLOW],
+    });
+  }
+
+  if (Array.isArray(state.missingFeatures) && state.missingFeatures.length) {
+    manual.push({
+      id: 'DECLARE_FEATURES',
+      why: `Declare missing feature usage manually with required="false": ${state.missingFeatures.join(', ')}.`,
+      refs: [BEST_PRACTICES, UPGRADE_FLOW],
+    });
+  }
+
+  return { steps: steps.map(stampRequiresStep), manual };
+}
+
+function stampRequiresStep(step) {
+  return {
+    ...step,
+    requiresStep: Object.hasOwn(STEP_REQUIRES, step.id) ? STEP_REQUIRES[step.id] : null,
+  };
+}
+
+function packageJsonStep(state, matrix, family) {
+  if (!state.packageJsonText) return null;
+  const expected = dependencySet(matrix, family);
+  const apply = (text) => rewritePackageJson(text, expected);
+  const after = apply(state.packageJsonText);
+  if (after === state.packageJsonText) return null;
+  return {
+    id: 'DEPS_TO_MATRIX',
+    file: state.packageJsonPath || 'package.json',
+    why: `Pin existing ${family} PCF dependency declarations to the compatibility matrix without moving user packages between dependency sections.`,
+    apply,
+  };
+}
+
+function rewritePackageJson(text, expected) {
+  const style = textStyle(text);
+  const parsed = JSON.parse(style.body);
+  let changed = false;
+  const wanted = {
+    ...((expected && expected.dependencies) || {}),
+    ...((expected && expected.devDependencies) || {}),
+  };
+  for (const section of ['dependencies', 'devDependencies']) {
+    if (!parsed[section] || typeof parsed[section] !== 'object' || Array.isArray(parsed[section])) continue;
+    for (const name of Object.keys(parsed[section])) {
+      if (!Object.hasOwn(wanted, name)) continue;
+      if (parsed[section][name] !== wanted[name]) {
+        parsed[section][name] = wanted[name];
+        changed = true;
+      }
+    }
+  }
+  if (!changed) return text;
+  // package.json is data, but hand-built controls often carry unrelated user dependencies. The
+  // transform keeps the raw object insertion order emitted by JSON.parse/stringify:
+  //   before: "dependencies": { "react": "^18.2.0", "left-pad": "1.3.0" }
+  //   after:  "dependencies": { "react": "16.14.0", "left-pad": "1.3.0" }
+  // Matrix packages already in dependencies/devDependencies are pinned in-place; unknown packages
+  // are untouched and a package is never moved between sections, avoiding accidental runtime/dev
+  // semantic changes in projects that were not generated by this skill.
+  return `${style.bom}${JSON.stringify(parsed, null, 2).replace(/\n/g, style.newline)}${style.hasFinalNewline ? style.newline : ''}`;
+}
+
+function textStyle(text) {
+  const raw = String(text || '');
+  const bom = raw.charCodeAt(0) === 0xFEFF ? '\uFEFF' : '';
+  const body = bom ? raw.slice(1) : raw;
+  return {
+    bom,
+    body,
+    newline: dominantNewline(body),
+    hasFinalNewline: /\r?\n$/.test(body),
+  };
+}
+
+function dominantNewline(text) {
+  const crlf = (String(text || '').match(/\r\n/g) || []).length;
+  const lf = (String(text || '').replace(/\r\n/g, '').match(/\n/g) || []).length;
+  return crlf > lf ? '\r\n' : '\n';
+}
+
+function buildModeStep(state) {
+  const text = state.pcfprojText || '';
+  if (!text || pcfprojBuildMode(text).status === 'production') return null;
+  return {
+    id: 'BUILDMODE_PRODUCTION',
+    file: state.pcfprojPath || '*.pcfproj',
+    why: 'Move PcfBuildMode below Microsoft.Common.props so pac pcf push Debug builds produce production bundles.',
+    apply: (source) => rewritePcfBuildMode(source),
+  };
+}
+
+function rewritePcfBuildMode(text) {
+  const source = String(text || '');
+  const mode = pcfprojBuildMode(source);
+  const ranges = mergeRanges((mode.occurrences || [])
+    .map((item) => lineRange(source, item.offset, item.endOffset)));
+  const withoutMode = ranges
+    .sort((a, b) => b[0] - a[0])
+    .reduce((out, [start, end]) => out.slice(0, start) + out.slice(end), source);
+  const adjustedImportEnd = adjustedOffset(mode.importEndOffset, ranges);
+  const lineEnd = dominantNewline(source);
+  const nameMatch = /(<Name>[^<]+<\/Name>)(\r?\n)([ \t]*)/.exec(withoutMode);
+  if (nameMatch && (mode.importOffset === -1 || nameMatch.index > adjustedImportEnd)) {
+    const insertion = `${nameMatch[1]}${nameMatch[2]}${nameMatch[3]}<PcfBuildMode>production</PcfBuildMode>${nameMatch[2]}${nameMatch[3]}`;
+    const after = `${withoutMode.slice(0, nameMatch.index)}${insertion}${withoutMode.slice(nameMatch.index + nameMatch[0].length)}`;
+    assertEffectiveBuildMode(after);
+    return after;
+  }
+
+  if (mode.importOffset === -1) {
+    const after = withoutMode.replace(/(<PropertyGroup\b[^>]*>)(\r?\n)([ \t]*)/, `$1$2$3<PcfBuildMode>production</PcfBuildMode>$2$3`);
+    assertEffectiveBuildMode(after);
+    return after;
+  }
+  const indent = leadingIndent(withoutMode, adjustedOffset(mode.importOffset, ranges));
+  const insertion = `${lineEnd}${indent}<PropertyGroup>${lineEnd}${indent}  <PcfBuildMode>production</PcfBuildMode>${lineEnd}${indent}</PropertyGroup>`;
+  const after = `${withoutMode.slice(0, adjustedImportEnd)}${insertion}${withoutMode.slice(adjustedImportEnd)}`;
+  assertEffectiveBuildMode(after);
+  return after;
+}
+
+function assertEffectiveBuildMode(text) {
+  // Raw `.pcfproj` shape that matters:
+  //   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" />
+  //   <PropertyGroup><Name>StarRating</Name> ... </PropertyGroup>
+  // Microsoft.PowerApps.MSBuild.Pcf props imported through Microsoft.Common.props reset Debug to
+  // development, and pac pcf push builds Debug. The after-shape must therefore be:
+  //   <Import ... Microsoft.Common.props />
+  //   <PropertyGroup><Name>StarRating</Name><PcfBuildMode>production</PcfBuildMode> ...</PropertyGroup>
+  // Use the doctor's one detector as the invariant so this transform cannot drift from diagnostics.
+  const mode = pcfprojBuildMode(text);
+  if (mode.status !== 'production') throw new Error('PcfBuildMode transform did not produce an effective production setting.');
+}
+
+function leadingIndent(text, offset) {
+  const lineStart = text.lastIndexOf('\n', offset) + 1;
+  const match = /^[ \t]*/.exec(text.slice(lineStart, offset));
+  return match ? match[0] : '';
+}
+
+function adjustedOffset(offset, removedRanges) {
+  if (offset < 0) return offset;
+  let adjusted = offset;
+  for (const [start, end] of removedRanges) {
+    if (end <= offset) adjusted -= end - start;
+  }
+  return adjusted;
+}
+
+function lineRange(text, start, end) {
+  let lineStart = text.lastIndexOf('\n', start) + 1;
+  let lineEnd = text.indexOf('\n', end);
+  if (lineEnd === -1) lineEnd = text.length;
+  else lineEnd += 1;
+  if (lineStart > 0 && /^[ \t]*$/.test(text.slice(lineStart, start)) && /^[ \t]*(?:\r)?$/.test(text.slice(end, lineEnd))) {
+    return [lineStart, lineEnd];
+  }
+  return [start, end];
+}
+
+function mergeRanges(ranges) {
+  const sorted = ranges.slice().sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  for (const range of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && range[0] <= last[1]) {
+      last[1] = Math.max(last[1], range[1]);
+    } else {
+      merged.push([...range]);
+    }
+  }
+  return merged;
+}
+
+function platformLibrarySteps(state, matrix) {
+  const out = [];
+  for (const manifest of state.manifestFiles || []) {
+    const after = rewritePlatformLibraries(manifest.text, matrix);
+    if (after === manifest.text) continue;
+    out.push({
+      id: 'PLATFORM_LIB_VERSION',
+      file: manifest.path,
+      why: 'Align React and Fluent platform-library declarations to the compatibility matrix baseline without changing any other manifest bytes.',
+      apply: (text) => rewritePlatformLibraries(text, matrix),
+    });
+  }
+  return out;
+}
+
+function rewritePlatformLibraries(text, matrix) {
+  const baselines = {
+    React: matrix.platformLibraries.React.recommendedBaseline.version,
+    Fluent: matrix.platformLibraries.Fluent.recommendedBaseline.version,
+  };
+  return String(text || '').replace(/<platform-library\b[^>]*>/g, (tag) => {
+    const name = attrFromTag(tag, 'name');
+    const current = attrFromTag(tag, 'version');
+    if (!Object.hasOwn(baselines, name)) return tag;
+    if (name === 'Fluent' && /^8\./.test(String(current || ''))) return tag;
+    if (current === baselines[name]) return tag;
+    // Manifest platform-library tags are transformed as a byte-preserving targeted attribute edit:
+    //   before: <platform-library name="Fluent" version="9.68.0" />
+    //   after:  <platform-library name="Fluent" version="9.46.2" />
+    // React/Fluent package family and declaration semantics are separate decisions; this low-risk
+    // step only changes the version attribute on already-declared React or Fluent platform libraries.
+    return tag.replace(/(\bversion\s*=\s*["'])([^"']*)(["'])/, `$1${baselines[name]}$3`);
+  });
+}
+
+function attrFromTag(tag, name) {
+  const re = new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, 'i');
+  const match = re.exec(tag);
+  return match ? match[1] : '';
+}
+
+function addManualNotes(state, hosts, manual) {
+  const family = state.family === 'standard' || state.family === 'virtual' ? state.family : dependencyFamily(state.manifestModels);
+  const declared = (state.manifestModels || []).flatMap((model) => (model.resources && model.resources.platformLibraries) || []);
+  if (family === 'standard' && declared.some((lib) => lib.name === 'React' || lib.name === 'Fluent')) {
+    manual.push({
+      id: 'STANDARD_TO_VIRTUAL',
+      why: 'Changing a standard control to virtual changes runtime shape and is not applied automatically.',
+      refs: [BEST_PRACTICES, UPGRADE_FLOW],
+    });
+  }
+  if (declared.some((lib) => lib.name === 'Fluent' && /^8\./.test(String(lib.version || '')))) {
+    manual.push({
+      id: 'FLUENT_8_TO_9',
+      why: 'Moving Fluent 8 controls to Fluent 9 can require code and styling changes, so the planner leaves it as a manual upgrade.',
+      refs: [BEST_PRACTICES, UPGRADE_FLOW],
+    });
+  }
+  if (hosts.includes('pages') && family === 'virtual') {
+    manual.push({
+      id: 'PAGES_VIRTUAL_TO_STANDARD',
+      why: 'Power Pages supports standard PCF controls and does not support virtual platform-library declarations.',
+      refs: [BEST_PRACTICES, UPGRADE_FLOW],
+    });
+  }
+}
+
+function serializePlan(plan) {
+  return {
+    steps: (plan.steps || []).map(({ apply, ...step }) => step),
+    manual: plan.manual || [],
+  };
+}
+
+function applyUpgrade(plan, projectDir, deps = {}) {
+  const fsDep = deps.fs || fs;
+  const runNpm = deps.runNpm || defaultRunNpm;
+  // Pass the project directory exactly as the caller spelled it. The plan's file paths are built from
+  // that same spelling, so the lexical containment check in resolveProjectFile compares like with
+  // like; the physical check there then resolves BOTH sides with realpath, which is what stops a file
+  // that is a link to somewhere outside the project. Realpathing only the project here broke every
+  // project reached through a linked folder, including all of macOS's os.tmpdir() (/var -> /private/var).
+  const prepared = prepareUpgradeWrites(plan, projectDir, fsDep);
+  const changedFiles = [];
+  const attempted = [];
+
+  try {
+    for (const item of prepared.writes) {
+      if (item.after === item.before) continue;
+      // Record the target before the write. A throw after a partial write must still restore this
+      // file from the in-memory original, not only the targets whose writes returned.
+      attempted.push(item);
+      writeReplacement(fsDep, item.file, item.after);
+      changedFiles.push(item.file);
+    }
+  } catch (err) {
+    const restored = restoreWrites(attempted, fsDep);
+    // Nothing stuck: every attempted target, including the one whose write threw, was put back.
+    // If a restore itself fails, changedFiles names what still differs and applied stays empty
+    // because the plan was not left applied.
+    err.applied = [];
+    err.skipped = prepared.skipped;
+    err.restored = restored.restored;
+    err.changedFiles = restored.changedFiles;
+    throw err;
+  }
+
+  if (prepared.reinstall) {
+    if (deps.noInstall) {
+      prepared.skipped.push('REINSTALL: run npm install in the PCF project');
+    } else {
+      const install = runNpm(['install'], { cwd: projectDir, npmCli: deps.npmCli });
+      if (install.status !== 0) {
+        const detail = [install.stderr, install.stdout, install.error].filter(Boolean).join('\n').trim();
+        const err = new Error(`npm install failed${detail ? `:\n${detail}` : ''}`);
+        err.changedFiles = changedFiles;
+        err.applied = prepared.applied;
+        err.skipped = prepared.skipped;
+        throw err;
+      }
+      prepared.applied.push('REINSTALL');
+    }
+  }
+
+  return { applied: prepared.applied, skipped: prepared.skipped, changedFiles };
+}
+
+function writeReplacement(fsDep, file, content) {
+  // A direct writeFileSync that throws after flushing a prefix leaves the target truncated
+  // (observed as `<Projec` on ENOSPC). Write the replacement beside the target, then rename.
+  // Rename on the same volume replaces the target only after the temp file is complete, so a
+  // throw never publishes a half-written project file.
+  const temp = path.join(
+    path.dirname(file),
+    `.${path.basename(file)}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`,
+  );
+  try {
+    fsDep.writeFileSync(temp, content);
+    if (typeof fsDep.renameSync === 'function') fsDep.renameSync(temp, file);
+    else fs.renameSync(temp, file);
+  } catch (err) {
+    try {
+      if (typeof fsDep.unlinkSync === 'function') fsDep.unlinkSync(temp);
+    } catch {
+      // writeFileSync may have thrown before creating the temp file.
+    }
+    throw err;
+  }
+}
+
+function restoreWrites(writes, fsDep) {
+  const restored = [];
+  const changedFiles = [];
+  for (const item of [...writes].reverse()) {
+    try {
+      writeReplacement(fsDep, item.file, item.before);
+      if (fsDep.readFileSync(item.file, 'utf8') !== item.before) {
+        changedFiles.push(item.file);
+        continue;
+      }
+      restored.push(item.file);
+    } catch {
+      changedFiles.push(item.file);
+    }
+  }
+  return { restored, changedFiles };
+}
+
+function prepareUpgradeWrites(plan, projectDir, fsDep) {
+  const applied = [];
+  const skipped = [];
+  const writes = [];
+  let reinstall = false;
+
+  for (const step of plan.steps || []) {
+    if (!SAFE_APPLY.has(step.id)) {
+      skipped.push(step.id);
+      continue;
+    }
+    if (step.id === 'REINSTALL') {
+      reinstall = true;
+      continue;
+    }
+    if (typeof step.apply !== 'function') {
+      skipped.push(step.id);
+      continue;
+    }
+    const file = resolveProjectFile(step.file, projectDir, fsDep);
+    const before = fsDep.readFileSync(file, 'utf8');
+    const after = step.apply(before);
+    writes.push({ file, before, after });
+    applied.push(step.id);
+  }
+
+  return { applied, skipped, writes, reinstall };
+}
+
+function resolveProjectFile(file, projectDir, fsDep = fs) {
+  const resolved = path.resolve(String(file));
+  const project = path.resolve(projectDir);
+  const rel = path.relative(project, resolved);
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new Error(`Refusing to write outside the PCF project: ${file}`);
+  }
+  const realProject = (fsDep.realpathSync.native || fsDep.realpathSync)(project);
+  const realFile = (fsDep.realpathSync.native || fsDep.realpathSync)(resolved);
+  const physicalRel = path.relative(realProject, realFile);
+  if (physicalRel === '' || physicalRel.startsWith('..') || path.isAbsolute(physicalRel)) {
+    throw new Error(`Refusing to write outside the PCF project: ${file}`);
+  }
+  return resolved;
+}
+
+function collectUpgradeState(projectDir, deps = {}) {
+  const fsDep = deps.fs || fs;
+  const found = findControlProject(projectDir, deps);
+  if (found.error) throw new Error(found.error);
+  const state = collectProject(found.projectDir, deps);
+  state.packageJsonPath = found.packageJson;
+  state.packageJsonText = fsDep.readFileSync(found.packageJson, 'utf8');
+  state.pcfprojPath = found.pcfproj;
+  state.pcfprojText = fsDep.readFileSync(found.pcfproj, 'utf8');
+  state.manifestFiles = found.manifests.map((file) => {
+    const text = fsDep.readFileSync(file, 'utf8');
+    return { path: file, text, model: parseManifest(text).model };
+  });
+  return state;
+}
+
+function dirtyTreeStatus(projectDir, deps = {}) {
+  const spawnResultSync = deps.spawnResultSync || defaultSpawnResultSync;
+  const result = spawnResultSync('git', ['status', '--porcelain', '--', projectDir], {
+    cwd: projectDir,
+    encoding: 'utf8',
+  });
+  if (result.status !== 0) {
+    const detail = String(result.stderr || result.error || '').trim();
+    return {
+      ok: false,
+      error: `Refusing to apply because '${projectDir}' is not inside a readable git work tree. Commit first or pass --allow-dirty.${detail ? ` ${detail}` : ''}`,
+    };
+  }
+  if (String(result.stdout || '').trim()) {
+    return {
+      ok: false,
+      error: 'Refusing to apply because the project has uncommitted changes. Commit, stash, or pass --allow-dirty.',
+    };
+  }
+  return { ok: true };
+}
+
+function runUpgrade(options = {}, deps = {}) {
+  const projectDir = path.resolve(String(options.project || process.cwd()));
+  const matrix = deps.matrix || loadMatrix();
+  const hosts = options.hosts || ['model'];
+  const beforeState = collectUpgradeState(projectDir, deps);
+  const projectRoot = beforeState.projectPath || projectDir;
+  const before = checkProject(beforeState, matrix, { hosts, needs: ['build'] });
+  const plan = planUpgrade(beforeState, matrix, { hosts });
+  let applied = [];
+  let skipped = [];
+  let after = null;
+  let ok = true;
+
+  let scopedPlan;
+  try {
+    scopedPlan = scopePlan(plan, options.steps);
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err), plan: serializePlan(plan), applied, skipped, manual: plan.manual, before, after };
+  }
+
+  if (options.apply) {
+    if (!options.allowDirty) {
+      const dirty = dirtyTreeStatus(projectRoot, deps);
+      if (!dirty.ok) {
+        return { ok: false, error: dirty.error, plan: serializePlan(scopedPlan), applied, skipped, manual: plan.manual, before, after };
+      }
+    }
+    let result;
+    try {
+      result = applyUpgrade(scopedPlan, projectRoot, {
+        ...deps,
+        noInstall: options.noInstall,
+        npmCli: options.npmCli,
+      });
+    } catch (err) {
+      return {
+        ok: false,
+        plan: serializePlan(scopedPlan),
+        applied: err.applied || applied,
+        skipped: err.skipped || skipped,
+        manual: plan.manual,
+        before,
+        after: null,
+        error: String(err && err.message ? err.message : err),
+        changedFiles: err.changedFiles || [],
+        restored: err.restored || [],
+      };
+    }
+    applied = result.applied;
+    skipped = result.skipped;
+    const changedFiles = result.changedFiles || [];
+    const afterState = collectUpgradeState(projectRoot, deps);
+    after = checkProject(afterState, matrix, { hosts, needs: ['build'] });
+    ok = !hasErrors(after);
+    return {
+      ok,
+      plan: serializePlan(scopedPlan),
+      applied,
+      skipped,
+      manual: plan.manual,
+      before,
+      after,
+      changedFiles,
+    };
+  }
+
+  return {
+    ok,
+    plan: serializePlan(scopedPlan),
+    applied,
+    skipped,
+    manual: plan.manual,
+    before,
+    after,
+  };
+}
+
+function selectableStepIds(plan) {
+  const available = new Set((plan.steps || []).map((step) => step.id));
+  // SAFE_APPLY order, not plan order, so the error list is stable and includes REINSTALL
+  // whenever the plan contains it. REINSTALL used to be applied only as a side effect of
+  // DEPS_TO_MATRIX, which made the plan list an id --steps then rejected.
+  return [...SAFE_APPLY].filter((id) => available.has(id));
+}
+
+function scopePlan(plan, steps) {
+  const requested = Array.isArray(steps) ? steps.filter(Boolean) : [];
+  if (requested.length === 0) return plan;
+  const byId = new Map((plan.steps || []).map((step) => [step.id, step]));
+  const selectable = selectableStepIds(plan);
+  for (const id of requested) {
+    if (!SAFE_APPLY.has(id) || !byId.has(id)) {
+      throw new Error(`Unknown --steps value '${id}'. Choose one of: ${selectable.join(', ') || '(none)'}.`);
+    }
+  }
+  const selectedIds = new Set(requested);
+  for (const id of [...selectedIds]) {
+    const required = byId.get(id) && byId.get(id).requiresStep;
+    if (required && byId.has(required) && !selectedIds.has(required)) selectedIds.add(required);
+  }
+  // Plan order, not request order: file edits stay ahead of the implied reinstall, and a
+  // step the caller named and a step requiresStep added are emitted once.
+  const stepsOut = (plan.steps || []).filter((step) => selectedIds.has(step.id));
+  return { ...plan, steps: stepsOut };
+}
+
+module.exports = {
+  planUpgrade,
+  applyUpgrade,
+  collectUpgradeState,
+  dirtyTreeStatus,
+  runUpgrade,
+  rewritePackageJson,
+  rewritePcfBuildMode,
+  rewritePlatformLibraries,
+  scopePlan,
+};

@@ -1,0 +1,129 @@
+#!/usr/bin/env node
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+
+const SKIP_DIRS = new Set(['node_modules', 'out', 'obj', 'bin', 'generated']);
+const ROOT = path.resolve(__dirname);
+const FIXTURES = path.join(ROOT, 'fixtures');
+
+function usage() {
+  return 'Usage: capture-pcf-fixture.js <projectDir> <fixtureDir>\nCopies a PCF project into evals/pcf/fixtures, excluding node_modules/out/obj/bin/generated.';
+}
+
+function comparablePath(value) {
+  const resolved = path.resolve(value);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function escapesParent(rel) {
+  // `path.relative` of a child named `..source` is the string `..source`. startsWith('..') treats
+  // that name as parent traversal, so capturing into an ancestor deletes the source. A path is
+  // outside only when the relative result is exactly `..`, starts with `..` plus a separator, or
+  // is absolute.
+  return rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel);
+}
+
+function isStrictChild(root, target) {
+  const rel = path.relative(comparablePath(root), comparablePath(target));
+  return rel !== '' && !escapesParent(rel);
+}
+
+function isInsideOrSame(root, target) {
+  const rel = path.relative(comparablePath(root), comparablePath(target));
+  return rel === '' || !escapesParent(rel);
+}
+
+function deepestExistingAncestor(target) {
+  let current = path.resolve(target);
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) return current;
+    current = parent;
+  }
+  return current;
+}
+
+function physicalPath(target) {
+  const resolved = path.resolve(target);
+  const ancestor = deepestExistingAncestor(resolved);
+  const realAncestor = fs.realpathSync(ancestor);
+  const suffix = path.relative(ancestor, resolved);
+  return comparablePath(suffix ? path.join(realAncestor, suffix) : realAncestor);
+}
+
+function assertInsideFixtures(target, options = {}) {
+  const fixturesRoot = options.fixturesRoot ? path.resolve(options.fixturesRoot) : FIXTURES;
+  const resolvedTarget = path.resolve(target);
+  if (!isStrictChild(fixturesRoot, resolvedTarget)) {
+    throw new Error(`Refusing to write outside ${fixturesRoot}: ${target}`);
+  }
+
+  const realFixtures = fs.realpathSync(fixturesRoot);
+  const realAncestor = fs.realpathSync(deepestExistingAncestor(resolvedTarget));
+  if (!isInsideOrSame(realFixtures, realAncestor)) {
+    throw new Error(`Refusing to write outside ${fixturesRoot}: ${target}`);
+  }
+}
+
+function assertNonOverlappingTrees(source, destination) {
+  const realSource = physicalPath(source);
+  const realDestination = physicalPath(destination);
+  if (isInsideOrSame(realSource, realDestination) || isInsideOrSame(realDestination, realSource)) {
+    throw new Error(`Refusing to capture overlapping source and fixture trees: ${source} -> ${destination}`);
+  }
+}
+
+function copyTree(src, dest) {
+  const stat = fs.statSync(src);
+  if (stat.isDirectory()) {
+    const base = path.basename(src);
+    if (SKIP_DIRS.has(base)) return;
+    fs.mkdirSync(dest, { recursive: true });
+    for (const entry of fs.readdirSync(src)) copyTree(path.join(src, entry), path.join(dest, entry));
+    return;
+  }
+  if (stat.isFile()) {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    if (path.basename(src) === 'package-lock.json') {
+      // Keep the lockfile-exists doctor signal without copying dependency data into the public
+      // eval corpus. Full captured locks bloat the repo and make GitHub dependency scanning raise
+      // security alerts for fixture-only packages that the harness never installs.
+      fs.writeFileSync(dest, `${JSON.stringify({
+        name: path.basename(path.dirname(src)),
+        lockfileVersion: 3,
+        requires: true,
+        packages: {},
+      }, null, 2)}\n`);
+      return;
+    }
+    fs.copyFileSync(src, dest);
+  }
+}
+
+function main(argv = process.argv.slice(2), options = {}) {
+  if (argv.includes('--help') || argv.includes('-h')) {
+    process.stdout.write(`${usage()}\n`);
+    return 0;
+  }
+  if (argv.length !== 2) {
+    process.stderr.write(`${usage()}\n`);
+    return 2;
+  }
+  const projectDir = path.resolve(argv[0]);
+  const fixtureDir = path.resolve(argv[1]);
+  if (!fs.existsSync(projectDir) || !fs.statSync(projectDir).isDirectory()) throw new Error(`Project directory does not exist: ${projectDir}`);
+  assertInsideFixtures(fixtureDir, options);
+  assertNonOverlappingTrees(projectDir, fixtureDir);
+  if (fs.existsSync(fixtureDir)) fs.rmSync(fixtureDir, { recursive: true, force: true });
+  copyTree(projectDir, fixtureDir);
+  process.stdout.write(`${JSON.stringify({ ok: true, fixtureDir })}\n`);
+  return 0;
+}
+
+if (require.main === module) {
+  try { process.exitCode = main(); }
+  catch (err) { process.stderr.write(`error: ${err.message}\n`); process.exitCode = 1; }
+}
+module.exports = { main, copyTree, assertInsideFixtures, assertNonOverlappingTrees };

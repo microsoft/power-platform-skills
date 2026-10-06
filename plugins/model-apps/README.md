@@ -82,6 +82,8 @@ a matching env var is set.
 
 ## Skills
 
+PCF code components ship in the separate preview [pcf plugin](../pcf/README.md).
+
 The plugin provides two authoring skills: `/app-builder` builds a whole model-driven app, and
 `/genpage` builds standalone generative pages for an existing app. **They are independent — you can
 use either on its own, and neither requires the other.**

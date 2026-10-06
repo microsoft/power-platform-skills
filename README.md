@@ -58,6 +58,7 @@ If you prefer to install manually, run these commands inside a GitHub Copilot CL
     ```bash
     /plugin install power-pages@power-platform-skills
     /plugin install model-apps@power-platform-skills
+    /plugin install pcf@power-platform-skills
     /plugin install mcp-apps@power-platform-skills
     /plugin install code-apps-preview@power-platform-skills
     /plugin install mobile-app@power-platform-skills
@@ -84,6 +85,16 @@ views, charts, security roles, app + sitemap — from a natural-language intent;
 generative pages for an app that already exists. Use either independently — neither requires the other
 
 **Stack**: React + TypeScript + Fluent, deployed via PAC CLI and the headless `cds-maker-sdk`
+
+### [PCF](plugins/pcf/README.md) (`plugins/pcf`)
+
+Build, test, diagnose, upgrade, deploy, verify and inventory Power Apps component framework (PCF) code components for model-driven apps, with guided setup for Power Pages field controls and canvas apps. Canvas apps need an admin to turn on **Power Apps component framework for canvas apps** in each environment.
+
+**Skills**: `/pcf:pcf` scaffolds Microsoft-maintained PCF templates and recipes, runs gates, deploys with PAC, and verifies registration and bindings.
+
+**Status**: Preview — see [capabilities](plugins/pcf/docs/pcf-capabilities.md)
+
+**Stack**: Node.js 20+, Power Apps component framework, PAC CLI, .NET SDK, and Azure CLI for verification/inventory
 
 ### [MCP Apps](plugins/mcp-apps/README.md) (`plugins/mcp-apps`)
 

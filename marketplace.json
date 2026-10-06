@@ -17,6 +17,10 @@
             "source": "./plugins/model-apps"
         },
         {
+            "name": "pcf",
+            "source": "./plugins/pcf"
+        },
+        {
             "name": "mcp-apps",
             "source": "./plugins/mcp-apps"
         },

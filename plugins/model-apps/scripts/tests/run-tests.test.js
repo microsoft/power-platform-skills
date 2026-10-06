@@ -84,6 +84,28 @@ const BUNDLED_SHARED_SOURCES = new Set([
   'shared/skills/**',
   'plugins/power-pages/scripts/lib/telemetry/region/**',
 ]);
+// pcf ships copies of these model-apps files (scripts/validate-plugin-copies.js is the source of
+// truth). A PR that edits only pcf's copy must still run this plugin's copy-sync test.
+const PCF_COPY_SYNC_PATHS = new Set([
+  'scripts/validate-plugin-copies.js',
+  'plugins/pcf/scripts/lib/process-runner.js',
+  'plugins/pcf/scripts/lib/sdk-http-client.js',
+  'plugins/pcf/scripts/lib/odata.js',
+  'plugins/pcf/scripts/lib/source-literals.js',
+  'plugins/pcf/scripts/lib/interaction-mode.js',
+  'plugins/pcf/scripts/lib/nearest-name.js',
+  'plugins/pcf/scripts/lib/utf8-stream.js',
+  'plugins/pcf/scripts/lib/cli-failure.js',
+  'plugins/pcf/scripts/lib/telemetry/ikey.json',
+  'plugins/pcf/scripts/lib/dataverse-auth.js',
+  'plugins/pcf/scripts/check-auth.js',
+  'plugins/pcf/scripts/resolve-interaction-mode.js',
+  'plugins/pcf/scripts/vendor/cds-maker-sdk.cjs',
+  'plugins/pcf/scripts/vendor/PROVENANCE.json',
+  'plugins/pcf/scripts/vendor/.gitattributes',
+  'plugins/pcf/skills/report-issue/report-issue-workflow.md',
+  'plugins/pcf/skills/report-issue/SKILL.md',
+]);
 
 test('the model-apps CI workflow triggers ONLY on model-apps paths and the shared sources it bundles', () => {
   const wf = fs.readFileSync(WORKFLOW, 'utf8');
@@ -104,7 +126,8 @@ test('the model-apps CI workflow triggers ONLY on model-apps paths and the share
   for (const g of globs) {
     assert.ok(
       g.startsWith('plugins/model-apps/') || g.startsWith('evals/model-apps/') || g.endsWith('model-apps-script-tests.yml')
-        || BUNDLED_SHARED_SOURCES.has(g),
+        || BUNDLED_SHARED_SOURCES.has(g)
+        || PCF_COPY_SYNC_PATHS.has(g),
       `path filter "${g}" is not scoped to model-apps — this workflow must not run for other plugins`
     );
   }
@@ -115,6 +138,10 @@ test('the model-apps CI workflow triggers ONLY on model-apps paths and the share
   for (const source of BUNDLED_SHARED_SOURCES) {
     assert.ok(globs.includes(source), `a change to ${source} must run the drift test`);
     assert.ok(fs.existsSync(path.resolve(__dirname, '..', '..', '..', '..', source.replace(/\/\*\*$/, ''))), `${source} names no directory`);
+  }
+  for (const copyPath of PCF_COPY_SYNC_PATHS) {
+    assert.ok(globs.includes(copyPath), `a change to ${copyPath} must run the pcf copy sync test`);
+    assert.ok(fs.existsSync(path.resolve(__dirname, '..', '..', '..', '..', copyPath)), `${copyPath} names no file`);
   }
 });
 

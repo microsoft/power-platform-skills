@@ -93,6 +93,46 @@ test('requiredLevel: respects argument', () => {
   assert.equal(requiredLevel('ApplicationRequired').Value, 'ApplicationRequired');
 });
 
+test('makeRequest reports a response cut off mid-body promptly and keeps complete responses unchanged', async () => {
+  const { makeRequest } = require('../lib/dataverse-auth.js');
+  const body = '{"value":"complete"}';
+  const server = http.createServer((req, res) => {
+    if (req.url === '/complete') {
+      res.writeHead(201, { 'Content-Type': 'application/json', 'X-Transport-Test': 'complete' });
+      res.end(body);
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': '100' });
+    res.write('{"value":');
+    // Let the client receive headers and a body chunk before severing the socket, so this exercises
+    // the response stream (not a connection failure before the response callback).
+    setTimeout(() => res.destroy(), 50);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  let timer;
+  try {
+    const result = await Promise.race([
+      makeRequest({ url: `http://127.0.0.1:${port}/truncated` }),
+      new Promise((resolve) => { timer = setTimeout(() => resolve({ timedOut: true }), 1000); }),
+    ]);
+    assert.equal(result.timedOut, undefined, 'makeRequest must settle when a response closes before end');
+    assert.equal(typeof result.error, 'string');
+    assert.ok(result.error.length > 0);
+    assert.deepEqual(Object.keys(result), ['error'], 'partial JSON must not be reported as a successful body');
+
+    const complete = await makeRequest({ url: `http://127.0.0.1:${port}/complete` });
+    assert.deepEqual(complete, { statusCode: 201, body });
+    const withHeaders = await makeRequest({ url: `http://127.0.0.1:${port}/complete`, includeHeaders: true });
+    assert.equal(withHeaders.statusCode, 201);
+    assert.equal(withHeaders.body, body);
+    assert.equal(withHeaders.headers['x-transport-test'], 'complete');
+  } finally {
+    clearTimeout(timer);
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('makeRequest preserves UTF-8 characters split across response chunks', async () => {
   const { makeRequest } = require('../lib/dataverse-auth.js');
   const body = JSON.stringify({ city: '東京', emoji: '😀', cafe: 'Café' });

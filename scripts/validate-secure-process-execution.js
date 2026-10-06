@@ -32,6 +32,7 @@ const path = require('path');
 const REPOSITORY_ROOT = path.resolve(__dirname, '..');
 const POWER_PAGES_ROOT = 'plugins/power-pages';
 const MODEL_APPS_ROOT = 'plugins/model-apps';
+const PCF_ROOT = 'plugins/pcf';
 const CHILD_PROCESS_MODULES = new Set(['child_process', 'node:child_process']);
 const PROCESS_METHODS = new Set([
   'exec',
@@ -54,6 +55,8 @@ const SCAN_ROOTS = Object.freeze([
   `${POWER_PAGES_ROOT}/skills`,
   `${MODEL_APPS_ROOT}/hooks`,
   `${MODEL_APPS_ROOT}/scripts`,
+  `${PCF_ROOT}/hooks`,
+  `${PCF_ROOT}/scripts`,
 ]);
 const EXCLUDED_DIRECTORY_NAMES = new Set([
   'test',
@@ -80,8 +83,11 @@ const EXCLUDED_DIRECTORY_NAMES = new Set([
 // through its own native-exec.js, which resolves the name to an absolute native
 // executable on PATH, never the working directory, and runs it with shell:false. That
 // resolved path is its one non-literal executable, audited once per scanned copy.
-const RUNNER_PATH = `${MODEL_APPS_ROOT}/scripts/lib/process-runner.js`;
-const RUNNER_REASON = 'model-apps process runner: absolute executable resolved at run time; '
+const RUNNER_PATHS = [
+  'plugins/model-apps/scripts/lib/process-runner.js',
+  'plugins/pcf/scripts/lib/process-runner.js',
+];
+const RUNNER_REASON = 'model-apps/pcf process runner: absolute executable resolved at run time; '
   + 'options merged under shell:false, batch-shim arguments checked before spawning.';
 const TELEMETRY_EXEC_CALL = 'execFileSync ( file , args , { encoding : options . encoding , '
   + 'timeout : options . timeout , stdio : options . stdio , windowsHide : true , shell : false , } )';
@@ -93,14 +99,14 @@ const AUDITED_EXCEPTIONS = Object.freeze([
     ['spawnSync', 'childProcess . spawnSync ( inv . file , inv . args , withOptions ( inv , options ) )'],
     ['execFile', 'childProcess . execFile ( inv . file , inv . args , withOptions ( inv , options ) , callback )'],
     ['spawn', 'childProcess . spawn ( inv . file , inv . args , withOptions ( inv , options ) )'],
-  ].flatMap(([callee, call]) => ['nonconstant-executable', 'ambiguous-shell-option'].map((rule) => Object.freeze({
-    path: RUNNER_PATH,
+  ].flatMap(([callee, call]) => RUNNER_PATHS.flatMap((runnerPath) => ['nonconstant-executable', 'ambiguous-shell-option'].map((rule) => Object.freeze({
+    path: runnerPath,
     rule,
     callee,
     call,
     reason: RUNNER_REASON,
-  }))),
-  ...[POWER_PAGES_ROOT, MODEL_APPS_ROOT].map((root) => Object.freeze({
+  })))),
+  ...[POWER_PAGES_ROOT, MODEL_APPS_ROOT, PCF_ROOT].map((root) => Object.freeze({
     path: `${root}/scripts/lib/telemetry/lib/native-exec.js`,
     rule: 'nonconstant-executable',
     callee: 'execFileSync',
@@ -1072,6 +1078,8 @@ function shouldScan(relativePath) {
   if (normalized.startsWith(`${POWER_PAGES_ROOT}/scripts/`)) return true;
   if (normalized.startsWith(`${MODEL_APPS_ROOT}/hooks/`)) return true;
   if (normalized.startsWith(`${MODEL_APPS_ROOT}/scripts/`)) return true;
+  if (normalized.startsWith(`${PCF_ROOT}/hooks/`)) return true;
+  if (normalized.startsWith(`${PCF_ROOT}/scripts/`)) return true;
   return normalized.startsWith(`${POWER_PAGES_ROOT}/skills/`) &&
     normalized.includes('/scripts/');
 }
