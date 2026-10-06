@@ -101,6 +101,28 @@ async function loadedFonts() {
     .map((face) => face.family.replace(/["']/g, '')))];
 }
 
+// Headings set at a weight the loaded family does not ship are drawn in a browser-faked bold.
+// The loaded-family list cannot show that, so compare each heading's computed weight with the
+// weights its family actually loaded. FontFace.weight is a single value ("400", "bold") for a
+// static face or a range ("100 900") for a variable one.
+function findSyntheticWeights() {
+  const toNumber = (value) => ({ normal: 400, bold: 700 }[value] || Number(value));
+  const faces = [...document.fonts].filter((face) => face.status === 'loaded');
+  const found = new Set();
+  for (const el of document.querySelectorAll('h1, h2, h3')) {
+    const style = getComputedStyle(el);
+    const family = style.fontFamily.split(',')[0].trim().replace(/["']/g, '');
+    const weight = toNumber(style.fontWeight);
+    const familyFaces = faces.filter((face) => face.family.replace(/["']/g, '') === family);
+    const covered = familyFaces.some((face) => {
+      const [low, high = low] = String(face.weight).split(/\s+/).map(toNumber);
+      return weight >= low && weight <= high;
+    });
+    if (familyFaces.length && !covered) found.add(`${el.tagName.toLowerCase()}: ${family} ${weight}`);
+  }
+  return [...found];
+}
+
 function measureOverflow() {
   const root = document.documentElement;
   if (root.scrollWidth <= root.clientWidth) return { overflow: false };
@@ -136,9 +158,19 @@ async function captureRouteAtWidth({ browser, page, url, route, width, outputDir
       result.pageErrors.push(`HTTP ${response.status()} ${response.url()}`);
     }
   };
+  // DNS and connection failures produce no response at all, only a failed request. Requests
+  // the page itself cancelled (net::ERR_ABORTED, e.g. a lazy image dropped on navigation) are
+  // routine, so they are not reported.
+  const onRequestFailed = (request) => {
+    const errorText = (request.failure() || {}).errorText || 'failed';
+    if (!/ERR_ABORTED/.test(errorText) && !/\/favicon\.ico(\?|$)/.test(request.url())) {
+      result.pageErrors.push(`FAILED ${request.url()} (${errorText})`);
+    }
+  };
   page.on('pageerror', onPageError);
   page.on('console', onConsole);
   page.on('response', onResponse);
+  page.on('requestfailed', onRequestFailed);
   try {
     await page.goto(`${url}${route}`, { waitUntil: 'networkidle', timeout: NAVIGATION_TIMEOUT_MS });
     await page.waitForTimeout(SETTLE_MS);
@@ -149,6 +181,7 @@ async function captureRouteAtWidth({ browser, page, url, route, width, outputDir
     }
     await page.evaluate(scrollThrough);
     result.fonts = await page.evaluate(loadedFonts);
+    result.syntheticWeights = await page.evaluate(findSyntheticWeights);
     result.overflow = await page.evaluate(measureOverflow);
     if (!checksOnly) {
       if (width === 'desktop') {
@@ -174,6 +207,7 @@ async function captureRouteAtWidth({ browser, page, url, route, width, outputDir
     page.off('pageerror', onPageError);
     page.off('console', onConsole);
     page.off('response', onResponse);
+    page.off('requestfailed', onRequestFailed);
   }
   return result;
 }
@@ -200,13 +234,16 @@ async function captureDesignReview({ playwright, channel, url, routes, outputDir
 }
 
 function summarize(results) {
-  const summary = { fonts: [], overflow: [], pageErrors: [], captureErrors: [], images: [] };
+  const summary = { fonts: [], syntheticWeights: [], overflow: [], pageErrors: [], captureErrors: [], images: [] };
   const fonts = new Set();
   for (const entry of results) {
     for (const width of Object.keys(VIEWPORTS)) {
       const r = entry[width];
       if (!r) continue;
       (r.fonts || []).forEach((f) => fonts.add(f));
+      (r.syntheticWeights || []).forEach((w) => {
+        if (!summary.syntheticWeights.includes(w)) summary.syntheticWeights.push(w);
+      });
       if (r.overflow && r.overflow.overflow) summary.overflow.push(`${entry.route} @ ${width}`);
       if (r.pageErrors && r.pageErrors.length) summary.pageErrors.push(`${entry.route} @ ${width}: ${r.pageErrors.length}`);
       if (r.captureError) summary.captureErrors.push(`${entry.route} @ ${width}: ${r.captureError}`);
@@ -267,6 +304,7 @@ module.exports = {
   VIEWPORTS,
   buildMobileSheet,
   captureDesignReview,
+  findSyntheticWeights,
   loadedFonts,
   main,
   measureOverflow,

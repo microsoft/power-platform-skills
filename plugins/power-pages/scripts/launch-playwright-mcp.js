@@ -46,15 +46,32 @@ function buildMcpArgs(browser, {
 // takes screenshots during design work, so the default would litter the user's project.
 // An explicit PLAYWRIGHT_MCP_OUTPUT_DIR is the server's own override, so it wins and is
 // left for the server to read; this launcher never deletes it.
+// Private roots tried in order: the OS temp directory, then a cache directory in the user's
+// home for a full or read-only temp volume. Neither is ever the user's project.
+function outputDirRoots({ tmpdir = os.tmpdir, homedir = os.homedir } = {}) {
+  return [tmpdir(), path.join(homedir(), '.cache', 'power-pages')];
+}
+
 function createOutputDir({
   env = process.env,
   mkdtempSync = fs.mkdtempSync,
+  mkdirSync = fs.mkdirSync,
   tmpdir = os.tmpdir,
+  homedir = os.homedir,
 } = {}) {
   if (env[OUTPUT_DIR_ENV]) {
     return null;
   }
-  return createPrivateTempDir(OUTPUT_DIR_PREFIX, { mkdtempSync, tmpdir });
+  const failures = [];
+  for (const root of outputDirRoots({ tmpdir, homedir })) {
+    try {
+      mkdirSync(root, { recursive: true, mode: 0o700 });
+      return createPrivateTempDir(OUTPUT_DIR_PREFIX, { mkdtempSync, tmpdir: () => root });
+    } catch (error) {
+      failures.push(`${root}: ${error.message}`);
+    }
+  }
+  throw new Error(failures.join('; '));
 }
 
 function removeOutputDir(outputDir, { rmSync = fs.rmSync } = {}) {
@@ -68,8 +85,10 @@ function removeOutputDir(outputDir, { rmSync = fs.rmSync } = {}) {
 // sessions keep a fresh directory. Sweeping an idle live session is harmless: its images
 // were already returned to the model, and the server recreates the directory on its next
 // write.
-function sweepStaleOutputDirs(options = {}) {
-  sweepStaleTempDirs(OUTPUT_DIR_PREFIX, options);
+function sweepStaleOutputDirs({ tmpdir = os.tmpdir, homedir = os.homedir, ...options } = {}) {
+  for (const root of outputDirRoots({ tmpdir, homedir })) {
+    sweepStaleTempDirs(OUTPUT_DIR_PREFIX, { ...options, tmpdir: () => root });
+  }
 }
 
 function resolveNpxCli({
@@ -120,14 +139,19 @@ function launch({
   }
 
   // Created only after npx resolves, so a launch that cannot start leaves nothing behind.
+  sweepStaleOutputDirsFn();
   let outputDir = null;
   try {
-    sweepStaleOutputDirsFn();
     outputDir = createOutputDirFn();
   } catch (error) {
-    // Screenshots still work without the temp directory; they just fall back to the
-    // server's default location, so a temp-dir failure must not block the browser tools.
-    writeError(`Playwright MCP output will use the server default directory: ${error.message}\n`);
+    // Starting without --output-dir would let the server write screenshots into the user's
+    // project (<cwd>/.playwright-mcp), so fail closed with a fix the user can apply.
+    writeError(
+      `Failed to start Playwright MCP: no private output directory could be created (${error.message}). `
+      + 'Free space in the temp directory or set PLAYWRIGHT_MCP_OUTPUT_DIR.\n',
+    );
+    exitFn(1);
+    return null;
   }
 
   const child = spawnFn(process.execPath, [resolvedNpxCliPath, ...buildMcpArgs(browser, { outputDir })], {

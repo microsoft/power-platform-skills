@@ -11,7 +11,7 @@ const { createPrivateTempDir, isOwnTempDir, sweepStaleTempDirs } = require('../l
 
 // A stand-in for the Playwright API surface the capture uses. In-page functions are
 // recognized by identity, so the fake answers exactly what the real browser would be asked.
-function fakePlaywright({ pageHeight = 3000, overflowRoutes = [], failRoutes = [], events = {} } = {}) {
+function fakePlaywright({ pageHeight = 3000, overflowRoutes = [], failRoutes = [], events = {}, synthetic = [] } = {}) {
   const calls = { launch: [], contexts: [], screenshots: [], sheets: [], gotos: [] };
   const makePage = (viewport) => {
     const page = new EventEmitter();
@@ -34,6 +34,7 @@ function fakePlaywright({ pageHeight = 3000, overflowRoutes = [], failRoutes = [
       if (fn === review.scrollThrough) return undefined;
       if (fn === review.loadedFonts) return ['Public Sans', 'Schibsted Grotesk'];
       if (fn === review.pageHeight) return pageHeight;
+      if (fn === review.findSyntheticWeights) return synthetic;
       if (fn === review.measureOverflow) {
         return overflowRoutes.some((r) => current.endsWith(r) && viewport.width === 390)
           ? { overflow: true, scrollWidth: 398, clientWidth: 390, culprits: [] }
@@ -70,6 +71,7 @@ function fakePlaywright({ pageHeight = 3000, overflowRoutes = [], failRoutes = [
 
 const consoleMessage = (type, text) => ({ type: () => type, text: () => text });
 const response = (status, url) => ({ status: () => status, url: () => url });
+const failedRequest = (url, errorText) => ({ url: () => url, failure: () => (errorText ? { errorText } : null) });
 
 test('parseArgs reads a capture request and trims the base URL and route list', () => {
   assert.deepEqual(
@@ -151,19 +153,35 @@ test('captureDesignReview records page errors with URLs and skips favicon and du
       pageerror: (url) => (url.endsWith('/') ? [new Error('boom')] : []),
       console: () => [consoleMessage('error', 'Failed to load resource: the server responded with a status of 404'), consoleMessage('warning', 'ignored'), consoleMessage('error', 'Uncaught TypeError')],
       response: () => [response(404, 'http://localhost:5173/missing.png'), response(404, 'http://localhost:5173/favicon.ico'), response(200, 'http://localhost:5173/ok.js')],
+      requestfailed: () => [
+        failedRequest('https://cdn.example/font.woff2', 'net::ERR_NAME_NOT_RESOLVED'),
+        failedRequest('https://images.example/lazy.jpg', 'net::ERR_ABORTED'),
+        failedRequest('http://localhost:5173/favicon.ico', 'net::ERR_CONNECTION_REFUSED'),
+      ],
     },
   });
   const result = await review.captureDesignReview({
     playwright: fake.playwright, channel: 'chrome', url: 'http://localhost:5173', routes: ['/', '/about'], outputDir: null, checksOnly: true,
   });
 
-  assert.deepEqual(result.routes[0].desktop.pageErrors, ['boom', 'Uncaught TypeError', 'HTTP 404 http://localhost:5173/missing.png']);
-  assert.deepEqual(result.routes[1].desktop.pageErrors, ['Uncaught TypeError', 'HTTP 404 http://localhost:5173/missing.png']);
+  const failed = 'FAILED https://cdn.example/font.woff2 (net::ERR_NAME_NOT_RESOLVED)';
+  assert.deepEqual(result.routes[0].desktop.pageErrors, ['boom', 'Uncaught TypeError', 'HTTP 404 http://localhost:5173/missing.png', failed]);
+  assert.deepEqual(result.routes[1].desktop.pageErrors, ['Uncaught TypeError', 'HTTP 404 http://localhost:5173/missing.png', failed]);
   for (const page of fake.browser.pages) {
-    for (const event of ['pageerror', 'console', 'response']) {
+    for (const event of ['pageerror', 'console', 'response', 'requestfailed']) {
       assert.equal(page.listenerCount(event), 0, `${event} listeners must not accumulate across routes`);
     }
   }
+});
+
+test('captureDesignReview reports headings drawn in a synthesized weight', async () => {
+  const fake = fakePlaywright({ synthetic: ['h1: Instrument Serif 700'] });
+  const result = await review.captureDesignReview({
+    playwright: fake.playwright, channel: 'chrome', url: 'http://localhost:5173', routes: ['/', '/about'], outputDir: null, checksOnly: true,
+  });
+
+  assert.deepEqual(result.routes[0].desktop.syntheticWeights, ['h1: Instrument Serif 700']);
+  assert.deepEqual(result.summary.syntheticWeights, ['h1: Instrument Serif 700'], 'listed once across routes and widths');
 });
 
 test('captureDesignReview in checks-only mode takes no screenshots', async () => {

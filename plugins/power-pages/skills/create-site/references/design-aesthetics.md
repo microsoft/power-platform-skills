@@ -170,7 +170,8 @@ Add a mono face only when the site shows data, codes, or reference numbers.
 
 **Ramp.**
 The hero headline is at least 3x the body size.
-Contrast weights by role: display at 600-800, body at 400, small labels at 500-600.
+Contrast weights by role, using only weights the chosen family publishes: display at 600-800 where the family ships them, body at 400, small labels at 500-600.
+Instrument Serif, DM Serif Display, Gloock, Young Serif, and Libre Caslon Display ship only 400 - set them at 400, get the contrast from size and tracking, and add `font-synthesis: none` to those headings so the browser never fakes a bold.
 Track large display type tight (`-0.02em` to `-0.04em`) and set it at line-height 1.0-1.1.
 Set body text at line-height 1.5-1.7 within `--measure`.
 Apply `text-wrap: balance` to headings and `text-wrap: pretty` to paragraphs; both degrade safely in older browsers.
@@ -200,7 +201,7 @@ Load both families in one `<link>` with `preconnect`, in `index.html` (`Layout.a
 ```
 
 Use a weight range (`wght@500..800`) only for variable families; a range on a static family such as DM Serif Display fails.
-Use a discrete list (`wght@400;600`) for static families.
+For static families, list only the weights the family publishes (its Google Fonts page shows them): a discrete list silently drops a weight that does not exist, and the browser then synthesizes it.
 Google Fonts silently drops a misspelled or non-Google family from a combined request and still returns HTTP 200, so the page falls back to the system font with no error.
 The design review's capture lists the families that actually loaded, which catches this (see [design-critique.md](design-critique.md#capture)).
 

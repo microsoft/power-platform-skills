@@ -492,7 +492,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | `create-site:4.7.plan-approval` | gate | plan | 4.7 | HTML plan rendered — *"Approve and start building / I'd like to make changes"* | nothing |
 | `create-site:5.7.critique-blocked` | gate | progress | 5.7 | A critical design gate still fails after three critique rounds - *"Keep fixing / Continue and record it as a known issue / Stop here"* | nothing |
 | `create-site:7.review` | gate | plan | 7 | Live site ready — *"Would you like any changes?"* | nothing |
-| `create-site:8.deploy` | gate | plan | 8 | *"Deploy now (Recommended) / Skip for now"* — invokes `/deploy-site` on Yes | nothing |
+| `create-site:8.deploy` | gate | plan | 8 | *"Deploy now (Recommended) / Skip for now"* — invokes `/deploy-site` on Yes; when `SAMPLE CONTENT` placeholders remain, they are listed first, the question names the count, and Skip becomes the recommended option | nothing |
 
 Template-path note: when Phase 1.5 selects and installs a template, the workflow stops after activation/live preview and does **not** enter the from-scratch Phase 4 plan approval or Phase 8 deploy prompt. Those gates fire only on the from-scratch branch.
 

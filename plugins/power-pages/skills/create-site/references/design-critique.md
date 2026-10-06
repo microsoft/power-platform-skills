@@ -26,8 +26,9 @@ Per route:
 Automated checks per route and width:
 
 - **`fonts`** - the families that actually loaded. Both chosen families must be listed; a missing one means the font `<link>` names it wrong or requests a weight range from a static family (see [design-aesthetics.md](design-aesthetics.md#4-typography)).
+- **`syntheticWeights`** - headings drawn at a weight their family does not ship, so the browser fakes it (e.g., `h1: Instrument Serif 700`). Set them at a weight the family publishes.
 - **`overflow`** - measured after scrolling through, so content revealed on scroll is included. `{ "overflow": true }` with an empty `culprits` list means a pseudo-element or a `100vw` width is responsible - look for `::before`/`::after` with negative offsets (e.g., a decorative frame corner at `right: -8px`). The fix belongs on the element; `overflow-x: hidden` on `html` or `body` only hides the break and clips content.
-- **`pageErrors`** - uncaught exceptions, console errors, and failed requests with their URL.
+- **`pageErrors`** - uncaught exceptions, console errors, HTTP error responses, and requests that failed outright (DNS or connection errors), each with its URL.
 
 `summary` lists the routes that overflow, have page errors, or failed to capture.
 
@@ -108,7 +109,7 @@ Any of these caps the site at Intentional regardless of the total, and must be f
 - An inaccessible primary flow: keyboard, focus, form labels, or contrast.
 - Proof invented and presented as fact, or UI that misrepresents what the site does.
 - A broken mobile layout: a failed overflow check, overlap, clipped text, or the primary CTA pushed off the first screen.
-- A failed font check.
+- A failed font check: a chosen family missing from `fonts`, or any entry in `syntheticWeights`.
 - A site that could belong to any organization, or pages that look assembled from unrelated templates.
 
 ## Scorecard
@@ -128,7 +129,6 @@ List problems only; passing details need no mention.
 2. Fix every critical gate, then every category below 3, highest impact first, and commit.
 3. Review again, capturing only the routes that changed plus `/`, and verify each earlier fix.
 
-The pass is complete when no critical gate fails and every category scores 3 or more.
-After three rounds, stop iterating on categories below 3 and record each with its reason.
+The pass is complete when no critical gate fails and every category scores 3 or more, or when three rounds have run and no critical gate fails - each category still below 3 is then recorded with its reason, and the Phase 7 summary shows it to the user.
 A critical gate still failing after three rounds goes to the user through the `create-site:5.7.critique-blocked` gate in `SKILL.md`; it never passes silently.
 Keep the final scorecard for the Phase 7 summary, then remove the screenshots with `node "${PLUGIN_ROOT}/skills/create-site/scripts/capture-design-review.js" --cleanup <outputDir>` for each round's `outputDir`.

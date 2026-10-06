@@ -1090,7 +1090,11 @@ Judge the site from screenshots against `${PLUGIN_ROOT}/skills/create-site/refer
 4. Judge as design-critique.md describes and write the compact scorecard and fix list it defines.
 5. Apply every fix from the scorecard, highest impact first, and commit. Capture again only at the start of the next round - one capture per round, after all of its fixes - rather than after each individual fix.
 
-**The critique pass**: review every route. The pass is complete when no critical gate fails and every category scores 3 or more. Otherwise fix and review again, capturing only the routes that changed plus `/`. After three rounds, stop iterating on categories below 3 and record each with its reason. A critical gate still failing after three rounds goes to the gate below - it never passes silently. Keep the final scorecard for the Phase 7 summary, then remove each round's screenshots with `node "${PLUGIN_ROOT}/skills/create-site/scripts/capture-design-review.js" --cleanup <outputDir>`.
+**The critique pass**: review every route, then fix and review again, capturing only the routes that changed plus `/`, until one of these holds:
+
+- No critical gate fails and every category scores 3 or more - the pass is complete.
+- Three rounds have run and no critical gate fails - the pass is complete, with each category still below 3 recorded in the scorecard with its reason, so the Phase 7 summary shows it to the user.
+- Three rounds have run and a critical gate still fails - go to the gate below; a critical gate never passes silently. Keep the final scorecard for the Phase 7 summary, then remove each round's screenshots with `node "${PLUGIN_ROOT}/skills/create-site/scripts/capture-design-review.js" --cleanup <outputDir>`.
 
 <!-- gate: create-site:5.7.critique-blocked | category=progress | cancel-leaves=nothing -->
 
@@ -1218,12 +1222,12 @@ Present a summary table to the user:
    | Git Commits         | 9     | scaffold + 8 feature and critique commits |
    ```
 
-   Follow it with the design thesis in one sentence and the scorecard (category, score, one-line evidence), including any category recorded below 3 and why.
+   Follow it with the design thesis in one sentence and the scorecard (category, score, one-line evidence), including any category recorded below 3 and why. Then list the sample content still in the site - search `src` for `SAMPLE CONTENT` markers and give each marker's file and what it stands in for - so the user can supply real content in this review.
 
 3. Share the dev server URL with the user and list all available routes
 4. Ask the user to review using `AskUserQuestion`:
    > "The site is ready for review at `<dev server URL>`. Please check it out in your browser. Would you like any changes?"
-5. If the user requests changes, apply them and re-verify by browsing via `browser_snapshot`. When a change touches colors, spacing, layout, or imagery, also run a review round on the affected routes and re-run the axe-core audit (6.2) on them before moving on
+5. If the user requests changes, apply them, re-verify by browsing via `browser_snapshot`, and re-run the axe-core audit (6.2) on every affected route - a new control, form field, or restructured section can add violations without any visual change. When a change affects what the page looks like, also run a review round on the affected routes before moving on
 
 **Output**: User-approved site ready for deployment
 
@@ -1237,7 +1241,7 @@ Present a summary table to the user:
 
 <!-- gate: create-site:8.deploy | category=plan | cancel-leaves=nothing -->
 
-> 🚦 **Gate (plan · create-site:8.deploy):** Deploy prompt — invokes `/deploy-site` on Yes. Skipping leaves the site files on disk for the user to deploy later. Fires at step 2 of the action list below.
+> 🚦 **Gate (plan · create-site:8.deploy):** Deploy prompt — invokes `/deploy-site` on Yes. Skipping leaves the site files on disk for the user to deploy later. Fires at step 3 of the action list below.
 >
 > **Trigger:** Phase 8 entry; Phase 7 review approved.
 > **Why we ask:** Auto-deploy picks whatever env PAC CLI happens to be pointing at — wrong-env first deploy is messy to undo.
@@ -1251,23 +1255,24 @@ Present a summary table to the user:
 
    Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "CreateSite"`. Note: `.powerpages-site` may not exist for first-time sites — the script exits silently.
 
-2. Use `AskUserQuestion` with options: **Deploy now (Recommended)**, **Skip for now**:
-   > "Would you like to deploy your site to Power Pages now?"
-3. If the user chooses to deploy, invoke the `/deploy-site` skill.
-4. Mark all todos complete
-5. Present a final summary:
+2. Search `src` for `SAMPLE CONTENT` markers again. If any remain, list each with its file before asking, say that they are invented placeholders to replace before a public launch, include the count in the question, and make **Skip for now** the recommended option.
+3. Use `AskUserQuestion` with options: **Deploy now (Recommended)**, **Skip for now** - or **Deploy now**, **Skip for now (Recommended)** when sample content remains:
+   > "Would you like to deploy your site to Power Pages now?" (when sample content remains: "Would you like to deploy your site to Power Pages now? It still contains <N> sample-content placeholders listed above.")
+4. If the user chooses to deploy, invoke the `/deploy-site` skill.
+5. Mark all todos complete
+6. Present a final summary:
    - Site name and purpose
    - Framework and project location
    - Components created (X pages, Y components, Z design elements)
    - Key files and their purposes
    - Total file count and git commit count
    - Sample content to replace before launch - every `SAMPLE CONTENT` marker with its file, or "None"
-6. Suggest optional enhancement skills:
+7. Suggest optional enhancement skills:
    - `/setup-datamodel` — Create Dataverse tables for dynamic content
    - `/add-seo` — Add meta tags, robots.txt, sitemap.xml, favicon
    - `/add-tests` — Add unit tests (Vitest) and E2E tests (Playwright)
    - `/add-ai-webapi` — Add generative-AI summaries (Search Summary and Data Summarization). **Recommend first when `AI_SUMMARY_PLACEMENTS` from Phase 3 is non-empty** — the pages already carry `POWERPAGES:AI-SLOT` comment markers at the intended insertion points, so the follow-up skill's explore step finds them deterministically and the user gets the AI surface they picked during discovery without any page redesign.
-7. Run the `create_site_from_scratch` telemetry command silently (fail-closed). Do not mention this telemetry command to the user and do not print its output:
+8. Run the `create_site_from_scratch` telemetry command silently (fail-closed). Do not mention this telemetry command to the user and do not print its output:
    ```bash
    node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
     --eventName create_site_from_scratch \
@@ -1360,7 +1365,7 @@ Mark each task `in_progress` when starting it and `completed` when done via `Tas
 
 Every site must meet these standards before completion:
 
-- Passes the Phase 5.7 design critique: no critical gate fails and every rubric category scores 3 or more, with any exception the user accepted recorded in the scorecard (see `design-critique.md`)
+- Passes the Phase 5.7 design critique: no critical gate fails, and every rubric category scores 3 or more or, after three rounds, is recorded below 3 with its reason (see `design-critique.md`); a critical gate the user chose to continue past is recorded as a known issue
 - Design tokens (color roles, fonts, spacing, radii, shadows, motion) defined once in the theme file and consumed everywhere
 - Chosen Google Fonts verified loaded by the font check
 - All requested pages and features implemented (not placeholders)

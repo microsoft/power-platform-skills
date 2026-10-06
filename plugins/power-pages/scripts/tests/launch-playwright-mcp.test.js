@@ -299,29 +299,54 @@ test('launch removes the temp output dir when the server fails to spawn', () => 
   assert.deepEqual(removed, ['/tmp/power-pages-playwright-mcp-def456']);
 });
 
-test('launch still starts the server when the temp output dir cannot be created', () => {
-  let spawnArgs;
+test('launch fails closed instead of writing into the project when no private output dir exists', () => {
+  let spawned = 0;
+  const exits = [];
   let stderr = '';
 
-  launchForTest({
+  const child = launchForTest({
     browser: 'chrome',
     npxCliPath: '/trusted/npm/bin/npx-cli.js',
     createOutputDirFn() {
-      throw new Error('EACCES: permission denied');
+      throw new Error('/tmp: ENOSPC; /home/me/.cache/power-pages: EACCES');
     },
-    spawnFn(command, args) {
-      spawnArgs = args;
+    spawnFn() {
+      spawned += 1;
       return new EventEmitter();
     },
-    exitFn() {},
+    exitFn(code) {
+      exits.push(code);
+    },
     writeError(message) {
       stderr += message;
     },
   });
 
-  assert.ok(spawnArgs, 'the server must still be spawned');
-  assert.equal(outputDirArg(spawnArgs), null);
-  assert.match(stderr, /server default directory: EACCES/);
+  assert.equal(child, null);
+  assert.equal(spawned, 0, 'the server must not start without a private output directory');
+  assert.deepEqual(exits, [1]);
+  assert.match(stderr, /ENOSPC.*EACCES/);
+  assert.match(stderr, /PLAYWRIGHT_MCP_OUTPUT_DIR/);
+});
+
+test('createOutputDir falls back to a private cache directory in the home folder', () => {
+  const made = [];
+  const dir = createOutputDir({
+    env: {},
+    tmpdir: () => '/full-tmp',
+    homedir: () => '/home/me',
+    mkdirSync: (root) => made.push(root),
+    mkdtempSync(prefix) {
+      if (prefix.startsWith('/full-tmp')) throw new Error('ENOSPC');
+      return `${prefix}xyz`;
+    },
+  });
+  assert.equal(dir, path.join('/home/me', '.cache', 'power-pages', `${OUTPUT_DIR_PREFIX}xyz`));
+  assert.deepEqual(made, ['/full-tmp', path.join('/home/me', '.cache', 'power-pages')]);
+
+  assert.throws(() => createOutputDir({
+    env: {}, tmpdir: () => '/a', homedir: () => '/b', mkdirSync() {}, mkdtempSync() { throw new Error('EROFS'); },
+  }), /EROFS.*EROFS/);
 });
 
 test('launch creates no temp output dir when npm cannot be located', () => {
@@ -421,7 +446,7 @@ test('sweepStaleOutputDirs removes only this user\'s hour-old launcher directori
     }
     fs.lutimesSync(planted, old, old);
 
-    sweepStaleOutputDirs({ tmpdir: () => root });
+    sweepStaleOutputDirs({ tmpdir: () => root, homedir: () => path.join(root, 'no-home') });
 
     assert.equal(fs.existsSync(stale), false, 'an hour-old launcher dir is removed');
     assert.equal(fs.existsSync(fresh), true, 'a live session dir is kept');
@@ -438,7 +463,8 @@ test('sweepStaleOutputDirs leaves other users\' directories and tolerates errors
 
   sweepStaleOutputDirs({
     tmpdir: () => '/shared/tmp',
-    readdirSync: () => [`${OUTPUT_DIR_PREFIX}mine`, `${OUTPUT_DIR_PREFIX}theirs`, `${OUTPUT_DIR_PREFIX}racing`],
+    homedir: () => '/home/me',
+    readdirSync: (root) => (root === '/shared/tmp' ? [`${OUTPUT_DIR_PREFIX}mine`, `${OUTPUT_DIR_PREFIX}theirs`, `${OUTPUT_DIR_PREFIX}racing`] : []),
     lstatSync(dir) {
       if (dir.endsWith('racing')) throw new Error('ENOENT');
       return { ...old, uid: dir.endsWith('mine') ? 501 : 777 };
