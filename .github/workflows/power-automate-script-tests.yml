@@ -1,0 +1,53 @@
+name: power-automate-script-tests
+
+on:
+    pull_request:
+        branches:
+            - main
+        paths:
+            - "plugins/power-automate/**"
+            - ".github/workflows/power-automate-script-tests.yml"
+    push:
+        branches:
+            - main
+        paths:
+            - "plugins/power-automate/**"
+            - ".github/workflows/power-automate-script-tests.yml"
+
+permissions:
+    contents: read
+
+concurrency:
+    group: power-automate-script-tests-${{ github.event.pull_request.number || github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    test-power-automate-scripts:
+        name: test-power-automate-scripts (${{ matrix.os }}, node ${{ matrix.node }})
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 15
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_POWER_AUTOMATE_OPTOUT: "1"
+        strategy:
+            fail-fast: false
+            matrix:
+                os:
+                    - ubuntu-latest
+                    - windows-latest
+                    - macos-latest
+                node:
+                    - 20
+                    - 22
+        steps:
+            - name: checkout
+              uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+            - name: setup-node
+              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+              with:
+                  node-version: ${{ matrix.node }}
+
+            - name: run-power-automate-script-tests
+              shell: bash
+              working-directory: plugins/power-automate
+              run: npm test
