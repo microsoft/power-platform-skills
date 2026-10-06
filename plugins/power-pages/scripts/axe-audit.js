@@ -4,17 +4,16 @@
 // a local dev server or a deployed site - and reports the violations.
 //
 // Usage:
-//   node axe-audit.js --url http://localhost:5173 --routes /,/about,/contact [--project-root <path>]
+//   node axe-audit.js --url http://localhost:5173 --routes /,/about,/contact
 //   node axe-audit.js --input - <<'REQUEST'
-//   {"url": "http://localhost:5173", "routes": ["/", "/about"], "projectRoot": "<path>"}
+//   {"url": "http://localhost:5173", "routes": ["/", "/about"]}
 //   REQUEST
 // Use the stdin form whenever a value comes from a user, a dev server's output, or a page, so
 // the shell never interprets it.
 //
-// Playwright comes from the project's dev dependency when --project-root has one, and
-// otherwise from the plugin's pinned @playwright/mcp package in npm's cache, so nothing is
-// installed into the project. axe-core itself is downloaded once per run and injected only
-// when its bytes match the hash pinned below.
+// Playwright is the one inside the plugin's pinned @playwright/mcp package, from npm's cache
+// (lib/load-playwright.js); nothing is installed into, or loaded from, the project.
+// axe-core is downloaded once per run and injected only when its bytes match the hash below.
 // Output: JSON array of per-route results on stdout.
 // Exit code: 1 when a critical or serious violation is found, a route could not be audited, or
 // the audit cannot run at all; 0 only when every route was audited and passed.
@@ -41,9 +40,9 @@ const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 const SETTLE_MS = 2000;
 const BLOCKING_IMPACTS = new Set(['critical', 'serious']);
 
-const REQUEST_FIELDS = { url: isString, routes: isStringList, projectRoot: isString };
-const USAGE = 'Usage: node axe-audit.js --url <base-url> --routes <comma-separated> [--project-root <path>]\n'
-  + '       node axe-audit.js --input -   (JSON request on stdin: url, routes, projectRoot)';
+const REQUEST_FIELDS = { url: isString, routes: isStringList };
+const USAGE = 'Usage: node axe-audit.js --url <base-url> --routes <comma-separated>\n'
+  + '       node axe-audit.js --input -   (JSON request on stdin: url, routes)';
 
 function parseArgs(argv, { readStdin = () => fs.readFileSync(0, 'utf8') } = {}) {
   let parsed = {};
@@ -51,7 +50,6 @@ function parseArgs(argv, { readStdin = () => fs.readFileSync(0, 'utf8') } = {}) 
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--url' && argv[i + 1]) parsed.url = argv[++i];
     else if (argv[i] === '--routes' && argv[i + 1]) parsed.routes = parseRouteList(argv[++i]);
-    else if (argv[i] === '--project-root' && argv[i + 1]) parsed.projectRoot = argv[++i];
     else if (argv[i] === '--input' && argv[i + 1] === '-') { fromStdin = true; i++; }
   }
   if (fromStdin) {
@@ -163,9 +161,9 @@ async function main(argv = process.argv.slice(2), {
     writeError(`axe-core could not be loaded: ${redactUrlsInText(error.message)}\n`);
     return 1;
   }
-  const playwright = loadPlaywrightFn(args.projectRoot);
+  const playwright = loadPlaywrightFn();
   if (!playwright) {
-    writeError('Playwright could not be loaded from the project or from the pinned @playwright/mcp package. Check that npm can reach its registry.\n');
+    writeError('Playwright could not be loaded from the pinned @playwright/mcp package. Check that npm can reach its registry.\n');
     return 1;
   }
   try {

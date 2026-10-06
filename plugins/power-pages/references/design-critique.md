@@ -12,24 +12,23 @@ One command captures every route at desktop (1440 x 900) and mobile (390 x 844) 
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/capture-design-review.js" --input - <<'REQUEST'
-{"url": "<SITE_URL>", "routes": ["/", "/about"], "projectRoot": "<PROJECT_ROOT>"}
+{"url": "<SITE_URL>", "routes": ["/", "/about"]}
 REQUEST
 ```
 
-Every value goes in the JSON request, never on the command line: a URL, a route, or a folder path can hold characters a shell acts on (`&`, `;`, `$`, quotes), and the quoted `'REQUEST'` delimiter keeps the shell from expanding anything inside.
+Every value goes in the JSON request, never on the command line: a URL or a route can hold characters a shell acts on (`&`, `;`, `$`, quotes), and the quoted `'REQUEST'` delimiter keeps the shell from expanding anything inside.
 Write each value as a JSON string (escape `"` and `\`) and include only the fields that apply:
 
 | Field | Value |
 |-------|-------|
-| `url` | The dev server or a deployed site, `http` or `https` only, without a user name or password |
+| `url` | The dev server or a deployed site, `http` or `https` only, without a user name or password. Any query string or fragment is dropped |
 | `routes` | An array of routes to capture |
 | `discover` | Instead of `routes`: the most pages to collect from the start page's navigation, then its main content, then its footer |
-| `projectRoot` | A project this plugin generated, to use its own `playwright` dev dependency. Loading it runs that project's code, so leave it out for any other folder |
 | `checksOnly` | `true` to run the checks without screenshots |
 | `axe` | `true` to add the axe-core accessibility audit of the captured pages (`accessibility`, summarized in `summary.accessibility`) |
 | `cleanup` | Alone: remove a capture's `outputDir` |
 
-Without `projectRoot`, the script borrows the Playwright inside the plugin's pinned `@playwright/mcp` package - the one its MCP server runs, kept in npm's cache - so nothing is installed into the project. On a machine where that package is not cached yet, npm downloads it there on first use.
+The script uses the Playwright inside the plugin's pinned `@playwright/mcp` package - the one its MCP server runs, kept in npm's cache - and never loads anything from the project, so nothing is installed into it. On a machine where that package is not cached yet, npm downloads it there on first use.
 The script rejects any other field or an unsafe URL; fix the request rather than moving values onto the command line.
 
 It prints JSON and writes screenshots to a private temporary directory outside the project (`outputDir`).
@@ -52,8 +51,9 @@ Automated checks per route and width:
 - **`pageErrors`** - uncaught exceptions, console errors, HTTP error responses, and requests that failed outright (DNS or connection errors), each with its URL. URLs are cut to origin and path, because query strings can carry tokens.
 - **`redirectedTo`** - present when the route was sent to sign in: to another host (an identity provider) or to the site's own sign-in page. The headless capture cannot sign in, so those screenshots show the login page, not the design. Canonical redirects (http to https, with or without `www.`) are followed and not reported.
 
-`summary` lists the routes that overflow, have page errors, redirected, or failed to capture.
-`summary.truncated` lists mobile pages too long for their sheets (over about 30,000 px, usually an endless feed); judge their end from the desktop full page and say the mobile end was not seen.
+`summary` lists the routes that overflow, have page errors, redirected, or failed to capture, and `summary.captured` counts the routes that loaded without being sent to sign in.
+`summary.truncated` lists pages longer than the capture reaches (about 30,000 px, usually an endless feed); judge what was captured and say the end was not seen.
+`summary.innerScroll` lists pages that scroll inside an element rather than the page, with that element's selector; their full-page images show only the first screen, so judge the rest from the source.
 
 ## First-impression review
 

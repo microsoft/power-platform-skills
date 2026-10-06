@@ -109,6 +109,29 @@ test('render-createsite-plan renders HTML from --data file', () => {
   assert.deepEqual(fs.readFileSync(iconPath), fs.readFileSync(sourceIcon), 'icon bytes should match shared asset');
 });
 
+test('render-createsite-plan reads --data - from stdin and keeps shell characters as data', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'createsite-plan-'));
+  const outputPath = path.join(tempDir, 'plan.html');
+  // A user-typed brand URL with characters that would end a single-quoted shell argument.
+  const brandUrl = "https://contoso.example/it's?a=1&b=$(echo hi)";
+  const data = { ...SAMPLE_DATA, DESIGN_DIRECTION_DATA: { ...SAMPLE_DATA.DESIGN_DIRECTION_DATA, brandSource: brandUrl } };
+
+  const result = spawnSync(process.execPath, [scriptPath, '--output', outputPath, '--data', '-'], {
+    encoding: 'utf8',
+    input: JSON.stringify(data),
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const html = fs.readFileSync(outputPath, 'utf8');
+  assert.match(html, /Contoso Portal/);
+  assert.ok(html.includes('it\\u0027s') || html.includes("it's"), 'the brand URL arrives intact');
+
+  const bad = spawnSync(process.execPath, [scriptPath, '--output', path.join(tempDir, 'bad.html'), '--data', '-'], { encoding: 'utf8', input: 'not json' });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /JSON on stdin is not valid/);
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
 test('render-createsite-plan renders HTML from --data-inline JSON', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'createsite-plan-'));
   const outputPath = path.join(tempDir, 'plan-inline.html');

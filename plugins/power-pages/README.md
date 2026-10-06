@@ -393,8 +393,8 @@ Reviews the design of an existing site - a live URL or a local project folder - 
 It captures each page at desktop and mobile widths, runs an accessibility audit, and scores the site against the same ten-category design rubric `/create-site` builds to.
 The result is a scorecard plus prioritized recommendations, each naming the page and element, why it matters, and the exact change, with a redesign direction when the site needs more than fixes.
 
-- Works from a URL (pages are discovered from the site's navigation) or from a project folder (local dev server, deployed site, or code only)
-- Makes no edits: screenshots go to a temporary folder outside the project, nothing is installed into the project, and the folder is checked with `git status` at the end. Starting the dev server, if you choose it, runs your project's own code
+- Works from a URL (pages are discovered from the site's navigation) or from a project folder, which it reads alongside a URL where the site runs - the deployed site or a dev server you start - or on its own for a code-only review
+- Runs nothing from your project and changes nothing in it: screenshots go to a temporary folder outside the project, and nothing is installed
 - Pages that require sign-in are listed as not reviewed, because the capture cannot sign in
 
 #### `/add-seo`

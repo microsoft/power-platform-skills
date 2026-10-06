@@ -915,10 +915,12 @@ Assemble a single JSON object with the following keys. The plan template rejects
 Pick an output path under `<PROJECT_ROOT>/docs/`. Default is `create-site-plan.html`; if that file already exists, pick a descriptive variant like `create-site-plan-v2.html` (the render script refuses to overwrite existing files).
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/render-createsite-plan.js" --output "<PROJECT_ROOT>/docs/create-site-plan.html" --data-inline '<json-string>'
+node "${PLUGIN_ROOT}/scripts/render-createsite-plan.js" --output "<PROJECT_ROOT>/docs/create-site-plan.html" --data - <<'PLAN'
+<plan JSON>
+PLAN
 ```
 
-Use `--data-inline` so no temp JSON file is written. If the JSON is too large for a single shell argument, write it to a temp file and use `--data <path>` instead, then delete the temp file after the render succeeds.
+Send the plan JSON on stdin as shown, so no temp file is written and nothing in it - such as the brand URL the user typed - is parsed by the shell; the quoted `'PLAN'` delimiter turns off expansion.
 
 The script prints `{"status":"ok","output":"<path>"}` on success. Capture and use that actual output path for the next step.
 
@@ -1084,17 +1086,16 @@ Judge the site from screenshots against `${PLUGIN_ROOT}/references/design-critiq
 
 **Running a review** (used for the first-impression review in 5.2 step 4 and for each critique round):
 
-1. Make sure `playwright` is a dev dependency of the project (`npm install --save-dev playwright` in `<PROJECT_ROOT>`; Phase 6 reuses it).
-2. Capture by sending the request on stdin, as design-critique.md's Capture section shows - the dev server URL, the routes, and the project folder never go on the command line:
+1. Capture by sending the request on stdin, as design-critique.md's Capture section shows - the dev server URL and the routes never go on the command line. Nothing needs installing: the script uses the plugin's pinned Playwright.
 
    ```bash
    node "${PLUGIN_ROOT}/scripts/capture-design-review.js" --input - <<'REQUEST'
-   {"url": "<DEV_SERVER_URL>", "routes": ["/", "/about"], "projectRoot": "<PROJECT_ROOT>"}
+   {"url": "<DEV_SERVER_URL>", "routes": ["/", "/about"]}
    REQUEST
    ```
-3. Open every path in `summary.images` in one turn, and read the automated checks from the JSON.
-4. Judge as design-critique.md describes and write the compact scorecard and fix list it defines.
-5. Apply every fix from the scorecard, highest impact first, and commit. Capture again only at the start of the next round - one capture per round, after all of its fixes - rather than after each individual fix.
+2. Open every path in `summary.images` in one turn, and read the automated checks from the JSON.
+3. Judge as design-critique.md describes and write the compact scorecard and fix list it defines.
+4. Apply every fix from the scorecard, highest impact first, and commit. Capture again only at the start of the next round - one capture per round, after all of its fixes - rather than after each individual fix.
 
 **The critique pass**: review every route, then fix and review again, capturing only the routes that changed plus `/`, until one of these holds:
 
@@ -1134,22 +1135,17 @@ Use `AskUserQuestion`, naming each failing critical gate and its evidence in the
 
 **Actions**:
 
-### 6.1 Install Playwright Dependency
+### 6.1 Prerequisites
 
-Phase 5 already installed `playwright` for the design review; skip this step when it is in `package.json`. Otherwise install it as a dev dependency so the audit script can launch a headless browser. This uses the system-installed browser (Edge/Chrome) — no browser download is needed:
-
-```bash
-cd "<PROJECT_ROOT>"
-npm install --save-dev playwright
-```
+The dev server must be running. Nothing needs installing: the audit uses the plugin's pinned Playwright with the system-installed browser (Edge or Chrome), and verifies the axe-core script against a pinned hash before running it.
 
 ### 6.2 Run axe-core Audit on Every Page
 
-Run the audit script via `Bash`, sending the dev server URL, every site route, and the project folder as a JSON request on stdin, so none of them is parsed by the shell:
+Run the audit script via `Bash`, sending the dev server URL and every site route as a JSON request on stdin, so neither is parsed by the shell:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/axe-audit.js" --input - <<'REQUEST'
-{"url": "<DEV_SERVER_URL>", "routes": ["/", "/about", "/services", "/contact"], "projectRoot": "<PROJECT_ROOT>"}
+{"url": "<DEV_SERVER_URL>", "routes": ["/", "/about", "/services", "/contact"]}
 REQUEST
 ```
 

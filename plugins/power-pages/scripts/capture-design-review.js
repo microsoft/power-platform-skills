@@ -7,7 +7,7 @@
 // the whole conversation.
 //
 // Usage:
-//   node capture-design-review.js --url http://localhost:5173 --routes /,/about [--project-root <path>] [--checks-only] [--axe]
+//   node capture-design-review.js --url http://localhost:5173 --routes /,/about [--checks-only] [--axe]
 //   node capture-design-review.js --url https://contoso.powerappsportals.com --discover 6
 //   node capture-design-review.js --input - [--axe]   (request as JSON on stdin; see REQUEST_FIELDS)
 //   node capture-design-review.js --cleanup <outputDir>   (or {"cleanup": "<outputDir>"} on stdin)
@@ -16,9 +16,8 @@
 // did not redirect to sign-in, so routes discovered on an untrusted page reach the audit
 // without the agent copying them into another shell command.
 //
-// Playwright comes from the project's dev dependency when --project-root has one, and
-// otherwise from the plugin's pinned @playwright/mcp package in npm's cache, so nothing is
-// installed into the project.
+// Playwright is the one inside the plugin's pinned @playwright/mcp package, from npm's cache
+// (lib/load-playwright.js); nothing is installed into, or loaded from, the project.
 // Output: JSON on stdout. Exit 0 when the capture ran - findings are data, not failures;
 // exit 1 on usage errors or when no browser can be launched.
 
@@ -47,11 +46,16 @@ const VIEWPORTS = {
 const SHEET_SEGMENT_HEIGHT = VIEWPORTS.mobile.height * 2;
 const SHEET_MAX_COLUMNS = 6;
 const SHEET_MAX_SHEETS = 3;
+// The deepest any capture looks, about 30,000 px. Scrolling and the desktop full-page image
+// stop here, so an endless feed - which grows each time the bottom comes into view - cannot
+// keep the capture running forever.
+const MAX_CAPTURE_HEIGHT = SHEET_MAX_SHEETS * SHEET_MAX_COLUMNS * SHEET_SEGMENT_HEIGHT;
+const SCROLL_BUDGET_MS = 15000;
 const SHEET_GAP = 16;
 const SETTLE_MS = 1200;
 
-const USAGE = 'Usage: node capture-design-review.js --url <base-url> (--routes <comma-separated> | --discover <max-pages>) [--project-root <path>] [--checks-only] [--axe]\n'
-  + '       node capture-design-review.js --input - [--axe]   (JSON request on stdin: url, routes | discover, projectRoot, checksOnly, axe, or cleanup)\n'
+const USAGE = 'Usage: node capture-design-review.js --url <base-url> (--routes <comma-separated> | --discover <max-pages>) [--checks-only] [--axe]\n'
+  + '       node capture-design-review.js --input - [--axe]   (JSON request on stdin: url, routes | discover, checksOnly, axe, or cleanup)\n'
   + '       node capture-design-review.js --cleanup <outputDir>';
 
 // Fields a `--input -` request may carry (see parseRequest in lib/review-navigation.js).
@@ -59,7 +63,6 @@ const REQUEST_FIELDS = {
   url: isString,
   routes: isStringList,
   discover: Number.isInteger,
-  projectRoot: isString,
   checksOnly: isBoolean,
   axe: isBoolean,
   cleanup: isString,
@@ -72,7 +75,6 @@ function parseArgs(argv, { readStdin = () => fs.readFileSync(0, 'utf8') } = {}) 
     const arg = argv[i];
     if (arg === '--url' && argv[i + 1]) parsed.url = argv[++i];
     else if (arg === '--routes' && argv[i + 1]) parsed.routes = parseRouteList(argv[++i]);
-    else if (arg === '--project-root' && argv[i + 1]) parsed.projectRoot = argv[++i];
     else if (arg === '--checks-only') parsed.checksOnly = true;
     else if (arg === '--axe') parsed.axe = true;
     else if (arg === '--discover' && argv[i + 1]) parsed.discover = Number.parseInt(argv[++i], 10);
@@ -155,12 +157,15 @@ html,body{margin:0;background:#8a8a8a}
 
 // --- In-page functions (serialized into the browser by page.evaluate) ---
 
-async function scrollThrough() {
+async function scrollThrough({ maxHeight, budgetMs }) {
   // Content revealed on scroll and lazy images only take their final layout once seen.
   // Instant jumps matter: under `scroll-behavior: smooth`, a plain scrollTo is still
-  // animating when the next measurement or capture starts.
+  // animating when the next measurement or capture starts. scrollHeight is read on every
+  // step because the page can grow while scrolling; the height and time limits end the loop
+  // on a feed that never stops growing.
   const root = document.documentElement;
-  for (let y = 0; y < root.scrollHeight; y += window.innerHeight / 2) {
+  const deadline = Date.now() + budgetMs;
+  for (let y = 0; y < Math.min(root.scrollHeight, maxHeight) && Date.now() < deadline; y += window.innerHeight / 2) {
     window.scrollTo({ top: y, behavior: 'instant' });
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
@@ -212,6 +217,24 @@ function measureOverflow() {
   return { overflow: true, scrollWidth: root.scrollWidth, clientWidth: root.clientWidth, culprits };
 }
 
+// Some layouts scroll inside an element rather than the page - `html, body { height: 100%;
+// overflow: hidden }` with a scrolling #root, or an app shell's content pane. The document
+// is then exactly one screen tall, so full-page images show only the first screen. Returns a
+// selector for the largest such scroller, or null when the page itself scrolls.
+function findInnerScroller() {
+  const root = document.documentElement;
+  if (root.scrollHeight > window.innerHeight + 1) return null;
+  let best = null;
+  for (const el of document.querySelectorAll('body *')) {
+    const style = getComputedStyle(el);
+    if (!/(auto|scroll)/.test(style.overflowY) || el.scrollHeight <= el.clientHeight + 100) continue;
+    if (el.clientHeight < window.innerHeight / 2) continue;
+    if (!best || el.clientHeight * el.clientWidth > best.clientHeight * best.clientWidth) best = el;
+  }
+  if (!best) return null;
+  return `${best.tagName.toLowerCase()}${best.id ? '#' + best.id : ''}${[...best.classList].slice(0, 3).map((c) => '.' + c).join('')}`;
+}
+
 function pageHeight() {
   return document.documentElement.scrollHeight;
 }
@@ -242,19 +265,38 @@ function discoverLinks(limit) {
 
 // Sign-in pages the site serves itself, e.g. /SignIn?returnUrl=... or /Account/Login.
 const SIGN_IN_PATH = /(^|\/)(sign-?in|log-?in|account\/login|\.auth\/login)(\/|$)/i;
+// Identity providers Power Pages sites commonly send visitors to: Microsoft Entra ID,
+// Entra External ID and Azure AD B2C, Microsoft accounts, and common third-party providers.
+const IDENTITY_PROVIDER_HOST = /(^|\.)(login\.microsoftonline\.com|login\.microsoft\.com|login\.windows\.net|login\.live\.com|b2clogin\.com|ciamlogin\.com|accounts\.google\.com|okta\.com|auth0\.com)$/i;
 
-// Decides whether a navigation that ended at `landedUrl` still shows the site requested at
-// `requestedUrl`. Canonical redirects stay on the site: http -> https, and apex <-> www.
-// Leaving for another host (an identity provider such as login.microsoftonline.com or
-// *.b2clogin.com) or bouncing to the site's own sign-in page means the headless browser,
-// which cannot sign in, is looking at a login form instead of the design.
-function classifyLanding(requestedUrl, landedUrl) {
+function hasPasswordField() {
+  return Boolean(document.querySelector('input[type="password"]'));
+}
+
+// Decides what a navigation that ended at `landedUrl` shows, for a request to `requestedUrl`:
+// - 'sign-in': a login form, which the headless browser cannot get past - the site's own
+//   sign-in path, an identity provider's host, or any page with a password field on a host
+//   the request did not name.
+// - 'same-site': the site, including canonical redirects (http -> https, apex <-> www).
+// - 'moved': the site forwards to another host that is not a login, e.g. a vanity domain to
+//   the portal's real address; the page shown is still the site, so it is captured as is.
+function classifyLanding(requestedUrl, landedUrl, { passwordField = false } = {}) {
   const requested = new URL(requestedUrl);
   const landed = new URL(landedUrl);
   const site = (u) => u.host.toLowerCase().replace(/^www\./, '');
-  if (site(requested) !== site(landed)) return 'left-site';
-  if (SIGN_IN_PATH.test(landed.pathname) && !SIGN_IN_PATH.test(requested.pathname)) return 'sign-in';
-  return 'same-site';
+  const signInPath = SIGN_IN_PATH.test(landed.pathname) && !SIGN_IN_PATH.test(requested.pathname);
+  if (site(requested) === site(landed)) return signInPath ? 'sign-in' : 'same-site';
+  if (signInPath || passwordField || IDENTITY_PROVIDER_HOST.test(landed.hostname)) return 'sign-in';
+  return 'moved';
+}
+
+// Reads where `page` landed after a navigation to `requestedUrl`, checking for a password field
+// only when the page left the requested host.
+async function landingOf(page, requestedUrl) {
+  const landed = page.url();
+  const leftHost = new URL(landed).host.replace(/^www\./i, '') !== new URL(requestedUrl).host.replace(/^www\./i, '');
+  const passwordField = leftHost ? await page.evaluate(hasPasswordField) : false;
+  return { landed, kind: classifyLanding(requestedUrl, landed, { passwordField }) };
 }
 
 // --- Capture ---
@@ -291,21 +333,29 @@ async function captureRouteAtWidth({ browser, page, url, route, slug = slugForRo
     await gotoSettled(page, `${url}${route}`, { settleMs: SETTLE_MS });
     // The query is dropped from the reported URL: sign-in redirects carry state, nonce,
     // and return-URL parameters that add noise and say nothing about the design.
-    const landed = new URL(page.url());
-    if (classifyLanding(`${url}${route}`, landed.href) !== 'same-site') result.redirectedTo = `${landed.origin}${landed.pathname}`;
+    const { landed, kind } = await landingOf(page, `${url}${route}`);
+    if (kind === 'sign-in') result.redirectedTo = redactUrl(landed);
     if (!checksOnly) {
       // The first screen is captured before scrolling so it shows what a visitor sees at load.
       result.viewport = path.join(outputDir, `${slug}-${width}.png`);
       await page.screenshot({ path: result.viewport });
     }
-    await page.evaluate(scrollThrough);
+    await page.evaluate(scrollThrough, { maxHeight: MAX_CAPTURE_HEIGHT, budgetMs: SCROLL_BUDGET_MS });
+    const innerScroller = await page.evaluate(findInnerScroller);
+    if (innerScroller) result.innerScroll = innerScroller;
     result.fonts = await page.evaluate(loadedFonts);
     result.syntheticWeights = await page.evaluate(findSyntheticWeights);
     result.overflow = await page.evaluate(measureOverflow);
     if (!checksOnly) {
       if (width === 'desktop') {
         result.fullPage = path.join(outputDir, `${slug}-desktop-full.png`);
-        await page.screenshot({ path: result.fullPage, fullPage: true });
+        const height = await page.evaluate(pageHeight);
+        if (height > MAX_CAPTURE_HEIGHT) {
+          result.fullPageTruncated = true;
+          await page.screenshot({ path: result.fullPage, fullPage: true, clip: { x: 0, y: 0, width: VIEWPORTS.desktop.width, height: MAX_CAPTURE_HEIGHT } });
+        } else {
+          await page.screenshot({ path: result.fullPage, fullPage: true });
+        }
       } else {
         const plan = planMobileSheets(await page.evaluate(pageHeight));
         result.sheets = [];
@@ -359,10 +409,12 @@ async function captureDesignReview({
       const page = await browser.newPage({ viewport: VIEWPORTS.desktop });
       try {
         await gotoSettled(page, url);
-        if (classifyLanding(url, page.url()) === 'same-site') {
-          // A canonical redirect (http -> https, apex <-> www) is still the site, so discovery
-          // continues from where the browser landed and later captures use that origin.
-          base = new URL(page.url()).origin;
+        const { landed, kind } = await landingOf(page, url);
+        if (kind !== 'sign-in') {
+          // A canonical redirect (http -> https, apex <-> www) or a move to the site's real
+          // host is still the site, so discovery continues from where the browser landed and
+          // later captures use that origin.
+          base = new URL(landed).origin;
           results = (await page.evaluate(discoverLinks, discover)).map((route) => ({ route }));
         } else {
           // Links on a login page are not the site's pages, so a start page that needs
@@ -422,9 +474,13 @@ function summarizeAccessibility(audit) {
 }
 
 function summarize(results) {
-  const summary = { fonts: [], syntheticWeights: [], overflow: [], pageErrors: [], captureErrors: [], redirects: [], truncated: [], images: [] };
+  const summary = {
+    captured: 0, fonts: [], syntheticWeights: [], overflow: [], pageErrors: [], captureErrors: [], redirects: [], truncated: [], innerScroll: [], images: [],
+  };
   const fonts = new Set();
   for (const entry of results) {
+    // A route counts as captured when it loaded at some width without being sent to sign in.
+    if (Object.keys(VIEWPORTS).some((w) => entry[w] && !entry[w].captureError && !entry[w].redirectedTo)) summary.captured += 1;
     for (const width of Object.keys(VIEWPORTS)) {
       const r = entry[width];
       if (!r) continue;
@@ -436,7 +492,8 @@ function summarize(results) {
       if (r.pageErrors && r.pageErrors.length) summary.pageErrors.push(`${entry.route} @ ${width}: ${r.pageErrors.length}`);
       if (r.captureError) summary.captureErrors.push(`${entry.route} @ ${width}: ${r.captureError}`);
       if (r.redirectedTo) summary.redirects.push(`${entry.route} @ ${width} -> ${r.redirectedTo}`);
-      if (r.sheetTruncated) summary.truncated.push(`${entry.route} @ ${width}`);
+      if (r.sheetTruncated || r.fullPageTruncated) summary.truncated.push(`${entry.route} @ ${width}`);
+      if (r.innerScroll) summary.innerScroll.push(`${entry.route} @ ${width}: ${r.innerScroll}`);
       for (const key of ['viewport', 'fullPage']) {
         if (r[key]) summary.images.push(r[key]);
       }
@@ -479,9 +536,9 @@ async function main(argv = process.argv.slice(2), {
     return 0;
   }
   sweepStaleTempDirs(OUTPUT_DIR_PREFIX);
-  const playwright = loadPlaywrightFn(args.projectRoot);
+  const playwright = loadPlaywrightFn();
   if (!playwright) {
-    writeError('Playwright could not be loaded from the project or from the pinned @playwright/mcp package. Check that npm can reach its registry.\n');
+    writeError('Playwright could not be loaded from the pinned @playwright/mcp package. Check that npm can reach its registry.\n');
     return 1;
   }
   const outputDir = args.checksOnly ? null : createPrivateTempDir(OUTPUT_DIR_PREFIX);
@@ -509,10 +566,13 @@ module.exports = {
   VIEWPORTS,
   SHEET_MAX_COLUMNS,
   SHEET_MAX_SHEETS,
+  MAX_CAPTURE_HEIGHT,
   buildMobileSheet,
   planMobileSheets,
   captureDesignReview,
   classifyLanding,
+  findInnerScroller,
+  hasPasswordField,
   findSyntheticWeights,
   discoverLinks,
   loadedFonts,

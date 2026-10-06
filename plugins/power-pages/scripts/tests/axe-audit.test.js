@@ -41,14 +41,15 @@ function fakePlaywright({ violationsFor = () => [], failRoutes = [] } = {}) {
   return { playwright, calls };
 }
 
-test('parseArgs requires a URL and routes, and makes --project-root optional', () => {
+test('parseArgs requires a URL and routes, and reduces the URL to origin and path', () => {
   assert.ok(axe.parseArgs([]).error);
   assert.ok(axe.parseArgs(['--url', 'http://localhost:5173']).error);
   assert.deepEqual(axe.parseArgs(['--url', 'https://contoso.powerappsportals.com/', '--routes', '/, /about']), {
     url: 'https://contoso.powerappsportals.com',
     routes: ['/', '/about'],
   });
-  assert.equal(axe.parseArgs(['--url', 'http://x', '--routes', '/', '--project-root', 'site']).projectRoot, 'site');
+  assert.equal(axe.parseArgs(['--url', 'https://contoso.example/en-US/?sig=abc#top', '--routes', '/']).url, 'https://contoso.example/en-US');
+  assert.equal(axe.parseArgs(['--url', 'http://x', '--routes', '/', '--project-root', 'site']).projectRoot, undefined, 'a project folder is never used');
   assert.deepEqual(axe.parseArgs(['--url', 'http://x', '--routes', 'about,/faq']).routes, ['/about', '/faq']);
   assert.match(axe.parseArgs(['--url', 'file:///etc/hosts', '--routes', '/']).error, /http and https/);
 });
@@ -152,9 +153,10 @@ test('auditRoutes redacts URL queries in the violations it reports', async () =>
 });
 
 test('parseArgs reads a JSON request from stdin and keeps shell characters as data', () => {
-  const request = { url: 'http://localhost:5173', routes: ['/a;b', 'c&d', '/$(id)'], projectRoot: '/home/me/My $Site' };
+  const request = { url: 'http://localhost:5173', routes: ['/a;b', 'c&d', '/$(id)'] };
   const parsed = axe.parseArgs(['--input', '-'], { readStdin: () => JSON.stringify(request) });
-  assert.deepEqual(parsed, { url: 'http://localhost:5173', routes: ['/a;b', '/c&d', '/$(id)'], projectRoot: '/home/me/My $Site' });
+  assert.deepEqual(parsed, { url: 'http://localhost:5173', routes: ['/a;b', '/c&d', '/$(id)'] });
+  assert.match(axe.parseArgs(['--input', '-'], { readStdin: () => '{"url":"http://x","routes":["/"],"projectRoot":"/p"}' }).error, /Unknown field.*projectRoot/);
   assert.match(axe.parseArgs(['--input', '-'], { readStdin: () => '{"url":"http://x","routes":["/"],"discover":3}' }).error, /Unknown field.*discover/);
   assert.match(axe.parseArgs(['--input', '-'], { readStdin: () => '{"url":"http://x","routes":"/"}' }).error, /routes.*wrong type/);
 });

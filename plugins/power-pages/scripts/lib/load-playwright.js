@@ -1,36 +1,18 @@
-// Resolves a Playwright library for browser scripts, without installing anything into the project.
+// Resolves the Playwright library the browser review scripts use, without installing anything
+// into a project.
 //
-// The plugin ships no node_modules (marketplace installs copy only the plugin directory).
-// Scripts first borrow the site project's own `playwright` dev dependency. When there is
-// no project, or it has none - a design review of a live URL, or a folder the plugin must
-// not modify - they borrow the Playwright inside the exact @playwright/mcp version the
-// plugin's MCP launcher already runs, so no new or unpinned package is ever fetched. That
-// package lives in npm's own cache (not the project); when the MCP server has never run on
-// this machine, npm downloads it there on first use, exactly as the launcher would.
+// There is exactly one source: the Playwright inside the exact @playwright/mcp version the
+// plugin's MCP launcher runs (scripts/lib/playwright-mcp-package.js), kept in npm's own cache.
+// A project's node_modules is never loaded: requiring a module from it runs that project's
+// code, which a design review of someone else's site must not do, and the version pin is what
+// the runtime-dependency rule in AGENTS.md requires.
 
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const { PLAYWRIGHT_MCP_PACKAGE, resolveNpxCli } = require('./playwright-mcp-package');
+const { createPrivateTempDir, removeDir } = require('./private-temp-dir');
 
-function loadProjectPlaywright(projectRoot, { requireFn = require } = {}) {
-  // require() treats a relative path without a leading "./" as a package name, so a
-  // relative --project-root such as "My Site" would never resolve. Anchor it to the cwd.
-  const root = path.resolve(projectRoot);
-  const candidates = [
-    'playwright',
-    path.join(root, 'node_modules', 'playwright'),
-    'playwright-core',
-    path.join(root, 'node_modules', 'playwright-core'),
-  ];
-  for (const candidate of candidates) {
-    try {
-      return requireFn(candidate);
-    } catch {
-      // Try the next location.
-    }
-  }
-  return null;
-}
+const NPM_WORKDIR_PREFIX = 'power-pages-npm-';
 
 // `npm exec --package=<spec> -c <command>` installs the pinned package into npm's npx cache
 // (the same install the MCP launcher uses) and runs <command> with that install's
@@ -39,16 +21,29 @@ function loadProjectPlaywright(projectRoot, { requireFn = require } = {}) {
 //   C:\Users\me\AppData\Local\npm-cache\_npx\a5b920f00216d246\node_modules\.bin;C:\Windows\...
 // npm runs -c through its own shell (sh or cmd), so the command is a fixed string that needs
 // no quoting on either. Lifecycle scripts stay disabled, as in the launcher.
+//
+// npm runs in a fresh, empty private directory that is also its --prefix. Run from the agent's
+// working directory - often the project being reviewed - npm would read that project's
+// .npmrc (which can replace the shell, the registry, or the package), put its
+// node_modules/.bin on PATH, and on Windows let cmd.exe find a `node` in that folder first.
 function findPinnedNodeModules({
   spawnSyncFn = spawnSync,
   resolveNpxCliFn = resolveNpxCli,
   delimiter = path.delimiter,
+  makeWorkDir = () => createPrivateTempDir(NPM_WORKDIR_PREFIX),
+  removeWorkDir = removeDir,
 } = {}) {
-  const result = spawnSyncFn(
-    process.execPath,
-    [resolveNpxCliFn(), '--yes', '--ignore-scripts', `--package=${PLAYWRIGHT_MCP_PACKAGE}`, '-c', 'node -p process.env.PATH'],
-    { encoding: 'utf8', shell: false, timeout: 180000 },
-  );
+  const workDir = makeWorkDir();
+  let result;
+  try {
+    result = spawnSyncFn(
+      process.execPath,
+      [resolveNpxCliFn(), '--yes', '--ignore-scripts', `--prefix=${workDir}`, `--package=${PLAYWRIGHT_MCP_PACKAGE}`, '-c', 'node -p process.env.PATH'],
+      { cwd: workDir, encoding: 'utf8', shell: false, timeout: 180000 },
+    );
+  } finally {
+    removeWorkDir(workDir);
+  }
   if (!result || result.status !== 0 || !result.stdout) {
     return null;
   }
@@ -60,7 +55,7 @@ function findPinnedNodeModules({
   return bin ? bin.replace(/[\\/]\.bin$/, '') : null;
 }
 
-function loadPinnedPlaywright({ requireFn = require, ...options } = {}) {
+function loadPlaywright({ requireFn = require, ...options } = {}) {
   let nodeModules;
   try {
     nodeModules = findPinnedNodeModules(options);
@@ -80,14 +75,8 @@ function loadPinnedPlaywright({ requireFn = require, ...options } = {}) {
   return null;
 }
 
-// Project first, so a site's own Playwright version wins; the pinned package otherwise.
-function loadPlaywright(projectRoot, options = {}) {
-  return (projectRoot && loadProjectPlaywright(projectRoot, options)) || loadPinnedPlaywright(options);
-}
-
 module.exports = {
+  NPM_WORKDIR_PREFIX,
   findPinnedNodeModules,
-  loadPinnedPlaywright,
   loadPlaywright,
-  loadProjectPlaywright,
 };

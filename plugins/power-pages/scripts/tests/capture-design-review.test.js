@@ -6,12 +6,15 @@ const test = require('node:test');
 const { EventEmitter } = require('node:events');
 
 const review = require('../capture-design-review');
-const { findPinnedNodeModules, loadPinnedPlaywright, loadPlaywright, loadProjectPlaywright } = require('../lib/load-playwright');
+const { NPM_WORKDIR_PREFIX, findPinnedNodeModules, loadPlaywright } = require('../lib/load-playwright');
 const { createPrivateTempDir, isOwnTempDir, sweepStaleTempDirs } = require('../lib/private-temp-dir');
 
 // A stand-in for the Playwright API surface the capture uses. In-page functions are
 // recognized by identity, so the fake answers exactly what the real browser would be asked.
-function fakePlaywright({ pageHeight = 3000, overflowRoutes = [], failRoutes = [], events = {}, synthetic = [], discovered = [], redirects = {} } = {}) {
+function fakePlaywright({
+  pageHeight = 3000, overflowRoutes = [], failRoutes = [], events = {}, synthetic = [], discovered = [], redirects = {},
+  passwordPages = [], innerScroll = {},
+} = {}) {
   const calls = { launch: [], contexts: [], screenshots: [], sheets: [], gotos: [] };
   const makePage = (viewport) => {
     const page = new EventEmitter();
@@ -35,6 +38,10 @@ function fakePlaywright({ pageHeight = 3000, overflowRoutes = [], failRoutes = [
     };
     page.evaluate = async (fn) => {
       if (fn === review.scrollThrough) return undefined;
+      // `passwordPages` lists landed URLs that show a login form; `innerScroll` maps a route
+      // to the selector of the element it scrolls inside.
+      if (fn === review.hasPasswordField) return passwordPages.includes(current);
+      if (fn === review.findInnerScroller) return innerScroll[new URL(current).pathname] || null;
       if (fn === review.loadedFonts) return ['Public Sans', 'Schibsted Grotesk'];
       if (fn === review.pageHeight) return pageHeight;
       if (fn === review.findSyntheticWeights) return synthetic;
@@ -79,19 +86,19 @@ const failedRequest = (url, errorText) => ({ url: () => url, failure: () => (err
 
 test('parseArgs reads a capture request and trims the base URL and route list', () => {
   assert.deepEqual(
-    review.parseArgs(['--url', 'http://localhost:5173/', '--routes', '/, /about ,', '--project-root', '/p', '--checks-only']),
-    { checksOnly: true, url: 'http://localhost:5173', routes: ['/', '/about'], projectRoot: '/p' },
+    review.parseArgs(['--url', 'http://localhost:5173/', '--routes', '/, /about ,', '--checks-only']),
+    { checksOnly: true, url: 'http://localhost:5173', routes: ['/', '/about'] },
   );
   assert.equal(review.parseArgs(['--cleanup', '/tmp/x']).cleanup, '/tmp/x');
   assert.match(review.parseArgs(['--url', 'http://localhost:5173']).error, /Usage/);
-  assert.match(review.parseArgs(['--url', 'u', '--routes', ',', '--project-root', '/p']).error, /Usage/);
+  assert.match(review.parseArgs(['--url', 'u', '--routes', ',']).error, /Usage/);
 });
 
 test('parseArgs anchors routes given without a leading slash', () => {
   assert.deepEqual(review.parseArgs(['--url', 'http://localhost:5173', '--routes', 'about, /faq']).routes, ['/about', '/faq']);
 });
 
-test('parseArgs takes either routes or a discover limit, and the project root is optional', () => {
+test('parseArgs takes either routes or a discover limit', () => {
   assert.deepEqual(review.parseArgs(['--url', 'https://contoso.example', '--discover', '6']), { checksOnly: false, url: 'https://contoso.example', discover: 6 });
   assert.deepEqual(review.parseArgs(['--url', 'http://localhost:5173', '--routes', '/']).routes, ['/']);
   assert.match(review.parseArgs(['--url', 'u', '--routes', '/', '--discover', '3']).error, /Usage/);
@@ -161,7 +168,7 @@ test('captureDesignReview writes every mobile sheet and reports a truncated page
       playwright: endless.playwright, channel: 'chrome', url: 'http://localhost:5173', routes: ['/feed'], outputDir, checksOnly: false,
     });
     assert.equal(feed.routes[0].mobile.sheets.length, review.SHEET_MAX_SHEETS);
-    assert.deepEqual(feed.summary.truncated, ['/feed @ mobile']);
+    assert.deepEqual(feed.summary.truncated, ['/feed @ desktop', '/feed @ mobile']);
   } finally {
     fs.rmSync(outputDir, { recursive: true, force: true });
   }
@@ -392,33 +399,6 @@ test('captureDesignReview discovers pages from the start URL and captures them a
   ]);
 });
 
-test('loadProjectPlaywright tries a global install, then the project, then playwright-core', () => {
-  // The root is resolved to an absolute path, which on Windows gains a drive letter.
-  const projectPlaywright = path.join(path.resolve('/site'), 'node_modules', 'playwright');
-  const tried = [];
-  const found = loadProjectPlaywright('/site', {
-    requireFn(id) {
-      tried.push(id);
-      if (id === projectPlaywright) return { chromium: 'project' };
-      throw new Error('MODULE_NOT_FOUND');
-    },
-  });
-  assert.deepEqual(found, { chromium: 'project' });
-  assert.deepEqual(tried, ['playwright', projectPlaywright]);
-  assert.equal(loadProjectPlaywright('/site', { requireFn() { throw new Error('missing'); } }), null);
-});
-
-test('loadProjectPlaywright resolves a relative project root against the working directory', () => {
-  const tried = [];
-  loadProjectPlaywright('My Site', {
-    requireFn(id) {
-      tried.push(id);
-      throw new Error('MODULE_NOT_FOUND');
-    },
-  });
-  assert.equal(tried[1], path.join(process.cwd(), 'My Site', 'node_modules', 'playwright'));
-});
-
 test('isOwnTempDir accepts only prefixed direct children of the temp directory', () => {
   const tmp = os.tmpdir();
   assert.equal(isOwnTempDir(path.join(tmp, `${review.OUTPUT_DIR_PREFIX}abc`), review.OUTPUT_DIR_PREFIX), true);
@@ -441,11 +421,15 @@ test('sweepStaleTempDirs only touches directories with the given prefix', () => 
   assert.deepEqual(removed, [path.join('/t', `${review.OUTPUT_DIR_PREFIX}old`)]);
 });
 
-test('findPinnedNodeModules reads the pinned npx install directory from PATH', () => {
+test('findPinnedNodeModules reads the pinned npx install directory from PATH, running npm in an empty private folder', () => {
   const calls = [];
+  const removed = [];
+  const workDir = path.join(os.tmpdir(), `${NPM_WORKDIR_PREFIX}abc`);
   const posix = findPinnedNodeModules({
     resolveNpxCliFn: () => '/node/lib/node_modules/npm/bin/npx-cli.js',
     delimiter: ':',
+    makeWorkDir: () => workDir,
+    removeWorkDir: (dir) => removed.push(dir),
     spawnSyncFn(command, args, options) {
       calls.push({ command, args, options });
       return { status: 0, stdout: '/home/me/.npm/_npx/a5b920f00216d246/node_modules/.bin:/usr/local/bin:/usr/bin\n' };
@@ -453,44 +437,48 @@ test('findPinnedNodeModules reads the pinned npx install directory from PATH', (
   });
   assert.equal(posix, '/home/me/.npm/_npx/a5b920f00216d246/node_modules');
   assert.equal(calls[0].command, process.execPath, 'npm runs on the current Node, never a PATH lookup');
-  assert.deepEqual(calls[0].args, ['/node/lib/node_modules/npm/bin/npx-cli.js', '--yes', '--ignore-scripts', '--package=@playwright/mcp@0.0.78', '-c', 'node -p process.env.PATH']);
+  assert.deepEqual(calls[0].args, [
+    '/node/lib/node_modules/npm/bin/npx-cli.js', '--yes', '--ignore-scripts', `--prefix=${workDir}`,
+    '--package=@playwright/mcp@0.0.78', '-c', 'node -p process.env.PATH',
+  ]);
+  // Never the agent's working directory, which may be the project under review with its
+  // own .npmrc, node_modules/.bin, or a `node` executable.
+  assert.equal(calls[0].options.cwd, workDir);
   assert.equal(calls[0].options.shell, false);
+  assert.deepEqual(removed, [workDir], 'the work folder is removed afterwards');
 
   const windows = findPinnedNodeModules({
     resolveNpxCliFn: () => 'C:\\npx-cli.js',
     delimiter: ';',
+    makeWorkDir: () => 'C:\\Temp\\w',
+    removeWorkDir() {},
     spawnSyncFn: () => ({ status: 0, stdout: 'C:\\Users\\Power User\\AppData\\Local\\npm-cache\\_npx\\a5b9\\node_modules\\.bin;C:\\Windows' }),
   });
   assert.equal(windows, 'C:\\Users\\Power User\\AppData\\Local\\npm-cache\\_npx\\a5b9\\node_modules');
 
-  assert.equal(findPinnedNodeModules({ resolveNpxCliFn: () => 'x', spawnSyncFn: () => ({ status: 1, stdout: '' }) }), null);
-  assert.equal(findPinnedNodeModules({ resolveNpxCliFn: () => 'x', delimiter: ':', spawnSyncFn: () => ({ status: 0, stdout: '/usr/bin:/bin' }) }), null);
+  const quiet = { makeWorkDir: () => '/w', removeWorkDir() {} };
+  assert.equal(findPinnedNodeModules({ ...quiet, resolveNpxCliFn: () => 'x', spawnSyncFn: () => ({ status: 1, stdout: '' }) }), null);
+  assert.equal(findPinnedNodeModules({ ...quiet, resolveNpxCliFn: () => 'x', delimiter: ':', spawnSyncFn: () => ({ status: 0, stdout: '/usr/bin:/bin' }) }), null);
+  assert.throws(() => findPinnedNodeModules({ ...quiet, resolveNpxCliFn: () => 'x', spawnSyncFn() { throw new Error('spawn failed'); }, removeWorkDir: (dir) => removed.push(dir) }));
+  assert.equal(removed.at(-1), '/w', 'the work folder is removed even when npm fails to start');
 });
 
-test('loadPlaywright prefers the project and falls back to the pinned package', () => {
-  const pinnedRun = { status: 0, stdout: `/c/_npx/abc/node_modules/.bin${path.delimiter}/usr/bin` };
-  const fromProject = loadPlaywright('/site', {
-    requireFn(id) {
-      if (id === path.join(path.resolve('/site'), 'node_modules', 'playwright')) return 'project';
-      throw new Error('missing');
-    },
-    spawnSyncFn() {
-      assert.fail('the pinned package is not needed when the project has Playwright');
-    },
-  });
-  assert.equal(fromProject, 'project');
-
-  const pinned = loadPlaywright(undefined, {
+test('loadPlaywright loads only the pinned package, never a project module', () => {
+  const required = [];
+  const pinned = loadPlaywright({
     resolveNpxCliFn: () => 'npx-cli.js',
-    spawnSyncFn: () => pinnedRun,
+    makeWorkDir: () => '/w',
+    removeWorkDir() {},
+    spawnSyncFn: () => ({ status: 0, stdout: `/c/_npx/abc/node_modules/.bin${path.delimiter}/usr/bin` }),
     requireFn(id) {
+      required.push(id);
       if (id === path.join('/c/_npx/abc/node_modules', 'playwright')) return 'pinned';
       throw new Error('missing');
     },
   });
   assert.equal(pinned, 'pinned');
-
-  assert.equal(loadPinnedPlaywright({ resolveNpxCliFn() { throw new Error('no npm'); } }), null);
+  assert.deepEqual(required, [path.join('/c/_npx/abc/node_modules', 'playwright')]);
+  assert.equal(loadPlaywright({ makeWorkDir: () => '/w', removeWorkDir() {}, resolveNpxCliFn() { throw new Error('no npm'); } }), null);
 });
 
 test('captureDesignReview reports a sign-in redirect and discovers nothing from the login page', async () => {
@@ -524,11 +512,13 @@ test('classifyLanding tells canonical redirects from sign-in redirects', () => {
   assert.equal(review.classifyLanding('http://contoso.example/', 'https://contoso.example/'), 'same-site');
   assert.equal(review.classifyLanding('https://contoso.example/about', 'https://www.contoso.example/about'), 'same-site');
   assert.equal(review.classifyLanding('https://www.contoso.example/', 'https://contoso.example/en-US/'), 'same-site');
-  assert.equal(review.classifyLanding('https://contoso.example/', 'https://login.microsoftonline.com/common/oauth2/authorize?state=x'), 'left-site');
-  assert.equal(review.classifyLanding('https://contoso.example/', 'https://contoso.b2clogin.com/contoso.onmicrosoft.com/oauth2'), 'left-site');
+  assert.equal(review.classifyLanding('https://contoso.example/', 'https://login.microsoftonline.com/common/oauth2/authorize?state=x'), 'sign-in');
+  assert.equal(review.classifyLanding('https://contoso.example/', 'https://contoso.b2clogin.com/contoso.onmicrosoft.com/oauth2'), 'sign-in');
+  assert.equal(review.classifyLanding('https://contoso.example/', 'https://idp.fabrikam.example/start', { passwordField: true }), 'sign-in', 'a login form on another host');
+  assert.equal(review.classifyLanding('https://contoso.example/', 'https://portal.contoso.com/en-US/'), 'moved', 'a vanity domain forwarding to the real one is still the site');
   assert.equal(review.classifyLanding('https://contoso.example/profile', 'https://contoso.example/SignIn?returnUrl=%2Fprofile'), 'sign-in');
   assert.equal(review.classifyLanding('https://contoso.example/signin', 'https://contoso.example/signin'), 'same-site', 'a requested sign-in page is the page itself');
-  assert.equal(review.classifyLanding('http://localhost:5173/', 'http://localhost:4200/'), 'left-site', 'another port is another site');
+  assert.equal(review.classifyLanding('http://localhost:5173/', 'http://localhost:4200/'), 'moved', 'another port is another host, but not a login');
 });
 
 test('captureDesignReview records no redirect when the page stays on the site', async () => {
@@ -555,17 +545,17 @@ test('redactUrl keeps origin and path and drops credentials, query, and fragment
 test('parseArgs reads a JSON request from stdin and keeps shell characters as data', () => {
   // Characters a shell would act on, inside values a user or a page supplied.
   const request = {
-    url: 'https://contoso.example/search?q=a&lang=en;x=$(echo hi)',
+    url: "https://contoso.example/it's;x=$(echo hi)/?q=a&lang=en",
     routes: ['/a;b', 'c&d', '/$HOME', "/it's"],
-    projectRoot: 'C:\\Sites\\Contoso & Co',
     axe: true,
   };
   const parsed = review.parseArgs(['--input', '-'], { readStdin: () => JSON.stringify(request) });
   assert.equal(parsed.error, undefined);
-  assert.equal(parsed.url, request.url);
+  // The URL keeps its path verbatim (percent-encoded by the URL parser); the query is dropped.
+  assert.equal(parsed.url, "https://contoso.example/it's;x=$(echo%20hi)");
   assert.deepEqual(parsed.routes, ['/a;b', '/c&d', '/$HOME', "/it's"]);
-  assert.equal(parsed.projectRoot, request.projectRoot);
   assert.equal(parsed.axe, true);
+  assert.match(review.parseArgs(['--input', '-'], { readStdin: () => '{"url":"https://x","discover":3,"projectRoot":"/p"}' }).error, /Unknown field.*projectRoot/);
 
   const discover = review.parseArgs(['--input', '-', '--axe'], { readStdin: () => '{"url":"https://contoso.example/","discover":6}' });
   assert.deepEqual(discover, { checksOnly: false, axe: true, url: 'https://contoso.example', discover: 6 });
@@ -649,5 +639,73 @@ test('parseArgs takes a cleanup path from the stdin request and ignores everythi
   const dir = 'C:\\Users\\First $Last\\AppData\\Local\\Temp\\power-pages-design-review-abc';
   assert.deepEqual(review.parseArgs(['--input', '-'], { readStdin: () => JSON.stringify({ cleanup: dir }) }), { cleanup: dir });
   assert.match(review.parseArgs(['--input', '-'], { readStdin: () => '{"toString":"x"}' }).error, /Unknown field.*toString/);
+});
+
+test('captureDesignReview follows a move to another host that is not a login, and reports one that is', async () => {
+  const fake = fakePlaywright({
+    discovered: ['/', '/services'],
+    redirects: { '/': 'https://portal.contoso.com/', '/services': 'https://portal.contoso.com/services', '/members': 'https://idp.fabrikam.example/start' },
+    passwordPages: ['https://idp.fabrikam.example/start'],
+  });
+  const moved = await review.captureDesignReview({
+    playwright: fake.playwright, channel: 'chrome', url: 'https://contoso.example', discover: 6, outputDir: null, checksOnly: true,
+  });
+  assert.equal(moved.baseUrl, 'https://portal.contoso.com', 'discovery continues on the host the site forwards to');
+  assert.deepEqual(moved.summary.redirects, []);
+
+  const login = await review.captureDesignReview({
+    playwright: fake.playwright, channel: 'chrome', url: 'https://contoso.example', routes: ['/members'], outputDir: null, checksOnly: true,
+  });
+  assert.equal(login.routes[0].desktop.redirectedTo, 'https://idp.fabrikam.example/start');
+  assert.equal(login.summary.captured, 0);
+});
+
+test('captureDesignReview limits scrolling and the desktop full page on an endless page', async () => {
+  const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-test-'));
+  try {
+    const fake = fakePlaywright({ pageHeight: review.MAX_CAPTURE_HEIGHT * 3 });
+    const result = await review.captureDesignReview({
+      playwright: fake.playwright, channel: 'chrome', url: 'http://localhost:5173', routes: ['/feed'], outputDir, checksOnly: false,
+    });
+    const desktopFull = fake.calls.screenshots.find((shot) => shot.viewport.width === 1440 && shot.fullPage);
+    assert.deepEqual(desktopFull.clip, { x: 0, y: 0, width: 1440, height: review.MAX_CAPTURE_HEIGHT });
+    assert.equal(result.routes[0].desktop.fullPageTruncated, true);
+    assert.deepEqual(result.summary.truncated, ['/feed @ desktop', '/feed @ mobile']);
+  } finally {
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  }
+});
+
+test('captureDesignReview flags a page that scrolls inside an element, and counts captured routes', async () => {
+  const fake = fakePlaywright({ innerScroll: { '/app': 'main#root' }, failRoutes: ['/down'] });
+  const result = await review.captureDesignReview({
+    playwright: fake.playwright, channel: 'chrome', url: 'http://localhost:5173', routes: ['/', '/app', '/down'], outputDir: null, checksOnly: true,
+  });
+  assert.equal(result.routes[1].desktop.innerScroll, 'main#root');
+  assert.deepEqual(result.summary.innerScroll, ['/app @ desktop: main#root', '/app @ mobile: main#root']);
+  assert.equal(result.summary.captured, 2, 'a route that failed at every width is not captured');
+});
+
+test('scrollThrough stops at the height limit and the time budget on a page that keeps growing', async () => {
+  // Stands in for the browser globals: every scroll adds another screen, like an endless feed.
+  const saved = { document: global.document, window: global.window };
+  let height = 2000;
+  let scrolls = 0;
+  global.document = { documentElement: { get scrollHeight() { return height; } } };
+  global.window = { innerHeight: 1000, scrollTo() { scrolls += 1; height += 1000; } };
+  const realSetTimeout = global.setTimeout;
+  global.setTimeout = (fn) => realSetTimeout(fn, 0);
+  try {
+    await review.scrollThrough({ maxHeight: 10000, budgetMs: 60000 });
+    assert.equal(scrolls, 21, '20 half-screen steps reach 10,000 px, then one scroll back to the top');
+    scrolls = 0;
+    height = 2000;
+    await review.scrollThrough({ maxHeight: 1e9, budgetMs: 0 });
+    assert.equal(scrolls, 1, 'an exhausted time budget only scrolls back to the top');
+  } finally {
+    global.document = saved.document;
+    global.window = saved.window;
+    global.setTimeout = realSetTimeout;
+  }
 });
 

@@ -732,14 +732,14 @@ Reviews traditional and SPA sites for deprecated Web API wildcard fields setting
 
 ---
 
-### 6.33 `exceptional-web-design` (2 calls / 1 gate + 1 sub-prompt)
+### 6.33 `exceptional-web-design` (2 calls / 2 sub-prompts)
 
-Read-only design review of an existing site from a URL or a project folder. It writes nothing to the project, so no prompt can leave state behind.
+Read-only design review of an existing site from a URL or a project folder. It runs nothing in the project and writes nothing to it, so no prompt can leave state behind and none is a gate.
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | Step 1 site prompt | sub-prompt | — | 1 | *"Which site should I review?"* - asked only when the request names no URL and no `powerpages.config.json` is found. Data-gathering. | nothing |
-| `exceptional-web-design:2.preview-source` | gate | plan | 2 | Folder without a URL - *"How should I see the site running?"* Start the dev server / Use the deployed site / Review the code only, offering only the available options. Starting a dev server runs the project's own scripts in the background; the skill stops it in step 6. Fires again, with only the untried options, when every captured route redirected to sign-in. | nothing |
+| Step 2 URL prompt | sub-prompt | — | 2 | Folder without a URL - *"I'll paste a URL / Review the code only"*. Asks where the site runs (the deployed site, or a dev server the user starts); the skill starts nothing. Data-gathering. | nothing |
 
 ---
 ### Cross-plugin shared skills — out of catalog scope

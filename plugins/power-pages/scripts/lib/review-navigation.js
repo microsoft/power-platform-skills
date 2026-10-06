@@ -7,17 +7,19 @@ const NAVIGATION_TIMEOUT_MS = 20000;
 // page as it is. Long enough for an SPA's first data fetches and web fonts on a normal site.
 const NETWORK_IDLE_GRACE_MS = 5000;
 
-// Validates a site URL taken from a user or a page before any browser is pointed at it.
-// Only http(s) is a website; file:, data:, and javascript: URLs are rejected. Credentials in
-// the URL are rejected too, because the URL is echoed into the JSON the agent reads.
-// Returns the URL without trailing slashes, ready to have a route appended.
+// Validates a site URL taken from a user or a page before any browser is pointed at it, and
+// reduces it to origin and path. Only http(s) is a website; file:, data:, and javascript: URLs
+// are rejected, and so are credentials. The query string and fragment are dropped: routes are
+// appended to this URL ("https://site/?lang=en" + "/about" would request the home page again),
+// and a query can carry a token that would otherwise be echoed into the JSON the agent reads.
+//   https://contoso.example/en-US/?sig=abc#top  ->  https://contoso.example/en-US
 function normalizeSiteUrl(value) {
   const text = String(value || '').trim();
   let parsed;
   try {
     parsed = new URL(text);
   } catch {
-    return { error: `Not a valid URL: ${text}` };
+    return { error: 'Not a valid URL. Give the full address, starting with http:// or https://.' };
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     return { error: `Only http and https URLs can be reviewed, not ${parsed.protocol}` };
@@ -25,7 +27,7 @@ function normalizeSiteUrl(value) {
   if (parsed.username || parsed.password) {
     return { error: 'Remove the user name and password from the URL; the review cannot sign in.' };
   }
-  return { url: text.replace(/\/+$/, '') };
+  return { url: `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, '') };
 }
 
 // Turns a --routes value such as "/, about,/contact/" into ["/", "/about", "/contact/"].
@@ -84,11 +86,15 @@ const isBoolean = (v) => typeof v === 'boolean';
 // session ids - and this output is read into the agent's conversation.
 //   https://contoso.blob.core.windows.net/media/hero.jpg?sv=2024&sig=abc  ->  https://contoso.blob.core.windows.net/media/hero.jpg
 //   data:image/png;base64,iVBOR...                                       ->  data:
+// WebSocket URLs are redacted the same way: SignalR and dev-server HMR sockets put access
+// tokens in the query, e.g. wss://x.service.signalr.net/client/?hub=a&access_token=...
+const WEB_PROTOCOLS = new Set(['http:', 'https:', 'ws:', 'wss:']);
+
 function redactUrl(value) {
   try {
     const parsed = new URL(value);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return parsed.protocol;
-    return `${parsed.origin}${parsed.pathname}`;
+    if (!WEB_PROTOCOLS.has(parsed.protocol)) return parsed.protocol;
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
   } catch {
     return String(value);
   }
@@ -100,7 +106,7 @@ function redactUrl(value) {
 //     - navigating to "https://contoso.example/p?sig=abc", waiting until "load"
 // A URL ends at whitespace, a quote, or a bracket, so those characters bound the match.
 function redactUrlsInText(text) {
-  return String(text).replace(/\bhttps?:\/\/[^\s'"<>()]+/g, redactUrl);
+  return String(text).replace(/\b(?:https?|wss?):\/\/[^\s'"<>()]+/g, redactUrl);
 }
 
 module.exports = {
