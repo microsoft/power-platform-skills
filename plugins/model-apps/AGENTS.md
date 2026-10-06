@@ -1366,14 +1366,16 @@ rejected a complete page saved with CRLF endings.
   parameter does, or a type whose second token is a name (`<span>(press [/] to search)</span>`, `(see docs)`, `(optional, <a>…</a>)`,
   `(get the <b>app</b>)`, `(extends <code>Base</code>)`, `(Note: see the <a href="/x">docs</a>)`, `(Note: <a href="/x">docs</a>)`: TS1005/TS1003;
   `parameterSyntaxFails`). A keyword there is read as TypeScript reads it: the thirteen modifiers it takes before a parameter's name (`public`,
-  `readonly`, `async`, `in`, `out`, …) and `this` end the reading, the thirty-three words that are no parameter's name (`extends`, `import`, `new`,
+  `readonly`, `async`, `in`, `out`, …) end the reading, the thirty-three words that are no parameter's name (`extends`, `import`, `new`,
   `class`, …) fail the list — but `default`, a modifier before what it can head (`interface`, `class`, `function`, `abstract`, `async` or a
-  decorator), ends the reading there — and every other keyword (`get`, `set`, `of`, `type`, …) is a name. A type is read to its second token
+  decorator), ends the reading there — and every other keyword (`get`, `set`, `of`, `type`, `this`, …) is a name. A type is read to its second token
   (`typeStartFails`): a name after a type reference is TS1005 unless the first word takes a type (`keyof`, `typeof`, `readonly`, `unique`, `infer`,
-  `asserts`, and `this` before `is`, a type predicate TypeScript reads in any type) or the second is a conditional's `extends`; a type reference's first
-  type argument is read the same way (`see<a href` fails at `href`); and a name after a generic function type's first type parameter is TS1005 unless
-  the first word is a modifier, which TypeScript parses there whatever it is (`<private x>`). Tests measure the classes over every keyword TypeScript has,
-  every keyword before every other one, and every two-word type start with the endings that could complete it. One place settles even those: **directly after the head of a type alias, `type Name =` at a
+  `asserts`) or the second is a conditional's `extends`; `this` and `is` on one line are a type predicate, which TypeScript reads in any type, and the
+  type after `is` is read the same way (`this field` fails, `this is string` does not); a type reference's first type argument is read the same way
+  (`see<a href` fails at `href`); a name after a generic function type's first type parameter is TS1005 unless the first word is a modifier, which
+  TypeScript parses there whatever it is (`<private x>`); and a type that is one name and a `,` lets the next parameter be read as the first was
+  (`(Type: string, <a href="/x">docs</a>)` fails at the `<`). Tests measure the classes over every keyword TypeScript has, every keyword before every
+  other one, and every two-word type start and second parameter with the endings that could complete it. One place settles even those: **directly after the head of a type alias, `type Name =` at a
   statement start** (after any `export` and `declare`), where `type Name` — two names side by side — cannot be
   an expression, so a `<` is a function type's type parameters, for certain, whatever follows it
   (`afterTypeAliasHead`; a head with type parameters, `type Fn<A> =`, is not read, and its right side is decided

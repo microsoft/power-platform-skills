@@ -3198,6 +3198,10 @@ const PLAIN_LIST_ELEMENTS = [
   // A word before a tag with attributes is a type reference with type arguments to a type, whose first is two names; an `===` is no initializer's `=`.
   '<small>(Note: see <a href="/docs">the docs</a>)</small>', '<p>(Tip: click <a href="/x">here</a>)</p>', '<p>(Note: requires <a href="/x">admin</a> access)</p>',
   '<p>(Status: {status === "ok" ? <b>OK</b> : <i>Down</i>})</p>', '<p>(Status: {status !== "ok" ? <b>Fix</b> : null})</p>', '<p>(Status: {status != "ok" ? <b>Fix</b> : null})</p>',
+  // `this` before a word that is not `is`, `this` as a parameter's name, and a lone type and a `,` before what no parameter starts with.
+  '<small>(Note: this field is required, <a href="/why">why?</a>)</small>', '<p>(Warning: this action cannot be undone, <a href="/help">learn more</a>)</p>',
+  '<p>(Tip: this works best in <a href="/x">Chrome</a>)</p>', '<p>(Note: this is a preview, see <a href="/docs">docs</a>)</p>', '<p>(Type: string, <a href="/x">docs</a>)</p>',
+  '<p>(this opens <a href="/x">settings</a>)</p>',
 ];
 // ... and the text in which something may start an expression and a `/`, a `<` or a back-tick follows, which a signature's parameter list shares: the guess.
 const INITIALIZER_LIST_ELEMENTS = ['<p>(a = /x/)</p>', '<p>(a = b/(c))</p>', '<p>(a = /(x)/)</p>', '<p>(a = <b>c</b>)</p>', '<p>(a = `x`)</p>'];
@@ -3283,7 +3287,7 @@ test('a keyword at the start of a parameter is a modifier, no name or a name, as
   const GUESS = { generic: false, ambiguity: 'generic' };
   for (const [list, expected] of [
     ['get the app', ELEMENT], ['set in Settings', ELEMENT], ['extends Base', ELEMENT], ['import from CSV', ELEMENT], ['of x', ELEMENT], ['type x', ELEMENT], ['new x', ELEMENT], ['new', ELEMENT],
-    ['import', ELEMENT], ['extends', ELEMENT], ['a, get the app', ELEMENT], ['a, extends', ELEMENT], ['public x', GUESS], ['async x', GUESS], ['this x', GUESS], ['get', GUESS], ['type', GUESS],
+    ['import', ELEMENT], ['extends', ELEMENT], ['a, get the app', ELEMENT], ['a, extends', ELEMENT], ['public x', GUESS], ['async x', GUESS], ['this x', ELEMENT], ['get', GUESS], ['type', GUESS],
     ['a, set', GUESS], ['a, in x', GUESS],
     // A word that an escape or a letter beyond ASCII goes on with is another name (`new\u0078` is `newx`): it ends the reading before it is classed.
     ['new\\u0078', GUESS], ['new\u00e9', GUESS], ['a, extends\u00e9 x', GUESS],
@@ -3315,9 +3319,9 @@ test('a keyword at the start of a parameter is a modifier, no name or a name, as
     const alone = opensTypeParameters(`<T>(${word}): x</T>`, 0);
     const before = opensTypeParameters(`<T>(${word} x): x</T>`, 0);
     if (word === 'this') {
-      // A name only alone and first, and the lexer stops at it.
-      assert.ok(everywhere('this') && everywhere('this: T'), '`this` is a parameter');
-      assert.deepStrictEqual([alone, before], [GUESS, GUESS], 'this');
+      // A name like any other: TypeScript checks only in its checker that it stands first, and a name after it fails.
+      assert.ok(everywhere('this') && everywhere('this: T') && everywhere('a, this') && nowhere('this x'), '`this` is a parameter\'s name');
+      assert.deepStrictEqual([alone, before], [GUESS, ELEMENT], 'this');
     } else if (everywhere(`${word} x`)) {
       modifiers.push(word);
       assert.deepStrictEqual(before, GUESS, `${word} is a modifier to TypeScript: the lexer stops at it`);
@@ -3386,6 +3390,10 @@ test('a parameter type that fails at its second token fails the list, wherever T
     ['a: A.B c', GUESS], ['a: 1 2', GUESS],
     // `this is` is a type predicate in any type, with trivia or a comment between the words; anything else after `this` is no type either way, and is left to the scan.
     ['a: this is string', GUESS], ['a?: this is T', GUESS], ['...a: this is T', GUESS], ['x, a: this is T', GUESS], ['a: this /* c */ is T', GUESS], ['a: this\u00a0is T', GUESS], ['a: Foo<this is T>', GUESS],
+    ['a: this is keyof T', GUESS], ['a: this field is required', ELEMENT], ['a: this is a preview', ELEMENT], ['a: this is how <a href="/x">it</a>', ELEMENT], ['a: this\nis T', ELEMENT], ['a: this /*\n*/ is T', ELEMENT],
+    // 	his is a parameter's name too, and a type that is one name and a `,` leaves the next parameter to be read as the first was.
+    ['this opens <a href="/x">settings</a>', ELEMENT], ['this', GUESS], ['this: T', GUESS], ['a, this', GUESS], ['this, a', GUESS],
+    ['Type: string, <a href="/x">docs</a>', ELEMENT], ['a: T, b c', ELEMENT], ['a: string, 1', ELEMENT], ['a: T, b', GUESS], ['a: T,', GUESS], ['a: T, ...b', GUESS], ['a: T[], b c', GUESS], ['a: T, b: U, c d', ELEMENT],
     // A type reference's first type argument is a type, read the same way.
     ['Note: see <a href="/docs">the docs</a>', ELEMENT], ['Tip: click <a href="/x">here</a>', ELEMENT], ['a: Foo<b c>', ELEMENT], ['a: Foo<<b c>() => b>', ELEMENT], ['a: Foo < /* c */ b c>', ELEMENT],
     ['a: Array<keyof T>', GUESS], ['a: Foo<T extends U ? X : Y>', GUESS], ['a: Foo<<T>() => T>', GUESS], ['a: Foo<infer U>', GUESS], ['a: Foo<a, b c>', GUESS], ['a: Foo<<private x>() => x>', GUESS],
@@ -3399,7 +3407,7 @@ test('a parameter type that fails at its second token fails the list, wherever T
   const unsound = [];
   let failed = 0;
   // The lexer reads two names; what follows them may complete a type that the pair alone does not (`this is` needs the type after it), so each list is tried with a few endings.
-  const shapes = [(pair) => pair, (pair) => `<${pair}>() => void`, (pair) => `Foo<${pair}>`];
+  const shapes = [(pair) => pair, (pair) => `<${pair}>() => void`, (pair) => `Foo<${pair}>`, (pair) => `T, ${pair}`];
   for (const first of words) {
     for (const second of words) {
       for (const shape of shapes) {
