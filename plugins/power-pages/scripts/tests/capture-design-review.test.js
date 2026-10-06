@@ -150,8 +150,9 @@ test('captureDesignReview writes every mobile sheet and reports a truncated page
       path.join(outputDir, 'home-mobile-sheet-2.png'),
     ]);
     // Each column is its own clipped capture, so the last one is taken at the page's end.
-    const clips = long.calls.screenshots.filter((shot) => shot.clip).map((shot) => shot.clip.y);
-    assert.deepEqual(clips, Array.from({ length: 10 }, (_, i) => i * segment));
+    const clipShots = long.calls.screenshots.filter((shot) => shot.clip);
+    assert.deepEqual(clipShots.map((shot) => shot.clip.y), Array.from({ length: 10 }, (_, i) => i * segment));
+    assert.ok(clipShots.every((shot) => shot.fullPage === true), 'a clip below the first screen needs fullPage to be document-relative');
     assert.ok(result.summary.images.includes(path.join(outputDir, 'home-mobile-sheet-2.png')));
     assert.deepEqual(result.summary.truncated, []);
 

@@ -277,6 +277,9 @@ async function captureRouteAtWidth({ browser, page, url, route, slug = slugForRo
         for (const [index, clips] of plan.sheets.entries()) {
           const columns = [];
           for (const clip of clips) {
+            // `fullPage` makes `clip` document-relative. Without it Playwright measures the
+            // clip from the viewport and throws "Clipped area is either empty or outside the
+            // resulting image" for any column below the first screen (checked on 1.62 and 1.63).
             const shot = await page.screenshot({ fullPage: true, clip });
             columns.push({ base64: Buffer.from(shot).toString('base64'), height: clip.height });
           }
