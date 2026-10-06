@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { approve, runValidation } = require('../../../scripts/lib/validation-helpers');
 
 const PREFIXES = {
   'intent-coverage': 'IC',
@@ -172,6 +173,5 @@ if (explicitReport) {
   }
 } else {
   // The PostToolUse(Skill) hook fires before the audit writes its report, so it can only see a previous run; Step 7.4 validates the new report.
-  process.stdin.resume();
-  process.stdin.on('end', () => process.exit(0));
+  runValidation(() => approve());
 }
