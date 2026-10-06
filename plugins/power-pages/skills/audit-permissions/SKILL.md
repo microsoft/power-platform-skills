@@ -122,12 +122,12 @@ Additionally scan **Web API artifacts** (used by the root-cause attribution in S
 - **Type files** under `src/types/**`: extract property names of the first `interface`/`type` literal; infer the table from filename/content when possible.
 - **Web API site settings** in `.powerpages-site/site-settings/` (files named `Webapi-*` / `Webapi/*`): parse `name` + `value`. Split `name` on `/`: `Webapi/<entitySet>/enabled` → kind `enabled`; `.../fields` → kind `fields`; `Webapi/error` → `error`; else `other`. `webapiEnabledEntitySets` = entity sets whose `enabled` value is exactly `"true"`. For every `fields` setting also record **`isWildcard`** — true when the trimmed value is `*`, or when any comma-separated entry is `*`. A list that names column logical names is NOT a wildcard, however long it is.
 
-Also scan **authentication/registration site settings** in `.powerpages-site/site-settings/` regardless of filename. Parse `name` + `value` for settings under `Authentication/Registration/`, including `Enabled`, `OpenRegistrationEnabled`, `ExternalLoginEnabled`, and `InvitationEnabled`. Compare names case-insensitively and treat a value as enabled only when its trimmed value is case-insensitively `"true"`. Record missing settings as `unknown`, not `false`.
+Also scan **authentication/registration site settings** in `.powerpages-site/site-settings/` regardless of filename. Parse `name` + `value` for settings under `Authentication/Registration/`, including `Enabled`, `OpenRegistrationEnabled`, `ExternalLoginEnabled`, and `InvitationEnabled`. Also parse each external provider's `Authentication/<Type>/<Provider>/RegistrationEnabled`; a configured provider (any settings under `Authentication/<Type>/<Provider>/`) without that setting counts as `true`, the server default. Compare names case-insensitively and treat a value as enabled only when its trimmed value is case-insensitively `"true"`. Record missing settings as `unknown`, not `false`.
 
 Build an **audience reachability profile** before judging permissions:
 
 - A role with `authenticatedusersrole: true` is automatically assigned to every signed-in site user; it is a broad baseline role, not proof of staff, employee, teacher, parent, or other trusted-persona membership.
-- If registration and open registration are enabled, any visitor can create an account and enter that broad Authenticated Users audience.
+- **Open registration** is proven when `OpenRegistrationEnabled` is `true` and either local registration is on (`Authentication/Registration/Enabled` is `true`) or at least one configured external provider's `RegistrationEnabled` is `true`. External-only sites often omit `Authentication/Registration/Enabled`. With open registration, any visitor can create an account and enter that broad Authenticated Users audience.
 - External login or invitation enablement may provide additional entry paths, but do not assume they are open to the public without supporting configuration evidence.
 - Carry this profile into every per-table scope and audience check. Do not evaluate a role name or permission in isolation from how users acquire that role.
 
@@ -350,7 +350,7 @@ Is the scope the least-privileged option that fits?
 
 - Search the service code for scope-relevant patterns: contact-scoped filters (`getCurrentContactId`, `_contactid_value`, `contactid`) and account-scoped filters (`_accountid_value`, `parentcustomerid`)
 - For EACH Global-read permission, resolve every assigned role and apply the Step 2.3 audience reachability profile. Then inspect the table's selected/whitelisted columns, data-model columns, UI purpose, and implementation plan to determine whether the data is explicitly public or intended for a narrower persona.
-- **Mandatory cross-artifact trigger, evaluated separately per affected table:** emit a finding when ALL four conditions hold: (1) `Authentication/Registration/Enabled` and `Authentication/Registration/OpenRegistrationEnabled` are `true`; (2) the assigned web role has `authenticatedusersrole: true`, so every registered account receives it; (3) that role is attached to this table's permission with `read: true` and Global scope; and (4) the table carries per-person, roster, grade, contact, or internal operational data, or the site intent limits it to staff/teachers/another purpose-specific persona → finding:
+- **Mandatory cross-artifact trigger, evaluated separately per affected table:** emit a finding when ALL four conditions hold: (1) open registration is proven (Step 2.3 audience reachability profile); (2) the assigned web role has `authenticatedusersrole: true`, so every registered account receives it; (3) that role is attached to this table's permission with `read: true` and Global scope; and (4) the table carries per-person, roster, grade, contact, or internal operational data, or the site intent limits it to staff/teachers/another purpose-specific persona → finding:
   - **Severity:** `critical`
   - **Title:** `Self-registered users can read all <table> records`
   - **Reasoning:** State the full evidence chain: registration setting(s) → automatic Authenticated Users membership → permission role binding → Global scope → exposed columns/intended audience. Authentication alone does not establish trusted-persona membership.
@@ -741,7 +741,7 @@ Follow the skill tracking instructions in the reference to record this skill's u
 
 Present a summary to the user:
 
-1. **Verdict** — **Safe to go** or **Needs revision**, plus the three category scores
+1. **Verdict** — when `SCORECARD_DATA` is non-null, show **Safe to go** or **Needs revision** plus the three category scores; otherwise state that this is a partial audit and omit both verdict phrases and scores.
 2. **Major issues count** — these need immediate attention
 3. **Minor issues count** — nice-to-have / forward-looking
 4. **Report location** — where the HTML report was saved

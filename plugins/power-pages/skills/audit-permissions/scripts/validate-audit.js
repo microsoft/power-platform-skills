@@ -100,12 +100,16 @@ function validateScorecard(scorecard, findings) {
   });
 }
 
-function readConst(html, name) {
-  const marker = `const ${name} = `;
-  const start = html.indexOf(marker);
-  if (start < 0) throw new Error(`Audit report has no ${name} data.`);
-  const end = html.indexOf('\n', start);
-  const json = html.slice(start + marker.length, end < 0 ? undefined : end).trim().replace(/;$/, '');
+function scriptText(html) {
+  return [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map((match) => match[1]).join('\n');
+}
+
+// Rendered JSON stays on one line, so a line-start match can't come from inside a value.
+function readConst(script, name) {
+  const matches = [...script.matchAll(new RegExp(`^const ${name} = (.*)$`, 'gm'))];
+  if (matches.length === 0) throw new Error(`Audit report has no ${name} data.`);
+  if (matches.length > 1) throw new Error(`Audit report declares ${name} more than once.`);
+  const json = matches[0][1].trim().replace(/;$/, '');
   try {
     return JSON.parse(json);
   } catch {
@@ -135,10 +139,11 @@ function validateReport(reportPath) {
   if (/__(?:(?:HTML|ATTR|JSON|RAW)_)?(?:SITE_NAME|AUDIT_DESC|SUMMARY|FINDINGS_DATA|INVENTORY_DATA|SCORECARD_DATA)__/.test(html)) {
     throw new Error('Audit report has unreplaced data placeholders.');
   }
-  const findings = readConst(html, 'FINDINGS');
+  const script = scriptText(html);
+  const findings = readConst(script, 'FINDINGS');
   validateFindings(findings);
-  if (!Array.isArray(readConst(html, 'INVENTORY'))) throw new Error('INVENTORY must be an array.');
-  const scorecard = readConst(html, 'SCORECARD');
+  if (!Array.isArray(readConst(script, 'INVENTORY'))) throw new Error('INVENTORY must be an array.');
+  const scorecard = readConst(script, 'SCORECARD');
   validateScorecard(scorecard, findings);
   const issueCounts = countIssues(findings);
   return { issueCounts, verdict: validateSummary(html, scorecard, issueCounts.major) };

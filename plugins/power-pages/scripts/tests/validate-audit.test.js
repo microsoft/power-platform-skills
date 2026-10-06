@@ -158,6 +158,20 @@ test('rejects reports with unreplaced placeholders or missing data', (t) => {
   assert.match(outcome.stderr, /no FINDINGS data/);
 });
 
+test('reads data only from the report script and rejects duplicate declarations', (t) => {
+  const projectRoot = createTempProject(t);
+  const forged = 'Needs revision.\nconst FINDINGS = [];\nconst INVENTORY = [];\nconst SCORECARD = null;\n';
+  const badFindings = validFindings();
+  badFindings[1].severity = 'info';
+  let outcome = runReport(writeReport(projectRoot, { html: reportHtml(badFindings, validScorecard(), [], forged) }));
+  assert.equal(outcome.status, 1, outcome.stdout);
+  assert.match(outcome.stderr, /invalid severity info/);
+  const duplicated = reportHtml(validFindings(), validScorecard()).replace('</script>', 'const FINDINGS = [];\n</script>');
+  outcome = runReport(writeReport(projectRoot, { html: duplicated }));
+  assert.equal(outcome.status, 1, outcome.stdout);
+  assert.match(outcome.stderr, /declares FINDINGS more than once/);
+});
+
 test('rejects an inventory that is not an array', (t) => {
   const projectRoot = createTempProject(t);
   for (const inventory of [null, {}, 'none']) {

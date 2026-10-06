@@ -211,7 +211,7 @@ Adds login/logout functionality and role-based authorization to your site.
 
 > "Check my table permissions for security issues"
 
-Audits existing table permissions on a deployed or in-progress site by analyzing them against the site code and live Dataverse metadata. Produces a visual HTML audit report with a verdict, category scores, and suggested fixes.
+Audits existing table permissions on a deployed or in-progress site against the site code and local metadata, querying live Dataverse relationship metadata only when a reachable flow has unresolved dependencies. Produces a visual HTML audit report with a verdict, category scores, and suggested fixes.
 
 - Each issue rated **major** or **minor**, with a Safe to go / Needs revision verdict and 1–5 scores for over-exposure, under-exposure, and correctness
 - Each major issue labelled permissions-only or caused upstream (data model, site code, or Web API settings)
