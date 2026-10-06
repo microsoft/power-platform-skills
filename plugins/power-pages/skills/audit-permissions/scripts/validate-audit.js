@@ -2,7 +2,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const { findProjectRoot } = require('../../../scripts/lib/validation-helpers');
 
 const DIMENSIONS = [
   'intent-coverage',
@@ -164,16 +163,6 @@ function htmlPathFor(resultPath) {
   return path.join(path.dirname(resultPath), 'permissions-audit.html');
 }
 
-function latestResultPath(docsDirectory) {
-  if (!fs.existsSync(docsDirectory)) return null;
-  const candidates = fs.readdirSync(docsDirectory)
-    .filter((name) => /^permissions-audit.*-result\.json$/i.test(name))
-    .map((name) => path.join(docsDirectory, name));
-  if (candidates.length === 0) return null;
-  return candidates.reduce((latest, candidate) =>
-    (fs.statSync(candidate).mtimeMs > fs.statSync(latest).mtimeMs ? candidate : latest));
-}
-
 function readFindings(html) {
   const marker = 'const FINDINGS = ';
   const start = html.indexOf(marker);
@@ -194,7 +183,12 @@ function validateHtmlFindings(html, result) {
   if (findings.length !== issues.length) {
     throw new Error(`Audit report lists ${findings.length} issues; JSON result has ${issues.length}.`);
   }
+  const findingIds = new Set();
   for (const finding of findings) {
+    if (findingIds.has(finding.id)) {
+      throw new Error(`Audit report lists finding ${finding.id} more than once.`);
+    }
+    findingIds.add(finding.id);
     const issue = issues.find((candidate) => candidate.id === finding.id);
     if (!issue) {
       throw new Error(`Audit report finding ${finding.id} does not match a JSON issue id.`);
@@ -219,10 +213,10 @@ function validateFiles(resultPath, htmlPath) {
   return summary;
 }
 
-function fail(error, hookMode) {
+function fail(error) {
   const message = error instanceof Error ? error.message : String(error);
   process.stderr.write(`Audit validation failed: ${message}\n`);
-  process.exit(hookMode ? 2 : 1);
+  process.exit(1);
 }
 
 const resultFlagIndex = process.argv.indexOf('--result');
@@ -236,22 +230,10 @@ if (explicitResult) {
     const summary = validateFiles(resultPath, htmlPath);
     process.stdout.write(`${JSON.stringify({ valid: true, resultPath, ...summary })}\n`);
   } catch (error) {
-    fail(error, false);
+    fail(error);
   }
 } else {
-  let input = '';
-  process.stdin.on('data', (chunk) => { input += chunk; });
-  process.stdin.on('end', () => {
-    try {
-      const cwd = JSON.parse(input).cwd;
-      const projectRoot = cwd && findProjectRoot(cwd);
-      if (!projectRoot) process.exit(0);
-      const resultPath = latestResultPath(path.join(projectRoot, 'docs'));
-      if (!resultPath) process.exit(0);
-      validateFiles(resultPath, htmlPathFor(resultPath));
-      process.exit(0);
-    } catch (error) {
-      fail(error, true);
-    }
-  });
+  // The PostToolUse(Skill) hook fires before the audit writes its artifacts, so it can only see a previous run; Step 7.4 validates the new result.
+  process.stdin.resume();
+  process.stdin.on('end', () => process.exit(0));
 }

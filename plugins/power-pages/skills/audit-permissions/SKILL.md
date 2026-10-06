@@ -163,7 +163,7 @@ Parse the JSON output and carry the findings into the audit as **major/minor** i
 - `warning` findings → **major** issue (unless purely forward-looking/cosmetic → **minor**)
 - `info` findings → **minor** issue
 
-These findings should be included in the final report even if the later code/Dataverse analysis also finds additional issues.
+These findings should be included in the final report even if the later code/Dataverse analysis also finds additional issues. Exception: drop the validator's "no associated web roles" warning for a Parent-scope child permission whose parent chain is valid (see check B).
 
 After Step 3.1 determines the environment URL, rerun the shared validator with live relationship verification only when the Step 3 discovery gate is open. Merge any additional findings:
 
@@ -184,7 +184,7 @@ Purely mechanical cross-checks over the parsed YAML + data model + Web API artif
 | Permission references a web-role GUID not defined in any role | IS | internal-consistency | major |
 | Web role has a **blank id** | IS | internal-consistency | major |
 | Permission has a **blank `entitylogicalname`** | DM | data-model-alignment | major |
-| Permission links **no web role** (empty `entitypermission_webrole`) | RC | role-completeness | major |
+| Permission links **no web role** (empty `entitypermission_webrole`) and is not a Parent-scope child with a valid parent chain | RC | role-completeness | major |
 | Permission grants **no privileges** (all 6 CRUD bits false) | TC | table-coverage | major |
 | Permission has **no scope** (`scope < 0`) | SC | scope-correctness | major |
 | Permission scope code **unrecognized** (`Unknown(code)`) | SC | scope-correctness | minor |
@@ -337,6 +337,7 @@ Does the permission have web role(s) assigned?
   - **Title:** `Permission <name> has no web role association`
   - **Reasoning:** A permission without a web role has no effect — no users will receive this access
   - **Fix:** Associate with the appropriate web role
+- Exception: a Parent-scope (`756150003`) child permission may leave its roles empty — it inherits role association through the parent chain. Raise no finding when its `parententitypermission` resolves to an existing permission; a broken chain is reported by check I.
 - If roles are assigned → `pass`
 
 **C. Scope Appropriateness**
@@ -857,7 +858,7 @@ Map each Step-4 finding into a dimension, then apply the severity policy above t
 |---|---|---|
 | A. Missing permission for referenced table | intent-coverage (+ table-coverage) | major |
 | A. Unused permission (not referenced in code) | privilege-calibration (C18, one issue per role) | minor |
-| B. Permission has no web role | role-completeness | major (also preflight `RC`) |
+| B. Permission has no web role | role-completeness | major (also preflight `RC`); none for a Parent-scope child with a valid parent chain |
 | C. Global scope with write/delete | privilege-calibration / security-posture | major, except staff shared work queues (C16) and child-table parity (C17) |
 | C. Scope could be narrower | scope-correctness | major if per-owner/PII, else minor |
 | D. Missing read | intent-coverage | major |

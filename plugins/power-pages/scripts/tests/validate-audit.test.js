@@ -1,8 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { spawnSync } = require('child_process');
-const fs = require('fs');
-const os = require('os');
 const path = require('path');
 
 const { createTempProject, writeProjectFile } = require('./test-utils');
@@ -190,6 +188,7 @@ test('checks the report against the JSON result', (t) => {
   expectFindingsFailure(t, (f) => { f[0].rootCause = 'mixed'; }, /AH1 has rootCause mixed; expected permissions/);
   expectFindingsFailure(t, (f) => { f[1].fix = ''; }, /finding IS1 needs a non-empty fix/);
   expectFindingsFailure(t, (f) => { delete f[0].title; }, /finding AH1 needs a non-empty title/);
+  expectFindingsFailure(t, (f) => { f[1] = { ...f[0] }; }, /lists finding AH1 more than once/);
 });
 
 test('rejects reports with unreplaced placeholders', (t) => {
@@ -206,48 +205,12 @@ test('pairs a renamed result with its own report', (t) => {
   assert.equal(outcome.status, 0, outcome.stderr);
 });
 
-test('hook mode passes when there is no audit result', (t) => {
+test('hook mode never blocks, even with an invalid earlier result', (t) => {
   const projectRoot = createTempProject(t);
+  const result = validResult();
+  result.verdict = 'Safe to go';
+  writeAudit(projectRoot, { result });
   const outcome = runHook(projectRoot);
   assert.equal(outcome.status, 0, outcome.stderr);
-});
-
-test('hook mode passes a valid audit and blocks an invalid one', (t) => {
-  const validRoot = createTempProject(t);
-  writeAudit(validRoot);
-  assert.equal(runHook(validRoot).status, 0);
-
-  const invalidRoot = createTempProject(t);
-  const result = validResult();
-  result.verdict = 'Safe to go';
-  writeAudit(invalidRoot, { result });
-  const outcome = runHook(invalidRoot);
-  assert.equal(outcome.status, 2);
-  assert.match(outcome.stderr, /Audit validation failed: verdict is Safe to go/);
-});
-
-test('hook mode validates the newest result', (t) => {
-  const projectRoot = createTempProject(t);
-  const older = writeAudit(projectRoot);
-  const result = validResult();
-  result.issueCounts.total = 9;
-  const newer = writeAudit(projectRoot, { name: 'permissions-audit-oct-2026', result });
-  fs.utimesSync(older, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
-  fs.utimesSync(newer, new Date(), new Date());
-  const outcome = runHook(projectRoot);
-  assert.equal(outcome.status, 2);
-  assert.match(outcome.stderr, /issueCounts\.total is 9/);
-});
-
-test('hook mode finds a site in a child directory', (t) => {
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'powerpages-workspace-'));
-  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
-  const siteRoot = path.join(workspace, 'site');
-  writeProjectFile(siteRoot, 'powerpages.config.json', '{}');
-  const result = validResult();
-  result.verdict = 'Safe to go';
-  writeAudit(siteRoot, { result });
-  const outcome = runHook(workspace);
-  assert.equal(outcome.status, 2);
-  assert.match(outcome.stderr, /verdict is Safe to go/);
+  assert.equal(outcome.stderr, '');
 });
