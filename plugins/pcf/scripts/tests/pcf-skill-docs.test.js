@@ -13,6 +13,7 @@ const PCF_REFERENCE_FILES = [
   'references/pcf-troubleshooting.md',
   'references/pcf-hosts.md',
   'references/pcf-power-pages.md',
+  'references/pcf-canvas.md',
   'references/pcf-recipes.md',
   'references/pcf-testing.md',
 ];
@@ -35,6 +36,12 @@ const ALLOWED_PLATFORM_ERROR_MESSAGES = [
 // on the checkout's line endings.
 function readPluginFile(relativePath) {
   return fs.readFileSync(path.join(ROOT, relativePath), 'utf8').replace(/\r\n/g, '\n');
+}
+
+function readCanvasReference() {
+  const relativePath = 'references/pcf-canvas.md';
+  assert.ok(fs.existsSync(path.join(ROOT, relativePath)), `${relativePath} is missing`);
+  return readPluginFile(relativePath);
 }
 
 function parseTroubleshootingEntries(text) {
@@ -169,6 +176,142 @@ test('/pcf skill links troubleshooting guidance for repair flows', () => {
     /\.\.\/\.\.\/references\/pcf-troubleshooting\.md/,
     'SKILL.md must link references/pcf-troubleshooting.md for build/import/render repair paths',
   );
+});
+
+test('/pcf canvas mode links the guided canvas reference', () => {
+  readCanvasReference();
+  const skill = readPluginFile('skills/pcf/SKILL.md');
+
+  assert.match(skill, /^- \*\*canvas\*\*:/m);
+  assert.match(skill, /\.\.\/\.\.\/references\/pcf-canvas\.md/);
+  assert.match(skill, /^description:.*guided setup for canvas apps/m);
+});
+
+test('canvas reference names the environment feature and exact Learn sources', () => {
+  const canvas = readCanvasReference();
+
+  assert.ok(canvas.includes('Power Apps component framework for canvas apps'));
+  for (const url of [
+    'https://learn.microsoft.com/en-us/power-apps/developer/component-framework/component-framework-for-canvas-apps',
+    'https://learn.microsoft.com/en-us/power-apps/developer/component-framework/limitations',
+    'https://learn.microsoft.com/en-us/power-apps/developer/component-framework/reference/',
+  ]) {
+    assert.ok(canvas.includes(url), `canvas guidance must cite ${url}`);
+  }
+  assert.match(canvas, /System administrator privileges/);
+  assert.match(canvas, /Power Apps license/);
+  assert.match(canvas, /By default[^.\n]*enabled only for model-driven apps/);
+  assert.match(canvas, /Dataverse-dependent APIs, including WebAPI, are not available in canvas apps/);
+  assert.match(canvas, /Custom auth[^.\n]*not supported in canvas apps[^.\n]*connectors/i);
+});
+
+test('canvas setup uses the current Studio path and documented update flow', () => {
+  const canvas = readCanvasReference();
+
+  assert.match(canvas, /Power Platform admin center.*\*\*Environments\*\*.*\*\*Settings\*\*.*\*\*Product\*\*.*\*\*Features\*\*.*\*\*Power Apps component framework for canvas apps\*\*.*\*\*Save\*\*/);
+  assert.match(canvas, /\*\*Add\*\*.*\*\*Get more components\*\*.*\*\*Code\*\*.*\*\*Import\*\*/);
+  assert.match(canvas, /\*\*Code components\*\*/);
+  assert.match(canvas, /manifest `version` for every change/);
+  assert.match(canvas, /closed and reopened/);
+  assert.match(canvas, /Publish all customizations first/);
+  assert.match(canvas, /\*\*Properties\*\*.*\*\*Advanced\*\*/);
+  assert.match(canvas, /potentially unsafe code/);
+  assert.match(canvas, /`Default` publisher.*unmanaged solution.*`pac pcf push`/);
+  assert.match(canvas, /Admins should review code components/);
+});
+
+test('canvas support stays guided without adding an automated host profile', () => {
+  const canvas = readCanvasReference();
+
+  assert.match(canvas, /`canvas` is not a `--hosts` or intent host value/);
+  assert.match(canvas, /`pcf-gates\.js` without `--hosts` defaults to `model`/);
+  assert.match(canvas, /`hosts`.*`\["model"\]`/);
+  assert.match(canvas, /standard and virtual/);
+  assert.ok(canvas.includes('https://learn.microsoft.com/en-us/power-apps/developer/component-framework/react-controls-platform-libraries#faq'));
+  assert.match(canvas, /canvas API limits are not checked automatically/i);
+  assert.match(canvas, /A canvas gate profile, reading the environment setting and automated runtime evidence are not implemented in this release/);
+  assert.match(canvas, /`runtime-not-checked` unless the user checks.*Power Apps Studio/);
+});
+
+test('canvas create flow uses model intent and gates with manual API review', () => {
+  const create = readPluginFile('skills/pcf/create-flow.md');
+
+  assert.match(create, /canvas apps[^\n]*model-driven profile/i);
+  assert.match(create, /`hosts`[^\n]*`\["model"\]`/);
+  assert.match(create, /`pcf-gates\.js` without `--hosts`/);
+  assert.match(create, /review canvas API limits by hand with the user/i);
+  assert.match(create, /plan approval[^\n]*canvas/i);
+  assert.match(create, /pcf-canvas\.md/);
+  for (const file of PCF_DOC_FILES) {
+    assert.doesNotMatch(readPluginFile(file), /--hosts(?:=|\s+)canvas\b/, `${file} must not pass canvas as an automated host`);
+  }
+});
+
+test('canvas deploy and final report stay guided and runtime-not-checked', () => {
+  const deploy = readPluginFile('skills/pcf/deploy-flow.md');
+  const skill = readPluginFile('skills/pcf/SKILL.md');
+
+  assert.match(deploy, /successful push[^\n]*canvas/i);
+  assert.ok(deploy.includes('Power Apps component framework for canvas apps'));
+  assert.match(deploy, /pcf-canvas\.md/);
+  assert.match(deploy, /runtime-not-checked/);
+  assert.match(skill, /^## Phase 9[^\n]*canvas setup/im);
+  assert.match(skill, /canvas-only targets[^\n]*skip[^\n]*form binding/i);
+  assert.match(skill, /^Final report:[^\n]*canvas status/im);
+});
+
+test('root README PCF entry describes guided canvas apps and the admin feature', () => {
+  const readme = readPluginFile('../../README.md');
+  const entry = readme.split(/^### /m).find((section) => section.startsWith('[PCF]'));
+
+  assert.ok(entry, 'the root README must have a PCF entry');
+  assert.match(entry, /canvas apps/i);
+  assert.match(entry, /guided[^.\n]*canvas apps/i);
+  assert.ok(entry.includes('Power Apps component framework for canvas apps'));
+});
+
+test('plugin README introduces guided canvas apps and the admin feature', () => {
+  const readme = readPluginFile('README.md');
+  const intro = readme.split('\n\n')[1];
+
+  assert.match(intro, /guided[^.\n]*canvas apps/i);
+  assert.ok(readme.includes('Power Apps component framework for canvas apps'));
+  assert.match(readme, /references\/pcf-canvas\.md/);
+});
+
+test('plugin metadata advertises guided canvas apps and the canvas-apps keyword', () => {
+  for (const file of ['.plugin/plugin.json', '.claude-plugin/plugin.json']) {
+    const manifest = JSON.parse(readPluginFile(file));
+    assert.match(manifest.description, /guided[^.\n]*canvas apps/i, `${file} must describe guided canvas support`);
+    assert.ok(manifest.keywords.includes('canvas-apps'), `${file} must include the canvas-apps keyword`);
+  }
+});
+
+test('canvas host and capability docs separate guidance from automated checks', () => {
+  const hosts = readPluginFile('references/pcf-hosts.md');
+  const capabilities = readPluginFile('docs/pcf-capabilities.md');
+  const design = readPluginFile('docs/pcf-design.md');
+  const uncovered = capabilities.split('### Not covered in this release')[1].split('### Known limitations')[0];
+
+  assert.match(hosts, /^## Canvas apps$/m);
+  assert.match(hosts, /\(pcf-canvas\.md\)/);
+  assert.match(capabilities, /^### Canvas apps .*guided$/m);
+  assert.match(uncovered, /Canvas-specific automated checks[^\n]*canvas API checks[^\n]*reading the environment setting[^\n]*runtime evidence/);
+  assert.ok(uncovered.includes('#656'), 'unimplemented canvas automation must point to the backlog');
+  assert.doesNotMatch(design, /Canvas apps and mobile offline are not covered/);
+  assert.match(design, /pcf-canvas\.md/);
+});
+
+test('canvas troubleshooting covers missing components and stale versions', () => {
+  const entries = parseTroubleshootingEntries(readPluginFile('references/pcf-troubleshooting.md'));
+  for (const title of [
+    "A pushed control isn't listed under Get more components \u2192 Code in Power Apps Studio",
+    'A canvas app still shows the old version',
+  ]) {
+    const matches = entries.filter((entry) => entry.title === title);
+    assert.equal(matches.length, 1, `expected one troubleshooting entry for ${title}`);
+    assertTroubleshootingEntry(matches[0]);
+  }
 });
 
 test('/pcf Pages compatibility gate precedes deploy phase', () => {

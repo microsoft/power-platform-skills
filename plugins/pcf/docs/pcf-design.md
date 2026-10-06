@@ -4,20 +4,20 @@ This document records the `/pcf:pcf` skill as it ships in the pcf plugin. It is 
 
 ## Purpose and scope
 
-`/pcf` builds, tests, diagnoses, upgrades, deploys, verifies and inventories Power Apps component framework (PCF) code components for model-driven apps and Power Pages.
+`/pcf` builds, tests, diagnoses, upgrades, deploys, verifies and inventories Power Apps component framework (PCF) code components for model-driven apps, with guided setup for Power Pages standard field controls and canvas apps.
 
 This plugin is in preview; [`pcf-capabilities.md`](pcf-capabilities.md) records the shipped capability evidence.
 
 This release covers:
 
-- Model-driven app host guidance, and Power Pages guidance for standard field controls only.
+- Model-driven app host guidance, Power Pages guidance for standard field controls only, and guided canvas app setup with manual API review.
 - Standard and virtual PCF controls.
 - Four scaffold templates: `field-standard`, `dataset-standard`, `field-virtual`, and `dataset-virtual`.
 - Six recipes: `star-rating`, `hierarchy-tree`, `lookup-dropdown`, `contextual-grid`, `grid-customizer`, and `attachment-uploader`.
 - Intent capture, plan rendering, scaffold, doctor, upgrade, manifest/source/build gates, deploy, binding verification, inventory, and offline evals.
 - Developer registration through `pac pcf push` with an explicit `--environment` and skill-recorded consent.
 
-Canvas apps and mobile offline are not covered by this skill. Registration uses `pac pcf push` in this release. Power Pages runtime certification is shown per recipe only when a recipe records runtime evidence.
+Canvas setup is guided; a canvas gate profile, reading the environment setting and automated canvas runtime evidence are not implemented in this release. Mobile offline is not covered by this skill. Registration uses `pac pcf push` in this release. Power Pages runtime certification is shown per recipe only when a recipe records runtime evidence.
 
 ## Architecture
 
@@ -35,6 +35,7 @@ intent/request
   -> scripts/pcf-push.js --project <dir> --env <url> (--solution <uniqueName> | --publisher-prefix <p>) runs pac pcf push --environment <url>
   -> scripts/verify-pcf.js checks registration and FormXML binding evidence
   -> Pages site configuration guidance and runtime evidence if a target site is reachable
+  -> canvas environment setting and Studio setup guidance for canvas targets; manual runtime evidence only
   -> scripts/pcf-inventory.js lists registered controls and where-used dependencies
 ```
 
@@ -85,6 +86,8 @@ Templates are minimal, tested PCF project families:
 | `field-virtual` | Field | Platform libraries | Model-driven apps |
 | `dataset-virtual` | Dataset | Platform libraries | Model-driven apps |
 
+The Hosts column names automated profiles. Canvas targets use the model-driven profile with manual canvas API review, not a new matrix or intent host value.
+
 Scaffolds include the `pcf-scripts` npm commands `build`, `clean`, `rebuild`, `lint`, `lint:fix`, `start`, `start:watch`, `refreshTypes` and `test`. The build/clean hooks are part of the generated contract because `pac pcf push` invokes the project package scripts during developer registration.
 
 Recipes overlay a template with task-focused behavior. The recipe catalog in [`../references/pcf-recipes.md`](../references/pcf-recipes.md) is rendered from `recipes/*/recipe.json` and separates **designed for** hosts from **certified** runtime evidence. Current recipes are available but not certified in this release unless that rendered catalog names a certification date.
@@ -133,6 +136,12 @@ Power Pages support is guided by [`../references/pcf-power-pages.md`](../referen
 
 Pages outcomes for the guided form-field and Liquid journeys must state whether the journey was runtime-verified. Do not claim a Pages dataset journey was verified. Recipes and the SKILL label uncertified Pages claims as not certified in this release until runtime evidence is recorded in recipe metadata.
 
+## Canvas setup
+
+Canvas support is guided by [`../references/pcf-canvas.md`](../references/pcf-canvas.md). Build and gate standard or virtual controls with the default model-driven profile and record `model` in intent; `canvas` is not a `--hosts` or intent host value. Review canvas API limits by hand with the user before the normal push flow. For canvas-only targets, skip model-driven form binding.
+
+After push, guide the **Power Apps component framework for canvas apps** environment setting and Studio import/updates. Report `runtime-not-checked` unless the user checks the control in Power Apps Studio. The canvas gate profile, reading the environment setting and automated runtime evidence are not implemented; see [#656](https://github.com/microsoft/power-platform-skills/issues/656).
+
 ## Testing, evals and CI
 
 Automated coverage ships at three levels:
@@ -156,7 +165,7 @@ See [`pcf-capabilities.md`](pcf-capabilities.md) for the evidence level behind e
 - [x] Manifest, source and build gates — `scripts/lint-pcf.js`, `scripts/pcf-gates.js`, `scripts/pcf-build.js`, `scripts/lib/pcf-manifest.js`, `pcf-code-gate.js`, `pcf-build.js`; covered by `pcf-manifest.test.js`, `pcf-lint-cli.test.js`, `pcf-code-gate.test.js`, `pcf-gates.test.js`, and `pcf-build.test.js`.
 - [x] Doctor and upgrade — `scripts/pcf-doctor.js`, `scripts/pcf-upgrade.js`, `scripts/lib/pcf-doctor.js`, `pcf-upgrade.js`; covered by `pcf-doctor.test.js` and `pcf-upgrade.test.js`.
 - [x] Deploy, verify and inventory — `scripts/pcf-push.js`, `scripts/verify-pcf.js`, `scripts/pcf-inventory.js`, `scripts/lib/pcf-dataverse.js`, `pcf-binding-verify.js`; covered by `pcf-push.test.js`, `pcf-verify-cli.test.js`, `pcf-inventory.test.js`, `pcf-dataverse*.test.js`, and `pcf-binding-verify.test.js`.
-- [x] Public references — `references/pcf-best-practices.md`, `pcf-deploy.md`, `pcf-hosts.md`, `pcf-power-pages.md`, `pcf-recipes.md`, `pcf-testing.md`, `pcf-troubleshooting.md`; covered by `pcf-skill-docs.test.js` and repository metadata validators.
+- [x] Public references — `references/pcf-best-practices.md`, `pcf-deploy.md`, `pcf-hosts.md`, `pcf-power-pages.md`, `pcf-canvas.md`, `pcf-recipes.md`, `pcf-testing.md`, `pcf-troubleshooting.md`; covered by `pcf-skill-docs.test.js` and repository metadata validators.
 - [x] Eval harness — `evals/pcf/`; covered by `node evals/pcf/run-pcf.js --tier smoke`, `--tier full`, and `node --test evals/pcf/tests/*.test.js`.
 - [x] Drift guard for copied model-apps and shared-skill sources — `scripts/tests/model-apps-copies.test.js`; covered by the plugin suite and by CI path filters that include the model-apps sources pcf bundles.
 - [x] Write-safety hook and markers — `hooks/hooks.json`, `hooks/validate-write-safety.js`; covered by `scripts/tests/validate-write-safety.test.js` and `node scripts/validate-hooks-manifests.js`.

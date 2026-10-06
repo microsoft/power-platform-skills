@@ -6,16 +6,20 @@ Use this flow for a new PCF control. Microsoft Learn defines PCF controls, manif
 
 Ask only what is missing from the request:
 
-1. **Host**: model-driven apps, Power Pages, or both. This release supports Power Pages only for standard field controls: the form-field journey and the standalone Liquid journey (`{% codecomponent %}`), both guided. Dataset controls on Pages (form sub-grid and list) are not supported in this release. Power Pages implies a **standard** field control because Learn says platform-library React controls are not supported on Power Pages: https://learn.microsoft.com/en-us/power-apps/developer/component-framework/react-controls-platform-libraries#faq.
-2. **Control shape**: field, dataset sub-grid/list, or Power Apps grid customizer. Dataset sub-grid/list is model-driven only in this release.
-3. **Template family**: standard vs virtual. Derive it from hosts and requirements; do not offer virtual for Pages.
+1. **Host**: model-driven apps, Power Pages, canvas apps (guided), or a combination. This release supports Power Pages only for standard field controls: the form-field journey and the standalone Liquid journey (`{% codecomponent %}`), both guided. Dataset controls on Pages (form sub-grid and list) are not supported in this release. Power Pages implies a **standard** field control because Learn says platform-library React controls are not supported on Power Pages: https://learn.microsoft.com/en-us/power-apps/developer/component-framework/react-controls-platform-libraries#faq.
+2. **Control shape**: field, dataset sub-grid/list, or Power Apps grid customizer. Dataset sub-grid/list binding is model-driven only in this release.
+3. **Template family**: standard vs virtual. Derive it from hosts and requirements; do not offer virtual for Pages. Canvas apps support standard and virtual controls; Learn confirms React controls and platform libraries for canvas and model-driven apps: https://learn.microsoft.com/en-us/power-apps/developer/component-framework/react-controls-platform-libraries#faq.
 4. **Properties**: name, type, usage, required/default. Check Pages property types and single-field limits against `../../references/pcf-hosts.md`.
 5. **Features**: WebAPI, Utility, Device, external service usage. Declare only documented features and guard optional APIs at runtime.
 6. **Recipe**: run `node "${PLUGIN_ROOT}/scripts/pcf-scaffold.js" --list`; route to a recipe only when its template and hosts fit. Recipes are designed-for unless the catalog says certified.
 
+For canvas apps, use the model-driven profile and read [canvas guidance](../../references/pcf-canvas.md). Canvas API limits are not checked automatically; review canvas API limits by hand with the user. WebAPI is unavailable in canvas apps; custom auth is not supported, so use connectors instead and check each API's availability in the linked Learn API reference.
+
 ## 2. Write `pcf-intent.json`
 
-Read `scripts/lib/pcf-intent.js` as the contract. Minimal valid example:
+Read `scripts/lib/pcf-intent.js` as the contract. For a canvas-only target, record `hosts` as `["model"]` and leave `bindings` empty rather than inventing a model-driven form binding. `canvas` is not a `--hosts` or intent host value. Keep the intended canvas target and manual-review decisions in `workflow-log.md`; do not add schema fields.
+
+Minimal valid model-driven + Pages example:
 
 ```json
 {
@@ -63,6 +67,8 @@ node "${PLUGIN_ROOT}/scripts/write-pcf-plan.js" --intent @pcf-intent.json [--man
 
 Show the plan. In attended runs use plan mode; in unattended runs log the approval default only when the request supplied enough safe detail. If the intent lint reports a Pages or binding error, fix intent before scaffold.
 
+At plan approval, explain that canvas is the intended runtime target but `model` is the automated gate profile. State that canvas setup is guided; a canvas gate profile, reading the environment setting and automated runtime evidence are not implemented. Confirm the manual API review and admin/Studio setup expectations with the user.
+
 ## 4. Scaffold
 
 ```powershell
@@ -80,6 +86,8 @@ Read `../../references/pcf-best-practices.md`, `../../references/pcf-testing.md`
 Current-record controls must use maker-configured `entityId` and `entityName` inputs. Missing id means an unsaved-record disabled state, never a crash. Do not use internal context or host DOM shortcuts.
 
 ## 6. Gates loop
+
+For a canvas target, run `pcf-gates.js` without `--hosts` to use the default `model` profile. Review canvas API limits by hand alongside these gates; green gates do not check canvas API compatibility.
 
 ```powershell
 node "${PLUGIN_ROOT}/scripts/pcf-gates.js" --project <dir> [--hosts model,pages] [--skip lint,test,build]

@@ -2,9 +2,9 @@
 
 This plugin ships the preview `/pcf:pcf` skill for Power Apps component framework (PCF) code components.
 
-`/pcf` builds, tests, diagnoses, upgrades, deploys, verifies and inventories PCF components for model-driven apps and Power Pages. The authoring flow runs in the main conversation loop, not a `Task` subagent, because plan approval, environment consent, binding choices and runtime-verification choices are interactive. Unattended mode uses `scripts/resolve-interaction-mode.js`; suppressing a prompt never authorizes an environment write. The public design record is [`docs/pcf-design.md`](docs/pcf-design.md).
+`/pcf` builds, tests, diagnoses, upgrades, deploys, verifies and inventories PCF components for model-driven apps, with guided setup for Power Pages standard field controls and canvas apps. Canvas targets use the model-driven gate profile and manual API review; `canvas` is not a `--hosts` or intent host value. Reading the canvas environment setting and automated canvas runtime evidence are not implemented. The authoring flow runs in the main conversation loop, not a `Task` subagent, because plan approval, environment consent, binding choices and runtime-verification choices are interactive. Unattended mode uses `scripts/resolve-interaction-mode.js`; suppressing a prompt never authorizes an environment write. The public design record is [`docs/pcf-design.md`](docs/pcf-design.md).
 
-Primary references: [`references/pcf-hosts.md`](references/pcf-hosts.md), [`references/pcf-best-practices.md`](references/pcf-best-practices.md), [`references/pcf-testing.md`](references/pcf-testing.md), [`references/pcf-deploy.md`](references/pcf-deploy.md), [`references/pcf-power-pages.md`](references/pcf-power-pages.md), [`references/pcf-recipes.md`](references/pcf-recipes.md), [`references/pcf-troubleshooting.md`](references/pcf-troubleshooting.md), and [`docs/pcf-capabilities.md`](docs/pcf-capabilities.md).
+Primary references: [`references/pcf-hosts.md`](references/pcf-hosts.md), [`references/pcf-best-practices.md`](references/pcf-best-practices.md), [`references/pcf-testing.md`](references/pcf-testing.md), [`references/pcf-deploy.md`](references/pcf-deploy.md), [`references/pcf-power-pages.md`](references/pcf-power-pages.md), [`references/pcf-canvas.md`](references/pcf-canvas.md), [`references/pcf-recipes.md`](references/pcf-recipes.md), [`references/pcf-troubleshooting.md`](references/pcf-troubleshooting.md), and [`docs/pcf-capabilities.md`](docs/pcf-capabilities.md).
 
 ## Layout
 
@@ -73,6 +73,7 @@ The `pcf-code-gate.js` / `PCF_PAGES_API` guard check is a conservative static he
 - **Record context through inputs** — do not use `Xrm`, `context.page`, or `context.mode.contextInfo`; pass `entityId` and `entityName` as maker-configured properties when a recipe needs the current record.
 - **Template/recipe health** — every committed PCF template and available recipe must pass `pcf-gates.js` through `pcf-ci-build.js --all`.
 - **Power Pages claims** — label designed-for vs certified separately; do not claim Pages runtime certification without runtime evidence recorded in recipe metadata.
+- **Canvas claims** — guided setup only; use the default `model` gate profile and review canvas API limits by hand. Guide the **Power Apps component framework for canvas apps** environment setting and Studio import. Report `runtime-not-checked` unless the user checks the control in Studio.
 
 ## CLI argument contract
 

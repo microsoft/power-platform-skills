@@ -60,12 +60,18 @@ This file records **shipped** behaviour only. Planned and unbuilt work is tracke
 - Site configuration for the form-field and Liquid journeys is 📋 guided.
 - No live Power Pages run has been completed in this release.
 
+### Canvas apps — 📋 guided
+- Guides the **Power Apps component framework for canvas apps** environment setting and Studio import/updates; see [canvas setup](../references/pcf-canvas.md).
+- Uses the model-driven gate profile for standard and virtual controls, records `model` in intent, and reviews canvas API limits by hand with the user. `canvas` is not an automated host value.
+- Deploys through the normal push flow. Canvas runtime stays `runtime-not-checked` unless the user checks the control in Power Apps Studio.
+- A canvas gate profile, reading the environment setting and automated runtime evidence are not implemented in this release. See [#656](https://github.com/microsoft/power-platform-skills/issues/656).
+
 ### Unattended mode — 🧪 tested
 - `resolve-interaction-mode.js` supports unattended runs by suppressing prompts only where a safe default exists.
 - Suppressing a prompt never authorizes an environment write.
 
 ### Not covered in this release
-- **Canvas apps** — a pushed control is registered for the whole environment, but the skill's host checks accept only `model` and `pages`, so it neither checks canvas limits nor guides canvas setup.
+- **Canvas-specific automated checks** — canvas API checks, reading the environment setting, and runtime evidence are not implemented. See [#656](https://github.com/microsoft/power-platform-skills/issues/656).
 - **Dataset controls on Power Pages** — form sub-grid and list journeys are not supported in this release. See [#656](https://github.com/microsoft/power-platform-skills/issues/656).
 - **Mobile and offline** — not checked, guided or verified.
 - **Registration without PAC** — registration uses `pac pcf push` in this release.

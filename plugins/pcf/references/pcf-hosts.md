@@ -1,6 +1,6 @@
 # PCF host capabilities
 
-This document summarizes the host rules the `/pcf` skill applies before build, deploy and Pages enablement. It is derived from `compatibility-matrix.json`, Microsoft Learn and observed probe results from this release.
+This document summarizes the host rules the `/pcf` skill applies before build, deploy, Pages enablement and guided canvas setup. It is derived from `compatibility-matrix.json`, Microsoft Learn and observed probe results from this release.
 
 ## Host matrix
 
@@ -28,6 +28,12 @@ Power Pages support is narrower than model-driven apps. This release supports Po
 - Required `uses-feature` declarations are not allowed for Pages. Optional features must be guarded at the method level and verified on the target site.
 - Multi-field form PCF bindings are not supported in Power Pages. A single field binding can be enabled on a Pages form field.
 - Power Pages Web API is available through PCF under Pages security, with explicit site settings and table permissions: [portal Web API](https://learn.microsoft.com/en-us/power-pages/configure/web-api-overview).
+
+## Canvas apps
+
+Canvas setup is guided only. Use the model-driven profile for standard and virtual controls, record `model` in intent, and review canvas API limits by hand. `canvas` is not a `--hosts` or intent host value; the generated matrix above still describes only the automated profiles.
+
+An admin must turn on **Power Apps component framework for canvas apps** in each environment. Follow [pcf-canvas.md](pcf-canvas.md) for the admin-center setting, Studio import/updates, API limits and evidence language. A canvas gate profile, reading the environment setting and automated runtime evidence are not implemented in this release.
 
 ## Platform libraries
 

@@ -301,3 +301,29 @@ If project lint reports that no `ControlManifest.Input.xml` files were found, pa
 **Fix**: Use logical names in site settings, explicit columns or the exact **Power Pages Web API Columns** view, correct table permissions and EntitySetName in URLs. Include the CSRF token only for raw AJAX; PCF `context.webAPI` handles its own host path.
 
 **Verify**: A permitted user succeeds, a denied user fails safely, and changes to the view propagate after the documented delay.
+
+## Canvas apps
+
+### A pushed control isn't listed under Get more components → Code in Power Apps Studio
+
+**Symptom**: A successful push is reported, but the control is missing from **Get more components → Code** in Power Apps Studio.
+
+**Candidate causes**: **Power Apps component framework for canvas apps** is off in that environment, Studio is open in a different environment, the push has not finished or published, or the user lacks the system administrator privileges needed to turn on the feature.
+
+**Discriminating checks**: Compare the push target with Studio's environment, check the completed push/publish result, and ask an admin to confirm the feature under Power Platform admin center → **Environments** → the environment → **Settings** → **Product** → **Features**. The skill does not read the setting automatically.
+
+**Fix**: Have an admin turn on the feature and save it in the intended environment, let push/publish complete, then follow the current **Add → Get more components → Code → Import** steps in [pcf-canvas.md](pcf-canvas.md). System administrator privileges and a Power Apps license are required to turn on the feature: [canvas code components](https://learn.microsoft.com/en-us/power-apps/developer/component-framework/component-framework-for-canvas-apps).
+
+**Verify**: The user sees the control on the **Code** tab, imports it, and adds it from **Code components**. Keep runtime `runtime-not-checked` until the user checks the control's behavior in Studio.
+
+### A canvas app still shows the old version
+
+**Symptom**: The canvas app still uses the old code component after a push or solution update.
+
+**Candidate causes**: The manifest version was not bumped, customizations were not published, or the app was not closed and reopened.
+
+**Discriminating checks**: Compare the manifest version with the deployed version, confirm that all customizations were published, and ask whether the user closed and reopened the app in Studio.
+
+**Fix**: Change the manifest `version` for every change, publish all customizations first, then close and reopen the app and accept Studio's update prompt. For re-imported properties missing from the default **Properties** tab, update the manifest version; they remain on **Advanced**. See [canvas updates](pcf-canvas.md#updates).
+
+**Verify**: After reopening and accepting the update, the user observes the new control behavior and expected properties in Studio. Report only the runtime behavior the user checked.

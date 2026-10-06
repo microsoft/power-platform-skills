@@ -88,7 +88,7 @@ generative pages for an app that already exists. Use either independently — ne
 
 ### [PCF](plugins/pcf/README.md) (`plugins/pcf`)
 
-Build, test, diagnose, upgrade, deploy, verify and inventory Power Apps component framework (PCF) code components for model-driven apps and Power Pages.
+Build, test, diagnose, upgrade, deploy, verify and inventory Power Apps component framework (PCF) code components for model-driven apps, with guided setup for Power Pages field controls and canvas apps. Canvas apps need an admin to turn on **Power Apps component framework for canvas apps** in each environment.
 
 **Skills**: `/pcf:pcf` scaffolds Microsoft-maintained PCF templates and recipes, runs gates, deploys with PAC, and verifies registration and bindings.
 

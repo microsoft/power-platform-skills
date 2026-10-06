@@ -7,6 +7,7 @@ Deployment writes to an environment. Obtain explicit consent before the write: e
 Preconditions:
 
 - `pcf-gates.js` is green for the target hosts.
+- For a canvas target, use the default model-driven gate profile and review canvas API limits by hand with the user; see [canvas guidance](../../references/pcf-canvas.md).
 - Existing controls with an available previous manifest have passed `lint-pcf.js --manifest <current> --against <previous>`. If no baseline exists, the report says compatibility was not compared.
 - Auth passed with `check-auth.js --env <envUrl> --require-pac`.
 - The target is safe to write.
@@ -25,6 +26,8 @@ Hints:
 - Omit `--no-verify` unless another verification step immediately follows.
 
 ## Import succeeded but old version runs
+
+For canvas apps, follow the [Studio update steps](../../references/pcf-canvas.md#updates): change the manifest version, publish all customizations, then close and reopen the app. The form/cache checks below apply to model-driven apps and Pages.
 
 If push/import succeeds but the old bundle still loads, check manifest version, solution version, publish state and browser cache. Bump the manifest `version` before each deploy; release packages also bump the solution `a.b.c.d` version. Publish the form/app customizations and hard refresh the browser. Same-version byte refresh was inconclusive in this release, so do not rely on it.
 
@@ -74,4 +77,6 @@ Microsoft documents Power Platform GitHub Actions at https://learn.microsoft.com
 
 ## After deploy
 
-Run `verify-pcf.js` from `bind-flow.md` or the intent form. Record the highest evidence level reached and say `runtime-not-checked` if no browser/site journey was observed.
+For model-driven targets and Power Pages form-field journeys, run `verify-pcf.js` from `bind-flow.md` or the intent form. For canvas-only targets, use the push registration read-back, or `pcf-inventory.js` for an existing registration; do not invent a model-driven form binding. Record the highest evidence level reached and say `runtime-not-checked` if no runtime journey was observed.
+
+After a successful push for a canvas target, guide an admin to turn on **Power Apps component framework for canvas apps** in the target environment, then guide the user's Power Apps Studio **Add → Get more components → Code → Import** steps in [pcf-canvas.md](../../references/pcf-canvas.md). The skill does not read the setting or collect automated canvas runtime evidence. Report `runtime-not-checked` unless the user checks the control in Studio.

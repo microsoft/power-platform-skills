@@ -1,7 +1,7 @@
 ---
 name: pcf
 version: 1.0.0
-description: Builds, tests, diagnoses, upgrades, deploys and verifies Power Apps component framework (PCF) code components for model-driven apps and Power Pages — field and dataset controls, standard and virtual (React) — from Microsoft-maintained templates and recipes pinned to a tested version matrix. Runs quality gates (manifest and host lint, source checks, lint, unit tests, production build), deploys with pac pcf push, verifies registration and form bindings, and guides Power Pages enablement. Use when the user wants to build, fix, upgrade, deploy or check a PCF control or code component, or asks why one fails to build, import, update or render. For a whole page use /model-apps:genpage; for a whole app use /model-apps:app-builder.
+description: Builds, tests, diagnoses, upgrades, deploys and verifies Power Apps component framework (PCF) code components for model-driven apps and Power Pages — field and dataset controls, standard and virtual (React) — from Microsoft-maintained templates and recipes pinned to a tested version matrix. Runs quality gates (manifest and host lint, source checks, lint, unit tests, production build), deploys with pac pcf push, verifies registration and form bindings, and guides Power Pages enablement, with guided setup for canvas apps. Use when the user wants to build, fix, upgrade, deploy or check a PCF control or code component, or asks why one fails to build, import, update or render. For a whole page use /model-apps:genpage; for a whole app use /model-apps:app-builder.
 author: Microsoft Corporation
 argument-hint: "<control description> | doctor | upgrade | verify | inventory"
 user-invocable: true
@@ -40,6 +40,7 @@ Build, repair, upgrade, deploy, bind, verify and inventory Power Apps component 
 - **existing project**: one `*.pcfproj` found. Iterate, gates, deploy-only or bind as requested. If several are found, ask which unless unattended supplied a path.
 - **verify**: existing control already registered/bound. Run `verify-pcf.js` or `pcf-inventory.js` as appropriate.
 - **pages**: user targets Power Pages. This release supports Power Pages only for standard field controls: the form-field journey and the standalone Liquid journey (`{% codecomponent %}`), both guided. Dataset controls on Pages (form sub-grid and list) are not supported in this release. Run the Pages compatibility gate before deploy or acceptance, then guide site configuration after deploy. Follow [pages-flow.md](pages-flow.md).
+- **canvas**: user targets canvas apps. Setup is guided only: use the default model-driven profile and `model` intent host, not `canvas`, and review canvas API limits by hand with the user. After the normal push flow, guide the environment setting and Studio setup using [../../references/pcf-canvas.md](../../references/pcf-canvas.md). A canvas gate profile, reading the environment setting and automated runtime evidence are not implemented.
 - **doctor**: run `pcf-doctor.js` and stop with fixes unless user asked to apply a repair.
 - **upgrade**: follow [upgrade-flow.md](upgrade-flow.md).
 - **inventory / "is this control still used?"**: run `pcf-inventory.js --env <url> --where-used`; always include the where-used warning from `pcf-testing.md` because dependency results are registered solution dependencies only, not proof of Liquid or arbitrary text references.
@@ -64,7 +65,7 @@ For repair work, read [../../references/pcf-troubleshooting.md](../../references
 
 ## Phase 1 — design → intent → plan approval
 
-Ask only the missing decisions: host(s), field vs dataset, template family, properties, required features, target solution/publisher, binding target, clients, and Pages journey. For new controls follow [create-flow.md](create-flow.md).
+Ask only the missing decisions: host(s), field vs dataset, template family, properties, required features, target solution/publisher, binding target, clients, Pages journey, and guided canvas setup. For new controls follow [create-flow.md](create-flow.md).
 
 Write `pcf-intent.json` with schema version 1, then render the plan:
 
@@ -139,22 +140,24 @@ node "${PLUGIN_ROOT}/scripts/pcf-push.js" --project <dir> --env <url> (--solutio
 
 ## Phase 7 — bind
 
-Follow [bind-flow.md](bind-flow.md). Use Maker for binding unless the user explicitly brought their own binding automation. Publish after binding before claiming a published level.
+For model-driven targets and Power Pages form-field journeys, follow [bind-flow.md](bind-flow.md). Use Maker for binding unless the user explicitly brought their own binding automation. Publish after binding before claiming a published level. For canvas-only targets, skip model-driven form binding and follow the canvas setup below.
 
 ## Phase 8 — verify and optional runtime check
 
-Verify metadata:
+For canvas-only targets, use the push registration read-back or `pcf-inventory.js` for registration evidence, not FormXML verification. For model-driven targets and Power Pages form-field journeys, verify metadata:
 
 ```powershell
 node "${PLUGIN_ROOT}/scripts/verify-pcf.js" --env <url> --control <prefix_ns.ctor> [--version <x.y.z>] --table <logical> --form <name|guid> (--column <col>|--control-id <id>) [--clients web,phone,tablet] [--param name=column:<col>] [--param name=static:<value>[:<type>]] [--workspace <dir>]
 node "${PLUGIN_ROOT}/scripts/verify-pcf.js" --env <url> --control <prefix_ns.ctor> [--version <x.y.z>] --intent @pcf-intent.json [--workspace <dir>]
 ```
 
-Offer a browser runtime check with Playwright MCP when a reachable app or Pages site exists. If skipped or unavailable, report `runtime-not-checked` honestly.
+For model-driven apps and Pages sites, offer a browser runtime check with Playwright MCP when a reachable target exists. If skipped or unavailable, report `runtime-not-checked` honestly. Canvas runtime checks are manual in Power Apps Studio.
 
-## Phase 9 — Pages site configuration
+## Phase 9 — Pages site configuration and canvas setup
 
-After deployment, follow [pages-flow.md](pages-flow.md), [../../references/pcf-power-pages.md](../../references/pcf-power-pages.md), and the host matrix to guide site configuration. This release supports Power Pages only for standard field controls: the form-field journey and the standalone Liquid journey (`{% codecomponent %}`), both guided. Dataset controls on Pages (form sub-grid and list) are not supported in this release. Do not claim Pages runtime certification without opening the site and recording behavior.
+For Power Pages targets after deployment, follow [pages-flow.md](pages-flow.md), [../../references/pcf-power-pages.md](../../references/pcf-power-pages.md), and the host matrix to guide site configuration. This release supports Power Pages only for standard field controls: the form-field journey and the standalone Liquid journey (`{% codecomponent %}`), both guided. Dataset controls on Pages (form sub-grid and list) are not supported in this release. Do not claim Pages runtime certification without opening the site and recording behavior.
+
+For canvas targets after a successful push, follow [../../references/pcf-canvas.md](../../references/pcf-canvas.md) to guide an admin through **Power Apps component framework for canvas apps** and the user through Studio import/setup. Do not read or change the setting automatically. Report `runtime-not-checked` unless the user checks the control in Power Apps Studio; registration and import are not runtime evidence.
 
 ## Upgrade and inventory shortcuts
 
@@ -180,4 +183,4 @@ After deployment, follow [pages-flow.md](pages-flow.md), [../../references/pcf-p
 | `runtime-verified` | Target host loaded and journey worked. | Browser/Playwright/manual smoke evidence. |
 | `runtime-not-checked` | Metadata was checked but runtime was not. | State explicitly; do not round up. |
 
-Final report: control identity, hosts, version, gates, deploy target as a safe placeholder such as `https://contoso.crm.dynamics.com`, evidence level, runtime status, Pages status, and inventory warning.
+Final report: control identity, hosts, version, gates, deploy target as a safe placeholder such as `https://contoso.crm.dynamics.com`, evidence level, runtime status, Pages status, canvas status, and inventory warning.
