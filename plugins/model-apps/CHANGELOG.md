@@ -124,6 +124,13 @@ where the build reads its code for certain.
 
 [#673]: https://github.com/microsoft/power-platform-skills/issues/673
 
+## [2.12.1]
+
+- **Usage telemetry is on.** The plugin sends a `skill_started` event when a skill starts, routed to
+  the collector for your cloud; an unrecognised cloud sends nothing. Org and tenant ids are sent, never
+  the user's id. Turn it off with `/model-apps:telemetry off`, or set
+  `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT=1` for automation.
+
 ## [2.12.0]
 
 Fixes from a retest of 2.11.0: an existing form converges to its layout's order and `--verify` checks
