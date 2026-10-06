@@ -356,6 +356,34 @@ test('actual supported counters admit a diagnostic even when the APK recommends 
   assert.throws(() => loadDiagnosticArtifacts(f.file, options), /does not support the target Android runtime counter/);
 });
 
+test('new Player metadata separates diagnostic mode and permits no published template recommendation', (t) => {
+  const f = fixture(t);
+  const metadata = f.manifest.player.metadata;
+  metadata.schemaVersion = 2;
+  metadata.mode = 'diagnostic';
+  delete metadata.recommendedTemplatePackage;
+  const options = { run: (command, args, cwd) => command === 'aapt2'
+    ? `E: meta-data\n A: android:name="com.microsoft.powerapps.devlauncher.PLAYER_COMPATIBILITY"\n A: android:value="${JSON.stringify(runtimeMetadata(metadata))}"\n`
+    : command === 'unzip' ? JSON.stringify(metadata) : f.options.run(command, args, cwd) };
+  writeJson(f.file, f.manifest);
+  const result = summary(loadDiagnosticArtifacts(f.file, options));
+  assert.equal(result.player.recommendedTemplatePackage, null);
+  assert.equal(result.deploymentAllowed, false);
+  metadata.recommendedTemplatePackage = {
+    name: TEMPLATE, version: '1.0.0', templateVersion: 2,
+    nativeRuntimeVersions: metadata.recommendedNativeRuntimeVersions,
+  };
+  writeJson(f.file, f.manifest);
+  assert.throws(() => loadDiagnosticArtifacts(f.file, options), /inconsistent recommended template/);
+  metadata.recommendedTemplatePackage.registry = 'https://registry.npmjs.org';
+  metadata.recommendedTemplatePackage.integrity = `sha512-${Buffer.alloc(64).toString('base64')}`;
+  writeJson(f.file, f.manifest);
+  assert.doesNotThrow(() => loadDiagnosticArtifacts(f.file, options));
+  metadata.mode = 'production';
+  writeJson(f.file, f.manifest);
+  assert.throws(() => loadDiagnosticArtifacts(f.file, options), /invalid supported\/recommended runtime counters/);
+});
+
 test('packed template CLI and host metadata disagreement blocks even with refreshed archive hashes', (t) => {
   const f = fixture(t);
   repack(f, TEMPLATE, (root) => modifyJson(path.join(root, 'template/app.json'), (config) => {

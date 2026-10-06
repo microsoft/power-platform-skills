@@ -132,6 +132,17 @@ version. The template's real `--manifest` must report that private version.
 The APK may still recommend template `0.1.0`; supported runtime counters and the
 full baked fingerprints, not npm-version equality, govern binary admission.
 
+New Player metadata uses schema 2 with an explicit `mode: "diagnostic"` for
+these artifacts. `recommendedTemplatePackage` may be absent; the Player does not
+invent a published version from its source checkout. A present schema-2
+recommendation carries the public registry and SHA-512 integrity verified by
+the producer at build time. The skill continues to admit the selected diagnostic
+by its exact artifacts, supported counters and fingerprints, not by the presence
+of a recommendation. Production-mode metadata is not a diagnostic Player.
+Previously verified schema-1 bundles retain their original historical
+recommendation data and remain inspectable; do not rewrite immutable artifacts
+to emulate the new schema or claim publication from their source labels.
+
 The inspection-only template excludes a stale canonical lock and cannot scaffold.
 Its separately hashed staging lock is the install-graph evidence. A private
 prerelease must enter the new host and template major required by the native

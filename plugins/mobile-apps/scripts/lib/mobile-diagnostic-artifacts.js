@@ -204,7 +204,9 @@ function parseAndroidPlayerMetadata(output) {
 }
 
 function validatePlayer(metadata, target) {
-  requireValue(metadata?.schemaVersion === 1 && PLATFORMS.every((platform) => {
+  const currentMetadata = metadata?.schemaVersion === 2 && metadata.mode === 'diagnostic';
+  const legacyMetadata = metadata?.schemaVersion === 1 && metadata.mode === undefined;
+  requireValue((legacyMetadata || currentMetadata) && PLATFORMS.every((platform) => {
     const supported = metadata.supportedNativeRuntimeVersions?.[platform];
     return Array.isArray(supported) && supported.length > 0
       && supported.every((version) => Number.isSafeInteger(version) && version > 0)
@@ -212,9 +214,11 @@ function validatePlayer(metadata, target) {
       && supported.includes(metadata.recommendedNativeRuntimeVersions?.[platform]);
   }), 'Selected player has invalid supported/recommended runtime counters.');
   const recommended = metadata.recommendedTemplatePackage;
-  requireValue(recommended?.name === TEMPLATE && exactVersion(recommended.version)
+  requireValue((currentMetadata && recommended === undefined) || (recommended?.name === TEMPLATE && exactVersion(recommended.version, currentMetadata)
     && Number.isSafeInteger(recommended.templateVersion) && recommended.templateVersion > 0
-    && same(recommended.nativeRuntimeVersions, metadata.recommendedNativeRuntimeVersions),
+    && same(recommended.nativeRuntimeVersions, metadata.recommendedNativeRuntimeVersions)
+    && (!currentMetadata || (recommended.registry === 'https://registry.npmjs.org'
+      && /^sha512-[A-Za-z0-9+/]{86}==$/.test(recommended.integrity || '')))),
   'Selected APK has an inconsistent recommended template/runtime contract.');
   requireValue(metadata.supportedNativeRuntimeVersions.android.includes(target.nativeRuntimeVersions.android),
     'Selected APK does not support the target Android runtime counter. Select a matching actual player; recommendations cannot authorize unsupported runtimes.');
@@ -244,7 +248,7 @@ function summary(selection) {
       recommendedNativeRuntimeVersions: Object.fromEntries(PLATFORMS.map((platform) => [
         platform, player.metadata.recommendedNativeRuntimeVersions[platform],
       ])),
-      recommendedTemplatePackage: {
+      recommendedTemplatePackage: player.metadata.recommendedTemplatePackage === undefined ? null : {
         name: TEMPLATE,
         version: player.metadata.recommendedTemplatePackage.version,
         templateVersion: player.metadata.recommendedTemplatePackage.templateVersion,
