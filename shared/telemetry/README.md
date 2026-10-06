@@ -60,7 +60,7 @@ choice cannot override `disabled: true`.
 |---|---|---|---|
 | Power Pages | `disabled: false` | Enabled and default-on for transmission. Organization-based geo routing selects a regional collector; without an organization ID, the configured US default is used. Events are written to the local mirror even after a user transmission opt-out. | `eventInfo.aadObjectId` when PAC exposes the signed-in user's Entra object ID; `eventInfo.framework` when the Power Pages code-site framework can be determined. |
 | Mobile Apps | `disabled: false` | Enabled and default-on for transmission. Its project environment selects the regional collector. Until that cluster is resolved, events remain in the local mirror and are not transmitted. | `eventInfo.invocationSource`; random per-project `eventInfo.appInstanceId` (or `null` outside a prepared project); optional validated checkpoint `eventInfo.additionalInfo`; and `eventInfo.appInsightsSelection`. |
-| Model Apps | `disabled: true` | Hard-off: no event building, network transmission, or local mirror. If enabled later, transmission will be default-on and the standard mirror and opt-out behavior will apply. | No signed-in user object ID. If enabled, the base event can include `orgId` and `tenantId` when PAC is signed in. |
+| Model Apps | `disabled: false` | Enabled and default-on for transmission. A public-cloud organization is geo-routed to the US or EU collector (US default only without an organization ID; an organization whose geo cannot be determined is not transmitted); a sovereign or internal PAC cloud is routed from the cloud stamp alone, never to a public collector; an unrecognized cloud, or a signed-in organization with no cloud, is not transmitted. Events are written to the local mirror even after a user transmission opt-out. | No signed-in user object ID. The base event can include `orgId` and `tenantId` when PAC is signed in. |
 
 ### Custom routing (the resolver contract)
 
@@ -74,8 +74,17 @@ module.exports = {
   async resolve({ event, cfg, cloud, configDir }) { /* ... */ },
   // optional sync fast-gate so hooks skip the ~3-5s pac shellout when unprovisioned.
   isProvisioned(cfg) { return true; },
+  // optional: reshape the wire envelope for a tenant that ingests a different schema.
+  // `data` is the already-sanitized allowlisted payload. Throwing or returning nothing
+  // sends nothing (fail closed); the local mirror is unaffected.
+  formatEnvelope({ eventName, time, data, iKey, eventStreamName }) { /* ... */ },
 };
 ```
+
+Model Apps uses `formatEnvelope` to send the Power Apps client `event` shape
+(`app_Name`, `clientType: "ModelAppsAIPlugin"`, `event_Name`, `session_Id`, and the
+remaining fields as a `customDimensions` JSON string) because its tenants ingest only
+the `event` stream.
 
 The dispatcher discovers it by convention (a `resolver.js` sibling of `ikey.json`)
 and resolves the destination by precedence: env override (test seam) →
@@ -149,7 +158,7 @@ The dispatcher runs a defense-in-depth allowlist filter against `FIELD_TYPES` be
 - **Enabled plugins are default-on for transmission.** There is no first-run
   prompt. A plugin that ships `disabled: true` remains hard-off regardless of a
   user's saved telemetry choice.
-- **Identifiers.** Power Pages, and Model Apps if enabled, can include the Dataverse organization GUID (`orgId`) and Entra tenant GUID (`tenantId`) when PAC is signed in. Power Pages can also include the signed-in user's Entra object ID (`eventInfo.aadObjectId`) when PAC exposes it. Mobile Apps excludes all three identity fields. The local diagnostic mirror retains the same fields as the event produced by each plugin.
+- **Identifiers.** Power Pages and Model Apps can include the Dataverse organization GUID (`orgId`) and Entra tenant GUID (`tenantId`) when PAC is signed in. Power Pages can also include the signed-in user's Entra object ID (`eventInfo.aadObjectId`) when PAC exposes it. Mobile Apps excludes all three identity fields. The local diagnostic mirror retains the same fields as the event produced by each plugin.
 - **Authenticated scenario.** When an adopter has the authentication or project-environment context required by its routing implementation, the resolved cloud and geo select the corresponding configured regional collector. Depending on the adopter's documented schema, the transmitted event may include End User Pseudonymous Information (EUPI) or Organization Identifiable Information (OII).
 - **Unauthenticated or unresolved scenario.** When PAC provides no authentication context, the organization, tenant, and Entra user object ID fields are absent. Destination behavior when routing context is unavailable is adopter-specific: configurations with a default region use that configured destination, while configurations that require a resolved project cluster retain the event in the local mirror and do not transmit it until a valid cluster is available. The event can still contain the allowlisted operational and system metadata and separately documented non-identity plugin-specific fields.
 - **Opt out of transmission** via `/<plugin>:telemetry off` (per-user, per-plugin). This writes `telemetry[<plugin>] = "off"` into `~/.power-platform-skills/config.json` and stops the network POST to the collector — **nothing leaves the machine** — but the local diagnostic mirror (a per-session `events.jsonl`) is still written so the user/developer can see exactly what would have been sent. It is therefore an opt-out of *transmission*, not of local logging. CI/headless can opt out by writing that file directly. Re-enable with `/<plugin>:telemetry on`.

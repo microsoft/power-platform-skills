@@ -893,7 +893,7 @@ scripts/
     detect-browser.js          ← System Chromium/Edge/Chrome detection (used by the launcher)
     modelapps-hook-utils.js    ← Tracked-skill discovery + validator lookup for the hooks
     utf8-stream.js             ← reads a hook's stdin as UTF-8 without splitting a multibyte character across pipe chunks
-    telemetry/                 ← Bundled 1DS telemetry: ikey.json (this plugin's config) + lib/ (copy of shared/telemetry/lib)
+    telemetry/                 ← Bundled 1DS telemetry: ikey.json (this plugin's per-region keys) + resolver.js + region/ (copy of power-pages' router) + lib/ (copy of shared/telemetry/lib)
   vendor/cds-maker-sdk.cjs     ← headless vendored SDK bundle (rebuilt via _vendor-build/)
   _vendor-build/               ← esbuild vendoring tooling (build.js + pinned deps)
   tests/                       ← node --test coverage for the scripts + hooks
@@ -903,7 +903,7 @@ hooks/                         ← Lifecycle hooks
   run-skill-posttool-validation.js ← Runs a skill's validate*.js after the Skill tool returns
   validate-icon-imports.js     ← PostToolUse: blocks unverified @fluentui/react-icons in generated .tsx
   validate-write-safety.js     ← PreToolUse: flags (non-blocking) out-of-cwd writes in model-apps sessions
-  run-skill-pretool-telemetry.js   ← PreToolUse(Skill): emits skill_started (ships disabled)
+  run-skill-pretool-telemetry.js   ← PreToolUse(Skill): emits skill_started
   run-user-prompt-telemetry.js ← UserPromptSubmit: emits skill_started for /model-apps:<skill>
 skills/
   app-builder/
@@ -1613,18 +1613,40 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
 (never a symlink) so installed plugins don't depend on symlink handling. Edit
 `shared/telemetry/lib/` first, then refresh this plugin's copy in the same change.
 
-- **Posture:** the committed `ikey.json` ships **`disabled: true`** (Tier-1 static,
-  no resolver) — currently carrying the **provisioned model-apps key + collector +
-  `event_stream_name`, staged disabled**. It emits nothing — no POST, no local log —
-  while `disabled: true`; flip `disabled` to `false` only after the Geneva mapping
-  is validated in DGrep (see the ADE provisioning runbook). `disabled: true` is the
-  active guard; the placeholder-key gate is a secondary defense for un-provisioned
-  copies. **Provision a fresh key; never copy another plugin's `ikey.json`**
+- **Posture:** the committed `ikey.json` ships **live** (`disabled: false`) with this
+  plugin's own per-region keys (`internal`, `us`, `eu`, `gov`, `high`, `dod`, `mooncake`;
+  US and EU share the public key and differ only by collector) and the Power Apps client
+  `event` stream. `disabled: true` is the repo-wide hard-off (no POST,
+  no local log). **Provision a fresh key; never copy another plugin's `ikey.json`**
   (CI-enforced: `node scripts/validate-telemetry-ikeys.js`).
+- **Wire shape:** these tenants ingest **only** the `event` stream, into the Power Apps client
+  `event` table; any other stream name is accepted by the collector and then dropped. So
+  `resolver.js` also exports `formatEnvelope`, which mirrors mobile-apps' envelope:
+  `app_Name: "powerappsclient"`, `event_Name`, `session_Id`, `tenantId`, and every other
+  allowlisted field as a `customDimensions` JSON string. `clientType` is
+  **`ModelAppsAIPlugin`** (never mobile's `PowerAppsNative`), so rows are separable from
+  real client traffic. Query the tenant's `event` table (raw 1DS copies prefix columns with `data_`):
+  `event | where clientType == "ModelAppsAIPlugin" | extend d = parse_json(customDimensions)
+  | summarize count() by tostring(d.pluginName), tostring(d.skillName)`.
+  The local mirror keeps the flat, readable shape.
+- **Routing:** `scripts/lib/telemetry/resolver.js` picks the key + collector per event.
+  `region/` beside it is a **verbatim copy** of power-pages' Artemis geo + cloud-stamp
+  router — refresh it by copying, and keep model-apps logic in `resolver.js`
+  (`telemetry-lib-copy.test.js` fails on drift, and the workflow runs on a power-pages
+  `region/` change). A public-cloud
+  org routes to `us`/`eu` by its geo (cached per org for 24 h under
+  `~/.power-platform-skills/region-cache/`, shared with power-pages — it stores only the
+  region, never a key); if its geo can't be determined (Artemis down, unknown geo) it sends
+  nothing rather than defaulting to US, and only a signed-out PAC (no org) takes the `us`
+  default. Unlike power-pages, a sovereign or internal PAC cloud (`UsGov`,
+  `UsGovHigh`, `UsGovDod`, `China`, `Tip1`/`Tip2`/`Test`/`Preprod`) routes from the stamp
+  alone, with no Artemis call and **never** a fallback to the public collector; an
+  unrecognized cloud, or a signed-in org with no cloud line, sends nothing. `ikey.json`
+  deliberately has no top-level static key, so a `null` resolution really does mean no
+  transmission.
 - **Emission:** `hooks/run-skill-pretool-telemetry.js` (PreToolUse Skill) and
   `hooks/run-user-prompt-telemetry.js` (UserPromptSubmit `/model-apps:<skill>`).
-- **Privacy:** while `disabled: true` nothing is built, sent or mirrored (see Posture). Once
-  enabled, telemetry is default-on: events can include Dataverse organization and Entra tenant GUIDs
+- **Privacy:** telemetry is default-on: events can include Dataverse organization and Entra tenant GUIDs
   when PAC is signed in, never the signed-in user's Entra object ID, and the local diagnostic mirror
   (`~/.power-platform-skills/telemetry/model-apps/sessions/<id>/events.jsonl`) retains the same
   fields — it is still written after a user opts out of transmission via
@@ -1913,9 +1935,10 @@ skill (`/genpage` or `/app-builder`), and for genpage verify Playwright browser 
 (navigate/snapshot/click/screenshot).
 
 **Hooks + telemetry:** the lifecycle hooks and telemetry hooks are covered by the plugin unit suite
-(`node scripts/run-tests.js`). Keep `scripts/lib/telemetry/ikey.json` shipping `disabled: true` until a
-key is provisioned (a test enforces this), and run `node scripts/validate-telemetry-ikeys.js` from the
-repo root after touching `ikey.json`.
+(`node scripts/run-tests.js`); `resolver.test.js` pins the shipped `ikey.json` (live, a real key and the
+right collector per region) and the sovereign/unknown-cloud routing. A test also forbids shipping a
+placeholder key enabled. Run `node scripts/validate-telemetry-ikeys.js` from the repo root after
+touching `ikey.json`.
 
 ## Eval Suite
 

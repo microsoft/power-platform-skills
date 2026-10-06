@@ -28,8 +28,20 @@ The installer automatically:
 
 - Installs `pac` CLI if not already installed
 - Detects available tools (GitHub Copilot CLI, Claude Code)
-- Registers the plugin marketplace and installs all listed plugins
+- Registers the plugin marketplace and installs all listed plugins except `dataverse`
 - Enables auto-update so plugins stay current
+
+To also install the [Dataverse](#dataverse-external) plugin, pass `--include-dataverse`:
+
+```powershell
+iwr https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js -OutFile install.js; node install.js --include-dataverse; del install.js
+```
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js | node - --include-dataverse
+```
+
+The `-` tells Node to read the piped script, so the arguments after it reach the installer.
 
 ### Manual Installation
 
@@ -52,6 +64,7 @@ If you prefer to install manually, run these commands inside a GitHub Copilot CL
     /plugin install power-apps-mobile-extension@power-platform-skills
     /plugin install canvas-apps@power-platform-skills
     /plugin install power-automate@power-platform-skills
+    /plugin install dataverse@power-platform-skills
     ```
 
 ## Available Plugins
@@ -116,6 +129,16 @@ Author Power Apps Canvas Apps using the Canvas Authoring MCP server.
 Build, edit, run, and debug Power Automate cloud flows via the FlowAgent MCP server.
 
 **Stack**: Node.js 18+, Azure CLI (`az login`), self-contained MCP bundle
+
+### [Dataverse](https://github.com/microsoft/Dataverse-skills) (external)
+
+Work with Microsoft Dataverse: connect to an environment, query and change records, manage tables and columns, and handle security, administration, and solutions.
+
+**Stack**: Dataverse MCP server, Dataverse CLI, Python SDK, and PAC CLI
+
+This plugin is maintained in [microsoft/Dataverse-skills](https://github.com/microsoft/Dataverse-skills), and this marketplace installs it straight from that repository's default branch.
+Report issues and send changes there.
+If you already installed `dataverse` from the `dataverse-skills` marketplace, keep only one of the two installs so its skills are not loaded twice.
 
 ## Local Development
 
@@ -282,6 +305,11 @@ Plugin descriptions, versions, licenses, and keywords are controlled from each
 plugin's `.plugin/plugin.json`. This keeps existing subscriptions updating without
 duplicating display/update metadata.
 
+Plugins maintained in other repositories, such as `dataverse`, use a remote `source` object instead of a path.
+Copilot CLI reads `marketplace.json` and Claude Code reads `.claude-plugin/marketplace.json`, and they spell a plugin in a repository subdirectory differently.
+So `marketplace.json` uses `"source": "github"` with `repo` and `path`, and the legacy file uses `"source": "git-subdir"` with `url` and `path`.
+`scripts/validate-legacy-compatibility.js` enforces that pairing.
+
 ## Documentation
 
 - [Power Pages Code Sites](https://learn.microsoft.com/en-us/power-pages/configure/create-code-sites)
@@ -309,6 +337,6 @@ Any use of third-party trademarks or logos are subject to those third-party's po
 
 ## Telemetry
 
-Power Pages, Mobile Apps, and Model Apps ship 1DS telemetry code, but their committed configurations and event schemas differ. Power Pages and Mobile Apps telemetry are enabled and default-on. Power Pages events can include Dataverse organization and Entra tenant GUIDs when PAC is signed in, plus the signed-in user's Entra object ID when PAC exposes it. Mobile Apps excludes those identity fields and records its documented invocation, project-instance, checkpoint, and App Insights selection fields. Model Apps ships hard-disabled (`disabled: true`), so it currently transmits no events and writes no local telemetry mirror; if enabled later, its events can include organization and tenant GUIDs but exclude the signed-in user's Entra object ID.
+Power Pages, Mobile Apps, and Model Apps ship 1DS telemetry code, but their committed configurations and event schemas differ. All three are enabled and default-on. Power Pages events can include Dataverse organization and Entra tenant GUIDs when PAC is signed in, plus the signed-in user's Entra object ID when PAC exposes it. Mobile Apps excludes those identity fields and records its documented invocation, project-instance, checkpoint, and App Insights selection fields. Model Apps events can include organization and tenant GUIDs but exclude the signed-in user's Entra object ID.
 
 For an enabled plugin, users opt out of transmission via `/<plugin>:telemetry off` (for example, `/power-pages:telemetry off`), stored in `~/.power-platform-skills/config.json`. The local diagnostic mirror is still written after this transmission-only opt-out. Each adopting plugin also honors `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` for automation and CI. The environment variable has highest precedence and disables transmission regardless of the saved command choice. See the [shared telemetry guide](shared/telemetry/README.md) for the full field list, current plugin states, geo-routing behavior, kill-switch semantics, and local-mirror behavior.
