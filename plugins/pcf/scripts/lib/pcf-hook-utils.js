@@ -34,9 +34,14 @@ function detectTrackedSkill(value) {
 
 function getTrackedSkillFromToolInput(toolInput) {
   if (!toolInput || typeof toolInput !== 'object') return null;
+  // Hosts name the invoked skill under one of these keys, e.g.
+  //   { "skill": "pcf:pcf" }   or   { "name": "pcf", "args": "..." }
+  // The first non-blank string is authoritative. If it names another plugin's skill
+  // ({ "skill": "other-plugin:pcf", "name": "pcf" }), a later alias must not turn that run
+  // into a pcf invocation, or another plugin's skill would emit pcf telemetry with org context.
   for (const field of ['skill', 'skill_name', 'skillName', 'name', 'commandName', 'command']) {
-    const skill = detectTrackedSkill(toolInput[field]);
-    if (skill) return skill;
+    const value = toolInput[field];
+    if (typeof value === 'string' && value.trim()) return detectTrackedSkill(value);
   }
   return null;
 }

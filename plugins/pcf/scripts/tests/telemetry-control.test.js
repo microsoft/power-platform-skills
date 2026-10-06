@@ -107,7 +107,9 @@ test('the telemetry skill is installable and points to its own staged control wo
   assert.match(skill, /^allowed-tools: Bash, execute$/m);
   assert.match(skill, /pcf telemetry/i);
   assert.match(skill, /\$\{PLUGIN_ROOT\}\/skills\/telemetry\/telemetry-workflow\.md/);
-  assert.match(skill, /scripts\/check-version\.js/);
+  // Changing telemetry must stay a local action. The plugin update check runs `git fetch`,
+  // so the control skill must not start with it, unlike the authoring skills.
+  assert.doesNotMatch(skill, /check-version\.js/, 'the telemetry control path must not make a network call');
   const workflow = fs.readFileSync(path.join(path.dirname(file), 'telemetry-workflow.md'), 'utf8');
   assert.match(workflow, /\$\{PLUGIN_ROOT\}\/scripts\/telemetry-config\.js/);
   assert.match(workflow, /ships disabled/i);

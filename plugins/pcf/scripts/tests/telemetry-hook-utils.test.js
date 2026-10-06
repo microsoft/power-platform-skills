@@ -45,6 +45,19 @@ test('skill input detection handles the known host field names', () => {
   assert.equal(ownUtils.getTrackedSkillFromToolInput({ skill: 'other-plugin:foo' }), null);
 });
 
+test('the first non-blank skill field decides, so a later alias cannot claim another plugin\'s run', () => {
+  const ownUtils = utils();
+  // Hosts name the invoked skill under one of several keys. When an earlier key names another
+  // plugin's skill, a later alias such as `name: "pcf"` must not turn that run into a pcf
+  // invocation, or another plugin's skill would emit pcf telemetry with org context.
+  assert.equal(ownUtils.getTrackedSkillFromToolInput({ skill: 'other-plugin:pcf', name: 'pcf' }), null);
+  assert.equal(ownUtils.getTrackedSkillFromToolInput({ skill_name: 'other-plugin:pcf', command: '/pcf:pcf' }), null);
+  assert.equal(ownUtils.getTrackedSkillFromToolInput({ skill: 'pcf:pcf', name: 'other-plugin:pcf' }), 'pcf');
+  // A blank or non-string field makes no claim, so the next field still decides.
+  assert.equal(ownUtils.getTrackedSkillFromToolInput({ skill: '  ', name: 'pcf' }), 'pcf');
+  assert.equal(ownUtils.getTrackedSkillFromToolInput({ skill: { id: 1 }, name: 'pcf:pcf' }), 'pcf');
+});
+
 test('hook utilities read the bundled plugin version and reuse the UTF-8 stream reader', async () => {
   const ownUtils = utils();
   const manifest = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, '.claude-plugin', 'plugin.json'), 'utf8'));

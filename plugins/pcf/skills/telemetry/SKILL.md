@@ -9,6 +9,6 @@ user-invocable: true
 argument-hint: "on | off | status"
 allowed-tools: Bash, execute
 ---
-> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
+<!-- No plugin update check here: it runs `git fetch`, and turning telemetry on or off must stay a local action. -->
 
 **Workflow: [telemetry-workflow.md](${PLUGIN_ROOT}/skills/telemetry/telemetry-workflow.md)** — Read and follow all steps defined in that bundled file.

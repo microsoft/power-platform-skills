@@ -9,7 +9,9 @@ const {
   tempRoot, seedRegion, writeConfig, waitForJson, waitForDispatcher, writePacStub, runHook,
 } = require('./telemetry-fixtures.js');
 
-function registerHookTests(hookName, payloadFor) {
+// `noEmitPayloads` lists hook-specific inputs that must not be treated as a pcf invocation,
+// as [label, payload] pairs (for example a Skill call whose first skill field names another plugin).
+function registerHookTests(hookName, payloadFor, { noEmitPayloads = [] } = {}) {
   let toolsDir;
   let marker;
   test.before((t) => {
@@ -84,6 +86,10 @@ function registerHookTests(hookName, payloadFor) {
       const { configDir, probe } = runHook(hookName, root, toolsDir, { payload: payload(), ikeyPath, optOut });
       const log = path.join(configDir, 'telemetry', 'pcf', 'sessions', 'pcf-offline-session', 'events.jsonl');
       const records = waitForJson(log, 5000, true);
+      // The mirror is written before the transmission gate, so wait for the detached dispatcher
+      // to exit before asserting that no POST reached the probe; a late POST would otherwise
+      // land after the assertion and the test would pass anyway.
+      waitForDispatcher(ikeyPath);
       assert.equal(records.length, 1);
       assert.equal(records[0].data.pluginName, 'pcf');
       assert.equal(records[0].data.eventName, 'skill_started');
@@ -108,6 +114,15 @@ function registerHookTests(hookName, payloadFor) {
       const root = tempRoot(t);
       const ikeyPath = writeConfig(root);
       const { configDir } = runHook(hookName, root, toolsDir, { payload: payload(skill), ikeyPath });
+      assertNoWork(configDir);
+    });
+  }
+
+  for (const [label, hookPayload] of noEmitPayloads) {
+    test(`${label} emits nothing and performs no enrichment`, (t) => {
+      const root = tempRoot(t);
+      const ikeyPath = writeConfig(root);
+      const { configDir } = runHook(hookName, root, toolsDir, { payload: { session_id: 'pcf-offline-session', ...hookPayload }, ikeyPath });
       assertNoWork(configDir);
     });
   }
