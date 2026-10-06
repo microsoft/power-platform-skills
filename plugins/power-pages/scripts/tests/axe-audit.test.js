@@ -150,3 +150,28 @@ test('auditRoutes redacts URL queries in the violations it reports', async () =>
   assert.equal(JSON.stringify(results).includes('SECRET'), false);
   assert.equal(results[0].violations[0].nodes[0].html, '<img src="/hero.jpg">');
 });
+
+test('parseArgs reads a JSON request from stdin and keeps shell characters as data', () => {
+  const request = { url: 'http://localhost:5173', routes: ['/a;b', 'c&d', '/$(id)'], projectRoot: '/home/me/My $Site' };
+  const parsed = axe.parseArgs(['--input', '-'], { readStdin: () => JSON.stringify(request) });
+  assert.deepEqual(parsed, { url: 'http://localhost:5173', routes: ['/a;b', '/c&d', '/$(id)'], projectRoot: '/home/me/My $Site' });
+  assert.match(axe.parseArgs(['--input', '-'], { readStdin: () => '{"url":"http://x","routes":["/"],"discover":3}' }).error, /Unknown field.*discover/);
+  assert.match(axe.parseArgs(['--input', '-'], { readStdin: () => '{"url":"http://x","routes":"/"}' }).error, /routes.*wrong type/);
+});
+
+test('auditRoutes and main redact URL queries from errors', async () => {
+  const { playwright } = fakePlaywright({ failRoutes: ['/preview?sig=SECRET'] });
+  const results = await axe.auditRoutes({ playwright, channel: 'chrome', url: 'https://contoso.example', routes: ['/preview?sig=SECRET'], axeSource: 'VERIFIED_AXE' });
+  assert.equal(results[0].url, 'https://contoso.example/preview');
+  assert.match(results[0].error, /ERR_FAILED https:\/\/contoso\.example\/preview$/);
+
+  let stderr = '';
+  const failing = { chromium: { launch: async () => { throw new Error('launch failed at https://contoso.example/?sig=SECRET'); } } };
+  const code = await axe.main(['--url', 'https://contoso.example', '--routes', '/'], {
+    write() {}, writeError: (s) => { stderr += s; }, loadPlaywrightFn: () => failing, loadAxeSourceFn: async () => 'VERIFIED_AXE', channel: () => undefined,
+  });
+  assert.equal(code, 1);
+  assert.equal(stderr.includes('SECRET'), false);
+  assert.match(stderr, /https:\/\/contoso\.example\//);
+});
+

@@ -11,17 +11,29 @@ The leading words and the design rules being checked live in [`design-aesthetics
 One command captures every route at desktop (1440 x 900) and mobile (390 x 844) and runs the automated checks:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/capture-design-review.js" --url <SITE_URL> --routes <comma-separated routes> --project-root "<PROJECT_ROOT>"
+node "${PLUGIN_ROOT}/scripts/capture-design-review.js" --input - <<'REQUEST'
+{"url": "<SITE_URL>", "routes": ["/", "/about"], "projectRoot": "<PROJECT_ROOT>"}
+REQUEST
 ```
 
-`<SITE_URL>` is the dev server or a deployed site, `http` or `https` only.
-When the URL, the routes, or the folder came from a user or a page, send them as a JSON request on stdin (`--input -`) rather than as arguments, so the shell never interprets them - `exceptional-web-design` step 4 shows the form.
-`--axe` adds the axe-core accessibility audit of the captured pages (`accessibility`, summarized in `summary.accessibility`).
-For a site whose routes are unknown, `--discover <max-pages>` replaces `--routes` and collects same-origin pages from the start page's navigation, then its main content, then its footer.
-Without `--project-root`, or when the project has no `playwright` dev dependency, the script borrows the Playwright inside the plugin's pinned `@playwright/mcp` package - the one its MCP server runs, kept in npm's cache - so nothing is installed into the project. On a machine where that package is not cached yet, npm downloads it there on first use.
+Every value goes in the JSON request, never on the command line: a URL, a route, or a folder path can hold characters a shell acts on (`&`, `;`, `$`, quotes), and the quoted `'REQUEST'` delimiter keeps the shell from expanding anything inside.
+Write each value as a JSON string (escape `"` and `\`) and include only the fields that apply:
+
+| Field | Value |
+|-------|-------|
+| `url` | The dev server or a deployed site, `http` or `https` only, without a user name or password |
+| `routes` | An array of routes to capture |
+| `discover` | Instead of `routes`: the most pages to collect from the start page's navigation, then its main content, then its footer |
+| `projectRoot` | A project this plugin generated, to use its own `playwright` dev dependency. Loading it runs that project's code, so leave it out for any other folder |
+| `checksOnly` | `true` to run the checks without screenshots |
+| `axe` | `true` to add the axe-core accessibility audit of the captured pages (`accessibility`, summarized in `summary.accessibility`) |
+| `cleanup` | Alone: remove a capture's `outputDir` |
+
+Without `projectRoot`, the script borrows the Playwright inside the plugin's pinned `@playwright/mcp` package - the one its MCP server runs, kept in npm's cache - so nothing is installed into the project. On a machine where that package is not cached yet, npm downloads it there on first use.
+The script rejects any other field or an unsafe URL; fix the request rather than moving values onto the command line.
 
 It prints JSON and writes screenshots to a private temporary directory outside the project (`outputDir`).
-`--cleanup <outputDir>` removes them; it exits 1 and names the directory when it cannot, so pass that path on to the user rather than reporting the screenshots gone.
+A request of `{"cleanup": "<outputDir>"}` removes them; it exits 1 and names the directory when it cannot, so pass that path on to the user rather than reporting the screenshots gone.
 Open every path in `summary.images` - in parallel, in one turn - and read the checks from `routes[]`.
 Per route:
 
@@ -142,4 +154,4 @@ List problems only; passing details need no mention.
 
 The pass is complete when no critical gate fails and every category scores 3 or more, or when three rounds have run and no critical gate fails - each category still below 3 is then recorded with its reason, and the Phase 7 summary shows it to the user.
 A critical gate still failing after three rounds goes to the user through the `create-site:5.7.critique-blocked` gate in `SKILL.md`; it never passes silently.
-Keep the final scorecard for the Phase 7 summary, then remove the screenshots with `node "${PLUGIN_ROOT}/scripts/capture-design-review.js" --cleanup <outputDir>` for each round's `outputDir`.
+Keep the final scorecard for the Phase 7 summary, then remove the screenshots with a `{"cleanup": "<outputDir>"}` request for each round's `outputDir`.

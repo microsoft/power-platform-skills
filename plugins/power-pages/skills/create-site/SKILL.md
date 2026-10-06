@@ -1085,7 +1085,13 @@ Judge the site from screenshots against `${PLUGIN_ROOT}/references/design-critiq
 **Running a review** (used for the first-impression review in 5.2 step 4 and for each critique round):
 
 1. Make sure `playwright` is a dev dependency of the project (`npm install --save-dev playwright` in `<PROJECT_ROOT>`; Phase 6 reuses it).
-2. Capture: `node "${PLUGIN_ROOT}/scripts/capture-design-review.js" --url <DEV_SERVER_URL> --routes <routes> --project-root "<PROJECT_ROOT>"`.
+2. Capture by sending the request on stdin, as design-critique.md's Capture section shows - the dev server URL, the routes, and the project folder never go on the command line:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/capture-design-review.js" --input - <<'REQUEST'
+   {"url": "<DEV_SERVER_URL>", "routes": ["/", "/about"], "projectRoot": "<PROJECT_ROOT>"}
+   REQUEST
+   ```
 3. Open every path in `summary.images` in one turn, and read the automated checks from the JSON.
 4. Judge as design-critique.md describes and write the compact scorecard and fix list it defines.
 5. Apply every fix from the scorecard, highest impact first, and commit. Capture again only at the start of the next round - one capture per round, after all of its fixes - rather than after each individual fix.
@@ -1094,7 +1100,7 @@ Judge the site from screenshots against `${PLUGIN_ROOT}/references/design-critiq
 
 - No critical gate fails and every category scores 3 or more - the pass is complete.
 - Three rounds have run and no critical gate fails - the pass is complete, with each category still below 3 recorded in the scorecard with its reason, so the Phase 7 summary shows it to the user.
-- Three rounds have run and a critical gate still fails - go to the gate below; a critical gate never passes silently. Keep the final scorecard for the Phase 7 summary, then remove each round's screenshots with `node "${PLUGIN_ROOT}/scripts/capture-design-review.js" --cleanup <outputDir>`.
+- Three rounds have run and a critical gate still fails - go to the gate below; a critical gate never passes silently. Keep the final scorecard for the Phase 7 summary, then remove each round's screenshots by sending `{"cleanup": "<outputDir>"}` to the same script the same way.
 
 <!-- gate: create-site:5.7.critique-blocked | category=progress | cancel-leaves=nothing -->
 
@@ -1139,10 +1145,12 @@ npm install --save-dev playwright
 
 ### 6.2 Run axe-core Audit on Every Page
 
-Run the audit script via `Bash`, passing the dev server URL and all site routes:
+Run the audit script via `Bash`, sending the dev server URL, every site route, and the project folder as a JSON request on stdin, so none of them is parsed by the shell:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/axe-audit.js" --url <DEV_SERVER_URL> --routes /,/about,/services,/contact --project-root "<PROJECT_ROOT>"
+node "${PLUGIN_ROOT}/scripts/axe-audit.js" --input - <<'REQUEST'
+{"url": "<DEV_SERVER_URL>", "routes": ["/", "/about", "/services", "/contact"], "projectRoot": "<PROJECT_ROOT>"}
+REQUEST
 ```
 
 Parse the returned JSON array of per-route results. Each result contains `violations` (with `id`, `impact`, `description`, `helpUrl`, and affected `nodes`), `passes` count, and `incomplete` count. A nonzero exit means at least one `critical` or `serious` violation was found, or a route could not be audited - its result has `error` instead of violations, so fix the cause (a broken route, or the dev server down) and audit it again.
@@ -1210,7 +1218,7 @@ Present a summary table to the user:
 
 **Actions**:
 
-1. Confirm every route still loads cleanly with one call - `node "${PLUGIN_ROOT}/scripts/capture-design-review.js" --url <DEV_SERVER_URL> --routes <all routes> --project-root "<PROJECT_ROOT>" --checks-only` - and fix any route listed under `summary.pageErrors`, `summary.overflow`, or `summary.captureErrors`. The visual review already happened in Phase 5.7
+1. Confirm every route still loads cleanly with one call - the capture request from 5.7 with every route and `"checksOnly": true` - and fix any route listed under `summary.pageErrors`, `summary.overflow`, or `summary.captureErrors`. The visual review already happened in Phase 5.7
 2. Present a summary of what was built, with the design scorecard from Phase 5.7:
 
    ```

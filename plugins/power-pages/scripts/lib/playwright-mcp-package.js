@@ -32,8 +32,18 @@ function resolveNpxCli({
   return match;
 }
 
+// npm's own entry point sits beside npx-cli.js in every npm layout resolveNpxCli accepts.
+function resolveNpmCli({ existsSync = fs.existsSync, ...options } = {}) {
+  const npmCli = path.join(path.dirname(resolveNpxCli({ existsSync, ...options })), 'npm-cli.js');
+  if (!existsSync(npmCli)) {
+    throw new Error(`Could not locate npm-cli.js beside ${path.dirname(npmCli)}. Install Node.js with npm.`);
+  }
+  return npmCli;
+}
+
 module.exports = {
   PLAYWRIGHT_MCP_PACKAGE,
   PLAYWRIGHT_MCP_VERSION,
+  resolveNpmCli,
   resolveNpxCli,
 };

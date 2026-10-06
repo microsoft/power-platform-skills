@@ -5,6 +5,11 @@
 //
 // Usage:
 //   node axe-audit.js --url http://localhost:5173 --routes /,/about,/contact [--project-root <path>]
+//   node axe-audit.js --input - <<'REQUEST'
+//   {"url": "http://localhost:5173", "routes": ["/", "/about"], "projectRoot": "<path>"}
+//   REQUEST
+// Use the stdin form whenever a value comes from a user, a dev server's output, or a page, so
+// the shell never interprets it.
 //
 // Playwright comes from the project's dev dependency when --project-root has one, and
 // otherwise from the plugin's pinned @playwright/mcp package in npm's cache, so nothing is
@@ -17,7 +22,10 @@
 const { detectBrowser } = require('./lib/detect-browser');
 const { loadPlaywright } = require('./lib/load-playwright');
 const { downloadPinned } = require('./lib/pinned-download');
-const { gotoSettled, normalizeSiteUrl, parseRouteList } = require('./lib/review-navigation');
+const fs = require('node:fs');
+const {
+  gotoSettled, isString, isStringList, normalizeSiteUrl, parseRequest, parseRouteList, redactUrl, redactUrlsInText,
+} = require('./lib/review-navigation');
 
 // axe-core 4.10.3 (MPL-2.0). The integrity value is the hash cdnjs publishes for this file,
 // and it matches axe.min.js in the axe-core@4.10.3 npm package byte for byte. To upgrade,
@@ -33,15 +41,27 @@ const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 const SETTLE_MS = 2000;
 const BLOCKING_IMPACTS = new Set(['critical', 'serious']);
 
-function parseArgs(argv) {
-  const parsed = {};
+const REQUEST_FIELDS = { url: isString, routes: isStringList, projectRoot: isString };
+const USAGE = 'Usage: node axe-audit.js --url <base-url> --routes <comma-separated> [--project-root <path>]\n'
+  + '       node axe-audit.js --input -   (JSON request on stdin: url, routes, projectRoot)';
+
+function parseArgs(argv, { readStdin = () => fs.readFileSync(0, 'utf8') } = {}) {
+  let parsed = {};
+  let fromStdin = false;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--url' && argv[i + 1]) parsed.url = argv[++i];
     else if (argv[i] === '--routes' && argv[i + 1]) parsed.routes = parseRouteList(argv[++i]);
     else if (argv[i] === '--project-root' && argv[i + 1]) parsed.projectRoot = argv[++i];
+    else if (argv[i] === '--input' && argv[i + 1] === '-') { fromStdin = true; i++; }
+  }
+  if (fromStdin) {
+    const { request, error } = parseRequest(readStdin(), REQUEST_FIELDS);
+    if (error) return { error };
+    parsed = { ...parsed, ...request };
+    if (request.routes) parsed.routes = parseRouteList(request.routes);
   }
   if (!parsed.url || !parsed.routes || parsed.routes.length === 0) {
-    return { error: 'Usage: node axe-audit.js --url <base-url> --routes <comma-separated> [--project-root <path>]' };
+    return { error: USAGE };
   }
   const site = normalizeSiteUrl(parsed.url);
   if (site.error) return { error: site.error };
@@ -106,9 +126,9 @@ async function auditRoutes({ playwright, channel, url, routes, axeSource }) {
         await gotoSettled(page, pageUrl, { settleMs: SETTLE_MS });
         await page.addScriptTag({ content: axeSource });
         await page.waitForFunction(() => typeof window.axe !== 'undefined', null, { timeout: 10000 });
-        results.push({ route, url: pageUrl, ...redactAxeResult(await page.evaluate(runAxe, WCAG_TAGS)) });
+        results.push({ route, url: redactUrl(pageUrl), ...redactAxeResult(await page.evaluate(runAxe, WCAG_TAGS)) });
       } catch (error) {
-        results.push({ route, url: pageUrl, error: error.message, violations: [], passes: 0, incomplete: 0 });
+        results.push({ route, url: redactUrl(pageUrl), error: redactUrlsInText(error.message), violations: [], passes: 0, incomplete: 0 });
       }
     }
   } finally {
@@ -129,8 +149,9 @@ async function main(argv = process.argv.slice(2), {
   loadPlaywrightFn = loadPlaywright,
   loadAxeSourceFn = loadAxeSource,
   channel = detectBrowser,
+  readStdin,
 } = {}) {
-  const args = parseArgs(argv);
+  const args = parseArgs(argv, { readStdin });
   if (args.error) {
     writeError(`${args.error}\n`);
     return 1;
@@ -139,7 +160,7 @@ async function main(argv = process.argv.slice(2), {
   try {
     axeSource = await loadAxeSourceFn();
   } catch (error) {
-    writeError(`axe-core could not be loaded: ${error.message}\n`);
+    writeError(`axe-core could not be loaded: ${redactUrlsInText(error.message)}\n`);
     return 1;
   }
   const playwright = loadPlaywrightFn(args.projectRoot);
@@ -152,7 +173,7 @@ async function main(argv = process.argv.slice(2), {
     write(`${JSON.stringify(results, null, 2)}\n`);
     return hasBlockingResult(results) ? 1 : 0;
   } catch (error) {
-    writeError(`${error.message}\n`);
+    writeError(`${redactUrlsInText(error.message)}\n`);
     return 1;
   }
 }

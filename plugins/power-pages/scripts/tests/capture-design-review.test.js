@@ -624,3 +624,30 @@ test('captureDesignReview --axe reports an axe-core that fails verification inst
   assert.deepEqual(result.summary.accessibility.unaudited, ['/']);
   assert.ok(result.routes[0].desktop, 'the capture itself still completes');
 });
+
+test('captureDesignReview redacts URL queries from navigation errors', async () => {
+  const fake = fakePlaywright({ failRoutes: ['/preview?sig=SECRET'] });
+  const result = await review.captureDesignReview({
+    playwright: fake.playwright, channel: 'chrome', url: 'https://contoso.example', routes: ['/preview?sig=SECRET'], outputDir: null, checksOnly: true,
+  });
+  assert.match(result.routes[0].desktop.captureError, /ERR_FAILED https:\/\/contoso\.example\/preview$/);
+  assert.match(result.routes[0].mobile.captureError, /ERR_FAILED https:\/\/contoso\.example\/preview$/);
+});
+
+test('main redacts URL queries from a fatal capture error', async () => {
+  let stderr = '';
+  const playwright = { chromium: { launch: async () => { throw new Error('page.goto: net::ERR_ABORTED at https://contoso.example/?sig=SECRET'); } } };
+  const code = await review.main(['--url', 'https://contoso.example', '--discover', '3', '--checks-only'], {
+    write() {}, writeError: (s) => { stderr += s; }, loadPlaywrightFn: () => playwright, channel: () => undefined,
+  });
+  assert.equal(code, 1);
+  assert.match(stderr, /Design review capture failed: .*https:\/\/contoso\.example\//);
+  assert.equal(stderr.includes('SECRET'), false);
+});
+
+test('parseArgs takes a cleanup path from the stdin request and ignores everything else', () => {
+  const dir = 'C:\\Users\\First $Last\\AppData\\Local\\Temp\\power-pages-design-review-abc';
+  assert.deepEqual(review.parseArgs(['--input', '-'], { readStdin: () => JSON.stringify({ cleanup: dir }) }), { cleanup: dir });
+  assert.match(review.parseArgs(['--input', '-'], { readStdin: () => '{"toString":"x"}' }).error, /Unknown field.*toString/);
+});
+

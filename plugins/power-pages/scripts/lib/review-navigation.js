@@ -1,5 +1,6 @@
-// Shared navigation and route parsing for the browser review scripts (capture-design-review.js
-// and axe-audit.js), so both load a page the same way and accept the same --routes input.
+// Shared input handling, navigation, and output redaction for the browser review scripts
+// (capture-design-review.js and axe-audit.js), so both accept the same request, load a page the
+// same way, and keep tokens in URLs out of what they report.
 
 const NAVIGATION_TIMEOUT_MS = 20000;
 // How long to wait for the network to go quiet after `load` before giving up and judging the
@@ -51,10 +52,67 @@ async function gotoSettled(page, url, { settleMs, timeout = NAVIGATION_TIMEOUT_M
   }
 }
 
+// Reads the request a caller sends on stdin with `--input -`, e.g.
+//   {"url": "https://contoso.example/?lang=en&x=1", "discover": 6}
+// A site URL, a folder path, or routes from a user, a dev server's output, or a page can hold
+// characters a shell would act on (`&`, `;`, `$(...)`, quotes, a `$` in a Windows user name).
+// Sent as JSON in a quoted heredoc they stay data: the shell never parses them. `fields` maps
+// each allowed key to a type check; any other key, or a value of the wrong type, fails closed.
+function parseRequest(text, fields) {
+  let request;
+  try {
+    request = JSON.parse(text);
+  } catch (error) {
+    return { error: `The stdin request is not valid JSON: ${error.message}` };
+  }
+  if (!request || typeof request !== 'object' || Array.isArray(request)) {
+    return { error: 'The stdin request must be a JSON object.' };
+  }
+  for (const [key, value] of Object.entries(request)) {
+    if (!Object.prototype.hasOwnProperty.call(fields, key)) return { error: `Unknown field in the stdin request: ${key}` };
+    if (!fields[key](value)) return { error: `Field ${key} in the stdin request has the wrong type.` };
+  }
+  return { request };
+}
+
+const isString = (v) => typeof v === 'string';
+const isStringList = (v) => Array.isArray(v) && v.every(isString);
+const isBoolean = (v) => typeof v === 'boolean';
+
+// Reported URLs keep their origin and path and drop the rest. Query strings and fragments on
+// real sites carry tokens - signed storage URLs (`?sv=...&sig=...`), signed preview links,
+// session ids - and this output is read into the agent's conversation.
+//   https://contoso.blob.core.windows.net/media/hero.jpg?sv=2024&sig=abc  ->  https://contoso.blob.core.windows.net/media/hero.jpg
+//   data:image/png;base64,iVBOR...                                       ->  data:
+function redactUrl(value) {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return parsed.protocol;
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return String(value);
+  }
+}
+
+// Error and console messages quote URLs inside other text, e.g. Playwright's
+//   page.goto: net::ERR_ABORTED at https://contoso.example/p?sig=abc
+//   Call log:
+//     - navigating to "https://contoso.example/p?sig=abc", waiting until "load"
+// A URL ends at whitespace, a quote, or a bracket, so those characters bound the match.
+function redactUrlsInText(text) {
+  return String(text).replace(/\bhttps?:\/\/[^\s'"<>()]+/g, redactUrl);
+}
+
 module.exports = {
   NAVIGATION_TIMEOUT_MS,
   NETWORK_IDLE_GRACE_MS,
   gotoSettled,
+  isBoolean,
+  isString,
+  isStringList,
   normalizeSiteUrl,
+  parseRequest,
   parseRouteList,
+  redactUrl,
+  redactUrlsInText,
 };
