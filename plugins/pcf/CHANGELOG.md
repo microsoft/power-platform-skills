@@ -8,4 +8,5 @@ First preview release: ships the `/pcf:pcf` skill, matrix-pinned templates and r
 
 ### Added
 
+- Staged usage telemetry with `/pcf:telemetry on|off|status`, regional routing and offline coverage; ships disabled with placeholder keys.
 - Guided canvas app setup, including the **Power Apps component framework for canvas apps** environment setting, Studio import/updates, and manual API-limit review; canvas-specific automated checks remain out of scope.

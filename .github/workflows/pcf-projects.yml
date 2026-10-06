@@ -33,6 +33,8 @@ jobs:
         # local disk (see the build step); the cap turns a hung install or test into a failed check
         # instead of a job that holds a runner for the platform's six-hour default.
         timeout-minutes: 45
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT: "1"
         strategy:
             fail-fast: false
             matrix:
@@ -68,6 +70,8 @@ jobs:
         name: package-pcf-projects
         runs-on: ubuntu-latest
         timeout-minutes: 30
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT: "1"
         steps:
             - name: checkout
               uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

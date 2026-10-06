@@ -105,6 +105,8 @@ The plugin registers lifecycle hooks (in `hooks/hooks.json`) that run automatica
 | Hook | When | What it does |
 |---|---|---|
 | Write-safety | before Write/Edit/MultiEdit | **Flags (non-blocking)** writes outside the cwd only during a PCF authoring session. Never blocks; silent in unrelated projects. |
+| Skill telemetry | before Skill/skill | Wired for `skill_started`; hard-disabled in this release. |
+| Prompt telemetry | on UserPromptSubmit | Wired for tracked PCF slash commands; hard-disabled in this release. |
 
 **Escape hatches** (environment variables — set to `1` or `true`):
 
@@ -122,6 +124,26 @@ $env:PCF_DISABLE_HOOKS = "1"
 # macOS / Linux (bash)
 export PCF_DISABLE_HOOKS=1
 ```
+
+## Telemetry
+
+This release **ships disabled** (`disabled: true`, placeholder keys): **nothing is sent or written** by the telemetry hooks, including the local mirror, and no PAC telemetry enrichment runs. `/pcf:telemetry on` cannot override this build's hard-off.
+
+A provisioned, enabled release would send **`skill_started` only**, with these approved base fields:
+
+- `pluginName`, `pluginVersion`, `skillName` - plugin and invoked skill identity.
+- `sessionId`, `correlationId` - session and per-invocation correlation.
+- `osName`, `osVersion`, `nodeVersion` - OS and Node runtime metadata (Node major version only).
+- `pacCliVersion`, `aiAgentName`, `aiAgentVersion` - PAC and host agent metadata when available.
+- `orgId`, `tenantId` - Dataverse organization and Entra tenant GUIDs when PAC is signed in.
+
+There is **no user object ID** and **no `eventInfo` payload**. The Power Apps client `event` envelope uses `clientType: "PcfAIPlugin"` and `pluginName: "pcf"` so PCF usage stays separate from other plugins and native-client traffic.
+
+**Never sent:** file paths, cwd, environment variables, prompts, skill arguments, tool inputs, site names, Dataverse URLs, stack traces, error-message text, credentials, usernames or hostnames.
+
+**Transmission opt-outs:** `/pcf:telemetry off` saves `telemetry["pcf"] = "off"` in `~/.power-platform-skills/config.json`; `POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT=1` (or `true`) has the **highest precedence**, including over `/pcf:telemetry on`. `/pcf:telemetry status` shows the build state and preference. Preferences can be saved while this build remains disabled.
+
+**Local mirror, once enabled:** `~/.power-platform-skills/telemetry/pcf/sessions/<sessionId>/events.jsonl` retains the same approved fields even after a transmission opt-out. Sessions older than 14 days are pruned best-effort, and logs rotate above 10 MB. This disabled release writes no mirror.
 
 ## Relation to model-apps
 
