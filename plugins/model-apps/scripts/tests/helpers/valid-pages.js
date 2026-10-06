@@ -161,6 +161,9 @@ const PARENTHESISED_ELEMENTS = [
   // accessor), `extends` and `import` no name at all.
   '<p>(get the <b>app</b>)</p>', '<p>(set in <b>Settings</b>)</p>', '<p>(set it to <em>on</em>)</p>', '<p>(extends <code>Base</code>)</p>', '<p>(get help: /docs)</p>', '<p>(import from <b>CSV</b>)</p>',
   '<p>(get: /docs)</p>', '<p>(tip: reset the <b>filter</b>)</p>', '<p>(note: offset in <b>px</b>)</p>', '<p>(hint: widget names/ids)</p>',
+  // A label and an element with attributes, or a phrase: in a type the `<` opens type parameters and a name is a type reference, and a second name after either is no type.
+  '<small>(Note: <a href="/help">see help</a>)</small>', '<p>(Status: <Badge color="green">OK</Badge>)</p>', '<p>(Owner: <Avatar src={url} />)</p>',
+  '<p>(Note: see the <a href="/help">docs</a>)</p>', '<p>(Tip: get the <b>app</b>)</p>',
   // Text in which something may start an expression — an `=`, a `[`, an `@`, `import` — but no `/`, `<` or back-tick follows it: read exactly, as code holds no regex, JSX or template there.
   '<p>(x = 5)</p>', '<p>(a: [b])</p>', '<p>(Ctrl = \u2318 on Mac)</p>', '<span>(@username)</span>', '<span>([optional])</span>', '<p>(tags: [a, b])</p>', '<button>(import)</button>',
   '<li>(optional, <a href="/docs">see docs</a>)</li>',
@@ -322,6 +325,8 @@ const EVERYDAY = [
   'const h1: <T>(x: { /* c */ readonly a: T }) => T = g;', 'const h2: <T>(x: { a /* c */ : T }) => T = g;', 'const h3: <T>(x: { [k /* c */ : string]: T }) => T = g;', 'const h4: <T>(x: { m(a /* c */): T }) => T = g;',
   // An element whose text starts with a parenthesis and holds an apostrophe, with a string on the same line after it.
   "const q1 = cond ? <p>(a), it's</p> : 'none';", "const q2 = [<p>(a); the user's</p>, 'x'];", 'const q3 = <p>(a), 5" wide</p> + "x";',
+  // An element whose first attribute is named `extends` and that closes at once: in a type the same `<T extends /` opens type parameters whose constraint is a regex.
+  'const e1 = <Flag extends />;', 'const e2 = <Flag extends/>;',
 ];
 
 // The pages. Each is { group, name, code }; the test drops those TypeScript does not parse.

@@ -87,6 +87,12 @@ const REFUSAL_CLASSES = [
     matches: (page) => page.group === 'parenthesised element' && INITIALIZER_ELEMENTS.includes(page.element),
   },
   {
+    id: 'an element whose first attribute is `extends` and that closes at once',
+    kind: 'generic',
+    what: 'a `<Name extends` and a `/`: an element with an attribute named `extends` where an expression starts, and type parameters in a type, whose constraint is read as an expression where it starts no type — here a regex. `const e = <T extends />;` and `let f: <T extends />;…[/]/>(a: T) => T;` begin with the same text.',
+    matches: (page) => page.group === 'everyday' && /^const e\d+ = /.test(page.name),
+  },
+  {
     id: 'a division on the next line',
     kind: 'newline',
     what: 'a `/` on a later line than the operand before it, where a regex could close on its line: a division that continues the statement, or (after a type) a regex that begins the next one. `const q = x` LF `/ y / z` and `let v: number` LF `/ y /.test(z)` are the same text.',
@@ -121,6 +127,9 @@ const TWO_WAY = [
       // A default in the parameter list: the regex holds a `)`, which ends the list in a scan of it and is the regex's to the type.
       ['an interface with a call signature whose default is a regex that holds a `)`, and a string that holds the closing tag and the call', `interface P { <U>(a = /[)]/); m: '</U>;${CALL};//'; }`, 0],
       ['an element whose text starts with a parenthesis and holds the same default, then the call', `const el = <U>(a = /[)]/); m: '</U>;\n${CALL};`, 1],
+      // `<T extends` and a `/`: type parameters whose constraint is a regex in a type, an element with an attribute named `extends` where an expression starts.
+      ['a function type whose type parameter\'s constraint is a regex that holds the call', `let f: <T extends />;${CALL};[/]/>(a: T) => T;`, 0],
+      ['an element whose first attribute is `extends` and that closes at once, then the call', `const el = <T extends />;\n${CALL};`, 1],
     ],
   },
   {

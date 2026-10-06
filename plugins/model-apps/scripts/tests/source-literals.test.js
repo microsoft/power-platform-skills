@@ -3190,6 +3190,9 @@ const PLAIN_LIST_ELEMENTS = [
   '<p>(get it: /docs)</p>', '<p>(of <b>x</b>)</p>', '<p>(type <code>/help</code>)</p>', '<p>(new <b>beta</b>)</p>', '<p>(a, get the <b>app</b>)</p>', '<p>(get: /docs)</p>', '<p>(set: /x)</p>',
   // A word that only ends in `get` or `set` is a name, and starts no accessor.
   '<p>(tip: reset the <b>filter</b>)</p>', '<p>(note: offset in <b>px</b>)</p>', '<p>(hint: widget names/ids)</p>',
+  // A label and an element with attributes, or a phrase: in a type the `<` opens type parameters and a name is a type reference, and a second name after either is no type.
+  '<small>(Note: <a href="/help">see help</a>)</small>', '<p>(Status: <Badge color="green">OK</Badge>)</p>', '<p>(Owner: <Avatar src={url} />)</p>',
+  '<p>(Note: see the <a href="/help">docs</a>)</p>', '<p>(Tip: get the <b>app</b>)</p>',
 ];
 // ... and the text in which something may start an expression and a `/`, a `<` or a back-tick follows, which a signature's parameter list shares: the guess.
 const INITIALIZER_LIST_ELEMENTS = ['<p>(a = /x/)</p>', '<p>(a = b/(c))</p>', '<p>(a = /(x)/)</p>', '<p>(a = <b>c</b>)</p>', '<p>(a = `x`)</p>'];
@@ -3208,20 +3211,23 @@ test('a parameter list in which an expression may start and a `/`, a `<` or a ba
   for (const element of INITIALIZER_LIST_ELEMENTS) assert.deepStrictEqual(earliestAmbiguity(`const e = ${element};\n${call};\n`), [10, 'generic'], element);
   assert.deepStrictEqual(opensTypeParameters('<T>(x: `a${string}`) => T', 0), { generic: true, ambiguity: null }, 'a template literal type is skipped whole');
   // ... and so is one in whose substitution something may start an expression with no `<` after it: no JSX is in it, and its strings are strings.
-  for (const head of ["<T>(a: `${T extends string ? 'a' : 'b'}`) => T", '<T>(a: `${T[number]}`) => T', "<T>(a: `${T extends 'a' ? 1 : 2}`, b: T) => T", '<T>(a: `x${A extends B ? C : D}`) => T', '<T>(a: `${keyof T & string}`) => T']) {
+  for (const head of ["<T>(a: `${T extends string ? 'a' : 'b'}`) => T", '<T>(a: `${T[number]}`) => T', "<T>(a: `${T extends 'a' ? 1 : 2}`, b: T) => T", '<T>(a: `x${A extends B ? C : D}`) => T', '<T>(a: `${keyof T & string}`) => T',
+    '<T>(key: `${T extends string ? Capitalize<T> : never}`) => void']) {
     assert.deepStrictEqual(opensTypeParameters(head, 0), { generic: true, ambiguity: null }, head);
   }
   // A `<` before anything that may start an expression is a type's (`Lowercase<T>`): the skip stays whole and the scan finds the arrow, so the head is read as the type it is — a guess
   // still, for the element reading of the same text holds a container that is not read.
   assert.deepStrictEqual(opensTypeParameters('<T>(a: `${Lowercase<T>}`) => T', 0), { generic: true, ambiguity: 'generic' });
   // The parameters are read up to their type, default, pattern or decorator; what else follows a name is no parameter's. A keyword may be a modifier, and a character beyond ASCII or a
-  // backslash may go on with the name: those end the reading, and the colon after the list leaves both readings.
+  // backslash may go on with the name: those end the reading, and the colon after the list leaves both readings. A type that opens type parameters with two names fails the list too.
   const ELEMENT = { generic: false, ambiguity: null };
   const GUESS = { generic: false, ambiguity: 'generic' };
-  for (const list of ['see docs', 'a b', 'a.b', 'a?b', 'a!', 'a, b c', 'a, ...b c', 'a\u00a0b', 'a /* c */ b', 'a\nb', 'a, 1', 'a, "b"', 'a, <b>']) assert.deepStrictEqual(opensTypeParameters(`<T>(${list}): x</T>`, 0), ELEMENT, JSON.stringify(list));
+  const FAILING_LISTS = ['see docs', 'a b', 'a.b', 'a?b', 'a!', 'a, b c', 'a, ...b c', 'a\u00a0b', 'a /* c */ b', 'a\nb', 'a, 1', 'a, "b"', 'a, <b>', 'Note: <a href="/x">y</a>', 'a: <b c>', 'a?: <b c d>', 'a, b: < c /* d */ e>'];
+  for (const list of FAILING_LISTS) assert.deepStrictEqual(opensTypeParameters(`<T>(${list}): x</T>`, 0), ELEMENT, JSON.stringify(list));
   // A `/` in the list before anything that may start an expression is in no type, so the element is certain even where a comment after the `)` would leave both readings.
   for (const text of ['<T>(x: a/b); // c </T>', '<T>(see: /docs); // c </T>', '<T>({a}/{b}); // c </T>']) assert.deepStrictEqual(opensTypeParameters(text, 0), ELEMENT, JSON.stringify(text));
-  for (const list of ['a', 'a?', 'a, b', '...a', 'public x', 'readonly x', 'static x', 'this', 'a\u00e9', 'a\\u0062', 'a, {b}', 'a, @d b', 'a, \u00e9']) assert.deepStrictEqual(opensTypeParameters(`<T>(${list}): x</T>`, 0), GUESS, JSON.stringify(list));
+  for (const list of ['a', 'a?', 'a, b', '...a', 'public x', 'readonly x', 'static x', 'this', 'a\u00e9', 'a\\u0062', 'a, {b}', 'a, @d b', 'a, \u00e9', 'a: <const b>() => b', 'a: <in b>() => b',
+    'a: <out b>() => b', 'a: <private b>() => b', 'a: <b extends c>() => b', 'a: <b, c>() => b', 'a: <b = c>() => b', 'a: <b\u00e9 c>() => b']) assert.deepStrictEqual(opensTypeParameters(`<T>(${list}): x</T>`, 0), GUESS, JSON.stringify(list));
   const ts = loadTypescriptOracle();
   if (!ts) return t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the readings');
   // The double-quoted decoy holds the call's own double quotes, so it parses in no frame; the others parse everywhere.
@@ -3232,7 +3238,7 @@ test('a parameter list in which an expression may start and a `/`, a `<` or a ba
   }
   const declared = 'declare const done: number, total: number, url: string, a: any, b: any, c: any, y: any;\n';
   for (const element of [...PLAIN_LIST_ELEMENTS, ...INITIALIZER_LIST_ELEMENTS]) assertTsParses(ts, `${declared}const e = ${element};`, element);
-  for (const list of ['see docs', 'a b', 'a.b', 'a?b', 'a!', 'a, b c', 'a, ...b c', 'a\u00a0b', 'a /* c */ b', 'a\nb', 'a, 1', 'a, "b"', 'a, <b>']) {
+  for (const list of FAILING_LISTS) {
     for (const code of [`interface I { <T>(${list}) }`, `type F = <T>(${list}) => void;`]) assert.ok(parseDiagnosticMessages(ts, code).length > 0, `TypeScript rejects ${JSON.stringify(code)}`);
   }
 });
@@ -3276,6 +3282,8 @@ test('a keyword at the start of a parameter is a modifier, no name or a name, as
     ['a, set', GUESS], ['a, in x', GUESS],
     // A word that an escape or a letter beyond ASCII goes on with is another name (`new\u0078` is `newx`): it ends the reading before it is classed.
     ['new\\u0078', GUESS], ['new\u00e9', GUESS], ['a, extends\u00e9 x', GUESS],
+    // `default` is a modifier before what it can head — `interface`, `class`, `function`, `abstract`, `async` or a decorator — and no parameter's name before anything else.
+    ['default interface', GUESS], ['default @d x', GUESS], ['default\ninterface', GUESS], ['a, default interface', GUESS], ['default x', ELEMENT], ['default: x', ELEMENT], ['default', ELEMENT],
   ]) assert.deepStrictEqual(opensTypeParameters(`<T>(${list}): x</T>`, 0), expected, list);
   // The classes as measured (the oracle half below measures them again, over every keyword): the lexer stops at a modifier, fails the list at a word that is no name, and reads on after a name.
   const MODIFIERS = ['abstract', 'accessor', 'async', 'declare', 'export', 'in', 'out', 'override', 'private', 'protected', 'public', 'readonly', 'static'];
@@ -3319,6 +3327,80 @@ test('a keyword at the start of a parameter is a modifier, no name or a name, as
   }
   assert.deepStrictEqual(unclassed, [], 'a keyword that is neither a modifier, a name nor no name in all three places');
   assert.deepStrictEqual([modifiers.sort(), noNames.sort()], [[...MODIFIERS].sort(), [...NO_NAMES].sort()], 'the lists above are the classes TypeScript has');
+  // Before every keyword and a decorator too, so that a word that is a modifier only before some (`default interface`, `default @d x`) is never read as failing the list.
+  const misread = [];
+  for (const word of keywords) {
+    for (const follower of [...keywords, '@d x', 'x']) {
+      const list = `${word} ${follower}`;
+      if (!parses(list).some(Boolean)) continue;
+      const read = opensTypeParameters(`<T>(${list}): x</T>`, 0);
+      if (!read.generic && read.ambiguity === null) misread.push(list);
+    }
+  }
+  assert.deepStrictEqual(misread, [], 'a parameter list that TypeScript parses is read as no list');
+});
+
+// `extends` starts an expression only where a type parameter's constraint may be one: before a token that starts no type (parseTypeParameter reads a type where
+// `isStartOfType() || !isStartOfExpression()`). A conditional type's `extends` is always followed by a type, so the `<` of a type after it is no JSX, and the template that holds it is whole.
+const EXPRESSION_CONSTRAINTS = ['/x/', 'class {}', 'super.x', 'delete x', '~x', '-x', '@d class {}', '#x'];
+const TYPE_CONSTRAINTS = ['string', 'Array<string>', '{ a: 1 }', "'a'", '1', '`x`', '<V>() => V', '| A', '& A', '!x', '?x', '*', 'typeof x', 'new () => X', 'function', 'this', 'true', 'null', '\u00e9', 'x.y', '.5'];
+test('`extends` starts an expression only before what starts no type, as TypeScript reads a constraint; a conditional type holds none', (t) => {
+  for (const c of EXPRESSION_CONSTRAINTS) assert.deepStrictEqual(opensTypeParameters(`<T>(a: <U extends ${c}>() => U, y/z): x</T>`, 0), { generic: false, ambiguity: 'generic' }, c);
+  for (const c of TYPE_CONSTRAINTS) assert.deepStrictEqual(opensTypeParameters(`<T>(a: <U extends ${c}>() => U, y/z): x</T>`, 0), { generic: false, ambiguity: null }, c);
+  const conditional = "declare const f: <T>(key: `${T extends string ? Capitalize<T> : never}`) => void;";
+  assert.deepStrictEqual(opensTypeParameters(conditional, conditional.indexOf('<')), { generic: true, ambiguity: null }, 'a conditional template literal type');
+  assert.deepStrictEqual(strayPageRefs(`${conditional}\nnavigateTo({pageType:"generative",pageId:"PAGEREF_detail"});\n`), [], 'and the call after it is read');
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the readings');
+  const constraintOf = (c) => {
+    const source = cleanSourceFile(ts, `type F = <U extends ${c}>() => U;`);
+    assert.ok(source, `TypeScript parses <U extends ${c}>`);
+    let found = null;
+    const visit = (node) => {
+      if (found === null && ts.isTypeParameterDeclaration(node) && node.name.text === 'U') found = node;
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    return found;
+  };
+  for (const c of EXPRESSION_CONSTRAINTS) assert.ok(constraintOf(c).expression, `an expression: <U extends ${c}>`);
+  for (const c of TYPE_CONSTRAINTS) assert.ok(!constraintOf(c).expression && constraintOf(c).constraint, `a type: <U extends ${c}>`);
+  assert.ok(cleanSourceFile(ts, conditional), 'the conditional template literal type parses');
+});
+
+// typeStartFails reads a parameter's type to its second token. After a type reference a name is TS1005 unless the first word takes a type after it (`keyof T`) or the second is a
+// conditional type's `extends`; after the first type parameter of a generic function type only `,`, `>`, `=` and `extends` may follow, unless the first word is a modifier, which
+// TypeScript parses there whatever it is (`<private x>`). So JSX text that labels a phrase or an element, `(Note: see the <a href="/x">docs</a>)`, is no parameter list.
+test('a parameter type that fails at its second token fails the list, wherever TypeScript rejects every signature that holds it', (t) => {
+  const ELEMENT = { generic: false, ambiguity: null };
+  const GUESS = { generic: false, ambiguity: 'generic' };
+  for (const [list, expected] of [
+    ['Note: see the <a href="/x">docs</a>', ELEMENT], ['Tip: get the <b>app</b>', ELEMENT], ['a: string number', ELEMENT], ['a, b?: x y', ELEMENT], ['a: x /* c */\n  y', ELEMENT], ['a: <b c>', ELEMENT],
+    ['a: keyof T', GUESS], ['a: typeof x', GUESS], ['a: readonly T[]', GUESS], ['a: unique symbol', GUESS], ['a: infer U', GUESS], ['a: asserts x', GUESS], ['a: new () => T', GUESS],
+    ['a: A extends B ? C : D', GUESS], ['a: <private x>() => x', GUESS], ['a: <static x>() => x', GUESS], ['a: <in out x>() => x', GUESS], ['a: x\u00e9 y', GUESS], ['a: x\\u0079 z', GUESS],
+    ['a: A.B c', GUESS], ['a: 1 2', GUESS],
+  ]) assert.deepStrictEqual(opensTypeParameters(`<T>(${list}): x</T>`, 0), expected, list);
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the readings');
+  const frames = [(list) => `interface I { <T>(${list}): string }`, (list) => `interface C { new <T>(${list}): string }`, (list) => `type F = <T>(${list}) => string;`];
+  const keywords = [];
+  for (let kind = ts.SyntaxKind.FirstKeyword; kind <= ts.SyntaxKind.LastKeyword; kind += 1) keywords.push(ts.tokenToString(kind));
+  const words = [...keywords, 'x', 'Note', 'see'];
+  const unsound = [];
+  let failed = 0;
+  for (const first of words) {
+    for (const second of words) {
+      for (const type of [`${first} ${second}`, `<${first} ${second}>() => void`]) {
+        const list = `x: ${type}`;
+        const read = opensTypeParameters(`<T>(${list}): x</T>`, 0);
+        if (read.generic || read.ambiguity !== null) continue;
+        failed += 1;
+        if (frames.some((frame) => parseDiagnosticMessages(ts, frame(list)).length === 0)) unsound.push(list);
+      }
+    }
+  }
+  assert.deepStrictEqual(unsound, [], 'a list read as no list that TypeScript parses as one');
+  assert.ok(failed >= 10000, `only ${failed} lists were read as no list`);
 });
 
 // readChildren in closing mode, through elementChildren: the children of `<T>` read from its `>` to the closing tag of its own. `fails` is a text no element has, `closes` the closing tag found, `hidden` one that

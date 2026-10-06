@@ -1771,8 +1771,9 @@ function parameterListMayStart(src, open) {
 // The words TypeScript's parser takes before a parameter's name (parseParameterWorker reads modifiers there, and only the checker rejects a misplaced one), measured over every keyword
 // TypeScript 5.8 has, each in a call signature, a construct signature and a function type, followed by a name: all three parse. A parameter that starts with one is not read.
 const PARAMETER_MODIFIERS = new Set(['abstract', 'accessor', 'async', 'declare', 'export', 'in', 'out', 'override', 'private', 'protected', 'public', 'readonly', 'static']);
-// The keywords that are no parameter's name in any of those places, alone or with a type (TS1359, TS1390 and the like are parse diagnostics): a parameter that starts with one fails. Every
-// other keyword — `get`, `set`, `of`, `type`, `let`, `await` and the rest — parses as a name there, alone, with a type, optional, and after a `,`. The test of these sets measures them again.
+// The keywords that are no parameter's name in any of those places, alone or with a type (TS1359, TS1390 and the like are parse diagnostics): a parameter that starts with one fails —
+// but `default`, which is a modifier before what it can head (defaultMayModify). Every other keyword — `get`, `set`, `of`, `type`, `let`, `await` and the rest — parses as a name
+// there, alone, with a type, optional, and after a `,`. The test of these sets measures them again, before every keyword.
 const NOT_PARAMETER_NAMES = new Set(['break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'else', 'enum', 'extends', 'false', 'finally', 'for',
   'function', 'if', 'import', 'instanceof', 'new', 'null', 'return', 'super', 'switch', 'throw', 'true', 'try', 'typeof', 'var', 'void', 'while', 'with']);
 
@@ -1783,8 +1784,9 @@ const NOT_PARAMETER_NAMES = new Set(['break', 'case', 'catch', 'class', 'const',
 // after a name is no parameter's in a call signature, a construct signature and a function type alike, and neither is one that no parameter starts with after a `,` (a number, a quote, a
 // back-tick, a `<`, a `#`, an operator: TS1003, as parameterListMayStart says of the first), so only the element compiles:
 // `(press [/] to search)`, `(see @/components)`, `(it's)`, `(N/A)`, `(see docs)`, `(a.b)`. A keyword is read as TypeScript reads it there: a modifier (PARAMETER_MODIFIERS) or `this`, which is a
-// name only first and alone, ends the reading; one that is no parameter's name (NOT_PARAMETER_NAMES: `(extends <code>Base</code>)`, `(import from <b>CSV</b>)`) fails; every other keyword
-// is a name (`(get the <b>app</b>)`, `(set in <b>Settings</b>)`).
+// name only first and alone, ends the reading; one that is no parameter's name (NOT_PARAMETER_NAMES: `(extends <code>Base</code>)`, `(import from <b>CSV</b>)`) fails, except a `default`
+// that may be a modifier; every other keyword is a name (`(get the <b>app</b>)`, `(set in <b>Settings</b>)`). A type is read only to its second token: one that fails there fails
+// the list (typeStartFails).
 function parameterSyntaxFails(src, open) {
   let k = skipSpaceAndComments(src, open + 1);
   for (;;) {
@@ -1795,6 +1797,7 @@ function parameterSyntaxFails(src, open) {
     if (end < src.length && (src[end] === '\\' || (src[end].charCodeAt(0) > 0x7f && !isTrivia(src[end])))) return false;
     const word = src.slice(k, end);
     if (PARAMETER_MODIFIERS.has(word) || word === 'this') return false;
+    if (word === 'default' && defaultMayModify(src, end)) return false;
     if (NOT_PARAMETER_NAMES.has(word)) return true;
     k = skipSpaceAndComments(src, end);
     if (src[k] === '?') k = skipSpaceAndComments(src, k + 1);
@@ -1806,17 +1809,55 @@ function parameterSyntaxFails(src, open) {
       if (n !== undefined && n.charCodeAt(0) <= 0x7f && !/^[A-Za-z_$\\{[.@)]$/.test(n)) return true;
       continue;
     }
-    return c !== undefined && c !== ')' && c !== ':' && c !== '=' && c.charCodeAt(0) <= 0x7f;
+    // A type that fails at its second token is TS1005 there (`(Note: <a href="/help">see help</a>)`, `(Tip: get the <b>app</b>)`); any other type ends the reading.
+    if (c === ':') return typeStartFails(src, skipSpaceAndComments(src, k + 1));
+    return c !== undefined && c !== ')' && c !== '=' && c.charCodeAt(0) <= 0x7f;
   }
+}
+
+// Whether `default`, ending at `end` at the start of a parameter, may be a modifier there. TypeScript's parser takes it as one before what it can head — `class`, `function`,
+// `interface`, `abstract`, `async` or a decorator (nextTokenCanFollowDefaultKeyword) — so `(default interface)` and `(default @d x)` parse, a parameter named `interface`
+// or `x` (only the checker objects). Before anything else it is no parameter's name. A character that could continue or escape a word is not read: true.
+function defaultMayModify(src, end) {
+  const next = skipSpaceAndComments(src, end);
+  const c = src[next];
+  return c === '@' || c === '\\' || (c !== undefined && c.charCodeAt(0) > 0x7f) || /^(?:class|function|interface|abstract|async)(?![\w$])/.test(src.slice(next, next + 10));
+}
+
+// The words a type may start with that take a type after them: `keyof T`, `typeof x`, `readonly T[]`, `unique symbol`, `infer U`, `asserts x`, measured over every keyword
+// TypeScript has; `new`, `abstract`, `function` and `import`, which start a type that a name does not follow, are kept as well.
+const TYPE_OPERATOR_WORDS = new Set(['keyof', 'typeof', 'readonly', 'unique', 'infer', 'asserts', 'new', 'abstract', 'function', 'import']);
+
+// Whether the type that starts at `t`, a parameter's, fails at its second token, a name. A name there that follows a type reference is TS1005 (the list wants a `,`, a `)`, an `=`, a
+// `?` or an operator), unless the first word takes a type after it (TYPE_OPERATOR_WORDS) or the second is a conditional type's `extends`. A `<` there opens a generic function type's
+// type parameters, which after their first name want `,`, `>`, `=` or `extends` (parseTypeParameter), unless the first word is a modifier — TypeScript parses every one there, and
+// only the checker objects (`<private x>`). A name that a character beyond ASCII or a backslash goes on with ends the reading: false. Both are measured against TypeScript over
+// every pair of keywords.
+function typeStartFails(src, t) {
+  const nameEnd = (at) => {
+    let e = at;
+    while (e < src.length && /[A-Za-z0-9_$]/.test(src[e])) e += 1;
+    if (e === at || /[0-9]/.test(src[at]) || src[e] === '\\' || (e < src.length && src[e].charCodeAt(0) > 0x7f && !isTrivia(src[e]))) return -1;
+    return e;
+  };
+  const parameters = src[t] === '<';
+  const first = parameters ? skipSpaceAndComments(src, t + 1) : t;
+  const firstEnd = nameEnd(first);
+  if (firstEnd === -1) return false;
+  const word = src.slice(first, firstEnd);
+  if (parameters ? word === 'const' || PARAMETER_MODIFIERS.has(word) : TYPE_OPERATOR_WORDS.has(word)) return false;
+  const second = skipSpaceAndComments(src, firstEnd);
+  const secondEnd = nameEnd(second);
+  return secondEnd !== -1 && src.slice(second, secondEnd) !== 'extends';
 }
 
 // Whether the character at `k`, in a parameter list read as a type, may start an expression or a statement there. TypeScript's parser does so from a type only at these places (parser.ts,
 // https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts): an initializer's `=` (any `=` that is not the `=>` of a function type — `a: A<B>= /re/` is an initializer
 // after type arguments), a computed name's `[` (any `[` but the `[]` of an array type, which this does not tell from a tuple, an index signature or an indexed access), a decorator's `@`,
 // an import type's attributes (`import("m", { with: { k: v } })`), an accessor's body in a type literal (`{ get x() { return 1 / 2 } }`: parseAccessorDeclaration parses a block, and only the
-// checker objects), and a type parameter's constraint, which is read as an expression where its first token starts no type (`<U extends /x/>`: parseTypeParameter). So `import` and `extends`
-// count as whole words wherever they stand, and `get` and `set` wherever an accessor's name may follow them: more starts only leave the scan untrusted sooner where a `/`, a `<` or a back-tick
-// follows. `typeof` takes a name.
+// checker objects), and a type parameter's constraint, which is read as an expression where its first token starts no type (`<U extends /x/>`: parseTypeParameter). So `import` counts
+// as a whole word wherever it stands, `get` and `set` wherever an accessor's name may follow them, and `extends` wherever what follows it may start no type: more starts only leave
+// the scan untrusted sooner where a `/`, a `<` or a back-tick follows. `typeof` takes a name.
 function expressionMayStart(src, k) {
   const c = src[k];
   if (c === '=') return src[k + 1] !== '>';
@@ -1825,6 +1866,16 @@ function expressionMayStart(src, k) {
   if (/[\w$\\]/.test(src[k - 1] || '') || !/[eigs]/.test(c)) return false;
   const word = /^(?:import|extends|get|set)(?![\w$\\])/.exec(src.slice(k, k + 8));
   if (word === null) return false;
+  if (word[0] === 'extends') {
+    // A constraint is read as a type where its first token starts one (`isStartOfType() || !isStartOfExpression()`), and a conditional type's `extends` is always followed by a
+    // type, so before a name, a string, a number, a template, a `{`, a `[`, a `<`, a `|`, a `&`, a `!`, a `?`, a `*` or a `.` it starts nothing: `${T extends string ? Capitalize<T>
+    // : never}` holds no expression. Before `class`, `super`, `delete` (and `await` and `yield`, which no type takes either), a `/`, a `(`, an operator, a `#` or an `@` it may.
+    const next = skipSpaceAndComments(src, k + 7);
+    const n = src[next];
+    if (n === undefined) return true;
+    if (/^[A-Za-z_$]$/.test(n)) return /^(?:class|super|delete|await|yield)(?![\w$\\])/.test(src.slice(next, next + 7));
+    return !(n.charCodeAt(0) > 0x7f || /^[{['"`0-9<|&!?*.]$/.test(n));
+  }
   if (word[0] !== 'get' && word[0] !== 'set') return true;
   // `get` and `set` begin an accessor only before its name — a `[`, a name or a keyword, a string or a number (canFollowGetOrSetKeyword). Before a `:`, a `?`, a `(`, a `<` or a `,` each is
   // a name, a property's (`{ get: T }`), a method's (`{ get(url: string): T }`) or a parameter's (`(get: /docs)`), and starts nothing.
