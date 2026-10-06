@@ -55,8 +55,8 @@
     "exitCode": 0,
     "result": "Types written to D:/work/account-records/RuntimeTypes.ts"
   },
-  { "id": "gate-custom-api", "command": "node 'D:/repo/plugins/model-apps/scripts/lib/feature-flags.js' custom-api", "exitCode": 0, "result": "disabled" },
-  { "id": "gate-telemetry", "command": "node 'D:/repo/plugins/model-apps/scripts/lib/feature-flags.js' custom-telemetry", "exitCode": 0, "result": "disabled" },
+  { "id": "gate-custom-api", "command": "node 'D:/repo/plugins/model-apps/scripts/lib/feature-flags.js' custom-api", "exitCode": 1, "result": "disabled" },
+  { "id": "gate-telemetry", "command": "node 'D:/repo/plugins/model-apps/scripts/lib/feature-flags.js' custom-telemetry", "exitCode": 1, "result": "disabled" },
   {
     "id": "page-files",
     "command": "node 'D:/repo/plugins/model-apps/scripts/check-page-files.js' --plan 'D:/work/account-records/genpage-plan.md'",

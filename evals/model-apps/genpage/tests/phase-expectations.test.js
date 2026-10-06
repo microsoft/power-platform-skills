@@ -461,6 +461,20 @@ test('eval 13: generated text carries no hardcoded currency symbols or date form
   assertFail(gradeCode(text, page("const fmt = 'MM/dd/yyyy'; return null;")), /hardcoded date format "MM\/dd\/yyyy"/);
   assertFail(gradeCode(text, page("const f = new Intl.NumberFormat(lang, { style: 'currency', currency: 'USD' }); return null;")), /hardcoded currency code/);
   assertFail(gradeCode(text, page("return <Text>{due.toLocaleDateString('en-US')}</Text>;")), /hardcoded locale for date formatting/);
+  // `$` at a string boundary, joined onto an amount with `+`.
+  assertFail(gradeCode(text, page("return <Text>{'$' + total.toFixed(2)}</Text>;")), /hardcoded "\$" currency symbol/);
+  assertFail(gradeCode(text, page("const label = 'Total: $' + total; return null;")), /hardcoded "\$" currency symbol/);
+  assertFail(gradeCode(text, page('const label = "Total: $ " + total; return null;')), /hardcoded "\$" currency symbol/);
+  assertFail(gradeCode(text, page("const label = total + ' $'; return null;")), /hardcoded "\$" currency symbol/);
+  assertFail(gradeCode(text, page('const label = `Total: $` + total; return null;')), /hardcoded "\$" currency symbol/);
+  // ...while OData query options and template interpolation stay valid.
+  assertPass(gradeCode(text, page("const q = '?$select=name,revenue&$top=' + n; return null;")));
+  assertPass(gradeCode(text, page("const q = '$filter=statecode eq 0'; return null;")));
+  assertPass(gradeCode(text, page('return <Text>{`${count}` + suffix}</Text>;')));
+  // `currency:` is a number-format option only beside style: 'currency'.
+  assertPass(gradeCode(text, page("const labels = { currency: 'Devise', total: 'Total' }; return null;")));
+  assertPass(gradeCode(text, page("const t = { fr: { currency: 'Devise' } }; return null;")));
+  assertFail(gradeCode(text, page("return <Text>{n.toLocaleString(lang, { currency: 'EUR', style: 'currency' })}</Text>;")), /hardcoded currency code/);
 });
 
 // --- Eval 15 -----------------------------------------------------------------------------------

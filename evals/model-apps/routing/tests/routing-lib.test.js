@@ -64,6 +64,17 @@ test('transcript: banners, blank lines, partial JSON and stderr noise are ignore
   assert.equal(p.decided, false);
 });
 
+test('transcript: resultError reports a failed terminal result for both CLIs and nothing for success', () => {
+  const claude = (r) => { const p = new TranscriptParser('claude', PLUGIN); p.push(JSON.stringify({ type: 'result', ...r })); return p.resultError; };
+  assert.equal(claude({ subtype: 'success', is_error: false }), null);
+  assert.equal(claude({ subtype: 'error_max_turns', is_error: false }), 'claude result error_max_turns');
+  assert.equal(claude({ subtype: 'success', is_error: true }), 'claude result success (is_error)');
+  const copilot = (r) => { const p = new TranscriptParser('copilot', PLUGIN); p.push(JSON.stringify({ type: 'result', ...r })); return p.resultError; };
+  assert.equal(copilot({ exitCode: 0 }), null);
+  assert.equal(copilot({ exitCode: 1 }), 'copilot result exitCode 1');
+  assert.equal(new TranscriptParser('claude', PLUGIN).resultError, null, 'no result yet is not a failure');
+});
+
 test('transcript: an unknown agent is rejected', () => {
   assert.throws(() => new TranscriptParser('gemini', PLUGIN), /unknown agent/);
 });

@@ -614,19 +614,52 @@ PHASE5_EXPECTATIONS.set(
 // the rule never trips it. Raw shapes this catches (references/localization.md forbids all of them):
 //   <Text>${total}</Text>                 `$` in JSX text right before a code `{`
 //   `$${amount.toFixed(2)}`               `$` in template text before the `${` delimiter
+//   '$' + total / 'Total: $' + total      `$` ending a string that is concatenated onto an amount
+//   amount + ' $'                         `$` opening a string concatenated after an amount
 //   'Total: €' / '$100'                   a symbol in a string
 //   'MM/dd/yyyy', 'yyyy-MM-dd'            a date pattern instead of usersettings.dateformatstring
 //   { style: 'currency', currency: 'USD' } a currency code instead of usersettings.currencysymbol
 //   d.toLocaleDateString('en-US')         a fixed locale's date format
-// A bare `${x}` interpolation is NOT a currency symbol: its `$` is the template delimiter.
+// Not currency: a bare `${x}` interpolation (its `$` is the template delimiter), an OData query
+// option such as '?$select=' + cols (`$` is followed by a name), and a `currency:` key outside a
+// `style: 'currency'` number format (e.g. a translation dictionary `{ currency: 'Devise' }`).
 const DATE_PART = '(?:d{1,2}|D{1,2}|M{1,4}|y{2,4}|Y{2,4})';
 const DATE_PATTERN = new RegExp(`\\b${DATE_PART}([/.\\-])${DATE_PART}\\1${DATE_PART}\\b`);
+
+// The object literal around `at` in the code view, by brace depth: from the nearest unmatched `{`
+// before it to its matching `}`. Strings are already blanked in `keep`, so braces inside them
+// cannot unbalance the scan. Returns [start, end) offsets, or null when `at` is not inside one.
+function enclosingObject(keep, at) {
+  let depth = 0;
+  let open = -1;
+  for (let i = at - 1; i >= 0; i -= 1) {
+    if (keep[i] === '}') depth += 1;
+    else if (keep[i] === '{') {
+      if (depth === 0) { open = i; break; }
+      depth -= 1;
+    }
+  }
+  if (open < 0) return null;
+  depth = 0;
+  for (let i = open; i < keep.length; i += 1) {
+    if (keep[i] === '{') depth += 1;
+    else if (keep[i] === '}' && --depth === 0) return [open, i + 1];
+  }
+  return [open, keep.length];
+}
+
 function hardcodedFormatProblem(content) {
   const keep = blankNonCodePreservingTemplateExpressions(content);
   const comment = new Uint8Array(content.length);
   for (const { start, end } of commentRanges(content)) comment.fill(1, start, end);
   const isText = (i) => keep[i] !== content[i] && !comment[i];
   const text = content.split('').map((ch, i) => (isText(i) ? ch : ' ')).join('');
+  // The code character next to a string literal's delimiter, skipping whitespace, in direction dir.
+  const codeNeighbour = (from, dir) => {
+    let k = from;
+    while (k >= 0 && k < content.length && /\s/.test(content[k])) k += dir;
+    return k >= 0 && k < content.length && !isText(k) ? content[k] : '';
+  };
   for (const m of text.matchAll(/[$\u20ac\u00a3\u00a5\u20b9]/g)) {
     const i = m.index;
     if (m[0] !== '$') return `hardcoded currency symbol "${m[0]}"`;
@@ -635,12 +668,28 @@ function hardcodedFormatProblem(content) {
     const amount = /\d/.test(content[j] || '');
     const templateCurrency = content[i + 1] === '$' && content[i + 2] === '{';
     const jsxCurrency = content[j] === '{' && !isText(j);
-    if (amount || templateCurrency || jsxCurrency) return 'hardcoded "$" currency symbol';
+    // String-boundary currency: the `$` is the last text character before a closing quote that is
+    // followed by `+`, or the first text character after an opening quote that is preceded by `+`.
+    // Whitespace is skipped unconditionally: the text view blanks string contents to spaces, so a
+    // space inside the string is indistinguishable from code here. Quote DELIMITERS stay visible in
+    // the code view (a quote inside text is blanked), which is what `!isText` tests below.
+    let end = i + 1;
+    while (end < content.length && /[ \t]/.test(content[end])) end += 1;
+    let start = i - 1;
+    while (start >= 0 && /[ \t]/.test(content[start])) start -= 1;
+    const prefixConcat = /['"`]/.test(content[end] || '') && !isText(end) && codeNeighbour(end + 1, 1) === '+';
+    const suffixConcat = start >= 0 && /['"`]/.test(content[start]) && !isText(start) && codeNeighbour(start - 1, -1) === '+';
+    if (amount || templateCurrency || jsxCurrency || prefixConcat || suffixConcat) return 'hardcoded "$" currency symbol';
   }
   const pattern = DATE_PATTERN.exec(text);
   if (pattern && /[dD]/.test(pattern[0]) && /M/.test(pattern[0]) && /[yY]/.test(pattern[0])) return `hardcoded date format "${pattern[0]}"`;
   for (const call of keep.matchAll(/\bcurrency\s*:\s*/g)) {
-    if (/^['"`]/.test(content.slice(call.index + call[0].length))) return 'hardcoded currency code in a number format';
+    if (!/^['"`]/.test(content.slice(call.index + call[0].length))) continue;
+    // Intl only formats a currency when the SAME options object sets style: 'currency'; a bare
+    // `currency:` key is an ordinary property (a label, a field name), not a number format.
+    const span = enclosingObject(keep, call.index);
+    const original = span ? content.slice(span[0], span[1]) : '';
+    if (/\bstyle\s*:\s*['"`]currency['"`]/.test(original)) return 'hardcoded currency code in a number format';
   }
   for (const call of keep.matchAll(/\b(?:toLocaleDateString|toLocaleString|toLocaleTimeString|DateTimeFormat)\s*\(\s*/g)) {
     if (/^['"`][a-z]{2,3}(?:-[A-Za-z]{2,4})?['"`]/.test(content.slice(call.index + call[0].length))) return 'hardcoded locale for date formatting';

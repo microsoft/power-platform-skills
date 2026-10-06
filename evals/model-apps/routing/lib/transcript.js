@@ -57,6 +57,25 @@ class TranscriptParser {
     return this.routedTo !== null || this.result !== null;
   }
 
+  /**
+   * Why the terminal `result` says the run FAILED, or null. A failed run that chose no plugin
+   * skill has not decided "none" — it never got to decide — so the runner turns this into a trial
+   * error instead of grading it (graded, it would pass every negative case).
+   *   Claude:  {"type":"result","subtype":"error_during_execution","is_error":true,...}
+   *            (success is subtype "success" with is_error false; other subtypes include
+   *            "error_max_turns")
+   *   Copilot: {"type":"result","exitCode":1,...}
+   */
+  get resultError() {
+    const r = this.result;
+    if (!r) return null;
+    if (this.agent === 'claude') {
+      if (r.subtype !== 'success' || r.isError) return `claude result ${r.subtype || 'error'}${r.isError ? ' (is_error)' : ''}`;
+      return null;
+    }
+    return typeof r.exitCode === 'number' && r.exitCode !== 0 ? `copilot result exitCode ${r.exitCode}` : null;
+  }
+
   push(line) {
     const s = String(line).trim();
     if (!s.startsWith('{')) return;
@@ -91,7 +110,7 @@ class TranscriptParser {
         else if (c.type === 'text' && typeof c.text === 'string') this.text = c.text;
       }
     } else if (ev.type === 'result') {
-      this.result = { subtype: ev.subtype, turns: ev.num_turns, costUsd: ev.total_cost_usd };
+      this.result = { subtype: ev.subtype, isError: ev.is_error === true, turns: ev.num_turns, costUsd: ev.total_cost_usd };
     }
   }
 

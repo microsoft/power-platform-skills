@@ -210,6 +210,8 @@ function spawnTrial({ bin, binArgs = [], args, env, prompt, cwd, timeoutMs, plug
             : `timed out before routing (${parser.eventCount} transcript events, no decision)`;
         } else if (parser.eventCount === 0) {
           error = `${bin} produced no transcript output`;
+        } else if (parser.resultError) {
+          error = `${parser.resultError} before any routing decision`;
         }
       }
       // Isolation guard (Claude reports its loaded skills): if the plugin's skills are not all
@@ -246,9 +248,10 @@ function spawnTrial({ bin, binArgs = [], args, env, prompt, cwd, timeoutMs, plug
     child.on('close', (code) => {
       if (buf) parser.push(buf);
       const tail = stderr.trim().split(/\r?\n/).slice(-3).join(' | ');
-      // A run that ends without routing is a valid "none" outcome only if the agent actually
-      // ran. Exiting non-zero with no transcript is an auth/install problem, not a decision.
-      if (!parser.decided && parser.routedTo === null && code !== 0 && !timedOut) {
+      // A run that ends without routing is a valid "none" outcome only if it ended SUCCESSFULLY.
+      // Exiting non-zero is an auth/install/runtime failure, not a decision — even when a terminal
+      // `result` event was printed first (a failed result is also caught via parser.resultError).
+      if (parser.routedTo === null && code !== 0 && !timedOut) {
         finish({ error: `${bin} exited ${code} before any routing decision${tail ? `: ${tail}` : ''}` });
       } else {
         finish();

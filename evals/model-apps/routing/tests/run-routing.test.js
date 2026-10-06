@@ -149,13 +149,29 @@ test('CLI --dry-run prints the isolated invocation and launches nothing', () => 
 
 // ---------- spawnTrial against a fake agent (real process plumbing) ----------
 
-function fakeTrial(mode, { prompt = 'build me a page', timeoutMs = 20000 } = {}) {
+function fakeTrial(mode, { prompt = 'build me a page', timeoutMs = 20000, agent = 'claude', env = {} } = {}) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'routing-fake-'));
   return spawnTrial({
-    agent: 'claude', bin: process.execPath, binArgs: [FAKE], args: [], env: { FAKE_AGENT_MODE: mode },
+    agent, bin: process.execPath, binArgs: [FAKE], args: [], env: { FAKE_AGENT_MODE: mode, ...env },
     prompt, cwd, timeoutMs, plugin: PLUGIN,
   }).finally(() => fs.rmSync(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 }
+
+test('spawnTrial: a FAILED terminal result is an error, never a "none" decision (both CLIs, any exit code)', async () => {
+  // Graded as "none", a run that crashed after printing its result would pass every negative
+  // case. Exit 1 is caught by the exit-code check; exit 0 proves the failed RESULT is caught alone.
+  for (const exit of ['1', '0']) {
+    const claude = await fakeTrial('claude-failed', { agent: 'claude', env: { FAKE_AGENT_EXIT: exit } });
+    assert.equal(claude.routedTo, null);
+    assert.match(claude.error || '', exit === '1' ? /exited 1 before any routing decision/ : /claude result error_during_execution \(is_error\) before any routing decision/, `claude exit ${exit}`);
+    const copilot = await fakeTrial('copilot-failed', { agent: 'copilot', env: { FAKE_AGENT_EXIT: exit } });
+    assert.equal(copilot.routedTo, null);
+    assert.match(copilot.error || '', exit === '1' ? /exited 1 before any routing decision/ : /copilot result exitCode 1 before any routing decision/, `copilot exit ${exit}`);
+  }
+  // A successful run that answers in text is still the legitimate "none".
+  const ok = await fakeTrial('answer');
+  assert.equal(ok.error, null);
+});
 
 test('spawnTrial: prompt reaches the agent on stdin; a routed agent is killed at the decision', async () => {
   const t = await fakeTrial('route-then-hang', { prompt: 'make me an app' });
