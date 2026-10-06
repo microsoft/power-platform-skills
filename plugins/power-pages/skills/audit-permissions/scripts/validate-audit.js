@@ -133,6 +133,9 @@ function fail(error) {
 
 const reportFlagIndex = process.argv.indexOf('--report');
 const positionalReport = process.argv.slice(2).find((argument) => !argument.startsWith('-'));
+if (reportFlagIndex >= 0 && (!process.argv[reportFlagIndex + 1] || process.argv[reportFlagIndex + 1].startsWith('-'))) {
+  fail(new Error('Usage: validate-audit.js --report <path>'));
+}
 const explicitReport = reportFlagIndex >= 0 ? process.argv[reportFlagIndex + 1] : positionalReport;
 
 if (explicitReport) {

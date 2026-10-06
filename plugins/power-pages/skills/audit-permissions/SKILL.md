@@ -182,7 +182,7 @@ Use this Dataverse-backed relationship validation only for local runs that need 
 
 ### 2.5 Deterministic preflight cross-reference (grader ground truth)
 
-Purely mechanical cross-checks over the parsed YAML + data model + Web API artifacts. **Emit ALL that apply.** Number IDs per prefix in encounter order (`IS1`, `IS2`, `DM1`, …). These are **ground truth**: carry them unchanged into the right dimension's issue list in Step 5 and never drop or downgrade them.
+Purely mechanical cross-checks over the parsed YAML + data model + Web API artifacts. **Emit ALL that apply.** Number IDs per prefix in encounter order (`IS1`, `IS2`, `DM1`, …). These are **ground truth**: carry them into the right dimension's issue list in Step 5 and never drop or downgrade them.
 
 | Condition | id prefix | dimension | severity |
 |---|---|---|---|
@@ -196,7 +196,6 @@ Purely mechanical cross-checks over the parsed YAML + data model + Web API artif
 | Permission scope code **unrecognized** (`Unknown(code)`) | SC | scope-correctness | minor |
 | Permission grants **write/create/delete to an Anonymous role** | AH | anonymous-access-hygiene | major |
 | Permission targets a table **not in the data model** | DM | data-model-alignment | major |
-| Data-model table with **no permission entries** | TC | table-coverage | minor |
 | Web API site-setting YAML parse error | IS | internal-consistency | major |
 | `-enabled` entity set with **no matching `-fields`** whitelist | IS | internal-consistency | major |
 | `-fields` whitelist with **no matching `-enabled`** setting | IS | internal-consistency | major |
@@ -531,13 +530,13 @@ Assess the **3 categories**; within each, reason across its 3 dimensions togethe
 - **[C2]** PII / contact columns (email, phone, guardian or parent contact, address) readable by the Anonymous role → dim `anonymous-access-hygiene` · **major**.
 - **[C3]** A role has GLOBAL-scope access to a per-person / per-owner table carrying PII or sensitive operational data (personal records, contact PII, grades, rosters) — reaching every record. Mutating grant → `privilege-calibration`; read-only → `security-posture` · **major**. This explicitly includes the baseline Authenticated Users role: when open registration lets any visitor acquire that role, treat it as a broad external audience, not as trusted staff. Evaluate and emit this pattern separately for each affected table; do not merge Student and Teacher (or other disjoint table exposures) into one issue.
 - **[C4]** A role is granted access (any CRUD) beyond its natural need-to-know / need-to-act → dim `privilege-calibration` · **major** only when the extra access reaches another audience's sensitive records (PII, confidential, financial); otherwise **minor**. C4 never applies to a case covered by C3, C9, C16, C17 or C18.
-- **[C5]** The site requires authoring/management but NO role has any Create/Write/Delete on ANY table (entirely read-only) — raise ONCE for the whole site → dim `intent-coverage` · **major** *(but if the authoring is expected to be performed by the intentionally-omitted `Administrators` role, this is **minor** — see the ADMINISTRATORS EXCEPTION below)*.
+- **[C5]** The site requires authoring/management but NO role has any Create/Write/Delete on ANY table (entirely read-only) — raise ONCE for the whole site → dim `intent-coverage` · **major** *(if the authoring is expected to be performed by the intentionally-omitted `Administrators` role, do NOT raise it — see the ADMINISTRATORS EXCEPTION below)*.
 - **[C6]** A table the site clearly needs to expose (referenced by service/UI code, or an obvious end-user entity) has NO permission granting the required access → dim `table-coverage` · **major** *(if the only missing grant would be for the `Administrators` role, do NOT raise it — see the ADMINISTRATORS EXCEPTION)*.
 - **[C7]** The site needs purpose-specific personas (e.g. distinct student / teacher / staff / admin audiences) but only generic Anonymous/Authenticated roles exist → dim `role-completeness` · **major** *(a missing `Administrators` role/persona is NOT a gap — see the ADMINISTRATORS EXCEPTION)*.
 - **[C8]** A web role is defined but referenced by NO table permission (orphaned) while every persona the site needs is still served by another role → dim `role-completeness` · **minor**.
 - **[C9]** GLOBAL-scope READ of inherently-public / non-sensitive shared reference data (announcements, facilities, public faculty/leadership listings) → dim `security-posture` · **minor**.
 - **[C10]** A scope/permission that only matters under a HYPOTHETICAL future change ("if guardians authenticate later, a Contact or Parent scope would be better") → dim `scope-correctness` · **minor**.
-- **[C11]** No `permission-plan.html` present, or only a generic/boilerplate plan ("Global is the broadest scope") → dim `internal-consistency` · **minor**.
+- **[C11]** No `permissions-plan.html` present, or only a generic/boilerplate plan ("Global is the broadest scope") → dim `internal-consistency` · **minor**.
 - **[C12]** A data-model table with no permission that is NOT clearly user-facing (not referenced by code, not an obvious end-user entity) → dim `table-coverage` · **minor**.
 - **[C13]** Wildcard `*` column exposure — a Web API query with `$select=*`, or any other column list set to `*` → dim `security-posture` · **major**, one issue per affected table. A `Webapi/<table>/fields` wildcard is reported through the Step 2.4 validator finding instead. An explicitly enumerated column list is never this issue, however long.
 - **[C14]** A portal-readable table mixes allowed and restricted rows, and the only separation is a client-controlled `$filter`/query predicate. Client filtering is not an authorization boundary. If bypass exposes **sensitive or confidential content** (PII, credentials/secrets, financial/health data, internal staff or agent notes, private case details, security data) → dim `security-posture` · **major**. If bypass exposes only non-sensitive content that is merely unpublished, draft, or workflow-incomplete → dim `security-posture` · **minor**. If Dataverse permissions, column security, a server-side endpoint, or a separate protected table enforces the separation, C14 does not trigger.
@@ -547,8 +546,7 @@ Assess the **3 categories**; within each, reason across its 3 dimensions togethe
 - **[C18]** **Unused grants** — permissions that no reachable code uses for a role (unused tables, unused create/write/delete bits, unneeded append/appendto), including explicit Administrators permissions → emit exactly ONE issue per role, dim `privilege-calibration` · **minor**, listing every unused grant. Do not split it per table. A C16 unused delete stays a separate **major** issue.
 
 **ADMINISTRATORS EXCEPTION (respect strongly).** By design, a site should **not** create table permissions for the `Administrators` web role — Administrators already hold inherently privileged access, so explicit Administrators CRUD permissions are unnecessary and add security noise. Therefore:
-- The **absence** of Administrators table permissions is CORRECT — NEVER raise a missing-permission, table-coverage, role-completeness, or entirely-read-only issue *solely* because the `Administrators` role lacks table permissions.
-- If an **under-exposure / usability** gap (e.g. C5 read-only site, C6 missing grant, C7 missing persona) exists ONLY because the authoring/CRUD that would resolve it belongs to the intentionally-omitted `Administrators` role, cap that issue at **minor** — never major.
+- The **absence** of Administrators table permissions is CORRECT — NEVER raise a missing-permission, table-coverage, role-completeness, or entirely-read-only issue *solely* because the `Administrators` role lacks table permissions. This includes an under-exposure gap (C5 read-only site, C6 missing grant, C7 missing persona) that exists only because the authoring/CRUD belongs to the intentionally-omitted `Administrators` role.
 - This exception applies ONLY to the `Administrators` role and ONLY to under-exposure/usability gaps. It NEVER downgrades an over-exposure (security) finding — if Administrators (or any role) actually holds an over-broad grant, score it by the security rules as usual.
 
 **NOVEL ISSUES (not covered by C1–C18):** still detect them — do NOT restrict yourself to the catalog. Assign severity by the [Appendix C](#appendix-c--severity-policy--auditgrader-bridge) security-first policy. A novel issue is NOT automatically minor: if it exposes data to the wrong audience, over-scopes access, or breaks a required flow, it is **major**.
@@ -564,7 +562,7 @@ Consolidate the full pooled issue list into **distinct root causes**, then class
 - **Under-exposure dimension tie-breaker (first match wins):** missing persona role spanning one or more reachable capabilities → `role-completeness`; existing persona role but missing table permission → `table-coverage`; existing role and table permission but missing CRUD/append bit → `intent-coverage`. Never choose among these dimensions by prose emphasis.
 - **Plan/code conflict tie-breaker:** for `reachable` capabilities, implementation wins and the applicable C6/C7/C15 issue remains major; for `disabled` capabilities, the plan wins and no under-exposure issue is raised; for `ambiguous` capabilities, raise only the minor `internal-consistency` conflict.
 - **Do NOT merge distinct exposures on different tables.** Two exposure/PII issues on DISJOINT table sets, or with different audiences/severities, are SEPARATE root causes — keep BOTH (e.g. anonymous-PII on student/teacher tables (major) vs over-broad Global read of public announcements/facilities (minor)). Only merge on the same or subset/superset tables. When in doubt, keep separate. C16 and C18 are one issue per role by definition.
-- **Preserve every preflight issue** (Step 2.5) as its own standalone issue with its fixed id + severity. If an audit/rubric issue duplicates a preflight one, merge it **into** the preflight issue (keep the preflight id/severity).
+- **Preserve every preflight issue** (Step 2.5) as its own standalone issue with its fixed id + severity. If an audit/rubric issue duplicates a preflight one, merge it **into** the preflight issue (keep the preflight id; severity is the higher of the two).
 - Never invent new problems; every consolidated issue traces to at least one source issue. Never downgrade a major to shrink the count.
 
 The consolidated issues are what feed scoring and all later phases. Re-bucket each under its (possibly reassigned) dimension. **This single consolidated `major`/`minor` list is the one issue set for everything downstream** — it becomes the report's `FINDINGS_DATA` (Step 7.2), the Overview's Major/Minor counts, and the input to the score. One issue set, one tally, so more issues ⇒ lower score.
@@ -813,7 +811,7 @@ Use each dimension's definition to decide where an issue belongs. Order is canon
 
 **7. Data Model Alignment** — `DM` · *Correctness* — Every table referenced in a permission resolves to a real data-model table; no phantom/misnamed tables.
 
-**8. Internal Consistency** — `IS` · *Correctness* — YAML valid; every web-role GUID in a permission resolves; `permission-plan.html` aligns with the YAML.
+**8. Internal Consistency** — `IS` · *Correctness* — YAML valid; every web-role GUID in a permission resolves; `permissions-plan.html` aligns with the YAML.
 
 **9. Security Posture** — `SP` · *Over-Exposure* — Overall least-privilege. No surprising broad grants on sensitive tables (Contact, system tables); no avoidable delete/write on shared records. If Web API field whitelists exist, check they don't broadly expose sensitive PII columns.
 
@@ -864,7 +862,7 @@ Map each Step-4 finding into a dimension, then apply the severity policy above t
 
 - **Read-only analysis**: This skill only reads existing configuration and code. It does NOT modify any files unless the user explicitly asks to fix issues (Step 8). Scoring and report generation are all non-mutating.
 - **Never invent the score**: always derive it from consolidated issue counts via [Appendix A](#appendix-a--scoring-model). Same issues ⇒ same score.
-- **Preflight issues are ground truth**: carry Step-2.5 issues verbatim (id, dimension, severity) through consolidation and scoring; never drop or downgrade them.
+- **Preflight issues are ground truth**: carry Step-2.5 issues (id, dimension) through consolidation and scoring; never drop or downgrade them — a merged duplicate may only raise the severity.
 - **One issue per root cause**: do not split a single root cause into multiple issues; do not over-merge independent problems.
 - **Final labels happen once**: Step 4 emits factual candidates; Step 5 alone assigns final severity, dimension, and issue id.
 - **Reachability beats prose**: routed/callable portal behavior outranks contradictory plan text; explicit runtime/build exclusion outranks dormant source code; ambiguity is minor correctness, not presumed under-exposure.

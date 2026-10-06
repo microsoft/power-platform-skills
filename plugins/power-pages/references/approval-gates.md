@@ -612,7 +612,7 @@ Template-path note: when Phase 1.5 selects and installs a template, the workflow
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
-| `audit-permissions:6.fix-offer` | gate | plan | 6 | Audit complete — *"Would you like me to fix any of these issues? Yes / No"* — declining leaves the audit report untouched; accepting routes to the table-permissions-architect agent | nothing |
+| `audit-permissions:6.fix-offer` | gate | plan | 8 | Audit complete — *"Would you like me to fix any of these issues? Yes / No"* — declining leaves the audit report untouched; accepting routes to the table-permissions-architect agent | nothing |
 
 ---
 

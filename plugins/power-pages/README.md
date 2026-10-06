@@ -211,11 +211,11 @@ Adds login/logout functionality and role-based authorization to your site.
 
 > "Check my table permissions for security issues"
 
-Audits existing table permissions on a deployed or in-progress site by analyzing them against the site code and live Dataverse metadata. Produces a visual HTML audit report grouped by severity with suggested fixes.
+Audits existing table permissions on a deployed or in-progress site by analyzing them against the site code and live Dataverse metadata. Produces a visual HTML audit report with a verdict, category scores, and suggested fixes.
 
-- Findings grouped as critical / warning / info / pass
-- Cross-references code usage, web roles, and Dataverse schema
-- Suggests concrete fixes for each issue
+- Each issue rated **major** or **minor**, with a Safe to go / Needs revision verdict and 1–5 scores for over-exposure, under-exposure, and correctness
+- Each major issue labelled permissions-only or caused upstream (data model, site code, or Web API settings)
+- Cross-references code usage, web roles, sign-up settings, and Dataverse schema, and suggests a concrete fix for each issue
 
 #### `/scan-site`
 

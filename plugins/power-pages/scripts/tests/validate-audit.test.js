@@ -135,6 +135,14 @@ test('rejects reports with unreplaced placeholders or missing data', (t) => {
   assert.match(outcome.stderr, /no FINDINGS data/);
 });
 
+test('fails when --report has no path', () => {
+  for (const args of [['--report'], ['--report', '--verbose']]) {
+    const outcome = spawnSync(process.execPath, [VALIDATOR_PATH, ...args], { input: '', encoding: 'utf8' });
+    assert.equal(outcome.status, 1);
+    assert.match(outcome.stderr, /Usage: validate-audit\.js --report <path>/);
+  }
+});
+
 test('hook mode never blocks, even with an invalid earlier report', (t) => {
   const projectRoot = createTempProject(t);
   writeReport(projectRoot, { html: '__SUMMARY__' });
