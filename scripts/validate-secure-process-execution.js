@@ -106,7 +106,7 @@ const AUDITED_EXCEPTIONS = Object.freeze([
     call,
     reason: RUNNER_REASON,
   })))),
-  ...[POWER_PAGES_ROOT, MODEL_APPS_ROOT].map((root) => Object.freeze({
+  ...[POWER_PAGES_ROOT, MODEL_APPS_ROOT, PCF_ROOT].map((root) => Object.freeze({
     path: `${root}/scripts/lib/telemetry/lib/native-exec.js`,
     rule: 'nonconstant-executable',
     callee: 'execFileSync',

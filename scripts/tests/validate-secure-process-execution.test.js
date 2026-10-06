@@ -214,6 +214,7 @@ test('repository-wide audit is clean, and the only audited exceptions are the pr
   const telemetry = AUDITED_EXCEPTIONS.filter((e) => /\/scripts\/lib\/telemetry\/lib\/native-exec\.js$/.test(e.path));
   assert.deepEqual(telemetry.map((e) => e.path).sort(), [
     'plugins/model-apps/scripts/lib/telemetry/lib/native-exec.js',
+    'plugins/pcf/scripts/lib/telemetry/lib/native-exec.js',
     'plugins/power-pages/scripts/lib/telemetry/lib/native-exec.js',
   ], 'the shared telemetry library: its one resolved-path call, in each scanned copy');
   assert.ok(telemetry.every((e) => e.rule === 'nonconstant-executable'), 'the telemetry call keeps shell:false provable');
@@ -231,6 +232,6 @@ test('CLI audit emits actionable diagnostics and succeeds for the repository', (
   assert.equal(result.status, 0, result.stderr);
   assert.equal((result.stdout.match(/^AUDITED plugins\/model-apps\/scripts\/lib\/process-runner\.js /gm) || []).length, 8);
   assert.equal((result.stdout.match(/^AUDITED plugins\/pcf\/scripts\/lib\/process-runner\.js /gm) || []).length, 8);
-  assert.equal((result.stdout.match(/^AUDITED plugins\/[a-z-]+\/scripts\/lib\/telemetry\/lib\/native-exec\.js /gm) || []).length, 2);
-  assert.match(result.stdout, /validation passed \(\d+ production files, 18 audited exceptions\)/);
+  assert.equal((result.stdout.match(/^AUDITED plugins\/[a-z-]+\/scripts\/lib\/telemetry\/lib\/native-exec\.js /gm) || []).length, 3);
+  assert.match(result.stdout, /validation passed \(\d+ production files, 19 audited exceptions\)/);
 });
