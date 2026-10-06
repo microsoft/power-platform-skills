@@ -222,12 +222,58 @@ test('guardMutations caps recorded samples but keeps counting', async () => {
   assert.equal(guard.blocked.requests.length, 20);
 });
 
-test('guardMutations is a no-op with --allow-form-submit', async () => {
+test('guardMutations lets same-origin writes through only inside allowWrites', async () => {
+  const origin = 'https://contoso.powerappsportals.com';
   const page = routingPage();
-  const guard = await guardMutations(page, { allowFormSubmit: true });
-  assert.equal(page.routes.length, 0);
-  assert.deepEqual(guard.blocked, { count: 0, requests: [] });
+  const guard = await guardMutations(page, { origin });
+  assert.equal(await page.send('POST', `${origin}/api/visit`), 'aborted:blockedbyclient', 'blocked before the window');
+  await guard.allowWrites(async () => {
+    assert.equal(await page.send('POST', `${origin}/contact-us?token=secret`), 'continued');
+    assert.equal(await page.send('POST', 'https://analytics.example/collect'), 'aborted:blockedbyclient', 'other origins stay blocked');
+  });
+  assert.equal(await page.send('POST', `${origin}/api/later`), 'aborted:blockedbyclient', 'blocked again after the window');
+  assert.deepEqual(guard.submitted, { count: 1, requests: [{ method: 'POST', url: `${origin}/contact-us` }] });
+  assert.equal(guard.blocked.count, 3);
+
+  // The window closes even when the step throws.
+  await assert.rejects(guard.allowWrites(async () => { throw new Error('boom'); }), /boom/);
+  assert.equal(await page.send('POST', `${origin}/x`), 'aborted:blockedbyclient');
+
+  // Without a known origin, the window allows nothing.
+  const barePage = routingPage();
+  const bare = await guardMutations(barePage, {});
+  await bare.allowWrites(async () => {
+    assert.equal(await barePage.send('POST', `${origin}/contact-us`), 'aborted:blockedbyclient');
+  });
   await guard.dispose();
+});
+
+test('applyState opens the write window only around an approved submit step', async () => {
+  const submit = { tag: 'button', type: null, inForm: true };
+  const page = fakePage({ descriptor: submit });
+  const window = [];
+  const allowWrites = async (fn) => { window.push('open'); await fn(); window.push('close'); };
+  await applyState(page, state([
+    { action: 'click', role: 'button', name: 'Send', exact: true },
+  ]), { allowFormSubmit: true, allowWrites });
+  assert.deepEqual(window, ['open', 'close']);
+
+  // A script save button the submit check can't see gets the window only when marked.
+  const marked = fakePage();
+  window.length = 0;
+  await applyState(marked, state([{ action: 'click', role: 'button', name: 'Save', exact: true, submit: true }]), { allowFormSubmit: true, allowWrites });
+  assert.deepEqual(window, ['open', 'close']);
+  await assert.rejects(
+    applyState(fakePage(), state([{ action: 'click', role: 'button', name: 'Save', exact: true, submit: true }]), {}),
+    /marked "submit": true.*--allow-form-submit/,
+  );
+
+  // A non-submitting click in a consented state stays guarded.
+  const plain = fakePage();
+  window.length = 0;
+  await applyState(plain, state([{ action: 'click', role: 'button', name: 'Menu', exact: true }]), { allowFormSubmit: true, allowWrites });
+  assert.deepEqual(window, []);
+  assert.ok(plain.actions.includes('click'));
 });
 
 test('applyState explains a missing control', async () => {
@@ -244,6 +290,21 @@ test('validateStates accepts a boolean allowFormSubmit and rejects anything else
   assert.equal(validateStates(state({ allowFormSubmit: true }))[0].allowFormSubmit, true);
   for (const value of ['true', 1, null, {}]) {
     assert.throws(() => validateStates(state({ allowFormSubmit: value })), (err) => err instanceof StatesFileError && /allowFormSubmit/.test(err.message));
+  }
+});
+
+test('validateStates accepts "submit" only on a click or press in a consented state', () => {
+  const file = (step, extra = { allowFormSubmit: true }) => ({ states: [{ route: '/', label: 'a', steps: [step], ...extra }] });
+  const click = { action: 'click', role: 'button', name: 'Save' };
+  assert.equal(validateStates(file({ ...click, submit: true }))[0].steps[0].submit, true);
+  assert.equal(validateStates(file({ ...click, submit: false }))[0].steps[0].submit, undefined);
+  const bad = [
+    [file({ ...click, submit: 'yes' }), /submit must be true or false/],
+    [file({ action: 'wait', ms: 1, submit: true }), /only allowed on a click or press/],
+    [file({ ...click, submit: true }, {}), /needs "allowFormSubmit": true/],
+  ];
+  for (const [data, re] of bad) {
+    assert.throws(() => validateStates(data), (err) => err instanceof StatesFileError && re.test(err.message));
   }
 });
 

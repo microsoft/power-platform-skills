@@ -96,7 +96,7 @@ test('check errors from pages and states make the audit incomplete', () => {
   assert.equal(report.summary.checkErrors, 2);
   assert.equal(report.summary.statesAudited, 2);
   assert.equal(report.summary.blockedRequests, 2);
-  assert.deepEqual(report.states[1], { label: 'Dialog', route: '/', viewport: 'desktop', error: null, checkErrors: [], blockedRequests: null, formSubmitAllowed: false });
+  assert.deepEqual(report.states[1], { label: 'Dialog', route: '/', viewport: 'desktop', error: null, checkErrors: [], blockedRequests: null, submittedRequests: null, formSubmitAllowed: false });
   assert.equal(exitCodeFor(report), EXIT.LOAD_FAILURE);
 });
 

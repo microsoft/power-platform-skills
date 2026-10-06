@@ -25,6 +25,11 @@
 // guard only sees the control a step targets, and page scripts can still send data
 // on any click (fetch/XHR, Web API calls), so guardMutations() adds a network-level
 // backstop that aborts state-changing requests while a state is replayed.
+//
+// Consent covers the submission the user approved, not every write the page makes, so
+// even a consented state stays guarded while it loads and replays its other steps. Only
+// the step that would otherwise be refused runs inside a short write window
+// (guard.allowWrites), and only requests to the audited site go through in it.
 
 const fs = require('node:fs');
 const { VIEWPORTS, routePathError } = require('./args');
@@ -41,6 +46,10 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 // would leave a "next page" or "sort" state empty, so it is the one POST let through.
 const READ_ONLY_POST_PATHS = Object.freeze([/^\/_services\/entity-grid-data\.json(\/|$)/i]);
 const MAX_BLOCKED_SAMPLES = 20;
+// How long the write window stays open after an approved submit step. The click or key
+// press returns once the event is dispatched; the form POST (a navigation) or the
+// script's fetch is issued right after, so the window has to outlast that hand-off.
+const SUBMIT_WINDOW_MS = 2000;
 
 class StatesFileError extends Error {}
 
@@ -54,6 +63,14 @@ function validateStep(step, where) {
   if (!step || typeof step !== 'object') throw new StatesFileError(`${where}: step must be an object`);
   if (!ACTIONS.includes(step.action)) throw new StatesFileError(`${where}: action must be one of ${ACTIONS.join(', ')}`);
   const out = { action: step.action };
+  // "submit": true marks the step the user approved as the submission, for a save
+  // button the submit-like check can't recognize (a type="button" that writes from
+  // script, common on code sites). It only means something on a click or key press.
+  if (step.submit !== undefined) {
+    if (typeof step.submit !== 'boolean') throw new StatesFileError(`${where}: submit must be true or false`);
+    if (step.action !== 'click' && step.action !== 'press') throw new StatesFileError(`${where}: submit is only allowed on a click or press step`);
+    if (step.submit) out.submit = true;
+  }
   if (step.action === 'wait') {
     const ms = step.ms;
     if (!Number.isInteger(ms) || ms < 0 || ms > LIMITS.waitMs) throw new StatesFileError(`${where}: wait "ms" must be an integer 0-${LIMITS.waitMs}`);
@@ -90,6 +107,9 @@ function validateStates(data) {
       throw new StatesFileError(`${where}: steps must be an array of 1-${LIMITS.steps} steps`);
     }
     const steps = s.steps.map((st, j) => validateStep(st, `${where}.steps[${j}]`));
+    if (steps.some((st) => st.submit) && s.allowFormSubmit !== true) {
+      throw new StatesFileError(`${where}: a step marked "submit": true needs "allowFormSubmit": true on the state`);
+    }
     // Per-state consent: a state may submit a form only when it opts in here AND the
     // run passes --allow-form-submit. Consent therefore covers the states the user
     // approved, not every state in the file.
@@ -151,7 +171,9 @@ function submitRefusal(step, target) {
   return null;
 }
 
-async function applyStep(page, step, { allowFormSubmit = false, timeoutMs = 10000 } = {}) {
+// `allowWrites(fn)` comes from guardMutations(). Without one (unit tests, or a caller
+// that doesn't guard), an approved submit step simply runs.
+async function applyStep(page, step, { allowFormSubmit = false, allowWrites = null, timeoutMs = 10000 } = {}) {
   if (step.action === 'wait') {
     await page.waitForTimeout(step.ms);
     return;
@@ -165,12 +187,27 @@ async function applyStep(page, step, { allowFormSubmit = false, timeoutMs = 1000
     }
   }
 
-  if (!allowFormSubmit && (step.action === 'click' || step.action === 'press')) {
+  // Checked for consented states too: the answer decides whether this step gets the
+  // write window, so a consented state's other clicks stay guarded.
+  let submits = false;
+  if (step.action === 'click' || step.action === 'press') {
     const target = locator ? await locator.evaluate(describeForSubmitCheck) : await page.evaluate(describeForSubmitCheck);
-    const refusal = submitRefusal(step, target);
-    if (refusal) throw new Error(`${refusal} To permit it, set "allowFormSubmit": true on this state and pass --allow-form-submit.`);
+    const refusal = submitRefusal(step, target) || (step.submit ? 'Refusing a step marked "submit": true.' : null);
+    if (refusal && !allowFormSubmit) throw new Error(`${refusal} To permit it, set "allowFormSubmit": true on this state and pass --allow-form-submit.`);
+    submits = Boolean(refusal);
   }
 
+  if (submits && allowWrites) {
+    await allowWrites(async () => {
+      await performStep(page, step, locator, timeoutMs);
+      await page.waitForTimeout(SUBMIT_WINDOW_MS);
+    });
+    return;
+  }
+  await performStep(page, step, locator, timeoutMs);
+}
+
+async function performStep(page, step, locator, timeoutMs) {
   switch (step.action) {
     case 'click': await locator.click({ timeout: timeoutMs }); break;
     case 'hover': await locator.hover({ timeout: timeoutMs }); break;
@@ -207,7 +244,10 @@ function isMutatingRequest(method, url, origin) {
 }
 
 // Aborts state-changing requests (POST/PUT/PATCH/DELETE, including a form POST
-// navigation) until dispose() is called. Records the method and path only — never
+// navigation) until dispose() is called, except inside allowWrites(fn): while fn runs,
+// writes to the audited origin go through and are recorded in `submitted` instead.
+// Writes to any other origin (analytics, third-party APIs) stay blocked even then, and
+// without an origin the window allows nothing. Records the method and path only — never
 // the query string or body, which can carry tokens or form data. Analytics beacons
 // are blocked too; that is harmless for an audit. The route is registered on the
 // browser context, not the page, so a popup or new tab opened by a state step is
@@ -217,27 +257,42 @@ function isMutatingRequest(method, url, origin) {
 // callers install the guard before navigation and end the page's renderer before
 // dispose() — see retireGuardedPage() in a11y-audit.js.
 // https://playwright.dev/docs/api/class-browsercontext#browser-context-route
-async function guardMutations(page, { allowFormSubmit = false, origin = null } = {}) {
+async function guardMutations(page, { origin = null } = {}) {
   const blocked = { count: 0, requests: [] };
-  if (allowFormSubmit) return { blocked, dispose: async () => {} };
+  const submitted = { count: 0, requests: [] };
+  let windowOpen = false;
+  const record = (log, request) => {
+    log.count++;
+    if (log.requests.length >= MAX_BLOCKED_SAMPLES) return;
+    let where = '(unparseable URL)';
+    try {
+      const u = new URL(request.url());
+      where = `${u.origin}${u.pathname}`;
+    } catch { /* keep placeholder */ }
+    log.requests.push({ method: request.method(), url: where });
+  };
+  const sameOrigin = (url) => {
+    try { return Boolean(origin) && new URL(url).origin === origin; } catch { return false; }
+  };
   const handler = (route) => {
     const request = route.request();
     if (!isMutatingRequest(request.method(), request.url(), origin)) return route.continue();
-    blocked.count++;
-    if (blocked.requests.length < MAX_BLOCKED_SAMPLES) {
-      let where = '(unparseable URL)';
-      try {
-        const u = new URL(request.url());
-        where = `${u.origin}${u.pathname}`;
-      } catch { /* keep placeholder */ }
-      blocked.requests.push({ method: request.method(), url: where });
+    if (windowOpen && sameOrigin(request.url())) {
+      record(submitted, request);
+      return route.continue();
     }
+    record(blocked, request);
     return route.abort('blockedbyclient');
   };
   const context = page.context();
   await context.route('**/*', handler);
   return {
     blocked,
+    submitted,
+    allowWrites: async (fn) => {
+      windowOpen = true;
+      try { return await fn(); } finally { windowOpen = false; }
+    },
     dispose: async () => { await context.unroute('**/*', handler).catch(() => {}); },
   };
 }
@@ -245,6 +300,7 @@ async function guardMutations(page, { allowFormSubmit = false, origin = null } =
 module.exports = {
   ACTIONS,
   LIMITS,
+  SUBMIT_WINDOW_MS,
   StatesFileError,
   activationKey,
   applyState,

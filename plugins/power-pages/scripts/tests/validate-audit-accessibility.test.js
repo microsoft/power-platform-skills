@@ -179,6 +179,19 @@ test('blocks non-boolean signedIn or sessionRemoved', () => {
   }
 });
 
+test('blocks a completed audit that leaves out signedIn or sessionRemoved', () => {
+  for (const field of ['signedIn', 'sessionRemoved']) {
+    const dir = makeProject();
+    writeReport(dir);
+    const marker = validMarker();
+    delete marker[field];
+    writeMarker(dir, marker);
+    const result = runValidator(dir);
+    assert.equal(result.code, 2, field);
+    assert.match(result.stderr, new RegExp(`${field} must be true or false \\(found nothing\\)`));
+  }
+});
+
 test('blocks when a signed-in session was not removed', () => {
   const dir = makeProject();
   writeReport(dir);
@@ -202,6 +215,25 @@ test('blocks a report path outside the project', () => {
   const result = runValidator(dir);
   assert.equal(result.code, 2);
   assert.match(result.stderr, /inside the project/);
+});
+
+test('blocks a report reached through a link that leads outside the project', (t) => {
+  const dir = makeProject();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'validate-audit-outside-'));
+  fs.writeFileSync(path.join(outside, 'accessibility-audit.md'), '# Accessibility audit: Contoso\n', 'utf8');
+  fs.mkdirSync(path.join(dir, 'docs'), { recursive: true });
+  try {
+    // A junction needs no extra rights on Windows; other platforms treat it as a
+    // directory symlink.
+    fs.symlinkSync(outside, path.join(dir, 'docs', 'reports'), 'junction');
+  } catch (err) {
+    t.skip(`can't create a directory link here (${err.code})`);
+    return;
+  }
+  writeMarker(dir, validMarker({ reportFile: 'docs/reports/accessibility-audit.md' }));
+  const result = runValidator(dir);
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /links outside it/);
 });
 
 test('blocks a baseUrl that would persist a token or credentials, without echoing it', () => {

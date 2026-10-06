@@ -20,10 +20,15 @@ const REFLOW_VIEWPORT = Object.freeze({ width: 320, height: 256 });
 //     wrapper still needs scrolling in two directions, so these are checked even when
 //     the page itself fits.
 // 1.4.10 exempts "parts of the content which require two-dimensional layout" (data
-// tables, images, maps, diagrams, video, code). A container is exempt only when every
-// element that overflows it is, or sits inside, such content. Telling that apart from
-// ordinary text is a judgment call, so a non-exempt container is a heuristic finding
-// for review rather than a blocking failure.
+// tables, images, maps, diagrams, video, code). The exemption applies at both levels:
+//   - a page-level offender is exempt when it is, or sits inside, such content, or when
+//     everything in it that crosses the viewport edge is such content (a wrapper around
+//     a wide table). A page that overflows only because of exempt content isn't a
+//     1.4.10 failure, so no blocking finding is raised for it.
+//   - a scroll container is exempt only when every element that overflows it is, or
+//     sits inside, such content. Telling that apart from ordinary text is a judgment
+//     call, so a non-exempt container is a heuristic finding for review rather than a
+//     blocking failure.
 // https://www.w3.org/WAI/WCAG22/Understanding/reflow.html
 function findOverflowInPage() {
   const h = window.__ppA11y;
@@ -44,25 +49,38 @@ function findOverflowInPage() {
     }
     return false;
   };
+  // Rightmost edge of the 2D content that crosses `edge` inside `c`, or -1 when any
+  // element crossing it is ordinary content (or nothing measurable crosses it).
+  const twoDBeyond = (c, edge) => {
+    let right = -1;
+    for (const d of c.querySelectorAll('*')) {
+      const r = d.getBoundingClientRect();
+      if (r.width === 0 || r.right <= edge + 1) continue;
+      const twoD = d.closest(TWO_D);
+      if (!twoD || !c.contains(twoD)) return -1;
+      right = Math.max(right, r.right);
+    }
+    return right;
+  };
   // True when everything wider than the container's visible box is 2D content. A
   // container that scrolls but has no measurable overflowing element (the overflow
   // comes from padding or a pseudo-element) is not exempt.
   const needsTwoD = (c) => {
     // Form fields scroll their own value by design; that isn't page content reflowing.
     if (c.matches(TWO_D) || c.matches('input,textarea,select')) return true;
-    const edge = c.getBoundingClientRect().left + c.clientLeft + c.clientWidth;
-    let wide = 0;
-    for (const d of c.querySelectorAll('*')) {
-      const r = d.getBoundingClientRect();
-      if (r.width === 0 || r.right <= edge + 1) continue;
-      const twoD = d.closest(TWO_D);
-      if (!twoD || !c.contains(twoD)) return false;
-      wide++;
-    }
-    return wide > 0;
+    return twoDBeyond(c, c.getBoundingClientRect().left + c.clientLeft + c.clientWidth) >= 0;
+  };
+  // A page-level offender is exempt when it is 2D content, or when its own overflow is
+  // fully explained by 2D content inside it: a wrapper wider than its wide table still
+  // pushes text sideways, so it isn't exempt.
+  const offenderIsTwoD = (el, r) => {
+    if (el.closest(TWO_D)) return true;
+    const right = twoDBeyond(el, vw);
+    return right >= 0 && r.right <= right + 1;
   };
 
   const offenders = [];
+  const exempt = [];
   const containers = [];
   for (const el of document.body.querySelectorAll('*')) {
     if (offenders.length >= MAX && containers.length >= MAX) break;
@@ -74,8 +92,13 @@ function findOverflowInPage() {
     }
     if (!pageOverflows || offenders.length >= MAX || r.right <= vw + 1) continue;
     if (!h.isRendered(el) || insideScroller(el)) continue;
-    // Keep only the outermost offender; its children overflow because it does.
-    if (offenders.some((o) => o.el.contains(el))) continue;
+    // Keep only the outermost offender; its children overflow because it does. The
+    // same goes for an exempt offender's children.
+    if (offenders.some((o) => o.el.contains(el)) || exempt.some((x) => x.contains(el))) continue;
+    if (offenderIsTwoD(el, r)) {
+      exempt.push(el);
+      continue;
+    }
     offenders.push({ el, width: Math.round(r.width), right: Math.round(r.right) });
   }
   return {
@@ -83,6 +106,7 @@ function findOverflowInPage() {
     scrollWidth: doc.scrollWidth,
     viewportWidth: vw,
     offenders: offenders.map((o) => ({ target: h.cssPath(o.el), html: h.snippet(o.el), width: o.width, right: o.right })),
+    twoDOffenders: exempt.length,
     scrollContainers: containers.map((c) => ({ target: h.cssPath(c.el), html: h.snippet(c.el), scrollWidth: c.scrollWidth, clientWidth: c.clientWidth })),
   };
 }
@@ -101,7 +125,9 @@ async function runReflowCheck(page, { settleMs = 300 } = {}) {
 
 function analyzeReflow(result) {
   const findings = [];
-  if (result.overflow) {
+  // Overflow explained entirely by exempt 2D content (and nothing else found) passes.
+  const onlyTwoD = result.offenders.length === 0 && (result.twoDOffenders || 0) > 0;
+  if (result.overflow && !onlyTwoD) {
     const nodes = result.offenders.length
       ? result.offenders.map((o) => ({ target: o.target, html: o.html, summary: `Element extends to ${o.right}px in a ${result.viewportWidth}px viewport` }))
       : [{ target: 'html', html: '', summary: `Page is ${result.scrollWidth}px wide in a ${result.viewportWidth}px viewport` }];

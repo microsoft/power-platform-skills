@@ -162,6 +162,18 @@ button.nofocus:focus{outline:none}.low{color:#aaa;background:#fff}</style></head
 <script>n.addEventListener('blur',function(){setTimeout(function(){fetch('/api/later',{method:'POST',body:'x'}).catch(function(){})},1500)});
 addEventListener('pagehide',function(){fetch('/api/unload',{method:'POST',body:'x',keepalive:true}).catch(function(){})})</script>
 </main></body></html>`,
+  // Not linked from "/". Tab from "Second" jumps back to "First", so focus cycles
+  // between two links and never reaches "Home" or "Later".
+  '/cycle': `<!doctype html><html lang="en"><head><title>Cycle</title></head><body><main><h1>Cycle</h1>
+<div><a href="#first" id="first">First</a> <a href="#second" id="second">Second</a></div><a href="/">Home</a> <button type="button">Later</button>
+<script>second.addEventListener('keydown',function(e){if(e.key==='Tab'&&!e.shiftKey){e.preventDefault();first.focus()}})</script>
+</main></body></html>`,
+  // Not linked from "/". A consented state submits this form, but the page also writes
+  // as it loads; consent covers only the submission, so that load-time POST is blocked.
+  '/consent': `<!doctype html><html lang="en"><head><title>Consent</title></head><body><main><h1>Consent</h1>
+<form method="post" action="/api/submit"><label for="m">Message</label> <input id="m" name="m"> <button>Send</button></form>
+<script>fetch('/api/visit',{method:'POST',body:'x'}).catch(function(){})</script>
+</main></body></html>`,
   // Not linked from "/". Writes as soon as it loads, before any check runs; a
   // read-only list-grid POST on the same origin must still go through.
   '/onload': `<!doctype html><html lang="en"><head><title>On load</title></head><body><main><h1>On load</h1><a href="/">Home</a>
@@ -172,6 +184,13 @@ addEventListener('pagehide',function(){fetch('/api/unload',{method:'POST',body:'
   '/scroller': `<!doctype html><html lang="en"><head><title>Scroller</title><style>.s{overflow-x:auto;max-width:100%}.nw{white-space:nowrap}</style></head>
 <body><main><h1>Scroller</h1><div class="s" id="text"><p class="nw">This sentence never wraps, so at 320 pixels wide it needs a sideways scroll to read.</p></div>
 <div class="s" id="data"><table><tr><th>Region</th><th>Q1 revenue</th><th>Q2 revenue</th><th>Q3 revenue</th><th>Q4 revenue</th><th>Total revenue</th></tr></table></div></main></body></html>`,
+  // Not linked from "/". A bare data table wider than the page makes the page scroll,
+  // which 1.4.10 exempts. "/widewrap" puts the same table in a wrapper that's wider
+  // still, so the wrapper pushes ordinary content sideways and isn't exempt.
+  '/widetable': `<!doctype html><html lang="en"><head><title>Wide table</title></head>
+<body><main><h1>Wide table</h1><p>Quarterly figures.</p><table style="width:900px"><tr><th>Region</th><th>Q1</th><th>Q2</th></tr></table></main></body></html>`,
+  '/widewrap': `<!doctype html><html lang="en"><head><title>Wide wrapper</title></head>
+<body><main><h1>Wide wrapper</h1><div id="wrap" style="width:1200px"><p>Text in this wrapper runs past the edge.</p><table style="width:900px"><tr><th>Region</th><th>Q1</th></tr></table></div></main></body></html>`,
   // Not linked from "/". The page ships its own window.axe that reports nothing, and a
   // RequireJS-style define() that throws on anonymous modules. The audit must still run
   // the pinned axe and find the missing alt text.
@@ -362,6 +381,45 @@ test('live: a write sent while the page loads is blocked in audit, state, and di
   }
 });
 
+test('live: a consented state can submit its form, but its page-load write stays blocked', { skip: !LIVE && 'set POWER_PAGES_A11Y_LIVE=1 to run' }, async () => {
+  const server = await startFixture();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-a11y-live-'));
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const statesFile = path.join(dir, 'states.json');
+    fs.writeFileSync(statesFile, JSON.stringify({ states: [
+      { route: '/consent', label: 'Sent', allowFormSubmit: true, steps: [{ action: 'click', role: 'button', name: 'Send' }] },
+    ] }));
+    const r = await runAsync(['--url', base, '--routes', '/consent', '--viewports', 'desktop', '--checks', 'axe', '--states', statesFile, '--allow-form-submit']);
+    const report = JSON.parse(r.stdout);
+    const [s] = report.states;
+    assert.equal(s.error, null, r.stderr);
+    assert.deepEqual(server.posts, ['POST /api/submit'], 'only the approved submission reached the site, never the load-time write');
+    assert.ok(s.blockedRequests.requests.some((q) => q.url.endsWith('/api/visit')));
+    assert.deepEqual(s.submittedRequests.requests.map((q) => new URL(q.url).pathname), ['/api/submit']);
+  } finally {
+    server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('live: a focus cycle that skips later controls is a gap, not a pass', { skip: !LIVE && 'set POWER_PAGES_A11Y_LIVE=1 to run' }, async () => {
+  const server = await startFixture();
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const r = await runAsync(['--url', base, '--routes', '/cycle', '--viewports', 'desktop', '--checks', 'keyboard']);
+    assert.equal(r.status, 3, `the unchecked controls make the audit incomplete\n${r.stderr}`);
+    const report = JSON.parse(r.stdout);
+    const cycle = report.violations.find((v) => v.id === 'pp-keyboard-focus-cycle');
+    assert.ok(cycle, 'the cycle is reported');
+    assert.equal(cycle.nodes.length, 2);
+    assert.ok(cycle.nodes.every((n) => /Home|Later/.test(n.html)), JSON.stringify(cycle.nodes));
+    assert.match(JSON.stringify(report.pages[0].checkErrors), /without reaching 2 other focusable/);
+  } finally {
+    server.close();
+  }
+});
+
 test('live: reflow flags a scroll container of plain text but not a data table', { skip: !LIVE && 'set POWER_PAGES_A11Y_LIVE=1 to run' }, async () => {
   const server = await startFixture();
   try {
@@ -378,6 +436,21 @@ test('live: reflow flags a scroll container of plain text but not a data table',
   }
 });
 
+test('live: reflow exempts a page that overflows only because of a data table', { skip: !LIVE && 'set POWER_PAGES_A11Y_LIVE=1 to run' }, async () => {
+  const server = await startFixture();
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const r = await runAsync(['--url', base, '--routes', '/widetable,/widewrap', '--viewports', 'desktop', '--checks', 'reflow']);
+    assert.equal(r.status, 1, `the wide wrapper is a blocking finding\n${r.stderr}`);
+    const report = JSON.parse(r.stdout);
+    const scroll = report.violations.filter((v) => v.id === 'pp-reflow-horizontal-scroll');
+    assert.equal(scroll.length, 1, JSON.stringify(scroll));
+    assert.deepEqual(scroll[0].nodes.map((n) => n.target), ['div#wrap']);
+  } finally {
+    server.close();
+  }
+});
+
 test('live: --allow-form-submit lifts the guard only for states that opt in', { skip: !LIVE && 'set POWER_PAGES_A11Y_LIVE=1 to run' }, async () => {
   const server = await startFixture();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pp-a11y-live-'));
@@ -385,9 +458,10 @@ test('live: --allow-form-submit lifts the guard only for states that opt in', { 
     const base = `http://127.0.0.1:${server.address().port}`;
     const statesFile = path.join(dir, 'states.json');
     const step = [{ action: 'click', role: 'button', name: 'Save draft' }];
+    // "Save draft" writes from script, so the consented state marks it as the submit.
     fs.writeFileSync(statesFile, JSON.stringify({ states: [
       { route: '/draft', label: 'Guarded', steps: step },
-      { route: '/draft', label: 'Consented', allowFormSubmit: true, steps: step },
+      { route: '/draft', label: 'Consented', allowFormSubmit: true, steps: [{ ...step[0], submit: true }] },
     ] }));
     const r = await runAsync(['--url', base, '--routes', '/draft', '--viewports', 'desktop', '--checks', 'axe', '--states', statesFile, '--allow-form-submit']);
     const report = JSON.parse(r.stdout);
@@ -395,6 +469,8 @@ test('live: --allow-form-submit lifts the guard only for states that opt in', { 
     assert.equal(byLabel.Guarded.formSubmitAllowed, false);
     assert.equal(byLabel.Guarded.blockedRequests.count, 1);
     assert.equal(byLabel.Consented.formSubmitAllowed, true);
+    assert.equal(byLabel.Consented.submittedRequests.count, 1);
+    assert.equal(byLabel.Guarded.submittedRequests, null);
     assert.deepEqual(server.posts, ['POST /api/save'], 'only the consented state reached the site');
 
     // The flag alone (no state opted in) keeps every state guarded and warns.

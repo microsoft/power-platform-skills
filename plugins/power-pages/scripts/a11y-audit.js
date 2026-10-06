@@ -235,7 +235,7 @@ async function runDiscover(browser, opts, log) {
         if (vi === 0) urls.push(url);
         const route = routeOf(url);
         log(`(${i + 1}) discover ${viewport} ${route}`);
-        const guard = await guardMutations(page, { allowFormSubmit: false, origin });
+        const guard = await guardMutations(page, { origin });
         try {
           const nav = await visit(page, url, { origin, timeoutMs: opts.timeoutMs });
           const entry = { url: displayUrl(url), route, viewport, title: nav.title || null, status: nav.status || null, error: nav.error || null, blockedRequests: guard.blocked };
@@ -310,7 +310,7 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
         // below synthesize focus, blur, Tab, resize, and media events that it can POST
         // on (autosave on blur, analytics that write a record). Load-time list-grid
         // reads still work: that read-only POST is exempt on the audited origin.
-        const guard = await guardMutations(page, { allowFormSubmit: false, origin });
+        const guard = await guardMutations(page, { origin });
         const checkErrors = [];
         let nav;
         let pageError = null;
@@ -378,20 +378,26 @@ async function runAudit(browser, opts, { axeSource, states }, log) {
         // Guarded from the first request, like a crawled page. Form submission needs two
         // consents: the run-wide --allow-form-submit switch and the state's own
         // "allowFormSubmit": true, so approving one submitting state never unguards the
-        // others. Classic Power Pages list grids fetch their rows with a POST; that
-        // read is exempt on the audited origin, so a grid still loads under the guard.
+        // others. Even then the guard stays on: only the submit step itself runs in a
+        // write window (guard.allowWrites), so writes the page sends while loading, from
+        // other steps, or during the keyboard check are still blocked. Classic Power
+        // Pages list grids fetch their rows with a POST; that read is exempt on the
+        // audited origin, so a grid still loads under the guard.
         const allowFormSubmit = Boolean(opts.allowFormSubmit && state.allowFormSubmit);
-        const guard = await guardMutations(page, { allowFormSubmit, origin });
+        const guard = await guardMutations(page, { origin });
         const checkErrors = [];
         const ctx = { route, viewport, state: state.label };
-        const stateInfo = { label: state.label, route, viewport, formSubmitAllowed: allowFormSubmit };
+        const stateInfo = {
+          label: state.label, route, viewport, formSubmitAllowed: allowFormSubmit,
+          submittedRequests: allowFormSubmit ? guard.submitted : null,
+        };
         try {
           const nav = await visit(page, url, { origin, timeoutMs: opts.timeoutMs });
           if (nav.error) {
             builder.addState({ ...stateInfo, error: nav.error, blockedRequests: guard.blocked });
             continue;
           }
-          await applyState(page, state, { allowFormSubmit, timeoutMs: Math.min(opts.timeoutMs, 10000) });
+          await applyState(page, state, { allowFormSubmit, allowWrites: guard.allowWrites, timeoutMs: Math.min(opts.timeoutMs, 10000) });
           await ensureHelpers(page);
           if (checks.has('axe')) {
             const { findings } = await runAxe(page, axeSource, { bestPractice: opts.bestPractice });

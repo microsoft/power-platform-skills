@@ -46,12 +46,16 @@ test('analyzeFocusSequence flags missing focus indicators and offscreen focus as
 });
 
 // Minimal page stand-in for walkFocus: the first evaluate() resets focus, each later
-// one describes the element the Tab press landed on.
-function fakeFocusPage(describe) {
+// one describes the element the Tab press landed on. The tab-stop gap query (run when
+// focus returns to the start) is answered by `gap`, which defaults to "nothing missed".
+function fakeFocusPage(describe, gap = () => ({ modal: false, total: 0, missed: [] })) {
   let calls = 0;
   return {
     keyboard: { press: async () => {} },
-    evaluate: async () => (calls++ === 0 ? undefined : describe(calls - 1)),
+    evaluate: async (fn, arg) => {
+      if (fn.name === 'focusCycleGapInPage') return gap(arg);
+      return calls++ === 0 ? undefined : describe(calls - 1);
+    },
   };
 }
 const focusInfo = (n) => ({ selector: `#e${n}`, tag: 'a', name: `e${n}`, html: '<a>', inIframe: false, indicator: true, offscreen: false });
@@ -83,6 +87,28 @@ test('runKeyboardCheck keeps walking while focus is inside an iframe', async () 
   assert.match(stuck.incomplete, /within 20 Tab presses/);
 });
 
+test('runKeyboardCheck tells a local focus cycle from a full wrap', async () => {
+  // e0 -> e1 -> e0: back at the start, but e2 and e3 were never reached.
+  const missed = [{ selector: '#e2', tag: 'a', name: 'e2', html: '<a>' }, { selector: '#e3', tag: 'a', name: 'e3', html: '<a>' }];
+  let asked = null;
+  const r = await runKeyboardCheck(fakeFocusPage((i) => focusInfo((i - 1) % 2), (visited) => {
+    asked = visited;
+    return { modal: false, total: 2, missed };
+  }), { maxTabs: 50 });
+  assert.deepEqual(asked, ['#e0', '#e1'], 'the gap query gets the visited selectors');
+  assert.match(r.incomplete, /without reaching 2 other focusable control/);
+  const cycle = r.findings.find((f) => f.id === 'pp-keyboard-focus-cycle');
+  assert.ok(cycle);
+  assert.equal(cycle.heuristic, true);
+  assert.deepEqual(cycle.wcag, ['2.1.2']);
+  assert.deepEqual(cycle.nodes.map((n) => n.target), ['#e2', '#e3']);
+
+  // The same cycle inside an open modal dialog is expected focus containment.
+  const modal = await runKeyboardCheck(fakeFocusPage((i) => focusInfo((i - 1) % 2), () => ({ modal: true, total: 0, missed: [] })), { maxTabs: 50 });
+  assert.equal(modal.incomplete, null);
+  assert.ok(!modal.findings.some((f) => f.id === 'pp-keyboard-focus-cycle'));
+});
+
 test('analyzeReflow flags a horizontally scrolling container even when the page fits', () => {
   const findings = analyzeReflow({
     overflow: false, scrollWidth: 320, viewportWidth: 320, offenders: [],
@@ -102,6 +128,10 @@ test('analyzeReflow reports outermost offenders or the page', () => {
   assert.match(f.nodes[0].summary, /808px in a 320px viewport/);
   const [page] = analyzeReflow({ overflow: true, scrollWidth: 400, viewportWidth: 320, offenders: [] });
   assert.equal(page.nodes[0].target, 'html');
+  // Overflow that comes only from exempt 2D content (a bare wide table) passes.
+  assert.deepEqual(analyzeReflow({ overflow: true, scrollWidth: 900, viewportWidth: 320, offenders: [], twoDOffenders: 1 }), []);
+  const [mixed] = analyzeReflow({ overflow: true, scrollWidth: 900, viewportWidth: 320, twoDOffenders: 1, offenders: [{ target: 'p.nw', html: '<p>', width: 600, right: 608 }] });
+  assert.deepEqual(mixed.nodes.map((n) => n.target), ['p.nw']);
 });
 
 test('analyzeZoom reports clipped text as a heuristic 1.4.4 finding', () => {

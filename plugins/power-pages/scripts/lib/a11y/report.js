@@ -57,8 +57,10 @@ class ReportBuilder {
     this.pageKeys.push(key || route);
   }
 
-  addState({ label, route, viewport, error = null, checkErrors = [], blockedRequests = null, formSubmitAllowed = false }) {
-    this.states.push({ label, route, viewport, formSubmitAllowed, error, checkErrors, blockedRequests });
+  // submittedRequests lists the writes a consented state's submit step was allowed to
+  // send (null when the state wasn't consented), so the user can see what changed.
+  addState({ label, route, viewport, error = null, checkErrors = [], blockedRequests = null, formSubmitAllowed = false, submittedRequests = null }) {
+    this.states.push({ label, route, viewport, formSubmitAllowed, error, checkErrors, blockedRequests, submittedRequests });
   }
 
   addFindings(findings, { route, viewport, state = null }) {

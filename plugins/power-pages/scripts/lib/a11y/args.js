@@ -61,8 +61,9 @@ Audit options
                             runs ${STATE_CHECKS.join(' and ')} (whichever are selected);
                             state-changing requests are blocked while it replays.
   --allow-form-submit       Master switch for form submission. Only states that
-                            also set "allowFormSubmit": true may submit a form or
-                            send state-changing requests; all others stay guarded.
+                            also set "allowFormSubmit": true may run their submit
+                            step, and writes to the site go through only around
+                            that step; everything else stays guarded.
 
 Session and environment
   --auth-state <file>       Playwright storage state from a11y-capture-auth.js.

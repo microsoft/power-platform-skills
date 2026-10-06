@@ -15,6 +15,12 @@
 // one element. An iframe is the exception to sticking: while Tab moves through the
 // frame's own controls, the top document's activeElement stays the iframe, so repeats
 // there are expected and the walk keeps pressing Tab until focus leaves the frame.
+// Coming back to the start isn't proof of a full wrap: a widget that cycles focus
+// among its own controls (A -> B -> A) also returns there. So on a return the walk
+// lists the visible tab stops it never reached (focusCycleGapInPage). None missed is a
+// wrap; otherwise the cycle is reported as a heuristic 2.1.2 finding and a coverage
+// gap. A cycle inside an open modal dialog is the expected pattern (Escape closes it),
+// so it counts as a wrap.
 // If it reaches MAX_TABS first, the controls after that point were never
 // checked, so the result carries an `incomplete` reason and the audit reports a check
 // error (exit 3) instead of passing on partial coverage. The cap is generous because a
@@ -71,6 +77,49 @@ function describeActiveElementInPage() {
   };
 }
 
+// Runs in the page after focus returned to the first element of the walk. Returns the
+// tab stops the walk never reached, so a local focus cycle isn't mistaken for a wrap.
+// Approximates the browser's sequential focus navigation: natively focusable or
+// [tabindex] elements with tabIndex >= 0 that aren't disabled, inert, or invisible.
+// Two cases need care so a real wrap isn't flagged:
+//   - only one radio per named group is a tab stop, so a group counts as reached when
+//     any of its radios was;
+//   - controls inside iframes or shadow roots aren't in this document's query, so they
+//     can't be reported as missed (the walk can't see into them either).
+// Returns at most MAX_MISSED samples plus the total.
+function focusCycleGapInPage(visited) {
+  const h = window.__ppA11y;
+  const MAX_MISSED = 10;
+  const active = document.activeElement;
+  // A native modal makes everything outside it inert; aria-modal declares the same.
+  if (active && active.closest('dialog:modal, [aria-modal="true"]')) return { modal: true, total: 0, missed: [] };
+  const seen = new Set(visited);
+  const radioKey = (el) => `${el.form ? h.cssPath(el.form) : ''}|${el.name}`;
+  const reachedGroups = new Set();
+  for (const sel of visited) {
+    let el = null;
+    try { el = document.querySelector(sel); } catch { /* not a valid selector */ }
+    if (el && el.type === 'radio' && el.name) reachedGroups.add(radioKey(el));
+  }
+  const FOCUSABLE = 'a[href],area[href],button,input,select,textarea,iframe,summary,audio[controls],video[controls],'
+    + '[tabindex],[contenteditable=""],[contenteditable="true"]';
+  const missed = [];
+  let total = 0;
+  for (const el of document.querySelectorAll(FOCUSABLE)) {
+    if (el.tabIndex < 0 || el.disabled || el.type === 'hidden' || el.closest('[inert]')) continue;
+    const visible = typeof el.checkVisibility === 'function'
+      ? el.checkVisibility({ visibilityProperty: true })
+      : el.getClientRects().length > 0;
+    if (!visible) continue;
+    if (el.type === 'radio' && el.name && reachedGroups.has(radioKey(el))) continue;
+    const selector = h.cssPath(el);
+    if (seen.has(selector)) continue;
+    total++;
+    if (missed.length < MAX_MISSED) missed.push({ selector, tag: el.tagName.toLowerCase(), name: h.accessibleName(el), html: h.snippet(el) });
+  }
+  return { modal: false, total, missed };
+}
+
 async function walkFocus(page, { maxTabs = MAX_TABS } = {}) {
   await page.evaluate(() => {
     if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
@@ -89,7 +138,9 @@ async function walkFocus(page, { maxTabs = MAX_TABS } = {}) {
     // Back at the first element after visiting others = the tab cycle wrapped.
     // Landing on the same element as last time is not a wrap; it may be a trap.
     if (sequence.length > 1 && info.selector === sequence[0].selector && last.selector !== info.selector) {
-      return { sequence, complete: true };
+      const gap = await page.evaluate(focusCycleGapInPage, [...new Set(sequence.map((s) => s.selector))]);
+      if (!gap || gap.modal || gap.total === 0) return { sequence, complete: true };
+      return { sequence, complete: false, cycle: gap };
     }
     sequence.push(info);
     // Stopping on an iframe would skip every control after it and, because iframe
@@ -157,15 +208,38 @@ function analyzeFocusSequence(sequence) {
   return findings;
 }
 
+// A focus cycle that skips other tab stops. Heuristic, because the list of expected tab
+// stops is an approximation of the browser's own (see focusCycleGapInPage).
+function focusCycleFinding(sequence, cycle) {
+  const loop = [...new Set(sequence.map((s) => s.selector))];
+  return makeFinding({
+    id: 'pp-keyboard-focus-cycle',
+    impact: 'serious',
+    wcag: ['2.1.2'],
+    heuristic: true,
+    description: `Pressing Tab cycles through ${loop.length} control(s) and never reaches ${cycle.total} other focusable control(s) on the page. Users who can't use a mouse may be stuck in this region.`,
+    helpUrl: 'https://www.w3.org/WAI/WCAG22/Understanding/no-keyboard-trap.html',
+    nodes: cycle.missed.map((m) => ({ target: m.selector, html: m.html, summary: `Never reached with Tab (${m.tag} "${m.name}")` })),
+  });
+}
+
 async function runKeyboardCheck(page, opts = {}) {
   const maxTabs = opts.maxTabs || MAX_TABS;
-  const { sequence, complete } = await walkFocus(page, { maxTabs });
+  const { sequence, complete, cycle } = await walkFocus(page, { maxTabs });
+  const findings = analyzeFocusSequence(sequence);
+  if (cycle) findings.push(focusCycleFinding(sequence, cycle));
+  let incomplete = null;
+  if (cycle) {
+    incomplete = `focus cycled back to the start without reaching ${cycle.total} other focusable control(s); they weren't checked`;
+  } else if (!complete) {
+    incomplete = `focus didn't cycle back to the start within ${maxTabs} Tab presses (more tab stops than the limit, or focus loops inside one region); later controls weren't checked`;
+  }
   return {
-    findings: analyzeFocusSequence(sequence),
+    findings,
     focusOrder: sequence.map((s) => ({ selector: s.selector, name: s.name })),
-    // Findings up to the cap are still real, so they are kept; the reason makes the
-    // run report a check error instead of a pass.
-    incomplete: complete ? null : `focus didn't cycle back to the start within ${maxTabs} Tab presses (more tab stops than the limit, or focus loops inside one region); later controls weren't checked`,
+    // Findings up to the cap or the cycle are still real, so they are kept; the reason
+    // makes the run report a check error instead of a pass.
+    incomplete,
   };
 }
 
