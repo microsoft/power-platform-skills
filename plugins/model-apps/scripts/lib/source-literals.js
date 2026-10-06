@@ -1032,8 +1032,11 @@ function asyncBeforeAngle(out, i) {
 // What a `<` at `i`, where an expression may start, opens: { generic, ambiguity }. `src` is the source and `out` the lexer's output.
 function angleOpens(src, out, i, budget = null, certainOperator = false) {
   let before = angleBefore(out, i);
-  // A `>` that is an operator for certain — it follows a cast's closer, an element or a regex the lexer read (OPERATOR_AFTER_OPERAND) — leaves no guess to report at the `<` after it.
-  if (certainOperator && before.report === 'angle') before = { read: before.read };
+  // A `>` that is an operator for certain — it follows a cast's closer, an element or a regex the lexer read (OPERATOR_AFTER_OPERAND) — is a comparison or a shift, and the operand
+  // after a binary operator is a unary expression, where a `<` opens an element and nothing else (parser.ts, parseBinaryExpressionRest and parseUnaryExpressionOrHigher,
+  // https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts): CERTAIN, and read as one. Keeping the rule here and only dropping the report would read
+  // `<T extends X>text</T>` as type parameters — `x as A<B> > <T extends X>text</T>; const r = /…/;` then hid the regex's token in code.
+  if (certainOperator && before.report === 'angle') before = { read: 'element' };
   if (before.read === 'element') return { generic: false, ambiguity: null };
   if (before.read === 'typeParameters') return { generic: true, ambiguity: null };
   // Directly after the head of a type alias a `<` is a function type's whatever follows it (afterTypeAliasHead). The head ends in a lone `=`, so no token of

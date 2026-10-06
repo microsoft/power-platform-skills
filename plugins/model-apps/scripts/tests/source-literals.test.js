@@ -1237,6 +1237,18 @@ test('ambiguity operator: a run of ">" and a "=" before a "<" is a guess whateve
   assertCertain(['const k = x as A<B>== <T extends X>MARK</T>;', 'const k = x as A<B>!= <T extends X>MARK</T>;', 'const k = x as A<B>&& <T extends X>MARK</T>;']);
 });
 
+// A `>` — or `>>`, `>>>` — that is an operator for certain, because it follows a cast's closer, a regex or an element this lexer read, is a comparison or a shift, and the operand
+// after a binary operator is a unary expression: a `<` there opens an element and nothing else, whatever the rule would read for the head (`<T extends X>`). Read by the rule,
+// the element's text was code and the regex after it held a token that was rewritten.
+test('a "<" after a ">" that is an operator for certain opens an element: the regex after it is data', () => {
+  for (const before of ['const k = x as A<B> > ', 'const k = /x/ > ', 'const k = <b/> > ', 'const k = x as A<B> >> ', 'const k = x as A<B> >>> ', 'const k = /x/ >> ',
+    'const k = x satisfies A<B> > ', 'const k = x as A<B<C>> > ']) {
+    const code = `${before}<T extends X>MARK</T>;${REGEX_STATEMENT}\n`;
+    assert.deepStrictEqual(ambiguities(code), [], JSON.stringify(code));
+    assert.ok(!maskOf(code).includes('MARK') && !maskOf(code).includes('navigateTo'), `the element is read, and the regex after it is data: ${JSON.stringify(code)}`);
+  }
+});
+
 // `*` before a `<`. After `function` the parser reads an optional `*`, an optional name and then type parameters (parser.ts, parseFunctionExpression and parseFunctionDeclaration,
 // https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts), so a `<` there opens them whatever follows: `function* <T>(x: T) {}`. A lexer that took the `*` for a
 // multiplication read `<T>(x: T) {…}` as an element, and the `</T>` in a string after it for its closing tag. After `yield` in a generator the delegation's operand is an assignment

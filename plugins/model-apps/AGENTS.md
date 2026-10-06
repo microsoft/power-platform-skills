@@ -1239,7 +1239,9 @@ rejected a complete page saved with CRLF endings.
   guess. The type is walked back from the `<` over a name, a qualified name, closed type arguments, indexes and array brackets, string and signed
   number literals, unions and intersections (a leading operator too) and the false branch of a conditional type; `keyof`, `typeof`, `unique`, `readonly` and parenthesised types are not
   walked, and a cast with one stays the `angle` guess. A `>` run — `>`, `>>`, `>>>` — right after what the lexer knows ended an operand (a cast's closer, an element or a regex it read, or the end of a
-  cast's type) is an operator, not the end of type arguments, and an operand follows it, certain too: `x as A<B> > /re/.test(y)`, `<b/> >> 1`. A chain of casts
+  cast's type) is an operator, not the end of type arguments, and an operand follows it, certain too: `x as A<B> > /re/.test(y)`, `<b/> >> 1`. The operand after
+  that binary operator is a unary expression, so a `<` there opens an element and nothing else — `x as A<B> > <T extends X>text</T>` is an element, never read by the
+  arrow rule as type parameters. A chain of casts
   is followed up to `CAST_CHAIN_LIMIT` links, past which the guess stands. The mapped type's `as` (`{ [K in keyof T as Foo<K>]: V }`) passes the same
   test, and nothing can follow it there but more of the type, so nothing is read from it.
 

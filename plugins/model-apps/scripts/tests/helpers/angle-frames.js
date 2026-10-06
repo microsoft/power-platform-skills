@@ -127,6 +127,12 @@ const PRODUCER_FRAMES = Object.freeze([
   { name: 'conditional type, closed before the token', role: 'type', text: 'type A = B extends C<D>@§' },
   { name: 'JSX closing tag, before the token', role: 'expression', text: 'const k = <p></p>@§' },
   { name: 'JSX self-closing tag, before the token', role: 'expression', text: 'const k = <p/>@§' },
+  // The same producers with a space before the token: the token is then an operator run of its own, after an operand the lexer knows has ended, and the operand after a binary
+  // operator is a unary expression — a `<` there is an element, whatever the rule would read (`x as A<B> > <T extends X>text</T>`).
+  { name: 'cast, closed, a space before the token', role: 'type', text: 'const k = x as A<B> @§' },
+  { name: 'satisfies, closed, a space before the token', role: 'type', text: 'const k = x satisfies A<B> @§' },
+  { name: 'regex, a space before the token', role: 'expression', text: 'const k = /x/ @§' },
+  { name: 'JSX self-closing tag, a space before the token', role: 'expression', text: 'const k = <p/> @§' },
 ]);
 
 // Every punctuator and keyword TypeScript has (`ts.tokenToString` of each token kind from the first to the last of each group), once each.
