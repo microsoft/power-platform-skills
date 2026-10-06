@@ -51,6 +51,7 @@ jobs:
             POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"
             POWER_PLATFORM_SKILLS_TELEMETRY_PCF_OPTOUT: "1"
             POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "1"
+            POWER_PLATFORM_SKILLS_TELEMETRY_POWER_AUTOMATE_OPTOUT: "1"
         strategy:
             fail-fast: false
             matrix:

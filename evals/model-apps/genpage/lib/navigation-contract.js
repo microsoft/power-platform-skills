@@ -15,16 +15,20 @@ function historicalPageMap(log) {
   return map;
 }
 
+// This one capture predates `pageType:"generative"` and double-quoted PAGEREFs. The compatibility
+// view admits those historical spellings ONLY; it still checks every actual target against sibling
+// files. It is never used to claim current-contract compliance.
+function navTargets(content, { legacy = false } = {}) {
+  const code = legacy ? content.replace(/\bpageType\s*:\s*(["'])custom\1/g, 'pageType: "generative"') : content;
+  return extractNavTargets(code);
+}
+
 function sourceProblems(files, { phase = 'authored', pageMap = {}, legacy = false } = {}) {
   const keys = new Set(files.map((file) => file.name.replace(/\.tsx$/i, '')));
   const ids = new Set(Object.values(pageMap).filter(isGuid).map((id) => id.toLowerCase()));
   const problems = [];
   for (const file of files) {
-    // This one capture predates `pageType:"generative"` and double-quoted PAGEREFs. The
-    // compatibility view admits those historical spellings ONLY; it still checks every actual
-    // target against sibling files. It is never used to claim current-contract compliance.
-    const code = legacy ? file.content.replace(/\bpageType\s*:\s*(["'])custom\1/g, 'pageType: "generative"') : file.content;
-    for (const target of extractNavTargets(code)) {
+    for (const target of navTargets(file.content, { legacy })) {
       if (target.kind === 'dynamic') problems.push(`${file.name}: effective navigation target is dynamic or overridden`);
       else if (target.kind === 'pageref' || (legacy && target.kind === 'pageref-malformed')) {
         if (phase === 'resolved') problems.push(`${file.name}: PAGEREF_${target.key} remains after resolution`);
@@ -106,4 +110,4 @@ function navigationProblems(fixture) {
   return problems;
 }
 
-module.exports = { navigationProblems, sourceProblems };
+module.exports = { navigationProblems, sourceProblems, navTargets };

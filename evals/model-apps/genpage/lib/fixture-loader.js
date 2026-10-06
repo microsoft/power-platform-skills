@@ -22,6 +22,7 @@ const path = require('node:path');
 //   workflowLog: string | null         ← workflow-log.md content (Layer 1)
 //   genpagePlan: string | null         ← genpage-plan.md content (Layer 1)
 //   genpageEditPlan: string | null     ← genpage-edit-plan.md content (Layer 1 edit flow)
+//   runtimeTypes: string | null        ← RuntimeTypes.ts content when captured (Layer 1)
 //   entityCreationLog: string | null   ← current log or legacy alias (Layer 1)
 //   contractVersion, manifest, events, artifacts ← versioned synthetic evidence
 
@@ -108,6 +109,10 @@ function loadFixtures(fixturesDir) {
       workflowLog: readOptional(dir, 'workflow-log.md'),
       genpagePlan: readOptional(dir, 'genpage-plan.md'),
       genpageEditPlan: readOptional(dir, 'genpage-edit-plan.md'),
+      // The schema `pac model genpage generate-types` wrote from the live environment. It is not a
+      // generated page (listTsxFiles skips it), but it is the only captured record of the choice
+      // values Dataverse actually holds after provisioning.
+      runtimeTypes: readOptional(dir, 'RuntimeTypes.ts'),
       // Only absence permits the legacy alias. An empty current log must not borrow old transactions.
       entityCreationLog: readOptional(dir, ENTITY_CREATION_LOG) ?? readOptional(dir, LEGACY_ENTITY_CREATION_LOG),
       ...fixtureEvidence(dir, entry.name, historicalContracts),

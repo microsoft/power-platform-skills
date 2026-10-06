@@ -1,0 +1,139 @@
+{
+  "skill_name": "model-apps-routing",
+  "eval_instructions": "Each case is one user prompt sent to a headless agent with only the model-apps plugin loaded. `expect` is the model-apps skill the agent must invoke FIRST (genpage | app-builder | report-issue | telemetry), or null when it must invoke none of them. `accept` lists other outcomes that are also correct for a genuinely ambiguous prompt. `trap` names the mis-route the case exists to catch. Graded by run-routing.js over N trials against a pass-rate threshold.",
+  "evals": [
+    {
+      "id": 1,
+      "tier": "smoke",
+      "prompt": "Add a generative page to my existing Sales Hub model-driven app that shows accounts as a gallery of cards.",
+      "expect": "genpage"
+    },
+    {
+      "id": 2,
+      "tier": "smoke",
+      "prompt": "Build me a model-driven app to manage equipment rentals: customers, rentals, and returns.",
+      "expect": "app-builder"
+    },
+    {
+      "id": 3,
+      "tier": "smoke",
+      "prompt": "Build a Power Pages site where customers can submit warranty claims.",
+      "expect": null,
+      "trap": "\"build a site/page\" wording bleeding into /genpage; Power Pages is a different product"
+    },
+    {
+      "id": 4,
+      "tier": "smoke",
+      "prompt": "I need a Dataverse app for inventory with products, warehouses and stock levels, plus a dashboard overview page.",
+      "expect": "app-builder",
+      "trap": "the word \"page\" pulling a whole-app request into /genpage"
+    },
+    {
+      "id": 5,
+      "tier": "full",
+      "prompt": "Edit the dashboard genpage in my Field Service app so the revenue chart is a donut instead of bars.",
+      "expect": "genpage"
+    },
+    {
+      "id": 6,
+      "tier": "full",
+      "prompt": "Create a genux page in my Operations Hub app that lists open cases with a filter toolbar and sortable columns.",
+      "expect": "genpage"
+    },
+    {
+      "id": 7,
+      "tier": "full",
+      "prompt": "My Contoso Recruiting model-driven app already exists. Add a page to it that shows candidates as a kanban board grouped by stage.",
+      "expect": "genpage",
+      "trap": "\"recruiting app\" read as a request to build an app"
+    },
+    {
+      "id": 8,
+      "tier": "full",
+      "prompt": "Create a model-driven app for tracking IT support tickets, with separate access for support agents and support leads.",
+      "expect": "app-builder"
+    },
+    {
+      "id": 9,
+      "tier": "full",
+      "prompt": "Make me an app to manage volunteer shifts for our nonprofit, with tables, forms and views.",
+      "expect": "app-builder"
+    },
+    {
+      "id": 10,
+      "tier": "full",
+      "prompt": "Add a business process flow to my Case Management model-driven app that walks a case through Triage, Investigate and Resolve.",
+      "expect": "app-builder",
+      "trap": "\"add ... to my existing app\" read as a /genpage edit"
+    },
+    {
+      "id": 11,
+      "tier": "full",
+      "prompt": "Download my deployed Asset Tracker model-driven app and add a Warranty table related to Asset.",
+      "expect": "app-builder",
+      "trap": "\"download my app\" read as the /genpage edit flow, which downloads pages"
+    },
+    {
+      "id": 12,
+      "tier": "full",
+      "prompt": "Write a Power Fx formula for a canvas app button that filters a gallery by the selected dropdown value.",
+      "expect": null,
+      "trap": "Power Apps wording bleeding into model-apps; canvas apps are a different plugin"
+    },
+    {
+      "id": 13,
+      "tier": "full",
+      "prompt": "Explain the difference between a canvas app and a model-driven app.",
+      "expect": null,
+      "trap": "a knowledge question triggering a build skill"
+    },
+    {
+      "id": 14,
+      "tier": "full",
+      "prompt": "Create a Power Automate cloud flow that emails me whenever a new account is created in Dataverse.",
+      "expect": null
+    },
+    {
+      "id": 15,
+      "tier": "full",
+      "prompt": "Build a React + Vite web app with a dashboard of sales charts that I can host on Azure Static Web Apps.",
+      "expect": null,
+      "trap": "\"React dashboard page\" bleeding into /genpage, which generates React pages for model-driven apps only"
+    },
+    {
+      "id": 16,
+      "tier": "stress",
+      "prompt": "Report a bug: the genpage skill crashed while uploading my page with pac.",
+      "expect": "report-issue",
+      "trap": "the skill name in a bug report invoking /genpage itself"
+    },
+    {
+      "id": 17,
+      "tier": "stress",
+      "prompt": "Turn off usage telemetry for the model apps plugin.",
+      "expect": "telemetry"
+    },
+    {
+      "id": 18,
+      "tier": "stress",
+      "prompt": "Add an overview page to the model-driven app I want to build for fleet maintenance: vehicles, service records and mechanics.",
+      "expect": "app-builder",
+      "trap": "\"add an overview page\" sent to /genpage although the app does not exist yet"
+    },
+    {
+      "id": 19,
+      "tier": "stress",
+      "prompt": "In my existing Asset Tracker model-driven app, add a Warranty table with a lookup to Asset and show it on the Asset form.",
+      "expect": "app-builder",
+      "trap": "an edit to an existing app's DATA MODEL routed to /genpage, which only builds pages"
+    },
+    {
+      "id": 20,
+      "tier": "stress",
+      "prompt": "Create a page for my existing model-driven app that tracks project milestones. I'll also need a new Milestone table for it.",
+      "expect": "genpage",
+      "accept": ["app-builder"],
+      "trap": "genuinely ambiguous: /genpage can create the table it needs, and /app-builder can edit the app; either is acceptable, NEITHER is not"
+    }
+  ]
+}

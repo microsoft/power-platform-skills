@@ -1,0 +1,9 @@
+{
+  "name": "@microsoft/power-automate-mcp-plugin",
+  "private": true,
+  "type": "commonjs",
+  "description": "Marketplace plugin assets (hooks + telemetry) for the power-automate plugin. CommonJS scope override — the repo root is type:module.",
+  "scripts": {
+    "test": "node --test scripts/lib/telemetry/async-ext.test.cjs scripts/release-contract.test.cjs"
+  }
+}
