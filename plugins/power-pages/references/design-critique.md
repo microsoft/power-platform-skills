@@ -16,9 +16,10 @@ node "${PLUGIN_ROOT}/scripts/capture-design-review.js" --url <SITE_URL> --routes
 
 `<SITE_URL>` is the dev server or a deployed site.
 For a site whose routes are unknown, `--discover <max-pages>` replaces `--routes` and collects same-origin pages from the start page's navigation, then its main content, then its footer.
-Without `--project-root`, or when the project has no `playwright` dev dependency, the script borrows the Playwright inside the plugin's pinned `@playwright/mcp` package, so it installs nothing.
+Without `--project-root`, or when the project has no `playwright` dev dependency, the script borrows the Playwright inside the plugin's pinned `@playwright/mcp` package - the one its MCP server runs, kept in npm's cache - so nothing is installed into the project. On a machine where that package is not cached yet, npm downloads it there on first use.
 
 It prints JSON and writes screenshots to a private temporary directory outside the project (`outputDir`).
+`--cleanup <outputDir>` removes them; it exits 1 and names the directory when it cannot, so pass that path on to the user rather than reporting the screenshots gone.
 Open every path in `summary.images` - in parallel, in one turn - and read the checks from `routes[]`.
 Per route:
 

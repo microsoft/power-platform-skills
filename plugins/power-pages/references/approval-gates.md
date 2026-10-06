@@ -739,7 +739,7 @@ Read-only design review of an existing site from a URL or a project folder. It w
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | Step 1 site prompt | sub-prompt | — | 1 | *"Which site should I review?"* - asked only when the request names no URL and no `powerpages.config.json` is found. Data-gathering. | nothing |
-| `exceptional-web-design:2.preview-source` | gate | plan | 2 | Folder without a URL - *"How should I see the site running?"* Start the dev server / Use the deployed site / Review the code only, offering only the available options. Starting a dev server runs the project's own scripts in the background; the skill stops it in step 6. | nothing |
+| `exceptional-web-design:2.preview-source` | gate | plan | 2 | Folder without a URL - *"How should I see the site running?"* Start the dev server / Use the deployed site / Review the code only, offering only the available options. Starting a dev server runs the project's own scripts in the background; the skill stops it in step 6. Fires again, with only the untried options, when every captured route redirected to sign-in. | nothing |
 
 ---
 ### Cross-plugin shared skills — out of catalog scope

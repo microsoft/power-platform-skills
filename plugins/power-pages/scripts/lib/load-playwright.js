@@ -1,10 +1,12 @@
-// Resolves a Playwright library for browser scripts, without installing anything.
+// Resolves a Playwright library for browser scripts, without installing anything into the project.
 //
 // The plugin ships no node_modules (marketplace installs copy only the plugin directory).
 // Scripts first borrow the site project's own `playwright` dev dependency. When there is
 // no project, or it has none - a design review of a live URL, or a folder the plugin must
 // not modify - they borrow the Playwright inside the exact @playwright/mcp version the
-// plugin's MCP launcher already runs, so no new or unpinned package is ever fetched.
+// plugin's MCP launcher already runs, so no new or unpinned package is ever fetched. That
+// package lives in npm's own cache (not the project); when the MCP server has never run on
+// this machine, npm downloads it there on first use, exactly as the launcher would.
 
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');

@@ -7,7 +7,8 @@
 //   node axe-audit.js --url http://localhost:5173 --routes /,/about,/contact [--project-root <path>]
 //
 // Playwright comes from the project's dev dependency when --project-root has one, and
-// otherwise from the plugin's pinned @playwright/mcp package, so nothing is installed.
+// otherwise from the plugin's pinned @playwright/mcp package in npm's cache, so nothing is
+// installed into the project.
 // Output: JSON array of per-route results on stdout.
 // Exit code: 1 when a critical or serious violation is found, a route could not be audited, or
 // the audit cannot run at all; 0 only when every route was audited and passed.

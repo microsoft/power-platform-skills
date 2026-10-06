@@ -12,10 +12,12 @@
 //   node capture-design-review.js --cleanup <outputDir>
 //
 // Playwright comes from the project's dev dependency when --project-root has one, and
-// otherwise from the plugin's pinned @playwright/mcp package, so nothing is installed.
+// otherwise from the plugin's pinned @playwright/mcp package in npm's cache, so nothing is
+// installed into the project.
 // Output: JSON on stdout. Exit 0 when the capture ran - findings are data, not failures;
 // exit 1 on usage errors or when no browser can be launched.
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { detectBrowser } = require('./lib/detect-browser');
@@ -65,6 +67,24 @@ function parseArgs(argv) {
 function slugForRoute(route) {
   const slug = route.replace(/^\/+|\/+$/g, '').replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase();
   return slug || 'home';
+}
+
+// Screenshot names come from the route, but different routes can share a slug -
+// /help/Moving-Home/ and /help-moving-home both become "help-moving-home" - and the later
+// capture would overwrite the earlier one's files. The first route keeps the readable slug;
+// a later one gets a suffix derived from its exact route text, so names stay stable.
+function uniqueSlugs(routes) {
+  const used = new Set();
+  return routes.map((route) => {
+    const base = slugForRoute(route);
+    let slug = base;
+    if (used.has(slug)) {
+      slug = `${base}-${crypto.createHash('sha256').update(route).digest('hex').slice(0, 8)}`;
+      for (let n = 2; used.has(slug); n++) slug = `${base}-${n}`;
+    }
+    used.add(slug);
+    return slug;
+  });
 }
 
 // Splits a mobile page of `pageHeight` px into sheets of column clips, each column one
@@ -204,8 +224,7 @@ function classifyLanding(requestedUrl, landedUrl) {
 
 // --- Capture ---
 
-async function captureRouteAtWidth({ browser, page, url, route, width, outputDir, checksOnly }) {
-  const slug = slugForRoute(route);
+async function captureRouteAtWidth({ browser, page, url, route, slug = slugForRoute(route), width, outputDir, checksOnly }) {
   const result = { pageErrors: [] };
   const onPageError = (error) => result.pageErrors.push(String(error && error.message ? error.message : error));
   // Chrome logs a failed fetch as the bare console text "Failed to load resource: ...
@@ -313,12 +332,13 @@ async function captureDesignReview({ playwright, channel, url, routes, discover,
         await page.close();
       }
     }
+    const slugs = uniqueSlugs(results.map((entry) => entry.route));
     for (const [width, viewport] of Object.entries(VIEWPORTS)) {
       const context = await browser.newContext({ viewport, deviceScaleFactor: 1 });
       const page = await context.newPage();
       try {
-        for (const entry of results) {
-          entry[width] = await captureRouteAtWidth({ browser, page, url: base, route: entry.route, width, outputDir, checksOnly });
+        for (const [index, entry] of results.entries()) {
+          entry[width] = await captureRouteAtWidth({ browser, page, url: base, route: entry.route, slug: slugs[index], width, outputDir, checksOnly });
         }
       } finally {
         await context.close();
@@ -361,6 +381,7 @@ async function main(argv = process.argv.slice(2), {
   writeError = (s) => process.stderr.write(s),
   loadPlaywrightFn = loadPlaywright,
   channel = detectBrowser,
+  removeDirFn = removeDir,
 } = {}) {
   const args = parseArgs(argv);
   if (args.error) {
@@ -372,7 +393,14 @@ async function main(argv = process.argv.slice(2), {
       writeError(`Refusing to remove ${args.cleanup}: not a design-review directory in the OS temp directory.\n`);
       return 1;
     }
-    removeDir(args.cleanup);
+    // removeDir swallows errors so a failed cleanup never masks a capture result. Here the
+    // removal is the whole job, so check the outcome: a locked file (common on Windows while
+    // an image viewer holds it) would otherwise leave screenshots behind under a success report.
+    removeDirFn(args.cleanup);
+    if (fs.existsSync(args.cleanup)) {
+      writeError(`Could not remove ${args.cleanup}. Close anything using its files and run --cleanup again, or delete the directory.\n`);
+      return 1;
+    }
     write(`${JSON.stringify({ removed: args.cleanup })}\n`);
     return 0;
   }
@@ -419,5 +447,6 @@ module.exports = {
   parseArgs,
   scrollThrough,
   slugForRoute,
+  uniqueSlugs,
   summarize,
 };

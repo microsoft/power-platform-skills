@@ -394,7 +394,7 @@ It captures each page at desktop and mobile widths, runs an accessibility audit,
 The result is a scorecard plus prioritized recommendations, each naming the page and element, why it matters, and the exact change, with a redesign direction when the site needs more than fixes.
 
 - Works from a URL (pages are discovered from the site's navigation) or from a project folder (local dev server, deployed site, or code only)
-- Read-only: screenshots go to a temporary folder outside the project, nothing is installed, and the folder is checked for changes at the end
+- Makes no edits: screenshots go to a temporary folder outside the project, nothing is installed into the project, and the folder is checked with `git status` at the end. Starting the dev server, if you choose it, runs your project's own code
 - Pages that require sign-in are listed as not reviewed, because the capture cannot sign in
 
 #### `/add-seo`

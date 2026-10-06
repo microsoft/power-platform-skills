@@ -306,6 +306,52 @@ test('main refuses to clean up anything but its own temp directories', async () 
   assert.deepEqual(JSON.parse(stdout), { removed: own });
 });
 
+test('main --cleanup fails and names the directory when it cannot be removed', async () => {
+  const own = createPrivateTempDir(review.OUTPUT_DIR_PREFIX);
+  try {
+    let stdout = '';
+    let stderr = '';
+    // Stands in for a deletion that silently fails, e.g. a file locked by an image viewer.
+    const code = await review.main(['--cleanup', own], {
+      write: (s) => { stdout += s; }, writeError: (s) => { stderr += s; }, removeDirFn() {},
+    });
+    assert.equal(code, 1);
+    assert.equal(stdout, '', 'no success report');
+    assert.ok(stderr.includes(`Could not remove ${own}`), stderr);
+  } finally {
+    fs.rmSync(own, { recursive: true, force: true });
+  }
+});
+
+test('uniqueSlugs keeps readable names and separates routes that share a slug', () => {
+  const slugs = review.uniqueSlugs(['/', '/help/Moving-Home/', '/help-moving-home', '/About', '/about']);
+  assert.equal(slugs[0], 'home');
+  assert.equal(slugs[1], 'help-moving-home');
+  assert.match(slugs[2], /^help-moving-home-[0-9a-f]{8}$/);
+  assert.equal(slugs[3], 'about');
+  assert.match(slugs[4], /^about-[0-9a-f]{8}$/);
+  assert.equal(new Set(slugs).size, slugs.length);
+  // The suffix depends only on the route text, so it is the same in every capture.
+  assert.equal(review.uniqueSlugs(['/x', '/help/Moving-Home/', '/help-moving-home'])[2], slugs[2]);
+});
+
+test('captureDesignReview gives colliding routes separate screenshot files', async () => {
+  const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-test-'));
+  try {
+    const fake = fakePlaywright();
+    const result = await review.captureDesignReview({
+      playwright: fake.playwright, channel: 'chrome', url: 'http://localhost:5173', routes: ['/help/Moving-Home/', '/help-moving-home'], outputDir, checksOnly: false,
+    });
+    const [first, second] = result.routes;
+    assert.equal(first.desktop.viewport, path.join(outputDir, 'help-moving-home-desktop.png'));
+    assert.notEqual(first.desktop.viewport, second.desktop.viewport);
+    assert.notEqual(first.mobile.sheets[0], second.mobile.sheets[0]);
+    assert.equal(new Set(result.summary.images).size, result.summary.images.length, 'no image path is shared');
+  } finally {
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  }
+});
+
 test('main reports a missing playwright install and usage errors', async () => {
   let stderr = '';
   const writeError = (s) => { stderr += s; };

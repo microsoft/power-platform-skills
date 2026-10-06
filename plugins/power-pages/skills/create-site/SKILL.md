@@ -905,7 +905,7 @@ Assemble a single JSON object with the following keys. The plan template rejects
 | `PAGES_DATA` | array | `[{ name, route, description, content: [...], components: [...] }]` - `content` is the page's narrative beats in order, one line per section with its purpose; `components` is shared component names used |
 | `COMPONENTS_DATA` | array | `[{ name, purpose, usedBy: [...] }]` — shared components with the page names that consume them |
 | `ROUTES_DATA` | array | `[{ path, page }]` — every route the router will register |
-| `REVIEW_DATA` | array of strings | Verification checklist items - include "Design critique: no critical gate fails and every rubric category scores 3 or more" alongside items like "All pages load without console errors" |
+| `REVIEW_DATA` | array of strings | Verification checklist items - include "Design critique: no critical gate fails; after up to three rounds, every category below 3 is recorded with its reason" alongside items like "All pages load without console errors" |
 | `DEPLOYMENT_DATA` | array | `[{ title, description, recommended?: boolean }]` — mark exactly one as `recommended: true` |
 
 **Write the data for the user**, not for internal tooling — phrase `description` and `reason` fields in plain language.
