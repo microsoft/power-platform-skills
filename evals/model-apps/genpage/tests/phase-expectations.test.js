@@ -475,6 +475,17 @@ test('eval 13: generated text carries no hardcoded currency symbols or date form
   assertPass(gradeCode(text, page("const labels = { currency: 'Devise', total: 'Total' }; return null;")));
   assertPass(gradeCode(text, page("const t = { fr: { currency: 'Devise' } }; return null;")));
   assertFail(gradeCode(text, page("return <Text>{n.toLocaleString(lang, { currency: 'EUR', style: 'currency' })}</Text>;")), /hardcoded currency code/);
+  // Regex literals match INPUT; they display nothing. Stripping symbols before formatting is fine.
+  assertPass(gradeCode(text, page("const v = Number(raw.replace(/[$\u20ac\u00a3]/g, '')); return <Text>{formatCurrency(v)}</Text>;")));
+  assertPass(gradeCode(text, page("const v = raw.replace(/^\\$\\s*/, ''); return <Text>{formatCurrency(Number(v))}</Text>;")));
+  assertFail(gradeCode(text, page("const v = raw.replace(/[$]/g, ''); return <Text>{'$' + v}</Text>;")), /hardcoded "\$" currency symbol/);
+  // Property keys are read as keys whether bare or quoted; the VALUE's literal type decides.
+  assertFail(gradeCode(text, page('const f = new Intl.NumberFormat(lang, { "style": "currency", "currency": "USD" }); return null;')), /hardcoded currency code/);
+  assertFail(gradeCode(text, page("const f = new Intl.NumberFormat(lang, { style: 'currency', currency: `USD` }); return null;")), /hardcoded currency code/);
+  assertPass(gradeCode(text, page('const f = new Intl.NumberFormat(lang, { style: "currency", currency: `${currencyCode}` }); return null;')));
+  assertPass(gradeCode(text, page("const f = new Intl.NumberFormat(lang, { style: 'currency', currency: settings.currencycode }); return null;")));
+  assertPass(gradeCode(text, page('const labels = { "currency": "Devise", "style": "Style" }; return null;')));
+  assertPass(gradeCode(text, page("const mode = isMoney ? 'currency' : 'decimal'; return null;")));
 });
 
 // --- Eval 15 -----------------------------------------------------------------------------------

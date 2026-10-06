@@ -107,11 +107,18 @@ test('grade: a timed-out trial arrives as an error and is never graded as "none"
   assert.equal(g.status, 'error', 'a negative case must not pass on a run that never finished');
 });
 
-test('summarize: threshold over non-error trials; 2/3 meets 0.67', () => {
+test('summarize: strict threshold over non-error trials; the default 2/3 is exactly 2 of 3', () => {
   const t = (routedTo) => ({ routedTo });
-  assert.equal(summarizeCase(CASE_GENPAGE, [t('genpage'), t('genpage'), t(null)], 0.67).status, 'pass');
-  assert.equal(summarizeCase(CASE_GENPAGE, [t('genpage'), t(null), t(null)], 0.67).status, 'fail');
-  assert.equal(summarizeCase(CASE_GENPAGE, [t('genpage'), t('genpage'), t(null)], 0.8).status, 'fail', 'tolerance is two-decimal, not a loophole');
+  assert.equal(summarizeCase(CASE_GENPAGE, [t('genpage'), t('genpage'), t(null)], 2 / 3).status, 'pass');
+  assert.equal(summarizeCase(CASE_GENPAGE, [t('genpage'), t(null), t(null)], 2 / 3).status, 'fail');
+  // No tolerance: a threshold is never lowered by a trial.
+  assert.equal(summarizeCase(CASE_GENPAGE, [t(null), t(null), t(null)], 0.01).status, 'fail', 'zero successes never pass');
+  const hundred = [...Array(99).fill(t('genpage')), t(null)];
+  assert.equal(summarizeCase(CASE_GENPAGE, hundred, 1).status, 'fail', 'threshold 1 needs every trial');
+  assert.equal(summarizeCase(CASE_GENPAGE, [...hundred.slice(0, 99), t('genpage')], 1).status, 'pass');
+  assert.equal(summarizeCase(CASE_GENPAGE, [t('genpage'), t('genpage'), t(null)], 0.67).status, 'fail', 'a rounded 0.67 is stricter than 2/3 — use 2/3');
+  // Float representation must not cost a trial: 0.7 * 10 = 7.000000000000001.
+  assert.equal(summarizeCase(CASE_GENPAGE, [...Array(7).fill(t('genpage')), t(null), t(null), t(null)], 0.7).status, 'pass');
   const s = summarizeCase(CASE_GENPAGE, [t('genpage'), t('genpage'), { routedTo: null, error: 'spawn' }], 1);
   assert.equal(s.status, 'pass', 'an errored trial is excluded, not counted as a fail');
   assert.equal(s.valid, 2);
@@ -120,7 +127,7 @@ test('summarize: threshold over non-error trials; 2/3 meets 0.67', () => {
 });
 
 test('summarize: every trial errored → error, never pass or fail', () => {
-  const s = summarizeCase(CASE_NONE, [{ routedTo: null, error: 'not signed in' }], 0.67);
+  const s = summarizeCase(CASE_NONE, [{ routedTo: null, error: 'not signed in' }], 2 / 3);
   assert.equal(s.status, 'error');
   assert.equal(s.rate, null);
 });

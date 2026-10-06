@@ -59,15 +59,16 @@ Every flag is in `lib/agents.js`; every transcript shape the parser understands 
 ## Grading
 
 Routing is not deterministic, so each case runs `--runs` trials (default 3) and passes when its
-pass rate over the **non-error** trials reaches `--threshold` (default `0.67`, i.e. 2 of 3; a 0.01
-tolerance makes two-decimal thresholds mean what they say). A case whose every trial errored is a
+successes over the **non-error** trials reach `--threshold`, compared strictly (default `2/3`, i.e.
+2 of 3; pass a decimal such as `0.8` or a fraction such as `3/4`). Prefer a fraction to a rounded
+decimal: `0.67` is stricter than `2/3`, so 2 of 3 fails it. A case whose every trial errored is a
 harness error.
 
 Exit codes: `0` every case met the threshold · `1` a case failed · `2` harness error.
 
 ```
 TAP version 13
-# agent claude · model sonnet · runs 2 · threshold 0.67
+# agent claude · model sonnet · runs 2 · threshold 2/3
 1..20
 ok 1 - #1 [smoke] expect genpage — 2/2 (genpage×2)
 not ok 4 - #4 [smoke] expect app-builder — 1/2 (app-builder×1, genpage×1)

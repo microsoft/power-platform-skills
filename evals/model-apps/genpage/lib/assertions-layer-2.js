@@ -648,11 +648,65 @@ function enclosingObject(keep, at) {
   return [open, keep.length];
 }
 
+/**
+ * Object-literal properties named `name`, written bare (`currency:`) or quoted (`"currency":`),
+ * found in CODE only and only in key position (after `{` or `,`), so a ternary such as
+ * `x ? 'currency' : 'decimal'` is not mistaken for a key. Each value is classified:
+ *   kind 'fixed'   — a quoted string, or a template literal with no `${…}` (text = its content)
+ *   kind 'runtime' — anything else: an identifier, a call, an interpolated template
+ * @returns {Array<{at: number, kind: 'fixed'|'runtime', text: string|null}>}
+ */
+function objectProperties(content, keep, isLiteral, name) {
+  const out = [];
+  const re = new RegExp(`(?:\\b${name}\\b|(['"])${name}\\1)\\s*:`, 'g');
+  for (const m of content.matchAll(re)) {
+    const at = m.index;
+    // Bare key: the identifier itself must be code. Quoted key: its opening quote must be a
+    // delimiter (code), not a quote character inside some other string.
+    if (m[1] ? isLiteral(at) : keep[at] !== content[at]) continue;
+    const colon = at + m[0].length - 1;
+    if (keep[colon] !== ':') continue;
+    let p = at - 1;
+    while (p >= 0 && /\s/.test(content[p])) p -= 1;
+    if (p >= 0 && content[p] !== '{' && content[p] !== ',') continue;
+    let v = colon + 1;
+    while (v < content.length && /\s/.test(content[v])) v += 1;
+    const q = content[v];
+    if (q === '\'' || q === '"' || q === '`') {
+      // The closing delimiter is the next character of the same kind that the code view kept.
+      // For a template, any kept non-blank character before it is a `${…}` body: a runtime value.
+      let k = v + 1;
+      let interpolated = false;
+      while (k < content.length && !(content[k] === q && keep[k] === q)) {
+        if (q === '`' && keep[k] === content[k] && !/\s/.test(content[k])) interpolated = true;
+        k += 1;
+      }
+      out.push(interpolated ? { at, kind: 'runtime', text: null } : { at, kind: 'fixed', text: content.slice(v + 1, k) });
+    } else {
+      out.push({ at, kind: 'runtime', text: null });
+    }
+  }
+  return out;
+}
+
 function hardcodedFormatProblem(content) {
   const keep = blankNonCodePreservingTemplateExpressions(content);
   const comment = new Uint8Array(content.length);
   for (const { start, end } of commentRanges(content)) comment.fill(1, start, end);
-  const isText = (i) => keep[i] !== content[i] && !comment[i];
+  // A literal character: blanked in the code view and not part of a comment. The view blanks string,
+  // template, JSX-text AND regex bodies alike but keeps their delimiters, e.g.
+  //   raw.replace(/[$€]/g, '')   →   raw.replace(/    /g, '')
+  // so which kind of literal a character belongs to is the delimiter that OPENED its run: tracked in
+  // one forward pass as the last non-blank code character. Regex bodies are input-matching syntax,
+  // not displayed text — `raw.replace(/[$€£]/g, '')` strips symbols from input, it shows none.
+  const isLiteral = (i) => keep[i] !== content[i] && !comment[i];
+  const inRegex = new Uint8Array(content.length);
+  let opener = '';
+  for (let i = 0; i < content.length; i += 1) {
+    if (isLiteral(i)) { if (opener === '/') inRegex[i] = 1; }
+    else if (!comment[i] && !/\s/.test(content[i])) opener = content[i];
+  }
+  const isText = (i) => isLiteral(i) && !inRegex[i];
   const text = content.split('').map((ch, i) => (isText(i) ? ch : ' ')).join('');
   // The code character next to a string literal's delimiter, skipping whitespace, in direction dir.
   const codeNeighbour = (from, dir) => {
@@ -683,13 +737,22 @@ function hardcodedFormatProblem(content) {
   }
   const pattern = DATE_PATTERN.exec(text);
   if (pattern && /[dD]/.test(pattern[0]) && /M/.test(pattern[0]) && /[yY]/.test(pattern[0])) return `hardcoded date format "${pattern[0]}"`;
-  for (const call of keep.matchAll(/\bcurrency\s*:\s*/g)) {
-    if (!/^['"`]/.test(content.slice(call.index + call[0].length))) continue;
-    // Intl only formats a currency when the SAME options object sets style: 'currency'; a bare
-    // `currency:` key is an ordinary property (a label, a field name), not a number format.
-    const span = enclosingObject(keep, call.index);
-    const original = span ? content.slice(span[0], span[1]) : '';
-    if (/\bstyle\s*:\s*['"`]currency['"`]/.test(original)) return 'hardcoded currency code in a number format';
+  // Intl formats a currency only when the SAME options object sets style: 'currency', and the code is
+  // hardcoded only when the `currency` VALUE is a fixed literal. Read real property keys — bare or
+  // quoted ({ "style": "currency", "currency": "USD" } is the same object) — and classify each value:
+  //   'USD' / "USD" / `USD`         fixed  (a template with no ${…} is still a constant)
+  //   `${currencyCode}` / code / x  runtime (comes from usersettings or other input — allowed)
+  // A `currency:` key outside such an object (a translation dictionary { currency: 'Devise' }) is
+  // an ordinary label, not a number format.
+  const currencyOptions = objectProperties(content, keep, isLiteral, 'currency');
+  if (currencyOptions.some((c) => c.kind === 'fixed')) {
+    const styles = objectProperties(content, keep, isLiteral, 'style').filter((s) => s.kind === 'fixed' && s.text === 'currency');
+    for (const c of currencyOptions.filter((p) => p.kind === 'fixed')) {
+      const span = enclosingObject(keep, c.at);
+      if (span && styles.some((s) => s.at > span[0] && s.at < span[1] && String(enclosingObject(keep, s.at)) === String(span))) {
+        return 'hardcoded currency code in a number format';
+      }
+    }
   }
   for (const call of keep.matchAll(/\b(?:toLocaleDateString|toLocaleString|toLocaleTimeString|DateTimeFormat)\s*\(\s*/g)) {
     if (/^['"`][a-z]{2,3}(?:-[A-Za-z]{2,4})?['"`]/.test(content.slice(call.index + call[0].length))) return 'hardcoded locale for date formatting';

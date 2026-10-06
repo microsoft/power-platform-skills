@@ -43,11 +43,17 @@ test('parseArgs: defaults and valid flags', () => {
   assert.equal(args.tier, 'stress');
   assert.equal(args.eval, 0);
   assert.equal(args.dryRun, true);
+  assert.equal(DEFAULTS.threshold, 2 / 3, 'the default is the exact fraction, not a rounded 0.67');
+  const frac = parse(['--threshold', '3/4']).args;
+  assert.equal(frac.threshold, 0.75);
+  assert.equal(frac.thresholdLabel, '3/4');
+  assert.equal(parse(['--threshold', '1']).args.threshold, 1);
 });
 
 test('parseArgs: rejects typos and value-less or out-of-range values instead of defaulting', () => {
   for (const argv of [['--agent', 'gemini'], ['--runs', '0'], ['--runs'], ['--threshold', '1.5'], ['--threshold', '0'],
-    ['--threshold', 'abc'], ['--tier', 'smoek'], ['--eval', '1.5'], ['--timeout', '--runs'], ['--runz', '3'],
+    ['--threshold', 'abc'], ['--threshold', '4/3'], ['--threshold', '0/3'], ['--threshold', '2/0'],
+    ['--tier', 'smoek'], ['--eval', '1.5'], ['--timeout', '--runs'], ['--runz', '3'],
     ['--model', 'gpt%PATH%'], ['--model', 'a b'], ['--model', 'x&calc']]) {
     const { args, errors } = parse(argv);
     assert.equal(args, null, `${argv.join(' ')} must be rejected`);

@@ -16,7 +16,10 @@
 // as a harness error, never as "the description is bad".
 
 const NONE = 'none';
-const THRESHOLD_TOLERANCE = 0.01;
+// Only absorbs binary floating-point error in `threshold * trials` (0.7 * 10 = 7.000000000000001);
+// it never lowers a requirement by a whole trial. The default "2 of 3" is the exact fraction 2/3
+// rather than a rounded 0.67, so no tolerance is needed to make it mean what it says.
+const FLOAT_EPSILON = 1e-9;
 
 function outcomeLabel(routedTo) {
   return routedTo == null ? NONE : routedTo;
@@ -63,9 +66,9 @@ function summarizeCase(evalCase, trials, threshold) {
   }
   const rate = passes / valid.length;
   return {
-    // Thresholds are typed as two-decimal fractions (0.67 for "2 of 3"), and 2/3 = 0.6667 < 0.67,
-    // so compare with a 0.01 tolerance — otherwise the default config fails every 2-of-3 case.
-    status: rate >= threshold - THRESHOLD_TOLERANCE ? 'pass' : 'fail',
+    // Compare successes against the required COUNT, strictly: a threshold of 0.01 still needs one
+    // success, and a threshold of 1 needs every valid trial.
+    status: passes + FLOAT_EPSILON >= threshold * valid.length ? 'pass' : 'fail',
     passes,
     valid: valid.length,
     runs: trials.length,

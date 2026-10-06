@@ -19,7 +19,7 @@
 // See EVAL_GUIDE.md → "Cadence" and .github/workflows/model-apps-agent-evals.yml.
 //
 // Usage: node run-routing.js [--agent claude|copilot] [--model <m>] [--runs <n>]
-//          [--threshold <0..1>] [--tier smoke|full|stress] [--eval <id>] [--concurrency <n>]
+//          [--threshold <0..1|a/b>] [--tier smoke|full|stress] [--eval <id>] [--concurrency <n>]
 //          [--timeout <sec>] [--out <results.json>] [--transcripts <dir>] [--compare <prev.json>]
 //          [--agent-bin <path>] [--dry-run]
 // Exit:  0 every case met the threshold · 1 a case failed · 2 harness error (bad args, agent
@@ -40,14 +40,14 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 const PLUGIN_DIR = path.join(REPO_ROOT, 'plugins', 'model-apps');
 const PLUGIN_NAME = 'model-apps';
 
-const DEFAULTS = { agent: 'claude', model: null, runs: 3, threshold: 0.67, tier: null, eval: null, concurrency: 4, timeout: 180, out: null, transcripts: null, compare: null, agentBin: null, dryRun: false };
+const DEFAULTS = { agent: 'claude', model: null, runs: 3, threshold: 2 / 3, thresholdLabel: '2/3', tier: null, eval: null, concurrency: 4, timeout: 180, out: null, transcripts: null, compare: null, agentBin: null, dryRun: false };
 
 const USAGE = `Usage: run-routing.js [options]
 
   --agent <claude|copilot>  Agent CLI to drive (default: claude)
   --model <name>            Model passed to the agent CLI (default: the CLI's own default)
   --runs <n>                Trials per case (default: 3)
-  --threshold <0..1>        Minimum pass rate per case (default: 0.67, i.e. 2 of 3)
+  --threshold <0..1|a/b>    Minimum pass rate per case, compared strictly (default: 2/3)
   --tier <tier>             Only cases of this tier (${TIERS.join(' | ')})
   --eval <id>               Only this case id
   --concurrency <n>         Parallel trials (default: 4)
@@ -83,10 +83,15 @@ function parseArgs(argv, { fail = (m) => { console.error(`error: ${m}`); process
         break;
       case '--runs': a.runs = int(f, value(f, ++i), 1); break;
       case '--threshold': {
+        // A decimal in (0, 1] or an exact fraction such as 2/3 — the default — so "2 of 3" never
+        // has to be rounded to 0.67 (which 2/3 = 0.666… would then fail under strict comparison).
         const raw = value(f, ++i);
-        const n = Number(raw);
-        if (!/^(0(\.\d+)?|1(\.0+)?)$/.test(raw) || !(n > 0)) fail(`--threshold must be a number in (0, 1] (got ${JSON.stringify(raw)})`);
+        const frac = /^(\d+)\/(\d+)$/.exec(raw);
+        const n = frac ? Number(frac[1]) / Number(frac[2]) : Number(raw);
+        const shapeOk = frac ? Number(frac[2]) > 0 : /^(0(\.\d+)?|1(\.0+)?)$/.test(raw);
+        if (!shapeOk || !(n > 0 && n <= 1)) fail(`--threshold must be a number in (0, 1] or a fraction such as 2/3 (got ${JSON.stringify(raw)})`);
         a.threshold = n;
+        a.thresholdLabel = raw;
         break;
       }
       case '--tier': a.tier = value(f, ++i); if (!TIERS.includes(a.tier)) fail(`--tier must be one of ${TIERS.join('|')}`); break;
@@ -354,7 +359,7 @@ async function runRouting(opts, { runTrial = runTrialWithAgent, evalsData, write
   const prevRate = new Map(prev ? prev.cases.map((c) => [c.id, c.rate]) : []);
 
   write('TAP version 13');
-  write(`# agent ${opts.agent} · model ${opts.model || '(cli default)'} · runs ${opts.runs} · threshold ${opts.threshold}`);
+  write(`# agent ${opts.agent} · model ${opts.model || '(cli default)'} · runs ${opts.runs} · threshold ${opts.thresholdLabel || opts.threshold}`);
   write(`1..${cases.length}`);
   const summary = { pass: 0, fail: 0, error: 0, trials: 0, trialErrors: 0, costUsd: 0 };
   const caseResults = [];
