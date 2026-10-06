@@ -15,6 +15,7 @@ function fakePlaywright({ violationsFor = () => [], failRoutes = [] } = {}) {
       if (failRoutes.some((r) => url.endsWith(r))) throw new Error(`net::ERR_FAILED ${url}`);
     },
     waitForTimeout: async () => {},
+    waitForLoadState: async () => {},
     addScriptTag: async (options) => calls.scripts.push(options),
     waitForFunction: async () => {},
     evaluate: async (fn, tags) => {
@@ -48,6 +49,7 @@ test('parseArgs requires a URL and routes, and makes --project-root optional', (
     routes: ['/', '/about'],
   });
   assert.equal(axe.parseArgs(['--url', 'http://x', '--routes', '/', '--project-root', 'site']).projectRoot, 'site');
+  assert.deepEqual(axe.parseArgs(['--url', 'http://x', '--routes', 'about,/faq']).routes, ['/about', '/faq']);
 });
 
 test('auditRoutes bypasses CSP, injects axe on every route, and records navigation failures', async () => {

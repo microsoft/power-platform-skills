@@ -337,7 +337,8 @@ test('createOutputDir falls back to a private cache directory in the home folder
     homedir: () => '/home/me',
     mkdirSync: (root) => made.push(root),
     mkdtempSync(prefix) {
-      if (prefix.startsWith('/full-tmp')) throw new Error('ENOSPC');
+      // createPrivateTempDir joins with path.join, which uses '\\' on Windows.
+      if (prefix.startsWith(path.join('/full-tmp'))) throw new Error('ENOSPC');
       return `${prefix}xyz`;
     },
   });

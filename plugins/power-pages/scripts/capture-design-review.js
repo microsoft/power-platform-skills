@@ -20,6 +20,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { detectBrowser } = require('./lib/detect-browser');
 const { loadPlaywright } = require('./lib/load-playwright');
+const { gotoSettled, parseRouteList } = require('./lib/review-navigation');
 const { createPrivateTempDir, isOwnTempDir, removeDir, sweepStaleTempDirs } = require('./lib/private-temp-dir');
 
 // Screenshots go to a private temp directory so they never land in the user's project.
@@ -38,14 +39,13 @@ const SHEET_MAX_COLUMNS = 6;
 const SHEET_MAX_SHEETS = 3;
 const SHEET_GAP = 16;
 const SETTLE_MS = 1200;
-const NAVIGATION_TIMEOUT_MS = 20000;
 
 function parseArgs(argv) {
   const parsed = { checksOnly: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--url' && argv[i + 1]) parsed.url = argv[++i].replace(/\/+$/, '');
-    else if (arg === '--routes' && argv[i + 1]) parsed.routes = argv[++i].split(',').map((r) => r.trim()).filter(Boolean);
+    else if (arg === '--routes' && argv[i + 1]) parsed.routes = parseRouteList(argv[++i]);
     else if (arg === '--project-root' && argv[i + 1]) parsed.projectRoot = argv[++i];
     else if (arg === '--checks-only') parsed.checksOnly = true;
     else if (arg === '--discover' && argv[i + 1]) parsed.discover = Number.parseInt(argv[++i], 10);
@@ -234,8 +234,7 @@ async function captureRouteAtWidth({ browser, page, url, route, width, outputDir
   page.on('response', onResponse);
   page.on('requestfailed', onRequestFailed);
   try {
-    await page.goto(`${url}${route}`, { waitUntil: 'networkidle', timeout: NAVIGATION_TIMEOUT_MS });
-    await page.waitForTimeout(SETTLE_MS);
+    await gotoSettled(page, `${url}${route}`, { settleMs: SETTLE_MS });
     // The query is dropped from the reported URL: sign-in redirects carry state, nonce,
     // and return-URL parameters that add noise and say nothing about the design.
     const landed = new URL(page.url());
@@ -299,7 +298,7 @@ async function captureDesignReview({ playwright, channel, url, routes, discover,
       base = start.origin;
       const page = await browser.newPage({ viewport: VIEWPORTS.desktop });
       try {
-        await page.goto(url, { waitUntil: 'networkidle', timeout: NAVIGATION_TIMEOUT_MS });
+        await gotoSettled(page, url);
         if (classifyLanding(url, page.url()) === 'same-site') {
           // A canonical redirect (http -> https, apex <-> www) is still the site, so discovery
           // continues from where the browser landed and later captures use that origin.

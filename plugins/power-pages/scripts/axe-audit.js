@@ -14,12 +14,12 @@
 
 const { detectBrowser } = require('./lib/detect-browser');
 const { loadPlaywright } = require('./lib/load-playwright');
+const { gotoSettled, parseRouteList } = require('./lib/review-navigation');
 
 const AXE_CDN_URL = 'https://cdnjs.cloudflare.com/ajax/libs/axe-core/4.10.3/axe.min.js';
 // WCAG 2.2 AA is cumulative, so the 2.0 and 2.1 A/AA tags are listed too.
 // See: https://github.com/dequelabs/axe-core/blob/develop/doc/API.md#axe-core-tags
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
-const NAVIGATION_TIMEOUT_MS = 15000;
 const SETTLE_MS = 2000;
 const BLOCKING_IMPACTS = new Set(['critical', 'serious']);
 
@@ -27,7 +27,7 @@ function parseArgs(argv) {
   const parsed = {};
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--url' && argv[i + 1]) parsed.url = argv[++i].replace(/\/+$/, '');
-    else if (argv[i] === '--routes' && argv[i + 1]) parsed.routes = argv[++i].split(',').map((r) => r.trim()).filter(Boolean);
+    else if (argv[i] === '--routes' && argv[i + 1]) parsed.routes = parseRouteList(argv[++i]);
     else if (argv[i] === '--project-root' && argv[i + 1]) parsed.projectRoot = argv[++i];
   }
   if (!parsed.url || !parsed.routes || parsed.routes.length === 0) {
@@ -64,8 +64,7 @@ async function auditRoutes({ playwright, channel, url, routes }) {
     for (const route of routes) {
       const pageUrl = `${url}${route}`;
       try {
-        await page.goto(pageUrl, { waitUntil: 'networkidle', timeout: NAVIGATION_TIMEOUT_MS });
-        await page.waitForTimeout(SETTLE_MS);
+        await gotoSettled(page, pageUrl, { settleMs: SETTLE_MS });
         await page.addScriptTag({ url: AXE_CDN_URL });
         await page.waitForFunction(() => typeof window.axe !== 'undefined', null, { timeout: 10000 });
         results.push({ route, url: pageUrl, ...(await page.evaluate(runAxe, WCAG_TAGS)) });

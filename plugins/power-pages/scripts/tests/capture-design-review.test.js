@@ -27,6 +27,7 @@ function fakePlaywright({ pageHeight = 3000, overflowRoutes = [], failRoutes = [
     };
     page.url = () => current;
     page.waitForTimeout = async () => {};
+    page.waitForLoadState = async () => {};
     page.screenshot = async (options = {}) => {
       calls.screenshots.push({ viewport, ...options });
       if (options.path) fs.writeFileSync(options.path, 'png');
@@ -84,6 +85,10 @@ test('parseArgs reads a capture request and trims the base URL and route list', 
   assert.equal(review.parseArgs(['--cleanup', '/tmp/x']).cleanup, '/tmp/x');
   assert.match(review.parseArgs(['--url', 'http://localhost:5173']).error, /Usage/);
   assert.match(review.parseArgs(['--url', 'u', '--routes', ',', '--project-root', '/p']).error, /Usage/);
+});
+
+test('parseArgs anchors routes given without a leading slash', () => {
+  assert.deepEqual(review.parseArgs(['--url', 'http://localhost:5173', '--routes', 'about, /faq']).routes, ['/about', '/faq']);
 });
 
 test('parseArgs takes either routes or a discover limit, and the project root is optional', () => {
@@ -340,16 +345,18 @@ test('captureDesignReview discovers pages from the start URL and captures them a
 });
 
 test('loadProjectPlaywright tries a global install, then the project, then playwright-core', () => {
+  // The root is resolved to an absolute path, which on Windows gains a drive letter.
+  const projectPlaywright = path.join(path.resolve('/site'), 'node_modules', 'playwright');
   const tried = [];
   const found = loadProjectPlaywright('/site', {
     requireFn(id) {
       tried.push(id);
-      if (id === path.join('/site', 'node_modules', 'playwright')) return { chromium: 'project' };
+      if (id === projectPlaywright) return { chromium: 'project' };
       throw new Error('MODULE_NOT_FOUND');
     },
   });
   assert.deepEqual(found, { chromium: 'project' });
-  assert.deepEqual(tried, ['playwright', path.join('/site', 'node_modules', 'playwright')]);
+  assert.deepEqual(tried, ['playwright', projectPlaywright]);
   assert.equal(loadProjectPlaywright('/site', { requireFn() { throw new Error('missing'); } }), null);
 });
 
