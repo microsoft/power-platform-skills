@@ -11,7 +11,7 @@ const validatorPath = path.join(__dirname, '..', '..', 'skills', 'audit-permissi
 const SAMPLE_DATA = {
   SITE_NAME: 'Contoso Portal',
   AUDIT_DESC: 'Security audit of table permissions for Contoso Portal',
-  SUMMARY: 'One major issue: anonymous users can read staff contact details.',
+  SUMMARY: 'One major issue: anonymous users can read staff contact details. Needs revision.',
   FINDINGS_DATA: [{
     id: 'AH1',
     severity: 'major',

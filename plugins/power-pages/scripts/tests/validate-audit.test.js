@@ -49,9 +49,10 @@ function validScorecard() {
   };
 }
 
-function reportHtml(findings, scorecard) {
-  return '<!doctype html><html><body><script>\n' +
+function reportHtml(findings, scorecard, inventory = [], summary = 'Roles are well separated, but staff contacts are public. Needs revision.') {
+  return `<!doctype html><html><body><div class="card" id="summaryBox">${summary}</div><script>\n` +
     `const FINDINGS = ${JSON.stringify(findings)};\n` +
+    `const INVENTORY = ${JSON.stringify(inventory)};\n` +
     `const SCORECARD = ${JSON.stringify(scorecard)};\n` +
     '</script></body></html>';
 }
@@ -101,7 +102,29 @@ test('recomputes category scores from the findings', (t) => {
 
 test('skips the score check when scoring was skipped', (t) => {
   const projectRoot = createTempProject(t);
-  const outcome = runReport(writeReport(projectRoot, { scorecard: null }));
+  const html = reportHtml(validFindings(), null, [], 'Partial audit: the data model was missing.');
+  const outcome = runReport(writeReport(projectRoot, { html }));
+  assert.equal(outcome.status, 0, outcome.stderr);
+  assert.equal(JSON.parse(outcome.stdout).verdict, null);
+});
+
+test('requires the summary to state the computed verdict', (t) => {
+  const projectRoot = createTempProject(t);
+  const minorOnly = validFindings().slice(1);
+  const minorScorecard = validScorecard();
+  minorScorecard.categories[0].score = 5;
+  const cases = [
+    [reportHtml(validFindings(), validScorecard(), [], 'Staff contacts are public. Safe to go.'), /must state the verdict "Needs revision"/],
+    [reportHtml(minorOnly, minorScorecard, [], 'Only a missing plan. Needs revision.'), /must state the verdict "Safe to go"/],
+    [reportHtml(validFindings(), null, [], 'Partial audit. Needs revision.'), /must not state a verdict/],
+    [reportHtml(validFindings(), validScorecard()).replace(/<div[^>]*summaryBox[^>]*>.*?<\/div>/, ''), /no SUMMARY/],
+  ];
+  for (const [html, pattern] of cases) {
+    const outcome = runReport(writeReport(projectRoot, { html }));
+    assert.equal(outcome.status, 1, outcome.stdout);
+    assert.match(outcome.stderr, pattern);
+  }
+  const outcome = runReport(writeReport(projectRoot, { html: reportHtml(minorOnly, minorScorecard, [], 'Only a missing plan. Safe to go.') }));
   assert.equal(outcome.status, 0, outcome.stderr);
 });
 
@@ -133,6 +156,15 @@ test('rejects reports with unreplaced placeholders or missing data', (t) => {
   outcome = runReport(writeReport(projectRoot, { html: '<html></html>' }));
   assert.equal(outcome.status, 1);
   assert.match(outcome.stderr, /no FINDINGS data/);
+});
+
+test('rejects an inventory that is not an array', (t) => {
+  const projectRoot = createTempProject(t);
+  for (const inventory of [null, {}, 'none']) {
+    const outcome = runReport(writeReport(projectRoot, { html: reportHtml(validFindings(), validScorecard(), inventory) }));
+    assert.equal(outcome.status, 1, outcome.stdout);
+    assert.match(outcome.stderr, /INVENTORY must be an array/);
+  }
 });
 
 test('fails when --report has no path', () => {

@@ -226,7 +226,7 @@ Before calling `pac env who` or any Dataverse query script, compute `needsLiveDi
 - `$expand` or related-table access whose target cannot be resolved from local metadata
 - file/image upload whose relationship or target metadata is unresolved
 
-It is `false` for Global-only/read-only flows, explicit Administrator-only CRUD unused by reachable site code, and cases fully resolved by the manifest and local source. When `false`, skip all of Step 3, record `liveDiscovery: "not-needed"` in the evidence ledger, and continue to Step 4. When `true`, first confirm the active Dataverse environment URL matches the manifest environment URL; if it does not, skip live queries and record the mismatch instead of querying the wrong environment.
+It is `false` when none of those dependencies apply — for example, Global-only/read-only flows, explicit Administrator-only CRUD unused by reachable site code, and cases fully resolved by the manifest and local source. When `false`, skip all of Step 3, record `liveDiscovery: "not-needed"` in the evidence ledger, and continue to Step 4. When `true`, first confirm the active Dataverse environment URL matches the manifest environment URL; if it does not, skip live queries and record the mismatch instead of querying the wrong environment.
 
 ### 3.1 Get Environment URL
 
@@ -526,7 +526,7 @@ Assess the **3 categories**; within each, reason across its 3 dimensions togethe
 2. **Audit candidates** (Step 4) — these are factual observations, not final labels. Match each candidate against the recurring catalog first. Only unmatched candidates use the generic [Appendix C](#appendix-c--severity-policy--auditgrader-bridge) policy. Step 5 assigns every final severity and dimension exactly once.
 3. **Recurring-issue catalog + rubric judgment** — run the catalog below as a CHECKLIST, then add anything the A–K checks didn't already cover (e.g., an entirely read-only management site → an intent-coverage failure).
 
-**RECURRING ISSUE CATALOG — DETECTION + SEVERITY (the primary lever for run-to-run consistency).** Test EACH pattern against the artifacts; whenever a pattern's TRIGGER holds, raise exactly ONE issue for it in the stated dimension with the FIXED severity — on every run, no matter how obvious or minor it seems. Match on the described SHAPE, not on specific table/role names (names in parentheses are illustrations). **Patterns are evaluated PER affected table-group and are NOT mutually exclusive**: if one table hits a MAJOR pattern and a different table hits a similar MINOR pattern (e.g. C2 on a PII table AND C9 on a public table), raise BOTH as separate issues — the ordering only resolves severity WITHIN one table-group, it never suppresses a finding on a different table.
+**RECURRING ISSUE CATALOG — DETECTION + SEVERITY (the primary lever for run-to-run consistency).** Test EACH pattern against the artifacts; whenever a pattern's TRIGGER holds, raise exactly ONE issue for it in the stated dimension with the FIXED severity — on every run, no matter how obvious or minor it seems. Match on the described SHAPE, not on specific table/role names (names in parentheses are illustrations). **Patterns are evaluated PER affected table-group and are NOT mutually exclusive**: if one table hits a MAJOR pattern and a different table hits a similar MINOR pattern (e.g. C2 on a PII table AND C14 minor on a draft-content table), raise BOTH as separate issues — the ordering only resolves severity WITHIN one table-group, it never suppresses a finding on a different table.
 
 - **[C1]** Anonymous write, create, or delete — raised by the preflight `AH` row (Step 2.5); do not raise it again here.
 - **[C2]** PII / contact columns (email, phone, guardian or parent contact, address) readable by the Anonymous role → dim `anonymous-access-hygiene` · **major**.
@@ -536,7 +536,7 @@ Assess the **3 categories**; within each, reason across its 3 dimensions togethe
 - **[C6]** A table the site clearly needs to expose (referenced by service/UI code, or an obvious end-user entity) has NO permission granting the required access → dim `table-coverage` · **major** *(if the only missing grant would be for the `Administrators` role, do NOT raise it — see the ADMINISTRATORS EXCEPTION)*.
 - **[C7]** The site needs purpose-specific personas (e.g. distinct student / teacher / staff / admin audiences) but only generic Anonymous/Authenticated roles exist → dim `role-completeness` · **major** *(a missing `Administrators` role/persona is NOT a gap — see the ADMINISTRATORS EXCEPTION)*.
 - **[C8]** A web role is defined but referenced by NO table permission (orphaned) while every persona the site needs is still served by another role → dim `role-completeness` · **minor**.
-- **[C9]** GLOBAL-scope READ of inherently-public / non-sensitive shared reference data (announcements, facilities, public faculty/leadership listings) → dim `security-posture` · **minor**. Global is the correct scope here (check C passes it); this minor issue only makes the site owner aware the data is public.
+- **[C9]** GLOBAL-scope READ of inherently-public / non-sensitive shared reference data (announcements, facilities, public faculty/leadership listings) is the correct scope → **no issue**. Record the public audience in the inventory/context, but do not lower the security score or require a fix.
 - **[C10]** A scope/permission that only matters under a HYPOTHETICAL future change ("if guardians authenticate later, a Contact or Parent scope would be better") → dim `scope-correctness` · **minor**.
 - **[C11]** No `permissions-plan.html` present, or only a generic/boilerplate plan ("Global is the broadest scope") → dim `internal-consistency` · **minor**.
 - **[C12]** A data-model table with no permission whose user-facing status is genuinely unclear — the implementation plan or data model describes it as user-facing, but no code uses it (likely a planned feature never built) → dim `table-coverage` · **minor**. Clearly backend/system tables with no permission are correct, so raise no issue.
@@ -576,6 +576,8 @@ Apply [Appendix A](#appendix-a--scoring-model) exactly: one 1–5 score per cate
 ### 5.4 Verdict (prose)
 
 Write a **2–3 sentence** grader verdict: the top thing the config gets right, the top thing it gets wrong, and the verdict. State the verdict verbatim — **"Safe to go"** when there are **zero major** issues, **"Needs revision"** when there is **at least one major** issue. Minor issues never change it. **Do NOT tell the user whether to deploy, release, or ship** — the verdict summarises the findings; the decision is theirs. Prose only. Use it as the report's `SUMMARY` (Step 7.2).
+
+If the data-model manifest is missing (`SCORECARD_DATA` is `null`), skip the verdict: write a 2–3 sentence summary that says this is a partial audit, and use neither verdict phrase.
 
 ---
 
@@ -707,7 +709,7 @@ Run the semantic validator on the rendered report:
 node "${PLUGIN_ROOT}/skills/audit-permissions/scripts/validate-audit.js" --report "<OUTPUT_PATH>"
 ```
 
-Do not present or copy a report until validation succeeds. The validator reads `FINDINGS_DATA` and `SCORECARD_DATA` from the report and checks unique issue ids whose prefix matches the dimension, major/minor severities, non-empty `title`/`reasoning`/`fix`, a valid `rootCause` and `rootCauseReason` on every major finding (and none on minor findings), the three category scores recomputed from the findings, and leftover placeholders.
+Do not present or copy a report until validation succeeds. The validator reads `FINDINGS_DATA`, `INVENTORY_DATA`, and `SCORECARD_DATA` from the report and checks unique issue ids whose prefix matches the dimension, major/minor severities, non-empty `title`/`reasoning`/`fix`, a valid `rootCause` and `rootCauseReason` on every major finding (and none on minor findings), that the inventory is an array, the three category scores recomputed from the findings, that `SUMMARY` states the verdict matching the major count (and neither verdict phrase on a partial audit), and leftover placeholders.
 
 If validation fails, delete the report you just rendered, fix the named problem in the data file, render again to the same path, and rerun the validator. Do not repeat evidence gathering to fix a validation error.
 
@@ -876,5 +878,5 @@ Map each Step-4 finding into a dimension, then apply the severity policy above t
 - **Deterministic API calls**: Always use the Node.js scripts (`query-table-lookups.js`, `query-table-relationships.js`) for Dataverse API queries — never use inline PowerShell `Invoke-RestMethod` calls.
 - **No questions during analysis**: Autonomously gather all data, run checks, score, and present findings. Only ask the user at the end about fixing issues.
 - **Security**: Never log or display auth tokens. The scripts handle token acquisition internally via `getAuthToken()`.
-- **Graceful degradation**: If Dataverse API scripts fail (exit code 1), skip API-dependent checks (H/H2 append/appendto validation, I parent chain integrity) and note in the report which checks were skipped. If the data-model manifest is missing, still emit the audit findings; set `SCORECARD_DATA` to `null` rather than fabricating a score — the report then shows a partial-audit notice instead of a verdict and scores.
+- **Graceful degradation**: If Dataverse API scripts fail (exit code 1), skip API-dependent checks (H/H2 append/appendto validation, I parent chain integrity) and note in the report which checks were skipped. If the data-model manifest is missing, still emit the audit findings; set `SCORECARD_DATA` to `null` rather than fabricating a score — the report then shows a partial-audit notice instead of a verdict and scores, and `SUMMARY` states no verdict (Step 5.4).
 - **Don't invent files or tables** not present in the inputs.

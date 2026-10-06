@@ -113,6 +113,23 @@ function readConst(html, name) {
   }
 }
 
+function validateSummary(html, scorecard, majorCount) {
+  const match = html.match(/id="summaryBox"[^>]*>([\s\S]*?)<\/div>/);
+  if (!match) throw new Error('Audit report has no SUMMARY.');
+  const states = (phrase) => match[1].toLowerCase().includes(phrase.toLowerCase());
+  if (scorecard === null) {
+    if (states('Safe to go') || states('Needs revision')) {
+      throw new Error('SUMMARY must not state a verdict when scoring was skipped.');
+    }
+    return null;
+  }
+  const [expected, opposite] = majorCount === 0 ? ['Safe to go', 'Needs revision'] : ['Needs revision', 'Safe to go'];
+  if (!states(expected) || states(opposite)) {
+    throw new Error(`SUMMARY must state the verdict "${expected}" and not "${opposite}".`);
+  }
+  return expected;
+}
+
 function validateReport(reportPath) {
   const html = fs.readFileSync(reportPath, 'utf8');
   if (/__(?:(?:HTML|ATTR|JSON|RAW)_)?(?:SITE_NAME|AUDIT_DESC|SUMMARY|FINDINGS_DATA|INVENTORY_DATA|SCORECARD_DATA)__/.test(html)) {
@@ -120,9 +137,11 @@ function validateReport(reportPath) {
   }
   const findings = readConst(html, 'FINDINGS');
   validateFindings(findings);
-  validateScorecard(readConst(html, 'SCORECARD'), findings);
+  if (!Array.isArray(readConst(html, 'INVENTORY'))) throw new Error('INVENTORY must be an array.');
+  const scorecard = readConst(html, 'SCORECARD');
+  validateScorecard(scorecard, findings);
   const issueCounts = countIssues(findings);
-  return { issueCounts, verdict: issueCounts.major === 0 ? 'Safe to go' : 'Needs revision' };
+  return { issueCounts, verdict: validateSummary(html, scorecard, issueCounts.major) };
 }
 
 function fail(error) {
