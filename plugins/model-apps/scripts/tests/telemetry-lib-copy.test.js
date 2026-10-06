@@ -44,6 +44,24 @@ test('bundled telemetry lib is identical to shared/telemetry/lib', (t) => {
   assert.deepEqual(drifted, [], 'bundled copy has drifted from shared/telemetry/lib — re-copy these files');
 });
 
+test('bundled telemetry region router is identical to power-pages\' region/', (t) => {
+  // model-apps' resolver.js reuses power-pages' Artemis geo + cloud-stamp router (scripts/lib/telemetry/
+  // region/) as a verbatim physical copy; model-apps-specific routing lives only in resolver.js. Without
+  // this, a router fix landed in one plugin would leave the other silently stale. The workflow's path
+  // filter includes the power-pages region/ directory, so a change on either side runs this check.
+  const sourceDir = path.join(REPO_ROOT, 'plugins', 'power-pages', 'scripts', 'lib', 'telemetry', 'region');
+  const copyDir = path.join(PLUGIN_ROOT, 'scripts', 'lib', 'telemetry', 'region');
+  if (!fs.existsSync(sourceDir)) {
+    t.skip('plugins/power-pages not present (installed plugin, not a repo checkout)');
+    return;
+  }
+  const sourceFiles = fs.readdirSync(sourceDir).filter((f) => f.endsWith('.js')).sort();
+  const copyFiles = fs.readdirSync(copyDir).filter((f) => f.endsWith('.js')).sort();
+  assert.deepEqual(copyFiles, sourceFiles, 'region/ copy and power-pages source must contain the same modules');
+  const drifted = sourceFiles.filter((f) => text(path.join(sourceDir, f)) !== text(path.join(copyDir, f)));
+  assert.deepEqual(drifted, [], 'region/ has drifted from power-pages — apply the change to both copies');
+});
+
 test('bundled shared skill workflows match their shared source', (t) => {
   const pairs = [
     ['telemetry', 'telemetry-workflow.md'],

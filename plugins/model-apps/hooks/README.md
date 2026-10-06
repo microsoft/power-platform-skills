@@ -13,7 +13,7 @@ back.
 | Matcher | Hook | Behaviour |
 | --- | --- | --- |
 | `Write\|Edit\|MultiEdit` | `validate-write-safety.js` | **Flags** (non-blocking, exit 1) a write outside the cwd, and only during an active model-apps authoring session — that is, when a `genpage-plan.md`, `app-spec.json`, or `model-app-plan.md` marker exists at or under the cwd, which covers both `/genpage` and `/app-builder`. |
-| `Skill\|skill` | `run-skill-pretool-telemetry.js` | Emits the `skill_started` usage event. Ships disabled until an instrumentation key is provisioned. |
+| `Skill\|skill` | `run-skill-pretool-telemetry.js` | Emits the `skill_started` usage event, routed by `scripts/lib/telemetry/resolver.js`. |
 
 ## PostToolUse
 

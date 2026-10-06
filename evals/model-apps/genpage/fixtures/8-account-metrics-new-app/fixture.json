@@ -1,0 +1,18 @@
+{
+  "contractVersion": 2,
+  "provenance": "synthetic",
+  "description": "Constructed trace of an attended /genpage create run for eval 8, not an agent capture: pac model list returns zero apps, the maker chooses to create a new app named Account Metrics, the solution question is asked because a new app is metadata work (dominant prefix cnt, choice ContosoCore recorded in ## Environment), Phase 3 runs pac model create with --solution and --publish, and the returned app-id is the --app-id of the Phase 6 genpage-upload.js deploy of an account dashboard.",
+  "contracts": [
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 1: Plan",
+    "plugins/model-apps/agents/genpage-planner.md App Detection — 0 apps: create a new one, or cancel",
+    "plugins/model-apps/agents/genpage-planner.md Solution Selection and Dominant-prefix detection",
+    "plugins/model-apps/references/plan-schema.md ## Environment — App: create new, Solution, Publisher Prefix",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 3: App Creation/Selection — --solution and --publish are mandatory; store the new app-id for Phase 6",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 4: Generate RuntimeTypes (Conditional)",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 6: Deploy — For Dataverse entity pages (first upload — create)",
+    "plugins/model-apps/references/data-caching.md Pattern 1 — List / array cache"
+  ],
+  "expectedOutcome": "deployed",
+  "toolResults": "tool-results.json",
+  "artifacts": ["prompt.txt", "agent-message.txt", "page-name.txt"]
+}

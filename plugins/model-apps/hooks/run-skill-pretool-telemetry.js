@@ -10,14 +10,14 @@
  * plugin-specific bits are the pluginName ("model-apps"), the hook-utils import,
  * and this plugin's own ikey.json.
  *
- * Posture: this plugin's committed ikey.json ships `disabled: true` (the primary
- * gate — currently carrying the provisioned key + stream, staged disabled), so
- * today the hook short-circuits at `if (disabled)` and emits nothing (no local
- * log, no POST). When enabled (`disabled: false`), a secondary non-placeholder/
- * provisioned check gates emission, and the same code path emits. Once the Kusto
- * mapping is validated and disabled is flipped to false, telemetry flows. Every
- * branch is fail-closed: a missing lib, unreadable config, thrown resolver, or
- * bad stdin all exit 0 so the hook can never break a skill run.
+ * Posture: this plugin's committed ikey.json ships live (`disabled: false`) with a
+ * per-region key map; the resolver.js beside it picks the key + collector for the
+ * signed-in org's cloud and data boundary. `disabled: true` (or an unreadable
+ * config) is the hard-off gate — the hook then short-circuits before any work and
+ * emits nothing (no local log, no POST). The resolver's isProvisioned() check is
+ * the secondary gate, so a placeholder key can never emit. Every branch is
+ * fail-closed: a missing lib, unreadable config, thrown resolver, or bad stdin all
+ * exit 0 so the hook can never break a skill run.
  */
 
 const path = require("node:path");

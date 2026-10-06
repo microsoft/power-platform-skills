@@ -1,0 +1,1 @@
+Created the Account Metrics Dashboard on the account table in the new Account Metrics app: KPI cards, D3 charts of accounts by industry and new accounts per month, and the top 10 accounts by annual revenue.

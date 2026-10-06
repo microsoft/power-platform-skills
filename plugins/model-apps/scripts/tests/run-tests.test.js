@@ -76,10 +76,14 @@ test('summarize fails the run when any non-skipped suite failed', () => {
 // failure. This is a text assertion rather than a YAML parse because the repo ships no YAML
 // dependency and the properties that matter are all line-level.
 const WORKFLOW = path.resolve(__dirname, '..', '..', '..', '..', '.github', 'workflows', 'model-apps-script-tests.yml');
-// The one exception: the `shared/` sources this plugin ships physical copies of. A change to one is
-// NOT unrelated — telemetry-lib-copy.test.js fails when a copy drifts from its source, and it should
+// The one exception: the sources this plugin ships physical copies of. A change to one is NOT
+// unrelated — telemetry-lib-copy.test.js fails when a copy drifts from its source, and it should
 // fail in the PR that edited the source, not in the next model-apps PR, whose author did not cause it.
-const BUNDLED_SHARED_SOURCES = new Set(['shared/telemetry/**', 'shared/skills/**']);
+const BUNDLED_SHARED_SOURCES = new Set([
+  'shared/telemetry/**',
+  'shared/skills/**',
+  'plugins/power-pages/scripts/lib/telemetry/region/**',
+]);
 
 test('the model-apps CI workflow triggers ONLY on model-apps paths and the shared sources it bundles', () => {
   const wf = fs.readFileSync(WORKFLOW, 'utf8');

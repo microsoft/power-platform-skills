@@ -241,6 +241,39 @@ test('scaffold changed-file validation separates preparation and generator owner
   assert.match(shared, /Do not suppress a protected-path finding/);
 });
 
+test('no user-authored value reaches the shell as a command argument', () => {
+  const skill = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
+  );
+
+  // A `'` ends a single-quoted argument; a `"`, a backtick or `$(...)` breaks out of a
+  // double-quoted one and runs before Node sees it. Both forms have shipped here: first the
+  // inline `--json` writes, then `init --app-name "<displayName>"`. Checking only one quoting
+  // style is what let the second through, so this checks the values instead.
+  const USER_AUTHORED = [
+    '<displayName>', '<confirmed brief>', '<aesthetic>', '<industry>',
+    '<feature>', '<direction>', '<slug>',
+  ];
+
+  const offenders = [];
+  for (const [line] of skill.matchAll(/^node "\$\{PLUGIN_ROOT\}\/scripts\/app-docs\.js"[^\n]*/gm)) {
+    for (const token of USER_AUTHORED) {
+      if (line.includes(token)) offenders.push(`${token} in: ${line.slice(60, 140)}`);
+    }
+  }
+  assert.deepEqual(offenders, [], 'these values are the user\'s own and must travel in a file');
+
+  // Every section that carries user text goes through --json-file, including the plan's own
+  // creation, which takes the display name.
+  for (const section of ['requirements', 'design', 'architecture', 'dataModel', 'screens', 'trust', 'offline', 'auth']) {
+    assert.doesNotMatch(skill, new RegExp(`set --section ${section} --json '`), `${section} must use --json-file`);
+  }
+  assert.match(skill, /init --json-file/);
+
+  // And the rule is stated, so the next value added follows it.
+  assert.match(skill, /Use `--json-file` for anything the user wrote/);
+});
+
 test('authentication discovers and checks registrations before writing a client ID', () => {
   const auth = skill.slice(
     skill.indexOf('### Step 7 — Auth config'),

@@ -990,3 +990,42 @@ test('validateGenpagePlanSchema: page files cannot collide by normalized case-in
     `expected duplicate-page-file, got ${JSON.stringify(errors)}`
   );
 });
+
+// ---------- solutions query: the planner's documented RELATIVE path form ----------
+
+const SOLUTIONS_QUERY = [...WORKFLOW_ASSERTIONS.keys()].find((t) => t.startsWith('Phase 1 (Planner): When the solution question runs, the planner queries /solutions'));
+
+test('solutions query: the documented relative `solutions?$select=` command passes on its own', () => {
+  // genpage-planner.md documents `dataverse-request.js <env> GET 'solutions?$select=...'` (no
+  // leading slash). The check once required a literal `/solutions`, so a log that copied the
+  // documented command verbatim failed.
+  const log = [
+    '- Solution selection question asked',
+    "- `node 'D:/repo/plugins/model-apps/scripts/dataverse-request.js' 'https://contoso.crm.dynamics.com' GET 'solutions?$select=uniquename,friendlyname&$top=10'`",
+  ].join('\n');
+  assert.equal(WORKFLOW_ASSERTIONS.get(SOLUTIONS_QUERY)({ fixture: fix({ workflowLog: log }), eval: evalStub(8) }).status, 'pass');
+});
+
+test('solutions query: no query at all still fails, and a lookalike entity set does not satisfy it', () => {
+  const asked = '- Solution selection question asked\n';
+  const check = WORKFLOW_ASSERTIONS.get(SOLUTIONS_QUERY);
+  assert.equal(check({ fixture: fix({ workflowLog: asked }), eval: evalStub(8) }).status, 'fail');
+  const lookalike = `${asked}- node dataverse-request.js https://contoso.crm.dynamics.com GET 'solutionsfoo?$top=1'\n`;
+  assert.equal(check({ fixture: fix({ workflowLog: lookalike }), eval: evalStub(8) }).status, 'fail');
+  assert.equal(check({ fixture: fix({ workflowLog: `${asked}- pac solution list\n` }), eval: evalStub(8) }).status, 'pass');
+});
+
+test('solutions query: the documented multi-line form (bash `\\` or PowerShell backtick continuation) passes', () => {
+  const check = WORKFLOW_ASSERTIONS.get(SOLUTIONS_QUERY);
+  const asked = '- Solution selection question asked\n';
+  for (const cont of ['\\', '`']) {
+    for (const eol of ['\n', '\r\n']) {
+      const log = `${asked}node "\${PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET ${cont}${eol}  "solutions?\\$select=uniquename,friendlyname&\\$top=10"${eol}`;
+      assert.equal(check({ fixture: fix({ workflowLog: log }), eval: evalStub(8) }).status, 'pass', JSON.stringify({ cont, eol }));
+    }
+  }
+  // An ordinary line break is not a continuation: a later, unrelated mention of solutions must not
+  // be credited to an earlier dataverse-request.js call.
+  const unrelated = `${asked}node dataverse-request.js https://contoso.crm.dynamics.com GET 'WhoAmI'\n- solutions were discussed\n`;
+  assert.equal(check({ fixture: fix({ workflowLog: unrelated }), eval: evalStub(8) }).status, 'fail');
+});

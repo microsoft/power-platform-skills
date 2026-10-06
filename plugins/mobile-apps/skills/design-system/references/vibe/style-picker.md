@@ -34,7 +34,7 @@ A self-contained moodboard-before-build reference for `/design-system`. Three na
 1. Verify plan + pick the target screen
 2. Pick the recommended default direction
 3. Render 3-up `_design_vibe.html`
-4. Open in browser (with cross-platform fallback)
+4. Open in browser (standalone runs only; with cross-platform fallback)
 5. Ask the user
 6. Write `## Design Direction` block + return
 
@@ -295,7 +295,7 @@ This sets the expectation that hybrid is real, named, and supported — without 
 
 **8. Explicit dark/light toggle per frame.** Render a small `Light / Dark` toggle pill above each phone frame, and make the alternate state available via `?dark=1` URL params or a click handler that swaps the frame's classes. This is what prevents the "I picked dark for aesthetics → got pushed into Inspection" failure mode.
 
-## Step 4 — Open the preview in the user's browser
+## Step 4 — Open the preview in the user's browser (standalone runs only)
 
 **Print before starting:**
 > "→ [design-system:vibe] Opening the preview in your default browser…"
@@ -306,7 +306,11 @@ Print the file path as a clickable link FIRST (always), then ask before launchin
 >
 > Want me to try opening it in your default browser? (yes / no — default: yes)"
 
-On `yes` (or no answer), try OS-appropriate openers in sequence and fall back to the printed link if all fail:
+On `yes` (or no answer), try OS-appropriate openers in sequence and fall back to the printed link if all fail.
+
+**Skip the opener entirely when `CODE_APPS_NATIVE_ORCHESTRATING=1`** and print the path: a
+`/create-mobile-app` run already has its build plan open in the browser, and a tab appearing over
+it interrupts the user rather than showing them something new.
 
 ```bash
 open "<working_dir>/_design_vibe.html" 2>/dev/null \
@@ -338,11 +342,11 @@ Use `AskUserQuestion` with options if available; otherwise plain text.
 **Handling responses:**
 
 - **`a` / `b` / `c`** → resolve to the direction name; go to Step 6
-- **`hybrid: ...`** → parse the description, merge bundles by picking the named dimensions from each, regenerate `_design_vibe.html` with the merged bundle as a 4th column titled "Your hybrid", re-open, ask "use this hybrid? (yes / refine)"
-- **`mix: ...`** → element-level remix. Parse the picks (`Inspection's status pills, Product's typography, SaaS's spacing`), build a custom bundle by overriding the recommended direction's fields with the named picks, render as a 4th frame titled "Your mix", same re-open / confirm loop as hybrid
+- **`hybrid: ...`** → parse the description, merge bundles by picking the named dimensions from each, regenerate `_design_vibe.html` with the merged bundle as a 4th column titled "Your hybrid", re-open it (standalone runs only; otherwise print the path), ask "use this hybrid? (yes / refine)"
+- **`mix: ...`** → element-level remix. Parse the picks (`Inspection's status pills, Product's typography, SaaS's spacing`), build a custom bundle by overriding the recommended direction's fields with the named picks, render as a 4th frame titled "Your mix", same re-open (standalone runs only; otherwise print the path) / confirm loop as hybrid
 - **`dark` / `light`** → flip the recommended direction's `background` field only (`dark-slate` ↔ `cool-gray-light`, `warm-cream` ↔ `rich-dark`); keep direction otherwise. Re-render the single affected frame so the user sees the swap before committing
 - **`again`** → regenerate with alternate accents (e.g. Product with rust instead of sage; Inspection with amber instead of orange) — same three directions, different concrete realizations. Cap to 1 `again` per session to avoid taste-paralysis.
-- **`none of these`** → ask what's missing AND what each direction got wrong (capture as a "rejected" log line in `memory-bank.md`). Regenerate the 3-up with adjustments (palette swap, density change, etc.), re-open, ask again
+- **`none of these`** → ask what's missing AND what each direction got wrong (capture as a "rejected" log line in `memory-bank.md`). Regenerate the 3-up with adjustments (palette swap, density change, etc.), re-open it (standalone runs only; otherwise print the path), ask again
 - **No reply / unclear** → ask once more, then default to the recommended direction with: `Defaulting to <name> based on app description; you can run /design-system --reskin any time to swap.`
 
 Cap re-renders at **3 iterations** to avoid infinite loops. After 3 the skill must lock in either the user's last clear pick or the recommended default.
