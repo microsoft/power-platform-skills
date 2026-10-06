@@ -1055,10 +1055,20 @@ repo-root `shared/telemetry/`; `scripts/lib/telemetry/lib` is a **physical copy*
 
 - **Posture:** the committed `ikey.json` ships **live** (`disabled: false`) with this
   plugin's own per-region keys (`internal`, `us`, `eu`, `gov`, `high`, `dod`, `mooncake`;
-  US and EU share the public key and differ only by collector) and the
-  `ModelAppsAIPluginEvent` stream. `disabled: true` is the repo-wide hard-off (no POST,
+  US and EU share the public key and differ only by collector) and the Power Apps client
+  `event` stream. `disabled: true` is the repo-wide hard-off (no POST,
   no local log). **Provision a fresh key; never copy another plugin's `ikey.json`**
   (CI-enforced: `node scripts/validate-telemetry-ikeys.js`).
+- **Wire shape:** these tenants ingest **only** the `event` stream, into the Power Apps client
+  `event` table; any other stream name is accepted by the collector and then dropped. So
+  `resolver.js` also exports `formatEnvelope`, which mirrors mobile-apps' envelope:
+  `app_Name: "powerappsclient"`, `event_Name`, `session_Id`, `tenantId`, and every other
+  allowlisted field as a `customDimensions` JSON string. `clientType` is
+  **`ModelAppsAIPlugin`** (never mobile's `PowerAppsNative`), so rows are separable from
+  real client traffic. Query the tenant's `event` table (raw 1DS copies prefix columns with `data_`):
+  `event | where clientType == "ModelAppsAIPlugin" | extend d = parse_json(customDimensions)
+  | summarize count() by tostring(d.pluginName), tostring(d.skillName)`.
+  The local mirror keeps the flat, readable shape.
 - **Routing:** `scripts/lib/telemetry/resolver.js` picks the key + collector per event.
   `region/` beside it is a **verbatim copy** of power-pages' Artemis geo + cloud-stamp
   router — refresh it by copying, and keep model-apps logic in `resolver.js`

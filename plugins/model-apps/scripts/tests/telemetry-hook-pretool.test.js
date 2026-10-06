@@ -140,8 +140,13 @@ test("shipped config + resolver → tracked skill is region-routed to this plugi
   const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
   const body = JSON.parse(probe.body);
   assert.equal(body.name, shipped.event_stream_name);
-  assert.equal(body.data.pluginName, "model-apps");
-  assert.equal(body.data.skillName, "genpage");
+  // The shipped resolver's formatEnvelope reshapes the event into the Power Apps client `event` schema.
+  assert.equal(body.data.clientType, "ModelAppsAIPlugin");
+  assert.equal(body.data.event_Name, "skill_started");
+  const dims = JSON.parse(body.data.customDimensions);
+  assert.equal(dims.pluginName, "model-apps");
+  assert.equal(dims.skillName, "genpage");
+  assert.equal(dims.eventInfo, undefined, "model-apps must not send eventInfo/aadObjectId");
   // Without the native stub (no csc.exe on this Windows box) PAC is absent: no org, so the event
   // takes the US default instead of the cached EU route.
   const region = stubBuilt ? "eu" : "us";

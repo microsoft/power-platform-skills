@@ -132,6 +132,59 @@ test("signed-in org with no cloud stamp → null (could be sovereign; never the 
   assert.deepEqual(calls, []);
 });
 
+// --- The wire envelope ---------------------------------------------------------------------------
+
+test("formatEnvelope emits the Power Apps client `event` shape, separable by clientType + pluginName", () => {
+  const time = "2026-10-06T00:00:00.000Z";
+  const data = {
+    eventName: "skill_started",
+    eventType: "Trace",
+    severity: "Info",
+    pluginName: "model-apps",
+    pluginVersion: "2.12.1",
+    skillName: "genpage",
+    sessionId: "s-1",
+    correlationId: "c-1",
+    osName: "Windows",
+    osVersion: "10.0.26100",
+    orgId: ORG_ID,
+    tenantId: "00000000-0000-0000-0000-0000000000bb",
+  };
+  const env = resolver.formatEnvelope({
+    eventName: "event",
+    time,
+    data,
+    iKey: "abc123-0000-0000-0000-000000000000-1234",
+    eventStreamName: "event",
+  });
+  assert.equal(env.ver, "4.0");
+  assert.equal(env.name, "event");
+  assert.equal(env.time, time);
+  assert.equal(env.iKey, "o:abc123");
+  assert.deepEqual(Object.keys(env.data).sort(), [
+    "app_Name", "clientType", "customDimensions", "event_Name", "session_Id", "severity", "tenantId", "timestamp",
+  ]);
+  assert.equal(env.data.app_Name, "powerappsclient");
+  // Must NOT be PowerAppsNative (mobile-apps / the real native client) — keeps these rows out of client metrics.
+  assert.equal(env.data.clientType, "ModelAppsAIPlugin");
+  assert.equal(env.data.event_Name, "skill_started");
+  assert.equal(env.data.session_Id, "s-1");
+  assert.equal(env.data.tenantId, data.tenantId);
+  assert.equal(env.data.timestamp, time);
+  const dims = JSON.parse(env.data.customDimensions);
+  assert.equal(dims.pluginName, "model-apps");
+  assert.equal(dims.skillName, "genpage");
+  assert.equal(dims.orgId, ORG_ID);
+  for (const meta of ["eventName", "eventType", "severity"]) assert.equal(dims[meta], undefined, meta);
+  assert.deepEqual(env.ext, { app: { sesId: "s-1", ver: "2.12.1" }, os: { name: "Windows", ver: "10.0.26100" } });
+});
+
+test("formatEnvelope omits tenantId when PAC gave none", () => {
+  const env = resolver.formatEnvelope({ time: "t", data: { eventName: "skill_started" }, iKey: "k-1", eventStreamName: "event" });
+  assert.equal("tenantId" in env.data, false);
+  assert.equal(env.data.session_Id, "");
+});
+
 // --- The committed config -----------------------------------------------------------------------
 
 // Collector per region, matching the 1DS OneCollector endpoints for each cluster category.
@@ -148,7 +201,7 @@ const EXPECTED_COLLECTORS = {
 test("shipped ikey.json is live, region-routed, and has a real key + the right collector per region", () => {
   const cfg = JSON.parse(fs.readFileSync(SHIPPED_IKEY, "utf8"));
   assert.equal(cfg.disabled, false);
-  assert.equal(cfg.event_stream_name, "ModelAppsAIPluginEvent");
+  assert.equal(cfg.event_stream_name, "event");
   assert.equal(cfg.default_region, "us");
   // No top-level static key: the dispatcher's static fallback must have nothing to fall back TO, so a
   // resolver that returns null (sovereign gap, unknown cloud) really does send nothing.

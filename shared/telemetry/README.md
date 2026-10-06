@@ -74,8 +74,17 @@ module.exports = {
   async resolve({ event, cfg, cloud, configDir }) { /* ... */ },
   // optional sync fast-gate so hooks skip the ~3-5s pac shellout when unprovisioned.
   isProvisioned(cfg) { return true; },
+  // optional: reshape the wire envelope for a tenant that ingests a different schema.
+  // `data` is the already-sanitized allowlisted payload. Throwing or returning nothing
+  // sends nothing (fail closed); the local mirror is unaffected.
+  formatEnvelope({ eventName, time, data, iKey, eventStreamName }) { /* ... */ },
 };
 ```
+
+Model Apps uses `formatEnvelope` to send the Power Apps client `event` shape
+(`app_Name`, `clientType: "ModelAppsAIPlugin"`, `event_Name`, `session_Id`, and the
+remaining fields as a `customDimensions` JSON string) because its tenants ingest only
+the `event` stream.
 
 The dispatcher discovers it by convention (a `resolver.js` sibling of `ikey.json`)
 and resolves the destination by precedence: env override (test seam) →

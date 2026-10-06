@@ -4,6 +4,7 @@
 // event. Implements the shared dispatcher's resolver contract (shared/telemetry/lib/resolver-loader.js):
 //   resolve({ event, cfg, cloud, configDir }) → { region, iKey, collectorUrl } | null
 //   isProvisioned(cfg)                         → boolean (sync gate before the pac shell-outs)
+//   formatEnvelope({ time, data, iKey, ... })  → the wire envelope (Power Apps client `event` shape)
 //
 // ./region/ is a VERBATIM copy of power-pages' Artemis geo + cloud-stamp router. Keep it byte-identical
 // so a refresh is a plain copy; the model-apps-specific routing lives here instead. Its org→region cache
@@ -81,4 +82,51 @@ function isProvisioned(cfg) {
   );
 }
 
-module.exports = { resolve, isProvisioned };
+// Reshape the shared skill_started payload into the Power Apps client `event` schema. model-apps' 1DS
+// tenants (shared with the mobile-apps plugin) ingest ONLY the `event` stream, into the Power Apps
+// client `event` table — a stream named anything else is accepted by the collector (HTTP 200) and then
+// silently dropped, because no table is mapped for it. This mirrors mobile-apps'
+// scripts/lib/mobile-telemetry-dispatcher.js buildEnvelope(), with one deliberate difference:
+// clientType is "ModelAppsAIPlugin", not "PowerAppsNative", so these rows can never be counted as Power
+// Apps native-client traffic by queries that filter on clientType.
+//
+// Wire shape (one line of the x-json-stream body):
+//   { ver: "4.0", name: "event", time, iKey: "o:<tenant token>",
+//     data: { app_Name: "powerappsclient", clientType: "ModelAppsAIPlugin", event_Name: "skill_started",
+//             session_Id, tenantId?, severity, timestamp,
+//             customDimensions: "{\"pluginName\":\"model-apps\",\"skillName\":\"genpage\",...}" },
+//     ext: { app: { sesId, ver }, os: { name, ver } } }
+// `data` arrives already sanitized against the shared FIELD_TYPES allowlist, so this only rearranges
+// approved fields. Query: event | where clientType == "ModelAppsAIPlugin"
+//   | extend d = parse_json(customDimensions) | where d.pluginName == "model-apps"
+function formatEnvelope({ time, data, iKey, eventStreamName }) {
+  const d = data || {};
+  const dimensions = { ...d };
+  delete dimensions.eventName;
+  delete dimensions.eventType;
+  delete dimensions.severity;
+  return {
+    ver: "4.0",
+    name: eventStreamName || "event",
+    time,
+    iKey: "o:" + String(iKey || "").split("-")[0],
+    data: {
+      app_Name: "powerappsclient",
+      clientType: "ModelAppsAIPlugin",
+      event_Name: d.eventName || "",
+      session_Id: d.sessionId || "",
+      ...(d.tenantId ? { tenantId: d.tenantId } : {}),
+      severity: d.severity || "Info",
+      timestamp: time,
+      customDimensions: JSON.stringify(dimensions),
+    },
+    // Common Schema Part A extensions, kept outside customDimensions so the ingestion mapping fills the
+    // standard app/session/OS columns (same as mobile-apps).
+    ext: {
+      app: { sesId: d.sessionId || "", ver: d.pluginVersion || "" },
+      os: { name: d.osName || "", ver: d.osVersion || "" },
+    },
+  };
+}
+
+module.exports = { resolve, isProvisioned, formatEnvelope };
