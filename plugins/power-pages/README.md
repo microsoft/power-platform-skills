@@ -40,7 +40,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 34 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, and platform migrations. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 35 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, accessibility, auditing, and platform migrations. Each skill is invoked conversationally — just describe what you want to do.
 
 ### Site scaffolding and deployment
 
@@ -393,6 +393,18 @@ Adds search engine optimization artifacts: `robots.txt`, `sitemap.xml`, and meta
 - Generates sitemap with production URLs
 - Adds viewport, charset, description, and social sharing meta tags
 
+#### `/audit-accessibility`
+
+> "Check my site for accessibility issues"
+
+Finds accessibility barriers on your deployed or local site and helps you fix them, so more people can use it.
+
+- Crawls your pages on desktop and mobile layouts, and audits menus, dialogs, tabs, and form validation that only appear after interaction
+- Combines axe-core WCAG 2.2 A/AA rules with keyboard, focus, reflow, text-resize, motion, and page-title checks
+- Optionally audits signed-in pages — you sign in yourself, and the session is deleted when the audit ends
+- Writes a prioritized report to `docs/accessibility/accessibility-audit.md`, maps issues to your source files, and offers fixes for your approval
+- Never submits forms or deploys changes without your permission
+
 ### Migration
 
 #### `/migrate-bootstrap`
@@ -484,14 +496,15 @@ A common end-to-end workflow looks like this:
 11. /add-seo                →  Search engine optimization
 12. /deploy-site            →  Push final changes live
 13. /test-site              →  Runtime smoke test on the live URL
-14. /security-review        →  Full security review (headers, firewall, scan, permissions)
-15. /plan-alm               →  Plan multi-environment promotion (planning only — produces the plan)
-16. /setup-solution         →  Package the site into a Dataverse solution
-17. /setup-pipeline         →  Set up the Power Platform pipeline
-18. /deploy-pipeline        →  Promote through staging → production (run per stage)
+14. /audit-accessibility    →  Accessibility audit across pages and interactive UI
+15. /security-review        →  Full security review (headers, firewall, scan, permissions)
+16. /plan-alm               →  Plan multi-environment promotion (planning only — produces the plan)
+17. /setup-solution         →  Package the site into a Dataverse solution
+18. /setup-pipeline         →  Set up the Power Platform pipeline
+19. /deploy-pipeline        →  Promote through staging → production (run per stage)
 ```
 
-> Steps 16–18 are the execution sequence `/plan-alm` recommends — you run them yourself; each detects the approved plan and keeps it updated. `/plan-alm` never runs them for you.
+> Steps 17–19 are the execution sequence `/plan-alm` recommends — you run them yourself; each detects the approved plan and keeps it updated. `/plan-alm` never runs them for you.
 
 Steps can be run independently — you don't need to follow this exact order. Each skill checks its own prerequisites and will tell you if something is missing. If something goes wrong, `/diagnose-deployment` pattern-matches deployment errors and `/report-issue` opens a pre-filled GitHub issue.
 

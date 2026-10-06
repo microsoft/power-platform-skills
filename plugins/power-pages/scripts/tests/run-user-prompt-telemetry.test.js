@@ -62,6 +62,12 @@ function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+// The detached dispatcher is a separate Node process. A full `node --test` run spawns
+// many processes in parallel, and under that load its cold start has taken > 5 s, so
+// give it generous headroom. Every caller waits for the probe to APPEAR, so the longer
+// deadline only costs time when the test is already failing.
+const DISPATCH_WAIT_MS = 20_000;
+
 // Poll for a file up to timeoutMs, sleeping between checks so the test runner
 // stays responsive. Returns whether the file exists at the end.
 function waitForFile(filePath, timeoutMs) {
@@ -139,7 +145,7 @@ test("hook emits PagesAIPluginEvent with top-level fields for tracked slash comm
     ikeyPath,
   });
   assert.equal(status, 0);
-  assert.ok(waitForFile(probePath, 5_000), "dispatcher should have written probe");
+  assert.ok(waitForFile(probePath, DISPATCH_WAIT_MS), "dispatcher should have written probe");
   const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
   assert.ok(probe.body.endsWith("\n"), "body must be newline-terminated");
   const body = JSON.parse(probe.body);
@@ -176,7 +182,7 @@ test("hook reports the site framework in eventInfo from the payload cwd", () => 
     }),
   });
   assert.equal(status, 0);
-  assert.ok(waitForFile(probePath, 5_000), "dispatcher should have written probe");
+  assert.ok(waitForFile(probePath, DISPATCH_WAIT_MS), "dispatcher should have written probe");
   const body = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
   // eventInfo is JSON-stringified for the wire (the tenant-side field mapping
   // flattens data.<key> and doesn't recurse) — see emit-dispatcher buildEnvelope.
@@ -203,7 +209,7 @@ test("hook omits framework when cwd is not a Power Pages code site", () => {
     cwd: fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-nosite-")),
   });
   assert.equal(status, 0);
-  assert.ok(waitForFile(probePath, 5_000), "dispatcher should have written probe");
+  assert.ok(waitForFile(probePath, DISPATCH_WAIT_MS), "dispatcher should have written probe");
   const body = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
   const eventInfo =
     typeof body.data.eventInfo === "string" ? JSON.parse(body.data.eventInfo) : {};
@@ -230,7 +236,7 @@ test("hook emits and exits 0 when optional detector fails to load", () => {
   assert.equal(status, 0);
   assert.equal(stdout, "");
   assert.equal(stderr, "");
-  assert.ok(waitForFile(probePath, 5_000), "dispatcher should still emit the event");
+  assert.ok(waitForFile(probePath, DISPATCH_WAIT_MS), "dispatcher should still emit the event");
   const body = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
   assert.equal(body.data.eventName, "skill_started");
   const eventInfo =

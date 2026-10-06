@@ -61,6 +61,12 @@ function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+// The detached dispatcher is a separate Node process. A full `node --test` run spawns
+// many processes in parallel, and under that load its cold start has taken > 5 s, so
+// give it generous headroom. Every caller waits for the probe to APPEAR, so the longer
+// deadline only costs time when the test is already failing.
+const DISPATCH_WAIT_MS = 20_000;
+
 function waitForFile(filePath, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (!fs.existsSync(filePath) && Date.now() < deadline) {
@@ -133,7 +139,7 @@ test("exits 0 and emits skill_started to probe when skill is tracked (provisione
     fakeProbe: probePath,
   });
   assert.equal(status, 0);
-  assert.ok(waitForFile(probePath, 5_000), "dispatcher should have written probe");
+  assert.ok(waitForFile(probePath, DISPATCH_WAIT_MS), "dispatcher should have written probe");
   const probe = JSON.parse(fs.readFileSync(probePath, "utf8"));
   const body = JSON.parse(probe.body);
   assert.equal(body.name, "PagesAIPluginEvent");
@@ -174,7 +180,7 @@ test("pretool hook reports the site framework in eventInfo from the payload cwd"
     fakeProbe: probePath,
   });
   assert.equal(status, 0);
-  assert.ok(waitForFile(probePath, 5_000), "dispatcher should have written probe");
+  assert.ok(waitForFile(probePath, DISPATCH_WAIT_MS), "dispatcher should have written probe");
   const body = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
   // eventInfo is JSON-stringified for the wire (the tenant-side field mapping
   // flattens data.<key> and doesn't recurse) — see emit-dispatcher buildEnvelope.
@@ -215,7 +221,7 @@ test("pretool hook finds a site in a CHILD of cwd (recommended create-site layou
     fakeProbe: probePath,
   });
   assert.equal(status, 0);
-  assert.ok(waitForFile(probePath, 5_000), "dispatcher should have written probe");
+  assert.ok(waitForFile(probePath, DISPATCH_WAIT_MS), "dispatcher should have written probe");
   const body = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
   assert.equal(JSON.parse(body.data.eventInfo).framework, "react");
 });
@@ -243,7 +249,7 @@ test("pretool hook emits without framework when cwd has multiple child sites", (
     fakeProbe: probePath,
   });
   assert.equal(status, 0);
-  assert.ok(waitForFile(probePath, 5_000), "dispatcher should still emit the event");
+  assert.ok(waitForFile(probePath, DISPATCH_WAIT_MS), "dispatcher should still emit the event");
   const body = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
   const eventInfo =
     typeof body.data.eventInfo === "string" ? JSON.parse(body.data.eventInfo) : {};
@@ -270,7 +276,7 @@ test("pretool hook emits and exits 0 when optional detector fails to load", () =
   assert.equal(status, 0);
   assert.equal(stdout, "");
   assert.equal(stderr, "");
-  assert.ok(waitForFile(probePath, 5_000), "dispatcher should still emit the event");
+  assert.ok(waitForFile(probePath, DISPATCH_WAIT_MS), "dispatcher should still emit the event");
   const body = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
   assert.equal(body.data.eventName, "skill_started");
   const eventInfo =
@@ -293,7 +299,7 @@ test("pretool hook omits framework when cwd is not a Power Pages code site", () 
     fakeProbe: probePath,
   });
   assert.equal(status, 0);
-  assert.ok(waitForFile(probePath, 5_000), "dispatcher should have written probe");
+  assert.ok(waitForFile(probePath, DISPATCH_WAIT_MS), "dispatcher should have written probe");
   const body = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
   const eventInfo =
     typeof body.data.eventInfo === "string" ? JSON.parse(body.data.eventInfo) : {};

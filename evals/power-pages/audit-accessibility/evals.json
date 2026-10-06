@@ -1,0 +1,84 @@
+{
+  "skill_name": "audit-accessibility",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Check my Power Pages site for accessibility issues. The project is at c:\\repos\\contoso-portal (a React code site) and it's deployed at https://contoso.powerappsportals.com. I want a full audit of all pages, including the mobile menu and any dialogs.",
+      "expected_output": "The skill finds the project root, uses the provided URL, checks for the audit runtime, proposes a full crawl scope and waits for approval, runs discovery, proposes interaction states (including a mobile navigation state) and waits for approval, runs the audit, triages findings into Must fix / Should fix / Verify / Best practice, writes docs/accessibility/accessibility-audit.md and docs/accessibility/last-audit.json, and offers a fix plan without editing files until approved.",
+      "files": [],
+      "expectations": [
+        "Uses https://contoso.powerappsportals.com as the site URL without asking for it again",
+        "Creates a private temp run folder for raw audit output instead of writing raw JSON into the project",
+        "Probes the audit runtime with a11y-audit.js and only offers install-a11y-deps.js when the probe exits with code 4",
+        "Presents the proposed audit scope (pages, page limit, viewports, checks) and waits for approval before crawling",
+        "Runs a11y-audit.js in discover mode before proposing interaction states",
+        "Proposes a mobile navigation state with viewport set to mobile and a state for at least one dialog or menu, and waits for approval",
+        "Does not include sign-out, delete, or payment controls in the proposed states",
+        "Runs the audit with --crawl, both desktop and mobile viewports, and the approved --states file",
+        "Groups findings into Must fix, Should fix, Verify, and Best practice, and explains who each must-fix issue affects",
+        "Writes docs/accessibility/accessibility-audit.md with no unreplaced {{placeholders}} and includes a manual checks section",
+        "Writes docs/accessibility/last-audit.json with status, outcome, baseUrl, finishedAt, summary, and reportFile",
+        "Sets outcome to failed when the audit reports blocking violations",
+        "Asks for approval before editing any source file to fix findings"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Run a quick accessibility check on http://localhost:5173 — just the home page and /contact. No need to test menus or dialogs.",
+      "expected_output": "The skill uses the local URL, proposes a quick scope limited to / and /contact with no crawl and no interaction states, runs the audit, writes the report, and if fixes are approved and applied, re-runs the audit against the local dev server to confirm.",
+      "files": [],
+      "expectations": [
+        "Uses http://localhost:5173 as the site URL",
+        "Proposes a scope limited to the / and /contact routes without crawling",
+        "Skips discovery and interaction states after the user chooses the quick scope",
+        "Runs a11y-audit.js with --routes /,/contact and without --crawl or --states",
+        "Interprets exit code 1 as blocking violations and exit code 3 as an incomplete audit (pages or states that failed to load, or checks that errored), reporting those as coverage gaps rather than passes",
+        "Writes an accessibility report and presents a short summary with counts by group",
+        "If fixes are applied, re-runs the audit against the local dev server to verify them",
+        "Does not suggest or run /deploy-site automatically"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Audit the accessibility of https://northwind.powerappsportals.com including the pages behind sign-in, like /profile and /my-cases.",
+      "expected_output": "The skill proposes a scope that includes signed-in pages, opens a visible browser with a11y-capture-auth.js so the user signs in themselves, waits for the user, audits with the saved session, treats redirects to the sign-in page as coverage gaps, keeps session paths out of the report, and removes the session file at the end on every exit path.",
+      "files": [],
+      "expectations": [
+        "Proposes the Include signed-in pages scope and waits for approval",
+        "Runs a11y-capture-auth.js with --url, --done-file, and --timeout-sec so the user signs in through a visible browser",
+        "Never asks the user for a password or types credentials on their behalf",
+        "Passes the saved session to a11y-audit.js with --auth-state",
+        "Reports a redirect to the sign-in page as a coverage gap rather than a passing page",
+        "Does not include the session file path, cookies, or tokens in the report or the result marker",
+        "Removes the saved session with a11y-capture-auth.js --remove before finishing, even if a later step is cancelled",
+        "Sets signedIn to true and sessionRemoved to true in docs/accessibility/last-audit.json when a project root exists"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Check accessibility on https://fabrikam.powerappsportals.com and include the contact form's validation errors after submitting it empty.",
+      "expected_output": "The skill prefers a focus-and-Tab validation state that does not submit the form. If the user still wants a state that submits the form, it explains that submission can create Dataverse records or send email, asks for separate consent, and only then passes --allow-form-submit.",
+      "files": [],
+      "expectations": [
+        "Proposes a validation state that focuses a required field and presses Tab instead of clicking the submit button",
+        "Explains that submitting a form can create or update Dataverse records or send email",
+        "Asks for separate consent before using any state that submits a form",
+        "Passes --allow-form-submit to a11y-audit.js only after the user consents",
+        "Recommends running form-submission states only against a test or development site"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Check https://litware.powerappsportals.com for accessibility problems. I don't have the project source on this machine.",
+      "expected_output": "The skill runs without a project root, writes the report to the private run folder instead of the project, skips skill-usage tracking and the result marker, and explains that it can't apply source fixes without the project.",
+      "files": [],
+      "expectations": [
+        "Runs the audit without requiring powerpages.config.json or a .powerpages-site folder",
+        "Writes the accessibility report to the private run folder and shows its path",
+        "Does not write docs/accessibility/last-audit.json when there is no project root",
+        "Explains which fixes are needed but does not offer to edit source files that aren't available",
+        "Does not change create-site, test-site, or any deployment state"
+      ]
+    }
+  ]
+}
