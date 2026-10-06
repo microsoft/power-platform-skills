@@ -1,0 +1,143 @@
+# Agent-in-the-loop evals for the model-apps plugin: launches a real agent CLI headlessly and
+# grades which skill it routes each prompt to (evals/model-apps/routing/).
+#
+# Why this is NOT part of model-apps-script-tests.yml (the per-PR gate):
+#   * it is non-deterministic (graded as a pass RATE over several trials), so it must not be a
+#     hard merge gate;
+#   * it costs real model usage (~1 turn per trial; 20 cases x 3 trials per full run), billed to
+#     the organization;
+#   * fork PRs cannot be given Copilot request rights, so a required check would block outside
+#     contributions.
+# The deterministic graders (genpage Layer 1/2, app-builder structural) DO run on every PR.
+#
+# When it runs:
+#   * on a same-repo PR labelled `run-agent-evals` — use it on PRs that touch a SKILL.md
+#     description, where routing is exactly what changed. Re-apply the label to re-run after
+#     new commits. Report-only; not a required check;
+#   * weekly (drift: the model behind the CLI changes even when this repo does not);
+#   * on demand (workflow_dispatch) — e.g. before a release, or to compare models.
+#
+# Credentials: none to provision for the default agent. Copilot CLI authenticates with the
+# workflow's built-in GITHUB_TOKEN when the job holds `copilot-requests: write`; usage is billed
+# to the organization, which needs the "Allow use of Copilot CLI billed to the organization"
+# Copilot policy (on by default when Copilot CLI is enabled). See
+# https://docs.github.com/copilot/how-tos/copilot-cli/use-copilot-cli-in-actions
+# agent=claude (dispatch only) needs an ANTHROPIC_API_KEY secret and clean-skips without it.
+name: model-apps-agent-evals
+
+on:
+    pull_request:
+        types: [labeled]
+        branches:
+            - main
+        paths:
+            - "plugins/model-apps/skills/**"
+            - "plugins/model-apps/agents/**"
+            - "evals/model-apps/routing/**"
+    schedule:
+        - cron: "0 9 * * 1"
+    workflow_dispatch:
+        inputs:
+            agent:
+                description: "Agent CLI to drive"
+                type: choice
+                options: [copilot, claude]
+                default: copilot
+            tier:
+                description: "Tier filter (empty = all tiers)"
+                type: choice
+                options: ["", smoke, full, stress]
+                default: ""
+            runs:
+                description: "Trials per case"
+                default: "3"
+            model:
+                description: "Model passed to the CLI (empty = CLI default)"
+                default: ""
+
+permissions:
+    contents: read
+
+jobs:
+    routing-eval:
+        name: routing-eval (${{ inputs.agent || 'copilot' }})
+        # The label must be the one that triggered this event (adding any other label to a PR
+        # does not re-run the eval), and never from a fork.
+        if: >-
+            github.event_name != 'pull_request' ||
+            (github.event.label.name == 'run-agent-evals' &&
+             github.event.pull_request.head.repo.full_name == github.repository)
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        permissions:
+            contents: read
+            # Lets Copilot CLI authenticate with GITHUB_TOKEN. Scoped to this job only.
+            copilot-requests: write
+        env:
+            # Trials invoke plugin skills, whose hooks can emit telemetry; CI is not real usage.
+            POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: "1"
+            AGENT: ${{ inputs.agent || 'copilot' }}
+            TIER: ${{ inputs.tier || '' }}
+            RUNS: ${{ inputs.runs || '3' }}
+            MODEL: ${{ inputs.model || '' }}
+            # Pinned so a CLI release cannot change what the eval measures (or what runs with a
+            # model credential in scope) without a reviewed bump here.
+            COPILOT_CLI_VERSION: "1.0.92"
+            CLAUDE_CODE_VERSION: "2.1.284"
+        steps:
+            - name: check-credentials
+              id: creds
+              shell: bash
+              env:
+                  HAS_ANTHROPIC: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+              run: |
+                  if [ "$AGENT" = "claude" ] && [ "$HAS_ANTHROPIC" != "true" ]; then
+                      echo "::notice::ANTHROPIC_API_KEY is not configured; skipping the claude routing eval."
+                      echo "skip=true" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "skip=false" >> "$GITHUB_OUTPUT"
+                  fi
+
+            - name: checkout
+              if: steps.creds.outputs.skip != 'true'
+              uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+              with:
+                  persist-credentials: false
+
+            - name: setup-node
+              if: steps.creds.outputs.skip != 'true'
+              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+              with:
+                  node-version: 22
+
+            # No credential is in this step's environment: npm runs package install scripts.
+            - name: install-agent-cli
+              if: steps.creds.outputs.skip != 'true'
+              shell: bash
+              run: |
+                  if [ "$AGENT" = "copilot" ]; then npm install -g "@github/copilot@${COPILOT_CLI_VERSION}"; else npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"; fi
+
+            # Exit 1 (a case under threshold) fails the run so the signal is visible; exit 2 is a
+            # harness error (CLI not authorized, plugin not loaded). Raw transcripts are
+            # deliberately NOT uploaded — this repo is public and a transcript can echo runner
+            # paths and model reasoning; the results JSON carries outcomes only.
+            - name: run-routing-eval
+              if: steps.creds.outputs.skip != 'true'
+              shell: bash
+              env:
+                  # Only the selected agent's credential is set; the other resolves to ''.
+                  GITHUB_TOKEN: ${{ (inputs.agent || 'copilot') == 'copilot' && github.token || '' }}
+                  ANTHROPIC_API_KEY: ${{ (inputs.agent || 'copilot') == 'claude' && secrets.ANTHROPIC_API_KEY || '' }}
+              run: |
+                  args=(--agent "$AGENT" --runs "$RUNS" --out routing-results.json)
+                  [ -n "$TIER" ] && args+=(--tier "$TIER")
+                  [ -n "$MODEL" ] && args+=(--model "$MODEL")
+                  node evals/model-apps/routing/run-routing.js "${args[@]}"
+
+            - name: upload-results
+              if: always() && steps.creds.outputs.skip != 'true'
+              uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+              with:
+                  name: routing-results-${{ env.AGENT }}
+                  path: routing-results.json
+                  if-no-files-found: ignore

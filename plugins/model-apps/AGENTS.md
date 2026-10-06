@@ -1430,3 +1430,27 @@ reconcile, fail-closed), `process`, `generate-pages`, `teardown`, `round-trip` a
 # From repo root:
 node evals/model-apps/app-builder/run-app-builder.js
 ```
+
+### Skill routing — agent in the loop
+
+`evals/model-apps/routing/` grades which skill a real agent CLI (Copilot CLI or
+Claude Code, headless, isolated, only this plugin loaded) invokes for each of 20
+prompts: `/genpage` vs `/app-builder` from both sides of their boundary, plus
+negatives that share vocabulary (Power Pages, canvas, Power Automate, a generic
+React dashboard). The offline harnesses above grade what a run *produced* and
+cannot see a mis-route; both skill descriptions point at each other, so a
+wording change to one can start stealing the other's prompts. The agent is
+killed at its first plugin-skill call, so a trial costs about one model turn;
+cases are graded as a pass rate over N trials. **Run it when you edit a skill
+`description:`.** It is not a per-PR gate (cost, non-determinism):
+`model-apps-agent-evals.yml` runs it on a same-repo PR labelled
+`run-agent-evals`, weekly, and on demand, using Copilot CLI authenticated by the
+workflow's own `GITHUB_TOKEN` (`copilot-requests: write`) — no secret to
+provision. Its parsing/grading/process code is unit-tested on every PR against a
+fake agent. See [`evals/model-apps/routing/EVAL_GUIDE.md`](../../evals/model-apps/routing/EVAL_GUIDE.md).
+
+```bash
+node evals/model-apps/routing/run-routing.js --dry-run                 # what would launch
+node evals/model-apps/routing/run-routing.js --tier smoke --runs 1     # quick local check
+node evals/model-apps/routing/run-routing.js --out after.json --compare before.json
+```

@@ -20,7 +20,7 @@ const fs = require('node:fs');
 // re-implemented: it is a pure lexer over TSX text, not part of the thing this harness judges, and
 // two divergent copies of a tokenizer is exactly how a false-green assertion creeps back in. Evals
 // never ship, so reaching into the plugin directory here is in-repo only.
-const { blankLiterals, findElisionMarker } = require('../../../../plugins/model-apps/scripts/lib/source-literals.js');
+const { blankLiterals, blankNonCodePreservingTemplateExpressions, commentRanges, findElisionMarker } = require('../../../../plugins/model-apps/scripts/lib/source-literals.js');
 const { pageStructureProblems } = require('../../../../plugins/model-apps/scripts/lib/page-structure.js');
 const { navigationProblems } = require('./navigation-contract.js');
 const { workerProblems } = require('./worker-contract.js');
@@ -606,6 +606,57 @@ PHASE5_EXPECTATIONS.set(
 PHASE5_EXPECTATIONS.set(
   'Phase 5 (Page Builder): Generated .tsx uses the choice enum names from RuntimeTypes.ts (not magic numbers)',
   () => skip('choice enum verification requires RuntimeTypes.ts fixture')
+);
+
+// Hardcoded currency symbols and date formats in the TEXT a page shows or formats with. The text
+// view keeps only string, template and JSX text at its original offsets: the template-preserving
+// lexer view leaves `${…}` bodies as code, and comment ranges are dropped, so a comment explaining
+// the rule never trips it. Raw shapes this catches (references/localization.md forbids all of them):
+//   <Text>${total}</Text>                 `$` in JSX text right before a code `{`
+//   `$${amount.toFixed(2)}`               `$` in template text before the `${` delimiter
+//   'Total: €' / '$100'                   a symbol in a string
+//   'MM/dd/yyyy', 'yyyy-MM-dd'            a date pattern instead of usersettings.dateformatstring
+//   { style: 'currency', currency: 'USD' } a currency code instead of usersettings.currencysymbol
+//   d.toLocaleDateString('en-US')         a fixed locale's date format
+// A bare `${x}` interpolation is NOT a currency symbol: its `$` is the template delimiter.
+const DATE_PART = '(?:d{1,2}|D{1,2}|M{1,4}|y{2,4}|Y{2,4})';
+const DATE_PATTERN = new RegExp(`\\b${DATE_PART}([/.\\-])${DATE_PART}\\1${DATE_PART}\\b`);
+function hardcodedFormatProblem(content) {
+  const keep = blankNonCodePreservingTemplateExpressions(content);
+  const comment = new Uint8Array(content.length);
+  for (const { start, end } of commentRanges(content)) comment.fill(1, start, end);
+  const isText = (i) => keep[i] !== content[i] && !comment[i];
+  const text = content.split('').map((ch, i) => (isText(i) ? ch : ' ')).join('');
+  for (const m of text.matchAll(/[$\u20ac\u00a3\u00a5\u20b9]/g)) {
+    const i = m.index;
+    if (m[0] !== '$') return `hardcoded currency symbol "${m[0]}"`;
+    let j = i + 1;
+    while (j < content.length && /[ \t]/.test(content[j])) j += 1;
+    const amount = /\d/.test(content[j] || '');
+    const templateCurrency = content[i + 1] === '$' && content[i + 2] === '{';
+    const jsxCurrency = content[j] === '{' && !isText(j);
+    if (amount || templateCurrency || jsxCurrency) return 'hardcoded "$" currency symbol';
+  }
+  const pattern = DATE_PATTERN.exec(text);
+  if (pattern && /[dD]/.test(pattern[0]) && /M/.test(pattern[0]) && /[yY]/.test(pattern[0])) return `hardcoded date format "${pattern[0]}"`;
+  for (const call of keep.matchAll(/\bcurrency\s*:\s*/g)) {
+    if (/^['"`]/.test(content.slice(call.index + call[0].length))) return 'hardcoded currency code in a number format';
+  }
+  for (const call of keep.matchAll(/\b(?:toLocaleDateString|toLocaleString|toLocaleTimeString|DateTimeFormat)\s*\(\s*/g)) {
+    if (/^['"`][a-z]{2,3}(?:-[A-Za-z]{2,4})?['"`]/.test(content.slice(call.index + call[0].length))) return 'hardcoded locale for date formatting';
+  }
+  return null;
+}
+
+PHASE5_EXPECTATIONS.set(
+  'Phase 5 (Page Builder): Generated .tsx does NOT hardcode currency symbols or date formats',
+  ({ files }) => {
+    for (const file of files) {
+      const problem = hardcodedFormatProblem(file.content);
+      if (problem) return fail(`${file.name}: ${problem}`);
+    }
+    return pass();
+  }
 );
 
 PHASE5_EXPECTATIONS.set(

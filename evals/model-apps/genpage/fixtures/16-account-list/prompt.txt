@@ -1,0 +1,4 @@
+Build a page showing Account records.
+
+- Data source: Dataverse entity account (already exists)
+- Specific requirements: simple account list
