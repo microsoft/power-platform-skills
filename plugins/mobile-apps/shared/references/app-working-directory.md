@@ -23,25 +23,21 @@ telemetry, and retries. Keep `PLUGIN_ROOT` absolute and re-supply any required
 shell variables from the current invocation context on each call; a missing
 value returns `NEEDS_CONTEXT`, never an empty path or a cwd fallback.
 
-## Bash (macOS/Linux or Git Bash on Windows)
+Resolve `$PA` and `PA_KIND` for this app via [cli-binary.md](../cli-binary.md),
+not from another app's cached selection. Re-supply both in each fresh shell
+call after binding the root; use the shared grouped/flat command and flag mapping.
 
-Replace the entire quoted `"<working_dir>"` placeholder with one shell-quoted
-literal argument, not raw interpolation inside double quotes. Single-quote the
-path and escape an embedded apostrophe as `'\''`. On Windows use a Git Bash
-compatible spelling of the same root, such as `C:/Users/maker/My App`, not an
-unrelated WSL filesystem path. Never execute an unresolved placeholder.
+## Shell guards
+
+Use a shell-quoted literal argument for the resolved root, including in Git Bash
+on Windows. Never execute an unresolved placeholder.
 
 ```bash
 cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 ```
 
-## PowerShell (Windows or PowerShell 7 on macOS/Linux)
-
-Use a single-quoted native filesystem path and double embedded apostrophes.
-`-LiteralPath` preserves spaces and wildcard characters such as brackets;
-`-ErrorAction Stop` prevents subsequent commands after a failed directory change.
-Do not paste Bash quoting or `|| exit 1` into Windows PowerShell.
-See [Set-Location](https://learn.microsoft.com/powershell/module/microsoft.powershell.management/set-location).
+For an existing PowerShell helper, use a single-quoted literal path and double
+embedded apostrophes:
 
 ```powershell
 Set-Location -LiteralPath '<working_dir>' -ErrorAction Stop

@@ -1,13 +1,15 @@
 # Retiring an app data source
 
 Use this reference when a current data-source request removes or replaces an
-app's Dataverse table binding, connector data source, SQL procedure, or cloud-flow
-binding.
+app's Dataverse table binding, connector data source, or SQL procedure.
 Follow [Data-source invocation scope](../shared-instructions.md#data-source-invocation-scope)
 first. Standalone calls resolve and approve their exact data delta here; child
 calls retain their current owner, phase, absolute root, and approved scope.
 Removing a source from the app does not authorize deleting the server table,
 its columns/records, a connection, a solution component, or the cloud flow itself.
+Cloud-flow binding changes are not supported by mobile skills; report
+`BLOCKED: cloud-flow integration is not supported` and return without discovery
+or mutation. Preserve existing flow dependencies when changing a supported source.
 
 ## Bind refresh, removal, and verification to the app root
 
@@ -24,7 +26,7 @@ The template's `npm run generate-schemas` rebuilds the runtime connector schema
 map. It does not infer unused tables from screen code, unregister sources, or
 replace the Power Apps CLI's service/model generation.
 
-The supported inverse of `add-data-source` is `delete-data-source`. The CLI
+The supported inverse of `pa app add data-source` is `pa app remove data-source`. The CLI
 removes the source's schema registration, updates `power.config.json`, and
 regenerates models/services from the remaining schemas. Follow it with
 `npm run generate-schemas` to update the mobile runtime map.
@@ -32,7 +34,7 @@ regenerates models/services from the remaining schemas. Follow it with
 ## Refresh a retained source
 
 For a source that remains in use but whose server schema changed, use the CLI's
-`refresh-data-source` instead. Hiding a field or dropping it from a screen spec
+`pa app refresh data-source` instead. Hiding a field or dropping it from a screen spec
 does not mean deleting its server column or unregistering the whole table.
 
 After current data-scope approval, `--refresh` or an approved refresh
@@ -51,12 +53,15 @@ procedure, and connection binding as applicable. Require one unambiguous stored
 registration; never guess from a display label or silently add an absent source.
 If the CLI's name-only selector could refresh unrelated registrations, STOP.
 Capture the existing binding identities before executing the command.
+Resolve `$PA` using [cli-binary.md](../cli-binary.md). The examples use grouped
+`pa` commands; on `PA_KIND=power-apps`, translate both verbs and flags using that
+reference. The skill's `--data-source-name` becomes the grouped CLI's `--name`.
 
 ```bash
 cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-npx --no-install power-apps refresh-data-source --data-source-name '<registered-name>' --non-interactive
+$PA app refresh data-source --name '<registered-name>' --non-interactive
 npm run generate-schemas
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
 Refresh only the approved retained source. Inspect per-source failure output as
@@ -74,8 +79,6 @@ No refresh authorizes retiring another source.
 
 Sources: [Power Apps CLI reference](https://learn.microsoft.com/power-apps/developer/code-apps/reference/cli#pa-app-remove-data-source)
 and [connecting to data](https://learn.microsoft.com/power-apps/developer/code-apps/how-to/connect-to-data#add-a-connection-to-a-code-app).
-The grouped code-apps equivalent is `pa app remove data-source --connector ... --name ...`;
-the mobile workflow below uses the template's flat `power-apps` binary.
 
 ## 1. Plan the removal, do not infer permission from absence
 
@@ -86,7 +89,7 @@ for standalone retirement. Classify each source as retain, add, refresh, or
 candidate removal. A missing row in a planner's output is a candidate, not consent.
 
 For each candidate, resolve the exact stored data-source name, API ID, and
-dataset/procedure/flow identity from `power.config.json` and `.power/schemas/`.
+dataset/table/procedure identity from `power.config.json` and `.power/schemas/`.
 A display label, table logical name, and generated class name need not match.
 Preserve original spelling; do not guess a CLI selector from a screen title.
 
@@ -122,35 +125,35 @@ return the conflict to the owner for an explicit migration plan.
 
 ## 3. Execute only the approved app-local removal
 
-Use the installed CLI from the app root. Confirm its removal options with
-`npx --no-install power-apps delete-data-source --help` (or `remove-flow --help`)
-if the installed surface differs. Do not fetch another CLI version as a fallback.
+Use the resolved `$PA` from the app root and the shared
+[command and flag mapping](../cli-binary.md). Confirm its removal options with
+`$PA app remove data-source --help` (translated for the flat fallback) if the
+installed surface differs. Do not fetch another CLI version as a fallback.
 
-After approval, `--force` acknowledges the CLI's destructive-action prompt;
-`--non-interactive` alone is not removal consent. The template-pinned CLI supports:
+After approval, `--force` acknowledges grouped `pa`'s destructive-action prompt;
+`--non-interactive` alone is not removal consent. For `PA_KIND=power-apps`,
+translate the command and flags and omit `--force` as specified by the shared
+mapping; the approval and scope checks still apply. Run only the applicable
+command below:
 
 ```bash
 cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 # Dataverse: use the registered data-source key, not a guessed display label.
-npx --no-install power-apps delete-data-source --api-id dataverse --data-source-name '<registered-name>' --force --non-interactive
+$PA app remove data-source --connector dataverse --name '<registered-name>' --force --non-interactive
 
 # Connector/table registration.
-npx --no-install power-apps delete-data-source --api-id '<apiId>' --data-source-name '<registered-name>' --force --non-interactive
+$PA app remove data-source --connector '<apiId>' --name '<registered-name>' --force --non-interactive
 
 # SQL procedure: also use the exact stored procedure identity from its schema.
-npx --no-install power-apps delete-data-source --api-id shared_sql --data-source-name '<registered-name>' --sql-stored-procedure '<procedure>' --force --non-interactive
-
-# Removes the app binding, not the server flow.
-npx --no-install power-apps remove-flow --flow-id '<flow-id>' --force --non-interactive
+$PA app remove data-source --connector shared_sql --name '<registered-name>' --procedure '<procedure>' --force --non-interactive
 ```
 
 Run sequentially: each operation can regenerate the shared model/service output.
 Do not manually delete `src/generated/` files, schema registrations, or
 `power.config.json` entries to imitate the command.
 
-**Scope preflight matters.** In the template-pinned CLI (0.15.3), non-Dataverse
-cleanup matches source names across connection references and prunes empty
-references. Before removal, check for same-named registrations in other
+**Scope preflight matters.** Non-Dataverse cleanup can match source names across
+connection references and prune empty references. Before removal, check for same-named registrations in other
 connectors/datasets and empty references used by remaining flows. If the command
 could remove anything outside the approved scope, stop and report the CLI
 limitation; do not run it and hope to repair collateral changes afterward.
@@ -179,7 +182,7 @@ After verified removal:
 ```bash
 cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npm run generate-schemas
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
 Confirm the runtime schema map excludes the retired source, including when the

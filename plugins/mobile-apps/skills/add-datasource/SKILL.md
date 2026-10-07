@@ -40,11 +40,11 @@ Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/sh
 | User's goal | Best approach | Invoke |
 |---|---|---|
 | Refresh generated services for a retained data source | Resolve the existing registration; preserve its platform and binding | Matching `/add-dataverse`, `/add-sharepoint`, or `/add-connector` with skill-only `--refresh --data-source-name "<registered-name>"` |
-| Stop using a registered table, connector, or flow in this app | Preserve the removal intent and resolve its existing registration type; do not infer a new data platform | Matching `/add-dataverse`, `/add-sharepoint`, or `/add-connector` with skill-only `--remove` |
+| Stop using a registered table or connector in this app | Preserve the removal intent and resolve its existing registration type; do not infer a new data platform | Matching `/add-dataverse`, `/add-sharepoint`, or `/add-connector` with skill-only `--remove` |
 | Store and manage structured business data (custom tables, forms, CRUD) | Dataverse is the platform's native database | `/add-dataverse` |
 | Invoke an existing Dataverse action/function/API | Discover with `pa app find-dataverse-api`; this plugin only adds Dataverse table CRUD | `/add-connector` |
 | Read lists, manage documents, integrate with SharePoint sites | SharePoint Online — dedicated skill with list creation support | `/add-sharepoint` |
-| Invoke an existing Power Automate cloud flow | Use `pa app list-flows` / `pa app add flow` support through the generic connector workflow | `/add-connector` |
+| Add, invoke, refresh, or remove a Power Automate cloud-flow binding | Cloud-flow integration is not supported by mobile skills | None; report the limitation and return without CLI calls |
 | Anything else — Teams messages, Excel data, OneDrive files, Office 365 email/calendar, Azure DevOps, Copilot Studio, custom connectors | Generic connector (we'll figure out the right one) | `/add-connector` |
 
 **Note:** Dedicated skills for Teams, Excel, OneDrive, Office 365, and Azure DevOps are planned for v1. Until then, `/add-connector` handles all of them — it covers every connector the platform supports and generates the same `src/generated/` service layer.
@@ -62,7 +62,7 @@ Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/sh
   matching leaf's removal branch; never turn "remove this source" into an add
   command. Use [data-source-removal.md](../../shared/references/data-source-removal.md).
 - When the user wants to **perform actions** (send an email, post a Teams message, create a file), route to `/add-connector` with the connector name as the argument (e.g., `/add-connector office365`, `/add-connector teams`).
-- When the user wants to **invoke a cloud flow**, route to `/add-connector` and tell it to use `$PA app list-flows --json` followed by `$PA app add flow --flow-id <flow-guid> --non-interactive` from the app root.
+- For a **cloud-flow binding** request, report `BLOCKED: cloud-flow integration is not supported` and return without discovery or mutation. Do not route it through a connector or Dataverse workflow.
 - When the user wants to **invoke a Dataverse action/function/API** rather than table CRUD, route to `/add-connector` and tell it to use `$PA app find-dataverse-api --search '<operation-name>' --json`; then stop and explain that this plugin only adds Dataverse table CRUD.
 - When the user wants to **store or query structured business data** with custom schema, route to `/add-dataverse`.
 

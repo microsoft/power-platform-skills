@@ -1,20 +1,33 @@
 #!/usr/bin/env node
 
 // Verifies Dataverse API access by obtaining an Azure CLI token and calling WhoAmI.
-// Usage: node verify-dataverse-access.js <environmentUrl>
+// Usage: node verify-dataverse-access.js <environmentUrl> [--tenant-id <id>]
 // Outputs JSON: { "token": "...", "userId": "...", "organizationId": "...", "tenantId": "..." }
 // Exit 0 on success, exit 1 on failure (error message on stderr).
 
 const { getAuthToken, makeRequest } = require('./lib/validation-helpers');
+const { parseArgs } = require('node:util');
+const usage = 'Usage: node verify-dataverse-access.js <environmentUrl> [--tenant-id <id>]';
 
 async function main() {
-  const envUrl = process.argv[2];
-  if (!envUrl) {
-    process.stderr.write('Usage: node verify-dataverse-access.js <environmentUrl>\n');
+  let parsed;
+  try {
+    parsed = parseArgs({
+      options: { 'tenant-id': { type: 'string' } },
+      allowPositionals: true,
+    });
+  } catch (error) {
+    process.stderr.write(`${error.message}\n${usage}\n`);
+    process.exit(1);
+  }
+  const [envUrl] = parsed.positionals;
+  const explicitTenantId = parsed.values['tenant-id'];
+  if (!envUrl || parsed.positionals.length !== 1 || (explicitTenantId !== undefined && !explicitTenantId.trim())) {
+    process.stderr.write(`${usage}\n`);
     process.exit(1);
   }
 
-  const token = await getAuthToken(envUrl);
+  const token = await getAuthToken(envUrl, explicitTenantId);
   if (!token) {
     process.stderr.write('Failed to get Azure CLI token. Run `az login` first.\n');
     process.exit(1);

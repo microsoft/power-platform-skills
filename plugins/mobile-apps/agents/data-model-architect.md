@@ -216,7 +216,12 @@ Even this legacy planning path is non-persisting: do not remove these flags or
 redirect output into app/auth configuration. A failed lookup returns to the
 owner with its error; it never authorizes a configuration write.
 
-Capture the **Environment URL** (e.g., `https://orgXXXXX.crm.dynamics.com`), **Environment ID**, and **Tenant ID** from the output. Use the URL as `<envUrl>` for subsequent script calls.
+Capture the **Environment URL**, **Environment ID**, and **Tenant ID** from the
+output. Use the URL as `<envUrl>` and the validated nonempty tenant as
+`<tenantId>`. Pass `--tenant-id "<tenantId>"` on every metadata helper call and
+retry below; do not inherit a tenant from shell variables or the active Azure
+account. Missing or conflicting tenant context returns `NEEDS_CONTEXT` before
+metadata access.
 
 If resolution fails (not authenticated or environment not visible to the logged-in account), do not stop the run. Skip further discovery, prepend a `Discovery skipped — environment not reachable` warning to your section, and finish with `DONE_WITH_CONCERNS`. The plan is a draft for the user's data-model review; `/add-dataverse` re-queries live metadata and blocks any mutation it cannot verify.
 
@@ -228,7 +233,7 @@ If resolution fails (not authenticated or environment not visible to the logged-
 
 ```bash
 cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-node "${PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl>
+node "${PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl> --tenant-id "<tenantId>"
 ```
 
 If it fails, skip Step 3 and Step 5's live queries, prepend a `Dataverse access failed — az login required` warning to your section, and finish with `DONE_WITH_CONCERNS`. Do not convert unverified guesses into confident decisions.
@@ -247,14 +252,15 @@ Query custom tables to discover conceptual reuse candidates. This broad query is
 ```bash
 cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions?\$select=MetadataId,LogicalName,DisplayName,Description,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes&\$filter=IsCustomEntity eq true"
+  "EntityDefinitions?\$select=MetadataId,LogicalName,DisplayName,Description,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes&\$filter=IsCustomEntity eq true" \
+  --tenant-id "<tenantId>"
 ```
 
 For the relevant tables, fetch their user-defined columns in a single call (system columns like `createdon`, `modifiedby`, `statecode`, `ownerid`, `versionnumber` are filtered out automatically):
 
 ```bash
 cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-node "${PLUGIN_ROOT}/scripts/list-table-columns.js" <envUrl> <table1> <table2> ...
+node "${PLUGIN_ROOT}/scripts/list-table-columns.js" <envUrl> <table1> <table2> ... --tenant-id "<tenantId>"
 ```
 
 Output is a clean JSON map of `{ tableName: [{ name, type, required }, ...] }`. Pass multiple tables in one invocation.
@@ -302,7 +308,8 @@ dependencies — in a **single** filtered query that also expands their columns:
 ```bash
 cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions?\$select=MetadataId,LogicalName,SchemaName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes,PrimaryIdAttribute,PrimaryNameAttribute&\$filter=LogicalName eq '<table1>' or LogicalName eq '<table2>'&\$expand=Attributes(\$select=LogicalName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName)"
+  "EntityDefinitions?\$select=MetadataId,LogicalName,SchemaName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes,PrimaryIdAttribute,PrimaryNameAttribute&\$filter=LogicalName eq '<table1>' or LogicalName eq '<table2>'&\$expand=Attributes(\$select=LogicalName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName)" \
+  --tenant-id "<tenantId>"
 ```
 
 Build the `$filter` by OR-ing every selected logical name. This is the [documented way to query multiple table definitions at once](https://learn.microsoft.com/power-apps/developer/data-platform/query-schema-definitions#basic-retrievemetadatachanges-example) and replaces 2N requests with one. Keep the expanded `$select` to base `AttributeMetadata` properties — one query [cannot cast to a derived column type](https://learn.microsoft.com/power-apps/developer/data-platform/query-schema-definitions#evaluate-other-options-to-retrieve-schema-definitions).

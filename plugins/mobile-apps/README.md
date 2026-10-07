@@ -228,12 +228,8 @@ Runs `pa app add data-source` under the hood, regenerates services, prints how t
 
 ### Data-source planning, refresh, and retirement
 
-`/setup-datamodel` and `/add-dataverse` plan only the requested Dataverse delta
-using compact live-metadata evidence and decision validation before approval.
-An existing plan is context, not permission to replay unrelated schema changes.
-Their `--plan-only` mode returns a proposal without saving the live plan or
-changing data/configuration. SQL/Excel/SharePoint schemas stay with their
-connectors rather than becoming Dataverse tables automatically.
+Use `/setup-datamodel` or `/add-dataverse` to review and approve a data change.
+Add `--plan-only` to preview it without changing the app or its data.
 
 For an existing binding, use the dedicated operation instead of adding it again:
 
@@ -243,24 +239,10 @@ For an existing binding, use the dedicated operation instead of adding it again:
 > /add-sharepoint --remove --data-source-name <registered-name>
 ```
 
-Refresh preserves the approved binding identity. Removal requires approval,
-consumer checks, and verification of CLI-owned registration/generated-output
-cleanup. Remove or update consumers first; a remaining or unknown dependency
-blocks retirement. Removing an app binding does not delete server tables,
-records, lists, connections, or flows. An offline-profile retirement decision
-is separate and remains visible if pending; an addition-only sync check cannot
-clear it.
-
-Data commands use the resolved app root on every shell/file operation, including
-verification and retries. Bash/Git Bash and PowerShell guards stop if the root is
-missing. Supplied connection IDs/references are retained rather than recreated.
-`npm run generate-schemas` rebuilds the runtime schema map; it does not register,
-refresh, or unregister sources.
-
-Sample seeding uses an explicitly approved table allowlist and count/media
-policy. Dependencies and retries cannot silently expand it to the full schema
-inventory. These data-only workflows report service signatures and remaining
-integration work rather than claiming that screens were wired.
+Refresh updates an existing source without adding it again. Removal stops if
+app code still uses the source and never deletes server tables, records, lists,
+or connections. These commands update the data layer; request screen changes
+separately through `/edit-app`. Cloud-flow integration is not supported.
 
 ### 5. Iterate on the generated app after the fact
 

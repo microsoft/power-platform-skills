@@ -18,20 +18,25 @@ Use its resolved absolute `working_dir` for every shell call and file tool,
 including referenced commands and delegated skills; never inherit a prior `cd`.
 
 **Invocation scope:** follow [Data-source invocation scope](../../shared/shared-instructions.md#data-source-invocation-scope)
-before the workflow below. This skill owns connector/flow bindings and generated
+before the workflow below. This skill owns connector bindings and generated
 services, not a full-app plan or screen implementation.
 
 For a standalone request, approve the current data-source delta before each
-mutation: the exact connector/flow, environment, binding, and dataset/table or
+mutation: the exact connector, environment, binding, and dataset/table or
 procedure as applicable. Connection creation needs explicit approval too.
 An approved child reuses only its owner's current scope; a missing choice may
 be resolved read-only, but a changed scope returns to that owner.
 For `--plan-only` or a planning-phase handoff, return the proposed bindings and
-unresolved choices before connection creation, `add-flow`, or `add-data-source`.
+unresolved choices before connection creation or `pa app add data-source`.
 Do not update the app plan, memory-bank, configuration, or generated files on
 that path; missing discovery access is not permission to create a connection.
 
-Action connectors and cloud flows do not imply Dataverse Data Model changes.
+Action connectors do not imply Dataverse Data Model changes.
+
+**Cloud flows are not supported by mobile skills.** For a request to add,
+refresh, invoke, or remove a cloud-flow binding, report
+`BLOCKED: cloud-flow integration is not supported` and return before discovery
+or mutation. Do not treat a flow as a connector data source.
 
 **Removal branch:** after resolving invocation scope, if `--remove` or the approved scope
 requests removal, execute
@@ -94,7 +99,7 @@ Use aliases only for routing; pass the exact discovered API ID to CLI commands.
 
 ```bash
 cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-npx --no-install power-apps find-dataverse-api --search '<operation-name>' --json
+$PA app find-dataverse-api --search '<operation-name>' --json
 ```
 
 Surface the matching metadata and STOP this leaf with a clear note that this
@@ -119,26 +124,6 @@ Common connector API names:
 - `azuredevops`, `azureblob`, `azurequeues`
 - `office365`, `office365users`, `office365groups`
 - `sql`, `commondataservice`
-
-**Cloud flows are supported by the Power Apps CLI, but they are not connector data sources.** If the user wants to invoke an existing Power Automate cloud flow from the app, use the flow-specific commands instead of `pa app add data-source`:
-
-```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-$PA app list-flows --search '<flow-name-or-keyword>' --json
-```
-
-Resolve the exact flow ID and approve its app binding, or reuse matching current
-owner approval. Proposal-only calls return here without adding the flow.
-
-```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-$PA app add flow --flow-id <flow-guid> --non-interactive
-```
-
-To remove a flow later, use the removal branch, which verifies consumers and
-approval before the CLI removes the app binding.
-
-After `pa app add flow`, continue at Step 4 and inspect the generated service/model files the same way as connector data sources.
 
 ### Step 3 — Add Connector
 
@@ -283,7 +268,7 @@ Do NOT deploy yet — that's `/deploy`'s job after all data sources are added.
 
 Update `memory-bank.md` with: connector added, configured operations, build status.
 
-## Remove a data source or flow
+## Remove a data source
 
 Apply the data-source invocation scope first for removals too. Identify consuming
 screens/services before deleting a dependency. Standalone removal must stop if

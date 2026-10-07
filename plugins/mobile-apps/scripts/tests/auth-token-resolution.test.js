@@ -87,6 +87,29 @@ test('explicit tenant argument short-circuits shell environment and discovery', 
   assert.equal(log.trim().split('\n').length, 1);
 });
 
+test('an inaccessible explicit tenant cannot fall back to an ambient identity', (t) => {
+  const { token, log } = runGetAuthToken(t, {
+    POWER_PLATFORM_TENANT_ID: 'tenant-from-env',
+    DATAVERSE_TENANT_ID: 'secondary-tenant',
+    FAKE_AZ_ACCOUNT_TENANT: 'tenant-from-az-account',
+    FAKE_AZ_FAIL_TENANTS: 'selected-tenant',
+  }, 'selected-tenant');
+  assert.equal(token, 'null');
+  assert.equal(log.trim().split('\n').length, 1);
+  assert.match(log, /--tenant selected-tenant/);
+  assert.doesNotMatch(log, /account show|tenant-from-env|secondary-tenant|tenant-from-az-account/);
+});
+
+for (const tenant of ['', '  ']) {
+  test(`an empty explicit tenant ${JSON.stringify(tenant)} cannot use ambient auth`, (t) => {
+    const { token, log } = runGetAuthToken(t, {
+      POWER_PLATFORM_TENANT_ID: 'tenant-from-env',
+    }, tenant);
+    assert.equal(token, 'null');
+    assert.equal(log, '');
+  });
+}
+
 test('env-supplied tenant short-circuits: no `az account show` is spawned', (t) => {
   const { token, log } = runGetAuthToken(t, {
     POWER_PLATFORM_TENANT_ID: 'tenant-from-env',
@@ -141,3 +164,115 @@ test('final fallback mints an unqualified token when no tenant resolves', (t) =>
   assert.equal(token, 'token-for:active-account');
   assert.doesNotMatch(log, /--tenant/);
 });
+
+function runMetadataHelper(t, script, args, env = {}) {
+  const logPath = makeFakeAzLog(t);
+  const directory = path.dirname(logPath);
+  const requestLog = path.join(directory, 'requests.jsonl');
+  const preload = path.join(directory, 'metadata-preload.cjs');
+  // The preload follows list-table-columns into its request subprocesses, so
+  // the real argument/token plumbing runs without Azure or HTTP traffic.
+  fs.writeFileSync(preload, `
+const fs = require('node:fs');
+require(${JSON.stringify(FAKE_AZ_PRELOAD)});
+const helpers = require(${JSON.stringify(HELPERS)});
+helpers.makeRequest = async ({ url, headers }) => {
+  fs.appendFileSync(${JSON.stringify(requestLog)}, JSON.stringify({
+    url, authorization: headers.Authorization,
+  }) + '\\n');
+  return {
+    statusCode: 200,
+    body: JSON.stringify(url.endsWith('/WhoAmI')
+      ? { UserId: 'mock-user', OrganizationId: 'mock-organization' }
+      : { value: [
+        { LogicalName: 'cr_title', AttributeType: 'String', RequiredLevel: { Value: 'ApplicationRequired' } },
+        { LogicalName: 'createdon', AttributeType: 'DateTime' },
+      ] }),
+  };
+};
+require(${JSON.stringify(path.join(__dirname, '..', 'emit-telemetry-checkpoint.js'))})
+  .captureSuccessfulDataverseRequest = () => {};
+`);
+  const result = spawnSync(process.execPath, [
+    path.join(__dirname, '..', script), UNREACHABLE_ENV_URL, ...args,
+  ], {
+    cwd: directory,
+    encoding: 'utf8',
+    timeout: 10000,
+    env: {
+      ...process.env,
+      NODE_OPTIONS: `--require=${JSON.stringify(preload)}`,
+      FAKE_AZ_LOG: logPath,
+      FAKE_AZ_STATIC_TOKEN: '',
+      FAKE_AZ_FAIL_TENANTS: '',
+      POWER_PLATFORM_TENANT_ID: 'tenant-from-env',
+      DATAVERSE_TENANT_ID: 'secondary-tenant',
+      FAKE_AZ_ACCOUNT_TENANT: 'tenant-from-az-account',
+      POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1',
+      ...env,
+    },
+  });
+  assert.ifError(result.error);
+  return {
+    result,
+    calls: fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8').trim().split('\n') : [],
+    requests: fs.existsSync(requestLog)
+      ? fs.readFileSync(requestLog, 'utf8').trim().split('\n').map(JSON.parse) : [],
+  };
+}
+
+for (const [script, positionals, count] of [
+  ['verify-dataverse-access.js', [], 1],
+  ['list-table-columns.js', ['cr_visit', 'cr_airport'], 2],
+]) {
+  for (const explicit of [true, false]) {
+    test(`${script} preserves output with ${explicit ? 'explicit' : 'legacy environment'} tenant selection`, (t) => {
+      const args = [...positionals, ...(explicit ? ['--tenant-id', 'selected-tenant'] : [])];
+      const { result, calls, requests } = runMetadataHelper(t, script, args);
+      assert.equal(result.status, 0, result.stderr);
+      const tenant = explicit ? 'selected-tenant' : 'tenant-from-env';
+      assert.equal(calls.length, count);
+      assert.ok(calls.every((call) => call.includes(`--tenant ${tenant}`)));
+      assert.equal(requests.length, count);
+      assert.ok(requests.every((request) => request.authorization === `Bearer token-for:${tenant}`));
+      const data = JSON.parse(result.stdout);
+      if (script === 'verify-dataverse-access.js') {
+        assert.equal(data.userId, 'mock-user');
+        assert.equal(data.organizationId, 'mock-organization');
+        assert.equal(data.token, `token-for:${tenant}`);
+      } else {
+        assert.deepEqual(Object.keys(data), positionals);
+        for (const table of positionals) {
+          assert.deepEqual(data[table], [
+            { name: 'cr_title', type: 'String', required: 'ApplicationRequired' },
+          ]);
+          assert.ok(requests.some((request) => request.url.includes(`LogicalName='${table}'`)));
+        }
+      }
+    });
+  }
+
+  test(`${script} stops after the selected tenant is rejected`, (t) => {
+    const { result, calls, requests } = runMetadataHelper(t, script,
+      [...positionals, '--tenant-id', 'selected-tenant'],
+      { FAKE_AZ_FAIL_TENANTS: 'selected-tenant' });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Failed to get Azure CLI token/);
+    assert.equal(calls.length, 1);
+    assert.match(calls[0], /--tenant selected-tenant/);
+    assert.deepEqual(requests, []);
+  });
+
+  for (const invalid of [
+    ['--tenant-id'], ['--tenant-id', ''], ['--tenant-id', '  '],
+    ['--tenant-id', '--unknown-option'],
+  ]) {
+    test(`${script} rejects malformed tenant arguments ${JSON.stringify(invalid)} before auth`, (t) => {
+      const { result, calls, requests } = runMetadataHelper(t, script, [...positionals, ...invalid]);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /tenant-id/);
+      assert.deepEqual(calls, []);
+      assert.deepEqual(requests, []);
+    });
+  }
+}

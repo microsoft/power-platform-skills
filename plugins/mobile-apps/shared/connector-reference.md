@@ -117,24 +117,19 @@ Use these instead of hand-rolled discovery when they match the user's goal:
 cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 $PA connection list-references --solution-id <solutionId> --json
 $PA app list-environment-variables --json
-$PA app list-flows --search '<flow-name-or-keyword>' --json
 $PA app find-dataverse-api --search '<operation-name>' --json
 $PA connection create --connector <apiId> --json
 ```
 
-Cloud flows are added with `pa app add flow`, not `pa app add data-source`:
-
-```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-$PA app add flow --flow-id <flow-guid> --non-interactive
-$PA app remove flow --flow-id <flow-guid> --force --non-interactive
-```
+Cloud-flow integration is not supported by mobile skills. Report the limitation
+and return without flow discovery or mutation; a flow is not a connector data source.
 
 For removal, use [data-source-removal.md](references/data-source-removal.md).
-`delete-data-source` / `remove-flow` own app registration, schema, and
-model/service cleanup; they do not delete server data. `npm run generate-schemas`
+`pa app remove data-source` owns app registration, schema, and
+model/service cleanup; it does not delete server data. `npm run generate-schemas`
 only rebuilds the mobile runtime schema map afterward. Use the removal workflow
-for approval, `--force`, shared-reference preflight, and postcondition checks.
+for approval, shared-reference preflight, and postcondition checks; use
+[cli-binary.md](cli-binary.md) for grouped/flat commands and flags.
 
 Do not use local Expo web-player testing from mobile-app skills. Mobile-app runtime diagnosis uses the native dev-client flow and `/debug-app` reading the sanitized `.powernative/metro-logs/` files.
 

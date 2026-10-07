@@ -67,7 +67,7 @@ function run(block, owner, caller) {
   const command = block.replaceAll('"<working_dir>"', shellQuote(owner.replaceAll('\\', '/')));
   // Use the current Node executable; mutation tests supply local CLI probes.
   const result = spawnSync(bash, ['-s'], {
-    input: `node() { "$REAL_NODE" "$@"; }\n${command}`,
+    input: `node() { "$REAL_NODE" "$@"; }\nPA="npx --no-install pa"\nPA_KIND=pa\n${command}`,
     cwd: caller,
     env: {
       ...process.env,
@@ -104,14 +104,17 @@ test('shared root contract distinguishes direct defaults from required child con
   assert.match(scope, /different roots, return `NEEDS_CONTEXT`/);
   assert.match(scope, /inaccessible directory is `BLOCKED`/);
   assert.match(scope, /does not persist across tool calls/);
-  assert.match(scope, /shell-quoted\nliteral argument/);
+  assert.match(scope, /shell-quoted literal argument/);
   assert.match(scope, /File tools do not inherit shell cwd/);
   assert.match(scope, /Read\/Edit\/Write\/Grep\/Glob absolute\s+project paths/);
   assert.match(scope, /grants no additional approval and does not relax\nplan-only mode/);
-  assert.match(scope, /Git Bash on Windows/);
-  assert.match(scope, /PowerShell 7 on macOS\/Linux/);
-  assert.match(scope, /double embedded apostrophes/);
+  assert.match(scope, /Git Bash\s+on Windows/);
+  assert.match(scope, /existing PowerShell helper/);
+  assert.match(scope, /double\s+embedded apostrophes/);
   assert.match(scope, /re-supply any required\nshell variables/);
+  assert.match(scope, /Resolve `\$PA` and `PA_KIND` for this app via \[cli-binary\.md\]/);
+  assert.match(scope, /not from another app's cached selection/);
+  assert.match(scope, /Re-supply both in each fresh shell\s+call after binding the root/);
   assert.equal(shellBlocks(scope)[0], guard);
   assert.equal(shellBlocks(scope, 'powershell')[0], powershellGuard);
 });
@@ -153,7 +156,7 @@ npm() { record_call npm "$@"; }
     const command = `${probes}\n${block}`;
     const result = run(command, owner, caller);
     assert.equal(result.status, 0, result.stderr);
-    expectedCalls += block.split('\n').filter((line) => /^(npx|npm) /.test(line)).length;
+    expectedCalls += block.split('\n').filter((line) => /^(?:\$PA|npx|npm) /.test(line)).length;
     const before = fs.readFileSync(trace, 'utf8');
     const missingRoot = run(command, path.join(directory, 'missing app'), caller);
     assert.equal(missingRoot.status, 1);
@@ -162,14 +165,23 @@ npm() { record_call npm "$@"; }
     assert.equal(fs.existsSync(path.join(caller, 'root-commands.jsonl')), false);
   }
   const calls = fs.readFileSync(trace, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
-  assert.equal(expectedCalls, 9);
+  assert.equal(expectedCalls, 8);
   assert.equal(calls.length, expectedCalls);
   for (const call of calls) {
     // Native realpath expands Windows 8.3 aliases retained by the JS resolver.
     assert.equal(fs.realpathSync.native(call.cwd), fs.realpathSync.native(owner));
   }
-  for (const operation of ['refresh-data-source', 'delete-data-source', 'remove-flow', 'generate-schemas', 'tsc']) {
+  for (const operation of ['refresh', 'remove', 'generate-schemas', 'tsc']) {
     assert.ok(calls.some((call) => call.args.includes(operation)), operation);
+  }
+  const cliCalls = calls.filter((call) => call.args[2] === 'pa');
+  assert.equal(cliCalls.length, 4);
+  for (const call of cliCalls) {
+    assert.deepEqual(call.args.slice(0, 4), ['npx', '--no-install', 'pa', 'app']);
+    assert.equal(call.args[5], 'data-source');
+    assert.ok(call.args.includes('--name'));
+    assert.ok(call.args.includes('--non-interactive'));
+    if (call.args[4] === 'remove') assert.ok(call.args.includes('--force'));
   }
   assert.equal(fs.readFileSync(path.join(caller, 'power.config.json'), 'utf8'), callerConfig);
 });
@@ -260,9 +272,10 @@ az() { record_call az "$@"; }
     for (const call of calls) {
       assert.equal(fs.realpathSync.native(call.cwd), fs.realpathSync.native(owner));
     }
-    for (const operation of ['add-data-source', 'generate-schemas', 'tsc']) {
+    for (const operation of ['data-source', 'generate-schemas', 'tsc']) {
       assert.ok(calls.some((call) => call.args.includes(operation)), operation);
     }
+    assert.ok(calls.some((call) => call.args.includes('add') && call.args.includes('data-source')));
     if (name === 'add-dataverse') {
       assert.ok(calls.some((call) => call.args.some((arg) => arg.endsWith('/resolve-environment.js')) && call.args.includes('owner')));
       assert.match(content, /--operations "\$\(cat "<working_dir>\/\.tmp\/dataverse-operation-phase-<name>\.json"\)"/);
@@ -317,23 +330,51 @@ npx() { node "$@"; }
       assert.ok(resolver);
       assert.ok(resolver.args.includes('--no-cache'));
       assert.ok(resolver.args.includes('--require-tenant'));
+      const metadata = calls.filter((call) => /\/(?:verify-dataverse-access|dataverse-request|list-table-columns)\.js$/.test(call.args[0]));
+      assert.equal(metadata.length, 4);
+      for (const call of metadata) {
+        assert.ok(call.args.includes('--tenant-id'));
+        assert.equal(call.args[call.args.indexOf('--tenant-id') + 1], 'fixture');
+      }
     } else {
       assert.ok(calls.every((call) => call.args[0] === '--no-install'));
     }
   });
 }
 
-test('connector execution and referenced examples always use the installed local CLI', () => {
+test('connector execution and referenced examples consistently use the resolved PA command', () => {
   for (const file of ['skills/add-connector/SKILL.md', 'skills/list-connections/SKILL.md', 'shared/connector-reference.md']) {
     const blocks = shellBlocks(read(path.join(pluginRoot, file)));
-    const commands = blocks.flatMap((block) => [...block.matchAll(/^\s*npx[^\n]*\bpower-apps\b[^\n]*/gm)]
+    const commands = blocks.flatMap((block) => [...block.matchAll(/^\s*\$PA [^\n]*/gm)]
       .map((match) => match[0].trim()));
     assert.ok(commands.length >= 3, file);
     for (const command of commands) {
-      assert.match(command, /^npx --no-install power-apps /, `${file}: ${command}`);
+      assert.match(command, /^\$PA (?:app|connection) /, `${file}: ${command}`);
+      assert.doesNotMatch(command, /--(?:api-id|resource-name|data-source-name|sql-stored-procedure)\b/);
     }
+    assert.doesNotMatch(blocks.join('\n'), /^\s*npx[^\n]*\b(?:power-apps|pa)\b/m);
   }
 });
+
+const cliResolution = shellBlocks(read(path.join(pluginRoot, 'shared/cli-binary.md')))[0];
+for (const [shims, kind] of [
+  [['pa', 'power-apps'], 'pa'],
+  [['pa.cmd', 'power-apps.cmd'], 'pa'],
+  [['power-apps'], 'power-apps'],
+  [['power-apps.cmd'], 'power-apps'],
+  [[], 'none'],
+]) {
+  test(`CLI resolution in the owner app selects ${kind} with ${shims.join(', ') || 'no shims'}`, (t) => {
+    const { owner, caller } = fixture(t);
+    const bin = path.join(owner, 'node_modules', '.bin');
+    fs.mkdirSync(bin, { recursive: true });
+    for (const shim of shims) fs.writeFileSync(path.join(bin, shim), '');
+    const command = `${guard}\n${cliResolution}\nprintf '%s|%s' "$PA_KIND" "$PA"`;
+    const result = run(command, owner, caller);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, `${kind}|${kind === 'none' ? '' : `npx --no-install ${kind}`}`);
+  });
+}
 
 const pwshProbe = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.ToString()'], {
   encoding: 'utf8',

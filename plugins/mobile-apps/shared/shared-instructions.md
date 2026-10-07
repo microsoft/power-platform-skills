@@ -247,7 +247,7 @@ they do not authorize unrelated app changes.
 
 Plugin-level hooks also run during unrelated plugin workflows, so every mutating mobile skill owns its validation:
 
-1. Track changed files by writer: the skill/subagents and preparation helpers versus trusted generators. Use a helper's returned `writtenFiles` when available; track removals separately, not as files to validate. CLI-owned output means output actually produced by `pa app init`, `pa app add data-source`, `pa app refresh data-source`, `pa app remove data-source`, `pa app add flow`, or `pa app remove flow` through the resolved `$PA` command. It is excluded only when produced by that command and not modified afterward by the skill or its subagents. Newly generated does not mean manually written.
+1. Track changed files by writer: the skill/subagents and preparation helpers versus trusted generators. Use a helper's returned `writtenFiles` when available; track removals separately, not as files to validate. CLI-owned output means output actually produced by `pa app init`, `pa app add data-source`, `pa app refresh data-source`, or `pa app remove data-source` through the resolved `$PA` command. It is excluded only when produced by that command and not modified afterward by the skill or its subagents. Newly generated does not mean manually written.
 2. Before returning success, pass each existing skill/helper-owned changed file explicitly:
 
    ```bash
@@ -332,51 +332,22 @@ The CLI ships two binaries — grouped `pa` (preferred) and flat `power-apps` (f
 
 Use the resolved `$PA` for Power Apps CLI commands, and direct `node` and `az` commands for the rest of the mobile-app plugin flow.
 
-### Exact generated-output commands
-
-These are command templates, not a batch to run. Replace placeholders with the
-approved values; execute only the owning skill's applicable row. This table is
-not approval to initialize, add, refresh, or remove anything.
-
-| Operation | Exact mobile command |
-|---|---|
-| Initialize a fresh approved app | `npx --no-install power-apps init -t MobileApp --display-name '<name>' --environment-id '<id>' --non-interactive` |
-| Add Dataverse table service | `npx --no-install power-apps add-data-source --api-id dataverse --org-url '<environment-url>' --resource-name '<table-logical-name>' --non-interactive` |
-| Add action connector | `npx --no-install power-apps add-data-source --api-id '<apiId>' --connection-id '<connection-id>'` |
-| Add tabular connector source | `npx --no-install power-apps add-data-source --api-id '<apiId>' --connection-id '<connection-id>' --dataset '<dataset>' --resource-name '<table>'` |
-| Add SQL stored procedure | `npx --no-install power-apps add-data-source --api-id shared_sql --connection-id '<connection-id>' --dataset '<dataset>' --sql-stored-procedure '<procedure>'` |
-| Refresh one retained source | `npx --no-install power-apps refresh-data-source --data-source-name '<registered-name>' --non-interactive` |
-| Remove one approved app binding | `npx --no-install power-apps delete-data-source --api-id '<apiId>' --data-source-name '<registered-name>' --force --non-interactive` |
-| Remove one approved SQL procedure binding | `npx --no-install power-apps delete-data-source --api-id shared_sql --data-source-name '<registered-name>' --sql-stored-procedure '<procedure>' --force --non-interactive` |
-| Add app flow binding | `npx --no-install power-apps add-flow --flow-id '<flow-id>' --non-interactive` |
-| Remove approved app flow binding | `npx --no-install power-apps remove-flow --flow-id '<flow-id>' --force --non-interactive` |
-
-For solution-aware connector sources, replace `--connection-id` with the exact
-resolved `--connection-ref '<reference-name>'`; do not supply guessed identities.
-For Dataverse removal, `<apiId>` is `dataverse`. Removal scope/approval and
-postconditions remain governed by [data-source-removal.md](references/data-source-removal.md).
-Do not infer success from an exit code or manually repair generated/config files.
+Use [cli-binary.md](cli-binary.md) for command/flag translation and the owning
+skill for its approved operation. Do not duplicate the resolver or maintain a
+second command catalog here. Do not substitute a global binary or fetch another
+CLI to bypass a failure. Refresh/removal scope and postconditions are in
+[data-source-removal.md](references/data-source-removal.md).
 
 `npm run generate-schemas` is the separate template command that rebuilds
 `src/generated/connectorSchemas.ts`; it does not add/remove registrations or
-regenerate all model/service files. `npx tsc --noEmit` validates types; it is
+regenerate all model/service files. `npx --no-install tsc --noEmit` validates types; it is
 not a generator.
-
-Other discovery commands:
-
-```bash
-$PA app init -t MobileApp --display-name '<name>' --environment-id <id> --non-interactive
-$PA app add data-source --connector <api> --connection-id <connection-id>
-$PA connection create --connector <api> --json
-$PA connection list-references --solution-id <solution-id> --json
-node scripts/resolve-environment.js [environment-id-or-url]
-```
 
 **Power Apps CLI required-argument rule:** when a skill invokes `$PA`, pass every value the skill already knows and run app-root verbs from the directory that contains `power.config.json`. In practice:
 
 - `app init` and pre-project discovery commands can use `--environment-id` because there is no `power.config.json` yet.
-- After `power.config.json` exists, do **not** pass `--environment-id` to app-root verbs (`app add data-source`, `app push`, `connection list-datasets`, `connection list-tables`, `connection list-references`, `app add flow`, `app remove flow`, etc.). The CLI reads the environment and region from `power.config.json`; extra unregistered flags can fail command parsing.
-- Use `--non-interactive` only on commands whose required values are completely supplied and whose implementation supports non-interactive execution (`app init`, `app push`, `app add flow --flow-id`, `app remove flow --flow-id --force`, `connection create --connector` for SSO-eligible connectors, `app remove data-source --connector --name --force`). Grouped `pa` refuses a non-interactive removal without `--force`, so pass it only when the user asked for the removal. For `app add data-source`, prefer passing the connector-specific required flags and let the action layer request only the options it needs.
+- After `power.config.json` exists, do **not** pass `--environment-id` to app-root verbs (`app add data-source`, `app push`, `connection list-datasets`, `connection list-tables`, `connection list-references`, etc.). The CLI reads the environment and region from `power.config.json`; extra unregistered flags can fail command parsing.
+- Use `--non-interactive` only on commands whose required values are completely supplied and whose implementation supports non-interactive execution (`app init`, `app push`, `connection create --connector` for SSO-eligible connectors, `app remove data-source --connector --name --force`). Grouped `pa` refuses a non-interactive removal without `--force`, so pass it only when the user asked for the removal. For `app add data-source`, prefer passing the connector-specific required flags and let the action layer request only the options it needs.
 - Follow
   [data-source-removal.md](references/data-source-removal.md), including verification
   of the actual configuration/schemas/generated output even when the command exits 0.
@@ -414,6 +385,9 @@ auth state, retry the same supported command once before further triage.
 Apply these rules whenever an `az`, `npm`, `npx`, or `expo` command exits non-zero. Do NOT retry silently or proceed past a failure.
 
 ### `$PA` (Power Apps CLI) failures (all commands)
+
+Unsupported command/option errors follow the failure policy above, not an auth
+retry. For authentication failures:
 
 1. Run `$PA auth status --json` to verify the active account.
 2. If the wrong account is active and the right one is cached, run `$PA auth switch --account <email>`.

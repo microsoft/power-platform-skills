@@ -12,6 +12,7 @@ const skill = (name) => read(`skills/${name}/SKILL.md`);
 const shared = read('shared/shared-instructions.md');
 const removal = read('shared/references/data-source-removal.md');
 const create = skill('create-mobile-app');
+const pluginCheck = '> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.';
 const dataSkills = [
   'add-datasource',
   'setup-datamodel',
@@ -45,7 +46,8 @@ for (const [name, ending] of [['LF', '\n'], ['CRLF', '\r\n']]) {
 }
 
 function assertSharedEntry(content, name) {
-  const body = content.replace(/^---\n[\s\S]*?\n---\n/, '').trimStart();
+  let body = content.replace(/^---\n[\s\S]*?\n---\n/, '').trimStart();
+  if (body.startsWith(`${pluginCheck}\n\n`)) body = body.slice(pluginCheck.length).trimStart();
   const firstLine = body.split('\n')[0];
   assert.match(firstLine, /\[shared-instructions\.md\]\([^)]+\/shared-instructions\.md\)/, `${name}: shared policy must be the first instruction`);
   assert.match(firstLine, /read (?:this |both )?first/i, `${name}: read-first prerequisite`);
@@ -66,6 +68,8 @@ for (const name of dataSkills) {
 test('data workflows cannot omit, defer, or disable reading shared policy', () => {
   const valid = '---\nallowed-tools: Read, Bash\n---\n\n**Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - read first.\n\n## Workflow\n';
   assert.doesNotThrow(() => assertSharedEntry(valid, 'data-workflow'));
+  assert.doesNotThrow(() => assertSharedEntry(valid.replace('**Shared instructions:', `${pluginCheck}\n\n**Shared instructions:`), 'data-workflow'));
+  assert.throws(() => assertSharedEntry(valid.replace('**Shared instructions:', `${pluginCheck}\n\nRun auth first.\n**Shared instructions:`), 'data-workflow'));
   assert.throws(() => assertSharedEntry(valid.replace('**Shared instructions:', 'Run auth first.\n**Shared instructions:'), 'data-workflow'));
   assert.throws(() => assertSharedEntry(valid.replace('shared-instructions.md', 'other.md'), 'data-workflow'));
   assert.throws(() => assertSharedEntry(valid.replace('read first', 'optional'), 'data-workflow'));
@@ -138,7 +142,7 @@ test('creation passes scoped approval and the app root to data leaves', () => {
 });
 
 test('connector-owned actions and SharePoint schemas do not imply Dataverse schema', () => {
-  assert.match(skill('add-connector'), /Action connectors and cloud flows do not imply Dataverse Data Model changes/);
+  assert.match(skill('add-connector'), /Action connectors do not imply Dataverse Data Model changes/);
   assert.match(skill('add-sharepoint'), /Keep SharePoint list\/library schemas in Connectors, not the Dataverse\nData Model/);
 });
 
@@ -308,9 +312,9 @@ test('the router and data-only orchestrator retain the removal operation', () =>
 });
 
 test('removal uses CLI-owned cleanup with explicit consent and verifies silent no-ops', () => {
-  assert.match(removal, /delete-data-source --api-id dataverse --data-source-name '<registered-name>' --force --non-interactive/);
-  assert.match(removal, /--sql-stored-procedure '<procedure>' --force --non-interactive/);
-  assert.match(removal, /remove-flow --flow-id '<flow-id>' --force --non-interactive/);
+  assert.match(removal, /\$PA app remove data-source --connector dataverse --name '<registered-name>' --force --non-interactive/);
+  assert.match(removal, /--procedure '<procedure>' --force --non-interactive/);
+  assert.match(removal, /`PA_KIND=power-apps`[\s\S]*omit `--force`/);
   assert.match(removal, /`--non-interactive` alone is not removal consent/);
   assert.match(removal, /Do not manually delete `src\/generated\/` files/);
   assert.match(removal, /flat CLI can return exit 0 for a not-found\/no-op removal/);
@@ -320,8 +324,8 @@ test('removal uses CLI-owned cleanup with explicit consent and verifies silent n
 
 test('schema-map generation is distinct from service refresh and removal', () => {
   assert.match(removal, /does not infer unused tables from screen code, unregister sources/);
-  assert.match(removal, /refresh-data-source --data-source-name '<registered-name>'/);
-  assert.match(removal, /npm run generate-schemas\nnpx tsc --noEmit/);
+  assert.match(removal, /\$PA app refresh data-source --name '<registered-name>'/);
+  assert.match(removal, /npm run generate-schemas\nnpx --no-install tsc --noEmit/);
   assert.match(removal, /including when the\nlast source was removed/);
 });
 
@@ -333,24 +337,48 @@ test('verified removal reconciles the app inventory without faking offline clean
   assert.match(removal, /do not silently remove them or edit the local\nsnapshot to pretend the server changed/);
 });
 
-test('generator ownership names exact CLI verbs and their command forms', () => {
+test('generator ownership uses the shared PA resolver without a duplicate command catalog', () => {
   const ownership = section(shared, '### Mandatory changed-file validation', '### MUST (required');
-  const commands = section(shared, '### Exact generated-output commands', 'Other discovery commands:');
-  for (const verb of ['init', 'add-data-source', 'refresh-data-source', 'delete-data-source', 'add-flow', 'remove-flow']) {
-    assert.ok(ownership.includes(`npx --no-install power-apps ${verb}`), verb);
-    assert.ok(commands.includes(`npx --no-install power-apps ${verb}`), verb);
+  const cli = section(shared, '## CLI Invocation', '## Command Failure Handling');
+  for (const verb of ['init', 'add data-source', 'refresh data-source', 'remove data-source']) {
+    assert.ok(ownership.includes(`pa app ${verb}`), verb);
   }
+  assert.match(ownership, /through the resolved `\$PA` command/);
   assert.match(ownership, /not modified afterward by the skill or its subagents/);
-  assert.match(commands, /command templates, not a batch to run/);
-  assert.match(commands, /--force --non-interactive/);
-  assert.match(commands, /--api-id dataverse --org-url '<environment-url>' --resource-name '<table-logical-name>' --non-interactive/);
-  assert.match(commands, /`npm run generate-schemas` is the separate template command/);
+  assert.match(cli, /\[cli-binary\.md\]\(cli-binary\.md\)/);
+  assert.match(cli, /`npm run generate-schemas` is the separate template command/);
+  assert.doesNotMatch(shared, /Exact generated-output commands|Exact mobile command|^\s*(?:PA|PA_KIND)=/m);
+  assert.doesNotMatch(cli, /npx --no-install power-apps/);
 });
 
-test('the exact-command guidance adds no CLI version preflight or upgrade workflow', () => {
+test('CLI guidance has no version preflight, hardcoded retirement version, or upgrade fallback', () => {
   const cli = section(shared, '## CLI Invocation', '## Command Failure Handling');
   assert.doesNotMatch(cli, /project-local CLI gate|--version|node_modules\/@microsoft\/power-apps-cli\/package\.json/);
   assert.match(cli, /Do not substitute a global binary/);
   assert.match(cli, /If the command is unsupported, report\nthe error/);
   assert.match(cli, /do not guess aliases, strip safety flags, or install another CLI/);
+  assert.doesNotMatch(removal, /\b\d+\.\d+\.\d+\b|npx --no-install power-apps/);
+  assert.match(removal, /\[command and flag mapping\]\(\.\.\/cli-binary\.md\)/);
+});
+
+test('unsupported cloud flows cannot enter connector routing or data-source lifecycle commands', () => {
+  const connector = skill('add-connector');
+  const router = skill('add-datasource');
+  for (const text of [connector, router, removal]) {
+    assert.match(text, /BLOCKED: cloud-flow integration is not supported/);
+  }
+  assert.ok(connector.indexOf('**Cloud flows are not supported') < connector.indexOf('**Removal branch:**'));
+  for (const text of [connector, router, removal, read('shared/connector-reference.md')]) {
+    assert.doesNotMatch(text, /\$PA app (?:add flow|remove flow|list-flows)|npx[^\n]*(?:add-flow|remove-flow|list-flows)/);
+  }
+  assert.match(removal, /Preserve existing flow dependencies/);
+});
+
+test('README explains data-source commands without internal execution mechanics', () => {
+  const examples = section(read('README.md'), '### Data-source planning, refresh, and retirement', '### 5.');
+  assert.match(examples, /--plan-only/);
+  assert.match(examples, /--refresh --data-source-name/);
+  assert.match(examples, /--remove --data-source-name/);
+  assert.match(examples, /never deletes server tables/);
+  assert.doesNotMatch(examples, /compact live-metadata|working_dir|PowerShell|Bash|schema map|allowlist|offline-profile-delta/);
 });

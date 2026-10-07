@@ -148,12 +148,19 @@ function getAzAccessToken(resourceUrl, tenantId = null) {
 /**
  * Gets an Azure CLI access token for the given resource URL.
  * Targets the env's tenant from Dataverse auth challenge when available.
- * Falls back to the active az tenant and then unqualified az token lookup.
+ * Without an explicit tenant, falls back to the active az tenant and then unqualified az token lookup.
  * @param {string} resourceUrl Dataverse resource URL to request a token for
- * @param {string|null} explicitTenantId Resolved environment tenant; skips tenant discovery when valid
+ * @param {string|null} explicitTenantId Resolved environment tenant; never falls back to another tenant
  * @returns {Promise<string|null>} Access token, or null if unavailable
  */
 async function getAuthToken(resourceUrl, explicitTenantId = null) {
+  // A selected environment is authoritative. Falling back after its token fails
+  // could run the approved operation under an unrelated ambient identity.
+  if (explicitTenantId !== null) {
+    return typeof explicitTenantId === 'string' && explicitTenantId.trim()
+      ? getAzAccessToken(resourceUrl, explicitTenantId.trim()) : null;
+  }
+
   // Candidates are produced LAZILY, in priority order. This used to be an array
   // literal, and an array literal evaluates every element before `.filter()`
   // runs — so each call paid for the WWW-Authenticate probe AND an
@@ -164,7 +171,6 @@ async function getAuthToken(resourceUrl, explicitTenantId = null) {
   // Short-circuiting preserves the exact preference order and fallback below —
   // it only skips work once a candidate has already minted a token.
   const candidateProducers = [
-    () => explicitTenantId,
     () => process.env.POWER_PLATFORM_TENANT_ID,
     () => process.env.DATAVERSE_TENANT_ID,
     () => getDataverseTenantFromChallenge(resourceUrl),
