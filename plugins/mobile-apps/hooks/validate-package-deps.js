@@ -183,8 +183,14 @@ function main(input) {
 let buffer = '';
 process.stdin.on('data', (chunk) => { buffer += chunk; });
 process.stdin.on('end', () => {
+  let input;
   try {
-    main(parseJson(buffer, 'validator input'));
+    input = parseJson(buffer, 'validator input');
+  } catch {
+    return;
+  }
+  try {
+    main(input);
   } catch (error) {
     const message = error.code === 'MOBILE_RELEASE_BLOCKED'
       ? error.message : 'Unable to verify package dependencies. Restore valid project files and the reviewed installation.';

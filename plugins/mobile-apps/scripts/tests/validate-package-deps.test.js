@@ -17,6 +17,18 @@ function blocked(result, expression = /BLOCKED:/) {
   assert.doesNotMatch(result.stderr, /fixture-secret-do-not-echo/);
 }
 
+test('empty or invalid validator stdin is a non-blocking no-op', (t) => {
+  const fixture = createFixture(t);
+  const hook = path.join(fixture.pluginRoot, 'hooks/validate-package-deps.js');
+  for (const input of ['', '{', '[]']) {
+    const result = spawnSync(process.execPath, [hook], {
+      cwd: fixture.projectRoot, encoding: 'utf8', input,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, '');
+  }
+});
+
 test('allows the version-matched release and its shipped haptics, not a snapshot name allowlist', (t) => {
   const fixture = createFixture(t);
   const result = runValidator(fixture);
