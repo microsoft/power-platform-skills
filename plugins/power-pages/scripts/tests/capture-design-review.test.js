@@ -709,3 +709,43 @@ test('scrollThrough stops at the height limit and the time budget on a page that
   }
 });
 
+test('captureDesignReview captures exactly `discover` pages and reports the rest it found', async () => {
+  const fake = fakePlaywright({ discovered: ['/', '/services', '/about', '/contact'] });
+  const one = await review.captureDesignReview({
+    playwright: fake.playwright, channel: 'chrome', url: 'https://contoso.example', discover: 1, outputDir: null, checksOnly: true,
+  });
+  assert.deepEqual(one.routes.map((r) => r.route), ['/']);
+  assert.deepEqual(one.summary.omittedRoutes, ['/services', '/about', '/contact']);
+
+  const all = await review.captureDesignReview({
+    playwright: fake.playwright, channel: 'chrome', url: 'https://contoso.example', discover: 6, outputDir: null, checksOnly: true,
+  });
+  assert.equal(all.routes.length, 4);
+  assert.deepEqual(all.summary.omittedRoutes, []);
+
+  const listed = await review.captureDesignReview({
+    playwright: fake.playwright, channel: 'chrome', url: 'https://contoso.example', routes: ['/'], outputDir: null, checksOnly: true,
+  });
+  assert.deepEqual(listed.summary.omittedRoutes, [], 'an explicit route list leaves nothing out');
+});
+
+test('discoverLinks orders pages by navigation, main content, then footer, and stops at its limit', () => {
+  // Stands in for the browser globals the in-page function reads.
+  const links = {
+    'header a[href], nav a[href]': ['/services/', 'https://other.example/x', '/sign-out', '/services'],
+    'main a[href]': ['/about?x=1', '/files/brochure.pdf', '#top'],
+    'footer a[href]': ['/contact', '/privacy'],
+  };
+  const saved = { document: global.document, location: global.location };
+  global.location = { pathname: '/', href: 'https://contoso.example/', origin: 'https://contoso.example' };
+  global.document = { querySelectorAll: (selector) => (links[selector] || []).map((href) => ({ getAttribute: () => href })) };
+  try {
+    assert.deepEqual(review.discoverLinks(60), ['/', '/services', '/about', '/contact', '/privacy']);
+    assert.deepEqual(review.discoverLinks(3), ['/', '/services', '/about']);
+    assert.deepEqual(review.discoverLinks(1), ['/'], 'the start page alone meets a limit of 1');
+  } finally {
+    global.document = saved.document;
+    global.location = saved.location;
+  }
+});
+

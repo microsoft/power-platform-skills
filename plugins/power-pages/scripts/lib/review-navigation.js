@@ -109,6 +109,19 @@ function redactUrlsInText(text) {
   return String(text).replace(/\b(?:https?|wss?):\/\/[^\s'"<>()]+/g, redactUrl);
 }
 
+// Markup and CSS selectors quote URLs anywhere - in any attribute, in inline CSS, in a
+// custom data attribute - and relative URLs carry tokens too:
+//   <div style="background-image:url(https://cdn.example/a.jpg?sig=...)" data-url="/files/r.pdf?token=...">
+//   a[href="/files/report.pdf?token=..."]
+// Absolute URLs get the same origin-and-path cut as in text. A relative URL - a token that
+// starts with `/`, `./`, or `../` right after a quote, `(`, `,`, `=`, or whitespace - loses its
+// query and fragment. Prose such as title="Why? Because." has no leading slash and is kept.
+const RELATIVE_URL = /((?:^|["'\s(,=])\.{0,2}\/[^\s"'()<>?#,]*)[?#][^\s"'()<>,]*/g;
+
+function redactUrlsInMarkup(text) {
+  return redactUrlsInText(text).replace(RELATIVE_URL, '$1');
+}
+
 module.exports = {
   NAVIGATION_TIMEOUT_MS,
   NETWORK_IDLE_GRACE_MS,
@@ -120,5 +133,6 @@ module.exports = {
   parseRequest,
   parseRouteList,
   redactUrl,
+  redactUrlsInMarkup,
   redactUrlsInText,
 };

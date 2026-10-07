@@ -390,7 +390,7 @@ Surfaces PAC CLI upload errors and Dataverse async operation errors, pattern-mat
 > "Why does my site look generic? What should I change?"
 
 Reviews the design of an existing site - a live URL or a local project folder - and tells you what to change, without changing anything.
-It captures each page at desktop and mobile widths, runs an accessibility audit, and scores the site against the same ten-category design rubric `/create-site` builds to.
+It captures up to eight key pages at desktop and mobile widths, runs an accessibility audit, and scores the site against the same ten-category design rubric `/create-site` builds to. Pages beyond that are listed in the report so you can ask for them next.
 The result is a scorecard plus prioritized recommendations, each naming the page and element, why it matters, and the exact change, with a redesign direction when the site needs more than fixes.
 
 - Works from a URL (pages are discovered from the site's navigation) or from a project folder, which it reads alongside a URL where the site runs - the deployed site or a dev server you start - or on its own for a code-only review

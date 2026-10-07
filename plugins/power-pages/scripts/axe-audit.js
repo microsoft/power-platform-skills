@@ -23,7 +23,7 @@ const { loadPlaywright } = require('./lib/load-playwright');
 const { downloadPinned } = require('./lib/pinned-download');
 const fs = require('node:fs');
 const {
-  gotoSettled, isString, isStringList, normalizeSiteUrl, parseRequest, parseRouteList, redactUrl, redactUrlsInText,
+  gotoSettled, isString, isStringList, normalizeSiteUrl, parseRequest, parseRouteList, redactUrl, redactUrlsInMarkup, redactUrlsInText,
 } = require('./lib/review-navigation');
 
 // axe-core 4.10.3 (MPL-2.0). The integrity value is the hash cdnjs publishes for this file,
@@ -82,24 +82,20 @@ async function runAxe(tags) {
   };
 }
 
-// axe reports each failing element as a markup snippet and a CSS selector, e.g.
-//   <img src="https://contoso.blob.core.windows.net/a.jpg?sv=2024&amp;sig=..." class="hero">
-//   a[href="/files/report.pdf?token=..."]
-// Query strings and fragments in URL attributes can carry tokens, and this output is read
-// into the agent's conversation, so they are dropped; the element stays identifiable by its
-// tag, path, and other attributes. srcset holds several comma-separated URLs, each cleaned.
-const URL_ATTRIBUTE = /\b(src|href|srcset|action|formaction|poster|data-src|data-href)(\s*=\s*)("[^"]*"|'[^']*')/gi;
-
-function stripUrlQueries(text) {
-  return String(text).replace(URL_ATTRIBUTE, (_, name, equals, quoted) => `${name}${equals}${quoted.replace(/[?#][^\s,"']*/g, '')}`);
-}
-
+// axe reports each failing element as a markup snippet and a CSS selector. Both come from the
+// reviewed page and can quote signed URLs in any attribute, so every URL in them is redacted
+// (redactUrlsInMarkup); the element stays identifiable by its tag, path, and other attributes.
 function redactAxeResult(result) {
   return {
     ...result,
     violations: result.violations.map((v) => ({
       ...v,
-      nodes: v.nodes.map((n) => ({ ...n, html: stripUrlQueries(n.html), target: (n.target || []).map(stripUrlQueries) })),
+      nodes: v.nodes.map((n) => ({
+        ...n,
+        html: redactUrlsInMarkup(n.html),
+        target: (n.target || []).map(redactUrlsInMarkup),
+        failureSummary: n.failureSummary && redactUrlsInMarkup(n.failureSummary),
+      })),
     })),
   };
 }
@@ -176,7 +172,7 @@ async function main(argv = process.argv.slice(2), {
   }
 }
 
-module.exports = { AXE_SCRIPT, WCAG_TAGS, auditRoutes, hasBlockingResult, loadAxeSource, main, parseArgs, runAxe, stripUrlQueries };
+module.exports = { AXE_SCRIPT, WCAG_TAGS, auditRoutes, hasBlockingResult, loadAxeSource, main, parseArgs, runAxe };
 
 if (require.main === module) {
   main().then((code) => process.exit(code));

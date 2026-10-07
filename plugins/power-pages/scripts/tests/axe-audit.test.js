@@ -93,17 +93,17 @@ test('main exits 1 for critical or serious violations and for routes it could no
   assert.match(unaudited.results[1].error, /ERR_FAILED/);
 });
 
-test('main passes --project-root to the Playwright loader and fails when none loads', async () => {
-  const roots = [];
+test('main loads Playwright without any project path and fails when the pinned package is unavailable', async () => {
+  const calls = [];
   let err = '';
-  const code = await axe.main(['--url', 'http://localhost:5173', '--routes', '/'], {
+  const code = await axe.main(['--url', 'http://localhost:5173', '--routes', '/', '--project-root', '/site'], {
     write: () => {},
     writeError: (s) => { err += s; },
-    loadPlaywrightFn: (root) => { roots.push(root); return null; },
+    loadPlaywrightFn: (...args) => { calls.push(args); return null; },
     loadAxeSourceFn: async () => 'VERIFIED_AXE',
   });
   assert.equal(code, 1);
-  assert.deepEqual(roots, [undefined]);
+  assert.deepEqual(calls, [[]], 'a --project-root argument is ignored, never passed to the loader');
   assert.match(err, /pinned @playwright\/mcp/);
 });
 
@@ -130,26 +130,25 @@ test('loadAxeSource downloads the pinned axe-core script and returns its text', 
   assert.match(axe.AXE_SCRIPT.integrity, /^sha512-[A-Za-z0-9+/]{86}==$/);
 });
 
-test('stripUrlQueries drops query strings and fragments from URL attributes in axe snippets', () => {
-  assert.equal(
-    axe.stripUrlQueries('<img src="https://contoso.blob.core.windows.net/a.jpg?sv=2024&amp;sig=abc" alt="" class="hero">'),
-    '<img src="https://contoso.blob.core.windows.net/a.jpg" alt="" class="hero">',
-  );
-  assert.equal(
-    axe.stripUrlQueries("<img srcset='/a.jpg?w=1 1x, /b.jpg?token=x 2x'>"),
-    "<img srcset='/a.jpg 1x, /b.jpg 2x'>",
-  );
-  assert.equal(axe.stripUrlQueries('a[href="/files/report.pdf?token=abc#p2"]'), 'a[href="/files/report.pdf"]');
-  assert.equal(axe.stripUrlQueries('<p title="Why? Because.">Ask us?</p>'), '<p title="Why? Because.">Ask us?</p>', 'non-URL text is untouched');
-});
-
 test('auditRoutes redacts URL queries in the violations it reports', async () => {
   const { playwright } = fakePlaywright({
-    violationsFor: () => [{ id: 'image-alt', impact: 'critical', nodes: [{ html: '<img src="/hero.jpg?sig=SECRET">', target: ['img[src="/hero.jpg?sig=SECRET"]'] }] }],
+    violationsFor: () => [{
+      id: 'image-alt',
+      impact: 'critical',
+      nodes: [{
+        html: '<div style="background-image:url(https://cdn.example/a.jpg?sig=SECRET)" data-url="/files/r.pdf?token=SECRET"><img src="/hero.jpg?sig=SECRET"></div>',
+        target: ['img[src="/hero.jpg?sig=SECRET"]'],
+        failureSummary: 'Fix any of the following: image at https://cdn.example/a.jpg?sig=SECRET has no alt',
+      }],
+    }],
   });
   const results = await axe.auditRoutes({ playwright, channel: 'chrome', url: 'https://contoso.example', routes: ['/'], axeSource: 'VERIFIED_AXE' });
   assert.equal(JSON.stringify(results).includes('SECRET'), false);
-  assert.equal(results[0].violations[0].nodes[0].html, '<img src="/hero.jpg">');
+  assert.equal(
+    results[0].violations[0].nodes[0].html,
+    '<div style="background-image:url(https://cdn.example/a.jpg)" data-url="/files/r.pdf"><img src="/hero.jpg"></div>',
+  );
+  assert.deepEqual(results[0].violations[0].nodes[0].target, ['img[src="/hero.jpg"]']);
 });
 
 test('parseArgs reads a JSON request from stdin and keeps shell characters as data', () => {

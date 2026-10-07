@@ -23,7 +23,7 @@ Write each value as a JSON string (escape `"` and `\`) and include only the fiel
 |-------|-------|
 | `url` | The dev server or a deployed site, `http` or `https` only, without a user name or password. Any query string or fragment is dropped |
 | `routes` | An array of routes to capture |
-| `discover` | Instead of `routes`: the most pages to collect from the start page's navigation, then its main content, then its footer |
+| `discover` | Instead of `routes`: how many pages to capture - the start page, then pages linked from its navigation, main content, and footer. Further pages it found are listed in `summary.omittedRoutes` |
 | `checksOnly` | `true` to run the checks without screenshots |
 | `axe` | `true` to add the axe-core accessibility audit of the captured pages (`accessibility`, summarized in `summary.accessibility`) |
 | `cleanup` | Alone: remove a capture's `outputDir` |

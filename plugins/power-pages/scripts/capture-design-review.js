@@ -51,6 +51,9 @@ const SHEET_MAX_SHEETS = 3;
 // keep the capture running forever.
 const MAX_CAPTURE_HEIGHT = SHEET_MAX_SHEETS * SHEET_MAX_COLUMNS * SHEET_SEGMENT_HEIGHT;
 const SCROLL_BUDGET_MS = 15000;
+// How many same-origin links discovery collects, so it can report the pages it found but
+// did not capture without letting a link-heavy page grow the output without bound.
+const DISCOVERY_SCAN_LIMIT = 60;
 const SHEET_GAP = 16;
 const SETTLE_MS = 1200;
 
@@ -239,12 +242,15 @@ function pageHeight() {
   return document.documentElement.scrollHeight;
 }
 
-// Collects the pages a visitor can reach from the start page: primary navigation first, then
-// main content, then the footer, same origin only. Sign-out links are skipped so a review
-// never ends a signed-in session, and file links are skipped because they are not pages.
+// Collects the pages a visitor can reach from the start page, in priority order: the start
+// page, then primary navigation, then main content, then the footer, same origin only.
+// Sign-out links are skipped so a review never ends a signed-in session, and file links are
+// skipped because they are not pages. Returns up to `limit` routes; the caller captures the
+// first `discover` of them and reports the rest as found but not captured.
 function discoverLinks(limit) {
   const start = location.pathname.replace(/\/+$/, '') || '/';
   const routes = [start];
+  if (routes.length >= limit) return routes;
   const skip = /(sign-?out|log-?out|log-?off)|\.(pdf|png|jpe?g|gif|svg|webp|zip|docx?|xlsx?|pptx?)$/i;
   for (const selector of ['header a[href], nav a[href]', 'main a[href]', 'footer a[href]']) {
     for (const anchor of document.querySelectorAll(selector)) {
@@ -400,6 +406,7 @@ async function captureDesignReview({
   const browser = await playwright.chromium.launch({ channel, headless: true });
   let base = url;
   let results = (routes || []).map((route) => ({ route }));
+  let omittedRoutes = [];
   try {
     if (discover) {
       // Discovered links are absolute paths, so captures use the origin as their base; a
@@ -415,7 +422,9 @@ async function captureDesignReview({
           // host is still the site, so discovery continues from where the browser landed and
           // later captures use that origin.
           base = new URL(landed).origin;
-          results = (await page.evaluate(discoverLinks, discover)).map((route) => ({ route }));
+          const found = await page.evaluate(discoverLinks, DISCOVERY_SCAN_LIMIT);
+          results = found.slice(0, discover).map((route) => ({ route }));
+          omittedRoutes = found.slice(discover);
         } else {
           // Links on a login page are not the site's pages, so a start page that needs
           // sign-in yields only itself; its capture records the redirect.
@@ -441,6 +450,8 @@ async function captureDesignReview({
     await browser.close();
   }
   const summary = summarize(results);
+  // Pages discovery found beyond the `discover` limit, so a review can say what it left out.
+  summary.omittedRoutes = omittedRoutes;
   const output = { outputDir: checksOnly ? null : outputDir, baseUrl: base, routes: results, summary };
   if (axe) {
     // A route that landed on a sign-in page would only audit the login form.
@@ -567,6 +578,7 @@ module.exports = {
   SHEET_MAX_COLUMNS,
   SHEET_MAX_SHEETS,
   MAX_CAPTURE_HEIGHT,
+  DISCOVERY_SCAN_LIMIT,
   buildMobileSheet,
   planMobileSheets,
   captureDesignReview,
