@@ -63,8 +63,8 @@ Keep the lifecycle reference's online-only Android/no-deployment limits.
 
 Both `expo-camera` and `expo-image-picker` must match the resolved native
 inventory and installed docs/types for this combined wrapper. Missing package,
-release evidence, or native support means STOP, not install. Do not run
-`npx expo install`, edit OS declarations, or offer local native builds.
+release evidence, or native support means STOP, not install.
+Do not run `npx expo install`, edit OS declarations, or offer local native builds.
 Package inclusion does not establish OS declarations or device runtime grants.
 Barcode/QR uses `expo-camera`; there is no controls barcode subpath.
 

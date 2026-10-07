@@ -149,27 +149,26 @@ function main(input) {
   const projectRoot = path.dirname(path.resolve(filePath));
   const explicit = toolInput.validation_mode === 'explicit-mobile-workflow';
   let baseline;
-  let installed;
   if (explicit) {
     const release = toolInput.diagnostic_artifacts
       ? require('../scripts/lib/mobile-diagnostic-artifacts').resolveDiagnosticProject(projectRoot, toolInput.diagnostic_artifacts).projectBaseline
       : resolveProjectRelease(projectRoot);
     baseline = packageDeps(release.managedDependencies);
-  } else {
-    installed = inspectInstalledPackages(projectRoot);
-    baseline = legacyBaseline(toolName, toolInput, content, projectRoot, installed);
   }
+  const installed = inspectInstalledPackages(projectRoot);
+  if (!explicit) baseline = legacyBaseline(toolName, toolInput, content, projectRoot, installed);
   const approved = approvedJsDependencies(toolInput);
   const unchangedPeers = new Set(Object.entries(baseline).filter(([name, version]) => dependencies[name] === version
-    && installed?.has(`node_modules/${name}`)).map(([name]) => `node_modules/${name}`));
-  for (const [name, version] of Object.entries(dependencies)) {
-    const actual = installed?.get(`node_modules/${name}`);
-    if (actual?.alias) {
+    && installed.has(`node_modules/${name}`)).map(([name]) => `node_modules/${name}`));
+  for (const name of new Set([...Object.keys(baseline), ...Object.keys(dependencies)])) {
+    const version = dependencies[name];
+    const actual = installed.get(`node_modules/${name}`);
+    if (version !== undefined && actual?.alias) {
       if (Object.hasOwn(FORBIDDEN_DEPS, actual.canonicalName)) fail(`Forbidden dependency \`${actual.canonicalName}\`. ${FORBIDDEN_DEPS[actual.canonicalName]}`);
       if (npmAliasTarget(version) !== actual.canonicalName) fail('Installed npm alias canonical identity does not match its dependency declaration.');
     }
     const native = isRuntimePackage(name)
-      || (installed && hasNativeClosure(installed, `node_modules/${name}`, unchangedPeers));
+      || hasNativeClosure(installed, `node_modules/${name}`, unchangedPeers);
     if (native && baseline[name] !== version) {
       fail(`Native/runtime dependency \`${name}\` differs from this app's reviewed baseline. Restore its declaration or select a verified release.`);
     }

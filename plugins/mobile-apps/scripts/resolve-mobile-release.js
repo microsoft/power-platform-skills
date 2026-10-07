@@ -46,6 +46,9 @@ function main(argv) {
   if (values['--platform'] && (!values['--base-version'] || !values['--base-fingerprint'])) {
     fail('Deployment checks require both --base-version and --base-fingerprint from the actual selected platform base. Version alone does not verify native compatibility.');
   }
+  if (values['--platform'] && !values['--project-root']) {
+    fail('Deployment-base validation requires --project-root to verify the app metadata, lock and installed native dependencies.');
+  }
   if (values['--requirements-only']) {
     if (!values['--project-root']) fail('Read-only --requirements-only planning requires --project-root DIR.');
     if (['--release', '--default', '--platform', '--base-version', '--base-fingerprint'].some((flag) => values[flag])) {

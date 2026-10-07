@@ -90,6 +90,7 @@ for (const [label, mutate] of [
   ['malformed managed range', (r) => { r.managedDependencies.dependencies[HOST] = '^1.0.0-...'; }],
   ['vendor traversal', (r) => { r.managedDependencies.dependencies[HOST] = 'file:./vendor/../host.tgz'; }],
   ['missing host inventory', (r) => { delete r.nativePackages[`node_modules/${HOST}`]; }],
+  ['published host prerelease', (r) => { r.nativePackages[`node_modules/${HOST}`] = '1.0.0-preview.1'; }],
   ['missing expo inventory', (r) => { delete r.nativePackages['node_modules/expo']; }],
   ['native version range', (r) => { r.nativePackages['node_modules/react'] = '^1.0.0'; }],
   ['native prerelease leading zero', (r) => { r.nativePackages['node_modules/react'] = '1.0.0-01'; }],
@@ -431,14 +432,27 @@ test('deployment checks require a platform, exact base version and actual base f
     ['--default', '--platform', 'ios', '--base-version', 'fixture-ios-base'],
     ['--default', '--platform', 'ios', '--base-fingerprint', release.platforms.ios.fingerprint],
   ]) blocked(runCli(fixture, args), /both --base-version and --base-fingerprint/);
-  blocked(runCli(fixture, ['--default', '--platform', 'android', '--base-version', 'fixture-ios-base',
+  blocked(runCli(fixture, ['--project-root', fixture.projectRoot, '--platform', 'android', '--base-version', 'fixture-ios-base',
     '--base-fingerprint', release.platforms.android.fingerprint]), /deployment base/);
-  blocked(runCli(fixture, ['--default', '--platform', 'ios', '--base-version', release.platforms.ios.player.version,
+  blocked(runCli(fixture, ['--project-root', fixture.projectRoot, '--platform', 'ios', '--base-version', release.platforms.ios.player.version,
     '--base-fingerprint', release.platforms.ios.fingerprint]), /deployment base/);
-  blocked(runCli(fixture, ['--default', '--platform', 'ios', '--base-version', 'fixture-ios-base',
+  blocked(runCli(fixture, ['--project-root', fixture.projectRoot, '--platform', 'ios', '--base-version', 'fixture-ios-base',
     '--base-fingerprint', release.platforms.android.fingerprint]), /deployment base fingerprint/);
-  blocked(runCli(fixture, ['--default', '--platform', 'ios', '--base-version', 'fixture-ios-base',
+  blocked(runCli(fixture, ['--project-root', fixture.projectRoot, '--platform', 'ios', '--base-version', 'fixture-ios-base',
     '--base-fingerprint', 'fixture-secret-do-not-echo']), /deployment base fingerprint/);
+});
+
+test('deployment checks cannot substitute catalogue selection for an installed project', (t) => {
+  const fixture = createFixture(t);
+  for (const selection of [['--default'], ['--release', fixture.release.id]]) {
+    for (const platform of ['android', 'ios']) {
+      const target = fixture.release.platforms[platform];
+      blocked(runCli(fixture, [...selection, '--platform', platform,
+        '--base-version', target.base.version, '--base-fingerprint', target.fingerprint]), /requires --project-root/);
+      assert.equal(runCli(fixture, ['--project-root', fixture.projectRoot, ...selection, '--platform', platform,
+        '--base-version', target.base.version, '--base-fingerprint', target.fingerprint]).status, 0);
+    }
+  }
 });
 
 test('matching deployment evidence cannot bypass strict project native inventory validation', (t) => {

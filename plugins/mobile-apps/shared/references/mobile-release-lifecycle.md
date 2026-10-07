@@ -300,13 +300,16 @@ node "${PLUGIN_ROOT}/scripts/mobile-template-lifecycle.js" plan \
 
 An equal supported target is valid. A stale template still needs migrations
 when the host is already at target; a host-only repair does not require template
-advancement. Downgrades and runtime-ID changes without a published migration
-are blocked. No independent host, Expo, React Native, controls, or other native
-package bumps are permitted.
+advancement. Reject lower target host or template package versions relative to
+the recorded source release even when the installed host has drifted downward.
+Runtime counter or fingerprint changes require a published template migration.
+No independent host, Expo, React Native, controls, or other native package bumps
+are permitted.
 
 At planning, a runtime counter/fingerprint or Expo/React Native transition must
 target a **new host and template package major**, not only new runtime counters.
-Published paths require stable versions. Scaffoldable local diagnostics and
+Published host and template identities require exact stable versions; prerelease
+hosts are restricted to the diagnostic contract. Scaffoldable local diagnostics and
 controlled private prerelease targets must also satisfy this transition rule.
 Previously verified `0.x` source-version `upgrade-inspection-only` artifacts
 instead report the required production major and cannot claim to satisfy that
@@ -385,6 +388,8 @@ target, not by copying expected policy values just to pass. If the target
 cannot expose a verifiable version/fingerprint, block native deployment rather
 than infer it from Hermes bytecode or the npm host. Preserve deployment approval,
 first-app-ID regeneration, and offline reconciliation gates.
+`--platform` always requires `--project-root`: inspecting a catalogue default
+or named release alone is not deployment admission.
 
 When debugging or reporting, include only the helper's sanitized tuple and
 whether resolution succeeded. Do not attach full manifests, auth/config files,

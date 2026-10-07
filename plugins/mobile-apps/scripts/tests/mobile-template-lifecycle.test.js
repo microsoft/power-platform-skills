@@ -77,6 +77,7 @@ test('package version comparisons are numeric, inclusive and stable-only', () =>
   assert.equal(compareVersions('1.10.0', '1.9.9'), 1);
   assert.equal(compareVersions('1.0.0', '1.0.0'), 0);
   assert.equal(compareVersions('1.0.0', '2.0.0'), -1);
+  assert.equal(compareVersions('1.0.0+build.1', '1.0.0+build.2'), 0);
   for (const version of ['latest', '^1.0.0', '01.0.0', '1.0.0-beta.1']) {
     assert.throws(() => compareVersions(version, '1.0.0'), /exact stable/);
   }
@@ -211,6 +212,40 @@ test('downgrades and runtime metadata changes without a template edge block', (t
   const bad = release('fixture-runtime-only', 2, '2.1.0');
   bad.nativeRuntimeVersions.android = 3;
   assert.throws(() => planUpdate(root, bad.id, catalog(source, bad)), /published template migration/);
+});
+
+test('forward template counters cannot hide source host or template package downgrades', (t) => {
+  for (const downgraded of ['host', 'template']) {
+    const root = directory(t);
+    const source = release('fixture-source', 1, '2.0.0');
+    source.template.version = '2.0.0';
+    const target = structuredClone(source);
+    target.id = 'fixture-target';
+    target.templateVersion = 2;
+    if (downgraded === 'host') {
+      target.managedDependencies.dependencies[HOST] = '1.5.0';
+      target.nativePackages[`node_modules/${HOST}`] = '1.5.0';
+      target.template.version = '2.1.0';
+    } else {
+      target.template.version = '1.5.0';
+    }
+    project(root, source);
+    writeJson(path.join(root, 'node_modules', HOST, 'package.json'), { name: HOST, version: '1.0.0' });
+    assert.throws(() => planUpdate(root, target.id, catalog(source, target)), /downgrade/);
+  }
+});
+
+test('changed native fingerprints require a template edge even with new package majors', (t) => {
+  const root = directory(t);
+  const source = release();
+  const target = structuredClone(source);
+  target.id = 'fixture-new-fingerprint';
+  target.template.version = '2.0.0';
+  target.managedDependencies.dependencies[HOST] = '2.0.0';
+  target.nativePackages[`node_modules/${HOST}`] = '2.0.0';
+  target.platforms.android.fingerprint = 'fixture-changed-native-inputs';
+  project(root, source);
+  assert.throws(() => planUpdate(root, target.id, catalog(source, target)), /fingerprint changes require a published template migration/);
 });
 
 test('lifecycle CLI rejects unknown, duplicate and missing arguments', () => {

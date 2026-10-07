@@ -11,6 +11,7 @@ const {
   selectProjectRelease,
   resolveProjectRelease,
   summarizeRelease,
+  exactVersion,
 } = require('./lib/mobile-release');
 
 const HOST = '@microsoft/power-apps-native-host';
@@ -25,13 +26,15 @@ function readJson(file) {
 }
 
 function compareVersions(left, right) {
-  const pattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-  if (!pattern.test(left) || !pattern.test(right)) {
+  if (!exactVersion(left, true) || !exactVersion(right, true)) {
     throw new Error('Only exact stable package versions can be compared');
   }
-  const a = left.split('.').map(Number);
-  const b = right.split('.').map(Number);
-  return Math.sign(a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
+  const a = left.split('+', 1)[0].split('.').map(BigInt);
+  const b = right.split('+', 1)[0].split('.').map(BigInt);
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return a[index] > b[index] ? 1 : -1;
+  }
+  return 0;
 }
 
 function assertMajorTransition(source, target) {
@@ -54,6 +57,8 @@ function planUpdate(projectRoot, releaseId, catalog = readCatalog()) {
   const installedHost = readJson(path.join(projectRoot, 'node_modules', HOST, 'package.json')).version;
   const targetHost = target.nativePackages[`node_modules/${HOST}`];
   if (target.templateVersion < source.templateVersion
+    || compareVersions(source.template.version, target.template.version) > 0
+    || compareVersions(source.nativePackages[`node_modules/${HOST}`], targetHost) > 0
     || ['android', 'ios'].some((platform) => (
       target.nativeRuntimeVersions[platform] < source.nativeRuntimeVersions[platform]
     )) || compareVersions(installedHost, targetHost) > 0) {

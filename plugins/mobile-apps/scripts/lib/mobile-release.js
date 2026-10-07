@@ -130,6 +130,8 @@ function validateRelease(release) {
     requireValue(safeInstallPath(installPath) && exactVersion(version), 'Invalid reviewed native package path or exact version.');
   }
   requireValue(CORE.every((name) => Object.hasOwn(release.nativePackages, `node_modules/${name}`)), 'Reviewed native inventory must include the host, expo, react-native and react.');
+  requireValue(exactVersion(release.nativePackages[`node_modules/${HOST}`], true),
+    'Reviewed host must have an exact stable version; prerelease hosts require the separate diagnostic contract.');
   for (const name of managedNames) {
     requireValue(!isRuntimePackage(name) || Object.hasOwn(release.nativePackages, `node_modules/${name}`), 'Reviewed native inventory is missing a managed runtime dependency.');
   }

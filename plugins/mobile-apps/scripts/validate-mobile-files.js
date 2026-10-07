@@ -170,6 +170,19 @@ function main(argv) {
     return 1;
   }
   const projectRoot = fs.realpathSync(requestedProjectRoot);
+  if (diagnosticArtifacts) {
+    let stat;
+    try {
+      stat = fs.lstatSync(diagnosticArtifacts);
+    } catch (error) {
+      process.stderr.write(`BLOCKED: --diagnostic-artifacts must point to an existing readable regular file (${error.code || 'filesystem error'}).\n`);
+      return 2;
+    }
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      process.stderr.write('BLOCKED: --diagnostic-artifacts must point to a regular file, not a directory or symbolic link.\n');
+      return 2;
+    }
+  }
   const validationTargets = allSource ? collectSourceTargets(projectRoot) : targets;
 
   const files = new Set();

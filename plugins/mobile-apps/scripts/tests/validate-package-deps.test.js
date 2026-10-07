@@ -72,6 +72,16 @@ test('allows ordinary JS packages, including scoped dependencies', (t) => {
   assert.equal(result.status, 0, result.stderr);
 });
 
+test('explicit admission inspects ordinary-name packages that depend on the existing native runtime', (t) => {
+  for (const section of ['dependencies', 'optionalDependencies']) {
+    const fixture = createFixture(t);
+    addDependency(fixture.projectRoot, 'ordinary-runtime-wrapper', '1.0.0', {
+      properties: { [section]: { expo: '1.0.0' } },
+    });
+    blocked(runValidator(fixture, { approved: ['ordinary-runtime-wrapper@1.0.0'] }), /Native\/runtime dependency/);
+  }
+});
+
 test('the dispatcher uses the isolated policy and preserves exact JS-approval parsing', (t) => {
   const fixture = createFixture(t);
   addDependency(fixture.projectRoot, 'react-native-calendars', '1.1314.0');
@@ -256,6 +266,34 @@ test('legacy edits block installed native drift against the lock', (t) => {
   blocked(runValidator(fixture, { explicit: false }), /native dependency drift/);
 });
 
+test('legacy validation rejects deletion of known or detected native baseline dependencies', (t) => {
+  for (const tool of ['Write', 'Edit', 'MultiEdit']) {
+    for (const name of ['expo', HOST, 'ordinary-native']) {
+      const fixture = createFixture(t);
+      if (name === 'ordinary-native') {
+        addDependency(fixture.projectRoot, name, '1.0.0', { properties: { codegenConfig: {} } });
+      }
+      const file = path.join(fixture.projectRoot, 'package.json');
+      const before = fs.readFileSync(file, 'utf8');
+      modifyJson(file, (pkg) => { delete pkg.dependencies[name]; });
+      const after = fs.readFileSync(file, 'utf8');
+      const edit = { old_string: before, new_string: after };
+      blocked(runValidator(fixture, {
+        explicit: false, tool,
+        input: tool === 'Write' ? {} : tool === 'MultiEdit' ? { edits: [edit] } : edit,
+      }), /Native\/runtime dependency/);
+    }
+  }
+});
+
+test('legacy validation still allows deleting an ordinary JavaScript dependency', (t) => {
+  const fixture = createFixture(t);
+  addDependency(fixture.projectRoot, 'date-fns', '4.1.0');
+  modifyJson(path.join(fixture.projectRoot, 'package.json'), (pkg) => { delete pkg.dependencies['date-fns']; });
+  const result = runValidator(fixture, { explicit: false });
+  assert.equal(result.status, 0, result.stderr);
+});
+
 test('legacy edits detect transitive native additions with an ordinary root package name', (t) => {
   const fixture = createFixture(t);
   addDependency(fixture.projectRoot, 'ordinary-ui', '1.0.0', { properties: { dependencies: { 'ordinary-bridge': '1.0.0' } } });
@@ -318,6 +356,12 @@ test('legacy Edit and MultiEdit admit approved JS UI libraries using existing un
     });
     blocked(unapproved, /user-approved JavaScript Dependencies plan/);
   }
+});
+
+test('explicit admission preserves approved JavaScript UI reuse of unchanged React/RN peers', (t) => {
+  const { fixture } = calendarFixture(t);
+  const result = runValidator(fixture, { approved: ['react-native-calendars@1.1314.0'] });
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test('legacy JS peer reuse does not excuse changed root runtime declarations or installed native versions', (t) => {
