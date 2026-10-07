@@ -100,6 +100,9 @@ The plugin's path-filtered CI runs the same build and tests on Windows, Linux an
 Node.js 22/24. Keep its workflow scoped to this plugin, its own file and required build inputs.
 CI must reject changes to either generated artifact after building. Keep source checkout bytes
 stable with the plugin's `.gitattributes` and preserve byte-exact artifact comparisons.
+Cover every first-party input listed in the esbuild metafile, including imported JSON.
+Keep the plugin-local `.npmrc` setting that omits registry URLs from the lockfile.
+Preserve locked versions and integrity values when changing registry metadata.
 Review dependency licenses when updating the lockfile. The build embeds full notices
 for bundled dependencies and the repository's root MIT license in `server/mcp.mjs`;
 keep them with the runtime.

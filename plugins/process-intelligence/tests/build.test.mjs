@@ -34,16 +34,31 @@ for (const autocrlf of ['true', 'false']) {
     await fs.mkdir(path.join(root, 'server'));
     await assert.doesNotReject(fs.copyFile(path.join(plugin, '.gitattributes'),
       path.join(root, '.gitattributes')), 'Build inputs and artifacts need explicit line-ending rules');
-    const source = '// fixture\nexport const value = 1;\n';
-    await fs.writeFile(path.join(root, 'src', 'entry.mjs'), source);
+    // Check every first-party input esbuild actually consumed, including imported
+    // JSON. Restricting this to .mjs misses package.json's recorded input size.
+    const meta = JSON.parse(await fs.readFile(path.join(plugin, 'server', 'bundle-meta.json'), 'utf8'));
+    const inputs = Object.keys(meta.inputs).filter(file => !file.startsWith('node_modules/'));
+    assert.ok(inputs.includes('package.json'));
+    const expectedInputs = new Map();
+    for (const file of inputs) {
+      const source = (await fs.readFile(path.join(plugin, file), 'utf8')).replace(/\r\n/g, '\n');
+      expectedInputs.set(file, source);
+      await fs.mkdir(path.dirname(path.join(root, file)), { recursive: true });
+      await fs.copyFile(path.join(plugin, file), path.join(root, file));
+    }
     for (const file of artifacts) await fs.writeFile(path.join(root, file), 'fixture\n');
     // A temporary index is sufficient for the same working-tree diff CI uses.
     // No commit, identity configuration or remote is needed in this owned fixture.
     assert.equal(git(['init', '--quiet', '--template=']), 0);
-    assert.equal(git(['add', '--', '.gitattributes', 'src/entry.mjs', ...artifacts]), 0);
-    await fs.rm(path.join(root, 'src', 'entry.mjs'));
-    assert.equal(git(['checkout-index', '--', 'src/entry.mjs']), 0);
-    assert.equal(await fs.readFile(path.join(root, 'src', 'entry.mjs'), 'utf8'), source);
+    assert.equal(git(['add', '--', '.gitattributes', ...inputs, ...artifacts]), 0);
+    for (const file of inputs) await fs.rm(path.join(root, file));
+    assert.equal(git(['checkout-index', '--', ...inputs]), 0);
+    for (const [file, source] of expectedInputs) {
+      assert.equal(await fs.readFile(path.join(root, file), 'utf8'), source,
+        `${file}: every actual build input needs stable checkout bytes`);
+      assert.equal(meta.inputs[file].bytes, Buffer.byteLength(source),
+        `${file}: committed metadata must describe the canonical checkout bytes`);
+    }
     const gate = ['diff', '--exit-code', '--', ...artifacts];
     assert.equal(git(gate), 0);
     for (const file of artifacts) {

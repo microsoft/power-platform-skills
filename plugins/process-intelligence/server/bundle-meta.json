@@ -4829,7 +4829,7 @@
       "format": "esm"
     },
     "package.json": {
-      "bytes": 418,
+      "bytes": 399,
       "imports": [],
       "format": "esm",
       "with": {

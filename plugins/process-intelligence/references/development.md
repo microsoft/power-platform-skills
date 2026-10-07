@@ -75,9 +75,14 @@ After building, CI runs `git diff --exit-code -- server/mcp.mjs server/bundle-me
 either changed artifact fails the job before tests can mask a stale shipped runtime.
 The plugin's `.gitattributes` keeps source byte counts stable and compares generated artifacts
 without line-ending conversion. The build embeds the complete root license with LF line endings.
+Checkout regressions cover every first-party metafile input, including the imported `package.json`,
+under both `core.autocrlf` settings.
 Build uses the integrity-locked npm graph and esbuild metadata, rejects external non-builtin
 runtime imports, and embeds full required license texts in the runtime before replacing output.
 Keep the lockfile's registry integrity values and TLS verification intact.
+The plugin-local `.npmrc` omits fixed registry URLs from the lockfile, following the repository's
+vendor-build pattern. npm uses each contributor's configured registry while checking the existing
+locked integrity values. Omitting URLs does not replace or independently verify those hashes.
 Do not disable TLS verification or change global npm settings to recover a failed restore.
 MCP startup never builds, restores or downloads a runtime.
 

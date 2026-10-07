@@ -130,6 +130,21 @@ test('license information travels in the runtime without a separate plugin audit
   assert.doesNotMatch(build, /dependency-licenses|THIRD-PARTY-NOTICES|licenses\.mjs/);
 });
 
+test('lockfile omits registry URLs while retaining versions and integrity hashes', async () => {
+  const lock = await json(path.join(root, 'package-lock.json'));
+  const packages = Object.entries(lock.packages).filter(([name]) => name);
+  assert.ok(packages.length > 0);
+  for (const [name, entry] of packages) {
+    assert.equal(Object.hasOwn(entry, 'resolved'), false, `${name}: registry must remain configurable`);
+    assert.equal(typeof entry.version, 'string', name);
+    assert.match(entry.integrity, /^(?:sha1-[A-Za-z0-9+/]{27}=|sha512-[A-Za-z0-9+/]{86}==)$/, name);
+  }
+  // npm reads project configuration beside package.json, not from ancestor projects.
+  const config = await readFile(path.join(root, '.npmrc'), 'utf8');
+  assert.deepEqual(config.split(/\r?\n/).map(line => line.trim())
+    .filter(line => line && !line.startsWith('#')), ['omit-lockfile-registry-resolved=true']);
+});
+
 test('bundled license comment retains complete texts for every shipped package and this project', async () => {
   const runtime = await readFile(path.join(root, 'server', 'mcp.mjs'), 'utf8');
   const marker = '/*! Bundled license information:';
