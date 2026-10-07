@@ -41,6 +41,44 @@ The skill has two parts:
 
 **Important:** Do NOT ask the user questions during analysis. Autonomously gather all data, then present findings.
 
+## Audit lifecycle telemetry
+
+At the very start of Step 1, before site verification, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/emit-audit-permissions-telemetry.js" --action start
+```
+
+Parse the JSON stdout and retain its `auditRunId` as `<AUDIT_RUN_ID>` for this invocation. Treat it as an opaque random token. Never derive it from, or replace it with, a site, environment, tenant, user, path, or report value.
+
+Telemetry is best-effort and must never block the audit. If the start command fails or returns no `auditRunId`, continue the audit without lifecycle telemetry. Do not invent an id and do not search local state for the latest run.
+
+On every controlled terminal failure after a run id was returned, close the run before stopping:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/emit-audit-permissions-telemetry.js" \
+  --action complete \
+  --runId "<AUDIT_RUN_ID>" \
+  --outcome failure \
+  --failureStage "<FAILURE_STAGE>"
+```
+
+Use exactly one of these fixed failure stages:
+
+- `site_verification`
+- `configuration_gathering`
+- `schema_validation`
+- `relationship_discovery`
+- `audit_checks`
+- `scoring`
+- `root_cause_attribution`
+- `report_rendering`
+- `report_validation`
+- `metrics_validation`
+- `unknown_controlled_failure`
+
+Do not pass error messages, paths, table names, finding content, or other user/site data to the telemetry script. A telemetry completion failure does not change the audit outcome and must not trigger a second completion attempt.
+
 ## Task Tracking
 
 At the start of Step 1, create all tasks upfront using `TaskCreate`. Mark each task `in_progress` when starting and `completed` when done.
@@ -69,6 +107,8 @@ Use `Glob` to find:
 
 If no `.powerpages-site` folder exists, stop and tell the user to deploy first using `/deploy-site`.
 If no table permissions exist, note this as a critical finding (the site may have no data access configured) and continue the audit — there may still be code references that need permissions.
+
+Before stopping because `.powerpages-site` is absent, close lifecycle telemetry with `failureStage: site_verification` as described above.
 
 ---
 
@@ -707,14 +747,21 @@ The render script refuses to overwrite existing files. Before calling it, check 
 Run the semantic validator on the rendered report:
 
 ```bash
-node "${PLUGIN_ROOT}/skills/audit-permissions/scripts/validate-audit.js" --report "<OUTPUT_PATH>"
+node "${PLUGIN_ROOT}/skills/audit-permissions/scripts/validate-audit.js" \
+  --report "<OUTPUT_PATH>" \
+  --data "<DATA_JSON_PATH>" \
+  --auditRunId "<AUDIT_RUN_ID>"
 ```
 
-Do not present or copy a report until validation succeeds. The validator reads `FINDINGS_DATA`, `INVENTORY_DATA`, and `SCORECARD_DATA` from the report and checks unique issue ids whose prefix matches the dimension, major/minor severities, non-empty `title`/`reasoning`/`fix`, a valid `rootCause` and `rootCauseReason` on every major finding (and none on minor findings), that the inventory is an array, the three category scores recomputed from the findings, that `SUMMARY` states the verdict matching the major count (and neither verdict phrase on a partial audit), and leftover placeholders.
+When lifecycle start returned no run id, omit `--data` and `--auditRunId`; report validation must still run.
+
+Do not present or copy a report until validation succeeds. The validator reads `FINDINGS_DATA`, `INVENTORY_DATA`, and `SCORECARD_DATA` from the report and checks unique issue ids whose prefix matches the dimension, major/minor severities, non-empty `title`/`reasoning`/`fix`, a valid `rootCause` and `rootCauseReason` on every major finding (and none on minor findings), that the inventory is an array, the three category scores recomputed from the findings, that `SUMMARY` states the verdict matching the major count (and neither verdict phrase on a partial audit), and leftover placeholders. When the run id and data path are supplied, the same deterministic command revalidates the source data, derives the closed aggregate metrics, and records successful completion and elapsed duration.
 
 If validation fails, delete the report you just rendered, fix the named problem in the data file, render again to the same path, and rerun the validator. Do not repeat evidence gathering to fix a validation error.
 
-Delete the temporary `audit-data.json` and `audit-evidence.json` files after validation succeeds.
+The validator reports `telemetryStatus` as `recorded_success`, `recorded_failure` (the report is valid but its source data could not be reconciled, so the run was recorded with `failureStage: metrics_validation`), `failed`, or `not_requested`. Telemetry is best-effort: neither `recorded_failure` nor `failed` invalidates the report. Do not retry with a reduced payload and do not expose report data in diagnostic output.
+
+Delete the temporary `audit-data.json` and `audit-evidence.json` files after the terminal command returns.
 
 ### 7.5 Open in Browser
 

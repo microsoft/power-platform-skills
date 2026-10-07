@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const { spawnSync } = require('child_process');
 const path = require('path');
 
@@ -13,6 +14,11 @@ const VALIDATOR_PATH = path.join(
   'audit-permissions',
   'scripts',
   'validate-audit.js'
+);
+const TELEMETRY_SCRIPT_PATH = path.join(
+  __dirname,
+  '..',
+  'emit-audit-permissions-telemetry.js'
 );
 
 function validFindings() {
@@ -195,4 +201,101 @@ test('hook mode never blocks, even with an invalid earlier report', (t) => {
   const outcome = runHook(projectRoot);
   assert.equal(outcome.status, 0, outcome.stderr);
   assert.equal(outcome.stderr, '');
+});
+
+test('validated report and source data record successful lifecycle completion together', (t) => {
+  const projectRoot = createTempProject(t);
+  const configDir = path.join(projectRoot, '.telemetry-test');
+  const ikeyPath = writeProjectFile(
+    projectRoot,
+    '.telemetry-test/ikey.json',
+    JSON.stringify({ disabled: true, event_stream_name: 'PagesAIPluginEvent' })
+  );
+  const env = {
+    ...process.env,
+    PATH: '',
+    POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
+    POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath,
+  };
+  const started = spawnSync(process.execPath, [TELEMETRY_SCRIPT_PATH, '--action', 'start'], {
+    encoding: 'utf8',
+    env,
+  });
+  assert.equal(started.status, 0, started.stderr);
+  const auditRunId = JSON.parse(started.stdout).auditRunId;
+
+  const findings = validFindings();
+  const scorecard = validScorecard();
+  const reportPath = writeReport(projectRoot, { findings, scorecard });
+  const dataPath = writeProjectFile(
+    projectRoot,
+    'audit-data.json',
+    JSON.stringify({
+      FINDINGS_DATA: findings,
+      SCORECARD_DATA: scorecard,
+    })
+  );
+  const outcome = spawnSync(process.execPath, [
+    VALIDATOR_PATH,
+    '--report', reportPath,
+    '--data', dataPath,
+    '--auditRunId', auditRunId,
+  ], {
+    encoding: 'utf8',
+    env,
+  });
+  assert.equal(outcome.status, 0, outcome.stderr);
+  const result = JSON.parse(outcome.stdout);
+  assert.equal(result.valid, true);
+  assert.equal(result.telemetryStatus, 'recorded_success');
+  assert.ok(fs.existsSync(path.join(
+    configDir,
+    'telemetry',
+    'power-pages',
+    'audit-runs',
+    `${auditRunId}.completed`
+  )));
+});
+
+test('valid report with unreconcilable source data is recorded as a failed run', (t) => {
+  const projectRoot = createTempProject(t);
+  const configDir = path.join(projectRoot, '.telemetry-test');
+  const ikeyPath = writeProjectFile(
+    projectRoot,
+    '.telemetry-test/ikey.json',
+    JSON.stringify({ disabled: true, event_stream_name: 'PagesAIPluginEvent' })
+  );
+  const env = {
+    ...process.env,
+    PATH: '',
+    POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
+    POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath,
+  };
+  const started = spawnSync(process.execPath, [TELEMETRY_SCRIPT_PATH, '--action', 'start'], {
+    encoding: 'utf8',
+    env,
+  });
+  assert.equal(started.status, 0, started.stderr);
+  const auditRunId = JSON.parse(started.stdout).auditRunId;
+
+  const reportPath = writeReport(projectRoot);
+  // The data file no longer matches the rendered report (one finding dropped).
+  const dataPath = writeProjectFile(
+    projectRoot,
+    'audit-data.json',
+    JSON.stringify({ FINDINGS_DATA: validFindings().slice(0, 1), SCORECARD_DATA: null })
+  );
+  const outcome = spawnSync(process.execPath, [
+    VALIDATOR_PATH,
+    '--report', reportPath,
+    '--data', dataPath,
+    '--auditRunId', auditRunId,
+  ], {
+    encoding: 'utf8',
+    env,
+  });
+  assert.equal(outcome.status, 0, outcome.stderr);
+  const result = JSON.parse(outcome.stdout);
+  assert.equal(result.valid, true, 'the report itself remains valid');
+  assert.equal(result.telemetryStatus, 'recorded_failure');
 });
