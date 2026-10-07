@@ -62,7 +62,7 @@ If in a project:
 ```bash
 test -f memory-bank.md && echo "memory_bank=present"
 test -f native-app-plan.md && echo "plan=present"
-node -e "const fs=require('node:fs');const p='src/generated/services';console.log('generated_service_count='+ (fs.existsSync(p) ? fs.readdirSync(p).filter(f=>f.endsWith('.ts')).length : 0));"
+node -e "const fs=require('node:fs');const p='src/generated/services';let count=0;try{count=fs.statSync(p).isDirectory()?fs.readdirSync(p).filter(f=>f.endsWith('.ts')).length:0;}catch{}console.log('generated_service_count='+count);"
 ```
 
 Read [release lifecycle](../../shared/references/mobile-release-lifecycle.md).
