@@ -454,11 +454,17 @@ function reorderCellsByAnchors(cells, positions) {
 // This is the AUTHORED effective width, not the live one: the reconcile deliberately clamps against
 // the section it is writing into (`convergeCellSpans`), which on an existing form can differ.
 //
-// Quick Create forms must use single-column sections. Dataverse rejects multi-column
-// (columns="11"/"111") quick-create sections with "Columns in a section must be set to '1'".
+// Quick Create AND Quick View forms must use single-column sections. Dataverse rejects a
+// multi-column section (columns="11"/"111") on either with
+//   HTTP 400 … systemforms: Columns in a section must be set to '1'. Found '11'.
+// — measured live on a Quick View whose auto layout had gone to two columns past six fields. The
+// cap used to cover Quick Create only, so a field-heavy Quick View failed the build mid-run.
+const SINGLE_COLUMN_FORM_TYPES = new Set(['QuickCreate', 'QuickView']);
+function maxSectionColumns(formType) {
+  return SINGLE_COLUMN_FORM_TYPES.has(formType) ? 1 : 4;
+}
 function sectionGridWidth(section, formType) {
-  const maxCols = formType === 'QuickCreate' ? 1 : 4;
-  return Math.min((section && section.columns) || 1, maxCols);
+  return Math.min((section && section.columns) || 1, maxSectionColumns(formType));
 }
 
 // Compile an App Spec form entry into the SDK's canonical desired-state intent.
@@ -487,10 +493,10 @@ function compileFormIntent(spec, formSpec, opts) {
   const entity = entityByLogical(spec, entityLogical);
   const formType = formSpec.formType || 'Main';
 
-  // The QuickCreate single-column cap — the same rule `sectionGridWidth` applies to explicit
-  // sections; the auto layout below picks its own 1-or-2 within it. It also blocks notes:
-  // quick-create forms don't host the timeline.
-  const maxCols = formType === 'QuickCreate' ? 1 : 4;
+  // The single-column cap for Quick Create and Quick View forms — the same rule `sectionGridWidth`
+  // applies to explicit sections; the auto layout below picks its own 1-or-2 within it. (Notes are
+  // gated separately below: only a Main form hosts the timeline.)
+  const maxCols = maxSectionColumns(formType);
   const explicit = Array.isArray(formSpec.tabs) || formSpec.layout === 'explicit';
 
   // Compute per-field required flag. isRequired is explicit authored intent (the primary

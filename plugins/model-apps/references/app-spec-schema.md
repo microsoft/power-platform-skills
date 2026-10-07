@@ -717,7 +717,9 @@ why they need naming here at all.
 ```
 - **`formType`** is `Main` (default), `QuickCreate`, or `QuickView`. A `QuickCreate` form is a
   simplified create form on the same entity (no sub-grids, no Notes; events allowed). A `QuickView`
-  form is read-only (no sub-grids, no events). Sub-grids/Notes are Main-form only.
+  form is read-only (no sub-grids, no events). Sub-grids/Notes are Main-form only. Every section on a
+  `QuickCreate` or `QuickView` form is one column: the platform refuses a wider one, so an authored
+  `columns` above 1 is built as 1, and the auto layout stays one column however many fields it holds.
 - **`quickViews[]`** (on a host form) embed a `QuickView` form via a lookup: `lookup` is the lookup
   column on the host, `targetEntity` the related entity, `form` the **name** of a `QuickView` form
   declared in `forms[]` (lint-enforced). Optional `label`, `section`, `displayAsCard`. The control

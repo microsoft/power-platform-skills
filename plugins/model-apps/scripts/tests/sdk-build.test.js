@@ -1278,6 +1278,25 @@ test('formDef forces single-column sections for a field-heavy QuickCreate form',
   assert.strictEqual(qc.tabs[0].columns[0].sections[0].columns, 1, 'QuickCreate form is forced to a single column');
 });
 
+// Dataverse refuses a multi-column section on a Quick View form exactly as it does on a Quick Create one —
+// live: "HTTP 400 … systemforms: Columns in a section must be set to '1'. Found '11'." for a Quick View whose
+// auto layout went to two columns past six fields, which failed the build mid-run.
+test('formDef forces single-column sections for a field-heavy QuickView form, auto and explicit', () => {
+  const { sectionGridWidth } = require('../lib/artifact-intent.js');
+  const spec = makeSpec();
+  const cust = spec.entities.find((e) => e.schemaName === 'new_customer');
+  cust.columns = Array.from({ length: 8 }, (_, i) => ({ schemaName: `new_c${i}`, displayName: `C${i}`, type: 'Text' }));
+  const auto = compileFormIntent(spec, { entity: 'new_customer', name: 'Card', formType: 'QuickView', layout: 'auto' });
+  const autoSection = auto.tabs[0].columns[0].sections[0];
+  assert.strictEqual(autoSection.columns, 1, 'a field-heavy QuickView auto layout stays single-column');
+  assert.ok(autoSection.rows.every((r) => r.cells.length === 1), 'one cell per row in a single-column section');
+  const explicit = compileFormIntent(spec, { entity: 'new_customer', name: 'Card', formType: 'QuickView',
+    tabs: [{ label: 'G', sections: [{ label: 'S', columns: 2, fields: ['new_name', 'new_c0', 'new_c1'] }] }] });
+  assert.strictEqual(explicit.tabs[0].columns[0].sections[0].columns, 1, 'an authored two-column QuickView section is clamped to 1');
+  assert.strictEqual(sectionGridWidth({ columns: 2 }, 'QuickView'), 1, 'verify judges a QuickView section by the same width');
+  assert.strictEqual(sectionGridWidth({ columns: 2 }, 'Main'), 2, 'a Main form keeps its authored width');
+});
+
 test('formDef clamps an explicitly authored multi-column section to 1 for QuickCreate', () => {
   const spec = makeSpec();
   const qc = compileFormIntent(spec, { entity: 'new_customer', name: 'QC', formType: 'QuickCreate',
