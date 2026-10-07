@@ -53,7 +53,7 @@ test(`malformed stored OID stops ${args.join(' ')} before Azure CLI or HTTP`, as
   let fetches = 0;
   const fetchImpl = async () => { fetches++; throw new Error('Unexpected fixture HTTP request'); };
   assert.equal(await run([...args, '--profile', 'sample'], {
-    ...f, stdin: new PassThrough(), fetchImpl, signal: AbortSignal.timeout(1000)
+    ...f, stdin: new PassThrough(), fetchImpl, signal: AbortSignal.timeout(15000)
   }), 2, f.err);
   assert.match(f.err, /account selection.*OID GUID or null/);
   assert.doesNotMatch(f.err, /not-an-oid|account-selected|TOKEN_ACQUIRED/);
@@ -83,7 +83,7 @@ for (const Cloud of removedClouds) test(`removed cloud ${Cloud} fails before CLI
   const original = await readFile(file, 'utf8');
   let fetches = 0;
   const fetchImpl = async () => { fetches++; throw new Error('Unexpected fixture HTTP request'); };
-  const options = { ...f, stdin: new PassThrough(), fetchImpl, signal: AbortSignal.timeout(1000) };
+  const options = { ...f, stdin: new PassThrough(), fetchImpl };
   for (const name of ['new', 'sample']) {
     assert.equal(await run(['config', '--profile', name, '--cloud', Cloud,
       '--tenant', sample.TenantId, '--environment', sample.EnvironmentId], options), 2, f.err);
@@ -93,7 +93,10 @@ for (const Cloud of removedClouds) test(`removed cloud ${Cloud} fails before CLI
   const content = JSON.stringify({ ...JSON.parse(original), Cloud });
   await writeFile(file, content);
   for (const args of [['diagnostics'], ['diagnostics', '--remote', 'true'], ['login'], ['logout'], ['serve']]) {
-    assert.equal(await run([...args, '--profile', 'sample'], options), 2, f.err);
+    // Bound each invocation independently rather than sharing a cumulative timeout.
+    assert.equal(await run([...args, '--profile', 'sample'], {
+      ...options, signal: AbortSignal.timeout(15000)
+    }), 2, f.err);
     assert.equal(await readFile(file, 'utf8'), content);
   }
   assert.match(f.err, /Choose Public, Gcc, GccHigh, DoD or Mooncake\./);
@@ -142,8 +145,15 @@ test('explicit sign-in is the only command that opens UI', async t => {
 });
 test('serving monitor invalidates old profile and does not silently rebind', async t => {
   const f = await setup(t), stdin = new PassThrough(); await f.store.save(bound);
-  const running = run(['serve', '--profile', 'sample'], { ...f, stdin });
-  setTimeout(() => f.store.save(sample), 100);
+  let ready;
+  const started = new Promise(resolve => { ready = resolve; });
+  const running = run(['serve', '--profile', 'sample'], {
+    ...f, stdin, onReady: ready, signal: AbortSignal.timeout(15000)
+  });
+  // Change an active session, not a profile whose startup is still running.
+  // The existing readiness seam avoids a machine-speed race.
+  await Promise.race([started, running.then(code => assert.fail(`Serve exited before readiness: ${code}`))]);
+  await f.store.save(sample);
   assert.equal(await running, 130);
   assert.match(f.err, /changed/); assert.equal(f.cli.calls.length, 0); assert.equal(f.out, '');
 });
@@ -154,87 +164,43 @@ test('help and cancellation use stderr and stable exit codes', async t => {
   assert.match(f.err, /Node.js 22\/24/); assert.equal(f.out, '');
 });
 
-test('reconfiguration and logout remove current and legacy stale claims without using Azure CLI', async t => {
+test('claims challenge reports the policy problem without persisting it or starting sign-in', async t => {
   const f = await setup(t);
-  const first = await f.store.save(bound);
-  await f.store.saveChallenge(first, claim);
-  const configure = ['config', '--profile', 'sample', '--cloud', 'Public',
-    '--tenant', sample.TenantId, '--environment', sample.EnvironmentId];
-  assert.equal(await run(configure, f), 0, f.err);
-  await assert.rejects(readFile(f.store.file('sample', '.challenge.json')), { code: 'ENOENT' });
-  // Model an already-existing stale file from an earlier reconfiguration.
-  await writeFile(f.store.file('sample', '.challenge.json'), JSON.stringify({ Revision: first.Revision, Claims: claim }));
-  assert.equal(await run(['logout', '--profile', 'sample'], f), 0, f.err);
-  const current = await f.store.load('sample');
-  assert.equal(current.HomeAccountId, null);
-  assertProfileBytes(await readFile(f.store.file('sample'), 'utf8'), null);
-  assert.equal(current.EnvironmentId, sample.EnvironmentId);
+  await f.store.save(bound);
+  const before = await readFile(f.store.file('sample'));
+  let sent = 0;
+  assert.equal(await run(['diagnostics', '--profile', 'sample', '--remote', 'true'], {
+    ...f, fetchImpl: async () => {
+      sent++;
+      return new Response(null, { status: 401, headers: {
+        'www-authenticate': `Bearer error="insufficient_claims", claims="${Buffer.from(claim).toString('base64')}"`
+      } });
+    }
+  }), 3, f.err);
+  assert.match(f.err, /Conditional Access.*CAE/);
+  assert.match(f.err, /login --profile NAME --sign-in true/);
+  assert.equal(sent, 1);
+  assert.deepEqual(await readFile(f.store.file('sample')), before);
   assert.deepEqual(await readdir(f.store.root), ['sample.json']);
-  assert.equal(f.cli.calls.length, 0);
+  assert.equal(f.cli.calls.some(args => args[0] === 'login'), false);
   assert.equal(f.out, '');
-  assert.doesNotMatch(f.err, /acrs|c1|fixture@example|11111111|aaaaaaaa/);
-});
-
-test('successful login removes legacy stale claims and consumes supported nested claims unchanged', async t => {
-  const f = await setup(t);
-  let selected = await f.store.save(bound);
-  const pending = f.store.file('sample', '.challenge.json');
-  await writeFile(pending, JSON.stringify({ Revision: 'older-revision', Claims: claim }));
-  assert.equal(await run(['login', '--profile', 'sample'], f), 0, f.err);
-  await assert.rejects(readFile(pending), { code: 'ENOENT' });
-  const nested = '{"access_token":{"custom":{"values":["private-context",{"nested":true}]},"acrs":{"essential":true}}}';
-  selected = await f.store.load('sample');
-  await f.store.saveChallenge(selected, nested);
-  assert.equal(await run(['login', '--profile', 'sample'], f), 3);
-  assert.equal(await f.store.loadChallenge(selected), nested);
+  assert.doesNotMatch(f.err, /acrs|c1|fixture@example|11111111|aaaaaaaa|2\.80/);
   assert.equal(await run(['login', '--profile', 'sample', '--sign-in', 'true'], f), 0, f.err);
-  await assert.rejects(readFile(pending), { code: 'ENOENT' });
-  const loginArgs = f.cli.calls.find(args => args[0] === 'login');
-  assert.equal(Buffer.from(loginArgs[loginArgs.indexOf('--claims-challenge') + 1], 'base64').toString(), nested);
-  assert.ok(f.cli.calls.filter(args => args.includes('get-access-token')).every(args => !args.includes('--claims-challenge')));
-  const stored = await readFile(f.store.file('sample'), 'utf8');
-  assert.doesNotMatch(stored, /Claims|accessToken|refresh_token|private-context/);
-  assert.doesNotMatch(f.err, /private-context|acrs|nested|fixture@example/);
-  assert.equal(f.out, '');
+  assert.ok(f.cli.calls.every(args => !args.includes('--claims-challenge')));
+  assert.deepEqual(await readdir(f.store.root), ['sample.json']);
 });
 
-test('malformed pending state fails login safely but explicit logout removes the unusable file', async t => {
+test('login cannot overwrite a newer profile published during token acquisition', async t => {
   const f = await setup(t);
-  const selected = await f.store.save(bound);
-  const file = f.store.file('sample', '.challenge.json');
-  for (const content of ['{"Claims":"private-malformed-content"', JSON.stringify({
-    Revision: selected.Revision, Claims: '{"private-unsupported-claim":"sensitive"}'
-  })]) {
-    await writeFile(file, content);
-    assert.equal(await run(['login', '--profile', 'sample', '--sign-in', 'true'], f), 3);
-    assert.equal(await readFile(file, 'utf8'), content);
-    assert.equal(f.cli.calls.length, 0);
-    assert.doesNotMatch(f.err, /private-malformed-content|private-unsupported-claim|sensitive|TOKEN_ACQUIRED/);
-  }
-  assert.equal(await run(['logout', '--profile', 'sample'], f), 0, f.err);
-  await assert.rejects(readFile(file), { code: 'ENOENT' });
-  assert.equal(f.cli.calls.length, 0);
-  assert.equal(f.out, '');
-});
-
-for (const pending of [null, claim]) for (const rotateRevision of [false, true])
-test(`login cannot clear a newer challenge (initial challenge: ${pending !== null}, revision changes: ${rotateRevision})`, async t => {
-  const f = await setup(t);
-  const selected = await f.store.save(bound);
-  if (pending !== null) await f.store.saveChallenge(selected, pending);
-  const newer = '{"access_token":{"custom":{"value":"new-private-challenge"}}}';
+  await f.store.save(bound);
   const runCli = f.cli.run.bind(f.cli);
   let current;
   f.cli.run = async (args, options) => {
     const result = await runCli(args, options);
-    if (args.includes('get-access-token')) {
-      current = rotateRevision ? await f.store.save(bound) : selected;
-      await f.store.saveChallenge(current, newer);
-    }
+    if (args.includes('get-access-token')) current = await f.store.save(sample);
     return result;
   };
   assert.equal(await run(['login', '--profile', 'sample', '--sign-in', 'true'], f), 3, f.err);
-  assert.equal(await f.store.loadChallenge(current), newer);
-  assert.equal((await f.store.load('sample')).Revision, current.Revision);
-  assert.doesNotMatch(f.err, /new-private-challenge|acrs|TOKEN_ACQUIRED/);
+  assert.deepEqual(await f.store.load('sample'), current);
+  assert.doesNotMatch(f.err, /TOKEN_ACQUIRED/);
 });

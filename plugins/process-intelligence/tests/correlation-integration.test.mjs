@@ -100,7 +100,7 @@ test('401 retry and background traffic keep the marker and independent session I
 });
 test('CLI remote diagnostics pages carry the marker and local serving starts without authentication', async () => {
   const correlation = new CorrelationSession();
-  const store = { async load() { return bound; }, async ensureCurrent() {}, async loadChallenge() { return null; } };
+  const store = { async load() { return bound; }, async ensureCurrent() {} };
   const remote = new FakeRemote({ stateless: true, postOnly: true }), stderr = new PassThrough(), stdout = new PassThrough();
   let diagnostics = ''; stderr.on('data', b => { diagnostics += b; });
   try {

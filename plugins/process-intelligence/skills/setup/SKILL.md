@@ -34,11 +34,11 @@ remote diagnostics or analytics until the user gives an explicit instruction cov
 Environment-ID confirmation alone is insufficient. This is user-level integration instruction,
 not tenant-admin consent or a plugin-enforced per-request gateway; existing authorization still applies.
 
-1. Check Node.js 22/24 LTS and Azure CLI 2.54+ (`az version`); claims login needs 2.80+.
+1. Check Node.js 22/24 LTS and Azure CLI 2.54+ (`az version`).
    Use official installation guidance in the README; never install or change global settings automatically.
    The bundle is ready to run; source development uses `npm ci` then `npm run build`
    from this directory in a repository checkout, never during MCP launch.
-   Profiles use `ProcessIntelligenceBridgeAzureCli` storage with no migration from other stores.
+   Profiles use `ProcessIntelligenceBridgeAzureCli` under the platform's per-user data directory.
 2. Have the user verify the intended Azure CLI cloud and organizational account in a normal terminal.
    If sign-in is needed, have them run `az login --allow-no-subscriptions` themselves.
    Azure CLI owns shared credentials; login may affect other CLI consumers. The bridge never switches clouds/accounts.
@@ -63,14 +63,17 @@ not tenant-admin consent or a plugin-enforced per-request gateway; existing auth
    directory, avoiding an additional workspace load of its `.mcp.json`; Claude Code has an equivalent local loader.
    Do not change global registrations.
 
-Serve never opens UI. A validated claims challenge requires explicit `login --profile work --sign-in true`
-on CLI 2.80+, then restart. Do not omit claims or change the client, resource or tenant to bypass authentication.
+Serve never opens UI. For a Conditional Access / CAE claims challenge, explain the policy failure
+and ask the user to run `login --profile work --sign-in true` in a normal terminal, then restart MCP.
+Do not store, decode or forward claims-challenge payloads. If the problem persists, ask the user's
+administrator to review the policy; normal sign-in may not satisfy policies requiring specific claims.
+Never change the client, resource or tenant as authentication recovery.
 Account changes require explicit `login --profile work --switch-account true`; tenant/environment changes
 require config, login and restart. Logout invalidates only the plugin profile, never `az logout`.
-Profile/challenge files are plaintext JSON protected by user ACLs/modes, not application encryption.
+Profiles are plaintext JSON without application-level encryption.
 Account binding persists only the tenant-local OID alongside the tenant; usernames stay in RAM.
-Use a non-personal profile label. Names and pending claims can still contain identifying information.
-For their exact fields, lifecycle and secure local export/removal, use connection patterns.
+Use a non-personal profile label. Names can still contain identifying information.
+For their exact fields, lifecycle and local export/removal, use connection patterns.
 
 Preserve the safe error. Do not request admin consent, edit identity registrations or imply every AADSTS
 failure is licensing. Direct access or consent problems to the user's administrator.

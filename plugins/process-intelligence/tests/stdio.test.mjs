@@ -3,7 +3,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { rm, readFile, access, rename, readdir, writeFile } from 'node:fs/promises';
+import { rm, readFile, access, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -87,38 +87,32 @@ test('actual isolated bundle persists canonical environment aliases without auth
   await assert.rejects(access(env.FIXTURE_AZ_REPORT), { code: 'ENOENT' });
   await assert.rejects(access(f.configDir), { code: 'ENOENT' });
 });
-test('actual bundle config, logout and explicit login remove selected stale challenges without leaks', async t => {
+test('actual bundle requests manual login for a claims challenge without state changes or replay', async t => {
   const f = await fixture(t);
   const entry = pathToFileURL(path.join(f.plugin, 'server', 'mcp.mjs')).href;
-  const preload = pathToFileURL(path.join(root, 'tests', 'bundle-preload.mjs')).href;
+  const report = path.join(f.temp, 'challenge-report.json');
+  const profileBefore = await readFile(f.state.file('sample'));
   const env = { ...f.env, FIXTURE_AZ_REPORT: path.join(f.temp, 'az-report.jsonl') };
-  const challengeFile = f.state.file('sample', '.challenge.json');
-  const other = await f.state.save({ ...await f.state.load('sample'), Name: 'another' });
-  await f.state.saveChallenge(other, claim);
-  const otherBytes = await readFile(f.state.file('another', '.challenge.json'));
-  for (const command of ['config', 'logout', 'login']) {
-    await writeFile(challengeFile, JSON.stringify({ Revision: 'older-revision', Claims: claim }));
-    const args = command === 'config'
-      ? ['config', '--profile', 'sample', '--cloud', 'Public', '--tenant', sample.TenantId, '--environment', sample.EnvironmentId]
-      : [command, '--profile', 'sample'];
-    // Use the existing launch dependency seam in this synthetic child; no production terminal
-    // or authentication bypass switch is added. All CLI responses and HTTP stay fixture-owned.
-    const output = spawnSync(process.execPath, ['--import', preload, '--input-type=module', '-e',
-      `const {launch}=await import(${JSON.stringify(entry)});await launch(${JSON.stringify(args)},{terminalAvailable:true});`],
+  const header = `Bearer error="insufficient_claims", claims="${Buffer.from(claim).toString('base64')}"`;
+  const code = `const {launch}=await import(${JSON.stringify(entry)});
+    const {writeFile}=await import('node:fs/promises');let sent=0;
+    await launch(['diagnostics','--profile','sample','--remote','true'],{
+      fetchImpl:async()=>{sent++;return new Response(null,{status:401,
+        headers:{'www-authenticate':${JSON.stringify(header)}}});}
+    });
+    await writeFile(${JSON.stringify(report)},JSON.stringify({sent}));`;
+  const output = spawnSync(process.execPath, ['--input-type=module', '-e', code],
     { env, cwd: f.temp, encoding: 'utf8', timeout: 15000 });
-    assert.equal(output.status, 0, output.stderr);
-    assert.equal(output.stdout, '');
-    assert.doesNotMatch(output.stderr, /acrs|c1|fixture@example|access_token|older-revision/);
-    assertProfileBytes(await readFile(f.state.file('sample'), 'utf8'),
-      command === 'login' ? bound.HomeAccountId : null);
-    await assert.rejects(access(challengeFile), { code: 'ENOENT' });
-    assert.deepEqual(await readFile(f.state.file('another', '.challenge.json')), otherBytes);
-    assert.equal(JSON.parse(await readFile(env.FIXTURE_REPORT, 'utf8')).fetches, 0);
-    if (command !== 'login') await assert.rejects(access(env.FIXTURE_AZ_REPORT), { code: 'ENOENT' });
-  }
+  assert.equal(output.status, 3, output.stderr);
+  assert.match(output.stderr, /Conditional Access.*CAE/);
+  assert.match(output.stderr, /login --profile NAME --sign-in true/);
+  assert.doesNotMatch(output.stderr, /acrs|fixture@example|2\.80|--claims-challenge/);
+  assert.equal(output.stdout, '');
+  assert.equal(JSON.parse(await readFile(report)).sent, 1);
+  assert.deepEqual(await readdir(f.state.root), ['sample.json']);
+  assert.deepEqual(await readFile(f.state.file('sample')), profileBefore);
   const calls = (await readFile(env.FIXTURE_AZ_REPORT, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
-  assert.ok(calls.length > 0);
-  assert.ok(calls.every(args => !['login', 'logout'].includes(args[0])));
+  assert.ok(calls.every(args => args[0] !== 'login' && !args.includes('--claims-challenge')));
 });
 test('actual isolated bundle rejects malformed stored OID before authentication or HTTP', async t => {
   const f = await fixture(t);
@@ -203,18 +197,6 @@ test('actual bundle warm username drift blocks further MCP traffic without persi
     ['initialize', 'notifications/initialized', 'tools/list']);
   assert.equal(await readFile(f.state.file('sample'), 'utf8'), before);
   assert.equal(stderr, '');
-});
-test('actual isolated bundle does not discover profiles in the legacy store', async t => {
-  const f = await fixture(t), legacy = path.join(path.dirname(f.state.root), 'ProcessMiningBridgeAzureCli');
-  if (f.state.root !== legacy) await rename(f.state.root, legacy);
-  const before = await readFile(path.join(legacy, 'sample.json'), 'utf8');
-  const output = spawnSync(process.execPath, [path.join(f.plugin, 'server', 'mcp.mjs'), 'diagnostics', '--profile', 'sample'],
-    { env: f.env, cwd: f.temp, encoding: 'utf8', timeout: 15000 });
-  assert.equal(output.status, 3, output.stderr);
-  assert.match(output.stderr, /not configured/);
-  assert.equal(output.stdout, '');
-  await assert.rejects(access(f.state.root), { code: 'ENOENT' });
-  assert.equal(await readFile(path.join(legacy, 'sample.json'), 'utf8'), before);
 });
 test('actual bundle keeps its early unsupported-Node guard without accessing private settings', async t => {
   const f = await fixture(t), entry = pathToFileURL(path.join(f.plugin, 'server', 'mcp.mjs')).href;

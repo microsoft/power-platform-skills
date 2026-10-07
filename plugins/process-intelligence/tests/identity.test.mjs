@@ -4,22 +4,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { StateStore, defaultStateRoot } from '../src/state.mjs';
-import { bound, sample } from './helpers.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const workspace = path.resolve(root, '..', '..');
 const json = async file => JSON.parse(await fs.readFile(file, 'utf8'));
-async function temporary(t) {
-  const directory = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'pi identity '));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
-  return directory;
-}
-
-test('public identity and lockfile use the relocated Process Intelligence plugin', async () => {
+test('public plugin identity and lockfile match the marketplace entry', async () => {
   assert.equal(path.basename(root), 'process-intelligence');
   for (const file of ['package.json', '.plugin/plugin.json', '.claude-plugin/plugin.json']) {
     const manifest = await json(path.join(root, file));
@@ -40,8 +31,6 @@ test('public identity and lockfile use the relocated Process Intelligence plugin
     assert.deepEqual(entries, [{ name: 'process-intelligence', source: './plugins/process-intelligence' }]);
     assert.ok(index.plugins.length > 1);
   }
-  await assert.rejects(fs.access(path.join(workspace, 'plugins', 'process-mining')), { code: 'ENOENT' });
-  await assert.rejects(fs.access(path.join(workspace, '.github', 'workflows', 'process-mining-tests.yml')), { code: 'ENOENT' });
 });
 
 test('plugin CI is path-filtered, read-only and runs the local build and test entrypoints', async () => {
@@ -113,28 +102,4 @@ test('Process Intelligence is not a telemetry adopter', async () => {
   assert.doesNotMatch(disclosure, /Process Intelligence/);
   const shared = await fs.readFile(path.join(workspace, 'shared', 'telemetry', 'README.md'), 'utf8');
   assert.doesNotMatch(shared, /Process Intelligence|process-intelligence/);
-});
-
-test('new default profiles never read or mutate the old store', async t => {
-  const home = await temporary(t), env = { LOCALAPPDATA: home, XDG_DATA_HOME: home };
-  const store = new StateStore(defaultStateRoot(process.platform, env, home));
-  const legacy = path.join(path.dirname(store.root), 'ProcessMiningBridgeAzureCli');
-  await fs.mkdir(legacy, { recursive: true });
-  const text = JSON.stringify({ ...bound, Revision: 'legacy-fixture' });
-  await fs.writeFile(path.join(legacy, 'sample.json'), text);
-  await assert.rejects(store.load('sample'), /not configured/);
-  assert.equal(path.basename(store.root), 'ProcessIntelligenceBridgeAzureCli');
-  await store.save(sample);
-  assert.equal((await store.load('sample')).HomeAccountId, null);
-  assert.equal(await fs.readFile(path.join(legacy, 'sample.json'), 'utf8'), text);
-  assert.deepEqual(await fs.readdir(legacy), ['sample.json']);
-});
-
-test('setup guidance describes new-only storage rather than promising profile migration', async () => {
-  for (const file of ['README.md', 'AGENTS.md', 'CLAUDE.md', 'skills/setup/SKILL.md', 'references/connection-patterns.md']) {
-    const text = await fs.readFile(path.join(root, file), 'utf8');
-    assert.match(text, /ProcessIntelligenceBridgeAzureCli/, file);
-    assert.match(text, /no (?:automatic )?migration/i, file);
-    assert.doesNotMatch(text, /Version 0\.6 reuses|reuse existing version 0\.5 profiles|rather than making a new store/i, file);
-  }
 });

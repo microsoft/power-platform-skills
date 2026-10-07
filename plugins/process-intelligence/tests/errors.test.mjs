@@ -9,8 +9,8 @@ import path from 'node:path';
 import { IdentityClient } from '../src/authentication.mjs';
 import { AzureCliProcess, runProcess, windowsUtility } from '../src/process.mjs';
 import { StateStore, defaultStateRoot } from '../src/state.mjs';
-import { authenticatedFetch, normalizeClaims } from '../src/http-auth.mjs';
-import { FakeAz, bound, oid, username, claim, token } from './helpers.mjs';
+import { authenticatedFetch } from '../src/http-auth.mjs';
+import { FakeAz, bound, oid, username, token } from './helpers.mjs';
 const code = expected => error => error.errorCode === expected;
 test('authentication failures have safe error codes without extra CLI calls', async () => {
   for (const [field, value, expected] of [['version', '2.53.0', 'AZ_CLI_UNSUPPORTED'], ['tenant', 'wrong', 'TENANT_MISMATCH'],
@@ -30,21 +30,25 @@ test('authentication failures have safe error codes without extra CLI calls', as
   await assert.rejects(identity.silent(oid), code('ACCOUNT_CHANGED'));
   assert.equal(az.calls.filter(args => args[1] === 'get-access-token').length, 1);
   az.user = username;
-  await assert.rejects(identity.silent(oid, claim), code('CLAIMS_LOGIN_REQUIRED'));
   az.tokenOutput = token({}, Math.floor(Date.now() / 1000) - 1);
-  await assert.rejects(identity.silent(oid, null, true), code('TOKEN_EXPIRED'));
+  await assert.rejects(identity.silent(oid, true), code('TOKEN_EXPIRED'));
 });
 test('process, state, endpoint and claims failures expose stable safe categories', async t => {
   const root = await mkdtemp(path.join(await realpath(os.tmpdir()), 'pm origins '));
   t.after(() => rm(root, { recursive: true, force: true }));
-  assert.throws(() => windowsUtility('unapproved.exe'), code('CLI_EXECUTION_FAILED'));
+  for (const name of ['unapproved.exe', 'icacls.exe', 'whoami.exe', 'powershell.exe']) {
+    assert.throws(() => windowsUtility(name), code('CLI_EXECUTION_FAILED'));
+  }
   assert.throws(() => defaultStateRoot('win32', {}, ''), code('STATE_ACCESS_DENIED'));
   await assert.rejects(new StateStore(root).load('missing'), code('PROFILE_MISSING'));
   await assert.rejects(new AzureCliProcess({ executable: path.join(root, 'missing') }).run(['version']), code('AZ_CLI_NOT_FOUND'));
   await assert.rejects(runProcess(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { timeout: 100 }), code('CLI_TIMEOUT'));
   await assert.rejects(runProcess(process.execPath, ['-e', "console.log('x'.repeat(10000))"], { outputLimit: 10 }), code('CLI_OUTPUT_LIMIT'));
-  assert.throws(() => normalizeClaims('invalid'), code('CLAIMS_INVALID'));
   const endpoint = 'https://fixture.example/mcp';
+  await assert.rejects(authenticatedFetch(endpoint, async () => 'synthetic',
+    async () => new Response(null, { status: 401,
+      headers: { 'www-authenticate': 'Bearer error="insufficient_claims"' } }))(endpoint),
+  code('CLAIMS_LOGIN_REQUIRED'));
   await assert.rejects(authenticatedFetch(endpoint, async () => assert.fail('no token'))('https://other.example/'), code('ENDPOINT_REJECTED'));
   for (const status of [401, 302, 403])
     await assert.rejects(authenticatedFetch(endpoint, async () => 'synthetic', async () => new Response('', { status }))(endpoint),

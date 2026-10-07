@@ -8,8 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { BridgeError } from './errors.mjs';
 import { profile, validateName } from './configuration.mjs';
-import { normalizeClaims } from './http-auth.mjs';
-import { PrivateDirectory, rejectLink, readJson, atomicWrite, stateError } from './private-files.mjs';
+import { PrivateDirectory, rejectLink, readJson, atomicWrite } from './private-files.mjs';
 
 export function defaultStateRoot(
   platform = process.platform,
@@ -19,7 +18,7 @@ export function defaultStateRoot(
   if (platform === 'win32') {
     if (!env.LOCALAPPDATA || !path.win32.isAbsolute(env.LOCALAPPDATA)) {
       throw new BridgeError(
-        'A private per-user LocalApplicationData directory is required.',
+        'A per-user LocalApplicationData directory is required.',
         3,
         'STATE_ACCESS_DENIED'
       );
@@ -28,7 +27,7 @@ export function defaultStateRoot(
   }
   if (!path.posix.isAbsolute(home)) {
     throw new BridgeError(
-      'A private per-user home directory is required.',
+      'A per-user home directory is required.',
       3,
       'STATE_ACCESS_DENIED'
     );
@@ -83,7 +82,7 @@ export class StateStore extends PrivateDirectory {
     await rejectLink(file);
     let handle;
     try {
-      handle = await fs.open(file, 'wx', 0o600);
+      handle = await fs.open(file, 'wx');
     } catch (error) {
       if (error.code !== 'EEXIST') {
         throw error;
@@ -118,11 +117,7 @@ export class StateStore extends PrivateDirectory {
     }
   }
 
-  async #write(file, value) {
-    await atomicWrite(file, JSON.stringify(value));
-  }
-
-  async save(value, expectedRevision, expectedClaims) {
+  async save(value, expectedRevision) {
     const selected = profile(value);
     return this.withLock(selected.Name, async () => {
       if (
@@ -131,61 +126,9 @@ export class StateStore extends PrivateDirectory {
       ) {
         throw changed();
       }
-      // A new challenge can arrive during terminal login without changing the profile revision.
-      // Compare the claims used for that login while holding the same lock as saveChallenge.
-      if (
-        expectedClaims !== undefined &&
-        (await this.loadChallenge(selected)) !== expectedClaims
-      ) {
-        throw new BridgeError(
-          'Conditional-access challenge changed during login. Run login again; no profile was saved.',
-          3,
-          'PROFILE_CHANGED'
-        );
-      }
       const saved = { ...selected, Revision: randomUUID().replaceAll('-', '') };
-      await this.#write(this.file(saved.Name), saved);
-      // Keep the old challenge if profile publication fails. Once the new revision is saved,
-      // every prior challenge is unusable; remove it before another writer can publish a new one.
-      await this.#removeChallenge(saved.Name);
+      await atomicWrite(this.file(saved.Name), JSON.stringify(saved));
       return saved;
-    });
-  }
-
-  async #removeChallenge(name) {
-    const file = this.file(name, '.challenge.json');
-    try {
-      await rejectLink(file);
-      const info = await fs.lstat(file);
-      if (!info.isFile() || info.nlink > 1) {
-        throw stateError('Pending claims must be an unlinked regular file.');
-      }
-      // Do not parse obsolete claims: explicit config/logout can also remove malformed or
-      // oversized files. Never follow links or recursively remove an unexpected directory.
-      await fs.unlink(file);
-    } catch (error) {
-      if (error.code !== 'ENOENT') {
-        throw stateError(
-          'Profile was saved, but pending claims cleanup failed. Stop affected bridge sessions ' +
-            'and safely remove only this profile\'s challenge file before reconnecting.'
-        );
-      }
-    }
-  }
-
-  async loadChallenge(selected) {
-    const pending = await readJson(this.file(selected.Name, '.challenge.json'));
-    return pending?.Revision === selected.Revision ? normalizeClaims(pending.Claims) : null;
-  }
-
-  async saveChallenge(selected, claims) {
-    const normalized = normalizeClaims(claims);
-    await this.withLock(selected.Name, async () => {
-      await this.ensureCurrent(selected);
-      await this.#write(this.file(selected.Name, '.challenge.json'), {
-        Revision: selected.Revision,
-        Claims: normalized
-      });
     });
   }
 }

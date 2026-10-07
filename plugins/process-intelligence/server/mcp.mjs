@@ -7314,7 +7314,7 @@ import path4 from "node:path";
 import { fileURLToPath } from "node:url";
 
 // src/cli.mjs
-import { setTimeout as delay } from "node:timers/promises";
+import { setTimeout as delay2 } from "node:timers/promises";
 
 // src/errors.mjs
 var BridgeError = class extends Error {
@@ -7523,191 +7523,245 @@ function resolveConnection(p) {
 
 // src/state.mjs
 import fs2 from "node:fs/promises";
-import path3 from "node:path";
+import path2 from "node:path";
 import os from "node:os";
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
-// src/http-auth.mjs
-var PLUGIN_CLIENT_REQUEST_ID = "11111111-1111-1111-1111-111111111111";
-function normalizeClaims(claims) {
-  try {
-    if (typeof claims !== "string" || claims.length > 16384) {
-      throw new Error();
-    }
-    let value = claims.trim();
-    if (!value.startsWith("{")) {
-      if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(value)) {
-        throw new Error();
-      }
-      value = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(value, "base64"));
-    }
-    const parsed = JSON.parse(value);
-    if (!isObject(parsed) || Object.keys(parsed).length !== 1 || !isObject(parsed.access_token) || Object.keys(parsed.access_token).length === 0) {
-      throw new Error();
-    }
-    const depth = (v, n = 0) => {
-      if (n > 16) {
-        throw new Error();
-      }
-      if (v && typeof v === "object") {
-        for (const child of Object.values(v)) {
-          depth(child, n + 1);
-        }
-      }
-    };
-    depth(parsed);
-    return value;
-  } catch {
-    throw new BridgeError(
-      "Invalid access-token claims challenge; no alternate authority or resource was used.",
-      3,
-      "CLAIMS_INVALID"
-    );
-  }
-}
-function readClaims(header) {
-  if (!header) {
-    return null;
-  }
-  if (header.length > 32768) {
-    throw new BridgeError(
-      "Authentication challenge exceeds the supported size.",
-      3,
-      "CLAIMS_INVALID"
-    );
-  }
-  const challenges = header.match(/(?:[^,"\\]|\\.|"(?:\\.|[^"\\])*")+/g) ?? [];
-  let bearer = false;
-  let result = null;
-  let required3 = false;
-  for (let item of challenges) {
-    item = item.trim();
-    const scheme = /^([A-Za-z][A-Za-z0-9_-]*)\s+(.*)$/.exec(item);
-    if (scheme) {
-      bearer = scheme[1].toLowerCase() === "bearer";
-      item = scheme[2];
-    }
-    if (!bearer) {
-      continue;
-    }
-    required3 ||= /insufficient_claims/i.test(item);
-    const match = /^claims\s*=\s*"((?:\\.|[^"\\])*)"\s*$/i.exec(item);
-    if (match) {
-      if (result !== null) {
-        throw new BridgeError("Ambiguous authentication claims challenge.", 3, "CLAIMS_INVALID");
-      }
-      result = normalizeClaims(match[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\"));
-    }
-  }
-  if (required3 && result === null) {
-    throw new BridgeError(
-      "Server requested claims but supplied no valid claims challenge. Sign in again.",
-      3,
-      "CLAIMS_INVALID"
-    );
-  }
-  return result;
-}
-function authenticatedFetch(endpoint, token, fetchImpl = globalThis.fetch, { correlation, transportMode = "streamable-http" } = {}) {
-  if (!["streamable-http", "post-only"].includes(transportMode)) {
-    throw new BridgeError("Unsupported MCP transport mode.", 2, "INVALID_CONFIGURATION");
-  }
-  return async (input2, init) => {
-    const original = new Request(input2, init);
-    if (!endpoint.startsWith("https://") || new URL(endpoint).username || original.url !== endpoint || original.headers.has("host") && original.headers.get("host").toLowerCase() !== new URL(endpoint).host.toLowerCase()) {
-      throw new BridgeError(
-        "Refusing to send a token outside the configured HTTPS MCP endpoint.",
-        3,
-        "ENDPOINT_REJECTED"
-      );
-    }
-    original.signal.throwIfAborted();
-    if (transportMode === "post-only" && original.method === "GET") {
-      if (original.headers.has("last-event-id")) {
-        throw new BridgeError(
-          "MCP stream resumption via GET is unavailable in POST-only mode; uncertain calls were not replayed.",
-          4,
-          "MCP_RESUMPTION_UNSUPPORTED"
-        );
-      }
-      if (original.headers.get("accept")?.trim().toLowerCase() !== "text/event-stream") {
-        throw new BridgeError(
-          "MCP GET requests are unavailable in POST-only mode.",
-          4,
-          "MCP_GET_UNSUPPORTED"
-        );
-      }
-      return new Response(null, { status: 405, headers: { Allow: "POST" } });
-    }
-    const owner = original.method === "POST" ? correlation?.capture() : correlation?.sessionOwner;
-    let claims = null;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      original.signal.throwIfAborted();
-      const outgoing = new Request(original.clone(), {
-        redirect: "manual",
-        signal: original.signal
-      });
-      outgoing.headers.set("x-ms-client-request-id", PLUGIN_CLIENT_REQUEST_ID);
-      if (correlation) {
-        outgoing.headers.set("x-ms-client-session-id", correlation.clientSessionId);
-      }
-      const acquire = () => token(claims, attempt !== 0, original.signal);
-      const accessToken = owner?.clientRequestId ? await acquire() : correlation ? await correlation.sessionOnly(acquire) : await acquire();
-      outgoing.headers.set("authorization", `Bearer ${accessToken}`);
-      let response;
-      try {
-        response = await fetchImpl(outgoing);
-      } catch (error62) {
-        if (original.signal.aborted) {
-          throw original.signal.reason;
-        }
-        throw error62 instanceof BridgeError ? error62 : new TransportError();
-      }
-      if (response.status === 401) {
-        try {
-          claims = readClaims(response.headers.get("www-authenticate"));
-        } finally {
-          await response.body?.cancel();
-        }
-        if (attempt === 0) {
-          continue;
-        }
-        throw new BridgeError(
-          "MCP returned HTTP 401 after token reacquisition. Check client grants/audience and run login; no identity or resource was substituted.",
-          3,
-          "HTTP_FAILURE"
-        );
-      }
-      if (response.status >= 300 && response.status < 400 || response.status === 403) {
-        await response.body?.cancel();
-        throw new BridgeError(
-          `MCP returned HTTP ${response.status}. Redirects are blocked; verify route, permissions and deployment.`,
-          3,
-          response.status === 403 ? "HTTP_FAILURE" : "REDIRECT_BLOCKED"
-        );
-      }
-      if (!response.ok && !(original.method === "GET" && response.status === 405)) {
-        await response.body?.cancel();
-        throw new TransportError(response.status);
-      }
-      return response;
-    }
-    throw new BridgeError("Authentication retry bound exceeded.");
-  };
-}
-
 // src/private-files.mjs
 import fs from "node:fs/promises";
-import { constants as constants2 } from "node:fs";
-import path2 from "node:path";
+import { constants } from "node:fs";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
+var stateError = (message, code = "STATE_ACCESS_DENIED") => new BridgeError(message, 3, code);
+async function rejectLink(file2) {
+  const resolved = path.resolve(file2);
+  const parts = [];
+  for (let cursor = resolved; path.dirname(cursor) !== cursor; cursor = path.dirname(cursor)) {
+    parts.push(cursor);
+  }
+  for (const item of parts.reverse()) {
+    try {
+      const info = await fs.lstat(item);
+      if (info.isSymbolicLink()) {
+        throw stateError("Private state must not be a symlink or reparse point.");
+      }
+      if (item === resolved && info.nlink > 1 && info.isFile()) {
+        throw stateError("Private state must not be a hard link.");
+      }
+    } catch (error62) {
+      if (error62.code !== "ENOENT") {
+        throw error62;
+      }
+    }
+  }
+}
+async function readText(file2, limit = 65536) {
+  await rejectLink(file2);
+  let handle;
+  try {
+    const before = await fs.lstat(file2);
+    if (!before.isFile() || before.size > limit) {
+      throw stateError("Private state is invalid or exceeds its size limit.", "STATE_INVALID");
+    }
+    handle = await fs.open(
+      file2,
+      constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW)
+    );
+    const actual = await handle.stat();
+    if (actual.ino !== before.ino || actual.dev !== before.dev || actual.nlink > 1) {
+      throw stateError("Private state changed while opening.");
+    }
+    const buffer = Buffer.alloc(limit + 1);
+    let total = 0;
+    while (total < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, total, buffer.length - total, null);
+      if (!bytesRead) {
+        break;
+      }
+      total += bytesRead;
+    }
+    if (total > limit) {
+      throw stateError("Private state is invalid or exceeds its size limit.", "STATE_INVALID");
+    }
+    return buffer.subarray(0, total).toString("utf8");
+  } catch (error62) {
+    if (error62.code === "ENOENT") {
+      return null;
+    }
+    if (error62 instanceof BridgeError) {
+      throw error62;
+    }
+    throw stateError("Private state could not be read safely.");
+  } finally {
+    await handle?.close();
+  }
+}
+async function readJson(file2, missing = null) {
+  const text = await readText(file2);
+  if (text === null) {
+    return missing;
+  }
+  try {
+    const value = JSON.parse(text.replace(/^\uFEFF/, ""));
+    if (isObject(value)) {
+      return value;
+    }
+  } catch {
+  }
+  throw stateError("Private state JSON is invalid; reconfigure explicitly.", "STATE_INVALID");
+}
+async function atomicWrite(file2, text) {
+  await rejectLink(file2);
+  const temporary = `${file2}.${randomUUID()}.tmp`;
+  try {
+    const handle = await fs.open(temporary, "wx");
+    try {
+      await handle.writeFile(text);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rejectLink(file2);
+    await fs.rename(temporary, file2);
+    if (process.platform !== "win32") {
+      const directory = await fs.open(path.dirname(file2), "r");
+      try {
+        await directory.sync();
+      } finally {
+        await directory.close();
+      }
+    }
+  } finally {
+    await fs.rm(temporary, { force: true });
+  }
+}
+var PrivateDirectory = class {
+  #prepared;
+  constructor(root) {
+    this.root = path.resolve(root);
+  }
+  async prepare({ signal } = {}) {
+    signal?.throwIfAborted();
+    await rejectLink(this.root);
+    this.#prepared ??= (async () => {
+      signal?.throwIfAborted();
+      await fs.mkdir(this.root, { recursive: true });
+      await rejectLink(this.root);
+      signal?.throwIfAborted();
+    })();
+    return this.#prepared;
+  }
+};
+
+// src/state.mjs
+function defaultStateRoot(platform = process.platform, env = process.env, home = os.homedir()) {
+  if (platform === "win32") {
+    if (!env.LOCALAPPDATA || !path2.win32.isAbsolute(env.LOCALAPPDATA)) {
+      throw new BridgeError(
+        "A per-user LocalApplicationData directory is required.",
+        3,
+        "STATE_ACCESS_DENIED"
+      );
+    }
+    return path2.win32.join(env.LOCALAPPDATA, "ProcessIntelligenceBridgeAzureCli");
+  }
+  if (!path2.posix.isAbsolute(home)) {
+    throw new BridgeError(
+      "A per-user home directory is required.",
+      3,
+      "STATE_ACCESS_DENIED"
+    );
+  }
+  const base = platform === "darwin" ? path2.posix.join(home, "Library", "Application Support") : env.XDG_DATA_HOME && path2.posix.isAbsolute(env.XDG_DATA_HOME) ? env.XDG_DATA_HOME : path2.posix.join(home, ".local", "share");
+  return path2.posix.join(base, "ProcessIntelligenceBridgeAzureCli");
+}
+var changed = () => new BridgeError(
+  "Profile/account changed. Restart MCP with the selected profile; the old connection is invalid.",
+  3,
+  "PROFILE_CHANGED"
+);
+var StateStore = class extends PrivateDirectory {
+  constructor(root = defaultStateRoot()) {
+    super(root);
+  }
+  file(name, suffix = ".json") {
+    validateName(name);
+    return path2.join(this.root, name + suffix);
+  }
+  async load(name) {
+    const value = await readJson(this.file(name));
+    if (value === null) {
+      throw new BridgeError(
+        "Profile is not configured. Run config with an explicit --profile first.",
+        3,
+        "PROFILE_MISSING"
+      );
+    }
+    return profile(value);
+  }
+  async ensureCurrent(selected) {
+    if (!isDeepStrictEqual(await this.load(selected.Name), profile(selected))) {
+      throw changed();
+    }
+  }
+  async withLock(name, operation) {
+    await this.prepare();
+    const file2 = this.file(name, ".node-lock");
+    await rejectLink(file2);
+    let handle;
+    try {
+      handle = await fs2.open(file2, "wx");
+    } catch (error62) {
+      if (error62.code !== "EEXIST") {
+        throw error62;
+      }
+      const owner = await readJson(file2);
+      let active = false;
+      if (Number.isSafeInteger(owner?.pid) && owner.pid > 0) {
+        try {
+          process.kill(owner.pid, 0);
+          active = true;
+        } catch (e) {
+          if (e.code !== "ESRCH") {
+            active = true;
+          }
+        }
+      }
+      throw new BridgeError(
+        active ? "Another Node process is changing this profile. Retry after it finishes." : "Stale Node mutation lock detected. Verify the owner and stop affected profile sessions before manually removing only its stale .node-lock file; no profile was changed.",
+        3,
+        "STATE_LOCKED"
+      );
+    }
+    try {
+      await handle.writeFile(JSON.stringify({ pid: process.pid, nonce: randomUUID2() }));
+      await handle.sync();
+      return await operation();
+    } finally {
+      await handle.close();
+      await fs2.unlink(file2);
+    }
+  }
+  async save(value, expectedRevision) {
+    const selected = profile(value);
+    return this.withLock(selected.Name, async () => {
+      if (expectedRevision !== void 0 && (await this.load(selected.Name)).Revision !== expectedRevision) {
+        throw changed();
+      }
+      const saved = { ...selected, Revision: randomUUID2().replaceAll("-", "") };
+      await atomicWrite(this.file(saved.Name), JSON.stringify(saved));
+      return saved;
+    });
+  }
+};
 
 // src/process.mjs
 import { spawn } from "node:child_process";
-import { access, constants } from "node:fs/promises";
-import path from "node:path";
+import { access, constants as constants2 } from "node:fs/promises";
+import path3 from "node:path";
 import { inspect } from "node:util";
+import { setTimeout as delay } from "node:timers/promises";
 var processError = (message, code = "CLI_EXECUTION_FAILED") => new BridgeError(message, 3, code);
 var ProcessOutput = class {
   constructor(code, stdout, stderr) {
@@ -7724,17 +7778,14 @@ var ProcessOutput = class {
   }
 };
 function windowsUtility(name) {
-  if (!["taskkill.exe", "icacls.exe", "whoami.exe", "cmd.exe", "powershell.exe"].includes(name)) {
+  if (!["taskkill.exe", "cmd.exe"].includes(name)) {
     throw processError("Unsupported Windows utility.");
   }
   const root = process.env.SystemRoot;
-  if (!root || !path.win32.isAbsolute(root)) {
+  if (!root || !path3.win32.isAbsolute(root)) {
     throw processError("Windows system directory is unavailable.");
   }
-  if (name === "powershell.exe") {
-    return path.win32.join(root, "System32", "WindowsPowerShell", "v1.0", name);
-  }
-  return path.win32.join(root, "System32", name);
+  return path3.win32.join(root, "System32", name);
 }
 async function terminate(child) {
   if (!child.pid) {
@@ -7750,8 +7801,26 @@ async function terminate(child) {
           "PROCESS_CLEANUP_FAILED"
         );
       }
+      return;
     }
-    return;
+    const deadline = performance.now() + 5e3;
+    while (true) {
+      try {
+        process.kill(-child.pid, 0);
+      } catch (error62) {
+        if (error62.code === "ESRCH") {
+          return;
+        }
+        throw processError(
+          "Could not verify owned process group termination.",
+          "PROCESS_CLEANUP_FAILED"
+        );
+      }
+      if (performance.now() >= deadline) {
+        throw processError("Owned process cleanup timed out.", "PROCESS_CLEANUP_FAILED");
+      }
+      await delay(25);
+    }
   }
   await new Promise((resolve, reject) => {
     const killer = spawn(windowsUtility("taskkill.exe"), ["/PID", String(child.pid), "/T", "/F"], {
@@ -7813,6 +7882,9 @@ async function runProcess(executable, args, {
       }).finally(() => {
         child.stdout.destroy();
         child.stderr.destroy();
+        if (failure3?.errorCode === "PROCESS_CLEANUP_FAILED") {
+          void finish(child.exitCode);
+        }
       });
     };
     const abort = () => stop(signal.reason);
@@ -7897,15 +7969,15 @@ var AzureCliProcess = class {
     }
     let executable = this.options.executable;
     if (!executable) {
-      for (const directory of (this.options.path ?? process.env.PATH ?? "").split(path.delimiter)) {
+      for (const directory of (this.options.path ?? process.env.PATH ?? "").split(path3.delimiter)) {
         const clean = directory.replace(/^"|"$/g, "");
-        if (!path.isAbsolute(clean)) {
+        if (!path3.isAbsolute(clean)) {
           continue;
         }
         for (const name of process.platform === "win32" ? ["az.exe", "az.cmd"] : ["az"]) {
-          const candidate = path.join(clean, name);
+          const candidate = path3.join(clean, name);
           try {
-            await access(candidate, process.platform === "win32" ? constants.F_OK : constants.X_OK);
+            await access(candidate, process.platform === "win32" ? constants2.F_OK : constants2.X_OK);
             executable = candidate;
             break;
           } catch (error62) {
@@ -7923,23 +7995,23 @@ var AzureCliProcess = class {
       "Azure CLI executable is missing or could not start. Install Azure CLI 2.54+ and put az on PATH.",
       "AZ_CLI_NOT_FOUND"
     );
-    if (!executable || !path.isAbsolute(executable)) {
+    if (!executable || !path3.isAbsolute(executable)) {
       throw missing();
     }
     try {
-      await access(executable, process.platform === "win32" ? constants.F_OK : constants.X_OK);
+      await access(executable, process.platform === "win32" ? constants2.F_OK : constants2.X_OK);
     } catch {
       throw missing();
     }
     let verbatim = false;
-    if (process.platform === "win32" && path.extname(executable).toLowerCase() === ".cmd") {
+    if (process.platform === "win32" && path3.extname(executable).toLowerCase() === ".cmd") {
       if (/[%!"\r\n]/.test(executable)) {
         throw processError("Azure CLI launcher path contains unsafe expansion characters.");
       }
       const command = `""${executable}" ${args.map((a) => `"${a}"`).join(" ")}"`;
       if (command.length > 7500) {
         throw processError(
-          "Azure CLI claims/command exceeds the Windows launcher limit; no claims were omitted."
+          "Azure CLI command exceeds the Windows launcher limit."
         );
       }
       executable = windowsUtility("cmd.exe");
@@ -7956,339 +8028,6 @@ var AzureCliProcess = class {
   }
 };
 
-// src/private-files.mjs
-var stateError = (message, code = "STATE_ACCESS_DENIED") => new BridgeError(message, 3, code);
-async function rejectLink(file2) {
-  const resolved = path2.resolve(file2);
-  const parts = [];
-  for (let cursor = resolved; path2.dirname(cursor) !== cursor; cursor = path2.dirname(cursor)) {
-    parts.push(cursor);
-  }
-  for (const item of parts.reverse()) {
-    try {
-      const info = await fs.lstat(item);
-      if (info.isSymbolicLink()) {
-        throw stateError("Private state must not be a symlink or reparse point.");
-      }
-      if (item === resolved && info.nlink > 1 && info.isFile()) {
-        throw stateError("Private state must not be a hard link.");
-      }
-    } catch (error62) {
-      if (error62.code !== "ENOENT") {
-        throw error62;
-      }
-    }
-  }
-}
-async function readText(file2, limit = 65536) {
-  await rejectLink(file2);
-  let handle;
-  try {
-    const before = await fs.lstat(file2);
-    if (!before.isFile() || before.size > limit) {
-      throw stateError("Private state is invalid or exceeds its size limit.", "STATE_INVALID");
-    }
-    handle = await fs.open(
-      file2,
-      constants2.O_RDONLY | (process.platform === "win32" ? 0 : constants2.O_NOFOLLOW)
-    );
-    const actual = await handle.stat();
-    if (actual.ino !== before.ino || actual.dev !== before.dev || actual.nlink > 1) {
-      throw stateError("Private state changed while opening.");
-    }
-    const buffer = Buffer.alloc(limit + 1);
-    let total = 0;
-    while (total < buffer.length) {
-      const { bytesRead } = await handle.read(buffer, total, buffer.length - total, null);
-      if (!bytesRead) {
-        break;
-      }
-      total += bytesRead;
-    }
-    if (total > limit) {
-      throw stateError("Private state is invalid or exceeds its size limit.", "STATE_INVALID");
-    }
-    return buffer.subarray(0, total).toString("utf8");
-  } catch (error62) {
-    if (error62.code === "ENOENT") {
-      return null;
-    }
-    if (error62 instanceof BridgeError) {
-      throw error62;
-    }
-    throw stateError("Private state could not be read safely.");
-  } finally {
-    await handle?.close();
-  }
-}
-async function readJson(file2, missing = null) {
-  const text = await readText(file2);
-  if (text === null) {
-    return missing;
-  }
-  try {
-    const value = JSON.parse(text.replace(/^\uFEFF/, ""));
-    if (isObject(value)) {
-      return value;
-    }
-  } catch {
-  }
-  throw stateError("Private state JSON is invalid; reconfigure explicitly.", "STATE_INVALID");
-}
-async function atomicWrite(file2, text) {
-  await rejectLink(file2);
-  const temporary = `${file2}.${randomUUID()}.tmp`;
-  try {
-    const handle = await fs.open(temporary, "wx", 384);
-    try {
-      await handle.writeFile(text);
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    await rejectLink(file2);
-    await fs.rename(temporary, file2);
-    if (process.platform !== "win32") {
-      const directory = await fs.open(path2.dirname(file2), "r");
-      try {
-        await directory.sync();
-      } finally {
-        await directory.close();
-      }
-    }
-  } finally {
-    await fs.rm(temporary, { force: true });
-  }
-}
-var PrivateDirectory = class {
-  #prepared;
-  #sid;
-  constructor(root) {
-    this.root = path2.resolve(root);
-  }
-  async #windows(args, signal) {
-    const result = await runProcess(windowsUtility("icacls.exe"), args, { signal });
-    if (result.code !== 0) {
-      throw stateError(
-        "Cannot establish private Windows state ACLs. Check ownership and permissions."
-      );
-    }
-    return result;
-  }
-  async prepare({ signal } = {}) {
-    signal?.throwIfAborted();
-    await rejectLink(this.root);
-    this.#prepared ??= (async () => {
-      signal?.throwIfAborted();
-      await fs.mkdir(this.root, { recursive: true, mode: 448 });
-      await rejectLink(this.root);
-      signal?.throwIfAborted();
-      if (process.platform !== "win32") {
-        await fs.chmod(this.root, 448);
-        return;
-      }
-      const user = await runProcess(windowsUtility("whoami.exe"), ["/user", "/fo", "csv", "/nh"], {
-        signal
-      });
-      this.#sid = /"(S-1-\d+(?:-\d+)+)"\s*$/.exec(user.stdout.trim())?.[1];
-      if (user.code !== 0 || !this.#sid) {
-        throw stateError("Cannot resolve current Windows user for private state.");
-      }
-      await this.#windows(
-        [this.root, "/inheritance:r", "/grant:r", `*${this.#sid}:(OI)(CI)F`, "/q"],
-        signal
-      );
-      await this.#windows([this.root, "/setowner", `*${this.#sid}`, "/q"], signal);
-      await this.verifyPrivate(this.root, true, { signal });
-    })();
-    return this.#prepared;
-  }
-  async verifyPrivate(file2 = this.root, directory = true, { signal } = {}) {
-    signal?.throwIfAborted();
-    await rejectLink(file2);
-    if (process.platform !== "win32") {
-      if (((await fs.stat(file2)).mode & 511) !== (directory ? 448 : 384)) {
-        throw stateError("State permissions are not private.");
-      }
-      return;
-    }
-    const temporary = path2.join(this.root, `.acl-${randomUUID()}.tmp`);
-    try {
-      await this.#windows([file2, "/save", temporary, "/q"], signal);
-      const text = (await fs.readFile(temporary)).toString("utf16le");
-      const sddl = text.split(/\r?\n/).find((line) => line.startsWith("D:"));
-      const entries = sddl?.match(/\([^)]*\)/g) ?? [];
-      const trustee = entries.length === 1 ? new RegExp(`^\\(A;${directory ? "OICI" : ""};FA;;;([A-Z]{2}|S-1-\\d+(?:-\\d+)+)\\)$`).exec(entries[0])?.[1] : null;
-      let matchesUser = trustee === this.#sid;
-      if (sddl?.startsWith("D:P") && /^[A-Z]{2}$/.test(trustee ?? "")) {
-        const script = "$ErrorActionPreference='Stop';[System.Security.AccessControl.RawSecurityDescriptor]::new('D:(A;;FA;;;' + $env:PROCESS_INTELLIGENCE_ACL_TRUSTEE + ')').DiscretionaryAcl[0].SecurityIdentifier.Value";
-        const resolved = await runProcess(windowsUtility("powershell.exe"), [
-          "-NoProfile",
-          "-NonInteractive",
-          "-EncodedCommand",
-          Buffer.from(script, "utf16le").toString("base64")
-        ], {
-          signal,
-          outputLimit: 8192,
-          env: { ...process.env, PROCESS_INTELLIGENCE_ACL_TRUSTEE: trustee }
-        });
-        matchesUser = resolved.code === 0 && resolved.stdout.trim() === this.#sid;
-      }
-      if (!sddl?.startsWith("D:P") || !trustee || !matchesUser) {
-        throw stateError(
-          "Windows state ACL verification failed; unexpected access entries were not ignored."
-        );
-      }
-    } finally {
-      await fs.rm(temporary, { force: true });
-    }
-  }
-};
-
-// src/state.mjs
-function defaultStateRoot(platform = process.platform, env = process.env, home = os.homedir()) {
-  if (platform === "win32") {
-    if (!env.LOCALAPPDATA || !path3.win32.isAbsolute(env.LOCALAPPDATA)) {
-      throw new BridgeError(
-        "A private per-user LocalApplicationData directory is required.",
-        3,
-        "STATE_ACCESS_DENIED"
-      );
-    }
-    return path3.win32.join(env.LOCALAPPDATA, "ProcessIntelligenceBridgeAzureCli");
-  }
-  if (!path3.posix.isAbsolute(home)) {
-    throw new BridgeError(
-      "A private per-user home directory is required.",
-      3,
-      "STATE_ACCESS_DENIED"
-    );
-  }
-  const base = platform === "darwin" ? path3.posix.join(home, "Library", "Application Support") : env.XDG_DATA_HOME && path3.posix.isAbsolute(env.XDG_DATA_HOME) ? env.XDG_DATA_HOME : path3.posix.join(home, ".local", "share");
-  return path3.posix.join(base, "ProcessIntelligenceBridgeAzureCli");
-}
-var changed = () => new BridgeError(
-  "Profile/account changed. Restart MCP with the selected profile; the old connection is invalid.",
-  3,
-  "PROFILE_CHANGED"
-);
-var StateStore = class extends PrivateDirectory {
-  constructor(root = defaultStateRoot()) {
-    super(root);
-  }
-  file(name, suffix = ".json") {
-    validateName(name);
-    return path3.join(this.root, name + suffix);
-  }
-  async load(name) {
-    const value = await readJson(this.file(name));
-    if (value === null) {
-      throw new BridgeError(
-        "Profile is not configured. Run config with an explicit --profile first.",
-        3,
-        "PROFILE_MISSING"
-      );
-    }
-    return profile(value);
-  }
-  async ensureCurrent(selected) {
-    if (!isDeepStrictEqual(await this.load(selected.Name), profile(selected))) {
-      throw changed();
-    }
-  }
-  async withLock(name, operation) {
-    await this.prepare();
-    const file2 = this.file(name, ".node-lock");
-    await rejectLink(file2);
-    let handle;
-    try {
-      handle = await fs2.open(file2, "wx", 384);
-    } catch (error62) {
-      if (error62.code !== "EEXIST") {
-        throw error62;
-      }
-      const owner = await readJson(file2);
-      let active = false;
-      if (Number.isSafeInteger(owner?.pid) && owner.pid > 0) {
-        try {
-          process.kill(owner.pid, 0);
-          active = true;
-        } catch (e) {
-          if (e.code !== "ESRCH") {
-            active = true;
-          }
-        }
-      }
-      throw new BridgeError(
-        active ? "Another Node process is changing this profile. Retry after it finishes." : "Stale Node mutation lock detected. Verify the owner and stop affected profile sessions before manually removing only its stale .node-lock file; no profile was changed.",
-        3,
-        "STATE_LOCKED"
-      );
-    }
-    try {
-      await handle.writeFile(JSON.stringify({ pid: process.pid, nonce: randomUUID2() }));
-      await handle.sync();
-      return await operation();
-    } finally {
-      await handle.close();
-      await fs2.unlink(file2);
-    }
-  }
-  async #write(file2, value) {
-    await atomicWrite(file2, JSON.stringify(value));
-  }
-  async save(value, expectedRevision, expectedClaims) {
-    const selected = profile(value);
-    return this.withLock(selected.Name, async () => {
-      if (expectedRevision !== void 0 && (await this.load(selected.Name)).Revision !== expectedRevision) {
-        throw changed();
-      }
-      if (expectedClaims !== void 0 && await this.loadChallenge(selected) !== expectedClaims) {
-        throw new BridgeError(
-          "Conditional-access challenge changed during login. Run login again; no profile was saved.",
-          3,
-          "PROFILE_CHANGED"
-        );
-      }
-      const saved = { ...selected, Revision: randomUUID2().replaceAll("-", "") };
-      await this.#write(this.file(saved.Name), saved);
-      await this.#removeChallenge(saved.Name);
-      return saved;
-    });
-  }
-  async #removeChallenge(name) {
-    const file2 = this.file(name, ".challenge.json");
-    try {
-      await rejectLink(file2);
-      const info = await fs2.lstat(file2);
-      if (!info.isFile() || info.nlink > 1) {
-        throw stateError("Pending claims must be an unlinked regular file.");
-      }
-      await fs2.unlink(file2);
-    } catch (error62) {
-      if (error62.code !== "ENOENT") {
-        throw stateError(
-          "Profile was saved, but pending claims cleanup failed. Stop affected bridge sessions and safely remove only this profile's challenge file before reconnecting."
-        );
-      }
-    }
-  }
-  async loadChallenge(selected) {
-    const pending = await readJson(this.file(selected.Name, ".challenge.json"));
-    return pending?.Revision === selected.Revision ? normalizeClaims(pending.Claims) : null;
-  }
-  async saveChallenge(selected, claims) {
-    const normalized = normalizeClaims(claims);
-    await this.withLock(selected.Name, async () => {
-      await this.ensureCurrent(selected);
-      await this.#write(this.file(selected.Name, ".challenge.json"), {
-        Revision: selected.Revision,
-        Claims: normalized
-      });
-    });
-  }
-};
-
 // src/authentication.mjs
 import { inspect as inspect2 } from "node:util";
 var same = (a, b) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
@@ -8297,10 +8036,6 @@ var authError = (code, message) => new BridgeError(message, 3, code);
 var invalidToken = () => authError(
   "TOKEN_INVALID",
   "Azure CLI returned an invalid token response or inconsistent user/tenant/client/audience claims; no authentication output was logged."
-);
-var reauth = () => authError(
-  "CLAIMS_LOGIN_REQUIRED",
-  "A validated conditional-access challenge requires explicit login --profile NAME --sign-in true with Azure CLI 2.80+, then restart MCP. Serve never opens UI; get-access-token cannot accept claims."
 );
 function json(text) {
   try {
@@ -8400,7 +8135,7 @@ var ProfileTokenProvider = class {
   constructor(profile2, store, identity) {
     Object.assign(this, { profile: profile2, store, identity });
   }
-  async getToken(claims = null, force = false, signal) {
+  async getToken(force = false, signal) {
     const p = this.profile;
     await this.store.ensureCurrent(p);
     if (!p.HomeAccountId) {
@@ -8410,11 +8145,7 @@ var ProfileTokenProvider = class {
       );
     }
     resolveConnection(p);
-    if (claims !== null) {
-      await this.store.saveChallenge(p, claims);
-    }
-    const pending = claims ?? await this.store.loadChallenge(p);
-    const result = await this.identity.silent(p.HomeAccountId, pending, force, signal);
+    const result = await this.identity.silent(p.HomeAccountId, force, signal);
     validateIdentity(p, result);
     await this.store.ensureCurrent(p);
     return result.token;
@@ -8424,8 +8155,7 @@ var loginGate = new Gate();
 async function login(selected, store, identity, { switchAccount = false, signIn = false, signal } = {}) {
   return loginGate.run(async () => {
     await store.ensureCurrent(selected);
-    const pending = await store.loadChallenge(selected);
-    const result = await identity.bind(pending, signIn, signal);
+    const result = await identity.bind(signIn, signal);
     validateIdentity(selected, result, switchAccount || selected.HomeAccountId === null);
     await store.ensureCurrent(selected);
     const saved = await store.save(
@@ -8433,8 +8163,7 @@ async function login(selected, store, identity, { switchAccount = false, signIn 
         ...selected,
         HomeAccountId: result.accountId.toLowerCase()
       },
-      selected.Revision,
-      pending
+      selected.Revision
     );
     return saved;
   }, signal);
@@ -8453,14 +8182,10 @@ var IdentityClient = class {
     this.cli = cli;
     this.now = now;
   }
-  async silent(account, claims = null, force = false, signal) {
+  async silent(account, force = false, signal) {
     return this.#gate.run(async () => {
-      if (force || claims) {
+      if (force) {
         this.#cached = void 0;
-      }
-      if (claims !== null) {
-        normalizeClaims(claims);
-        throw reauth();
       }
       const result = await this.#acquire(false, signal);
       if (!same(account, result.accountId)) {
@@ -8472,13 +8197,10 @@ var IdentityClient = class {
       return result;
     }, signal);
   }
-  async bind(claims = null, signIn = false, signal) {
+  async bind(signIn = false, signal) {
     return this.#gate.run(async () => {
       this.#cached = void 0;
       this.#accountUsername = void 0;
-      if (claims !== null && !signIn) {
-        throw reauth();
-      }
       await this.#ensureVersion(signal);
       await this.#cloud(signal);
       if (signIn) {
@@ -8493,15 +8215,6 @@ var IdentityClient = class {
           "none",
           "--only-show-errors"
         ];
-        if (claims !== null) {
-          if (this.#version < 208e4) {
-            throw authError(
-              "AZ_CLI_UNSUPPORTED",
-              "Claims login requires Azure CLI 2.80+. Upgrade explicitly; claims were not omitted."
-            );
-          }
-          args.push("--claims-challenge", Buffer.from(normalizeClaims(claims)).toString("base64"));
-        }
         await this.#run(args, signal, true);
       }
       return this.#acquire(true, signal);
@@ -32890,13 +32603,13 @@ var StreamableHTTPClientTransport = class {
       this.onerror?.(new Error(`Maximum reconnection attempts (${maxRetries}) exceeded.`));
       return;
     }
-    const delay2 = this._getNextReconnectionDelay(attemptCount);
+    const delay3 = this._getNextReconnectionDelay(attemptCount);
     this._reconnectionTimeout = setTimeout(() => {
       this._startOrAuthSse(options).catch((error62) => {
         this.onerror?.(new Error(`Failed to reconnect SSE stream: ${error62 instanceof Error ? error62.message : String(error62)}`));
         this._scheduleReconnection(options, attemptCount + 1);
       });
-    }, delay2);
+    }, delay3);
   }
   _handleSseStream(stream, options, isReconnectable) {
     if (!stream) {
@@ -33855,6 +33568,101 @@ var StdioServerTransport = class {
   }
 };
 
+// src/http-auth.mjs
+var PLUGIN_CLIENT_REQUEST_ID = "11111111-1111-1111-1111-111111111111";
+function authenticatedFetch(endpoint, token, fetchImpl = globalThis.fetch, { correlation, transportMode = "streamable-http" } = {}) {
+  if (!["streamable-http", "post-only"].includes(transportMode)) {
+    throw new BridgeError("Unsupported MCP transport mode.", 2, "INVALID_CONFIGURATION");
+  }
+  return async (input2, init) => {
+    const original = new Request(input2, init);
+    if (!endpoint.startsWith("https://") || new URL(endpoint).username || original.url !== endpoint || original.headers.has("host") && original.headers.get("host").toLowerCase() !== new URL(endpoint).host.toLowerCase()) {
+      throw new BridgeError(
+        "Refusing to send a token outside the configured HTTPS MCP endpoint.",
+        3,
+        "ENDPOINT_REJECTED"
+      );
+    }
+    original.signal.throwIfAborted();
+    if (transportMode === "post-only" && original.method === "GET") {
+      if (original.headers.has("last-event-id")) {
+        throw new BridgeError(
+          "MCP stream resumption via GET is unavailable in POST-only mode; uncertain calls were not replayed.",
+          4,
+          "MCP_RESUMPTION_UNSUPPORTED"
+        );
+      }
+      if (original.headers.get("accept")?.trim().toLowerCase() !== "text/event-stream") {
+        throw new BridgeError(
+          "MCP GET requests are unavailable in POST-only mode.",
+          4,
+          "MCP_GET_UNSUPPORTED"
+        );
+      }
+      return new Response(null, { status: 405, headers: { Allow: "POST" } });
+    }
+    const owner = original.method === "POST" ? correlation?.capture() : correlation?.sessionOwner;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      original.signal.throwIfAborted();
+      const outgoing = new Request(original.clone(), {
+        redirect: "manual",
+        signal: original.signal
+      });
+      outgoing.headers.set("x-ms-client-request-id", PLUGIN_CLIENT_REQUEST_ID);
+      if (correlation) {
+        outgoing.headers.set("x-ms-client-session-id", correlation.clientSessionId);
+      }
+      const acquire = () => token(attempt !== 0, original.signal);
+      const accessToken = owner?.clientRequestId ? await acquire() : correlation ? await correlation.sessionOnly(acquire) : await acquire();
+      outgoing.headers.set("authorization", `Bearer ${accessToken}`);
+      let response;
+      try {
+        response = await fetchImpl(outgoing);
+      } catch (error62) {
+        if (original.signal.aborted) {
+          throw original.signal.reason;
+        }
+        throw error62 instanceof BridgeError ? error62 : new TransportError();
+      }
+      if (response.status === 401) {
+        const challenged = /insufficient_claims|\bclaims\s*=/i.test(
+          response.headers.get("www-authenticate") ?? ""
+        );
+        await response.body?.cancel();
+        if (challenged) {
+          throw new BridgeError(
+            "MCP returned a Conditional Access / Continuous Access Evaluation (CAE) claims challenge. Sign in again with login --profile NAME --sign-in true in a normal terminal, then restart MCP. If the problem persists, ask your administrator to review the policy; this is not evidence of a wrong tenant.",
+            3,
+            "CLAIMS_LOGIN_REQUIRED"
+          );
+        }
+        if (attempt === 0) {
+          continue;
+        }
+        throw new BridgeError(
+          "MCP returned HTTP 401 after token reacquisition. Check client grants/audience and run login; no identity or resource was substituted.",
+          3,
+          "HTTP_FAILURE"
+        );
+      }
+      if (response.status >= 300 && response.status < 400 || response.status === 403) {
+        await response.body?.cancel();
+        throw new BridgeError(
+          `MCP returned HTTP ${response.status}. Redirects are blocked; verify route, permissions and deployment.`,
+          3,
+          response.status === 403 ? "HTTP_FAILURE" : "REDIRECT_BLOCKED"
+        );
+      }
+      if (!response.ok && !(original.method === "GET" && response.status === 405)) {
+        await response.body?.cancel();
+        throw new TransportError(response.status);
+      }
+      return response;
+    }
+    throw new BridgeError("Authentication retry bound exceeded.");
+  };
+}
+
 // src/correlation.mjs
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID as randomUUID3 } from "node:crypto";
@@ -34067,7 +33875,7 @@ var RemoteBridge = class {
         new StreamableHTTPClientTransport(new URL(endpoint), {
           fetch: authenticatedFetch(
             endpoint,
-            (claims, force, requestSignal) => this.tokens.getToken(claims, force, requestSignal),
+            (force, requestSignal) => this.tokens.getToken(force, requestSignal),
             this.fetchImpl,
             { correlation: this.correlation, transportMode: MCP_TRANSPORT_MODE }
           ),
@@ -34466,7 +34274,8 @@ Prefixes are case-insensitive and may have a separating hyphen. IDs are canonica
 Azure CLI 2.54+ is required. Login binds the existing CLI organizational user by default.
 Environment discovery reads metadata using the existing CLI session; it does not configure or sign in.
 Config remains offline; pass the resolved tenant GUID, or an explicitly confirmed tenant if discovery is unavailable.
---sign-in true explicitly permits tenant-scoped az login in a normal terminal (CLI 2.80+ for claims).
+--sign-in true explicitly permits tenant-scoped az login in a normal terminal.
+Conditional Access / CAE claims challenges require manual sign-in; their payload is not stored or forwarded.
 Azure CLI owns shared credentials; logout invalidates only this profile, never az logout.
 MCP uses POST-only transport; standalone GET streaming and GET resumption are disabled.
 No custom client/browser/redirect options, admin consent or implicit cloud/account switching.`;
@@ -34624,7 +34433,7 @@ async function execute(args, {
       write(
         `MCP_TRANSPORT: ${MCP_TRANSPORT_MODE}; standalone GET streaming and GET resumption are disabled.`
       );
-      await tokens.getToken(null, false, signal);
+      await tokens.getToken(false, signal);
       write("TOKEN_ACQUIRED: silent token acquisition succeeded for the configured resource.");
       let cursor;
       let count = 0;
@@ -34657,7 +34466,7 @@ async function execute(args, {
     const monitor = (async () => {
       try {
         while (!lifetime.signal.aborted) {
-          await delay(250, null, { signal: lifetime.signal });
+          await delay2(250, null, { signal: lifetime.signal });
           await store.ensureCurrent(selected);
         }
       } catch (error62) {

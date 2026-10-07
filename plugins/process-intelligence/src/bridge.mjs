@@ -173,7 +173,7 @@ export class RemoteBridge {
         new StreamableHTTPClientTransport(new URL(endpoint), {
           fetch: authenticatedFetch(
             endpoint,
-            (claims, force, requestSignal) => this.tokens.getToken(claims, force, requestSignal),
+            (force, requestSignal) => this.tokens.getToken(force, requestSignal),
             this.fetchImpl,
             { correlation: this.correlation, transportMode: MCP_TRANSPORT_MODE }
           ),

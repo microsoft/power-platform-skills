@@ -1,98 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import { BridgeError, TransportError, isObject } from './errors.mjs';
+import { BridgeError, TransportError } from './errors.mjs';
 
 const PLUGIN_CLIENT_REQUEST_ID = '11111111-1111-1111-1111-111111111111';
 
-export function normalizeClaims(claims) {
-  try {
-    if (typeof claims !== 'string' || claims.length > 16384) {
-      throw new Error();
-    }
-    let value = claims.trim();
-    if (!value.startsWith('{')) {
-      if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(value)) {
-        throw new Error();
-      }
-      value = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(value, 'base64'));
-    }
-    const parsed = JSON.parse(value);
-    if (
-      !isObject(parsed) ||
-      Object.keys(parsed).length !== 1 ||
-      !isObject(parsed.access_token) ||
-      Object.keys(parsed.access_token).length === 0
-    ) {
-      throw new Error();
-    }
-    const depth = (v, n = 0) => {
-      if (n > 16) {
-        throw new Error();
-      }
-      if (v && typeof v === 'object') {
-        for (const child of Object.values(v)) {
-          depth(child, n + 1);
-        }
-      }
-    };
-    depth(parsed);
-    return value;
-  } catch {
-    throw new BridgeError(
-      'Invalid access-token claims challenge; no alternate authority or resource was used.',
-      3,
-      'CLAIMS_INVALID'
-    );
-  }
-}
-
-export function readClaims(header) {
-  if (!header) {
-    return null;
-  }
-  if (header.length > 32768) {
-    throw new BridgeError(
-      'Authentication challenge exceeds the supported size.',
-      3,
-      'CLAIMS_INVALID'
-    );
-  }
-  // Split authentication schemes only outside quoted strings; commas within claims JSON are not separators.
-  const challenges = header.match(/(?:[^,"\\]|\\.|"(?:\\.|[^"\\])*")+/g) ?? [];
-  let bearer = false;
-  let result = null;
-  let required = false;
-  for (let item of challenges) {
-    item = item.trim();
-    const scheme = /^([A-Za-z][A-Za-z0-9_-]*)\s+(.*)$/.exec(item);
-    if (scheme) {
-      bearer = scheme[1].toLowerCase() === 'bearer';
-      item = scheme[2];
-    }
-    if (!bearer) {
-      continue;
-    }
-    required ||= /insufficient_claims/i.test(item);
-    const match = /^claims\s*=\s*"((?:\\.|[^"\\])*)"\s*$/i.exec(item);
-    if (match) {
-      if (result !== null) {
-        throw new BridgeError('Ambiguous authentication claims challenge.', 3, 'CLAIMS_INVALID');
-      }
-      result = normalizeClaims(match[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\'));
-    }
-  }
-  if (required && result === null) {
-    throw new BridgeError(
-      'Server requested claims but supplied no valid claims challenge. Sign in again.',
-      3,
-      'CLAIMS_INVALID'
-    );
-  }
-  return result;
-}
-
-/** @param {string} endpoint @param {(claims:string|null,force:boolean,signal?:AbortSignal)=>Promise<string>} token */
+/** @param {string} endpoint @param {(force:boolean,signal?:AbortSignal)=>Promise<string>} token */
 export function authenticatedFetch(
   endpoint,
   token,
@@ -141,7 +54,6 @@ export function authenticatedFetch(
       return new Response(null, { status: 405, headers: { Allow: 'POST' } });
     }
     const owner = original.method === 'POST' ? correlation?.capture() : correlation?.sessionOwner;
-    let claims = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       original.signal.throwIfAborted();
       const outgoing = new Request(original.clone(), {
@@ -153,7 +65,7 @@ export function authenticatedFetch(
       if (correlation) {
         outgoing.headers.set('x-ms-client-session-id', correlation.clientSessionId);
       }
-      const acquire = () => token(claims, attempt !== 0, original.signal);
+      const acquire = () => token(attempt !== 0, original.signal);
       const accessToken = owner?.clientRequestId
         ? await acquire()
         : correlation
@@ -170,10 +82,21 @@ export function authenticatedFetch(
         throw error instanceof BridgeError ? error : new TransportError();
       }
       if (response.status === 401) {
-        try {
-          claims = readClaims(response.headers.get('www-authenticate'));
-        } finally {
-          await response.body?.cancel();
+        // Detect e.g. Bearer error="insufficient_claims", claims="..." only to
+        // explain the failure. Never decode, log, persist or forward its payload.
+        // https://learn.microsoft.com/en-us/entra/identity-platform/claims-challenge
+        const challenged = /insufficient_claims|\bclaims\s*=/i.test(
+          response.headers.get('www-authenticate') ?? ''
+        );
+        await response.body?.cancel();
+        if (challenged) {
+          throw new BridgeError(
+            'MCP returned a Conditional Access / Continuous Access Evaluation (CAE) claims challenge. ' +
+              'Sign in again with login --profile NAME --sign-in true in a normal terminal, then restart MCP. ' +
+              'If the problem persists, ask your administrator to review the policy; this is not evidence of a wrong tenant.',
+            3,
+            'CLAIMS_LOGIN_REQUIRED'
+          );
         }
         if (attempt === 0) {
           continue;

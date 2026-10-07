@@ -36,11 +36,9 @@ credential storage; the bridge has no disk token cache. Keep dependencies locked
 - `environment-resolution.mjs`: explicit Public setup lookup by environment ID. Reuse the Azure CLI
   identity checks; accept only an exact metadata match or validated token-free Dataverse challenge.
   It has no profile/cache writes. Other clouds retain explicit tenant setup.
-- `state.mjs`: private `ProcessIntelligenceBridgeAzureCli` profile/claims state.
-  This store has no migration, old-store lookup or automatic rebinding.
-  Keep revision publication and superseded-challenge cleanup in the same per-profile lock.
-  Login must compare its consumed pending claims as well as the profile revision before saving.
-  Surface cleanup failures; never remove another profile's challenge or silently discard required claims.
+- `state.mjs`: `ProcessIntelligenceBridgeAzureCli` profile state in the platform's per-user data directory.
+  Keep atomic revision publication and exclusive per-profile mutation locks.
+  `private-files.mjs` retains structural/link checks.
   `authentication.mjs`: persisted account binding is TenantId + HomeAccountId (tenant-local oid).
   Do not persist AccountUsername or a username surrogate; keep username/token checks in RAM.
   Cold acquisition verifies the saved principal before MCP traffic; warm username pinning must
@@ -54,6 +52,9 @@ credential storage; the bridge has no disk token cache. Keep dependencies locked
   optional GET/SSE probe locally with 405, after endpoint/abort checks and before auth/network.
   Reject GET resumption; retain POST JSON/SSE, real HTTP failures and the authentication boundary.
   Environment-discovery GET requests are separate and must remain unchanged.
+  Detect HTTP 401 claims challenges only to explain Conditional Access / CAE and request manual
+  sign-in and MCP restart. Never store, decode, forward or log claims-challenge payloads.
+  Do not replay a claims-challenged request; keep the single retry for plain HTTP 401.
 - `correlation.mjs`: random client-session IDs and independent internal logical request owners.
   Background traffic must not borrow another request's internal owner. `http-auth.mjs` sends
   `x-ms-client-request-id: 11111111-1111-1111-1111-111111111111` on every real outbound MCP
@@ -68,9 +69,10 @@ credential storage; the bridge has no disk token cache. Keep dependencies locked
 - Serving never runs `az login`; logout never runs `az logout`. No CLI cache files or global settings
   are read/modified directly. Local diagnostics use supported read-only CLI commands, not token acquisition.
   Do not infer verified account binding from `account-selected`; local diagnostics explicitly report
-  `boundAccountVerified: false`. Profile names and required pending claims may still contain EUII.
-- Validated claims require explicit terminal sign-in; forced acquisition clears only our memory cache,
-  not Azure CLI's. Token claims are consistency checks; the service validates signatures and authorization.
+  `boundAccountVerified: false`. Profile names may still contain EUII.
+- Only user-requested terminal sign-in opens authentication UI. Forced acquisition clears only our
+  memory cache, not Azure CLI's. Token claims are consistency checks; the service validates signatures
+  and authorization.
 - Keep stdout MCP-only. Never log tokens, response bodies, cache contents or private profile identifiers.
   The explicit resolver returns only cloud/environment/tenant/source on stderr as setup data;
   do not add these identifiers to general diagnostics.
@@ -106,9 +108,9 @@ Preserve locked versions and integrity values when changing registry metadata.
 Review dependency licenses when updating the lockfile. The build embeds full notices
 for bundled dependencies and the repository's root MIT license in `server/mcp.mjs`;
 keep them with the runtime.
-Windows ACL verification permits only one protected, full-control ACE for the current user.
-When Windows emits an SDDL alias, resolve it with the inbox Windows PowerShell SID converter;
-never equate account RID suffixes or allow extra administrator/group access.
+Keep regular-file, size, symlink/reparse-point and hard-link checks on profile reads.
+POSIX cleanup must observe owned process-group disappearance within its bounded cleanup deadline,
+not treat signal delivery or the launcher's close event as completed descendant cleanup.
 For skill/reference changes, use `node --test tests/analysis-behavior.test.mjs tests/investigation-behavior.test.mjs tests/packaging.test.mjs`.
 See [development](references/development.md) for the packaged-bundle and fake-stdio checks.
 

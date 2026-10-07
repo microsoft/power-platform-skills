@@ -7,132 +7,98 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import childProcess from 'node:child_process';
-import { EventEmitter } from 'node:events';
-import { PassThrough } from 'node:stream';
 import { syncBuiltinESMExports } from 'node:module';
-import { PrivateDirectory } from '../src/private-files.mjs';
-import { runProcess, windowsUtility } from '../src/process.mjs';
+import { PrivateDirectory, readJson } from '../src/private-files.mjs';
+import { StateStore } from '../src/state.mjs';
+import { bound } from './helpers.mjs';
 
-const windows = { skip: process.platform !== 'win32' };
-const syntheticSid = 'S-1-5-21-111-222-333-1001';
-
-test('native Windows directory preparation retains strict private access', windows, async t => {
-  const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'pi-native-acl-'));
+async function fixture(t) {
+  const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'pi-state-files-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const directory = new PrivateDirectory(path.join(root, 'private'));
-  try {
-    await directory.prepare();
-  } catch (error) {
-    // Keep hosted-only failure evidence structural: never print the export,
-    // path, account name or SID. This uses real utilities, unlike alias fixtures.
-    const user = await runProcess(windowsUtility('whoami.exe'), ['/user', '/fo', 'csv', '/nh']);
-    const sid = /"(S-1-\d+(?:-\d+)+)"\s*$/.exec(user.stdout.trim())?.[1];
-    const file = path.join(root, 'acl-export.txt');
-    const exported = await runProcess(windowsUtility('icacls.exe'), [directory.root, '/save', file, '/q']);
-    if (exported.code === 0) {
-      const bytes = await fs.readFile(file);
-      const lines = bytes.toString('utf16le').split(/\r?\n/);
-      const descriptor = lines.find(line => line.startsWith('D:'));
-      const entries = descriptor?.match(/\([^)]*\)/g) ?? [];
-      t.diagnostic(JSON.stringify({
-        exportBytes: bytes.length,
-        utf16leBom: bytes[0] === 255 && bytes[1] === 254,
-        nullBytes: [...bytes].filter(byte => byte === 0).length,
-        descriptorLine: descriptor === undefined ? -1 : lines.indexOf(descriptor),
-        protected: descriptor?.startsWith('D:P') ?? false,
-        currentUserResolved: user.code === 0 && !!sid,
-        aceCount: entries.length,
-        aces: entries.map(entry => {
-          const fields = entry.slice(1, -1).split(';');
-          return {
-            allow: fields[0] === 'A',
-            directoryFlags: fields[1] === 'OICI',
-            inherited: fields[1]?.includes('ID') ?? false,
-            fullControl: fields[2] === 'FA',
-            currentUser: !!sid && fields[5] === sid,
-            alias: /^[A-Z]{2}$/.test(fields[5] ?? '')
-          };
-        })
-      }));
-    } else {
-      t.diagnostic(`Native ACL export failed with exit code ${exported.code}.`);
+  return root;
+}
+
+for (const platform of ['win32', 'darwin', 'linux']) {
+  test(`state operations use standard filesystem APIs on ${platform}`, async t => {
+    const root = await fixture(t);
+    const previous = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { ...previous, value: platform });
+    t.after(() => Object.defineProperty(process, 'platform', previous));
+    const spawn = t.mock.method(childProcess, 'spawn', () => assert.fail('No state subprocess is permitted'));
+    syncBuiltinESMExports();
+    t.after(() => { spawn.mock.restore(); syncBuiltinESMExports(); });
+    for (const operation of ['chmod', 'chown']) {
+      t.mock.method(fs, operation, () => assert.fail('State permissions must not be rewritten'));
     }
-    throw error;
+    const mkdir = fs.mkdir;
+    const open = fs.open;
+    t.mock.method(fs, 'mkdir', async (file, options) => {
+      assert.equal(options?.mode, undefined, 'Directory creation must use OS defaults');
+      return mkdir(file, options);
+    });
+    t.mock.method(fs, 'open', async (file, flags, mode) => {
+      assert.equal(mode, undefined, 'Profile, temporary and lock files must use OS defaults');
+      const handle = await open(file, flags, mode);
+      if (previous.value === 'win32' && platform !== 'win32' &&
+          file === path.join(root, 'profiles') && flags === 'r') {
+        // Windows cannot fsync a directory. Model that Unix-only capability
+        // here; native Unix runs still exercise the real directory fsync.
+        t.mock.method(handle, 'sync', async () => {});
+      }
+      return handle;
+    });
+    const store = new StateStore(path.join(root, 'profiles'));
+    const selected = await store.save(bound);
+    assert.deepEqual(await new StateStore(store.root).load('sample'), selected);
+    await store.save(selected, selected.Revision);
+    assert.deepEqual(await fs.readdir(store.root), ['sample.json']);
+    assert.equal(spawn.mock.callCount(), 0);
+  });
+}
+
+test('native state creation matches ordinary filesystem defaults and preserves existing directory permissions', async t => {
+  const root = await fixture(t);
+  const control = path.join(root, 'ordinary');
+  await fs.mkdir(control);
+  await fs.writeFile(path.join(control, 'file.json'), '{}');
+  const store = new StateStore(path.join(root, 'profiles'));
+  const selected = await store.save(bound);
+  assert.deepEqual(await store.load('sample'), selected);
+  if (process.platform !== 'win32') {
+    assert.equal((await fs.stat(store.root)).mode & 0o777, (await fs.stat(control)).mode & 0o777);
+    assert.equal((await fs.stat(store.file('sample'))).mode & 0o777,
+      (await fs.stat(path.join(control, 'file.json'))).mode & 0o777);
+    await fs.chmod(store.root, 0o775);
+    await fs.chmod(store.file('sample'), 0o664);
+    const cold = new StateStore(store.root);
+    assert.deepEqual(await cold.load('sample'), selected);
+    await cold.prepare();
+    assert.equal((await fs.stat(store.root)).mode & 0o777, 0o775);
+    assert.equal((await fs.stat(store.file('sample'))).mode & 0o777, 0o664);
   }
 });
 
-async function fixture(t, sid, sddl) {
-  const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'pi-acl-'));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const spawn = childProcess.spawn;
-  const calls = [];
-  // Exercise the real preparation/parser without switching OS users or changing
-  // real ACLs. Alias resolution still executes the native Windows SID conversion.
-  const mock = t.mock.method(childProcess, 'spawn', (executable, args, options) => {
-    const name = path.basename(executable).toLowerCase();
-    calls.push(name);
-    if (name === 'powershell.exe') return spawn(executable, args, options);
-    assert.ok(['whoami.exe', 'icacls.exe'].includes(name));
-    const child = Object.assign(new EventEmitter(), {
-      stdout: new PassThrough(), stderr: new PassThrough(), exitCode: null
-    });
-    setImmediate(async () => {
-      try {
-        if (name === 'whoami.exe') child.stdout.write(`"fixture\\user","${sid}"\r\n`);
-        if (args.includes('/save')) {
-          await fs.writeFile(args[args.indexOf('/save') + 1],
-            `${path.basename(root)}\r\n${sddl}\r\n`, 'utf16le');
-        }
-        child.stdout.end();
-        child.stderr.end();
-        child.exitCode = 0;
-        child.emit('close', 0);
-      } catch (error) {
-        child.emit('error', error);
-      }
-    });
-    return child;
-  });
-  syncBuiltinESMExports();
-  t.after(() => { mock.mock.restore(); syncBuiltinESMExports(); });
-  return { directory: new PrivateDirectory(root), root, calls };
-}
-
-test('Windows numeric SID verification needs no alias resolver', windows, async t => {
-  const { directory, calls } = await fixture(t, syntheticSid,
-    `D:P(A;OICI;FA;;;${syntheticSid})`);
-  await directory.prepare();
-  assert.equal(calls.includes('powershell.exe'), false);
+test('directory preparation honors cancellation and rejects non-directory paths', async t => {
+  const root = await fixture(t);
+  const cancelled = new PrivateDirectory(path.join(root, 'cancelled'));
+  await assert.rejects(cancelled.prepare({ signal: AbortSignal.abort() }), { name: 'AbortError' });
+  await assert.rejects(fs.stat(cancelled.root), { code: 'ENOENT' });
+  const file = path.join(root, 'file');
+  await fs.writeFile(file, 'unchanged');
+  await assert.rejects(new PrivateDirectory(file).prepare());
+  assert.equal(await fs.readFile(file, 'utf8'), 'unchanged');
 });
 
-test('Windows local Administrator SDDL alias resolves to the exact native SID', windows, async t => {
-  const executable = path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const script = "[System.Security.AccessControl.RawSecurityDescriptor]::new('D:(A;;FA;;;LA)').DiscretionaryAcl[0].SecurityIdentifier.Value";
-  const native = await runProcess(executable,
-    ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')]);
-  assert.equal(native.code, 0);
-  const sid = native.stdout.trim();
-  assert.match(sid, /^S-1-5-21-\d+-\d+-\d+-500$/);
-  const { directory, root } = await fixture(t, sid, 'D:P(A;OICI;FA;;;LA)');
-  await directory.prepare();
-  assert.deepEqual(await fs.readdir(root), [], 'ACL exports must be cleaned up');
+test('profile readers retain regular-file, size and hard-link checks', async t => {
+  const root = await fixture(t);
+  const file = path.join(root, 'profile.json');
+  await fs.writeFile(file, '{"Name":"sample"}');
+  assert.deepEqual(await readJson(file), { Name: 'sample' });
+  const linked = path.join(root, 'linked.json');
+  await fs.link(file, linked);
+  await assert.rejects(readJson(linked), { errorCode: 'STATE_ACCESS_DENIED' });
+  await fs.unlink(linked);
+  await fs.writeFile(file, 'x'.repeat(65537));
+  await assert.rejects(readJson(file), { errorCode: 'STATE_INVALID' });
+  await assert.rejects(readJson(root), { errorCode: 'STATE_INVALID' });
 });
-
-for (const [name, sddl, sid = syntheticSid] of [
-  ['another local account', 'D:P(A;OICI;FA;;;LA)'],
-  ['another domain Administrator with the same RID', 'D:P(A;OICI;FA;;;LA)',
-    'S-1-5-21-111-222-333-500'],
-  ['an administrator group', 'D:P(A;OICI;FA;;;BA)'],
-  ['an unknown alias', 'D:P(A;OICI;FA;;;ZZ)'],
-  ['additional access', `D:P(A;OICI;FA;;;${syntheticSid})(A;OICI;FA;;;BA)`],
-  ['inherited access', `D:P(A;OICIID;FA;;;${syntheticSid})`],
-  ['unprotected DACL', `D:(A;OICI;FA;;;${syntheticSid})`],
-  ['different rights', `D:P(A;OICI;FR;;;${syntheticSid})`],
-  ['a different numeric SID', 'D:P(A;OICI;FA;;;S-1-5-21-111-222-333-500)']
-]) {
-  test(`Windows private ACL rejects ${name}`, windows, async t => {
-    const { directory, root } = await fixture(t, sid, sddl);
-    await assert.rejects(directory.prepare(), { errorCode: 'STATE_ACCESS_DENIED' });
-    assert.deepEqual(await fs.readdir(root), []);
-  });
-}

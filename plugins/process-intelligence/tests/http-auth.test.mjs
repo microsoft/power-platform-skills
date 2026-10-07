@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { authenticatedFetch, normalizeClaims, readClaims } from '../src/http-auth.mjs';
+import { authenticatedFetch } from '../src/http-auth.mjs';
 import { CorrelationSession } from '../src/correlation.mjs';
 const endpoint = 'https://fixture.example/processmining/mcp?api-version=2024-10-01';
 const marker = '11111111-1111-1111-1111-111111111111';
@@ -40,23 +40,52 @@ test(`every outbound MCP request has the exact marker (${transportMode}, correla
     assert.equal(headers.get('x-ms-client-session-id'), correlation?.clientSessionId ?? null);
   }
 });
-test('claims JSON/base64 validation, ambiguity and untrusted metadata', () => {
-  assert.equal(normalizeClaims(Buffer.from(claims).toString('base64url')), claims);
-  assert.equal(normalizeClaims(claims), claims);
-  assert.equal(readClaims(`Bearer authorization_uri="https://evil.example", claims="${Buffer.from(claims).toString('base64')}"`), claims);
-  for (const v of ['bad-claims', '[]', '{}', '{"access_token":{},"id_token":{}}', 'x'.repeat(16385)]) assert.throws(() => normalizeClaims(v));
-  assert.throws(() => readClaims('Bearer error="insufficient_claims"'));
-  assert.throws(() => readClaims(`Bearer claims="${Buffer.from(claims).toString('base64')}", claims="${Buffer.from(claims).toString('base64')}"`));
+for (const header of [
+  `Bearer error="insufficient_claims", claims="${Buffer.from(claims).toString('base64')}"`,
+  'Bearer error="insufficient_claims"',
+  'Bearer CLAIMS = "private-invalid-payload"',
+  'Bearer authorization_uri="https://untrusted.example", claims="private-one", claims="private-two"',
+  `Bearer claims="${'x'.repeat(33000)}"`
+]) {
+  test(`claims challenge requests manual login without parsing or replay (${header.length} characters)`, async () => {
+    let sent = 0, acquisitions = 0, cancelled = false;
+    const fetch = authenticatedFetch(endpoint, async () => { acquisitions++; return 'synthetic'; }, async () => {
+      sent++;
+      return new Response(new ReadableStream({ cancel() { cancelled = true; } }),
+        { status: 401, headers: { 'www-authenticate': header } });
+    });
+    await assert.rejects(fetch(endpoint, { method: 'POST', body: '{"id":1}' }), error => {
+      assert.equal(error.errorCode, 'CLAIMS_LOGIN_REQUIRED');
+      assert.match(error.message, /Conditional Access.*CAE/);
+      assert.match(error.message, /login --profile NAME --sign-in true/);
+      assert.match(error.message, /restart MCP/);
+      assert.doesNotMatch(error.message, /private-|untrusted\.example|acrs|2\.80/);
+      return true;
+    });
+    assert.equal(sent, 1);
+    assert.equal(acquisitions, 1);
+    assert.equal(cancelled, true);
+  });
+}
+test('a claims challenge on the plain-401 retry still requests manual login', async () => {
+  let sent = 0;
+  const fetch = authenticatedFetch(endpoint, async () => 'synthetic', async () => {
+    sent++;
+    return new Response(null, { status: 401,
+      headers: sent === 2 ? { 'www-authenticate': 'Bearer error="insufficient_claims"' } : {} });
+  });
+  await assert.rejects(fetch(endpoint), { errorCode: 'CLAIMS_LOGIN_REQUIRED' });
+  assert.equal(sent, 2);
 });
-test('one 401 retry preserves bytes, headers and normalized claims', async () => {
+test('one plain 401 retry preserves bytes and headers', async () => {
   const tokens = [], requests = [];
   const fetch = authenticatedFetch(endpoint, async (...args) => { tokens.push(args); return `fake-${tokens.length}`; }, async req => {
     requests.push({ body: await req.text(), auth: req.headers.get('authorization'), marker: req.headers.get('x-marker'),
       requestId: req.headers.get('x-ms-client-request-id') });
-    return requests.length === 1 ? new Response('', { status: 401, headers: { 'www-authenticate': `Bearer claims="${Buffer.from(claims).toString('base64')}"` } }) : new Response('ok');
+    return requests.length === 1 ? new Response('', { status: 401 }) : new Response('ok');
   }, { transportMode: 'post-only' });
   assert.equal(await (await fetch(endpoint, { method: 'POST', body: '{"id":1}', headers: { 'x-marker': 'present' } })).text(), 'ok');
-  assert.deepEqual(tokens.map(t => t.slice(0, 2)), [[null, false], [claims, true]]);
+  assert.deepEqual(tokens.map(t => t[0]), [false, true]);
   assert.deepEqual(requests.map(r => r.body), ['{"id":1}', '{"id":1}']);
   assert.equal(requests[1].marker, 'present');
   assert.ok(requests.every(request => request.requestId === marker));

@@ -4,7 +4,6 @@
 import { inspect } from 'node:util';
 import { BridgeError, Gate, isObject } from './errors.mjs';
 import { CLIENT_ID, isGuid, resolveConnection } from './configuration.mjs';
-import { normalizeClaims } from './http-auth.mjs';
 
 const same = (a, b) =>
   typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
@@ -17,12 +16,6 @@ const invalidToken = () =>
   authError(
     'TOKEN_INVALID',
     'Azure CLI returned an invalid token response or inconsistent user/tenant/client/audience claims; no authentication output was logged.'
-  );
-
-const reauth = () =>
-  authError(
-    'CLAIMS_LOGIN_REQUIRED',
-    'A validated conditional-access challenge requires explicit login --profile NAME --sign-in true with Azure CLI 2.80+, then restart MCP. Serve never opens UI; get-access-token cannot accept claims.'
   );
 
 function json(text) {
@@ -150,7 +143,7 @@ export class ProfileTokenProvider {
     Object.assign(this, { profile, store, identity });
   }
 
-  async getToken(claims = null, force = false, signal) {
+  async getToken(force = false, signal) {
     const p = this.profile;
     await this.store.ensureCurrent(p);
     if (!p.HomeAccountId) {
@@ -160,11 +153,7 @@ export class ProfileTokenProvider {
       );
     }
     resolveConnection(p);
-    if (claims !== null) {
-      await this.store.saveChallenge(p, claims);
-    }
-    const pending = claims ?? (await this.store.loadChallenge(p));
-    const result = await this.identity.silent(p.HomeAccountId, pending, force, signal);
+    const result = await this.identity.silent(p.HomeAccountId, force, signal);
     validateIdentity(p, result);
     await this.store.ensureCurrent(p);
     return result.token;
@@ -181,8 +170,7 @@ export async function login(
 ) {
   return loginGate.run(async () => {
     await store.ensureCurrent(selected);
-    const pending = await store.loadChallenge(selected);
-    const result = await identity.bind(pending, signIn, signal);
+    const result = await identity.bind(signIn, signal);
     validateIdentity(selected, result, switchAccount || selected.HomeAccountId === null);
     await store.ensureCurrent(selected);
     const saved = await store.save(
@@ -190,8 +178,7 @@ export async function login(
         ...selected,
         HomeAccountId: result.accountId.toLowerCase()
       },
-      selected.Revision,
-      pending
+      selected.Revision
     );
     return saved;
   }, signal);
@@ -214,14 +201,10 @@ export class IdentityClient {
     this.now = now;
   }
 
-  async silent(account, claims = null, force = false, signal) {
+  async silent(account, force = false, signal) {
     return this.#gate.run(async () => {
-      if (force || claims) {
+      if (force) {
         this.#cached = undefined;
-      }
-      if (claims !== null) {
-        normalizeClaims(claims);
-        throw reauth();
       }
       const result = await this.#acquire(false, signal);
       if (!same(account, result.accountId)) {
@@ -234,15 +217,12 @@ export class IdentityClient {
     }, signal);
   }
 
-  async bind(claims = null, signIn = false, signal) {
+  async bind(signIn = false, signal) {
     return this.#gate.run(async () => {
       this.#cached = undefined;
       // Explicit binding can select a new CLI session; login still requires switch-account
       // before it will persist a different OID.
       this.#accountUsername = undefined;
-      if (claims !== null && !signIn) {
-        throw reauth();
-      }
       await this.#ensureVersion(signal);
       await this.#cloud(signal);
       if (signIn) {
@@ -257,15 +237,6 @@ export class IdentityClient {
           'none',
           '--only-show-errors'
         ];
-        if (claims !== null) {
-          if (this.#version < 2080000) {
-            throw authError(
-              'AZ_CLI_UNSUPPORTED',
-              'Claims login requires Azure CLI 2.80+. Upgrade explicitly; claims were not omitted.'
-            );
-          }
-          args.push('--claims-challenge', Buffer.from(normalizeClaims(claims)).toString('base64'));
-        }
         await this.#run(args, signal, true);
       }
       return this.#acquire(true, signal);

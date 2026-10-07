@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { IdentityClient, validateIdentity } from '../src/authentication.mjs';
-import { sample, bound, oid, username, token, claim, FakeAz } from './helpers.mjs';
+import { sample, bound, oid, username, token, FakeAz } from './helpers.mjs';
 test('explicit token args/no subscription/memory cache/forced reacquisition', async () => {
   const az = new FakeAz(), client = new IdentityClient(bound, az);
   const first = await client.silent(oid);
@@ -14,7 +14,7 @@ test('explicit token args/no subscription/memory cache/forced reacquisition', as
   assert.equal(az.calls.filter(a => a[0] === 'account' && a[1] === 'show').length, 4);
   assert.deepEqual(az.calls.find(a => a[1] === 'get-access-token'), ['account', 'get-access-token', '--tenant', sample.TenantId,
     '--resource', 'https://api.powerplatform.com', '--output', 'json', '--only-show-errors']);
-  await client.silent(oid, null, true);
+  await client.silent(oid, true);
   assert.equal(az.calls.filter(a => a[1] === 'get-access-token').length, 2);
   assert.doesNotMatch(String(first), /eyJ/);
 });
@@ -42,9 +42,9 @@ test('expiry uses UTC/JWT minimum and two minute refresh margin', async () => {
   await client.silent(oid);
   assert.equal(az.calls.filter(a => a[1] === 'get-access-token').length, 2);
   az.tokenOutput = token({ exp: Math.floor(now / 1000) - 1 }, Math.floor(now / 1000) + 300);
-  await assert.rejects(client.silent(oid, null, true), /expired/);
+  await assert.rejects(client.silent(oid, true), /expired/);
   const envelope = JSON.parse(token()); envelope.expires_on = '9223372036854775807'; az.tokenOutput = JSON.stringify(envelope);
-  await assert.rejects(client.silent(oid, null, true));
+  await assert.rejects(client.silent(oid, true));
 });
 test('before/after snapshot race fails before returning token', async () => {
   for (const [field, value] of Object.entries({
@@ -83,23 +83,22 @@ test('cold OID binding accepts a matching renamed user without changing the prof
   az.tokenOutput = token();
   assert.equal((await new IdentityClient(selected, az).silent(oid)).accountId, oid);
 });
-for (const invalidation of ['force', 'claims', 'expiry'])
+for (const invalidation of ['force', 'expiry'])
 test(`RAM username pin survives ${invalidation} token invalidation`, async () => {
   let now = Date.now();
   const az = new FakeAz(), client = new IdentityClient(bound, az, () => now);
   await client.silent(oid);
-  if (invalidation === 'claims') await assert.rejects(client.silent(oid, claim, true), { errorCode: 'CLAIMS_LOGIN_REQUIRED' });
   if (invalidation === 'expiry') now += 3600000;
   az.user = 'other@example.invalid';
   az.tokenOutput = token({ unique_name: az.user }, Math.floor(now / 1000) + 3600);
-  await assert.rejects(client.silent(oid, null, invalidation === 'force'), { errorCode: 'ACCOUNT_CHANGED' });
+  await assert.rejects(client.silent(oid, invalidation === 'force'), { errorCode: 'ACCOUNT_CHANGED' });
   assert.equal(az.calls.filter(args => args[1] === 'get-access-token').length, 1);
 });
 test('forced fresh token rejects changed OID even if the CLI username stayed the same', async () => {
   const az = new FakeAz(), client = new IdentityClient(bound, az);
   await client.silent(oid);
   az.tokenOutput = token({ oid: '44444444-4444-4444-4444-444444444444' });
-  await assert.rejects(client.silent(oid, null, true), { errorCode: 'ACCOUNT_CHANGED' });
+  await assert.rejects(client.silent(oid, true), { errorCode: 'ACCOUNT_CHANGED' });
   assert.equal(az.calls.filter(args => args[1] === 'get-access-token').length, 2);
 });
 test('token-free session check cannot verify a cold OID but checks warm username continuity', async () => {
@@ -114,22 +113,23 @@ test('token-free session check cannot verify a cold OID but checks warm username
   await assert.rejects(client.checkSession(), { errorCode: 'ACCOUNT_CHANGED' });
   assert.equal(az.calls.filter(args => args[1] === 'get-access-token').length, acquisitions);
 });
-test('claims require verified explicit login, never silently omitted', async () => {
+test('explicit login uses the selected tenant and resource without claims parameters', async () => {
   const az = new FakeAz(), client = new IdentityClient(bound, az);
-  await assert.rejects(client.silent(oid, claim, true), /conditional-access/);
-  assert.equal(az.calls.length, 0);
-  await assert.rejects(client.bind(claim, false));
-  await client.bind(claim, true);
+  await client.bind(true);
   const login = az.calls.find(a => a[0] === 'login');
-  assert.ok(login.includes('--allow-no-subscriptions'));
-  assert.equal(Buffer.from(login[login.indexOf('--claims-challenge') + 1], 'base64').toString(), claim);
+  assert.deepEqual(login, ['login', '--tenant', sample.TenantId, '--allow-no-subscriptions',
+    '--scope', 'https://api.powerplatform.com/.default', '--output', 'none', '--only-show-errors']);
+  assert.equal(az.calls.some(a => a.includes('--claims-challenge')), false);
   assert.equal(az.calls.some(a => a.includes('set') || a.includes('logout')), false);
 });
-test('old CLI claims/version and default binding never start UI', async () => {
+test('baseline CLI supports explicit sign-in while default binding never starts UI', async () => {
   const az = new FakeAz(); az.version = '2.54.0';
   const client = new IdentityClient(bound, az);
-  await client.bind(); await assert.rejects(client.bind(claim, true), /2.80/);
+  await client.bind();
   assert.equal(az.calls.some(a => a[0] === 'login'), false);
+  await client.bind(true);
+  assert.equal(az.calls.filter(a => a[0] === 'login').length, 1);
+  assert.equal(az.calls.some(a => a.includes('--claims-challenge')), false);
   az.version = '2.53.0'; await assert.rejects(new IdentityClient(bound, az).silent(oid), /2.54/);
 });
 for (const [error, expected] of [['AADSTS65001 secret', /consent/], ['AADSTS65002 secret', /preauthorization/],
@@ -142,7 +142,7 @@ test('identity switch requires explicit selection and cancellation stays cancell
   const result = await new IdentityClient(sample, new FakeAz()).bind();
   assert.throws(() => validateIdentity({ ...bound, HomeAccountId: 'other' }, result, false));
   validateIdentity({ ...bound, HomeAccountId: 'other' }, result, true);
-  await assert.rejects(new IdentityClient(bound, new FakeAz()).silent(oid, null, false, AbortSignal.abort()), { name: 'AbortError' });
+  await assert.rejects(new IdentityClient(bound, new FakeAz()).silent(oid, false, AbortSignal.abort()), { name: 'AbortError' });
 });
 test('discovery and MCP token audiences never share a memory-cache entry', async () => {
   const az = new FakeAz(), client = new IdentityClient(bound, az);

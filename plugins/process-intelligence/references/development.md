@@ -96,12 +96,11 @@ All test runs check the actual bundle in an isolated subtree with spaces, no sou
 and no dotnet on PATH, plus direct/manifest launch, missing Azure CLI/profile and clean stdout.
 Tests never sign in or access real AppData. Tests route fetch to an official SDK fake server;
 they do not add arbitrary-token/endpoint environment switches to production.
-Mocked subprocess tests cover expiry, cloud/account/tenant drift, claims, no-subscription users,
+Mocked subprocess tests cover expiry, cloud/account/tenant drift, no-subscription users,
 invalid responses, redaction, timeout/cancellation, actual Windows `.cmd` fixtures and executable
-Unix/shebang fixtures on native Unix. Windows ACLs are verified with native utilities.
-SDDL aliases use the inbox Windows PowerShell SID converter with no profile; the resolved SID
-must exactly match the current user. No additional .NET installation is required. An alias is
-not an exemption from the protected-DACL, single-ACE or full-control requirements.
+Unix/shebang fixtures on native Unix. Claims-challenge tests check the sanitized policy explanation,
+manual sign-in instruction, absence of persistence and no automatic replay.
+State tests cover regular-file, size, link, atomic-write and mutation-lock checks.
 EOF-before-overflow tests use controlled streams and process-local spawn stubs: writes are
 released only after parent-side EOF, and rejection must wait for owned cleanup. This is distinct
 from native `.cmd`/shebang overflow and descendant-liveness checks. Closing a Node standard
@@ -109,6 +108,9 @@ descriptor does not reliably produce native Windows EOF before exit.
 Native test diagnostics retain startup/overflow/cleanup/close timings and a 4-second benchmark
 indicator. The benchmark is not a functional SLA: invocation and Windows cleanup have separate
 deadlines. Exceeding it remains visible as unresolved latency; it is not claimed fixed.
+POSIX cleanup sends SIGKILL once to the owned group, then waits up to five seconds for the group
+to disappear. A surviving group or failed liveness check reports `PROCESS_CLEANUP_FAILED`;
+the caller must not treat the launcher's exit alone as completed cleanup.
 Live token acquisition and MCP deployment/access checks are separate, explicit operations.
 Environment-resolution tests use synthetic directory records and token-free challenge replies,
 including wrong/ambiguous IDs, unsupported clouds, principal drift, resource isolation,
@@ -221,15 +223,17 @@ The entry point runs directly or imports exactly once; SIGINT/SIGTERM cancel own
 Azure CLI uses validated argument arrays; Windows `.cmd` expansion is constrained and quoted.
 Cancellation/output limits/timeouts kill only the owned process tree (Windows taskkill by PID;
 Unix process group), never by process name. Stdout is MCP-only; diagnostics/auth use stderr.
-The plugin stores profiles/challenges only in `ProcessIntelligenceBridgeAzureCli`; there is no
-migration or legacy-store lookup. Azure CLI 2.54+ supplies `expires_on`; ambiguous local `expiresOn` is not parsed.
-CLI 2.80+ supports explicit `login --claims-challenge` (base64), not claims on `get-access-token`.
+The plugin stores profiles only in `ProcessIntelligenceBridgeAzureCli` under the platform's
+per-user data directory. Azure CLI 2.54+ supplies `expires_on`; ambiguous local `expiresOn` is not parsed.
 Forced acquisition clears the bridge memory cache but does not force refresh of Azure CLI's cache.
 Read-only local diagnostics run CLI version/cloud/account commands; only remote diagnostics acquire
 tokens and connect. CLI subprocess output is captured, never forwarded to MCP stdout or diagnostics.
 
-A claims challenge received on the first 401 is saved for explicit sign-in. If a new challenge
-appears only after the single authentication retry, the request fails without a further retry.
+A plain 401 permits a single token reacquisition and retry. A Conditional Access / CAE claims
+challenge on either response stops immediately with a sanitized explanation and asks the user
+to run `login --profile NAME --sign-in true`, then restart MCP. The bridge does not store,
+decode or forward claims-challenge payloads. Normal sign-in may not satisfy a specific claims
+requirement; persistent failures need administrator policy review, not identity/resource changes.
 
 ## Dependency management and licenses
 

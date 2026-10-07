@@ -74,6 +74,70 @@ test('Unix executable-bit failure is actionable', { skip: process.platform === '
   await chmod(az, 0o600);
   await assert.rejects(new AzureCliProcess({ executable: az }).run(['version']), /Azure CLI executable/);
 });
+
+function posixCleanupFixture(t, kill) {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+  t.after(() => Object.defineProperty(process, 'platform', platform));
+  const child = Object.assign(new EventEmitter(), {
+    pid: 12345, stdout: new PassThrough(), stderr: new PassThrough(),
+    exitCode: null, signalCode: null
+  });
+  const spawn = t.mock.method(childProcess, 'spawn', () => child);
+  syncBuiltinESMExports();
+  t.after(() => { spawn.mock.restore(); syncBuiltinESMExports(); });
+  t.mock.method(process, 'kill', (pid, signal) => {
+    assert.equal(pid, -child.pid);
+    return kill(signal);
+  });
+  return child;
+}
+
+test('POSIX cleanup waits for the entire owned group after the launcher closes', async t => {
+  let alive = true, probes = 0, settled = false;
+  const child = posixCleanupFixture(t, signal => {
+    if (signal === 'SIGKILL') return true;
+    assert.equal(signal, 0);
+    probes++;
+    if (!alive) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+    return true;
+  });
+  const pending = assert.rejects(runProcess(process.execPath, [], { outputLimit: 1 }),
+    { errorCode: 'CLI_OUTPUT_LIMIT' }).finally(() => { settled = true; });
+  child.stdout.write('overflow');
+  child.exitCode = 1;
+  child.emit('close', 1);
+  await new Promise(resolve => setImmediate(resolve));
+  const returnedEarly = settled;
+  alive = false;
+  await pending;
+  assert.equal(returnedEarly, false, 'launcher close is not process-group termination');
+  assert.ok(probes >= 2, 'wait until the owned group is absent');
+});
+
+for (const failure of ['deadline', 'permission']) {
+  test(`POSIX cleanup reports ${failure} failure instead of claiming termination`, async t => {
+    const child = posixCleanupFixture(t, signal => {
+      if (signal === 'SIGKILL') return true;
+      assert.equal(signal, 0);
+      if (failure === 'permission') throw Object.assign(new Error('denied'), { code: 'EPERM' });
+      return true;
+    });
+    let now = 0;
+    t.mock.method(performance, 'now', () => { now += 5001; return now; });
+    let settled = false;
+    const pending = assert.rejects(runProcess(process.execPath, [], { outputLimit: 1 }),
+      { errorCode: 'PROCESS_CLEANUP_FAILED' }).finally(() => { settled = true; });
+    child.stdout.write('overflow');
+    await new Promise(resolve => setImmediate(resolve));
+    const reportedBeforeClose = settled;
+    child.exitCode = 1;
+    child.emit('close', 1);
+    await pending;
+    assert.equal(reportedBeforeClose, true, 'failed cleanup cannot wait forever for launcher close');
+  });
+}
+
 test('timeout and cancellation kill the owned process tree', async t => {
   const { az, dir } = await fixture(t, `
     import {spawn} from 'node:child_process'; import {writeFileSync} from 'node:fs';
@@ -130,7 +194,9 @@ for (const stream of ['stdout', 'stderr']) test(`controlled ${stream} overflow a
   });
   // No real PID is touched by the deterministic Unix process-group branch.
   if (process.platform !== 'win32') t.mock.method(process, 'kill', (pid, signal) => {
-    assert.equal(pid, -child.pid); assert.equal(signal, 'SIGKILL'); events.push('cleanup.started'); return true;
+    assert.equal(pid, -child.pid);
+    if (signal === 0) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+    assert.equal(signal, 'SIGKILL'); events.push('cleanup.started'); return true;
   });
   syncBuiltinESMExports();
   t.after(() => {

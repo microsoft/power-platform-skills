@@ -27,7 +27,8 @@ Prefixes are case-insensitive and may have a separating hyphen. IDs are canonica
 Azure CLI 2.54+ is required. Login binds the existing CLI organizational user by default.
 Environment discovery reads metadata using the existing CLI session; it does not configure or sign in.
 Config remains offline; pass the resolved tenant GUID, or an explicitly confirmed tenant if discovery is unavailable.
---sign-in true explicitly permits tenant-scoped az login in a normal terminal (CLI 2.80+ for claims).
+--sign-in true explicitly permits tenant-scoped az login in a normal terminal.
+Conditional Access / CAE claims challenges require manual sign-in; their payload is not stored or forwarded.
 Azure CLI owns shared credentials; logout invalidates only this profile, never az logout.
 MCP uses POST-only transport; standalone GET streaming and GET resumption are disabled.
 No custom client/browser/redirect options, admin consent or implicit cloud/account switching.`;
@@ -212,7 +213,7 @@ async function execute(
       write(
         `MCP_TRANSPORT: ${MCP_TRANSPORT_MODE}; standalone GET streaming and GET resumption are disabled.`
       );
-      await tokens.getToken(null, false, signal);
+      await tokens.getToken(false, signal);
       write('TOKEN_ACQUIRED: silent token acquisition succeeded for the configured resource.');
       let cursor;
       let count = 0;

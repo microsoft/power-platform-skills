@@ -6,16 +6,14 @@ import assert from 'node:assert/strict';
 import { IdentityClient, ProfileTokenProvider, login } from '../src/authentication.mjs';
 import { authenticatedFetch } from '../src/http-auth.mjs';
 import { resolveConnection } from '../src/configuration.mjs';
-import { FakeAz, bound, sample, claim, username, token } from './helpers.mjs';
+import { FakeAz, bound, sample, username, token } from './helpers.mjs';
 function state(p) {
-  return { current: { ...p }, challenge: null,
+  return { current: { ...p },
     async ensureCurrent(p) { assert.deepEqual(p, this.current, 'Profile changed'); },
-    async save(p, revision, expectedClaims) {
+    async save(p, revision) {
       assert.equal(this.current.Revision, revision, 'Profile changed');
-      if (expectedClaims !== undefined) assert.equal(this.challenge, expectedClaims, 'Challenge changed');
-      this.challenge = null; return this.current = { ...p, Revision: 'new' };
-    },
-    async loadChallenge() { return this.challenge; }, async saveChallenge(p, c) { this.challenge = c; } };
+      return this.current = { ...p, Revision: 'new' };
+    } };
 }
 test('profile provider never initiates login and validates revision before/after token', async () => {
   const s = state(bound), az = new FakeAz(), id = new IdentityClient(bound, az);
@@ -27,17 +25,25 @@ test('unbound profile fails before subprocess', async () => {
   const az = new FakeAz(), s = state(sample), provider = new ProfileTokenProvider(sample, s, new IdentityClient(sample, az));
   await assert.rejects(provider.getToken(), /No account/); assert.equal(az.calls.length, 0);
 });
-test('validated challenge persists and blocks later silent acquisition until explicit sign-in', async () => {
+test('claims failure requests login without changing the profile or starting sign-in', async () => {
   const s = state(bound), az = new FakeAz(), id = new IdentityClient(bound, az), provider = new ProfileTokenProvider(bound, s, id);
-  await assert.rejects(provider.getToken(claim, true), /challenge/); assert.equal(s.challenge, claim);
-  await assert.rejects(provider.getToken(), /challenge/);
-  await assert.rejects(login(bound, s, id), /challenge/);
+  const endpoint = resolveConnection(bound).endpoint;
+  let sent = 0;
+  const fetch = authenticatedFetch(endpoint, (...args) => provider.getToken(...args), async () => {
+    sent++;
+    return new Response(null, { status: 401,
+      headers: { 'www-authenticate': 'Bearer error="insufficient_claims", claims="private-payload"' } });
+  });
+  await assert.rejects(fetch(endpoint), { errorCode: 'CLAIMS_LOGIN_REQUIRED' });
+  assert.equal(sent, 1);
+  assert.deepEqual(s.current, bound);
+  assert.equal(az.calls.some(a => a[0] === 'login'), false);
   const saved = await login(bound, s, id, { signIn: true });
-  assert.equal(s.challenge, null);
   assert.equal(saved.HomeAccountId, bound.HomeAccountId);
   assert.equal(Object.hasOwn(saved, 'AccountUsername'), false);
   assert.equal(JSON.stringify(saved).includes(username), false);
   assert.equal(az.calls.filter(a => a[0] === 'login').length, 1);
+  assert.equal(az.calls.some(a => a.includes('--claims-challenge')), false);
 });
 test('account switch requires explicit consent and wrong tenant never binds', async () => {
   const selected = { ...bound, HomeAccountId: '44444444-4444-4444-4444-444444444444' };

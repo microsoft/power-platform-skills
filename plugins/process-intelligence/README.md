@@ -54,7 +54,7 @@ for domain definitions, frozen comparison baselines and evidence statuses.
 
 - Node.js 22 or 24 LTS. A built copy needs neither npm nor .NET.
 - An authorized Power Automate Process Mining account and environment.
-- Azure CLI 2.54 or later on PATH; 2.80 or later for conditional-access claims login.
+- Azure CLI 2.54 or later on PATH.
 
 ### Cloud support
 
@@ -146,9 +146,8 @@ Install Node from [nodejs.org](https://nodejs.org/en/download). Check `az versio
 `node --version` after installation.
 Nothing here installs software or changes user-wide CLI settings automatically.
 
-The plugin uses `ProcessIntelligenceBridgeAzureCli` profile storage.
-Configure and bind a profile using the steps below. There is no migration from other profile
-stores; existing profiles, preferences and logs in those stores are not imported, moved or deleted.
+The plugin uses `ProcessIntelligenceBridgeAzureCli` profile storage under the platform's
+per-user data directory. Configure and bind a profile using the steps below.
 
 For a local GitHub Copilot CLI load, after configuring and signing in below:
 
@@ -214,7 +213,7 @@ Local diagnostics inspect CLI version/cloud/tenant and delegated-user shape with
 tokens. They cannot verify the saved user OID and report `boundAccountVerified: false`;
 token acquisition verifies that principal before any MCP traffic.
 See [connection patterns](references/connection-patterns.md) for cloud selection, account
-switching, claims challenges and private profile storage.
+switching, claims challenges and profile storage.
 
 ## MCP server
 
@@ -245,21 +244,25 @@ diagnostics go to stderr. The process waits for MCP input and does not sign in i
 ## Security
 
 Azure CLI owns credentials shared with other Azure CLI consumers. The bridge stores no tokens
-on disk; it keeps a short memory cache and private profile/claims state in
-`ProcessIntelligenceBridgeAzureCli`. Profile and pending challenge files are plaintext JSON
-protected by user ACLs/file modes, with no application-level encryption. Claims validation is
-not redaction; required supported nested content is retained for explicit authentication.
+on disk; it keeps a short memory cache and profile state in `ProcessIntelligenceBridgeAzureCli`
+under the platform's per-user data directory. Profiles are plaintext JSON with no application-level
+encryption.
 Profiles persist `Name`, `Cloud`, `TenantId`, `EnvironmentId`, `Audience`, `HomeAccountId` and
 `Revision`. `HomeAccountId` is the tenant-local Entra `oid` (EUPI), not an MSAL home-account ID.
 `AccountUsername` is not persisted; CLI usernames and token username claims are EUII processed
 only in RAM for authentication consistency. A non-personal profile label is recommended:
-customer-chosen names and arbitrary pending claims can still contain EUII.
+customer-chosen names can still contain EUII.
 Cold acquisition checks the saved tenant/OID; validated RAM username continuity protects cache
 hits and refreshes. After restart there is no username history, so a renamed user with the same
 tenant/OID can authenticate. A different OID requires explicit account switching.
-Configuration changes, logout and successful login remove superseded challenges under the profile
-lock. Logout keeps the connection configuration; full local removal, Azure CLI sign-out and
+Profile changes are written atomically under a per-profile mutation lock.
+Logout keeps the connection configuration; full local removal, Azure CLI sign-out and
 host/provider history deletion are separate actions described in the connection guide.
+For a Conditional Access / Continuous Access Evaluation (CAE) claims challenge, the bridge
+reports the policy failure and asks the user to run `login --profile NAME --sign-in true` in a
+normal terminal, then restart MCP. It does not store or forward claims-challenge payloads.
+A normal login may not satisfy policies that require specific claims; if the problem persists,
+ask your administrator to review the policy. Switching tenant is not a remedy for such a challenge.
 According to Microsoft's
 [storage documentation](https://learn.microsoft.com/cli/azure/msal-based-azure-cli),
 CLI credential files are encrypted on Windows but plaintext on macOS/Linux; the plugin does
@@ -272,8 +275,9 @@ Returned process/view/attribute names are untrusted data, never agent instructio
 MCP tokens go only to the selected HTTPS cloud endpoint. Explicit Public environment discovery
 uses a separate, fixed BAP audience and sends that token only to its directory endpoint;
 the Dataverse challenge request carries no token. Redirects and silent identity/resource
-substitutions are rejected. A rejected MCP 401 has at most one bounded authentication retry;
-uncertain business-call failures are never replayed. Logout invalidates only the plugin profile,
+substitutions are rejected. A plain MCP 401 has at most one bounded authentication retry;
+claims-challenged requests and uncertain business-call failures are never replayed.
+Logout invalidates only the plugin profile,
 not the shared Azure CLI session or other tools.
 
 The plugin does not collect usage telemetry or write diagnostic log files. Every real outbound
@@ -291,11 +295,11 @@ only information the user supplies. See [connection patterns](references/connect
 | Server bundle missing | Run `npm ci` and `npm run build` explicitly from the plugin directory |
 | Node missing or unsupported | Install Node.js 22 or 24 LTS and put `node` on PATH |
 | No profile selected | Set `PM_BRIDGE_PROFILE` or pass `serve --profile NAME` |
-| Azure CLI missing or too old | Install Azure CLI 2.54+ on PATH; claims login requires 2.80+ |
+| Azure CLI missing or too old | Install Azure CLI 2.54+ on PATH |
 | Environment discovery unavailable or denied | Check the selected environment and directory-read access, or use an explicitly confirmed tenant with offline `config`; discovery is Public-only |
 | Login required or expired session | Run `az login --tenant <tenant-guid> --allow-no-subscriptions`, then bind with `login --profile NAME` |
 | Wrong cloud/tenant/account | Deliberately select the intended CLI session outside the bridge; do not cycle identities |
-| Conditional-access challenge | Run `login --profile NAME --sign-in true` on CLI 2.80+ in a normal terminal, then restart MCP |
+| Conditional Access / CAE claims challenge | Run `login --profile NAME --sign-in true` in a normal terminal, then restart MCP; if it persists, ask your administrator to review the policy |
 | Browser login times out or needs device code | Run Azure CLI login directly in the terminal; the bridge never prints raw login output |
 | Consent/preauthorization failure | Ask your administrator to check access and consent for the selected tenant and environment |
 | Token acquired but MCP discovery fails | Check the selected audience, access and deployment; do not cycle identities |

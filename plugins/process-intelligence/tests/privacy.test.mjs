@@ -8,9 +8,9 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { bundleFixture, pluginRoot } from './bundle-fixtures.mjs';
 
-test('connection guidance describes exact profile/challenge fields and plaintext retention boundaries', async () => {
+test('connection guidance describes profile fields, data location and plaintext retention', async () => {
   const text = await readFile(path.join(pluginRoot, 'references', 'connection-patterns.md'), 'utf8');
-  for (const field of ['Name', 'Cloud', 'TenantId', 'EnvironmentId', 'Audience', 'HomeAccountId', 'Revision', 'Claims']) {
+  for (const field of ['Name', 'Cloud', 'TenantId', 'EnvironmentId', 'Audience', 'HomeAccountId', 'Revision']) {
     assert.match(text, new RegExp(`\\| \`${field}\` \\|`), field);
   }
   assert.match(text, /tenant-local object ID/);
@@ -19,18 +19,26 @@ test('connection guidance describes exact profile/challenge fields and plaintext
   assert.match(text, /OII/);
   assert.match(text, /plaintext JSON/i);
   assert.match(text, /no application-level encryption/i);
-  assert.match(text, /structure, size and depth/i);
-  assert.match(text, /not redaction/i);
-  assert.match(text, /not limited to.*acrs/i);
+  assert.match(text, /per-user data directory/i);
   assert.match(text, /no automatic expiry/i);
-  assert.match(text, /malformed.*config.*logout/is);
-  assert.match(text, /saved.*cleanup failed/i);
+  assert.doesNotMatch(text, /\| `Claims` \||\.challenge\.json|0700|0600|SDDL/);
   assert.doesNotMatch(text, /\| `AccountUsername` \|/);
   assert.match(text, /AccountUsername` is not persisted/);
   assert.match(text, /username.*transient.*RAM.*EUII/is);
   assert.match(text, /profile name.*EUII/is);
-  assert.match(text, /Claims.*EUII\/EUPI\/OII/is);
   assert.match(text, /cold.*diagnostics.*cannot verify.*OID/is);
+});
+
+test('setup guidance requests manual reauthentication without a claims-persistence workflow', async () => {
+  for (const file of ['README.md', 'skills/setup/SKILL.md', 'references/connection-patterns.md']) {
+    const text = (await readFile(path.join(pluginRoot, file), 'utf8')).replace(/\s+/g, ' ');
+    assert.match(text, /Conditional Access.*CAE/, file);
+    assert.match(text, /login --profile (?:NAME|work) --sign-in true/, file);
+    assert.match(text, /restart MCP/, file);
+    assert.match(text, /(?:not|never) (?:store|persist|save)[^.]*claims/i, file);
+    assert.match(text, /(?:persists|continues)[^.]*administrator|administrator[^.]*policy/i, file);
+    assert.doesNotMatch(text, /2\.80|--claims-challenge|\.challenge\.json|migration|legacy.store/i, file);
+  }
 });
 
 test('setup shows host privacy notice and requires explicit integration instruction before connection', async () => {
@@ -65,17 +73,26 @@ test('local export and removal guidance separates selected files from shared cre
     '~/.local/share/ProcessIntelligenceBridgeAzureCli'
   ]) assert.ok(text.includes(location), location);
   assert.match(text, /work\.json/);
-  assert.match(text, /work\.challenge\.json/);
+  assert.doesNotMatch(text, /work\.challenge\.json/);
   assert.match(text, /stop only.*affected.*sessions/i);
-  assert.match(text, /export.*private.*directory/is);
-  assert.match(text, /remove.*exact.*two files/is);
-  assert.match(text, /stale.*Revision/is);
+  assert.match(text, /export.*user-controlled.*directory/is);
+  assert.match(text, /remove exactly.*work\.json/is);
   assert.match(text, /no wildcards|never use wildcards/i);
   assert.match(text, /local user/i);
   assert.match(text, /tenant administrator/i);
   assert.match(text, /host\/provider/i);
   assert.match(text, /backups.*exports/is);
   assert.match(text, /logout.*keeps.*configuration/is);
+});
+
+test('runtime has no claims persistence or explicit state permission enforcement', async () => {
+  for (const file of ['src/private-files.mjs', 'src/state.mjs', 'src/authentication.mjs',
+    'src/http-auth.mjs', 'src/process.mjs', 'server/mcp.mjs']) {
+    const text = await readFile(path.join(pluginRoot, file), 'utf8');
+    assert.doesNotMatch(text,
+      /normalizeClaims|readClaims|saveChallenge|loadChallenge|verifyPrivate|\.challenge\.json|--claims-challenge|icacls\.exe|whoami\.exe|powershell\.exe|SetAccessControl|\b(?:chmod|chown)\s*\(|0o(?:600|700)/,
+      file);
+  }
 });
 
 test('report drafts use supplied information without log collection or automatic submission', async () => {

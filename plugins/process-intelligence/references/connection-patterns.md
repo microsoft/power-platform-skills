@@ -94,7 +94,7 @@ Each cold token acquisition verifies that token's `tid`/`oid` against the saved 
 any MCP traffic. CLI cloud, tenant and delegated-user shape are checked before and after acquisition;
 token username claims must match the current CLI username. After successful validation, the username
 is pinned only in this IdentityClient's RAM. Cache hits and refreshes reject CLI username/cloud/tenant
-changes; the RAM pin survives expiry, forced reacquisition and pending claims, until disposal or
+changes; the RAM pin survives expiry and forced reacquisition until disposal or
 explicit login. A process restart has no username history: a renamed user with the same tenant/OID
 can authenticate, while a different OID is rejected even if the username matches.
 Token audience, client and delegated-user claims must also agree. Parsing claims is not cryptographic validation:
@@ -111,7 +111,7 @@ a new token is acquired. Cached credentials still belong to the previously verif
 
 Binding a different OID requires `login --profile work --switch-account true`; tenant/environment changes
 require config, login and restart. Reconfiguration clears account selection and invalidates active
-connections. `logout --profile work` clears only this plugin's binding/challenge, even if az is missing;
+connections. `logout --profile work` clears only this plugin's account binding, even if az is missing;
 it never invokes `az logout`, clears CLI credentials or signs other tools out.
 
 ## Clouds and resources
@@ -154,13 +154,12 @@ An explicit `--audience` must equal the selected cloud's default resource.
 No audience cycling or arbitrary gateway overrides occur.
 Environment discovery runs only through the explicit Public setup command, never during MCP serving.
 
-## Protected state and challenges
+## Profile storage
 
-Private state lives outside the plugin in `ProcessIntelligenceBridgeAzureCli`.
-Profiles and pending challenges are **plaintext JSON** with **no application-level encryption**.
-User-only Windows ACLs or Unix permissions protect the files; validation is not redaction or
-encryption. Windows uses built-in `whoami`/`icacls`; Unix directories/files use modes 0700/0600.
-Links/reparse points and hard-linked files are rejected. Profiles and claims use PascalCase fields.
+Profile state lives outside the plugin in `ProcessIntelligenceBridgeAzureCli`, under the platform's
+per-user data directory. Profiles are **plaintext JSON** with **no application-level encryption**.
+Regular-file, size, symlink/reparse-point and hard-link checks remain in place.
+Profile fields use PascalCase.
 
 | Platform | Default state directory |
 |---|---|
@@ -188,62 +187,34 @@ a person, and a user-chosen profile name can itself contain EUII. Choose non-per
 
 `AccountUsername` is not persisted. CLI usernames and matching token claims are processed
 transiently in RAM for authentication consistency checks (EUII), without a persisted surrogate
-or username hash. This does not make the whole store EUII-free: profile names and pending claims
-may still contain identifying information.
+or username hash. This does not make the whole store EUII-free: profile names may still contain
+identifying information.
 
 Configuration has no automatic expiry. Logout keeps the configuration and only clears the account
-binding and pending challenge. Full local removal is described below.
+binding. Full local removal is described below.
 
-### Pending challenge fields and lifecycle
+### Conditional Access and CAE recovery
 
-`<name>.challenge.json` is temporarily persisted because MCP serve never opens sign-in UI and a
-separate, explicit terminal login must receive the required challenge.
+An HTTP 401 with `insufficient_claims` or a `claims` parameter is reported as a
+Conditional Access / Continuous Access Evaluation (CAE) claims challenge, not as proof
+of a wrong tenant. Run `login --profile work --sign-in true` in a normal terminal,
+then restart MCP. MCP serving never opens sign-in UI.
 
-| Field | Purpose and classification | Lifecycle |
-|---|---|---|
-| `Revision` | Associates this challenge with one saved profile revision; OII. | Written with pending claims; removed with that challenge. |
-| `Claims` | Required access-token authentication challenge, stored as a JSON string. Treat as sensitive authentication data: nested content can include EUII/EUPI/OII. | Preserved for explicit login, including across process restarts and failed sign-in; removed when superseded by a successful profile save. |
+The bridge does not store, decode or forward claims-challenge payloads, and does not replay
+the challenged request. Normal sign-in may not satisfy policies requiring specific claims;
+if the problem persists, ask your administrator to review the policy rather than changing the
+client, tenant or resource. See Microsoft's [claims-challenge guidance](https://learn.microsoft.com/en-us/entra/identity-platform/claims-challenge)
+for the distinction between ordinary reauthentication and a claims-aware authorization flow.
 
-Validation checks **structure, size and depth**: at most 16,384 input characters, a single
-`access_token` object with at least one property, and the supported nesting-depth limit of 16.
-JSON or base64 input is normalized to JSON text. This is **not redaction**: supported arbitrary
-nested content is retained, not limited to `acrs`. No required field is silently dropped.
-The challenge file is subject to the private-state reader's 65,536-byte limit.
-There is no automatic expiry or background cleanup timer for either file.
+### Profile writes and token caching
 
-Run `login --profile work --sign-in true` in a normal terminal on Azure CLI 2.80+.
-The bridge passes normalized, base64-encoded claims to `az login --claims-challenge` for the same
-configured tenant/scope. `az account get-access-token` cannot accept claims. Older CLI versions
-fail explicitly, and large claims may exceed Windows' command-line limit. Failed or interrupted
-authentication retains the pending requirement; do not omit it to bypass access policy.
-Restart MCP after successful login.
-
-Config/reconfiguration, logout and successful login save a new profile revision, then remove the
-previous challenge **under the same per-profile mutation lock**. This includes already-existing
-revision-stale files in this store, not only newly created challenges. Login checks both the profile
-revision and the pending claims it authenticated with; a different challenge arriving during login
-aborts that save and preserves the newer challenge, even if the profile revision did not change.
-Stale operations cannot clear a newer profile's challenge.
-
-Reads alone do not delete files. A well-formed revision-stale challenge is ignored for authentication
-and removed at the next successful profile save. Malformed current challenge JSON/claims blocks
-login explicitly; config or logout can remove malformed/oversized **regular** challenge files without
-parsing them. First configuration also removes an orphan challenge for that exact profile name.
-Neither cleanup nor logout touches another profile, persistent `.lock` files or Azure CLI credentials.
-If profile publication fails, its old challenge remains. If the profile is saved but cleanup fails,
-the command reports **"Profile was saved, but pending claims cleanup failed"**, not success.
-The new configuration may already be present; correct file access and retry the intended operation,
-or stop affected sessions and use the exact removal procedure below. Unsafe links/directories are
-not followed or recursively removed.
-
-Configure and bind a new profile explicitly; there is no legacy-store lookup or automatic rebinding.
-There is no migration from other stores.
-Persistent `.lock` files are not evidence of an active owner and are left alone.
-Node mutations exclusively create `.node-lock` files. A live owner blocks concurrent writes;
+Config, logout and successful login publish profiles atomically under a per-profile mutation lock.
+Login checks the profile revision before saving, so it cannot overwrite a newer configuration.
+Profile reads do not create directories or modify data.
+Mutations exclusively create `.node-lock` files. A live owner blocks concurrent writes;
 missing/dead/unknown owners fail conservatively. Verify that no owner is active and stop affected
 profile sessions before manually removing only that confirmed stale `.node-lock`, never profile
 files or shared credentials. No lock is automatically recovered.
-Data from other profile stores is not imported, reused, moved or changed.
 Access tokens enter Node RAM through captured Azure CLI stdout pipes and are sent only to the
 allowlisted HTTPS resource endpoint. The bridge persists no access/refresh tokens and never reads
 Azure CLI's private cache.
@@ -253,7 +224,7 @@ on macOS/Linux. The plugin does not add OS credential-cache protection.
 The per-connection memory cache uses `expires_on` Unix UTC seconds and JWT expiry, whichever is
 earlier, with a two-minute margin. Azure CLI 2.54+ is required; ambiguous local `expiresOn` is not
 parsed. Each request checks the shared CLI session even on a memory cache hit.
-A 401 permits at most one reacquisition; this clears our memory cache but **cannot force Azure CLI's
+A plain 401 permits at most one reacquisition; this clears our memory cache but **cannot force Azure CLI's
 own cache to refresh**. No ARM token/resource fallback is permitted.
 
 Serving never prompts. Challenge authority/resource metadata is ignored; only the configured HTTPS
@@ -269,32 +240,29 @@ retention/deletion through their respective settings, contracts and supported pr
 
 1. Identify the exact state directory from the platform table and the exact profile name passed
    to `--profile` or `PM_BRIDGE_PROFILE`. Names are 1-40 lowercase letters, digits or hyphens,
-   starting with a letter. For profile `work`, the only data files are `work.json` and
-   `work.challenge.json` in that directory. Do not select similarly named profiles or old stores.
+   starting with a letter. For profile `work`, the data file is `work.json` in that directory.
+   Do not select similarly named profiles.
 2. Stop only the affected bridge sessions using that profile and finish/stop its config/login/logout
    operations. Disable their automatic restart in the selected host while doing maintenance.
    Do not terminate every Node/Azure CLI process. A `.node-lock` still requires owner investigation;
    never remove an active or uncertain lock. Other profiles can stay running.
-3. For inspection/export, open those exact regular files in a trusted **local** editor without
-   uploading them to an AI host, support conversation or repository. If an export is needed, copy
-   the selected profile and its existing challenge into a separate private user-controlled directory
-   outside the repository. Restrict destination ACLs to that user on Windows; use directory 0700
-   and file 0600 on macOS/Linux. Verify the copied bytes locally before removal. Copy the challenge
-   even when its `Revision` is stale; do not print or paste the contents into logs or examples.
-   Treat exports as sensitive, including any nested claims, and follow your organization's storage policy.
-4. For full local removal, remove exactly those two files that exist: `work.json` and
-   `work.challenge.json`. A missing challenge needs no action. Include a legacy stale challenge
-   regardless of its `Revision`. Use exact literal paths in the file manager or shell, with
+3. For inspection/export, open that exact regular file in a trusted **local** editor without
+   uploading it to an AI host, support conversation or repository. If an export is needed, copy
+   the selected profile into a separate user-controlled directory outside the repository.
+   Verify the copied bytes locally before removal. Do not print or paste the contents into logs
+   or examples; follow your organization's storage policy for identifying configuration data.
+4. For full local removal, remove exactly the selected `work.json` file.
+   Use its exact literal path in the file manager or shell, with
    **no wildcards** and no recursive directory removal. Refuse links/reparse points, hard links or
    unexpected directories and investigate their ownership instead. Keep all other profiles,
-   `.lock`/`.node-lock` files, plugin files and Azure CLI state untouched. Verify both exact data
-   paths are absent before restarting; reconfiguration/login will be required.
+   `.node-lock` files, plugin files and Azure CLI state untouched. Verify the exact profile path
+   is absent before restarting; reconfiguration/login will be required.
 5. Local deletion does not erase backups or exports; manage those copies separately under your
    retention policy. It also does not remove source Process Mining data, shared Azure CLI credentials,
    or data already sent to the host/model/provider, including conversation history.
 
 For binding-only removal, use `node server/mcp.mjs logout --profile work`: logout keeps the
-configuration and removes the binding/challenge, not the whole profile. If you separately choose
+configuration and removes the account binding, not the whole profile. If you separately choose
 to sign out of Azure CLI, use its supported sign-out procedure yourself, knowing it affects other
 CLI consumers; the plugin never runs `az logout`. Separately request host/model/history deletion
 through the selected host/provider's controls. Neither local logout nor uninstalling the plugin

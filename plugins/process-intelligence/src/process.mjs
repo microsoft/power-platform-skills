@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { access, constants } from 'node:fs/promises';
 import path from 'node:path';
 import { inspect } from 'node:util';
+import { setTimeout as delay } from 'node:timers/promises';
 import { BridgeError } from './errors.mjs';
 
 const processError = (message, code = 'CLI_EXECUTION_FAILED') => new BridgeError(message, 3, code);
@@ -28,15 +29,12 @@ class ProcessOutput {
 }
 
 export function windowsUtility(name) {
-  if (!['taskkill.exe', 'icacls.exe', 'whoami.exe', 'cmd.exe', 'powershell.exe'].includes(name)) {
+  if (!['taskkill.exe', 'cmd.exe'].includes(name)) {
     throw processError('Unsupported Windows utility.');
   }
   const root = process.env.SystemRoot;
   if (!root || !path.win32.isAbsolute(root)) {
     throw processError('Windows system directory is unavailable.');
-  }
-  if (name === 'powershell.exe') {
-    return path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', name);
   }
   return path.win32.join(root, 'System32', name);
 }
@@ -55,8 +53,29 @@ async function terminate(child) {
           'PROCESS_CLEANUP_FAILED'
         );
       }
+      return;
     }
-    return;
+    // SIGKILL delivery and the launcher's close event do not prove descendants
+    // have exited. Probe only the owned group; never resolve cleanup while it
+    // still exists, or retry a signal against a potentially reused group ID.
+    const deadline = performance.now() + 5000;
+    while (true) {
+      try {
+        process.kill(-child.pid, 0);
+      } catch (error) {
+        if (error.code === 'ESRCH') {
+          return;
+        }
+        throw processError(
+          'Could not verify owned process group termination.',
+          'PROCESS_CLEANUP_FAILED'
+        );
+      }
+      if (performance.now() >= deadline) {
+        throw processError('Owned process cleanup timed out.', 'PROCESS_CLEANUP_FAILED');
+      }
+      await delay(25);
+    }
   }
   // taskkill targets only this owned PID and descendants; never a process name.
   await new Promise((resolve, reject) => {
@@ -128,6 +147,11 @@ export async function runProcess(
         .finally(() => {
           child.stdout.destroy();
           child.stderr.destroy();
+          // Failed cleanup may leave the launcher alive: waiting for its close
+          // event would turn a bounded cleanup error into an unbounded hang.
+          if (failure?.errorCode === 'PROCESS_CLEANUP_FAILED') {
+            void finish(child.exitCode);
+          }
         });
     };
 
@@ -267,7 +291,7 @@ export class AzureCliProcess {
       const command = `""${executable}" ${args.map(a => `"${a}"`).join(' ')}"`;
       if (command.length > 7500) {
         throw processError(
-          'Azure CLI claims/command exceeds the Windows launcher limit; no claims were omitted.'
+          'Azure CLI command exceeds the Windows launcher limit.'
         );
       }
       executable = windowsUtility('cmd.exe');

@@ -22,11 +22,14 @@ changes as recovery. Use explicit terminal login; MCP serving never starts sign-
 For Public setup, resolve the tenant from the confirmed environment ID rather than requesting
 a tenant GUID up front. Follow the setup skill's manual fallback when discovery is unavailable;
 config remains offline and saved profiles keep explicit tenant selection.
-Keep profile state in `ProcessIntelligenceBridgeAzureCli`.
-There is no migration or legacy-store lookup; never move or delete old user state automatically.
+Keep profile state in `ProcessIntelligenceBridgeAzureCli` under the platform's per-user data directory.
 Persisted account binding is the tenant plus tenant-local OID, not a username. Usernames are
-transient RAM-only consistency inputs; profile names and claims can still contain EUII.
+transient RAM-only consistency inputs; profile names can still contain EUII.
 Cold local diagnostics cannot verify that OID; only token acquisition does so before MCP traffic.
+For a Conditional Access / CAE claims challenge, explain the policy failure and ask the user to run
+`login --profile work --sign-in true` in a normal terminal, then restart MCP.
+Do not store, decode or forward challenge payloads. If the problem persists, direct the user
+to their administrator for policy review rather than changing tenant, resource or client.
 
 References:
 - [Shared analysis contract](references/analysis-contract.md)

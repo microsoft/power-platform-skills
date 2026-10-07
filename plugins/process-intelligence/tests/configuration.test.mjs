@@ -74,7 +74,7 @@ test('connection documentation separates five accepted mappings from sovereign s
   const readme = await readFile(new URL('../../../README.md', import.meta.url), 'utf8');
   assert.match(readme, /GCC, GCC High, DoD and Mooncake are not supported yet/);
   const text = await readFile(new URL('../references/connection-patterns.md', import.meta.url), 'utf8');
-  const section = text.split('## Clouds and resources')[1].split('## Protected state')[0];
+  const section = text.split('## Clouds and resources')[1].split(/\r?\n## /)[0];
   const rows = section.split(/\r?\n/).filter(line => /^\| [^|]+ \|/.test(line))
     .map(line => line.split('|').slice(1, -1).map(cell => cell.trim())).filter(row => row[0] !== 'Cloud');
   assert.deepEqual(rows.map(row => row.slice(0, 4)), clouds.map(([cloud, suffix, host, shard]) =>
