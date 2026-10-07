@@ -52,6 +52,7 @@ If you prefer to install manually, run these commands inside a Claude Code or Gi
     /plugin install power-apps-mobile-extension@power-platform-skills
     /plugin install canvas-apps@power-platform-skills
     /plugin install power-automate@power-platform-skills
+    /plugin install process-intelligence@power-platform-skills
     ```
 
 ## Available Plugins
@@ -117,6 +118,21 @@ Build, edit, run, and debug Power Automate cloud flows via the FlowAgent MCP ser
 
 **Stack**: Node.js 18+, Azure CLI (`az login`), self-contained MCP bundle
 
+### [Process Intelligence](plugins/process-intelligence/README.md) (`plugins/process-intelligence`)
+
+Analyze Power Automate Process Mining data, including bottlenecks, variants,
+cohorts, rework and object-centric executions through guided MCP workflows.
+
+**Skills**: `/analytics` and `/investigate-process` guide analysis;
+`/analyze-performance`, `/analyze-variants`, `/analyze-drivers`, `/compare-cohorts`,
+`/derive-metric` and `/analyze-objects` answer focused questions.
+`/setup` and `/report-issue` handle connection setup and support drafts.
+See the [skill catalog](plugins/process-intelligence/README.md#skills).
+
+**Stack**: Node.js 22 or 24 LTS, Azure CLI, self-contained MCP bundle
+
+GCC, GCC High, DoD and Mooncake are not supported yet.
+
 ## Local Development
 
 To develop and test plugins locally, follow these steps:
@@ -133,7 +149,11 @@ To develop and test plugins locally, follow these steps:
     claude --plugin-dir /path/to/power-platform-skills/plugins/power-apps-mobile-extension
     claude --plugin-dir /path/to/power-platform-skills/plugins/canvas-apps
     claude --plugin-dir /path/to/power-platform-skills/plugins/power-automate
+    claude --plugin-dir /path/to/power-platform-skills/plugins/process-intelligence
     ```
+
+For Process Intelligence, first follow its [setup instructions](plugins/process-intelligence/README.md#installation),
+including the explicit profile and absolute plugin root needed to avoid duplicate workspace MCP loads.
 
 ## Running Without Interruption
 
@@ -249,10 +269,16 @@ power-platform-skills/
 │   │   │   └── plugin.json
 │   │   ├── shared/
 │   │   └── skills/
-│   └── canvas-apps/          # Canvas Apps plugin
+│   ├── canvas-apps/          # Canvas Apps plugin
+│   │   ├── .plugin/
+│   │   │   └── plugin.json
+│   │   ├── references/       # Technical + design guides
+│   │   └── skills/
+│   └── process-intelligence/ # Process Mining analytics plugin
 │       ├── .plugin/
 │       │   └── plugin.json
-│       ├── references/       # Technical + design guides
+│       ├── server/           # Self-contained MCP bundle
+│       ├── references/
 │       └── skills/
 ├── AGENTS.md                 # Development guidelines
 └── README.md

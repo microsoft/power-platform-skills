@@ -39,6 +39,10 @@
         {
             "name": "power-automate",
             "source": "./plugins/power-automate"
+        },
+        {
+            "name": "process-intelligence",
+            "source": "./plugins/process-intelligence"
         }
     ]
 }

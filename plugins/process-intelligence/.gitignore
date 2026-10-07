@@ -1,0 +1,7 @@
+node_modules/
+.test-artifacts/
+*.cache
+*.dmp
+profile*.json
+*.challenge.json
+*.node-lock
