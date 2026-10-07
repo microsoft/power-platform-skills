@@ -694,6 +694,12 @@ This read-only helper recipe is also used by
 Those callers supply their own request scope and approvals; they do not run
 the create wizard or dispatch its native-app planner.
 
+Apply [app-working-directory.md](../../shared/references/app-working-directory.md)
+before this recipe. Each shell block below and in Dataverse planning recovery
+re-enters the owner's absolute root. Re-supply the selected identity and artifact
+paths on every call; fresh-shell retries re-execute the complete guarded
+attempt block, including its variable assignments and function definition.
+
 Planning stays read-only. The resolver's `--no-cache` mode may read existing
 identity metadata, but must not persist the environment cache, auth settings,
 or telemetry cluster, and must not replay pending telemetry. Normal resolution
@@ -713,6 +719,7 @@ Branch on the Gate 1-approved
   nested planner or architect rediscover the tenant.
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ACTIVE_ENV_ID" --no-cache --require-tenant
 ```
 
@@ -760,6 +767,7 @@ Detailed advisory discovery is quality-bounded:
   expansion, at most once per newly selected logical name.
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 SNAPSHOT_PATH='<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json'
 CONCEPTS_PATH='<working_dir>/.tmp/dataverse-concepts.json'
 ARCHITECT_EVIDENCE_PATH='<working_dir>/.tmp/dataverse-architect-evidence.json'
@@ -1142,6 +1150,7 @@ Compute `NEW_DETAIL_NAMES = requested names - DETAIL_ATTEMPTED_NAMES`.
   and a new app-owned table.
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --env-url "$ACTIVE_ENV_URL" \
   --tenant-id "$ACTIVE_TENANT_ID" \
@@ -1190,6 +1199,7 @@ snapshot. Compute
   this same set-difference rule automatically.
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --env-url "$ACTIVE_ENV_URL" \
   --tenant-id "$ACTIVE_TENANT_ID" \

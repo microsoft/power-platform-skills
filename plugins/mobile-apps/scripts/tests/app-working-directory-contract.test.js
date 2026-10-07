@@ -234,6 +234,32 @@ test('documented normalization arguments preserve literal root contents without 
     'The harness must expose unsafe source quoting, not rewrite it to a safe form');
 });
 
+test('delegated creation planning and recovery blocks bind each fresh invocation to the owner root', (t) => {
+  const { directory, owner, caller } = fixture(t);
+  const create = read(path.join(pluginRoot, 'skills/create-mobile-app/SKILL.md'));
+  const sections = [
+    ['### Foreground Dataverse planning snapshot and evidence', '#### Planner completion dispatch'],
+    ['#### Dataverse planning recovery', '#### Step 3.0a'],
+  ];
+  const blocks = sections.flatMap(([start, end]) => {
+    const begin = create.indexOf(start);
+    const finish = create.indexOf(end, begin);
+    assert.ok(begin >= 0 && finish > begin);
+    return shellBlocks(create.slice(begin, finish));
+  });
+  assert.equal(blocks.length, 4);
+  for (const block of blocks) {
+    assert.ok(block.startsWith(`${guard}\n`));
+    const rootProbe = `${block.split('\n')[0]}\nnode -p "process.cwd()"`;
+    const result = run(rootProbe, owner, caller);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.realpathSync.native(result.stdout.trim()), fs.realpathSync.native(owner));
+    const failed = run(rootProbe, path.join(directory, 'missing app'), caller);
+    assert.equal(failed.status, 1);
+    assert.match(failed.stderr, /BLOCKED: cannot enter working_dir/);
+  }
+});
+
 for (const file of [
   'shared/references/offline-profile-reconciliation.md',
   'skills/deploy/SKILL.md',
