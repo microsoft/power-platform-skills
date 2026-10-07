@@ -84,6 +84,11 @@ asset improves an existing-site or narrow-edit outcome.
 For an explicit new-site design handoff, plan meaningful content imagery as part of the initial
 composition: a relevant hero image or original illustration and supporting images where they
 explain the content. Reuse suitable template images rather than replacing them gratuitously.
+Suitability means fit with the approved experience, subject and art direction, not merely presence
+in the selected creation template. New-site imagery and branding are not constrained by that
+template; replace unsuitable visuals through the approved asset/caller operations without
+discarding required content or deleting unrelated Web Files. Honor explicit asset-preservation
+preferences and keep existing-site narrow edits within their requested scope.
 Record at least one non-decorative content photograph/illustration in the asset manifest with
 its real placement; a logo, favicon, icon, or decorative pattern alone is insufficient. An explicit
 user request to omit images is recorded as `newSiteDesign.imagery: "user-declined"` with
@@ -93,7 +98,7 @@ reference owns the delivery-specific URL, staging/import, binding, and verificat
 
 ## Source priority
 
-Resolve sources in this order:
+Among sources that fit the approved design, resolve in this order:
 
 1. existing approved site/template images or hosted image URLs;
 2. user-provided approved hosted brand assets and photography;

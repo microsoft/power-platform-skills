@@ -22,6 +22,24 @@ Use [page blueprints](page-blueprints.md) for role-appropriate first screens, na
 
 Keep this brief in the calling workflow's existing approved plan and carry it through authoring handoffs. Do not restart discovery, ask for every design choice, or run a full critique at each component. For classic work, use the [classic critique adapter](../skills/style-site/references/design-critique.md) to interpret the shared categories without loading the SPA capture/fix loop. Code sites retain their existing design references and completion contract; classic exceptions do not change those rules.
 
+## Classic creation templates: reference, not a design constraint
+
+Use the selected classic creation template for data-model/domain context and requirements
+interpretation only, not as a visual specification. Although it provisions the native baseline,
+its appearance, page composition, layout, branding, and presentation do not constrain the new
+site's approved design. Derive the modern experience from the user's purpose and the experience
+brief; reuse template sections, colors, fonts, or images only when they fit that direction or the
+user explicitly asks to preserve them. A template section is not a requirement merely because it
+exists. Honor an explicit preservation preference or **Keep the template unchanged** choice.
+
+Visual freedom does not authorize discarding required capabilities or content. Preserve valid
+PAC metadata, record identities and relationships, forms/lists and data bindings, authentication,
+navigation behavior, locale scope, and supported Bootstrap/Studio-compatible serialization.
+Native owners may recompose sections, columns, and elements within that contract; the original
+template arrangement is not protected. Use the existing approved operations and final styling
+handoff, not a data-model migration, protected-stylesheet replacement, SPA framework, or invented
+native component. This new-site default does not turn an existing-site narrow edit into a redesign.
+
 ## Direction and safe brand reuse
 
 - Start with the audience, visitor journey, primary action, and approved aesthetic/mood. Carry one coherent direction through typography, palette, imagery, shapes, spacing, and interaction states; avoid unrelated effects chosen merely to look elaborate.

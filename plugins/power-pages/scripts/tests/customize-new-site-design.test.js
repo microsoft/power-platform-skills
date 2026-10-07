@@ -204,6 +204,96 @@ test('existing-site schema-1 plans need neither a new design brief nor added ima
   assert.equal(validateCustomizationPlan(plan), plan);
 });
 
+test('template-independent native recomposition and explicit preservation survive approval and final styling handoff', async (t) => {
+  const root = temporaryRoot(t);
+  const plan = externalImagePlan();
+  plan.summary = 'Use the template for conference domain context, not its visual identity.';
+  plan.preservation = 'Keep required conference content, registration behavior and the user-approved logo.';
+  plan.newSiteDesign.composition = 'Replace the starter arrangement with an editorial speaker introduction '
+    + 'and a compact registration task section; retain the logo at the user-requested size.';
+  const content = plan.operations[0];
+  content.id = 'recompose-speakers-page';
+  content.skill = 'author-webpage-content';
+  content.action = 'replace';
+  content.summary = 'Recompose the localized speaker introduction with the approved modern design.';
+  content.target = { path: 'web-pages/speakers/content-pages/Speakers.en-US.webpage.copy.html' };
+  content.inputs = {
+    targetFile: content.target.path, locale: 'en-US', bootstrapMajor: 5, mode: 'replace',
+    sections: [{
+      layout: 'one-third-right',
+      columns: [
+        { elements: [{ type: 'text', content: 'Meet the conference speakers' }] },
+        { elements: [{ type: 'image', source: plan.assets[0].externalUrl, alt: 'Conference speaker.' }] },
+      ],
+    }],
+  };
+  content.preserve = ['Required speaker content and registration data bindings.',
+    'User-approved logo, native markers, Liquid behavior and en-US locale scope.'];
+  content.expectedOutputs = ['localizedTargetFile'];
+  plan.operations[1].dependsOn = [content.id];
+
+  // Template provenance must not select a layout or overwrite explicit preservation.
+  for (const templateName of ['StarterLayout1', 'ProgramRegistration']) {
+    const alternative = structuredClone(plan);
+    alternative.site.templateName = templateName;
+    assert.equal(validateCustomizationPlan(alternative), alternative);
+    assert.deepEqual(alternative.operations[0].inputs.sections, content.inputs.sections);
+    assert.equal(alternative.preservation, plan.preservation);
+  }
+  const review = await renderReviewedPlan(plan, path.join(root, 'review.html'), { check: successfulImageCheck });
+  const dataPath = path.join(root, 'approved.json');
+  fs.writeFileSync(dataPath, JSON.stringify(plan), 'utf8');
+  publishApprovedPlan({ projectRoot: root, dataPath, imageChecksPath: review.imageChecks });
+  const resolved = updateExecution({ projectRoot: root, action: 'resolve', operationId: content.id });
+  assert.deepEqual(resolved.operation.preserve, content.preserve);
+  assert.deepEqual(resolved.resolvedInputs, content.inputs);
+  assert.equal(resolved.designContext.composition, plan.newSiteDesign.composition);
+  assert.throws(() => updateExecution({
+    projectRoot: root, action: 'resolve', operationId: 'style-new-site',
+  }), /incomplete dependencies/);
+
+  updateExecution({ projectRoot: root, action: 'start', operationId: content.id });
+  const outputsPath = path.join(root, 'outputs.json');
+  fs.writeFileSync(outputsPath, JSON.stringify({ localizedTargetFile: content.target.path }), 'utf8');
+  updateExecution({ projectRoot: root, action: 'complete', operationId: content.id, outputsPath });
+  const styling = updateExecution({ projectRoot: root, action: 'resolve', operationId: 'style-new-site' });
+  assert.deepEqual(styling.designContext, resolved.designContext);
+  assert.deepEqual(styling.imageChecks, resolved.imageChecks);
+  const approvedHash = planHash(plan);
+  plan.preservation = 'Discard the required registration behavior.';
+  assert.notEqual(planHash(plan), approvedHash);
+  fs.writeFileSync(dataPath, JSON.stringify(plan), 'utf8');
+  assert.throws(() => publishApprovedPlan({
+    projectRoot: root, dataPath, imageChecksPath: review.imageChecks,
+  }), /plan|hash/i);
+});
+
+test('existing-site narrow edits keep explicit layout preservation without acquiring a design workflow', (t) => {
+  const root = temporaryRoot(t);
+  const plan = externalImagePlan();
+  delete plan.newSiteDesign;
+  plan.assets = [];
+  plan.aesthetic = null;
+  plan.mood = null;
+  plan.summary = 'Correct one localized heading without redesigning the page.';
+  plan.preservation = 'User requested that the current layout, colors and logo remain unchanged.';
+  plan.operations = [{
+    id: 'correct-heading', skill: 'author-webpage-content', action: 'modify',
+    target: { path: 'web-pages/speakers/content-pages/Speakers.en-US.webpage.copy.html' },
+    locales: ['en-US'], inputs: { mode: 'modify', content: 'Meet the speakers' },
+    dependsOn: [], outputBindings: {}, preserve: [plan.preservation], expectedOutputs: ['localizedTargetFile'],
+  }];
+  const dataPath = path.join(root, 'approved.json');
+  fs.writeFileSync(dataPath, JSON.stringify(plan), 'utf8');
+  publishApprovedPlan({ projectRoot: root, dataPath });
+  const resolved = updateExecution({ projectRoot: root, action: 'resolve', operationId: 'correct-heading' });
+  assert.equal(resolved.designContext, undefined);
+  assert.deepEqual(resolved.operation.preserve, [plan.preservation]);
+  assert.deepEqual(resolved.resolvedInputs, plan.operations[0].inputs);
+  assert.deepEqual(updateExecution({ projectRoot: root, action: 'status' }).operations
+    .map((operation) => operation.id), ['correct-heading']);
+});
+
 test('experience brief remains visible and hash-bound through checked image publication and native handoffs', async (t) => {
   const root = temporaryRoot(t);
   const plan = externalImagePlan();

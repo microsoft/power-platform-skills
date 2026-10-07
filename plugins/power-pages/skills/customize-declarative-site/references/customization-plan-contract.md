@@ -92,7 +92,7 @@ still receive the exact declarative root rather than the documentation directory
     "languages": ["en-US"]
   },
   "summary": "Adapt the downloaded Event Portal for a developer conference.",
-  "preservation": "Retain the template structure while adding pages and sections.",
+  "preservation": "Preserve required conference content and registration behavior, record identities and locale scope.",
   "aesthetic": "Bold & Vibrant",
   "mood": "Technical & Precise",
   "capabilities": [],
@@ -110,6 +110,12 @@ needed.
 Use `null` for an unavailable template name or styling selection. Do not infer a Microsoft
 template from visual similarity.
 
+`site.templateName` identifies the creation baseline and supplies data-model/domain and
+requirements context, not visual constraints. Record the actual preservation decision in
+`preservation`: required content/capabilities, native contracts, and explicit user preferences.
+Do not default new-site plans to retaining the template's layout, palette or branding.
+Existing-site narrow edits still preserve the established visual direction and unrelated content.
+
 The customization plan is data-model-neutral. Do not require or infer Standard versus Enhanced
 from the downloaded files. `/deploy-site` establishes the authoritative model from the exact
 website record in the selected environment immediately before upload.
@@ -123,6 +129,9 @@ not placeholders or a fixed theme copied into every site.
 Include its experience brief in the existing `summary` and `newSiteDesign.composition` text:
 audience/job, actions, principal doubt and honest proof, design thesis, first-screen concept,
 signature moment, and page narrative. Put per-page section decisions in approved operation inputs.
+Distinguish template-derived requirements from the chosen modern presentation. Supported native
+recomposition can replace the starter arrangement; list any specifically retained appearance or
+layout as an explicit preference rather than inferring it from `site.templateName`.
 This adds no required schema fields: existing schema-1 plans and approved receipts remain valid,
 and the current plan hash, HTML presentation, and `designContext` carry the decisions unchanged.
 
@@ -295,7 +304,9 @@ Rules:
 - `inputs` contains final visitor-facing values, files, URLs, and behavior.
 - `dependsOn` references operation IDs.
 - `outputBindings` maps consumer input names to typed outputs of operations in `dependsOn`.
-- `preserve` accounts for existing content or behavior that must survive.
+- `preserve` accounts for existing content or behavior that must survive, including required
+  forms/lists/data bindings and explicit appearance/layout preferences. For new-site recomposition,
+  identify those dependencies without treating every template section as immutable.
 - `expectedOutputs` names stable output keys without inventing their values.
 
 Example dependency binding:

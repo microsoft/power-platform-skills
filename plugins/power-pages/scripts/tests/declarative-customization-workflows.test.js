@@ -153,3 +153,72 @@ test('creation image URL policy reaches content planning and the classic design 
     assert.doesNotMatch(document, /Do not hotlink the Unsplash URL|Never place an Unsplash hotlink|Deliver locally staged\/imported Web Files, not Unsplash/);
   }
 });
+
+test('classic template selection and new-site handoff distinguish requirements from visual constraints', () => {
+  const entry = read(path.join('skills', 'create-site', 'SKILL.md')).split('## Code-Site Workflow')[0];
+  const workflow = read(path.join('skills', 'create-site', 'workflows', 'declarative-site.md'));
+  const selection = workflow.split('## Phase 2:')[1].split('## Phase 3:')[0];
+  const handoff = workflow.split('On **Customize now**')[1].split('On **Keep the template unchanged**')[0];
+  for (const source of [entry, selection, handoff]) {
+    assert.match(source, /data-model\/domain|domain\/data/);
+    assert.match(source, /requirements/);
+    assert.match(source, /not a (?:constraint|visual commitment|visual\s+constraint)/);
+    assert.match(source, /preservation preferences/);
+  }
+  assert.match(selection, /requested capabilities and content/);
+  assert.match(handoff, /newSiteDesign\.composition/);
+  assert.match(handoff, /designContext/);
+  assert.match(handoff, /do not default to retaining\s+the starter arrangement/);
+  assert.match(workflow, /On \*\*Keep the template unchanged\*\*, finish/);
+});
+
+test('classic planning defaults allow recomposition but preserve explicit preferences and existing-site scope', () => {
+  const shared = read(path.join('references', 'site-design-quality.md'));
+  const customization = read(path.join('skills', 'customize-declarative-site', 'SKILL.md'));
+  const content = read(path.join('skills', 'customize-declarative-site', 'references', 'content-and-page-compositions.md'));
+  const contract = read(path.join('skills', 'customize-declarative-site', 'references', 'customization-plan-contract.md'));
+  const assets = read(path.join('skills', 'customize-declarative-site', 'references', 'visual-asset-planning.md'));
+  const templateRole = shared.split('## Classic creation templates:')[1].split('## Direction')[0];
+  for (const term of ['data-model/domain', 'requirements', 'appearance', 'page composition',
+    'layout', 'branding', 'presentation', 'PAC metadata', 'record identities', 'data bindings',
+    'authentication', 'locale scope', 'Bootstrap/Studio-compatible serialization']) {
+    assert.ok(templateRole.includes(term), term);
+  }
+  assert.match(templateRole, /template arrangement is not protected/);
+  assert.match(templateRole, /does not turn an existing-site narrow edit into a redesign/);
+  assert.match(customization, /Existing-site and narrow edits remain preservation-first/);
+  assert.match(customization, /do not require separate redesign permission/);
+  assert.doesNotMatch(customization, /template preservation level/);
+  assert.match(content, /For existing-site work without a redesign request/);
+  assert.match(content, /instead of the layout-reuse and styling\s+defaults/);
+  assert.match(content, /freely recomposing supported native sections\/columns\/elements/);
+  assert.match(content, /binding is a rendering contract, not the creation template's visual identity/);
+  assert.doesNotMatch(content, /Keep existing native\s+color roles/);
+  assert.match(contract, /`preservation`: required content\/capabilities, native contracts, and explicit user preferences/);
+  assert.doesNotMatch(contract, /"preservation": "Retain the template structure/);
+  assert.match(assets, /Among sources that fit the approved design/);
+  assert.match(assets, /Honor explicit asset-preservation\s+preferences/);
+});
+
+test('native authors and final styling carry the approved composition without sacrificing native integrity', () => {
+  const page = read(path.join('skills', 'classic-site-skills', 'author-webpage', 'SKILL.md'));
+  const content = read(path.join('skills', 'classic-site-skills', 'author-webpage-content', 'SKILL.md'));
+  const composition = read(path.join('skills', 'classic-site-skills', 'author-webpage-content',
+    'references', 'webpage-content-composition.md'));
+  const styling = read(path.join('skills', 'style-site', 'references', 'design-quality.md'));
+  const critique = read(path.join('skills', 'style-site', 'references', 'design-critique.md'));
+  for (const source of [page, content, composition, styling, critique]) {
+    assert.match(source, /creation template/);
+    assert.match(source, /designContext/);
+    assert.match(source, /preservation/);
+  }
+  assert.match(page, /do not substitute the creation template's layout or branding/);
+  assert.match(content, /may replace or recompose/);
+  assert.match(composition, /required forms\/lists, data bindings, Liquid behavior, native markers and locale scope/);
+  assert.match(composition, /never replace it with a\s+static lookalike or silently discard it/);
+  assert.match(composition, /does not broaden an unrelated existing-site `append` or `modify`/);
+  assert.match(styling, /native DOM delivered by structural authoring/);
+  assert.match(styling, /return missing structural changes to those owners/);
+  assert.match(critique, /not resemblance to the selected creation template/);
+  assert.match(critique, /Do not turn an existing-site narrow edit into an unsolicited redesign/);
+});

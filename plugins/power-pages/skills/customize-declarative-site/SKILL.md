@@ -113,7 +113,8 @@ Do not generate a broad plan or invoke every owner merely because they are avail
 
 ## Phase 2: Gather customization intent
 
-Use the initial request and existing template before asking questions. Do not ask again for
+Use the initial request and the template's data-model/domain and requirements context before
+asking questions. Template selection is not a visual specification. Do not ask again for
 information already established.
 
 For a broad or underspecified request, collect:
@@ -122,16 +123,21 @@ For a broad or underspecified request, collect:
 - new pages, routes, parent relationships, and requested navigation;
 - visitor-facing content and languages;
 - assets, reusable snippets, Liquid templates, and custom layouts;
-- template preservation level: preserve layout and update content/branding, retain structure but
-  add pages/sections, or substantially redesign;
+- required capabilities/content and any explicit user preservation preferences; for existing-site
+  work, resolve preservation versus redesign only when the requested scope is unclear;
 - aesthetic and mood for new-site design or requested visual customization.
 
-For `creationIntent: "new-site"`, design the complete visitor experience rather than just
-preserving the Microsoft baseline's appearance. Reuse the shared quality reference to choose a
-coherent typography system, role-based palette, spacing rhythm, responsive composition, and
+For `creationIntent: "new-site"`, the selected creation template is a data/domain and requirements
+reference, not a constraint on appearance, page composition, layout, branding, or presentation.
+Design the complete modern visitor experience from the user's intent, not the starter arrangement.
+Honor explicit preservation preferences or a choice to keep the template unchanged; otherwise
+do not require separate redesign permission just to depart from it. Reuse the shared quality
+reference to choose a coherent typography system, role-based palette, spacing rhythm, responsive composition, and
 meaningful hero/supporting imagery. Make context-specific design decisions without asking for
-every font or color. Preserve platform behavior, native editable wrappers, navigation and
-authentication; preserving those contracts does not require preserving generic template styling.
+every font or color. Preserve required capabilities/content, valid PAC metadata, record identities
+and relationships, forms/lists and data bindings, navigation, authentication, and locale scope.
+Native Bootstrap/Studio-compatible serialization is protected, not the template's section
+arrangement: plan supported recomposition through the native owners before final styling.
 Existing-site and narrow edits remain preservation-first unless redesign is requested.
 Use the native content-composition adapter below to select relevant `page-blueprints.md` narrative
 patterns once for a new-site design or approved redesign, without adopting its SPA execution rules.
@@ -146,7 +152,8 @@ Set `newSiteDesign.imageDelivery: "external-url"` for every new-site creation ha
 using approved direct HTTPS URLs in native image components; do not download them, create image
 Web Files, or schedule image-import operations. Suitable existing template images may remain.
 
-Apply the content reasoning and example page-compositions reference. Inspect similar pages first,
+Apply the content reasoning and example page-compositions reference. Inspect similar pages for
+requirements, bindings and supported serialization, not a mandatory design to copy;
 derive a content outline and supported `section -> columns -> elements` structure, draft safe
 explanatory copy, and identify only organization-specific facts that require confirmation.
 Plan the first screen and narrative beats before styling; choose task-first layouts for forms,
@@ -165,8 +172,8 @@ An explicit user choice to omit imagery is the only exception, recorded in `newS
 <!-- not-a-gate: compact clarification gathers missing content and layout inputs; Phase 4 approves the plan -->
 
 When material inputs remain, ask once with the unresolved business facts plus compact choices for
-content source, navigation placement, locales, layout reuse versus proposal, whether styling
-changes are in scope, and only the unresolved asset decisions: approved brand files, permission
+content source, navigation placement, locales, any unresolved preservation or styling scope,
+and only the unresolved asset decisions: approved brand files, permission
 to use Unsplash photography, and preserve/supply/propose/no-change logo direction. Prefer
 site-derived defaults and do not repeat known information.
 
@@ -288,8 +295,10 @@ For each ready operation:
    returns the operation plus effective `resolvedInputs` combining approved static inputs with
    actual bound outputs.
 2. Mark the operation `start`, then pass that resolved operation and, when returned, its approved
-   `designContext` to its owning skill. The shared brief supplies Bootstrap and visual direction,
-   not permission to change unrelated records or bypass the owner's approval.
+   `designContext` to its owning skill. Carry its new-site composition and explicit preservation
+   decisions, not an implicit instruction to retain the creation template's layout or branding.
+   The shared brief supplies Bootstrap and visual direction, not permission to change unrelated
+   records, discard required capabilities/content, or bypass the owner's approval.
    Also pass returned `imageChecks`: reuse these source checks for unchanged URLs instead of
    probing once per child or placement. Keep local caller/URL verification and browser failure
    handling. Previously approved receipts without this optional field remain resumable, but do

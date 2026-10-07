@@ -29,6 +29,13 @@ Classic source-only conclusions remain provisional; status/plan HTML and structu
 are not runtime evidence. Keep pre-approval image checks and exact-plan `--imageChecks` publication
 unchanged, reusing the receipt for unchanged URLs rather than probing at every owner handoff.
 
+Selected classic creation templates supply data-model/domain and requirements context, not
+constraints on appearance, page composition, layout, branding, or modern presentation. Follow
+the template-role rule in `references/site-design-quality.md` through the new-site handoff,
+native composition and final styling. Preserve required capabilities/content, native integrity
+and explicit user preservation preferences, not the starter arrangement by default. Do not
+broaden unrelated existing-site edits into redesigns.
+
 New classic creation recommends Enhanced with Bootstrap 5, with explicit model/admin approval,
 the helper's Bootstrap-filtered template catalog, and downloaded Bootstrap verification using
 the shared inspector. Preserve an explicit Standard/Bootstrap 3 compatibility choice. Never add
@@ -39,7 +46,7 @@ The `creationIntent: "new-site"` handoff requires a schema-1 `newSiteDesign` bri
 content imagery unless explicitly declined. Existing-site plans remain preservation-first and
 backward-compatible. New creation sets `newSiteDesign.imageDelivery: "external-url"` and passes
 approved HTTPS image URLs directly to native content owners, without image downloads, staging,
-Web File imports or fake output bindings. Preserve suitable existing template images. Explicit
+Web File imports or fake output bindings. Reuse template images only when they fit the approved design. Explicit
 file delivery outside that route still reuses `prepare-declarative-asset.js` and `author-web-file`.
 Keep final `style-site` guards and the plan's visual context hash-bound and visible in approval
 HTML. Review external-host availability, license, privacy and CSP; do not silently relax policies.

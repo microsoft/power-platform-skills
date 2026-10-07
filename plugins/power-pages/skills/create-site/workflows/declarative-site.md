@@ -3,6 +3,8 @@
 Follow this workflow only after `create-site` routes the request to a Standard or Enhanced data
 model declarative site. The platform creates the baseline from a documented first-party template;
 the skill downloads that baseline rather than generating Power Pages metadata.
+Use the selected template for data-model/domain context and requirements interpretation only,
+not as a constraint on visual design, page composition, layout, branding, or modern presentation.
 Then coordinate a polished, image-rich design through the existing customization and styling
 owners, unless the user explicitly chooses to keep the bare template.
 Use approved direct HTTPS image URLs for image additions, not downloaded/imported Web Files.
@@ -150,6 +152,12 @@ Present the returned templates with the disclosure:
 > environment-specific template-catalog API, so this may not include every template shown in
 > Power Pages design studio.
 
+Explain that selection determines the provisioned baseline and informs the site's domain/data
+requirements, not its final appearance. Template previews and starter layouts are references,
+not a visual commitment. Carry forward genuinely requested capabilities and content; customization
+may recompose supported native sections and establish a new identity without changing the data
+model or weakening platform contracts. Honor explicit user preservation preferences.
+
 > 🚦 **Gate (plan · create-site:declarative-2-select-template):** Select the exact supported template
 > identifier submitted to Create Website.
 >
@@ -201,6 +209,7 @@ Environment URL: <environmentUrl>
 Environment ID: <environmentId>
 Template: <template display name> (<templateName>)
 Template requirements: <requirements, or "None listed">
+Template role: Data/domain and requirements reference; final visual design is customizable
 Site name: <siteName>
 Language LCID: <lcid>
 Subdomain: <subdomain>
@@ -386,11 +395,16 @@ Use `AskUserQuestion`:
 On **Customize now**, invoke `/customize-declarative-site` through the `Skill` tool and provide:
 
 - exact `PROJECT_ROOT` and declarative site root;
-- site name and selected template;
+- site name and selected template as data-model/domain and requirements context, not a visual
+  constraint; include genuinely requested capabilities/content and explicit preservation preferences;
 - environment URL;
 - `WEBSITE_RECORD_ID`;
 - configured base language;
 - the user's original site intent, when present;
+- the intended modern experience, including freedom to change page composition, layout, branding
+  and presentation through supported native authoring. Record it in the existing `summary` and
+  `newSiteDesign.composition` brief and carry it through `designContext`; do not default to retaining
+  the starter arrangement or ask for separate redesign permission merely because it differs;
 - any already established experience brief, brand source, primary action, and narrative intent;
   let the customizer complete only missing decisions rather than asking for them again;
 - `creationIntent: "new-site"` and `verifiedBootstrapMajor: <BOOTSTRAP_VERSION>` with the inspected

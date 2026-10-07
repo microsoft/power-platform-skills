@@ -123,6 +123,16 @@ expected value to the caller.
 
 ## Whole-page composition
 
+An approved new-site `replace` may freely recompose supported native sections, columns and
+elements; the creation template's arrangement is not a preservation requirement. Its
+data-model/domain context still informs required content and capabilities. Carry explicit user
+preservation preferences and the approved `designContext` through the resolved composition.
+Preserve required forms/lists, data bindings, Liquid behavior, native markers and locale scope,
+not a visual copy of the starter page. If a required component cannot be safely retained or moved
+through a supported contract, return that dependency to its owner; never replace it with a
+static lookalike or silently discard it for a cleaner design. Final CSS belongs to `style-site`.
+This does not broaden an unrelated existing-site `append` or `modify` into a whole-page redesign.
+
 Use this workflow for `create` and `replace`:
 
 1. Read the complete current target file.

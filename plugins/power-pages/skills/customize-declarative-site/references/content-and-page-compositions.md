@@ -25,21 +25,27 @@ cancellation, and support. Present only categories relevant to the inspected sit
 
 ## Clarification defaults
 
-Prefer one compact clarification round. Resolve safe defaults from the site:
+Prefer one compact clarification round. For existing-site work without a redesign request,
+resolve safe defaults from the site:
 
 - route: derive a conventional route from the page name;
 - locale: use the default website language unless additional enabled languages are requested;
-- template: reuse the closest verified sibling page template;
+- page-template binding: reuse a compatible verified sibling page template;
 - layout: reuse an established site-local pattern when it fits;
 - styling: preserve the existing visual language unless visual change is requested;
 - navigation: mirror comparable informational pages, but ask when primary versus footer placement
   materially changes the user's intent.
 
 For an explicit new-site design handoff, use the approved `newSiteDesign` and shared
-`${PLUGIN_ROOT}/references/site-design-quality.md` instead of the preservation-only styling
-default. Design a cohesive complete experience with purposeful imagery, hierarchy, and responsive
-section rhythm. The native Bootstrap/Studio structure and platform behavior remain protected;
-the baseline's generic appearance is not a design requirement.
+`${PLUGIN_ROOT}/references/site-design-quality.md` instead of the layout-reuse and styling
+defaults above. The creation template supplies data-model/domain and requirements context only;
+it does not constrain appearance, page composition, layout, branding, or presentation. Retain
+explicit preservation preferences, required content/capabilities and working data bindings, not
+the starter arrangement by default. Design purposeful imagery, hierarchy and responsive section
+rhythm, freely recomposing supported native sections/columns/elements in the approved scope.
+Native Bootstrap/Studio serialization and platform behavior remain protected. A PAC page-template
+binding is a rendering contract, not the creation template's visual identity: reuse it when
+compatible with the brief, or route an approved layout/binding change to its native owner.
 
 Use [page blueprints](../../../references/page-blueprints.md) to select narrative beats and a
 role-appropriate first screen from that same brief. Translate ideas through the native structures
@@ -49,8 +55,9 @@ component type. Keep the primary task clear without forcing oversized hero text 
 form or list. A signature moment must use an approved, genuinely available capability or static
 explanatory composition, not invented data or new behavior.
 Read only the relevant blueprint/narrative patterns, not the SPA implementation contract. These
-are conceptual patterns, not required component types or serialized layouts. Keep existing native
-color roles and Bootstrap breakpoints rather than imposing SPA token names or grid counts.
+are conceptual patterns, not required component types or serialized layouts. Choose color roles
+for the approved design and use supported Bootstrap breakpoints rather than imposing SPA token
+names or grid counts; the starter palette is not mandatory for new-site design.
 Do not invent testimonials, service levels, metrics, endorsements or live status counts, even
 behind a source comment. Use confirmed capability or truthful process explanation instead.
 Only when the calling scope expressly permits sample content, label it visibly as sample content
@@ -66,7 +73,8 @@ means a column containing supported elements and later styled as one surface; it
 `type: card` component.
 
 These examples are non-exhaustive and are not a catalog of allowed page designs. Prefer a
-composition derived from the user's goal and a suitable existing site-local pattern. Use any
+composition derived from the user's goal and approved brief. Reuse a site-local pattern only
+when it fits that scope and direction. Use any
 valid combination of supported layouts and elements, and combine or adapt the examples below
 when they help.
 
@@ -83,8 +91,10 @@ when they help.
 
 Choose structure in this order:
 
-1. inspect a similar existing page and reuse its verified composition when appropriate;
-2. choose one of the patterns above;
+1. derive the first screen and narrative from the approved intent; inspect similar pages for
+   required content, data bindings and supported native serialization;
+2. reuse or adapt a suitable existing composition or example, or propose a different supported
+   composition; new-site design does not default to the creation template's arrangement;
 3. map every section to a supported layout;
 4. map each column to ordered supported elements: text, image, button, video, or spacer;
 5. add `style-site` only when the requested result requires presentation not already supplied by
