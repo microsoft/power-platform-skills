@@ -39,6 +39,7 @@ test('SECTION_MAP recognizes the six known per-skill files', () => {
     'manage-firewall.json',
     'audit-permissions.json',
     'setup-auth.json',
+    'perf-checker.json',
   ];
   for (const file of expected) {
     assert.ok(SECTION_MAP[file], `${file} missing from SECTION_MAP`);
