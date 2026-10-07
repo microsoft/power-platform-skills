@@ -66,10 +66,16 @@ async function terminate(child) {
         if (error.code === 'ESRCH') {
           return;
         }
-        throw processError(
-          'Could not verify owned process group termination.',
-          'PROCESS_CLEANUP_FAILED'
-        );
+        // Darwin killpg1 can find the group but exclude its zombie members,
+        // returning EPERM until reaping removes it. Retry only this probe,
+        // within the same deadline; only ESRCH confirms disappearance.
+        // https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/kern_sig.c#L1702-L1718
+        if (process.platform !== 'darwin' || error.code !== 'EPERM') {
+          throw processError(
+            'Could not verify owned process group termination.',
+            'PROCESS_CLEANUP_FAILED'
+          );
+        }
       }
       if (performance.now() >= deadline) {
         throw processError('Owned process cleanup timed out.', 'PROCESS_CLEANUP_FAILED');

@@ -111,6 +111,8 @@ deadlines. Exceeding it remains visible as unresolved latency; it is not claimed
 POSIX cleanup sends SIGKILL once to the owned group, then waits up to five seconds for the group
 to disappear. A surviving group or failed liveness check reports `PROCESS_CLEANUP_FAILED`;
 the caller must not treat the launcher's exit alone as completed cleanup.
+Darwin can return `EPERM` while killed group members are being reaped. Only this probe result
+is retried within the same deadline; `ESRCH` confirms that the group has disappeared.
 Live token acquisition and MCP deployment/access checks are separate, explicit operations.
 Environment-resolution tests use synthetic directory records and token-free challenge replies,
 including wrong/ambiguous IDs, unsupported clouds, principal drift, resource isolation,

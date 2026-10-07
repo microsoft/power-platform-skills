@@ -7811,10 +7811,12 @@ async function terminate(child) {
         if (error62.code === "ESRCH") {
           return;
         }
-        throw processError(
-          "Could not verify owned process group termination.",
-          "PROCESS_CLEANUP_FAILED"
-        );
+        if (process.platform !== "darwin" || error62.code !== "EPERM") {
+          throw processError(
+            "Could not verify owned process group termination.",
+            "PROCESS_CLEANUP_FAILED"
+          );
+        }
       }
       if (performance.now() >= deadline) {
         throw processError("Owned process cleanup timed out.", "PROCESS_CLEANUP_FAILED");

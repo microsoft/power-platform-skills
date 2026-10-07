@@ -75,9 +75,9 @@ test('Unix executable-bit failure is actionable', { skip: process.platform === '
   await assert.rejects(new AzureCliProcess({ executable: az }).run(['version']), /Azure CLI executable/);
 });
 
-function posixCleanupFixture(t, kill) {
+function posixCleanupFixture(t, kill, platformName = 'linux') {
   const platform = Object.getOwnPropertyDescriptor(process, 'platform');
-  Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+  Object.defineProperty(process, 'platform', { ...platform, value: platformName });
   t.after(() => Object.defineProperty(process, 'platform', platform));
   const child = Object.assign(new EventEmitter(), {
     pid: 12345, stdout: new PassThrough(), stderr: new PassThrough(),
@@ -135,6 +135,82 @@ for (const failure of ['deadline', 'permission']) {
     child.emit('close', 1);
     await pending;
     assert.equal(reportedBeforeClose, true, 'failed cleanup cannot wait forever for launcher close');
+  });
+}
+
+for (const reason of ['timeout', 'cancellation', 'stdout', 'stderr']) {
+  test(`Darwin cleanup preserves ${reason} only after an EPERM probe reaches ESRCH`, async t => {
+    const signals = [];
+    let release = false, settled = false, notifyProbe;
+    const firstProbe = new Promise(resolve => { notifyProbe = resolve; });
+    const child = posixCleanupFixture(t, signal => {
+      signals.push(signal);
+      if (signal === 'SIGKILL') return true;
+      assert.equal(signal, 0);
+      notifyProbe();
+      throw Object.assign(new Error('synthetic group probe'), { code: release ? 'ESRCH' : 'EPERM' });
+    }, 'darwin');
+    const controller = new AbortController();
+    const pending = runProcess(process.execPath, [], {
+      signal: controller.signal, timeout: reason === 'timeout' ? 10 : 1000, outputLimit: 1
+    }).then(value => { settled = true; return value; }, error => { settled = true; return error; });
+    if (reason === 'cancellation') controller.abort();
+    if (reason === 'stdout' || reason === 'stderr') child[reason].write('overflow');
+    await firstProbe;
+    child.exitCode = 1;
+    child.emit('close', 1);
+    await new Promise(resolve => setImmediate(resolve));
+    const returnedBeforeDisappearance = settled;
+    release = true;
+    const error = await pending;
+    if (reason === 'cancellation') assert.equal(error, controller.signal.reason);
+    else assert.equal(error.errorCode, reason === 'timeout' ? 'CLI_TIMEOUT' : 'CLI_OUTPUT_LIMIT');
+    assert.equal(returnedBeforeDisappearance, false, 'EPERM and launcher close do not prove group disappearance');
+    assert.equal(signals.filter(signal => signal === 'SIGKILL').length, 1);
+    assert.ok(signals.filter(signal => signal === 0).length >= 2);
+  });
+}
+
+test('Darwin cleanup bounds persistent EPERM without waiting for launcher close', async t => {
+  const signals = [];
+  const child = posixCleanupFixture(t, signal => {
+    signals.push(signal);
+    if (signal === 'SIGKILL') return true;
+    assert.equal(signal, 0);
+    throw Object.assign(new Error('synthetic denied probe'), { code: 'EPERM' });
+  }, 'darwin');
+  let now = 0;
+  t.mock.method(performance, 'now', () => { now += 2000; return now; });
+  const pending = assert.rejects(runProcess(process.execPath, [], { outputLimit: 1 }), {
+    errorCode: 'PROCESS_CLEANUP_FAILED', message: 'Owned process cleanup timed out.'
+  });
+  child.stdout.write('overflow');
+  await pending;
+  assert.equal(child.exitCode, null);
+  assert.deepEqual(signals, ['SIGKILL', 0, 0, 0]);
+});
+
+for (const phase of ['signal', 'probe', 'probe-after-EPERM']) {
+  test(`Darwin cleanup retains genuine ${phase} failures`, async t => {
+    const signals = [];
+    const child = posixCleanupFixture(t, signal => {
+      signals.push(signal);
+      if (signal === 'SIGKILL' && phase !== 'signal') return true;
+      const transient = phase === 'probe-after-EPERM' && signals.length === 2;
+      throw Object.assign(new Error('synthetic failure'), {
+        code: phase === 'signal' || transient ? 'EPERM' : 'EIO'
+      });
+    }, 'darwin');
+    const pending = assert.rejects(runProcess(process.execPath, [], { outputLimit: 1 }), {
+      errorCode: 'PROCESS_CLEANUP_FAILED',
+      message: phase === 'signal' ? 'Could not terminate the owned process group.'
+        : 'Could not verify owned process group termination.'
+    });
+    child.stdout.write('overflow');
+    await pending;
+    assert.equal(child.exitCode, null);
+    assert.deepEqual(signals, phase === 'signal' ? ['SIGKILL'] :
+      phase === 'probe' ? ['SIGKILL', 0] : ['SIGKILL', 0, 0]);
   });
 }
 
