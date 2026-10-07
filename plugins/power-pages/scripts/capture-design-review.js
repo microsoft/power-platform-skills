@@ -8,7 +8,7 @@
 //
 // Usage:
 //   node capture-design-review.js --url http://localhost:5173 --routes /,/about [--checks-only] [--axe]
-//   node capture-design-review.js --url https://contoso.powerappsportals.com --discover 6
+//   node capture-design-review.js --url https://contoso.powerappsportals.com --discover 8
 //   node capture-design-review.js --input - [--axe]   (request as JSON on stdin; see REQUEST_FIELDS)
 //   node capture-design-review.js --cleanup <outputDir>   (or {"cleanup": "<outputDir>"} on stdin)
 //

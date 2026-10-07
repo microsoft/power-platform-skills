@@ -105,8 +105,17 @@ function redactUrl(value) {
 //   Call log:
 //     - navigating to "https://contoso.example/p?sig=abc", waiting until "load"
 // A URL ends at whitespace, a quote, or a bracket, so those characters bound the match.
+//
+// Inline `data:` URLs carry their whole payload - an embedded image, file, or JSON blob - and
+// show up in markup (`<img src="data:image/png;base64,...">`) and in console errors. Their
+// form is `data:[<mediatype>][;base64],<data>` (https://www.rfc-editor.org/rfc/rfc2397), so
+// the required comma tells them from prose such as "Missing data: name"; each becomes "data:".
+const DATA_URL = /\bdata:[\w.+-]*(?:\/[\w.+-]*)?(?:;[^,\s'"<>()]*)*,[^\s'"<>()]*/gi;
+
 function redactUrlsInText(text) {
-  return String(text).replace(/\b(?:https?|wss?):\/\/[^\s'"<>()]+/g, redactUrl);
+  return String(text)
+    .replace(DATA_URL, 'data:')
+    .replace(/\b(?:https?|wss?):\/\/[^\s'"<>()]+/g, redactUrl);
 }
 
 // Markup and CSS selectors quote URLs anywhere - in any attribute, in inline CSS, in a

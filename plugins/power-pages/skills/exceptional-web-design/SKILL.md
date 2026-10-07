@@ -107,7 +107,7 @@ node "${PLUGIN_ROOT}/scripts/capture-design-review.js" --input - --axe <<'REQUES
 REQUEST
 ```
 
-With only a URL, the request line is `{"url": "<SITE_URL>", "discover": 6}`.
+With only a URL, the request line is `{"url": "<SITE_URL>", "discover": 8}`.
 The script accepts only `http` and `https` URLs without a user name or password, drops any query string or fragment, and rejects any other field; on a rejection, fix the request rather than moving values onto the command line.
 Discovered routes are paths from the site's origin, so the output's `baseUrl` can differ from `SITE_URL`.
 The audit results are in `accessibility`, one entry per audited page, and `summary.accessibility.violations` lists them one per line, critical first.

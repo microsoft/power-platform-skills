@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { NAVIGATION_TIMEOUT_MS, NETWORK_IDLE_GRACE_MS, gotoSettled, parseRouteList, redactUrlsInMarkup } = require('../lib/review-navigation');
+const { NAVIGATION_TIMEOUT_MS, NETWORK_IDLE_GRACE_MS, gotoSettled, parseRouteList, redactUrlsInMarkup, redactUrlsInText } = require('../lib/review-navigation');
 
 test('parseRouteList anchors every route to the site root and drops empty entries', () => {
   assert.deepEqual(parseRouteList('/, about ,/contact/,,'), ['/', '/about', '/contact/']);
@@ -57,5 +57,17 @@ test('redactUrlsInMarkup removes tokens from URLs in any attribute, inline CSS, 
     ['<p title="Why? Because.">Ask us?</p>', '<p title="Why? Because.">Ask us?</p>'],
   ];
   for (const [input, expected] of cases) assert.equal(redactUrlsInMarkup(input), expected, input);
+});
+
+test('redactUrlsInText collapses inline data: URLs and leaves prose that merely says "data:"', () => {
+  const pixel = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+  assert.equal(redactUrlsInMarkup(`<img src="${pixel}" alt="">`), '<img src="data:" alt="">');
+  assert.equal(redactUrlsInMarkup(`<div style="background:url(${pixel})">`), '<div style="background:url(data:)">');
+  assert.equal(redactUrlsInText(`Refused to load the image '${pixel}' because it violates CSP`), "Refused to load the image 'data:' because it violates CSP");
+  assert.equal(redactUrlsInText('data:,Hello%20World'), 'data:');
+  // Quotes inside a data URL are percent-encoded; a raw quote would end the attribute holding it.
+  assert.equal(redactUrlsInText('data:application/json;charset=utf-8,%7B%22token%22%3A%22x%22%7D'), 'data:');
+  assert.equal(redactUrlsInText('Missing data: name is required'), 'Missing data: name is required');
+  assert.equal(redactUrlsInText('See https://contoso.example/a?sig=x and data:text/plain,secret'), 'See https://contoso.example/a and data:');
 });
 
