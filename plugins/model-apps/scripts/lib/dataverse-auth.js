@@ -49,6 +49,54 @@ function requireDataverseOrigin(value) {
   return origin;
 }
 
+// Every path handed to `dataverseRequest` must stay under this root. `dataverse-request.js` is an
+// escape hatch an agent drives with free text, so a path such as "../../../XRMServices/…" must not
+// reach another endpoint with the user's token. The origin cannot move: the validated origin is
+// followed by `/api/…`, so everything the caller adds is path, query or fragment (an absolute URL
+// passed as the path stays text under the root). The path can move, in two places:
+//   1. The client. `makeRequest` sends the WHATWG-parsed `pathname`, and the parser resolves `.` and
+//      `..` segments, their percent-encoded spellings (`%2e%2e`, `.%2E`) and, for https, `\` as `/`.
+//      See https://url.spec.whatwg.org/#double-dot-path-segment
+//   2. The server. Measured on a live environment: Dataverse decodes `%2F` and `%5C` (either case)
+//      into separators once, then resolves dot segments again:
+//        "..%2Fv9.0%2FWhoAmI"  → served /api/data/v9.0/WhoAmI (200)
+//        "..%5Cv9.0%5CWhoAmI"  → served /api/data/v9.0/WhoAmI (200)
+//        "%252e%252e/…"        → 404 (decoded once only)
+//      `%u002f`, an overlong `%c0%af` and a fullwidth solidus were not read as separators, and a `..`
+//      followed by `%00`, `%09`, `%20` or `;` was not read as `..` (400 or 404, never the parent).
+// So both readings are checked. A leading slash stays allowed: Dataverse answers
+// `/api/data/v9.2//WhoAmI` like `/api/data/v9.2/WhoAmI`. A query is not checked, because no
+// endpoint resolves dot segments inside one.
+const WEB_API_ROOT = '/api/data/v9.2/';
+
+/**
+ * The request URL for a path under the Dataverse Web API root; throws when the path, as the client
+ * sends it or as the server then decodes it, would leave that root.
+ * @param {string} origin - a value returned by requireDataverseOrigin
+ * @param {string} apiPath - e.g. "EntityDefinitions(LogicalName='account')"
+ * @returns {string} e.g. "https://contoso.crm.dynamics.com/api/data/v9.2/EntityDefinitions(LogicalName='account')"
+ */
+function webApiUrl(origin, apiPath) {
+  if (typeof apiPath !== 'string') {
+    throw new Error(`A Dataverse Web API path must be text (got ${apiPath === null ? 'null' : typeof apiPath}).`);
+  }
+  const url = `${origin}${WEB_API_ROOT}${apiPath}`;
+  const sent = new URL(url);
+  const served = new URL(origin + sent.pathname.replace(/%2f|%5c/gi, '/')).pathname;
+  const escaped = !sent.pathname.startsWith(WEB_API_ROOT) ? sent.pathname
+    : !served.startsWith(WEB_API_ROOT) ? served
+      : null;
+  if (escaped !== null) {
+    throw new Error(
+      `The path '${apiPath}' leaves the Dataverse Web API root ${WEB_API_ROOT} (it resolves to '${escaped}'). `
+        + `Pass a path relative to that root, for example "EntityDefinitions(LogicalName='account')". `
+        + "A '..' segment cannot step out of it, whether written plainly, percent-encoded (%2e%2e) or "
+        + 'joined by an encoded slash (%2F, %5C).'
+    );
+  }
+  return url;
+}
+
 /**
  * Gets an Azure CLI access token for the given Dataverse environment URL.
  * Returns null if `az` is missing, the user isn't logged in, the resource is unreachable, or the
@@ -382,9 +430,10 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
  * @returns {Promise<{status: number, data: any, headers?: object}>}
  */
 async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {}) {
-  // The validated origin, never the caller's text, is what the token is requested for and sent to.
+  // The validated origin, never the caller's text, is what the token is requested for and sent to,
+  // and the path is checked against the Web API root before a token is even read.
   const cleanUrl = requireDataverseOrigin(envUrl);
-  const url = `${cleanUrl}/api/data/v9.2/${apiPath}`;
+  const url = webApiUrl(cleanUrl, apiPath);
   const bodyStr = body == null ? null : typeof body === 'string' ? body : JSON.stringify(body);
   const { includeHeaders = false, extraHeaders = {}, timeout = 60000, token: presetToken = null } = opts;
   // Test seams, matching `preflightAuth`'s injection style. Without them the token-reuse behaviour
@@ -781,6 +830,7 @@ function emitResult(ok, payload) {
 module.exports = {
   dataverseOrigin,
   requireDataverseOrigin,
+  webApiUrl,
   preflightAuth,
   azIdentity,
   getAuthToken,

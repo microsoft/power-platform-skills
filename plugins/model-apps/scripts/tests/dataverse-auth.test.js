@@ -795,6 +795,71 @@ test('dataverseRequest builds the request on the validated origin and requests t
   assert.equal(url, 'https://contoso.crm.dynamics.com/api/data/v9.2/WhoAmI');
 });
 
+test('a path that leaves the Web API root is refused before a token is read or a request sent', async () => {
+  const { dataverseRequest } = require('../lib/dataverse-auth.js');
+  // [path, where it resolves]. Each spelling reached an endpoint outside /api/data/v9.2/ on a live
+  // environment with the released code. The client resolves the first seven itself; the server decodes
+  // %2F / %5C and resolves the next three. The last one leaves the root as the client sends it, although
+  // the server's further decoding would bring it back: the client reading is checked on its own too.
+  const escapes = [
+    ['../v9.0/WhoAmI', '/api/data/v9.0/WhoAmI'],
+    ['../../../XRMServices/2011/Organization.svc/web', '/XRMServices/2011/Organization.svc/web'],
+    ['%2e%2e/%2E%2e/%2e%2E/XRMServices/2011/Organization.svc/web', '/XRMServices/2011/Organization.svc/web'],
+    ['.%2e/v9.0/WhoAmI', '/api/data/v9.0/WhoAmI'],
+    ['..\\..\\..\\XRMServices\\2011\\Organization.svc\\web', '/XRMServices/2011/Organization.svc/web'],
+    ['a%2Fb/../../x', '/api/data/x'],
+    ['..', '/api/data/'],
+    ['..%2Fv9.0%2FWhoAmI', '/api/data/v9.0/WhoAmI'],
+    ['..%5cv9.0%5cWhoAmI', '/api/data/v9.0/WhoAmI'],
+    ['.%2e%2Fv9.0%2FWhoAmI', '/api/data/v9.0/WhoAmI'],
+    ['../x%2F..%2Fv9.2%2FWhoAmI', '/api/data/x%2F..%2Fv9.2%2FWhoAmI'],
+  ];
+  for (const [apiPath, resolved] of escapes) {
+    let tokens = 0;
+    let sent = 0;
+    await assert.rejects(
+      dataverseRequest('https://contoso.crm.dynamics.com', 'GET', apiPath, null, {
+        getToken: () => { tokens += 1; return 'TOK'; },
+        request: async () => { sent += 1; return { statusCode: 200, body: '{}' }; },
+      }),
+      (e) => /leaves the Dataverse Web API root \/api\/data\/v9\.2\//.test(e.message) && e.message.includes(`resolves to '${resolved}'`),
+      apiPath
+    );
+    assert.equal(tokens, 0, apiPath);
+    assert.equal(sent, 0, apiPath);
+  }
+  await assert.rejects(
+    dataverseRequest('https://contoso.crm.dynamics.com', 'GET', undefined, null, { getToken: () => 'TOK', request: async () => ({ statusCode: 200, body: '{}' }) }),
+    /must be text \(got undefined\)/
+  );
+});
+
+test('a path inside the Web API root is sent exactly as before', async () => {
+  const { dataverseRequest } = require('../lib/dataverse-auth.js');
+  const accepted = [
+    'WhoAmI',
+    "EntityDefinitions(LogicalName='account')/Attributes?$select=LogicalName",
+    '$batch',
+    // Dataverse answers /api/data/v9.2//WhoAmI and WhoAmI%2F like WhoAmI (measured).
+    '/WhoAmI',
+    'WhoAmI%2F',
+    // Decoded by the server, this resolves back inside the root.
+    'x/..%2F..%2Fv9.2%2FWhoAmI',
+    // Dot segments inside a query are data, not a path.
+    "accounts?$filter=name eq '../../x'",
+    // An absolute URL is only text under the root: it cannot change where the request goes.
+    'https://example.com/x',
+  ];
+  for (const apiPath of accepted) {
+    let url;
+    await dataverseRequest('https://contoso.crm.dynamics.com', 'GET', apiPath, null, {
+      getToken: () => 'TOK',
+      request: async (o) => { url = o.url; return { statusCode: 200, body: '{}' }; },
+    });
+    assert.equal(url, `https://contoso.crm.dynamics.com/api/data/v9.2/${apiPath}`, apiPath);
+  }
+});
+
 test('createAzHttpClient requests its token for the validated origin, never the text it was given', async () => {
   const { createAzHttpClient } = require('../lib/sdk-http-client.js');
   assert.throws(() => createAzHttpClient('https://contoso.crm.dynamics.com/&whoami', { getToken: () => 'TOK' }), /Invalid Dataverse org URL/);
