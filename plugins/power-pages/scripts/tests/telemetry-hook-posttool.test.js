@@ -18,8 +18,9 @@ function mkConfigDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-ho-"));
 }
 
-function runHook({ input, configDir, ikeyPath, fakeProbe }) {
-  return spawnSync(process.execPath, [HOOK], {
+function runHook({ input, configDir, ikeyPath, fakeProbe, preload }) {
+  const args = preload ? ["--require", preload, HOOK] : [HOOK];
+  return spawnSync(process.execPath, args, {
     input,
     encoding: "utf8",
     env: {
@@ -80,6 +81,61 @@ test("posttool hook exits 0 with no tracked skill (preserves existing behavior)"
     configDir: mkConfigDir(),
   });
   assert.equal(status, 0);
+});
+
+test("validation continues when the optional telemetry module cannot load", () => {
+  const configDir = mkConfigDir();
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-localized-"));
+  const preload = path.join(configDir, "block-telemetry-load.js");
+  fs.writeFileSync(
+    preload,
+    [
+      '"use strict";',
+      'const Module = require("node:module");',
+      "const originalLoad = Module._load;",
+      "Module._load = function (request, parent, isMain) {",
+      '  if (String(request).includes("power-pages-telemetry")) {',
+      '    throw new Error("simulated telemetry load failure");',
+      "  }",
+      "  return originalLoad.call(this, request, parent, isMain);",
+      "};",
+      "",
+    ].join("\n"),
+    "utf8"
+  );
+  fs.writeFileSync(
+    path.join(projectRoot, ".powerpages-localization.json"),
+    JSON.stringify({
+      locales: ["en-US", "fr-FR"],
+      translationMethod: "agent",
+    })
+  );
+  fs.writeFileSync(
+    path.join(projectRoot, "package.json"),
+    JSON.stringify({
+      dependencies: {
+        react: "^19.0.0",
+        "react-dom": "^19.0.0",
+      },
+    })
+  );
+  fs.writeFileSync(
+    path.join(projectRoot, "powerpages.config.json"),
+    JSON.stringify({ siteName: "Telemetry Test" })
+  );
+
+  const result = runHook({
+    input: JSON.stringify({
+      cwd: projectRoot,
+      session_id: "telemetry-load-failure-session",
+      tool_input: { skill: "add-localization" },
+    }),
+    configDir,
+    preload,
+  });
+
+  assert.equal(result.status, 2);
+  assert.doesNotMatch(result.stderr, /simulated telemetry load failure/);
 });
 
 test("emits localization-only completion with duration and stable failure class", (t) => {

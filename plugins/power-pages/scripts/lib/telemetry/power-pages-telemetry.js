@@ -56,6 +56,7 @@ const PACKAGE_FAILURE_CODES = new Set([
   "mode-unsupported",
   "mode-inconclusive",
   "npm-resolution-failed",
+  "package-validation-error",
 ]);
 
 function enumValue(value, allowed, fallback = undefined) {
@@ -250,7 +251,7 @@ function osFriendlyName(platform) {
 
 function commonFields(skillName, projectRoot, eventInfo, activeOverride) {
   const active =
-    activeOverride || invocationState.findActive(skillName, projectRoot);
+    activeOverride || invocationState.findOrBindActive(skillName, projectRoot);
   let auth = null;
   let detectedAgent = {};
   try {
@@ -334,20 +335,11 @@ function buildLocalizationPackageValidationEvent(envelopeName, input) {
 }
 
 function emitSkillConfigured(skillName, projectRoot, eventInfo) {
-  // create-site starts before its target directory exists, so its configured
-  // event is the only caller allowed to use the latest unmatched start.
-  const active = skillName === "create-site"
-    ? invocationState.findActive(skillName, projectRoot, {
-      allowLatestFallback: true,
-    })
-    : undefined;
   const emitted = emit(
     "configured",
     skillName,
     projectRoot,
-    eventInfo,
-    {},
-    { active }
+    eventInfo
   );
   if (emitted && skillName === "add-localization") {
     invocationState.markConfigured(skillName, projectRoot);

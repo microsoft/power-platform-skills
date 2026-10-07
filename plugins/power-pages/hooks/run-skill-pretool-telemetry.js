@@ -126,15 +126,14 @@ function readStdin() {
   const resolvedSessionId = sessionLib.getSessionId(
     sessionLib.resolveHostSessionId(parsed)
   );
-  // Configuration/package/completion events are emitted by later Node
-  // processes. Persist only the host session id, start time, and a one-way cwd
-  // hash so those events can correlate with this start without storing a path.
+  // The skill resolves its actual project root after this hook runs. Record a
+  // path-free pending start now; the first project-aware telemetry call binds
+  // it only when that pending invocation is unambiguous.
   if (skillName === "create-site" || skillName === "add-localization") {
     try {
-      invocationState.recordStart(
+      invocationState.recordPendingStart(
         skillName,
-        resolvedSessionId,
-        typeof parsed.cwd === "string" ? parsed.cwd : process.cwd()
+        resolvedSessionId
       );
     } catch {
       // Correlation state is best-effort and must never block the skill start.

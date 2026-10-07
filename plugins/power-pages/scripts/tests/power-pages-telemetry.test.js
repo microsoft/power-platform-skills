@@ -79,6 +79,7 @@ test("package validation telemetry accepts only standardized failure codes", () 
     failureCodes: [
       "framework-peer-incompatible",
       "license-review-required",
+      "package-validation-error",
       "raw npm error text",
       "framework-peer-incompatible",
     ],
@@ -95,7 +96,11 @@ test("package validation telemetry accepts only standardized failure codes", () 
     packageSelection: "alternative",
     mode: "runtime",
     validationStatus: "unsupported",
-    failureCodes: ["framework-peer-incompatible", "license-review-required"],
+    failureCodes: [
+      "framework-peer-incompatible",
+      "license-review-required",
+      "package-validation-error",
+    ],
     prerelease: false,
     unverifiedOverrideRequested: false,
   });

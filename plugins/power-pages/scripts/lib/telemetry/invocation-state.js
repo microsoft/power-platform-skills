@@ -37,22 +37,28 @@ function stateDir(skillName) {
   );
 }
 
-function stateFile(skillName, sessionId, projectHashValue) {
+function stateFile(skillName, state) {
+  const invocationKey =
+    state.invocationId ||
+    `${String(state.startedAt || "nostart")}:${state.projectHash || "pending"}`;
   const invocationHash = crypto
     .createHash("sha256")
-    .update(`${String(sessionId || "nosession")}\0${projectHashValue}`)
+    .update(
+      `${String(state.sessionId || "nosession")}\0` +
+      `${state.projectHash || "pending"}\0${invocationKey}`
+    )
     .digest("hex");
   return path.join(stateDir(skillName), `${invocationHash}.json`);
 }
 
 function writeState(skillName, state) {
   const { file: previousFile, ...persistedState } = state;
-  if (!persistedState.projectHash) return null;
-  const file = stateFile(
-    skillName,
-    persistedState.sessionId,
-    persistedState.projectHash
+  const hasProjectHash = /^[a-f0-9]{64}$/.test(
+    persistedState.projectHash || ""
   );
+  const isPending = persistedState.pending === true && !persistedState.projectHash;
+  if (!hasProjectHash && !isPending) return null;
+  const file = stateFile(skillName, persistedState);
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const tmp = `${file}.tmp.${process.pid}`;
@@ -77,9 +83,21 @@ function recordStart(skillName, sessionId, projectRoot, now = Date.now()) {
   if (!hash) return null;
   prune(skillName, now);
   return writeState(skillName, {
+    invocationId: crypto.randomUUID(),
     sessionId,
     startedAt: now,
     projectHash: hash,
+  });
+}
+
+function recordPendingStart(skillName, sessionId, now = Date.now()) {
+  if (!skillName || !sessionId) return null;
+  prune(skillName, now);
+  return writeState(skillName, {
+    invocationId: crypto.randomUUID(),
+    sessionId,
+    startedAt: now,
+    pending: true,
   });
 }
 
@@ -99,7 +117,10 @@ function readStates(skillName, now = Date.now()) {
       if (
         typeof state.sessionId !== "string" ||
         typeof state.startedAt !== "number" ||
-        !/^[a-f0-9]{64}$/.test(state.projectHash) ||
+        (
+          !/^[a-f0-9]{64}$/.test(state.projectHash || "") &&
+          !(state.pending === true && !state.projectHash)
+        ) ||
         now - state.startedAt > MAX_AGE_MS
       ) {
         continue;
@@ -123,7 +144,9 @@ function findActive(
   } = {}
 ) {
   const states = readStates(skillName).filter(
-    (state) => !requireConfigured || typeof state.configuredAt === "number"
+    (state) =>
+      state.pending !== true &&
+      (!requireConfigured || typeof state.configuredAt === "number")
   );
   const hash = projectHash(projectRoot);
   if (sessionId && hash) {
@@ -145,8 +168,32 @@ function findActive(
     (allowLatestFallback ? states[0] : null);
 }
 
+function bindPending(skillName, projectRoot) {
+  const hash = projectHash(projectRoot);
+  if (!hash) return null;
+  const existing = findActive(skillName, projectRoot);
+  const pending = readStates(skillName).filter(
+    (state) => state.pending === true && !state.projectHash
+  );
+  if (pending.length === 0) return existing;
+  // A bound record plus a pending record could represent overlapping runs on
+  // the same project. Refuse to guess which invocation produced this event.
+  if (pending.length !== 1 || existing) return null;
+  return writeState(skillName, {
+    ...pending[0],
+    pending: false,
+    projectHash: hash,
+  })
+    ? findActive(skillName, projectRoot)
+    : null;
+}
+
+function findOrBindActive(skillName, projectRoot) {
+  return bindPending(skillName, projectRoot);
+}
+
 function markConfigured(skillName, projectRoot, now = Date.now()) {
-  const active = findActive(skillName, projectRoot);
+  const active = findOrBindActive(skillName, projectRoot);
   if (!active) return null;
   return writeState(skillName, { ...active, configuredAt: now });
 }
@@ -187,9 +234,12 @@ function prune(skillName, now = Date.now()) {
 
 module.exports = {
   MAX_AGE_MS,
+  bindPending,
   findActive,
+  findOrBindActive,
   markConfigured,
   projectHash,
+  recordPendingStart,
   recordStart,
   removeState,
 };

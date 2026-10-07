@@ -264,11 +264,11 @@ legal approval. For review and acceptance, require explicit maker confirmation,
 then rerun with:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/validate-i18n-package.js" --projectRoot "<PROJECT_ROOT>" --framework "<FRAMEWORK>" --package "<PACKAGE>" --version "<VERSION_OR_RANGE>" --mode "<runtime|static>" --confirmLicenseReview
+node "${PLUGIN_ROOT}/scripts/validate-i18n-package.js" --projectRoot "<PROJECT_ROOT>" --framework "<FRAMEWORK>" --package "<PACKAGE>" --version "<VERSION_OR_RANGE>" --mode "<runtime|static>" --confirmLicenseReview --telemetryLocales "<CANONICAL_RESULTING_LOCALES>" --telemetryOperation "<create|add-languages|repair|reconfigure>" --telemetryPackageSelection "<recommended|alternative|preserved>"
 ```
 
-Preserve the same telemetry arguments from the original command. This
-confirmation overrides only the license criterion. Missing evidence,
+Preserve any other previously approved validation flags from the original
+command. This confirmation overrides only the license criterion. Missing evidence,
 deprecation, maintenance, compatibility, mode, and package-health failures
 continue to block.
 
@@ -279,7 +279,13 @@ mode-evidence result with `AskUserQuestion`:
 |---|---|---|
 | The package's runtime/static support could not be verified. How should this proceed? | Package evidence | Use the framework recommendation (Recommended), Provide an official documentation URL, Proceed as explicitly unverified, Cancel |
 
-For an official URL, rerun with `--modeEvidenceUrl "<HTTPS_URL>"`. The script
+For an official URL, rerun with:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-i18n-package.js" --projectRoot "<PROJECT_ROOT>" --framework "<FRAMEWORK>" --package "<PACKAGE>" --version "<VERSION_OR_RANGE>" --mode "<runtime|static>" --modeEvidenceUrl "<HTTPS_URL>" --telemetryLocales "<CANONICAL_RESULTING_LOCALES>" --telemetryOperation "<create|add-languages|repair|reconfigure>" --telemetryPackageSelection "<recommended|alternative|preserved>"
+```
+
+Preserve any other previously approved validation flags. The script
 accepts only the package homepage or repository hostname published in npm
 metadata, rejects local/internal hosts, fetches at most 1 MiB, strips active
 HTML content, and returns bounded plain text in
@@ -318,7 +324,7 @@ section, or when a condition cannot be checked.
 Write the classification to a temporary project-relative JSON file and rerun:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/validate-i18n-package.js" --projectRoot "<PROJECT_ROOT>" --framework "<FRAMEWORK>" --package "<PACKAGE>" --version "<VERSION_OR_RANGE>" --mode "<runtime|static>" --modeEvidenceUrl "<HTTPS_URL>" --modeEvidenceClassificationFile "<PROJECT_RELATIVE_JSON_PATH>"
+node "${PLUGIN_ROOT}/scripts/validate-i18n-package.js" --projectRoot "<PROJECT_ROOT>" --framework "<FRAMEWORK>" --package "<PACKAGE>" --version "<VERSION_OR_RANGE>" --mode "<runtime|static>" --modeEvidenceUrl "<HTTPS_URL>" --modeEvidenceClassificationFile "<PROJECT_RELATIVE_JSON_PATH>" --telemetryLocales "<CANONICAL_RESULTING_LOCALES>" --telemetryOperation "<create|add-languages|repair|reconfigure>" --telemetryPackageSelection "<recommended|alternative|preserved>"
 ```
 
 The script verifies the classification shape, requested mode, URL, and that
@@ -333,11 +339,23 @@ classification file after the rerun.
 - `inconclusive`: return to the package-evidence question above.
 
 For an unverified override, explain that completion requires successful build
-and browser verification, obtain explicit confirmation, and rerun with
-`--allowUnverifiedMode`. Never use that flag for an unsupported result.
+and browser verification, obtain explicit confirmation, and rerun with:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-i18n-package.js" --projectRoot "<PROJECT_ROOT>" --framework "<FRAMEWORK>" --package "<PACKAGE>" --version "<VERSION_OR_RANGE>" --mode "<runtime|static>" --allowUnverifiedMode --telemetryLocales "<CANONICAL_RESULTING_LOCALES>" --telemetryOperation "<create|add-languages|repair|reconfigure>" --telemetryPackageSelection "<recommended|alternative|preserved>"
+```
+
+Never use that flag for an unsupported result. Preserve any other previously
+approved validation flags.
 
 A prerelease requires a separate explicit `AskUserQuestion` confirmation and
-rerun with `--allowPrerelease`.
+rerun with:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-i18n-package.js" --projectRoot "<PROJECT_ROOT>" --framework "<FRAMEWORK>" --package "<PACKAGE>" --version "<VERSION_OR_RANGE>" --mode "<runtime|static>" --allowPrerelease --telemetryLocales "<CANONICAL_RESULTING_LOCALES>" --telemetryOperation "<create|add-languages|repair|reconfigure>" --telemetryPackageSelection "<recommended|alternative|preserved>"
+```
+
+Preserve any other previously approved validation flags.
 
 For any alternative package whose initialization is not recognized by
 deterministic discovery, identify the repository-relative initialization file

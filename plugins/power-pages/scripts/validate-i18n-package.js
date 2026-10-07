@@ -22,7 +22,14 @@ const {
 const {
   sanitizeUntrustedText,
 } = require('./lib/safe-untrusted-text');
-const telemetry = require('./lib/telemetry/power-pages-telemetry');
+
+let telemetry = null;
+try {
+  telemetry = require('./lib/telemetry/power-pages-telemetry');
+} catch {
+  // Telemetry is optional. Package validation must remain available when the
+  // bundled telemetry module is missing, invalid, or has a load-time failure.
+}
 
 const MAX_EVIDENCE_TEXT_CHARS = 200000;
 const MAX_NPM_METADATA_BYTES = 10 * 1024 * 1024;
@@ -1010,35 +1017,37 @@ async function runCli() {
     ),
     rangeSatisfies: versionSatisfiesRangeWithNpm,
   });
-  try {
-    telemetry.emitPackageValidation(
-      projectRoot,
-      telemetry.buildPackageValidationEventInfo({
-        framework,
-        operation: args.telemetryOperation,
-        intendedLocales: args.telemetryLocales,
-        packageName: args.package,
-        resolvedVersion: result.version,
-        packageSelection: args.telemetryPackageSelection,
-        mode: args.mode,
-        validationStatus: result.status,
-        failureCodes: result.failureCodes,
-        prerelease: result.prerelease,
-        unverifiedOverrideRequested: Boolean(args.allowUnverifiedMode),
-      })
-    );
-  } catch {
-    // Package validation results must not depend on telemetry availability.
+  if (telemetry) {
+    try {
+      telemetry.emitPackageValidation(
+        projectRoot,
+        telemetry.buildPackageValidationEventInfo({
+          framework,
+          operation: args.telemetryOperation,
+          intendedLocales: args.telemetryLocales,
+          packageName: args.package,
+          resolvedVersion: result.version,
+          packageSelection: args.telemetryPackageSelection,
+          mode: args.mode,
+          validationStatus: result.status,
+          failureCodes: result.failureCodes,
+          prerelease: result.prerelease,
+          unverifiedOverrideRequested: Boolean(args.allowUnverifiedMode),
+        })
+      );
+    } catch {
+      // Package validation results must not depend on telemetry availability.
+    }
   }
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   process.exitCode = result.viable ? 0 : 1;
 }
 
 if (require.main === module) {
-  runCli().catch(() => {
+  runCli().catch((error) => {
     try {
       const args = parseTelemetryErrorContext(process.argv.slice(2));
-      if (args) {
+      if (args && telemetry) {
         telemetry.emitPackageValidation(
           args.projectRoot,
           telemetry.buildPackageValidationEventInfo({
@@ -1049,9 +1058,9 @@ if (require.main === module) {
             packageSelection: args.telemetryPackageSelection,
             mode: args.mode,
             validationStatus: 'error',
-            failureCodes: error.telemetryFailureCode
-              ? [error.telemetryFailureCode]
-              : [],
+            failureCodes: [
+              error.telemetryFailureCode || 'package-validation-error',
+            ],
             unverifiedOverrideRequested: Boolean(args.allowUnverifiedMode),
           })
         );

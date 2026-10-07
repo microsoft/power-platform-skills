@@ -65,6 +65,80 @@ test("persists correlation state without storing the project path", (t) => {
   );
 });
 
+test("binds one pending invocation to the resolved project root", (t) => {
+  const original = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-state-"));
+  const projectRoot = path.join(configDir, "resolved-project");
+  process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = configDir;
+  t.after(() => {
+    if (original === undefined) {
+      delete process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+    } else {
+      process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = original;
+    }
+  });
+
+  const pendingFile = state.recordPendingStart(
+    "add-localization",
+    "pending-session"
+  );
+  assert.ok(pendingFile);
+  const raw = fs.readFileSync(pendingFile, "utf8");
+  assert.doesNotMatch(raw, /resolved-project/);
+  assert.equal(JSON.parse(raw).projectHash, undefined);
+
+  const bound = state.bindPending("add-localization", projectRoot);
+  assert.equal(bound.sessionId, "pending-session");
+  assert.equal(bound.projectHash, state.projectHash(projectRoot));
+  assert.equal(fs.existsSync(pendingFile), false);
+});
+
+test("does not guess when multiple project-less invocations are pending", (t) => {
+  const original = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-state-"));
+  process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = configDir;
+  t.after(() => {
+    if (original === undefined) {
+      delete process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+    } else {
+      process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = original;
+    }
+  });
+
+  state.recordPendingStart("add-localization", "first-session");
+  state.recordPendingStart("add-localization", "second-session");
+
+  assert.equal(
+    state.bindPending(
+      "add-localization",
+      path.join(configDir, "ambiguous-project")
+    ),
+    null
+  );
+});
+
+test("does not bind over an existing project invocation", (t) => {
+  const original = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-state-"));
+  const projectRoot = path.join(configDir, "shared-project");
+  process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = configDir;
+  t.after(() => {
+    if (original === undefined) {
+      delete process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+    } else {
+      process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = original;
+    }
+  });
+
+  state.recordStart("add-localization", "bound-session", projectRoot);
+  state.recordPendingStart("add-localization", "pending-session");
+
+  assert.equal(
+    state.findOrBindActive("add-localization", projectRoot),
+    null
+  );
+});
+
 test("keeps projects separate when a host session is reused", (t) => {
   const original = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-state-"));

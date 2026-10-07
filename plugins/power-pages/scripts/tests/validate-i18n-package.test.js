@@ -2,7 +2,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const {
   assessModeSupport,
@@ -24,6 +27,48 @@ const {
   versionSatisfiesRangeWithNpm,
 } = require('../validate-i18n-package');
 const { createTempProject, writeProjectFile } = require('./test-utils');
+const VALIDATOR = path.resolve(__dirname, '../validate-i18n-package.js');
+const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
+
+function sleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function waitForFile(filePath, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (!fs.existsSync(filePath) && Date.now() < deadline) sleep(25);
+  return fs.existsSync(filePath);
+}
+
+function writeProvisionedTelemetryConfig(configDir) {
+  const ikeyPath = path.join(configDir, 'ikey.json');
+  fs.writeFileSync(
+    ikeyPath,
+    JSON.stringify({
+      event_stream_name: 'PagesAIPluginEvent',
+      disabled: false,
+      default_region: 'us',
+      regions: {
+        us: {
+          instrumentation_key: 'test-ikey-32-chars-minimum-aaaaaaaaaaaaaa',
+          collector_url: 'https://example.invalid/OneCollector/1.0/',
+        },
+      },
+    })
+  );
+  const shippedResolver = path.join(
+    PLUGIN_ROOT,
+    'scripts',
+    'lib',
+    'telemetry',
+    'resolver.js'
+  );
+  fs.writeFileSync(
+    path.join(configDir, 'resolver.js'),
+    `module.exports = require(${JSON.stringify(shippedResolver)});\n`
+  );
+  return ikeyPath;
+}
 
 function metadata(overrides = {}) {
   return {
@@ -50,6 +95,118 @@ function evaluationOptions(overrides = {}) {
     ...overrides,
   };
 }
+
+test('package evaluation remains available when optional telemetry cannot load', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ppskills-i18n-telemetry-'));
+  const preload = path.join(tempDir, 'block-telemetry-load.js');
+  fs.writeFileSync(
+    preload,
+    [
+      "'use strict';",
+      "const Module = require('node:module');",
+      'const originalLoad = Module._load;',
+      'Module._load = function (request, parent, isMain) {',
+      "  if (String(request).includes('power-pages-telemetry')) {",
+      "    throw new Error('simulated telemetry load failure');",
+      '  }',
+      '  return originalLoad.call(this, request, parent, isMain);',
+      '};',
+      '',
+    ].join('\n'),
+    'utf8'
+  );
+  const script = `
+    const validator = require(${JSON.stringify(VALIDATOR)});
+    const baseMetadata = {
+      version: '16.2.0',
+      license: 'MIT',
+      description: 'Internationalization for React with runtime language switching',
+      homepage: 'https://example.test/docs',
+      peerDependencies: { react: '>=16.8.0 <20' },
+      time: { '16.2.0': '2026-07-01T00:00:00.000Z' }
+    };
+    const options = {
+      packageName: 'react-i18next',
+      framework: 'react',
+      frameworkVersion: '^19.0.0',
+      frameworkVersions: { react: '^19.0.0', 'react-dom': '^19.0.0' },
+      mode: 'runtime',
+      now: new Date('2026-07-30T00:00:00.000Z'),
+      rangeSatisfies: () => true
+    };
+    const supported = validator.evaluatePackage(baseMetadata, options);
+    const rejected = validator.evaluatePackage(
+      {
+        ...baseMetadata,
+        version: '17.0.0-rc.1',
+        time: { '17.0.0-rc.1': '2026-07-01T00:00:00.000Z' }
+      },
+      options
+    );
+    process.stdout.write(JSON.stringify({
+      supported: supported.viable,
+      rejected: rejected.viable,
+      rejectedCodes: rejected.failureCodes
+    }));
+  `;
+
+  const result = spawnSync(
+    process.execPath,
+    ['--require', preload, '-e', script],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    supported: true,
+    rejected: false,
+    rejectedCodes: ['prerelease-not-approved'],
+  });
+});
+
+test('CLI error telemetry uses a stable generic failure code', () => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ppskills-i18n-error-'));
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ppskills-i18n-project-'));
+  const probePath = path.join(configDir, 'probe.json');
+  const ikeyPath = writeProvisionedTelemetryConfig(configDir);
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      VALIDATOR,
+      '--projectRoot', projectRoot,
+      '--package', 'react-i18next',
+      '--mode', 'runtime',
+      '--framework', 'react',
+      '--telemetryLocales', 'fr-FR',
+      '--telemetryOperation', 'add-languages',
+      '--telemetryPackageSelection', 'recommended',
+    ],
+    {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: '',
+        POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
+        POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath,
+        POWER_PLATFORM_SKILLS_FAKE_HTTPS: probePath,
+        POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: '',
+      },
+      timeout: 30_000,
+    }
+  );
+
+  assert.equal(result.status, 1);
+  assert.ok(waitForFile(probePath, 5_000), 'error dispatcher should write probe');
+  const envelope = JSON.parse(JSON.parse(fs.readFileSync(probePath, 'utf8')).body);
+  const eventInfo = JSON.parse(envelope.data.eventInfo);
+  assert.equal(envelope.data.eventName, 'localization_package_validation');
+  assert.equal(eventInfo.validationStatus, 'error');
+  assert.deepEqual(eventInfo.failureCodes, ['package-validation-error']);
+  assert.deepEqual(eventInfo.intendedLocales, ['fr-FR']);
+  assert.equal(eventInfo.operation, 'add-languages');
+  assert.equal(eventInfo.packageSelection, 'recommended');
+});
 
 test('requires complete, usable context before emitting error telemetry', () => {
   assert.equal(parseTelemetryErrorContext([]), null);

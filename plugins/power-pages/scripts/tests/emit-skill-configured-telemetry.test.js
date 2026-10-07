@@ -13,6 +13,11 @@ const SCRIPT = path.join(
   "scripts",
   "emit-skill-configured-telemetry.js"
 );
+const PRETOOL_HOOK = path.join(
+  PLUGIN_ROOT,
+  "hooks",
+  "run-skill-pretool-telemetry.js"
+);
 const invocationState = require("../lib/telemetry/invocation-state");
 
 function sleep(ms) {
@@ -27,8 +32,10 @@ function waitForFile(filePath, timeoutMs) {
 
 test("emits approved localization configuration with the start-hook session", (t) => {
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-config-event-"));
+  const hostRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-config-host-"));
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-config-project-"));
   const probePath = path.join(configDir, "probe.json");
+  const startProbePath = path.join(configDir, "start-probe.json");
   const ikeyPath = path.join(configDir, "ikey.json");
   fs.writeFileSync(
     ikeyPath,
@@ -60,11 +67,27 @@ test("emits approved localization configuration with the start-hook session", (t
       process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = originalConfigDir;
     }
   });
-  invocationState.recordStart(
-    "add-localization",
-    "configured-session",
-    projectRoot
+  const startResult = spawnSync(
+    process.execPath,
+    [PRETOOL_HOOK],
+    {
+      input: JSON.stringify({
+        cwd: hostRoot,
+        session_id: "configured-session",
+        tool_input: { skill: "add-localization" },
+      }),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: "",
+        POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath,
+        POWER_PLATFORM_SKILLS_FAKE_HTTPS: startProbePath,
+        POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "",
+      },
+      timeout: 30_000,
+    }
   );
+  assert.equal(startResult.status, 0);
 
   const result = spawnSync(
     process.execPath,

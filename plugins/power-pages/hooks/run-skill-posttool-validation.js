@@ -10,7 +10,14 @@ const {
   isAlmPlanSkill,
 } = require('../scripts/lib/powerpages-hook-utils');
 const { planDataPath } = require('../scripts/lib/alm-paths');
-const telemetry = require('../scripts/lib/telemetry/power-pages-telemetry');
+
+let telemetry = null;
+try {
+  telemetry = require('../scripts/lib/telemetry/power-pages-telemetry');
+} catch {
+  // Telemetry is optional. A missing or invalid bundled module must not prevent
+  // the hook from running the skill validator and returning its real status.
+}
 
 const DEBUG = process.env.DEBUG === '1' || process.env.DEBUG === 'true';
 
@@ -137,7 +144,7 @@ process.stdin.on('end', () => {
     validatorStatus = 0;
   }
 
-  if (skillName === 'add-localization') {
+  if (skillName === 'add-localization' && telemetry) {
     const sessionId =
       typeof input?.session_id === 'string'
         ? input.session_id
