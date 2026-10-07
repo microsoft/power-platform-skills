@@ -136,6 +136,8 @@ function render(block, root) {
     membershipid: '66666666-6666-6666-6666-666666666666',
     upn: 'maker@example.test',
     'team-name': 'Test team',
+    entitysetname: 'cr_visits',
+    T: context.table,
   })) command = command.replaceAll(`<${token}>`, value);
   // The recipes abbreviate the JSON-string selectedcolumns array with [...].
   return command.replaceAll('[...]', '[\\"cr123_title\\"]');
@@ -267,7 +269,7 @@ for (const name of helpers) {
         if (args[2].startsWith('EntityDefinitions(')) assert.ok(args[2].includes(context.table));
         if (args[2] === 'PublishXml') {
           const body = JSON.parse(args[args.indexOf('--body') + 1]);
-          const target = name === 'enable-tables-offline'
+          const target = body.ParameterXml.includes('<entities>')
             ? `<entity>${context.table}</entity>`
             : `<mobileofflineprofile>${context.profileId}</mobileofflineprofile>`;
           assert.ok(body.ParameterXml.includes(target));
@@ -365,6 +367,47 @@ test('offline setup forwards its resolved root and exact approved prerequisites 
   assert.match(caller, /--working-dir '<working_dir>'/);
   assert.match(caller, /orchestrator: create-mobile-app/);
   assert.match(caller, /not its prerequisite or\s+profile mutations/);
+});
+
+test('offline architect reads only the supplied app and tenant and cannot borrow another root', (t) => {
+  const f = fixture(t);
+  const text = read('agents/offline-profile-architect.md');
+  const binding = section(text, '## Invocation context and root binding', '## Hard Rules');
+  assert.ok(binding.includes(rootLink));
+  assert.match(binding, /owner's absolute `working_dir` and complete environment ID\/URL\/tenant/);
+  assert.match(binding, /Never use the launch cwd or ambient tenant/);
+  assert.doesNotMatch(text, /<workdir>/);
+  assert.match(text, /Write `<working_dir>\/_offline_section\.md` in the approved app root/);
+  const blocks = shellBlocks(text);
+  assert.equal(blocks.length, 5);
+  for (const block of blocks) {
+    assert.ok(block.startsWith(`${guard}\n`));
+    const result = run(block, f);
+    assert.equal(result.status, 0, `${block}\n${result.stderr}`);
+    const before = calls(f);
+    const failed = run(block, f, path.join(f.directory, 'missing owner'));
+    assert.equal(failed.status, 1);
+    assert.deepEqual(calls(f), before);
+  }
+  const requests = calls(f).filter((call) => call.args[0].endsWith('/dataverse-request.js'));
+  assert.equal(requests.length, 4);
+  for (const call of requests) {
+    assert.equal(fs.realpathSync.native(call.cwd), fs.realpathSync.native(f.owner));
+    assert.equal(call.args[1], context.environmentUrl);
+    assert.equal(call.args[2], 'GET');
+    assert.equal(call.args[call.args.indexOf('--tenant-id') + 1], context.tenantId);
+  }
+  const before = calls(f).length;
+  fs.writeFileSync(path.join(f.owner, 'power.config.json'), '{"environmentId":"wrong-environment"}');
+  const conflict = run(blocks[0], f);
+  assert.equal(conflict.status, 1);
+  assert.match(conflict.stderr, /NEEDS_CONTEXT: selected environment does not match working_dir/);
+  assert.ok(calls(f).slice(before).every((call) => call.args[0] === '-p'));
+  const caller = section(read('skills/setup-offline-profile/SKILL.md'), 'agent: mobile-app:offline-profile-architect', '### Step 3.5');
+  for (const field of ['Working directory: <working_dir>', 'Environment ID:', 'Environment URL:', 'Tenant ID:',
+    'Manifest path:', 'Phase: planning', 'Proposal output: <working_dir>/_offline_section.md']) {
+    assert.ok(caller.includes(field), field);
+  }
 });
 
 test('offline setup resolves identity only inside its selected app before handing off', (t) => {
@@ -472,6 +515,10 @@ test('root reception preserves offline gates, exact deltas, permissions, and sch
   assert.match(prereqs, /current offline approval covers these exact prerequisite changes/);
   assert.match(prereqs, /obtain owner\/user approval first/);
   assert.match(prereqs, /IsCustomizable.Value = false[\s\S]*BLOCKED/);
+  assert.match(prereqs, /"PublishXml" --tenant-id "<tenantId>"/);
+  assert.match(prereqs, /<entities><entity><table><\/entity><\/entities>/);
+  assert.doesNotMatch(shellBlocks(prereqs).join('\n'), /"PublishAllXml"/);
+  assert.match(prereqs, /owner separately approves publishing all pending/);
   assert.match(add, /Cancel stops without[\s\S]*creating a profile item/);
   assert.match(add, /--all-new[\s\S]*only within the owner's exact table allowlist/);
   assert.match(add, /Steps 3–7 for[\s\S]*each approved missing table/);

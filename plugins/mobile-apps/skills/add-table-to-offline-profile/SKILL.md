@@ -161,8 +161,14 @@ After a successful change, issue the approved prerequisite publication:
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<envUrl>" POST \
-  "PublishAllXml" --tenant-id "<tenantId>" --body '{}'
+  "PublishXml" --tenant-id "<tenantId>" --body '{
+    "ParameterXml": "<importexportxml><entities><entity><table></entity></entities></importexportxml>"
+  }'
 ```
+
+Publish only this helper's changed prerequisite table. Do not use
+`PublishAllXml` unless the owner separately approves publishing all pending
+environment customizations; table-only approval does not cover that fallback.
 
 No prerequisite mutation or publication is allowed in proposal-only mode.
 

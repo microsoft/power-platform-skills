@@ -36,6 +36,11 @@ same escaping to every literal app-root path argument in a command, including
 paths to files under that root. Never interpolate a path inside double quotes
 or execute an unresolved placeholder.
 
+The same rule applies to caller-supplied artifact paths such as
+`<SNAPSHOT_PATH>`, evidence, contracts, manifests, and changed-file arguments.
+These placeholders are literal paths, not shell variables. Only an actual
+variable assigned safely in the current call may use double-quoted expansion.
+
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 ```
@@ -46,6 +51,10 @@ embedded apostrophes:
 ```powershell
 Set-Location -LiteralPath '<working_dir>' -ErrorAction Stop
 ```
+
+When Bash launches PowerShell, do not embed a path in the `-Command` source.
+Pass it through a per-call environment variable and keep the PowerShell command
+constant; otherwise the path is parsed by two different shells.
 
 ## File tools
 

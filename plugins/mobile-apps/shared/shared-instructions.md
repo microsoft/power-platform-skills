@@ -253,8 +253,8 @@ Plugin-level hooks also run during unrelated plugin workflows, so every mutating
    ```bash
    node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" \
      --project-root '<working_dir>' \
-     --file "<changed-file-1>" \
-     --file "<changed-file-2>"
+     --file '<changed-file-1>' \
+     --file '<changed-file-2>'
    ```
 
 3. On exit `2`, repair every finding and rerun. Exit `0` is required before `DONE`.

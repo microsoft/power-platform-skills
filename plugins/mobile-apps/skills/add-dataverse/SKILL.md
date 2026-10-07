@@ -389,17 +389,17 @@ plan bytes, structured-schema bytes, and fresh reconciliation bytes:
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
-  --validate "<operation-manifest-path>" \
-  --contract "<schema-contract-path>" \
-  --approval-receipt "<approval-receipt-path>" \
-  --reconciliation "<execution-reconciliation-path>" \
+  --validate '<operation-manifest-path>' \
+  --contract '<schema-contract-path>' \
+  --approval-receipt '<approval-receipt-path>' \
+  --reconciliation '<execution-reconciliation-path>' \
   --plan '<working_dir>/native-app-plan.md' \
   --environment-id "<environmentId>" \
   --env-url "<envUrl>" \
   --tenant-id "<tenantId>" \
   --publisher-prefix "<customizationprefix>" \
   --solution "<solution-uniquename>" \
-  --publish-checkpoint "<publish-checkpoint-path>" \
+  --publish-checkpoint '<publish-checkpoint-path>' \
   --require-executable
 ```
 

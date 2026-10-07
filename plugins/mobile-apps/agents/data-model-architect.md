@@ -132,8 +132,8 @@ table facts, candidate order, and top-three cap without reading the full snapsho
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
-  --snapshot "<foreground snapshot path>" \
-  --output "<compact architect evidence path>" \
+  --snapshot '<foreground snapshot path>' \
+  --output '<compact architect evidence path>' \
   --validate-only
 ```
 

@@ -130,7 +130,7 @@ Only if normalization succeeds:
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/validate-dataverse-planning-decisions.js" \
   --contract '<working_dir>/.tmp/dataverse-schema-contract.json' \
-  --snapshot "<SNAPSHOT_PATH>"
+  --snapshot '<SNAPSHOT_PATH>'
 ```
 
 `DONE` / `DONE_WITH_CONCERNS` from an agent is not a validation result. Verify

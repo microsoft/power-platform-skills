@@ -15,6 +15,13 @@ const appRootReference = read(path.join(pluginRoot, 'shared/references/app-worki
 const appRootLink = '[app-working-directory.md](${PLUGIN_ROOT}/shared/references/app-working-directory.md)';
 const guard = "cd -- '<working_dir>' || { echo \"BLOCKED: cannot enter working_dir\" >&2; exit 1; }";
 const powershellGuard = "Set-Location -LiteralPath '<working_dir>' -ErrorAction Stop";
+const quotedFileArgument = /--(?:working-dir|project-root|approval-receipt|contract|file|output|publish-checkpoint|reconciliation|snapshot|validate)\s+"[^"\n]*<[^>\n]+>[^"\n]*"/;
+
+function unsafePathLiteral(line) {
+  if (quotedFileArgument.test(line)) return true;
+  return [...line.matchAll(/"([^"\n]*)"/g)].some((match) =>
+    match[1].includes('<working_dir>') && !/^\$\(cat '<working_dir>[^']*'\)$/.test(match[1]));
+}
 
 for (const prefix of ['', '   ', '> ', '>   ']) {
   for (const eol of ['\n', '\r\n']) {
@@ -38,7 +45,7 @@ function assertRootBinding(text) {
   assert.ok(blocks.length > 0);
   for (const block of blocks) {
     assert.ok(block.startsWith(`${guard}\n`), 'Every shell call must re-enter the app root');
-    assert.doesNotMatch(block, /"<working_dir>/, 'Arguments must preserve the literal root too');
+    assert.ok(!block.split('\n').some(unsafePathLiteral), 'Arguments and artifact aliases must preserve literal paths too');
   }
   for (const block of shellBlocks(text, 'powershell')) {
     assert.ok(block.startsWith(`${powershellGuard}\n`), 'PowerShell calls need a literal fail-closed root');
@@ -140,6 +147,31 @@ test('shared root contract distinguishes direct defaults from required child con
   assert.equal(shellBlocks(scope, 'powershell')[0], powershellGuard);
 });
 
+for (const [file, selector] of [
+  ['agents/data-model-architect.md', '/render-dataverse-architect-evidence.js'],
+  ['shared/references/dataverse-change-planning.md', '/validate-dataverse-planning-decisions.js'],
+]) {
+  test(`${file} keeps caller-supplied evidence path aliases literal`, (t) => {
+    const { owner, caller } = fixture(t);
+    const block = shellBlocks(read(path.join(pluginRoot, file)))
+      .find((command) => command.includes(selector));
+    assert.ok(block);
+    const snapshot = `${owner.replaceAll('\\', '/')}/.tmp/snapshot.json`;
+    const evidence = `${owner.replaceAll('\\', '/')}/.tmp/evidence.json`;
+    const command = block
+      .replaceAll('<foreground snapshot path>', shellLiteralContents(snapshot))
+      .replaceAll('<compact architect evidence path>', shellLiteralContents(evidence))
+      .replaceAll('<SNAPSHOT_PATH>', shellLiteralContents(snapshot));
+    const probe = 'node() { "$REAL_NODE" -e \'console.log(JSON.stringify(process.argv.slice(1)))\' "$@"; }';
+    const result = run(`${probe}\n${command}`, owner, caller);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, '');
+    const args = JSON.parse(result.stdout);
+    assert.equal(args[args.indexOf('--snapshot') + 1], snapshot);
+    if (args.includes('--output')) assert.equal(args[args.indexOf('--output') + 1], evidence);
+  });
+}
+
 test('canonical root guard treats dollar and backtick syntax as literal path contents', (t) => {
   const { owner, caller } = fixture(t);
   const literalPath = owner.replaceAll('\\', '/').replaceAll("'", "'\\''");
@@ -158,16 +190,22 @@ function markdownFiles(directory) {
   });
 }
 
-test('shell commands and handoffs never interpolate literal app roots inside double quotes', () => {
+test('shell commands and handoffs never interpolate root or artifact-path literals inside double quotes', () => {
   const offenders = [];
   for (const directory of ['agents', 'shared', 'skills']) {
     for (const file of markdownFiles(path.join(pluginRoot, directory))) {
-      read(file).split('\n').forEach((line, index) => {
+      const text = read(file);
+      const snippets = [
+        ...shellBlocks(text),
+        ...shellBlocks(text, 'text').flatMap((snippet) =>
+          snippet.split('\n').filter((line) => quotedFileArgument.test(line))),
+        ...[...text.matchAll(/`([^`\n]+)`/g)].map((match) => match[1])
+          .filter((code) => !/^".*"$/.test(code.trim())),
+      ];
+      snippets.flatMap((snippet) => snippet.split('\n')).forEach((line) => {
         // Structured file-tool arguments are not shell commands.
         if (/\b(?:Grep|Glob|Read|Write|Edit)\b.*\b(?:path|file_path)=/.test(line)) return;
-        if (line.includes('"<working_dir>')) {
-          offenders.push(`${path.relative(pluginRoot, file)}:${index + 1}`);
-        }
+        if (unsafePathLiteral(line)) offenders.push(`${path.relative(pluginRoot, file)}: ${line.trim()}`);
       });
     }
   }
@@ -463,10 +501,48 @@ for (const [shims, kind] of [
   });
 }
 
+const previewOpeners = [
+  ['skills/design-system/references/vibe/style-picker.md', '_design_vibe.html'],
+  ['skills/preview-screens/SKILL.md', 'preview.html'],
+];
+
+function captureWindowsOpener(t, file, filename) {
+  const { owner, caller } = fixture(t);
+  const block = shellBlocks(read(path.join(pluginRoot, file)))
+    .find((command) => command.includes('powershell.exe'));
+  assert.ok(block);
+  const probes = `
+open() { return 1; }
+xdg-open() { return 1; }
+powershell.exe() {
+  "$REAL_NODE" -e 'console.log(JSON.stringify({ path: process.env.MOBILE_APP_PREVIEW_PATH, args: process.argv.slice(1) }))' -- "$@"
+}
+`;
+  const result = run(`${probes}\n${block}`, owner, caller);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  const call = JSON.parse(result.stdout);
+  assert.equal(call.path, `${owner.replaceAll('\\', '/')}/${filename}`);
+  assert.deepEqual(call.args, ['-NoProfile', '-Command', 'Start-Process -FilePath $env:MOBILE_APP_PREVIEW_PATH']);
+  return { block, owner, caller, call };
+}
+
+for (const [file, filename] of previewOpeners) {
+  test(`${file} passes a literal Windows path as data and reports failed openers safely`, (t) => {
+    const { block, owner, caller } = captureWindowsOpener(t, file, filename);
+    const failed = run('open() { return 1; }\nxdg-open() { return 1; }\npowershell.exe() { return 1; }\n' + block,
+      owner, caller);
+    assert.equal(failed.status, 0, failed.stderr);
+    assert.equal(failed.stderr, '');
+    assert.match(failed.stdout, /Could not auto-open/);
+    assert.ok(failed.stdout.includes(`file://${owner.replaceAll('\\', '/')}/${filename}`));
+  });
+}
+
 const pwshProbe = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.ToString()'], {
   encoding: 'utf8',
 });
-test('SharePoint PowerShell root guards preserve literal paths and fail before any operation', {
+test('PowerShell root guards and preview openers preserve literal paths', {
   skip: pwshProbe.error?.code === 'ENOENT' && !process.env.CI ? 'PowerShell is unavailable locally; required in CI' : false,
 }, (t) => {
   assert.ifError(pwshProbe.error);
@@ -491,5 +567,19 @@ test('SharePoint PowerShell root guards preserve literal paths and fail before a
     assert.match(failed.stderr, /does not exist|Cannot find path/);
     assert.equal(fs.existsSync(trace), false);
     assert.equal(fs.existsSync(path.join(caller, 'powershell-root.txt')), false);
+  }
+  for (const [file, filename] of previewOpeners) {
+    const { call } = captureWindowsOpener(t, file, filename);
+    const result = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command',
+      'function Start-Process { param([string]$FilePath) @{ path = $FilePath } | ConvertTo-Json -Compress }\n' +
+      call.args[2],
+    ], {
+      env: { ...process.env, MOBILE_APP_PREVIEW_PATH: call.path },
+      encoding: 'utf8',
+      timeout: 10000,
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).path, call.path);
   }
 });

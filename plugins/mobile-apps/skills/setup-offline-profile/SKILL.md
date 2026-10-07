@@ -204,12 +204,15 @@ Spawn via `Task`:
 ```text
 agent: mobile-app:offline-profile-architect
 prompt:
+  Owner: setup-offline-profile
+  Phase: planning
   Working directory: <working_dir>
   Plugin root: ${PLUGIN_ROOT}
   Environment ID: <selected-environment-id>
   Environment URL: <envUrl>
   Tenant ID: <tenantId>
   Manifest path: <absolute manifest path within working_dir>
+  Proposal output: <working_dir>/_offline_section.md
   Publisher prefix: <prefix>
   Mode: default
 ```
