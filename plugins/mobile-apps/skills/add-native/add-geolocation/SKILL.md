@@ -1,214 +1,163 @@
 ---
 name: add-geolocation
-description: Internal implementation skill invoked by /add-native for native background GPS tracking with durable storage and Dataverse sync using @microsoft/power-apps-native-bglocation.
+description: Internal helper for one-shot coordinates or continuous/background GPS using release-matched geolocation controls; tracking adds durable storage and Dataverse sync.
 user-invocable: false
 disable-model-invocation: true
 allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion
 model: sonnet
 ---
 
-**Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** - read first.
+**Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
 # Add Geolocation
 
-Internal helper for `/add-native geolocation`, `/add-native location-tracking`, `/add-native background-location`, `/add-native gps-tracking`, and `/add-native @microsoft/power-apps-native-bglocation`.
+Internal helper for `/add-native location` (one-shot), `/add-native geolocation`,
+`/add-native location-tracking`, and `/add-native background-location` (tracking).
+Preserve the requested mode; ask once if intent is unclear.
 
-Use this only for continuous/background GPS tracking with native durable storage and inline Dataverse upload. For a single foreground coordinate read, use `/add-native location` (`expo-location`) instead.
+Read [release lifecycle](../../../shared/references/mobile-release-lifecycle.md)
+and [native controls](../references/native-controls.md). Do not use
+`GeolocationExtension`, HostingSDK, PCF, Launch URI, or Cordova bridge paths.
+Do not substitute another library's `configureSync` / `HttpSyncContract` API.
 
-Hard rules:
-- Auth is MSAL-only. Do not expose OneAuth or an auth selector.
-- Use `geoService(dataSource, app_id)` and `BgLocationClient`.
-- Do not use `GeolocationExtension`, HostingSDK, PCF, Launch URI, or CordovaV2 bridge paths.
-- Do not install packages or edit native config.
-- The control is not usable until its Dataverse target table and mapped columns are verified.
-
-## 1. Verify app and package
+## 1. Verify the app and resolved release
 
 ```bash
 test -f app.config.js && test -f power.config.json && test -f package.json && test -d src
-node -e "const p=require('./package.json'); const m='@microsoft/power-apps-native-bglocation'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m); process.exit(1); } console.log('OK: geolocation package present');"
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root "<working_dir>"
 ```
 
-If either check fails, stop. The template/app must already ship the native package.
+If the parent explicitly selected local diagnostic artifacts, append the same
+`--diagnostic-artifacts "<manifest.json>"` to resolution and package validation.
+Keep the lifecycle reference's online-only Android/no-deployment limits.
 
-## 2. Verify the Dataverse target table first
+Unknown/missing records block native mutation. Do not install packages, edit
+native config, or run local native builds. Match the installed public README,
+exports, and types to the resolved inventory before generating any wrapper.
+Use `@microsoft/power-apps-native-controls/geolocation` only when that aggregate
+is included in the verified release. Use the legacy
+`@microsoft/power-apps-native-bglocation` import only when the matching leaf
+is actually included. Pick one literal import at generation time, never both.
 
-This control uses the package default Dataverse entity set:
+The public runtime exports are `BgLocationClient`, `geoService`, `AuthMethod`,
+and `ConnectionType`. Controls 0.2.0 uses background-location 0.2.3; do not copy
+APIs from a newer leaf. Package facts are not evidence of a released player/base.
 
-```text
-msdyn_locationrecords
+## 2. One-shot location — no tracking setup
+
+For a single coordinate read, write `src/native/location.ts`. This path needs
+**no `app_id`, data source, target table, or `startTracking`**. Skip Steps 3–5.
+Check the selected version's location permission requirements; native binary
+inclusion, OS declarations, runtime grants, and use are distinct.
+
+Conditional example for a resolved release that contains the aggregate:
+
+```ts
+import { Platform } from 'react-native';
+
+export async function getCurrentLocation() {
+  if (Platform.OS !== 'ios' && Platform.OS !== 'android') {
+    return { ok: false as const, reason: 'UNSUPPORTED_PLATFORM' as const };
+  }
+
+  try {
+    const { BgLocationClient } =
+      await import('@microsoft/power-apps-native-controls/geolocation');
+    const value = await new BgLocationClient().getCurrentLocation();
+    return { ok: true as const, value };
+  } catch {
+    return { ok: false as const, reason: 'LOCATION_FAILED' as const };
+  }
+}
 ```
 
-Do not ask the user for a table name and do not invent a custom table. `msdyn_locationrecords` must already exist before the control can be used.
+Refine permission/error results only from the installed public contract. Do not
+guess fields or classify errors by matching arbitrary native error text. Screens
+show an appropriate denied/unsupported/failure state without exposing raw errors.
+If the resolved release instead supports `expo-location`, use its installed
+one-shot contract with the same platform and result guards, not tracking setup.
+
+## 3. Continuous tracking — permissions and ownership first
+
+For background-location **0.2.3**, `startTracking` uses background permissions
+even with `trackInBackground: false`. Do not promise foreground-only tracking
+permissions. Missing OS declarations require another verified base, not a
+runtime fallback or per-customer wrapping option.
+
+Tracking is shared. `stopTracking()` and `isTracking()` have no `app_id`
+parameter. Before code generation, record a single app-level tracking owner,
+explicit user start/stop actions, and how other screens observe status.
+Do not start duplicate sessions, reconfigure an already owned session, or stop
+tracking on an unrelated screen's unmount. A JS ownership flag does not prove
+ownership of a native session surviving a JS restart; reconcile native status
+through the installed API before starting/stopping.
+
+Use MSAL only; do not expose OneAuth or an auth selector. Read the installed
+`geoService(dataSource, app_id)` contract, `AuthMethod.MSAL`,
+`ConnectionType.Dataverse`, permissions, and persistence behavior. The tracking
+target must include `connectionUrl`, `trackInBackground`, and
+`persistAcrossRestarts` as required by that version. Optional interval,
+distance, and notification settings must come from its types, not guesses.
+
+## 4. Verify the tracking Dataverse target
+
+This check is **tracking-only**, never a prerequisite for a one-shot read.
+Use the package's default entity set `msdyn_locationrecords` and default field
+map. Do not invent a custom table, create the table, or route missing-table
+provisioning through `/add-dataverse`.
 
 ```bash
 ENV_JSON=$(node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e "console.log(require('./power.config.json').environmentId)")")
 ENV_URL=$(node -e "const j=JSON.parse(process.argv[1]); process.stdout.write(j.environmentUrl || '')" "$ENV_JSON")
-
-TABLE="msdyn_locationrecords"
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
-  "EntityDefinitions?\$filter=EntitySetName eq '$TABLE'&\$select=LogicalName,EntitySetName"
+  "EntityDefinitions?\$filter=EntitySetName eq 'msdyn_locationrecords'&\$select=LogicalName,EntitySetName"
 ```
 
-Required result:
-- One row returned: capture `LogicalName` and verify columns.
-- Empty `value: []`: stop. Mark `BLOCKED (target table missing)`. Do not create the table, do not route to `/add-dataverse`, and do not report the control as usable. Tell the user to run the geolocation-control table provisioning/setup mechanism, then re-run `/add-native geolocation`.
-- Auth/environment error: stop. Mark `UNVERIFIED (target table not checked)`. Do not report the control as usable.
-
-When the table exists, verify every mapped column exists:
+- One row: capture its logical name and check the mapped columns below.
+- Empty `value: []`: `BLOCKED (target table missing)`. Ask for the supported
+  geolocation table provisioning/setup mechanism, then re-run this workflow.
+- Auth/environment failure: `UNVERIFIED (target table not checked)`. Stop.
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
   "EntityDefinitions(LogicalName='<logicalName>')/Attributes?\$select=LogicalName,AttributeType"
 ```
 
-Required default `fieldMap` columns from the package README:
+Confirm the installed README's default `fieldMap` columns and their types:
 
 ```text
 msdyn_locationrecordid, msdyn_appid, msdyn_latitude, msdyn_longitude,
 msdyn_altitude, msdyn_accuracy, msdyn_heading, msdyn_speed, msdyn_timestamp
 ```
 
-If any active `fieldMap` column is missing, stop. Mark `BLOCKED (target columns missing)` and tell the user to fix the control table through the geolocation-control table provisioning/setup mechanism.
+Missing active columns block tracking. Do not report the target as ready or
+silently substitute another table.
 
-## 3. Write `src/native/geolocation.ts`
+## 5. Write the tracking wrapper from installed docs/types
 
-Create or patch `src/native/geolocation.ts` so screens import this wrapper, not the package directly.
+Create or patch `src/native/geolocation.ts` only after the preceding gates pass.
+Screens import the wrapper, not the control. Require a native platform guard
+before lazy imports inside `try`/`catch`; return discriminated results and never
+throw. Preserve native capture, durable pending storage, and native upload
+without depending on JavaScript being alive. Do not replace native behavior
+with JS timers, upload loops, or a made-up adapter contract.
 
-The target config must require the README's two tracking flags:
-- `trackInBackground: boolean`
-- `persistAcrossRestarts: boolean`
+Use only verified public methods from the installed version. Keep
+`geoService(dataSource, app_id)` initialization and the shared tracking owner
+together; do not synthesize `stopTracking(app_id)` or `isTracking(app_id)`.
+Do not add data sources or tracking side effects to the one-shot wrapper.
 
-```ts
-// src/native/geolocation.ts
-import {
-  geoService,
-  BgLocationClient,
-  AuthMethod,
-  ConnectionType,
-} from '@microsoft/power-apps-native-bglocation';
-import type {
-  DataverseDataSource,
-  LocationData,
-  PermissionStatus,
-} from '@microsoft/power-apps-native-bglocation';
-
-export type { LocationData, PermissionStatus } from '@microsoft/power-apps-native-bglocation';
-
-export type GeoTrackingTarget = Omit<DataverseDataSource, 'authMethod' | 'connectionType'>;
-
-export type GeoResult<T> =
-  | { ok: true; value: T }
-  | {
-      ok: false;
-      reason: 'NATIVE_MODULE_MISSING' | 'PERMISSION_DENIED' | 'TRACKING_FAILED';
-      message?: string;
-    };
-
-let activeClient: BgLocationClient | null = null;
-
-function client(): BgLocationClient {
-  return activeClient ?? new BgLocationClient();
-}
-
-function dataSource(target: GeoTrackingTarget): DataverseDataSource {
-  return {
-    ...target,
-    authMethod: AuthMethod.MSAL,
-    connectionType: ConnectionType.Dataverse,
-  };
-}
-
-function fail(error: unknown): Extract<GeoResult<never>, { ok: false }> {
-  const message = error instanceof Error ? error.message : String(error);
-  if (/native|module|not.*link|undefined is not an object|null is not an object/i.test(message)) {
-    return { ok: false, reason: 'NATIVE_MODULE_MISSING', message };
-  }
-  if (/permission|denied|authoriz|not granted/i.test(message)) {
-    return { ok: false, reason: 'PERMISSION_DENIED', message };
-  }
-  return { ok: false, reason: 'TRACKING_FAILED', message };
-}
-
-export async function startTracking(
-  app_id: string,
-  target: GeoTrackingTarget,
-): Promise<GeoResult<void>> {
-  try {
-    activeClient = geoService(dataSource(target), app_id);
-    await activeClient.startTracking();
-    return { ok: true, value: undefined };
-  } catch (error) {
-    activeClient = null;
-    return fail(error);
-  }
-}
-
-export async function stopTracking(): Promise<GeoResult<void>> {
-  try {
-    await client().stopTracking();
-    activeClient = null;
-    return { ok: true, value: undefined };
-  } catch (error) {
-    return fail(error);
-  }
-}
-
-export async function isTracking(): Promise<GeoResult<boolean>> {
-  try {
-    return { ok: true, value: await client().isTracking() };
-  } catch (error) {
-    return fail(error);
-  }
-}
-
-export async function getPermissionStatus(): Promise<GeoResult<PermissionStatus>> {
-  try {
-    return { ok: true, value: await client().getPermissionStatus() };
-  } catch (error) {
-    return fail(error);
-  }
-}
-
-export async function getCurrentLocation(): Promise<GeoResult<LocationData>> {
-  try {
-    return { ok: true, value: await client().getCurrentLocation() };
-  } catch (error) {
-    return fail(error);
-  }
-}
-```
-
-## 4. Usage shape
-
-Screens must pass `connectionUrl`, `trackInBackground`, and `persistAcrossRestarts`. Do not pass `tableName` or `fieldMap`; the control uses the default `msdyn_locationrecords` table and default `msdyn_*` field map. `intervalMs`, `distanceFilterMeters`, and `notification` are optional.
-
-```ts
-const target: GeoTrackingTarget = {
-  connectionUrl: 'https://org.crm.dynamics.com',
-  trackInBackground: true,
-  persistAcrossRestarts: false,
-};
-
-await startTracking('my-wrap-app', target);
-```
-
-## 5. Type-check and summary
+## 6. Validate and summarize
 
 ```bash
 npx --no-install tsc --noEmit
 ```
 
-Only after table + columns are verified and TypeScript passes, report:
+Report the mode, resolved release/package version, wrapper path, permission
+requirements, ownership decision for tracking, and whether native device
+validation was performed. Tracking additionally requires verified table and
+columns. Type-check success alone never means native execution is validated.
 
-```text
-Geolocation status : READY
-Package present    : @microsoft/power-apps-native-bglocation
-Wrapper            : src/native/geolocation.ts
-Required config    : connectionUrl, trackInBackground, persistAcrossRestarts
-Auth               : MSAL only
-Target table       : <TABLE> verified
-Native config      : not changed
-```
-
-If table verification failed, report `BLOCKED` or `UNVERIFIED` instead and do not update `memory-bank.md` as if the control is ready.
+Update `memory-bank.md` only with completed wrapper work and explicit remaining
+limitations. On any failed prerequisite, report `BLOCKED` / `UNVERIFIED`, not
+`READY`; do not claim packages, players, or bases are available without evidence.

@@ -14,7 +14,11 @@ model: sonnet
 
 Builds the mobile app in the current directory and pushes it to the Power Platform environment recorded in `power.config.json`.
 
-This skill uses the standard 4-step deployment flow for this plugin: check memory bank, build, deploy, then update memory bank.
+This skill checks the app-matched verified release and actual selected bases
+before building and pushing. Read
+[release lifecycle](../../shared/references/mobile-release-lifecycle.md).
+Native compatibility is a separate gate from artifact format, environment
+confirmation, offline coverage, and TypeScript.
 
 ## Out of scope (deliberately)
 
@@ -24,7 +28,7 @@ This skill uses the standard 4-step deployment flow for this plugin: check memor
 
 ## Workflow
 
-1. Check memory bank → 1.5 App ID preflight → 2. Build → 2.4 Native package → 2.5 Offline profile coverage gate → 3. Deploy → 4. Update memory bank
+1. Check memory bank → 1.2 Verified release + selected bases → 1.5 App ID preflight → 2. Build → 2.4 Native package → 2.5 Offline profile coverage gate → 3. Deploy → 4. Update memory bank
 
 ---
 
@@ -37,6 +41,53 @@ Read `memory-bank.md` from the project root if present. Capture:
 - Current version
 
 If absent, continue — the project may have been created without the plugin. Re-derive env from `power.config.json` if needed.
+
+### Step 1.2 — Verified release and actual intended bases
+
+Reject any `--diagnostic-artifacts` selection or `local-diagnostic-only` context
+before building or pushing. Local test archives and APK metadata never authorize
+tenant/store deployment, even when their hashes and counters match. Do not
+silently replace the selection with a published/default release.
+
+Resolve the app's installed/locked template, host, Expo, React Native, and
+native inventory; never use the newest bundled template as its runtime allowlist.
+
+```bash
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root "<working_dir>"
+```
+
+Then obtain the **actual intended base version and fingerprint** for each target
+from the selected deployment target's verifiable metadata. Do not silently
+substitute the policy's expected values, assume “latest”, or claim a player/base
+is available because its package exists on npm. Missing selection is a blocker.
+If the target cannot expose both values, STOP; a version label alone does not
+prove matching native runtime content.
+
+```bash
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root "<working_dir>" --platform android --base-version "<actual-intended-android-base-version>" --base-fingerprint "<actual-intended-android-base-fingerprint>"
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root "<working_dir>" --platform ios --base-version "<actual-intended-ios-base-version>" --base-fingerprint "<actual-intended-ios-base-fingerprint>"
+```
+
+Every resolver invocation must succeed. Unknown/missing release or base records
+STOP before build/push, including when the policy is intentionally empty.
+Each deployment check requires `--platform`, `--base-version`, and
+`--base-fingerprint` together. The fingerprint must exactly match the verified
+release's platform fingerprint; a missing or mismatched fingerprint blocks.
+`--requirements-only` is planning-only and cannot authorize deployment.
+There is no `deploy without compatibility` override. A successful web preview,
+Metro run, native import, or Hermes magic check is not evidence of native
+compatibility. A newer plugin/template is not an app upgrade.
+
+Keep only the sanitized resolved tuple and selected base versions/fingerprints in the
+deployment summary; never dump raw app/auth/config files. Re-run these checks
+before each push and after any manifest, lockfile, host, native inventory, or
+base selection change, including the first-deploy second pass.
+
+Package inclusion, OS declarations, runtime grants, and actual use remain
+distinct. Disabling controls does not remove unused default Android permissions.
+Different declarations require another verified base; optional per-customer
+permission wrapping is deferred. Do not edit plugins/permissions or run a local
+native build to bypass a mismatch.
 
 ### Step 1.5 — App ID preflight (first-deploy gate)
 
@@ -83,7 +134,8 @@ If `package.json` has no `build` script, fall back to:
 npx --no-install expo export --platform web
 ```
 
-(The current template does not define a `build` script, so this fallback is the normal path for freshly scaffolded apps. Both forms produce the same `dist/` web output.)
+(Use the resolved app's scripts, not assumptions about the newest template.
+Both forms produce `dist/` web output, not a new native binary.)
 
 **Known issue — `expo export --platform web` never exits.** The export finishes its work (writes `dist/`, prints `Exported: dist` and the asset count) and then **hangs indefinitely**. Reproduced deterministically across separate runs; observed still alive 2h34m after completing. `dist/` is complete and correct when this happens. Suspected cause: the Metro config returned by `createPowerAppsMetroConfig` (`metro.config.js`) installs a dev-server middleware internally, which appears to hold an open handle — a web *export* should not need a dev server. Note the template itself only calls `createPowerAppsMetroConfig`; the middleware is applied inside `@microsoft/power-apps-native-host`, not in app code. **Not yet root-caused.**
 
@@ -121,12 +173,15 @@ Verify `dist/` exists with `index.html` before continuing.
 **Print before starting:**
 > "→ Compiling the native Hermes bundle and hash-addressed asset package for iOS and Android. No JavaScript is compiled inside the wrap pipeline — it only consumes these prebuilt files. ~1–3 minutes."
 
-**Node version gate (required).** The native export crashes on **Node < 20.19.4** — it hits `util.styleText(['yellow','inverse','bold'], …)`, which older Node rejects, failing the Metro bundle with a cryptic `ERR_INVALID_ARG_VALUE`. Check first:
+**Node version gate (required).** Follow
+[version-check.md](../../shared/version-check.md) and any higher engine
+requirements of the resolved release. Check the common Node 22+ floor first:
 
 ```bash
-node -e 'const [M,m,p]=process.versions.node.split(".").map(Number); const ok = M>20 || (M===20 && (m>19 || (m===19 && p>=4))); if (!ok) { console.error(`Node ${process.versions.node} is too old; need >= 20.19.4`); process.exit(1); } console.log(`✓ Node ${process.versions.node}`);'
+node -e 'const major=Number(process.versions.node.split(".")[0]); if (major < 22) { console.error("Node 22+ required; also check resolved release engines"); process.exit(1); }'
 ```
-If it exits non-zero, STOP and tell the user to switch (`nvm use 20.19.4`, or install Node ≥ 20.19.4) and rerun. Do **not** run the native packaging commands on older Node.
+If this or a release-specific engine check fails, STOP and ask the user to
+switch to a supported Node version. Do not fetch newer native dependencies.
 
 The web build above produces `dist/index.html` (the hosted Code App). Native **wrapped** apps additionally need a precompiled Hermes bundle **and** the customer's images/fonts as hash-addressed asset files, so the wrap pipeline never compiles or downloads JavaScript. Produce both platforms:
 
@@ -145,6 +200,10 @@ Both platforms are required — the verification below fails if either bundle or
 These sit alongside `index.html` under the same container SAS, so the wrap pipeline fetches them as siblings — no RP or connector change is required.
 
 **Verify before continuing** — STOP on any failure (never push a web-only build for a native-wrapped app):
+
+This checks packaging only. Hermes magic bytes identify the file format, not
+bytecode/engine ABI, Expo/RN, native module, player, or selected-base
+compatibility; Step 1.2 must also pass for both platforms.
 
 ```bash
 # Hermes magic bytes on both bundles (expect c61fbc03)
@@ -203,6 +262,10 @@ Do not push until the gate is resolved (reconciled to `in-sync`, or explicitly o
 
 **Telemetry checkpoint: `push_app_to_power_platform`**
 
+Re-run Step 1.2 for the app and both actual intended base versions and
+fingerprints before this push. Neither the environment override nor the
+offline override can waive it.
+
 **Resolve and confirm the target environment FIRST.** `pa app push` deploys to the environment configured in `power.config.json`. Resolve that ID to a Dataverse URL so the user catches drift before pushing.
 
 Run:
@@ -252,7 +315,7 @@ If deploy fails, report the error and STOP — do not retry silently. Common fix
 |---|---|
 | `pa app push` auth error, wrong user, or multiple accounts | Follow shared-instructions command-failure handling. `az login` / `az account set` does not switch the standalone Power Apps CLI account. |
 | Environment mismatch | Re-run `$PA app init -t MobileApp --display-name <name> --environment-id <id> --non-interactive` in a fresh/app root for the intended target|
-| `$PA` is empty (`PA_KIND=none` — CLI not installed) | Ask the user to run `npm install` in the project root (the template pins `@microsoft/power-apps-cli`), then re-resolve `$PA` per [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md). Never fall back to a bare `npx pa` or `npx power-apps`. |
+| `$PA` is empty (`PA_KIND=none` — CLI not installed) | Ask the user to restore the resolved release's existing exact locked dependencies in the project root, then re-resolve `$PA` per [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md). Never fall back to a bare `npx pa` or `npx power-apps`, a newer host/native package or an unrelated global CLI. |
 
 ### Step 4 — Update memory bank
 
@@ -262,6 +325,8 @@ If `memory-bank.md` exists, increment the version (`v1.0.0` → `v1.1.0`) and up
 - Last deployed timestamp
 - App URL (if captured)
 - Append a row to the **Build history** section: `| v1.1.0 | <timestamp> | deploy | success |`
+- Record the sanitized verified release tuple and both actual selected base
+  versions/fingerprints; record native device validation separately from packaging success.
 
 Print the summary card:
 

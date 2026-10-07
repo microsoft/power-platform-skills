@@ -37,13 +37,26 @@ test -f app.config.js && test -f power.config.json && test -f package.json && te
 
 If this fails, tell the user to run `/create-mobile-app` first and STOP.
 
-### 2. Verify packages are already present
+### 2. Verify the app's release and packages
 
-`expo-print` is required. `expo-sharing` is optional unless the plan specifically needs sharing behavior.
+Read [release lifecycle](../../../shared/references/mobile-release-lifecycle.md)
+and [native controls](../references/native-controls.md). Resolve the app before
+native mutations; unknown/missing records block even if a dependency is present.
 
 ```bash
-node -e "const p=require('./package.json'); const deps={...p.dependencies,...p.devDependencies}; const required='expo-print'; if (!deps[required]) { console.error('MISSING: expo-print is not in package.json. The template/app must already ship it for /add-native pdf-report. This skill will not install it or edit native config. Capability not added.'); process.exit(1); } console.log('OK: expo-print package present'); console.log(deps['expo-sharing'] ? 'OK: expo-sharing package present' : 'OPTIONAL_MISSING: expo-sharing is not in package.json; generated PDFs can be created/viewed/uploaded, but sharing helpers must not be generated.');"
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root "<working_dir>"
 ```
+
+If the parent explicitly selected local diagnostic artifacts, append the same
+`--diagnostic-artifacts "<manifest.json>"` to resolution and package validation.
+Keep the lifecycle reference's online-only Android/no-deployment limits.
+
+`expo-print` is required. `expo-sharing` is optional unless sharing is required.
+Match exact installed versions/docs/types to the resolved native inventory.
+“Present” throughout this helper means verified in that app's release, not just
+listed in `package.json` or available in the newest bundled template.
+Native preview additionally requires a resolved PDF viewer path; generation
+does not establish viewing support.
 
 If `expo-print` is missing, STOP. Do not run `npm install`, `npx expo install`, `pod install`, or edit `app.config.js`. Do not add `pdf-report` to the plan or generated wrappers for this app.
 
@@ -52,7 +65,7 @@ If `expo-sharing` is missing:
 - Continue for generate-only, native-viewer preview, or Dataverse-upload flows.
 - Do not import `expo-sharing`.
 - Do not generate `sharePdfReport(...)`.
-- If the user's requirement specifically includes sharing, STOP and say sharing is not supported by this template.
+- If the user's requirement specifically includes sharing, STOP and say sharing is not supported by the resolved release.
 
 ### 3. Write or verify `src/native/pdfReport.ts`
 
@@ -71,16 +84,15 @@ Base wrapper when `expo-sharing` is present:
 
 ```ts
 // src/native/pdfReport.ts
-import * as Print from 'expo-print';
-import * as Sharing from 'expo-sharing';
+import { Platform } from 'react-native';
 
 export type PdfReportResult =
   | { ok: true; uri: string; numberOfPages?: number; base64?: string }
-  | { ok: false; reason: 'EMPTY_HTML' | 'PRINT_FAILED'; message?: string };
+  | { ok: false; reason: 'UNSUPPORTED_PLATFORM' | 'EMPTY_HTML' | 'PRINT_FAILED'; message?: string };
 
 export type PdfShareResult =
   | { ok: true }
-  | { ok: false; reason: 'INVALID_URI' | 'SHARING_UNAVAILABLE' | 'SHARE_FAILED'; message?: string };
+  | { ok: false; reason: 'UNSUPPORTED_PLATFORM' | 'INVALID_URI' | 'SHARING_UNAVAILABLE' | 'SHARE_FAILED'; message?: string };
 
 export function escapePdfHtml(value: string): string {
   return value
@@ -115,11 +127,15 @@ export async function createPdfReport(
   html: string,
   options?: { includeBase64?: boolean },
 ): Promise<PdfReportResult> {
+  if (Platform.OS !== 'ios' && Platform.OS !== 'android') {
+    return { ok: false, reason: 'UNSUPPORTED_PLATFORM' };
+  }
   if (!html.trim()) {
     return { ok: false, reason: 'EMPTY_HTML', message: 'PDF report HTML is empty.' };
   }
 
   try {
+    const Print = await import('expo-print');
     const result = await Print.printToFileAsync({
       html,
       base64: options?.includeBase64 ?? false,
@@ -137,11 +153,15 @@ export async function createPdfReport(
 }
 
 export async function sharePdfReport(uri: string, options?: { dialogTitle?: string }): Promise<PdfShareResult> {
+  if (Platform.OS !== 'ios' && Platform.OS !== 'android') {
+    return { ok: false, reason: 'UNSUPPORTED_PLATFORM' };
+  }
   if (!uri || !uri.startsWith('file://')) {
     return { ok: false, reason: 'INVALID_URI', message: 'Generated PDF reports must be shared from a local file URI.' };
   }
 
   try {
+    const Sharing = await import('expo-sharing');
     const available = await Sharing.isAvailableAsync();
     if (!available) {
       return { ok: false, reason: 'SHARING_UNAVAILABLE', message: 'Sharing is not available on this platform.' };
@@ -236,11 +256,13 @@ if (!upload.success) {
 npx --no-install tsc --noEmit
 ```
 
-Fix any TypeScript errors before rebuilding.
+Fix wrapper TypeScript errors. Do not claim native device validation from tsc.
 
 ### 7. Native rebuild note
 
-This skill does not install native code. If `expo-print` or `expo-sharing` was just added outside the skill, the app needs a native rebuild outside this workflow. If the packages were already in the build, Metro hot reload is enough for wrapper edits.
+This skill does not install native code or run local native builds. An
+out-of-band native package addition blocks compatibility. Use a separately
+approved verified-release migration; Metro can update only JavaScript.
 
 ### 8. Summary
 

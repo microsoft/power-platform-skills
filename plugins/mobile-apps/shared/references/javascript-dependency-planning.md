@@ -15,7 +15,27 @@ A package is native-bound when it or a runtime dependency ships any of these:
 - `app.plugin.js`, `app.plugin.ts`, or equivalent Expo config plugin
 - `react-native.config.js`
 
-Those packages must already be supported by the template/runtime. A package name is not evidence: a `react-native-*` package may still be pure JavaScript.
+Those packages must already be included at matching versions in the app's
+[verified release context](mobile-release-lifecycle.md). The newest bundled
+template is not the runtime allowlist for an older app. A package name is not
+evidence: a `react-native-*` package may still be pure JavaScript.
+
+Use the orchestrator's sanitized resolved context, or resolve it read-only:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root "<working_dir>"
+```
+
+Unknown/missing release records block native mutations, not pure source/UI
+planning and editing. For pure-JavaScript work, inspect the existing project's
+installed versions and contracts; record native compatibility as unverified,
+and do not claim that a successful type-check validates a player or base.
+For an explicitly approved local diagnostic, carry `--diagnostic-artifacts`
+through the resolver and changed-file validator as specified by the lifecycle
+reference. It does not waive exact JS approvals, alias checks, native closure
+inspection, or the Android-only/no-deployment boundary.
+Never install the controls aggregate, a native leaf, or a newer host to repair
+an older binary; those changes belong to an approved verified-release migration.
 
 ## When To Select A Library
 
@@ -59,7 +79,7 @@ The exact version and rationale are part of the screen-plan approval. Approval a
 
 ### Calendar example
 
-A full month/week/agenda scheduling surface triggers candidate selection. Evaluate `react-native-calendars` first because it supplies established calendar and agenda primitives and is pure JavaScript; `1.1314.0` is the known-good version for the current template baseline. Confirm current metadata and compatibility before writing the row. A lightweight horizontal date strip plus `FlatList` does not require a new package.
+A full month/week/agenda scheduling surface triggers candidate selection. Evaluate `react-native-calendars` first because it supplies established calendar and agenda primitives and is pure JavaScript. Select an exact version compatible with the existing app's React/React Native/Expo and Node versions, not a version assumed from the newest template. Confirm current metadata and compatibility before writing the row. A lightweight horizontal date strip plus `FlatList` does not require a new package.
 
 ## Installation Contract
 
@@ -92,3 +112,7 @@ If installed contents reveal native code/config or an incompatible runtime depen
 ## Builder Contract
 
 Builders may directly import only packages listed in the approved table and present at the exact version in `package.json`. Builders never select packages, edit manifests, or run installs. A missing approved package is an orchestrator block; an unplanned package is a planning-context error.
+
+Forward the same resolved release context (or explicit unresolved/source-only
+status) to planners and builders. Approval of a JS-only dependency is not
+approval to alter native inventory, OS declarations, or the selected base.

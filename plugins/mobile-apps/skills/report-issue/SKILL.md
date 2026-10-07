@@ -50,10 +50,8 @@ Read-only checks:
 
 ```bash
 test -f power.config.json && echo "in_project=true" || echo "in_project=false"
-pwd
 node --version
 npm --version
-node scripts/resolve-environment.js "$(node -e \"console.log(require('./power.config.json').environmentId)\")" 2>/dev/null || true
 az --version 2>/dev/null | head -1
 npx --no-install expo --version 2>/dev/null
 uname -srm
@@ -62,12 +60,42 @@ uname -srm
 If in a project:
 
 ```bash
-node -e "console.log(require('./package.json').name, require('./package.json').version)" 2>/dev/null
-node -e "console.log(JSON.stringify({env: require('./power.config.json').environmentId, name: require('./power.config.json').displayName}))"
 test -f memory-bank.md && echo "memory_bank=present"
 test -f native-app-plan.md && echo "plan=present"
-ls src/generated/services/ 2>/dev/null | head -10
+node -e "const fs=require('node:fs');const p='src/generated/services';let count=0;try{count=fs.statSync(p).isDirectory()?fs.readdirSync(p).filter(f=>f.endsWith('.ts')).length:0;}catch{}console.log('generated_service_count='+count);"
 ```
+
+Read [release lifecycle](../../shared/references/mobile-release-lifecycle.md).
+For a mobile project, collect only the resolver's sanitized tuple:
+
+For a previously approved `--diagnostic-artifacts` selection, retain that explicit
+option and label the result `local-diagnostic-only`; report the actual selected
+APK's supported counters, never an inferred player version. Do not attach the
+artifact manifest, archive/binary, local paths, source profile, or private build
+evidence to a public issue. iOS remains untested; reporting still works if local
+inspection fails.
+
+```bash
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root "<working_dir>"
+```
+
+If the affected workflow supplied actual selected base versions and fingerprints,
+check them read-only using all three flags: `--platform android|ios`,
+`--base-version <actual-intended-version>`, and
+`--base-fingerprint <actual-intended-fingerprint>`. A version-only deployment
+check blocks. Collect actual target metadata, never copy expected policy values.
+Record unknown/missing evidence honestly; reporting must still work when the
+policy is empty. Do not infer the runtime from the newest bundled template,
+claim a published package proves player/base availability, or mutate native
+dependencies to make diagnostics pass.
+
+For controls, identify the selected `/pdf`, `/pen`, or `/geolocation` contract
+and matching release/leaf version using
+[native controls](../add-native/references/native-controls.md). The aggregate
+root is metadata, not a runtime API. Separate package inclusion, OS declarations,
+runtime grants, and app usage in the reproduction. No raw app/auth config,
+credentials, private repository links, package code, customer names, tenant,
+environment, app, or connection IDs belong in this public issue.
 
 If the description names a package matching `@microsoft/power-apps-native-*`, collect its declared and lockfile-resolved versions from `package.json` and `package-lock.json`. Do not read package source or metadata from `node_modules/`.
 
@@ -87,20 +115,18 @@ for (const [name, declared] of Object.entries(dependencies)) {
 NODE
 ```
 
-For native-build issues also capture:
-
-```bash
-[ "$(uname)" = "Darwin" ] && xcode-select -p
-[ "$(uname)" = "Darwin" ] && pod --version 2>/dev/null
-java -version 2>&1 | head -1
-echo "ANDROID_HOME=$ANDROID_HOME"
-```
+For native runtime issues capture the platform and user-supplied player/base
+version. Do not run or probe local Xcode, CocoaPods, Gradle, or JDK builds.
 
 ### Step 3 — Collect diagnostics
 
 **Telemetry checkpoint: `collect_issue_diagnostics`**
 
-Run `npx --no-install expo doctor` and capture the text output verbatim.
+Run read-only project diagnostics only when available; do not auto-install or
+upgrade tooling. Sanitize bounded relevant output before showing or persisting
+it. A doctor/type-check pass does not validate native runtime compatibility.
+Use `npx --no-install` for any available project-local diagnostic tool; report
+unavailable checks without downloading a replacement or blocking issue reporting.
 
 Ask for the affected workflow's Support ID when available. Use the telemetry
 helper's read-only `--report` mode from the affected project to inspect only its
@@ -108,7 +134,7 @@ allowlisted timeline. Include the Support ID and relevant step/error category in
 the issue body, not environment, tenant, or organization IDs. Do not
 upload the telemetry directory or raw timing/authentication files.
 
-If the user pasted an error, capture verbatim. Otherwise look for recent failure signals:
+If the user pasted an error, extract a sanitized minimal reproduction. Otherwise look for recent failure signals:
 
 - Last 50 lines of any Metro / Gradle / Xcode log if user mentions a build failure
 - `git status --short` if in a git repo (to show modified files — sanitize for secrets first)
@@ -117,7 +143,8 @@ If the user pasted an error, capture verbatim. Otherwise look for recent failure
 **Do NOT capture:**
 - Contents of `src/playerConfig.ts` (contains tenantId / clientId — sensitive)
 - Contents of `.env` or any file matching `.env*`
-- Connection IDs unless the user explicitly opted in (PII / can map to tenant)
+- Connection IDs, even if a diagnostic command printed them
+- Raw `app.json`, `app.config.js`, `auth.config.json`, or `power.config.json`
 - Anything under `node_modules/`
 - Package source excerpts, patched package contents, or proposed fork code
 - Tenant/environment/organization IDs in a public issue, even though verified
@@ -153,9 +180,9 @@ Print this block — user copies into a new issue:
 | npm | <version> |
 | Power Apps CLI | <version> |
 | Expo CLI | <version> |
-| Xcode | <if macOS> |
-| JDK | <if android> |
-| ANDROID_HOME set | <yes/no> |
+| Release status | <verified release ID or unresolved category> |
+| Runtime tuple | <sanitized template/host/Expo/React Native/native inventory versions> |
+| Player / selected bases | <actual supplied versions and base fingerprints, or unknown> |
 
 ### Project context
 
@@ -198,7 +225,7 @@ Not run inside a mobile-app project.
 ### Logs / errors
 
 ```
-<paste verbatim — sensitive values redacted>
+<bounded sanitized error summary; no package source or raw configuration>
 ```
 
 ### Notes
@@ -223,5 +250,7 @@ If the user wants to open it, suggest `open <url>` (macOS) / `xdg-open <url>` (L
 ## Notes
 
 - This skill never modifies any file or invokes mutating commands. Pure diagnostic.
-- For diagnosing connection-specific failures, suggest the user run `/list-connections` first and paste that output into the issue.
-- For diagnosing build failures, suggest they include the full Metro/Gradle/Xcode log (not truncated).
+- For connection-specific failures, use `/list-connections` locally; include only
+  a sanitized category/reproduction, never raw connection output or IDs.
+- For build failures, include a bounded sanitized excerpt, not full logs or
+  private package source. Keep native compatibility limitations explicit.

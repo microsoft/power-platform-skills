@@ -19,7 +19,11 @@ model: sonnet
 
 Generate typed camera + image-picker wrappers, an optional barcode/QR scanner control, and optional custom-upload guidance for Dataverse image/file workflows.
 
-This skill **only writes JS files under `src/native/`**. It does not install modules and does not touch `package.json` or `app.config.js` — the underlying Expo modules (`expo-camera`, `expo-image-picker`) and their config plugins must already be shipped by the `microsoft/power-platform-skills/plugins/mobile-apps/template#main` template. If they're missing, STOP and tell the user the template doesn't ship them yet.
+This skill **only writes JS files under `src/native/`**. It does not install
+modules or touch `package.json` / `app.config.js`. The Expo modules and native
+configuration must match the app's
+[verified release context](../../../shared/references/mobile-release-lifecycle.md),
+not the newest plugin template. Unknown/missing records block native mutations.
 
 Why: customer binaries are built from a pre-built rewrap base, not from the customer's `package.json`. Adding a native module here would compile against modules the binary doesn't actually contain, causing runtime crashes after rewrap. See [`/add-native`](../SKILL.md) for the same hard rules.
 
@@ -33,7 +37,7 @@ Two modules are required (must already be in `package.json`):
 
 ## Workflow
 
-1. Verify project → 2. Verify modules are template-shipped → 3. Write camera wrapper → 3b. Write scanner control if requested → 4. Detect Dataverse columns → 5. Write upload helper only for custom capture flows → 6. Type-check → 7. Summary
+1. Verify project → 2. Verify resolved native inventory → 3. Write camera wrapper → 3b. Write scanner control if requested → 4. Detect Dataverse columns → 5. Write upload helper only for custom capture flows → 6. Type-check → 7. Summary
 
 ---
 
@@ -45,15 +49,24 @@ test -f app.config.js && test -f power.config.json && test -f package.json
 
 If any file is missing, report and STOP — this skill requires an initialized Power Apps mobile app.
 
-### Step 2 — Verify modules are template-shipped
+### Step 2 — Verify resolved native inventory
 
-Both `expo-camera` and `expo-image-picker` must already be in `package.json`. Do **not** install them — if they're missing, the upstream template hasn't shipped them yet, and this skill STOPs.
+Resolve the app before package checks or wrapper edits:
 
 ```bash
-node -e "const p = require('./package.json'); const need = ['expo-camera','expo-image-picker']; const missing = need.filter(m => !p.dependencies?.[m]); if (missing.length) { console.error('MISSING from package.json: ' + missing.join(', ') + '. The upstream template must ship these for /add-native camera to run. Do NOT install them yourself — file an issue at the template repo (plugins/mobile-apps/template) instead.'); process.exit(1); } console.log('OK: both modules present');"
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root "<working_dir>"
 ```
 
-If the check fails, STOP. Print the error verbatim. Do not run `npx expo install`. Do not edit `app.config.js`. Tell the user the template version they scaffolded from doesn't include the camera modules — they need to wait for a newer template release or open a request upstream.
+If the parent explicitly selected local diagnostic artifacts, append the same
+`--diagnostic-artifacts "<manifest.json>"` to resolution and package validation.
+Keep the lifecycle reference's online-only Android/no-deployment limits.
+
+Both `expo-camera` and `expo-image-picker` must match the resolved native
+inventory and installed docs/types for this combined wrapper. Missing package,
+release evidence, or native support means STOP, not install.
+Do not run `npx expo install`, edit OS declarations, or offer local native builds.
+Package inclusion does not establish OS declarations or device runtime grants.
+Barcode/QR uses `expo-camera`; there is no controls barcode subpath.
 
 Also check if the wrapper already exists:
 
@@ -418,14 +431,15 @@ Fix any errors. Common issues:
 ```
 Camera + image picker wrappers generated
 ---
-Modules (template-shipped) : expo-camera, expo-image-picker
+Modules (release-matched)  : expo-camera, expo-image-picker <resolved versions>
+Release context            : <verified release ID>
 package.json               : unchanged ✓
 app.config.js              : unchanged ✓
 Camera wrapper             : src/native/camera.ts
 Scanner control            : src/native/barcodeScanner.tsx (or "skipped — no barcode/QR workflow requested")
 Upload helper              : src/native/cameraUpload.ts  (or "skipped — no Dataverse image columns found")
 
-Type-check: PASS
+Type-check: PASS (not native device validation)
 
 Sample usage (capture + upload to Dataverse):
 

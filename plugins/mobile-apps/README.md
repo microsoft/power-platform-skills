@@ -18,13 +18,35 @@ Start from the Power Platform mobile app template, then use the mobile-app
 skill to generate the app plan, data model, screens, native capabilities, and
 connector wiring.
 
-1. Create a new app from the template and install dependencies:
+1. Select a verified release and create a new app from its immutable template:
 
     ```sh
-    npx degit microsoft/power-platform-skills/plugins/mobile-apps/template#main my-mobile-app
+    node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --default
+    node "${PLUGIN_ROOT}/scripts/mobile-template-lifecycle.js" acquire \
+      --release "<reviewed-release-id>" --destination ./my-mobile-app
     cd my-mobile-app
-    npm install
+    npm ci
     ```
+
+    `${PLUGIN_ROOT}` is the installed mobile-app plugin directory. Acquisition
+    and dependency installation require approval. The helper checks the exact
+    package version, integrity, and compatibility manifest and never overwrites
+    a non-empty target. Use existing npm user/environment authentication; it
+    does not provision registry credentials.
+
+    **Release gate:** the reviewed policy currently contains no release/default.
+    These commands therefore block until maintainers verify matching template,
+    host, native dependencies, Android/iOS bases, and available players. Do not
+    substitute `latest`, a Git branch, or the bundled template to bypass this
+    check. Existing source-only editing remains possible without claiming native
+    compatibility. See [the lifecycle contract](shared/references/mobile-release-lifecycle.md).
+
+    An explicitly requested online-only Android test may instead select immutable
+    local archives with `--diagnostic-artifacts "<manifest.json>"`, following
+    that contract's separate inspection/acquisition/install approvals. It verifies
+    package/lock hashes and actual selected APK metadata, not release readiness.
+    No catalogue/default is created; iOS remains unvalidated and diagnostic
+    tenant/store deployment is prohibited.
 
 2. Install the mobile-app plugin from the Power Platform Skills marketplace.
 
@@ -132,32 +154,38 @@ This template is provided under the license in `LICENSE`.
 
 The mobile-app plugin is stored in `plugins/mobile-apps` in the `power-platform-skills` marketplace. It works with GitHub Copilot in VS Code and Claude Code.
 
-## Manual migration to a new template
+## Updating an existing app
 
-To migrate without `upgrade-template`, create a new app from the latest template
-instead of modifying the old app in place. Commit or back up the old app first.
+`/check-updates` **offers to update** a verified native release as a unit:
+template migrations, host, Expo/React Native, native inventory, and matching
+bases/players. It checks for stale templates even when the host was already
+updated and supports same-template host repair. It previews every migration in
+a disposable copy, then asks separately before applying the full reviewed
+chain. Customer code, settings, local changes, and instruction files are preserved.
 
-1. Create the new app and install its dependencies.
-2. Copy the contents of `app/` and `src/` from the old app into the same
-    directories in the new app:
+Managed/native packages are never offered as unrelated npm bumps. Pure-JS
+dependencies retain individual approval, validation, rollback, and direct-advisory
+auditing. Unsupported metadata, conflicts, unavailable releases, and incomplete
+previews block changes rather than inventing state. See
+[the lifecycle contract](shared/references/mobile-release-lifecycle.md).
 
-    ```bash
-    cp -R ../old-app/app/. app/
-    cp -R ../old-app/src/. src/
-    ```
+When an old app has no supported migration, retain the original app and report
+the missing route. Do not run the new-project CLI over it, replace its root
+configuration wholesale, or rewrite its protected compatibility IDs.
 
-3. Copy app-owned assets and settings such as `assets/`, `auth.config.json`,
-    `power.config.json`, and `offline-profile.json` as needed. Review each file
-    before replacing the version supplied by the new template.
-4. Keep the new template's `package.json`, root configuration files,
-    `android/`, and `ios/`. Reapply old customizations selectively rather than
-    copying these files wholesale.
-5. Run `npm install`, `npm run type-check`, and the bundle command for each
-    target platform, such as `npm run bundle:android` or `npm run bundle:ios`.
-6. Give the resulting errors to GitHub Copilot in Agent mode and ask it to
-    update the migrated `app/` and `src/` code for the new template APIs while
-    preserving the new template configuration. Review the changes and rerun the
-    failing command until the build succeeds.
+## Existing native controls
+
+When a verified release includes `@microsoft/power-apps-native-controls`,
+`/add-native` routes PDF viewing, pen capture, and geolocation to its public
+`/pdf`, `/pen`, and `/geolocation` subpaths. Older releases use only the leaf
+APIs their binary actually ships; installing the aggregate is not a binary
+upgrade. Barcode is not an aggregate subpath.
+
+The template owns the dependency; a compatible host owns plugin registration.
+Merely adding the package does not grant runtime permissions or start tracking.
+Existing Android library declarations can remain even for unused controls.
+This workflow uses a fixed-capability base, not per-customer optional-permission
+selection during wrapping. Different declarations require another verified base.
 
 ## Hello world — your first run
 
@@ -268,17 +296,17 @@ Example edit flows:
 
 | Command | Status | Description |
 | --- | --- | --- |
-| `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `pa app init`, resolves the selected environment tenant, discovers tenant-visible app registrations and checks the complete required permission profile, lets the user select or create one (or skip auth), then applies data/native/connectors, builds screens, starts dev server |
+| `/create-mobile-app` | ✅ v0 | Orchestrator — acquires an exact reviewed immutable template into a new/empty folder after approval, or validates an existing fresh installed app against its release. Separately approves installation, gates planning, runs the resolved `pa app init`, verifies environment/auth setup, then applies data/native/connectors, builds screens and starts the dev server. Missing release evidence blocks creation. |
 | `/set-app-registration-native` | ✅ v0 | Auth helper — discovers tenant-visible app registrations, checks the applicable native runtime permission profile, opens the environment-specific Wrap page for creation or repair, and writes the selected client ID to `auth.config.json`. |
 | `/add-dataverse` | ✅ v0 | Add Dataverse — connect to existing tables, or create / extend tables in Tier 0 → N order via the Dataverse Web API, then generate TS services. Accepts ER diagrams via image / Mermaid / text, or spawns the data-model-architect agent. |
 | `/setup-datamodel` | ✅ v0 | Discoverable alias for `/add-dataverse` optimized for the design-first entry point ("how do I plan my Dataverse schema?"). Same workflow under a more searchable name. |
 | `/add-connector` | ✅ v0 | Generic connector — runs `pa app add data-source` for any first-party or custom connector |
-| `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, haptics, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
+| `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, haptics, etc.) — resolves the app-matched reviewed native inventory and installed closure, then writes typed wrappers under `src/native/`. The newest bundled template is not the allowlist; missing native support requires a coordinated release, not an independent package install. |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `pa app add data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
 | `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. `--plan-only` preserves the old docs-only behavior. |
 | `/debug-app` | ✅ v0 | Monitors live `.powernative/metro-logs/` files with a durable byte cursor, stores host-neutral cursor/audit/health state under `.powernative/debug-app/`, diagnoses runtime and silent data-path failures, and verifies bounded fixes without depending on host terminal IDs. |
 | `/setup-app-insights` | ✅ v0 | Configure optional customer-owned Application Insights telemetry — discover or accept an existing Azure resource and wire `app.json` → `expo.extra.appInsightsConfig` + `PowerAppsProvider`, change the resource, or disable it. Off by default; invoking it is the opt-in. Also delegated to by `/edit-app`. Never provisions Azure resources or stores the connection string. |
-| `/check-updates` | ✅ v0 | Standalone dependency maintenance — checks for a plugin update and restart first, then presents, approves, updates, and validates direct packages one at a time in host, other `@microsoft/*`, and remaining npm package order. |
+| `/check-updates` | ✅ v0 | Offers a coordinated verified native release/template upgrade or host repair, then individually approved JS-only updates and direct-advisory auditing. Full-chain preview, explicit application approval, validation, and rollback; never independent native bumps. |
 | `/deploy` | ✅ v0 | Build + push — `npm run build` then `pa app push` to the env in `power.config.json`. **Does not** drive `expo run:ios` or `expo run:android` (out of scope for v0). |
 | `/open-wrap-url` | ✅ v0 | Opens the Wrap URL in browser for an app ID using `https://make.powerapps.com/environments/<envID>/wrap?appID=<appID>`. Requires both `--app-id` and `--env-id`. |
 | `/report-issue` | ✅ v0 | Read-only diagnostic — collects env / Expo / Node versions, project context, recent errors, and renders a copy-paste-ready GitHub issue body. Sanitizes secrets. |

@@ -10,7 +10,22 @@ All skills reference this single file. When new shared instructions are added, u
 
 **📋 [version-check.md](./version-check.md)**
 
-Run at the start of every skill execution (at most once per day). Notifies the user if a tool version is below the supported minimum (Node 22+, npm 10+, Expo SDK 55+, etc.).
+Run at the start of every skill execution (at most once per day). Use the selected release's supported tooling rather than assuming that newer Expo/React Native versions work with an older binary.
+
+Native work also follows [mobile-release-lifecycle.md](./references/mobile-release-lifecycle.md).
+Resolve the app-version-matched inventory before adding native usage or changing
+dependencies, and verify the intended base before deployment. Never use the
+newest bundled template as an old app's native allowlist. This is an explicit
+workflow gate, not a telemetry/write hook. Source-only edits can continue when
+release evidence is unavailable without claiming native validation.
+
+Only an explicitly requested local diagnostic may substitute the lifecycle
+reference's `--diagnostic-artifacts` selection for published release resolution.
+Carry that same explicit manifest through resolve/plan/changed-file validation
+and nested skills; label the sanitized context `local-diagnostic-only`.
+It is online-only Android test scope, not a default or a tenant/store deployment
+path. Preserve every normal approval and telemetry checkpoint. Never send the
+manifest, its local paths, archive names, raw CLI output or APK to telemetry.
 
 ---
 

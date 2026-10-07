@@ -38,7 +38,12 @@ jobs:
 
             - name: syntax-check-mobile-template
               shell: bash
-              run: node --check plugins/mobile-apps/template/metro.config.js
+              run: |
+                  node --check plugins/mobile-apps/template/metro.config.js
+                  node --check plugins/mobile-apps/scripts/lib/mobile-release.js
+                  node --check plugins/mobile-apps/scripts/lib/mobile-diagnostic-artifacts.js
+                  node --check plugins/mobile-apps/scripts/resolve-mobile-release.js
+                  node --check plugins/mobile-apps/scripts/mobile-template-lifecycle.js
 
             - name: run-mobile-apps-script-tests
               shell: bash
@@ -46,7 +51,7 @@ jobs:
               run: node --test scripts/tests/*.test.js
 
     test-mobile-apps-template:
-        name: test-mobile-apps-template (ubuntu, node 22)
+        name: test-mobile-apps-legacy-preparation-fixture (ubuntu, node 22)
         runs-on: ubuntu-latest
         env:
             POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: "1"

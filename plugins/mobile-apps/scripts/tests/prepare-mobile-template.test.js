@@ -197,7 +197,12 @@ test('scaffold validation uses preparation writes, not later generator output', 
     });
   }
 
-  const manualFiles = [...prepared.writtenFiles, 'memory-bank.md'];
+  // The bundled fixture is not a verified runtime release. Source preparation
+  // can still be tested, but its package write must not bypass native admission.
+  const packageValidation = validate(['package.json']);
+  assert.strictEqual(packageValidation.status, 2, packageValidation.stderr);
+  assert.match(packageValidation.stderr, /release/i);
+  const manualFiles = [...prepared.writtenFiles.filter((file) => file !== 'package.json'), 'memory-bank.md'];
   const valid = validate(manualFiles);
   assert.strictEqual(valid.status, 0, valid.stderr);
   for (const file of ['power.config.json', path.relative(projectRoot, generatedPath)]) {
@@ -469,4 +474,56 @@ test('failed full preparation restores every mutated file', () => {
   }), /must not wrap Slot with SafeAreaView/);
 
   assertSnapshotsEqual(before, fileSnapshot(projectRoot));
+});
+
+test('preparation preserves compatibility, customer extras, instructions and explicit aliases', (t) => {
+  const projectRoot = copyTemplate();
+  t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
+  const appConfig = JSON.parse(fs.readFileSync(path.join(projectRoot, 'app.json'), 'utf8'));
+  appConfig.expo.extra.powerappsNative = {
+    schemaVersion: 1, templateVersion: 7, nativeRuntimeVersions: { android: 4, ios: 6 },
+  };
+  appConfig.expo.extra.customerSetting = { enabled: true, nested: ['keep'] };
+  const preservedFiles = {
+    'app.json': JSON.stringify(appConfig),
+    'AGENTS.md': '# Customer rules\nDo not replace this file.\n',
+    'CLAUDE.md': '@AGENTS.md\n# Custom extension\n',
+    '.github/copilot-instructions.md': 'Follow the customer rules.\n',
+    'tsconfig.json': JSON.stringify({
+      extends: HOST_TSCONFIG,
+      compilerOptions: {
+        baseUrl: '.',
+        paths: { '@/*': ['./src/*'], '@/native/*': ['./src/native/*'] },
+      },
+    }),
+    'power.config.json': '{"environmentId":"","connectionReferences":{"customer":{"keep":true}}}',
+  };
+  for (const [file, content] of Object.entries(preservedFiles)) {
+    fs.mkdirSync(path.dirname(path.join(projectRoot, file)), { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, file), content);
+  }
+  const result = prepareMobileTemplate({
+    workingDir: projectRoot, displayName: 'Preservation probe', slug: 'preservation-probe',
+  });
+  assert.equal(result.removedPowerConfig, false);
+  for (const [file, content] of Object.entries(preservedFiles)) {
+    assert.equal(fs.readFileSync(path.join(projectRoot, file), 'utf8'), content, file);
+  }
+});
+
+test('missing or malformed compatibility metadata blocks before any preparation edits', (t) => {
+  const projectRoot = copyTemplate();
+  t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
+  for (const powerappsNative of [
+    undefined,
+    { schemaVersion: 1, templateVersion: 1, nativeRuntimeVersions: { android: 1 } },
+    { schemaVersion: 1, templateVersion: '1.0.0', nativeRuntimeVersions: { android: 1, ios: 1 } },
+  ]) {
+    fs.writeFileSync(path.join(projectRoot, 'app.json'), JSON.stringify({ expo: { extra: { powerappsNative } } }));
+    const before = fileSnapshot(projectRoot);
+    assert.throws(() => prepareMobileTemplate({
+      workingDir: projectRoot, displayName: 'Do not write', slug: 'do-not-write',
+    }), /powerappsNative|metadata|runtime|templateVersion/i);
+    assertSnapshotsEqual(before, fileSnapshot(projectRoot));
+  }
 });

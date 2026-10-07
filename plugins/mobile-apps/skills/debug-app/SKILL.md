@@ -120,6 +120,16 @@ Before entering the loop:
 
 ### 0.preflight Read project context
 
+For an explicitly selected `--diagnostic-artifacts "<manifest.json>"`, follow
+the [local diagnostic lifecycle](../../shared/references/mobile-release-lifecycle.md)
+and carry the option into resolver/validator calls. Use `mobile-template-lifecycle.js
+plan` read-only to compare the app's required counter with this known APK's
+actual supported counters. Report both values on mismatch; offer an approved
+`/check-updates` migration or a separately verified matching player, never a
+counter rewrite. No automatic device discovery, offline conversion, first-party
+package patch, or tenant/store deployment. APK metadata is not a device test;
+iOS remains untested. Existing no-fix/consent and telemetry behavior is unchanged.
+
 Follow the shared instructions before diagnosing logs:
 
 Use `workingDir` from argument parsing as `<working_dir>` throughout this workflow. It is already validated as an app root; do not derive it again from a later phase or silently switch projects.
@@ -185,7 +195,7 @@ Branch as follows:
 | Multiple valid logs exist | Show every valid session and ask which one to monitor. Do not select by recency alone. |
 | Log exists, PID is gone, and another process owns the logged port | Do NOT diagnose from this log. Tell the user which PID holds the port and ask them to restart `npm run dev`. |
 | Log exists but PID/port contradict each other | The device may be talking to the wrong server. Ask the user to stop stale Metro processes and rerun `npm run dev`. |
-| No log exists and the logging form is unavailable | This project predates project-local Metro logging or has incomplete dependencies. Stop and report the missing config form, dependency declaration, or resolvable export. Do not enter a restart loop or edit customer-owned config from `/debug-app`; the user must adopt the current template's Metro config and host dependency first. |
+| No log exists and the logging form is unavailable | This project either predates project-local Metro logging or has incomplete/incompatible dependencies. Stop and report the missing config form, dependency declaration, or resolvable export. Do not enter a restart loop, edit customer config, or copy the newest template/host. Resolve the existing app's release and route any necessary migration to `/check-updates`; unknown/missing verified support is a blocker, not permission to install a newer host. |
 | No log exists and the current factory or legacy direct logging form resolves | If available host output contains `[powernative] Metro logging instrumentation failed`, report its phase and project-relative log path; the host deliberately fails open, so Metro can remain live without a file. Otherwise tell the user Metro is not running or has not emitted `.powernative` logs. Ask them to run `npm run dev`, open the native app, then rerun `/debug-app`. |
 
 The PID/port check prevents stale-log diagnosis: a log file can outlive its Metro process, so only the socket probe reveals that the log stopped belonging to the app under test. The explicit choice prevents a valid session on one port from being confused with another valid session in the same project.
@@ -920,6 +930,30 @@ Append to `.powernative/debug-app/fixes.md`:
 
 These recipes apply to errors classified as "Import / Bundle" in Step B. They are read from the persisted `.powernative` Metro log. Each recipe is opinionated: take the action listed if its precondition matches, otherwise fall through to the next.
 
+**Release-aware diagnosis.** Read
+[release lifecycle](../../shared/references/mobile-release-lifecycle.md) and
+resolve the app read-only before attributing native import/module/ABI failures:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/resolve-mobile-release.js" --project-root "<working_dir>"
+```
+
+Use only the sanitized tuple in diagnostic handoffs. The newest bundled
+template is not this app's runtime allowlist. Unknown/missing records block
+native mutations, not source-only diagnosis and fixes; mark native compatibility
+unverified. User consent to a dependency install does not waive this gate.
+Never install controls, a native leaf, Expo, or a newer host to fix an older
+player/base; route verified-release migrations to `/check-updates`.
+
+For controls, read [the conditional contract](../add-native/references/native-controls.md):
+the root is metadata, `/pdf`, `/pen`, and `/geolocation` are public runtime
+subpaths, and there is no barcode subpath. Use a leaf only when its matching
+version is in the resolved release. Native wrappers guard the platform before
+lazy imports. A missing native module or OS declaration is not solved by a JS
+fallback, runtime grant, or `enableNativeControls` on host 0.4.0 (unsupported).
+Package inclusion, declarations, grants, and use are separate; disabling
+controls does not remove default Android permissions.
+
 Before applying any recipe, run the first-party native package ownership gate when the cited source/importer or failed internal import is under `node_modules/@microsoft/power-apps-native-*`. A confirmed package-owned defect routes to `/report-issue`; never repair it with a resolver alias, copied source, patch, postinstall rewrite, or replacement dependency.
 
 | Error pattern | Precondition | Action |
@@ -927,8 +961,8 @@ Before applying any recipe, run the first-party native package ownership gate wh
 | `SyntaxError: <file>:<line>:<col>` in `app/`, `src/components/`, `src/hooks/`, `src/services/` | The cited line is in editable user code (NOT `src/generated/`, NOT `node_modules/`) | `Read` the file around the cited line (±10 lines), identify the syntactic issue (unclosed JSX tag, missing closing brace/paren, stray comma, missing `from` in import, unterminated string, missing semicolon between statements), apply a single minimal `Edit`. Do NOT reformat surrounding code. |
 | `SyntaxError` in `src/generated/` | Cited file is under `src/generated/` | **Do not edit.** Schema regen produced bad output. Hand-off: tell the user to re-run `npm run generate-schemas`; if the error reproduces, route to `/add-connector` or `/add-dataverse` to re-add the affected datasource. |
 | `Unable to resolve module <name>` from `<importer>` | `<name>` starts with `.` or `..` (relative import) | `Glob` the importer's directory for files matching `<name>` with any extension (`.ts`, `.tsx`, `.js`, `.jsx`, `.json`). If found with a different extension → fix the import to drop the extension OR match the actual one. If found with a typo (Levenshtein ≤ 2) → fix the typo. If not found at all → the file genuinely doesn't exist; surface to user and ask whether to create it or remove the import. |
-| `Unable to resolve module <name>` | `<name>` is a bare package AND not present in `package.json` `dependencies` / `devDependencies` | Follow [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) to classify the published package by contents, not its name. If native-bound and absent from the template, report that a template/runtime update is required. If verified pure JavaScript, ask consent for the exact version, install with `npm install --save-exact`, validate, and retry. Do NOT install without consent. |
-| `Unable to resolve module <name>` | `<name>` IS in `package.json` but the bundle still fails | Likely cache: ask the user to stop Metro, rerun `npm run dev -- --clear`, then reload. Never kill an unowned process. |
+| `Unable to resolve module <name>` | `<name>` is a bare package AND not present in `package.json` `dependencies` / `devDependencies` | Follow [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) to classify published contents. Native-bound or unresolved classification: STOP native mutation and report the missing verified support; do not install. Verified pure JavaScript: ask consent for the exact version compatible with this app, install with `npm install --save-exact`, validate, and retry. Do NOT install without consent. |
+| `Unable to resolve module <name>` | `<name>` IS in `package.json` but the bundle still fails | First verify installed public exports, lockfile version, and the app-matched release. A controls root/subpath mismatch, missing install, or native version mismatch is not a cache diagnosis. Only after excluding these, ask the user to restart Metro with `npm run dev -- --clear` and reload. Never kill an unowned process. |
 | `transform failed` referencing a babel plugin (e.g., `[BABEL] ... unknown plugin "react-native-reanimated/plugin"`) | Error references `babel.config.js` | **Hand-off.** `babel.config.js` is project config (same constraint that protects `app.config.js`). Print the cited plugin and suggested fix order (e.g., "`react-native-reanimated/plugin` MUST be the LAST plugin in `babel.config.js` `plugins` array"); skip to next issue. |
 | `transform failed` without a babel reference | Generic transform failure (often a TS feature Metro's transformer can't handle) | Read the cited file, look for syntax that requires a specific TS lib (e.g., decorators, top-level await). If the issue is a known-bad pattern, surface and ask before fixing. Otherwise hand-off. |
 | `predev` script failure (e.g., `npm run generate-schemas` errored before `expo start` ran) | Bundle output shows the failure happened during the `predev` lifecycle hook | This is not a code edit — `power.config.json` or the connector setup is broken. **Hand-off:** route user to `/add-connector` (for Power Platform connectors) or `/add-dataverse` (for Dataverse). Do NOT edit `power.config.json` directly. |
@@ -1041,6 +1075,13 @@ Do NOT attempt a third automated fix for the same error. Wait for user guidance.
 
 ## Constraints
 
+- **Native compatibility is fail-closed.** Resolve the existing app and use its
+  installed public contracts. Do not mutate native dependencies/config or run
+  local native builds, even with consent to an unrelated JS fix. No newest
+  template allowlist, fabricated verified release, or runtime fallback for a
+  missing native package. Optional permission wrapping remains deferred.
+  Never rewrite `app.json` → `expo.extra.powerappsNative` requirements to make
+  the resolver accept a mismatched installation.
 - **Never fix native config files** (`app.config.js`, `app.plugin.js`, `Podfile`, `build.gradle`, `gradle.properties`) — report the error to the user with the exact line and a suggested manual action.
 - **Never modify `src/generated/`** — these files are auto-generated. Fix the upstream query / service / schema instead, then run `npm run generate-schemas`.
 - **Never patch or fork first-party native packages in a customer project** — for confirmed defects in `@microsoft/power-apps-native-*`, do not edit `node_modules/`, generate `patch-package` artifacts or postinstall rewrites, vendor/copy package source, generate or install a fork, replace the dependency with a git/tarball/local path, or add resolver aliases/shims that shadow the package. Route the sanitized evidence to `/report-issue`.
