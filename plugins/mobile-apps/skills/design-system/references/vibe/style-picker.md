@@ -313,8 +313,8 @@ On `yes` (or no answer), try OS-appropriate openers in sequence and fall back to
 it interrupts the user rather than showing them something new.
 
 ```bash
-open "<working_dir>/_design_vibe.html" 2>/dev/null \
-  || xdg-open "<working_dir>/_design_vibe.html" 2>/dev/null \
+open '<working_dir>/_design_vibe.html' 2>/dev/null \
+  || xdg-open '<working_dir>/_design_vibe.html' 2>/dev/null \
   || powershell.exe -NoProfile -Command "Start-Process '<working_dir>\_design_vibe.html'" 2>/dev/null \
   || echo "Could not auto-open. Please open this URL: file://<working_dir>/_design_vibe.html"
 ```

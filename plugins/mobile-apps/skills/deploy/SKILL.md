@@ -175,7 +175,7 @@ Run the local, no-network delta check (`.datamodel-manifest.json` vs `offline-pr
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js" --project-root "<working_dir>"
+node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js" --project-root '<working_dir>'
 ```
 
 Branch on the JSON `status` (full contract in [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md)):
@@ -200,7 +200,7 @@ Branch on the JSON `status` (full contract in [offline-profile-reconciliation.md
 
 Options:
 
-- **Update the offline profile now (recommended)** — use the reconciliation reference's **Scoped helper handoffs** with `orchestrator: deploy`, absolute `working_dir`, `phase: implementation`, and the approved environment/profile/table scope. Read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` with `--working-dir "<working_dir>" --table <t>` for each approved `missingTables[]` entry, then `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` with those arguments plus `--columns add:<newColumns>` for each approved `tablesWithNewColumns[]` entry. Re-run the guarded delta check; when it reports `in-sync`, continue to Step 3.
+- **Update the offline profile now (recommended)** — use the reconciliation reference's **Scoped helper handoffs** with `orchestrator: deploy`, absolute `working_dir`, `phase: implementation`, and the approved environment/profile/table scope. Read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` with `--working-dir '<working_dir>' --table <t>` for each approved `missingTables[]` entry, then `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` with those arguments plus `--columns add:<newColumns>` for each approved `tablesWithNewColumns[]` entry. Re-run the guarded delta check; when it reports `in-sync`, continue to Step 3.
 - **Deploy anyway** — requires an explicit override. Wait for the exact phrase `deploy without offline` (case-insensitive); a bare `y`/`yes` is not enough, mirroring the environment-mismatch gate in Step 3. Then continue to Step 3 and note the skipped reconciliation in the Step 4 build-history row.
 
 Do not push until the gate is resolved (reconciled to `in-sync`, or explicitly overridden).

@@ -9,14 +9,13 @@ const test = require('node:test');
 
 const pluginRoot = path.resolve(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(pluginRoot, file), 'utf8').replace(/\r\n?/g, '\n');
-const helpers = ['add-table-to-offline-profile', 'edit-offline-profile'];
+const helpers = ['add-table-to-offline-profile', 'edit-offline-profile', 'enable-tables-offline'];
 const documents = Object.fromEntries(helpers.map((name) => [name, read(`skills/${name}/SKILL.md`)]));
 const reference = read('shared/references/app-working-directory.md');
 const rootLink = '[app-working-directory.md](${PLUGIN_ROOT}/shared/references/app-working-directory.md)';
 const shellBlocks = (text) => [...text.replace(/\r\n?/g, '\n').matchAll(/^```bash\n([\s\S]*?)\n```/gm)]
   .map((match) => match[1]);
 const guard = shellBlocks(reference)[0];
-const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
 const slashPath = (value) => value.replaceAll('\\', '/');
 
 // The documented Windows shell is Git Bash, not a WSL filesystem.
@@ -46,7 +45,7 @@ function fixture(t) {
   fs.mkdirSync(relative);
   t.after(() => fs.rmSync(relative, { recursive: true, force: true }));
   for (const [name, environmentId] of [
-    ["owner's app [test] $literal `tick`", context.environmentId],
+    ["owner's app [test] $literal $(printf value) `printf tick`", context.environmentId],
     ['different app', 'caller-environment'],
   ]) {
     const root = path.join(relative, name);
@@ -96,7 +95,7 @@ if (script === 'resolve-environment.js') {
 }
 `);
   const directory = path.resolve(relative);
-  const owner = path.join(directory, "owner's app [test] $literal `tick`");
+  const owner = path.join(directory, "owner's app [test] $literal $(printf value) `printf tick`");
   const caller = path.join(directory, 'different app');
   const callerFiles = Object.fromEntries(fs.readdirSync(caller)
     .map((name) => [name, fs.readFileSync(path.join(caller, name), 'utf8')]));
@@ -109,9 +108,7 @@ if (script === 'resolve-environment.js') {
 }
 
 function render(block, root) {
-  let command = block.replaceAll("'<working_dir>'", shellQuote(slashPath(root)))
-    .replaceAll(/"<working_dir>([^"]*)"/g,
-    (_match, suffix) => shellQuote(slashPath(root) + suffix));
+  let command = block.replaceAll('<working_dir>', slashPath(root).replaceAll("'", "'\\''"));
   for (const [token, value] of Object.entries({
     'selected-environment-id': context.environmentId,
     envUrl: context.environmentUrl,
@@ -198,26 +195,28 @@ for (const name of helpers) {
         }
       }
     }
-    for (const file of [
-      'power.config.json', '.datamodel-manifest.json', 'docs/plan-artifacts/.datamodel-manifest.json',
-      'offline-profile.json', 'memory-bank.md', 'app/', 'src/',
-    ]) assert.ok(text.includes(`<working_dir>/${file}`), file);
+    const files = ['power.config.json', '.datamodel-manifest.json',
+      'docs/plan-artifacts/.datamodel-manifest.json', 'memory-bank.md'];
+    if (name !== 'enable-tables-offline') files.push('offline-profile.json', 'app/', 'src/');
+    for (const file of files) assert.ok(text.includes(`<working_dir>/${file}`), file);
     assert.match(text, /every shell call and file tool/);
     assert.match(text, /Re-supply the absolute `PLUGIN_ROOT`/);
-    assert.match(text, /missing values\s+return `NEEDS_CONTEXT`/);
-    assert.match(text, /no prior `cd`, export, or shell variable persists/);
+    assert.match(text, /[Mm]issing values\s+return\s+`NEEDS_CONTEXT`/);
+    assert.match(text, /no\s+prior `cd`, export, or shell variable persists/);
     assert.match(text, /All linked recovery commands, re-GET verification, and retries/);
-    assert.match(text, /--project-root "<working_dir>"` in its own guarded call/);
     assert.doesNotMatch(text, /\$PROFILE_ID|\bin cwd\b/);
-    const handoff = section(text, '```text\nArguments: --working-dir', '\n```');
-    for (const field of [
-      '--working-dir "<working_dir>"', '--profile-id "<profileId>"', '--table "<table>"',
-      'MOBILE_APP_ORCHESTRATING=1', 'orchestrator', 'working_dir', 'phase', 'approved_scope',
-      'environment ID/URL/tenant', 'profile ID', 'table allowlist', 'item ID',
-      'supplied answers', '--plan-only',
-    ]) assert.ok(handoff.includes(field), field);
-    assert.match(text, /recipient must enforce the same canonical root contract/);
-    assert.match(text, /do not fall back to direct invocation or rediscovery/);
+    if (name !== 'enable-tables-offline') {
+      assert.match(text, /--project-root '<working_dir>'` in its own guarded call/);
+      const handoff = section(text, '```text\nArguments: --working-dir', '\n```');
+      for (const field of [
+        "--working-dir '<working_dir>'", '--profile-id "<profileId>"', '--table "<table>"',
+        'MOBILE_APP_ORCHESTRATING=1', 'orchestrator', 'working_dir', 'phase', 'approved_scope',
+        'environment ID/URL/tenant', 'profile ID', 'table allowlist', 'item ID',
+        'supplied answers', '--plan-only',
+      ]) assert.ok(handoff.includes(field), field);
+      assert.match(text, /recipient must enforce the same canonical root contract/);
+      assert.match(text, /do not fall back to direct invocation or rediscovery/);
+    }
   });
 
   test(`${name}: documented commands and fresh retries cannot be redirected by another app cwd`, (t) => {
@@ -256,7 +255,10 @@ for (const name of helpers) {
         if (args[2].startsWith('EntityDefinitions(')) assert.ok(args[2].includes(context.table));
         if (args[2] === 'PublishXml') {
           const body = JSON.parse(args[args.indexOf('--body') + 1]);
-          assert.ok(body.ParameterXml.includes(`<mobileofflineprofile>${context.profileId}</mobileofflineprofile>`));
+          const target = name === 'enable-tables-offline'
+            ? `<entity>${context.table}</entity>`
+            : `<mobileofflineprofile>${context.profileId}</mobileofflineprofile>`;
+          assert.ok(body.ParameterXml.includes(target));
         }
         if (args[2] === 'mobileofflineprofileitems') {
           const body = JSON.parse(args[args.indexOf('--body') + 1]);
@@ -270,7 +272,8 @@ for (const name of helpers) {
         assert.equal(script, '-p');
       }
     }
-    for (const method of ['GET', 'POST', 'PATCH']) {
+    const methods = name === 'enable-tables-offline' ? ['GET', 'POST'] : ['GET', 'POST', 'PATCH'];
+    for (const method of methods) {
       assert.ok(requests.some((args) => args[1] === method), method);
     }
     assert.deepEqual(fs.readdirSync(f.caller).sort(), Object.keys(f.callerFiles).sort());
@@ -323,6 +326,65 @@ test('add-table manifest discovery stays within the owner for both supported loc
   assert.match(result.stderr, /NEEDS_CONTEXT: no manifest in working_dir/);
   assert.equal(result.stdout, '');
   assert.ok(fs.existsSync(path.join(f.caller, '.datamodel-manifest.json')));
+});
+
+test('offline setup forwards its resolved root and exact approved prerequisites to the internal helper', () => {
+  const setup = read('skills/setup-offline-profile/SKILL.md');
+  const binding = section(setup, '## App-root binding', '## Workflow');
+  assert.ok(binding.includes(rootLink));
+  assert.ok(setup.indexOf(rootLink) < setup.indexOf('```bash'));
+  assert.match(binding, /inherit a child invocation's owner root/);
+  assert.match(binding, /file tools use absolute `<working_dir>\/\.\.\.` paths/);
+  assert.match(binding, /prior shell variables do not persist/);
+  assert.match(binding, /planning-phase caller returns[\s\S]*before entering this mutating wizard/);
+  for (const block of shellBlocks(setup)) assert.ok(block.startsWith(`${guard}\n`), block);
+  const handoff = section(setup, '### Step 4', '### Step 5');
+  for (const field of [
+    "--working-dir '<working_dir>'", 'MOBILE_APP_ORCHESTRATING=1',
+    'orchestrator: setup-offline-profile', 'working_dir: <working_dir>',
+    'phase: implementation', 'approved_scope:', 'environmentId:', 'environmentUrl:',
+    'tenantId:', 'tables:', 'operations:', 'publication:', 'supplied_answers:',
+  ]) assert.ok(handoff.includes(field), field);
+  assert.match(handoff, /exact Gate 1-approved prerequisite table allowlist/);
+  assert.match(handoff, /Configuration review must already\s+be accepted/);
+  assert.match(handoff, /literal first-line status/);
+  const creation = read('skills/create-mobile-app/SKILL.md');
+  const caller = section(creation, 'If the user selects Yes, invoke `/setup-offline-profile`', 'Tables and generated services now exist');
+  assert.match(caller, /--working-dir '<working_dir>'/);
+  assert.match(caller, /orchestrator: create-mobile-app/);
+  assert.match(caller, /not its prerequisite or\s+profile mutations/);
+});
+
+test('offline setup resolves identity only inside its selected app before handing off', (t) => {
+  const f = fixture(t);
+  const setup = read('skills/setup-offline-profile/SKILL.md');
+  const block = shellBlocks(setup)[0];
+  const result = run(block, f);
+  assert.equal(result.status, 0, result.stderr);
+  const recorded = calls(f);
+  assert.equal(recorded.length, 2);
+  assert.ok(recorded.every((call) => fs.realpathSync.native(call.cwd) === fs.realpathSync.native(f.owner)));
+  assert.deepEqual(recorded[1].args.slice(1), [context.environmentId, '--no-cache', '--require-tenant']);
+  const before = calls(f);
+  const failed = run(block, f, path.join(f.directory, 'missing owner'));
+  assert.equal(failed.status, 1);
+  assert.deepEqual(calls(f), before);
+  assert.match(failed.stderr, /BLOCKED: cannot enter working_dir/);
+});
+
+test('offline enablement cannot widen the owner table list or repeat approval in planning mode', () => {
+  const enable = documents['enable-tables-offline'];
+  const tables = section(enable, '### Step 2', '### Step 3');
+  assert.match(tables, /only the exact table allowlist in the owner's `approved_scope`/);
+  assert.match(tables, /not permission to enable every\s+row/);
+  assert.match(tables, /Missing or conflicting table selection returns\s+`NEEDS_CONTEXT`/);
+  const gate = section(enable, '### Gate', '### Step 4');
+  assert.match(gate, /Gate 1 approval is reused without a duplicate\s+prompt/);
+  assert.match(gate, /owner[\s\S]*owns the approval gate/);
+  assert.match(gate, /Do not widen\s+scope or override proposal-only mode/);
+  assert.match(enable, /owner separately approves the broader publication/);
+  assert.match(enable, /Table-only approval does not authorize publishing unrelated changes/);
+  assert.match(enable, /literal first line/);
 });
 
 test('root reception preserves offline gates, exact deltas, permissions, and schema baselines', () => {

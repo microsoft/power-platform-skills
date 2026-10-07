@@ -746,7 +746,7 @@ Reject loop = re-spawn data-model-architect in `mode: cross-entity-audit` with t
 Run the mobile changed-file dispatcher against every file this planner wrote or edited, including `native-app-plan.md` and temporary section files that remain in the project:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root "<working_dir>" --file "<changed-file>" [--file "<changed-file>" ...]
+node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root '<working_dir>' --file "<changed-file>" [--file "<changed-file>" ...]
 ```
 
 Repair reported violations and rerun until it exits `0`. Pass exact changed files, never the whole project root.
@@ -756,8 +756,8 @@ time:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
-  --normalize-contract "<working_dir>/.tmp/dataverse-schema-contract.json" \
-  --output "<working_dir>/.tmp/dataverse-schema-contract.json"
+  --normalize-contract '<working_dir>/.tmp/dataverse-schema-contract.json' \
+  --output '<working_dir>/.tmp/dataverse-schema-contract.json'
 ```
 
 The gate-owning planner must now finalize the pre-existing

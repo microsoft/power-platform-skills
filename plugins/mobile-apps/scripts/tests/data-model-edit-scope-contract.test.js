@@ -53,7 +53,7 @@ test('the existing editor forwards approved data context and a bounded seed allo
   const edit = skill('edit-app');
   const apply = section(edit, '### Step 5 — Apply app mutations', '#### Step 5.5');
   for (const required of ['MOBILE_APP_ORCHESTRATING=1', 'orchestrator: edit-app', 'working_dir',
-    'phase: implementation', 'approved_scope', '--working-dir "<working_dir>"',
+    'phase: implementation', 'approved_scope', "--working-dir '<working_dir>'",
     'offline_reconciliation_owner: edit-app', '--tables', 'retiring_tables']) {
     assert.ok(apply.includes(required), required);
   }
@@ -61,9 +61,9 @@ test('the existing editor forwards approved data context and a bounded seed allo
   assert.match(apply, /empty[\s\S]*skip seeding|skip seeding[\s\S]*empty/);
   assert.match(edit, /seed table allowlist|seed.*allowlist/i);
   const reconcile = section(edit, '#### Step 5.6', '### Step 6');
-  assert.match(reconcile, /--project-root "<working_dir>"/);
+  assert.match(reconcile, /--project-root '<working_dir>'/);
   assert.match(reconcile, /Scoped helper\s+handoffs/);
-  assert.match(reconcile, /--working-dir "<working_dir>"/);
+  assert.match(reconcile, /--working-dir '<working_dir>'/);
 });
 
 test('setup dispatches retained connector refresh with an explicit selector and registered identity', () => {
@@ -71,7 +71,7 @@ test('setup dispatches retained connector refresh with an explicit selector and 
   assert.match(refresh, /Invoke skill: \/add-connector/);
   assert.match(refresh, /approved_scope: <refresh operation, exact registered name, verified API\/dataset\/resource and connection ID\/reference>/);
   const args = refresh.split('Arguments:')[1];
-  for (const required of ['--working-dir "<working_dir>"', '--connector <verified-api-id>',
+  for (const required of ["--working-dir '<working_dir>'", '--connector <verified-api-id>',
     '--refresh', '--data-source-name "<registered-name>"']) {
     assert.ok(args.includes(required), required);
   }
@@ -98,7 +98,7 @@ test('offline reconciliation owners forward explicit roots and exact approved he
   assert.match(handoff, /orchestrator: <current reconciliation owner>/);
   assert.match(handoff, /working_dir: <owner's resolved absolute working_dir>/);
   assert.match(handoff, /approved_scope: <exact environment\/profile identity/);
-  assert.equal((handoff.match(/--working-dir "<working_dir>"/g) || []).length, 2);
+  assert.equal((handoff.match(/--working-dir '<working_dir>'/g) || []).length, 2);
   assert.match(handoff, /Never send `--all-new`/);
   for (const owner of ['setup-datamodel', 'edit-app', 'add-dataverse', 'deploy']) {
     const content = skill(owner);
@@ -132,14 +132,14 @@ test('the setup planner and all child handoffs share the same absolute owner roo
   ]) {
     const handoff = section(setup, start, end);
     assert.match(handoff, /Context:[\s\S]*working_dir: <working_dir>/);
-    assert.match(handoff, /Arguments:[\s\S]*--working-dir "<working_dir>"/);
+    assert.match(handoff, /Arguments:[\s\S]*--working-dir '<working_dir>'/);
   }
-  assert.match(setup, /--plan-section "<working_dir>\/native-app-plan\.md#data-model"/);
+  assert.match(setup, /--plan-section '<working_dir>\/native-app-plan\.md#data-model'/);
   const retirement = section(setup, '### Phase 6.25', '### Phase 6.5');
   assert.match(retirement, /working_dir: <working_dir>/);
-  assert.match(retirement, /--working-dir "<working_dir>"/);
+  assert.match(retirement, /--working-dir '<working_dir>'/);
   const offline = section(setup, '### Phase 6.5', '### Phase 7');
-  assert.match(offline, /--project-root "<working_dir>"/);
+  assert.match(offline, /--project-root '<working_dir>'/);
   assert.match(offline, /offline helpers also inherit the same absolute `working_dir`/);
 });
 

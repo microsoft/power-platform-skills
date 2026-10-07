@@ -75,14 +75,14 @@ summary when a measured run was created:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/emit-telemetry-checkpoint.js" \
-  --begin "<skill-name>" --project-root "<working_dir>" || true
+  --begin "<skill-name>" --project-root '<working_dir>' || true
 ```
 
 A nested skill uses the supplied run ID and caller span by adding `--run-id`
 and `--parent-span-id`; its returned span is a new skill invocation. Pass both
 IDs as orchestration context when invoking another Skill or Task, not as Power
 Apps CLI flags. Never infer a parent from a process or session ID. On resume,
-use `--resume "<skill-span-id>" --run-id "<run-id>" --project-root "<working_dir>"`
+use `--resume "<skill-span-id>" --run-id "<run-id>" --project-root '<working_dir>'`
 instead of starting a second run, then replace `SKILL_SPAN_ID` with the newly
 returned span ID. Resume is valid only after `needs_context`; it creates a new
 immutable attempt in the same run. Each attempt can have only one retry;
@@ -103,11 +103,11 @@ that same span afterward:
 node "${PLUGIN_ROOT}/scripts/emit-telemetry-checkpoint.js" \
   "<skill-name>|<checkpoint-name>|started" \
   --run-id "$RUN_ID" --parent-span-id "$SKILL_SPAN_ID" \
-  --project-root "<working_dir>" || true
+  --project-root '<working_dir>' || true
 node "${PLUGIN_ROOT}/scripts/emit-telemetry-checkpoint.js" \
   "<skill-name>|<checkpoint-name>|completed" \
   --run-id "$RUN_ID" --span-id "$STEP_SPAN_ID" \
-  --project-root "<working_dir>" || true
+  --project-root '<working_dir>' || true
 ```
 
 For one foreground command, prefer the wrapper so timing and outcome come from
@@ -118,7 +118,7 @@ command string. Use a real executable or `node <script>` on Windows, not a
 ```bash
 bash "${PLUGIN_ROOT}/scripts/run-with-telemetry.sh" \
   --execute "<skill-name>|<checkpoint-name>" --run-id "$RUN_ID" \
-  --parent-span-id "$SKILL_SPAN_ID" --project-root "<working_dir>" \
+  --parent-span-id "$SKILL_SPAN_ID" --project-root '<working_dir>' \
   -- node "<script-path>" "<argument>"
 ```
 
@@ -252,7 +252,7 @@ Plugin-level hooks also run during unrelated plugin workflows, so every mutating
 
    ```bash
    node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" \
-     --project-root "<working_dir>" \
+     --project-root '<working_dir>' \
      --file "<changed-file-1>" \
      --file "<changed-file-2>"
    ```

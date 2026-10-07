@@ -31,6 +31,7 @@ function assertRootBinding(text) {
   assert.ok(blocks.length > 0);
   for (const block of blocks) {
     assert.ok(block.startsWith(`${guard}\n`), 'Every shell call must re-enter the app root');
+    assert.doesNotMatch(block, /"<working_dir>/, 'Arguments must preserve the literal root too');
   }
   for (const block of shellBlocks(text, 'powershell')) {
     assert.ok(block.startsWith(`${powershellGuard}\n`), 'PowerShell calls need a literal fail-closed root');
@@ -42,12 +43,12 @@ const bashPaths = process.platform === 'win32'
   ? (spawnSync('where.exe', ['bash'], { encoding: 'utf8' }).stdout || '').split(/\r?\n/)
   : [];
 const bash = bashPaths.find((entry) => /[\\/]Git[\\/]/i.test(entry)) || 'bash';
-const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+const shellLiteralContents = (value) => value.replaceAll('\\', '/').replaceAll("'", "'\\''");
 
 function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'app-working-dir-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-  const owner = path.join(directory, "owner's app [test] $root $(printf expanded) `literal`");
+  const owner = path.join(directory, "owner's app [test] $root $(printf expanded) `printf backtick`");
   const caller = path.join(directory, 'different app');
   for (const root of [owner, caller]) {
     fs.mkdirSync(root, { recursive: true });
@@ -64,7 +65,7 @@ function fixture(t) {
 }
 
 function run(block, owner, caller) {
-  const command = block.replaceAll("'<working_dir>'", shellQuote(owner.replaceAll('\\', '/')));
+  const command = block.replaceAll('<working_dir>', shellLiteralContents(owner));
   // Use the current Node executable; mutation tests supply local CLI probes.
   const result = spawnSync(bash, ['-s'], {
     input: `node() { "$REAL_NODE" "$@"; }\nPA="npx --no-install pa"\nPA_KIND=pa\n${command}`,
@@ -72,6 +73,7 @@ function run(block, owner, caller) {
     env: {
       ...process.env,
       REAL_NODE: process.execPath.replaceAll('\\', '/'),
+      PLUGIN_ROOT: pluginRoot.replaceAll('\\', '/'),
       POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1',
     },
     encoding: 'utf8',
@@ -131,6 +133,76 @@ test('canonical root guard treats dollar and backtick syntax as literal path con
   assert.equal(result.stderr, '');
   assert.equal(fs.realpathSync.native(result.stdout.trim()), fs.realpathSync.native(owner));
 });
+
+function markdownFiles(directory) {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const file = path.join(directory, entry.name);
+    return entry.isDirectory() ? markdownFiles(file) : entry.name.endsWith('.md') ? [file] : [];
+  });
+}
+
+test('shell commands and handoffs never interpolate literal app roots inside double quotes', () => {
+  const offenders = [];
+  for (const directory of ['agents', 'shared', 'skills']) {
+    for (const file of markdownFiles(path.join(pluginRoot, directory))) {
+      read(file).split('\n').forEach((line, index) => {
+        // Structured file-tool arguments are not shell commands.
+        if (/\b(?:Grep|Glob|Read|Write|Edit)\b.*\b(?:path|file_path)=/.test(line)) return;
+        if (line.includes('"<working_dir>')) {
+          offenders.push(`${path.relative(pluginRoot, file)}:${index + 1}`);
+        }
+      });
+    }
+  }
+  assert.deepEqual(offenders, []);
+});
+
+test('documented normalization arguments preserve literal root contents without repairing their quotes', (t) => {
+  const { owner, caller } = fixture(t);
+  const reference = read(path.join(pluginRoot, 'shared/references/dataverse-change-planning.md'));
+  const block = shellBlocks(reference).find((command) => command.includes('--normalize-contract'));
+  assert.ok(block);
+  const probe = 'node() { "$REAL_NODE" -e \'console.log(JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(1) }))\' "$@"; }';
+  const result = run(`${probe}\n${block}`, owner, caller);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  const call = JSON.parse(result.stdout);
+  assert.equal(fs.realpathSync.native(call.cwd), fs.realpathSync.native(owner));
+  const contract = `${owner.replaceAll('\\', '/')}/.tmp/dataverse-schema-contract.json`;
+  assert.deepEqual(call.args.slice(1), ['--normalize-contract', contract, '--output', contract]);
+
+  const unsafe = block.replaceAll("'<working_dir>/.tmp/dataverse-schema-contract.json'", '"<working_dir>/.tmp/dataverse-schema-contract.json"');
+  assert.notEqual(unsafe, block);
+  const unsafeResult = run(`${probe}\n${unsafe}`, owner, caller);
+  assert.equal(unsafeResult.status, 0, unsafeResult.stderr);
+  assert.notDeepEqual(JSON.parse(unsafeResult.stdout).args.slice(1), call.args.slice(1),
+    'The harness must expose unsafe source quoting, not rewrite it to a safe form');
+});
+
+for (const file of [
+  'shared/references/offline-profile-reconciliation.md',
+  'skills/deploy/SKILL.md',
+  'skills/edit-app/SKILL.md',
+]) {
+  test(`${file} checks the actual owner project from a different app launch directory`, (t) => {
+    const { owner, caller } = fixture(t);
+    for (const [root, table] of [[owner, 'cr_owner'], [caller, 'cr_caller']]) {
+      fs.writeFileSync(path.join(root, '.datamodel-manifest.json'),
+        JSON.stringify({ tables: [{ logicalName: table, columns: [] }] }));
+      fs.writeFileSync(path.join(root, 'offline-profile.json'),
+        JSON.stringify({ profileId: 'test-profile', tables: [] }));
+    }
+    const block = shellBlocks(read(path.join(pluginRoot, file)))
+      .find((command) => command.includes('/offline-profile-delta.js'));
+    assert.ok(block);
+    const result = run(block, owner, caller);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, '');
+    const delta = JSON.parse(result.stdout);
+    assert.equal(delta.status, 'delta');
+    assert.deepEqual(delta.missingTables.map((table) => table.logicalName), ['cr_owner']);
+  });
+}
 
 const removal = read(path.join(pluginRoot, 'shared/references/data-source-removal.md'));
 
@@ -263,22 +335,12 @@ npm() { record_call npm "$@"; }
 az() { record_call az "$@"; }
 `;
     for (const block of blocks) {
-      // Whole quoted paths are replaced as literal arguments, including nested
-      // $(cat "...") paths. Other placeholders are inert values for the CLI stubs.
-      const command = block
-        .replaceAll("'<working_dir>'", shellQuote(owner.replaceAll('\\', '/')))
-        .replaceAll(/"<working_dir>([^"]*)"/g, (_match, suffix) =>
-          shellQuote(owner.replaceAll('\\', '/') + suffix.replaceAll(/<[^>]+>/g, 'fixture')))
-        .replaceAll(/<[^>]+>/g, 'fixture');
+      // Substitute values only; changing the authored quotes would conceal a regression.
+      const command = block.replaceAll(/<(?!working_dir>)[^>]+>/g, 'fixture');
       const result = run(`${probes}\n${command}`, owner, caller);
       assert.equal(result.status, 0, `${name}:\n${block}\n${result.stderr}`);
-      const missing = block
-        .replaceAll("'<working_dir>'", shellQuote(path.join(directory, 'missing app').replaceAll('\\', '/')))
-        .replaceAll(/"<working_dir>([^"]*)"/g, (_match, suffix) =>
-        shellQuote(path.join(directory, 'missing app').replaceAll('\\', '/') + suffix.replaceAll(/<[^>]+>/g, 'fixture')))
-        .replaceAll(/<[^>]+>/g, 'fixture');
       const before = fs.existsSync(trace) ? fs.readFileSync(trace, 'utf8') : '';
-      const failed = run(`${probes}\n${missing}`, owner, caller);
+      const failed = run(`${probes}\n${command}`, path.join(directory, 'missing app'), caller);
       assert.equal(failed.status, 1, failed.stderr);
       assert.match(failed.stderr, /BLOCKED: cannot enter working_dir/);
       assert.equal(fs.existsSync(trace) ? fs.readFileSync(trace, 'utf8') : '', before);
@@ -294,7 +356,7 @@ az() { record_call az "$@"; }
     assert.ok(calls.some((call) => call.args.includes('add') && call.args.includes('data-source')));
     if (name === 'add-dataverse') {
       assert.ok(calls.some((call) => call.args.some((arg) => arg.endsWith('/resolve-environment.js')) && call.args.includes('owner')));
-      assert.match(content, /--operations "\$\(cat "<working_dir>\/\.tmp\/dataverse-operation-phase-<name>\.json"\)"/);
+      assert.match(content, /--operations "\$\(cat '<working_dir>\/\.tmp\/dataverse-operation-phase-<name>\.json'\)"/);
     }
     assert.equal(fs.readFileSync(path.join(caller, 'power.config.json'), 'utf8'), callerConfig);
 
@@ -325,13 +387,11 @@ npx() { node "$@"; }
     const blocks = shellBlocks(content);
     assert.ok(blocks.length >= 3);
     for (const block of blocks) {
-      const materialize = (root) => block
-        .replaceAll("'<working_dir>'", shellQuote(root.replaceAll('\\', '/')))
-        .replaceAll(/<[^>]+>/g, 'fixture');
-      const succeeded = run(`${probes}\n${materialize(owner)}`, owner, caller);
+      const command = block.replaceAll(/<(?!working_dir>)[^>]+>/g, 'fixture');
+      const succeeded = run(`${probes}\n${command}`, owner, caller);
       assert.equal(succeeded.status, 0, `${block}\n${succeeded.stderr}`);
       const before = fs.readFileSync(trace, 'utf8');
-      const failed = run(`${probes}\n${materialize(path.join(directory, 'missing app'))}`, owner, caller);
+      const failed = run(`${probes}\n${command}`, path.join(directory, 'missing app'), caller);
       assert.equal(failed.status, 1);
       assert.match(failed.stderr, /BLOCKED: cannot enter working_dir/);
       assert.equal(fs.readFileSync(trace, 'utf8'), before);

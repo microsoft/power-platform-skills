@@ -37,6 +37,24 @@ app-owned offline runtime code.
 - User/team membership assignment — split into `/assign-offline-profile`
 - Row-count download estimation — split into `/preview-offline-scope`
 
+## App-root binding
+
+Before entering the wizard, and before any project read or command, execute
+[app-working-directory.md](${PLUGIN_ROOT}/shared/references/app-working-directory.md).
+Resolve one absolute `working_dir`: inherit a child invocation's owner root or
+use the direct invocation's explicit `--working-dir`/initial cwd per that contract.
+Missing or conflicting child context returns `NEEDS_CONTEXT`, never a launch-cwd
+fallback. Bind every shell call and file tool, including references and retries,
+to this root; file tools use absolute `<working_dir>/...` paths.
+
+Retain the selected environment ID/URL/tenant and supplied answers as invocation
+context. Re-supply the absolute `PLUGIN_ROOT` and required values in each fresh
+call; prior shell variables do not persist. Forward the same root and identity
+to the architect and prerequisite helper. Entry approval is not permission to
+skip the wizard's offline gates. A `--plan-only` or planning-phase caller returns
+`NEEDS_CONTEXT: offline setup requires an implementation-phase invocation`
+before entering this mutating wizard.
+
 ## Workflow
 
 1. Verify project & auth → 2. Resolve mode (create vs extend) → 3. Spawn architect agent → **Gate 1** (table prerequisites) → 4. Run the internal `enable-tables-offline` workflow if needed → 5. POST profile shell → **Gate 2** (per-table row scope) → 6. POST profile items → **Gate 3** (relationships + columns + sync) → 7. POST associations → 8. Validate + publish → 9. Persist artifacts → 10. Summary
@@ -46,26 +64,42 @@ app-owned offline runtime code.
 ### Step 1 — Verify project & auth
 
 ```bash
-test -f power.config.json && test -f app.config.js
-# Manifest lives at either root (legacy) or docs/plan-artifacts/ (newer scaffolds)
-MANIFEST=$(test -f .datamodel-manifest.json && echo ".datamodel-manifest.json" || \
-           (test -f docs/plan-artifacts/.datamodel-manifest.json && echo "docs/plan-artifacts/.datamodel-manifest.json"))
-test -n "$MANIFEST" && echo "✓ manifest at $MANIFEST"
-node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+if [ ! -f power.config.json ] || [ ! -f app.config.js ]; then
+  echo "BLOCKED: working_dir is not an initialized app" >&2
+  exit 1
+fi
+environment_id=$(node -p "require('./power.config.json').environmentId || ''") || {
+  echo "BLOCKED: unreadable power.config.json" >&2; exit 1;
+}
+if [ -z "$environment_id" ]; then
+  echo "NEEDS_CONTEXT: selected app has no environmentId" >&2; exit 1;
+fi
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$environment_id" --no-cache --require-tenant
 ```
 
-Capture **Environment URL** for `<envUrl>` and **manifest path** for the architect spawn (Step 3) and the artifacts write (Step 9).
+Require the resolved environment ID, HTTPS URL, and tenant to match any supplied
+owner context. Capture them as `<selected-environment-id>`, `<envUrl>`, and
+`<tenantId>`. A mismatch returns `NEEDS_CONTEXT`; do not switch environment or
+account to proceed. Pass `--tenant-id "<tenantId>"` to every Dataverse request,
+including copied reference commands and retries.
+
+Locate `<working_dir>/.datamodel-manifest.json` or
+`<working_dir>/docs/plan-artifacts/.datamodel-manifest.json` with absolute file
+tools. Keep the selected absolute manifest path in invocation context for the
+architect (Step 3) and artifact updates (Step 9); never search another app.
 
 **Web-only target detection** — Mobile Offline Profiles only apply to native targets (iOS/Android). If the project is web-only, the profile will be created in Dataverse but **the generated app will never use it**:
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 # Inspect platforms declared in app.config.js
 node -e "
-const c = require('$(pwd)/app.config.js');
+const c = require('./app.config.js');
 const platforms = c?.expo?.platforms ?? [];
 const hasNative = platforms.includes('ios') || platforms.includes('android');
 console.log(JSON.stringify({ platforms, hasNative }));
-" 2>/dev/null
+"
 ```
 
 | `hasNative` | Action |
@@ -137,8 +171,10 @@ Read `memory-bank.md` `## Offline profile` block. Decide based on `status`:
 > "→ Checking for existing offline profiles in the environment…"
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
-  "mobileofflineprofiles?\$select=mobileofflineprofileid,name,description,publishedon"
+  "mobileofflineprofiles?\$select=mobileofflineprofileid,name,description,publishedon" \
+  --tenant-id "<tenantId>"
 ```
 
 Decision tree — evaluate in order:
@@ -168,9 +204,12 @@ Spawn via `Task`:
 ```text
 agent: mobile-app:offline-profile-architect
 prompt:
-  Working directory: <workdir>
+  Working directory: <working_dir>
   Plugin root: ${PLUGIN_ROOT}
+  Environment ID: <selected-environment-id>
   Environment URL: <envUrl>
+  Tenant ID: <tenantId>
+  Manifest path: <absolute manifest path within working_dir>
   Publisher prefix: <prefix>
   Mode: default
 ```
@@ -338,13 +377,33 @@ configReview: accepted
 
 **Telemetry checkpoint: `enable_dataverse_tables_offline`**
 
-If Gate 1 identified any table needing change, read and execute `${PLUGIN_ROOT}/skills/enable-tables-offline/SKILL.md` with the table list as its `$ARGUMENTS`:
+If Gate 1 identified any table needing change, read and execute
+`${PLUGIN_ROOT}/skills/enable-tables-offline/SKILL.md` with the approved table
+list and the complete scoped handoff below. Configuration review must already
+be accepted; neither a saved manifest nor a bare table list is approval.
 
 ```text
-$ARGUMENTS: cr123_note,cr123_visit
+$ARGUMENTS: --working-dir '<working_dir>' <comma-separated approved logical names>
+
+Context:
+  MOBILE_APP_ORCHESTRATING=1
+  orchestrator: setup-offline-profile
+  working_dir: <working_dir>
+  phase: implementation
+  approved_scope:
+    environmentId: <selected-environment-id>
+    environmentUrl: <envUrl>
+    tenantId: <tenantId>
+    tables: <exact Gate 1-approved prerequisite table allowlist>
+    operations: <approved IsAvailableOffline/ChangeTrackingEnabled changes>
+    publication: <approved targeted publication; broader fallback only if separately approved>
+  supplied_answers: <current offline gate responses>
 ```
 
-Wait for it to return. Expected final line: `DONE` or `DONE_WITH_CONCERNS:`.
+Wait for it to return and parse its literal first-line status. `DONE` continues;
+`DONE_WITH_CONCERNS` must be surfaced before continuing. On `NEEDS_CONTEXT`,
+resolve the missing context within this owner's approved root/scope or return
+the blocker; never re-dispatch with a different app or infer approval.
 
 If `BLOCKED`, propagate the block up — STOP.
 
@@ -360,8 +419,10 @@ If all tables were already enabled, skip this step.
 For `create-new` mode:
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "mobileofflineprofiles" \
+  --tenant-id "<tenantId>" \
   --body '{
     "name": "<app name> Offline Profile",
     "description": "<auto-generated description referencing app name + scope summary>"
@@ -398,8 +459,10 @@ gate1: approved
 For each table, in sequence:
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "mobileofflineprofileitems" \
+  --tenant-id "<tenantId>" \
   --body '{
     "name": "<table display name>",
     "regardingobjectid@odata.bind": "/mobileofflineprofiles(<profileId>)",
@@ -434,8 +497,10 @@ Print `✓ <table>` after each 2xx.
 Empirical 2026-05-24 + 2026-05-25 capture from maker portal **unblocked** association creation. Recipe (no `selectedrelationshipsschema` field — server fills it):
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "mobileofflineprofileitemassociations" \
+  --tenant-id "<tenantId>" \
   --body '{
     "name": "<relationshipSchemaName>",
     "relationshipdisplayname": "<relationshipSchemaName>",
@@ -464,8 +529,10 @@ Skip Step 7a entirely if the architect's proposal includes zero relationships (r
 #### Step 7b — PATCH `selectedcolumns` on each item
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> PATCH \
   "mobileofflineprofileitems(<itemId>)" \
+  --tenant-id "<tenantId>" \
   --body '{
     "selectedcolumns": "<JSON string — see below>"
   }'
@@ -495,9 +562,10 @@ If syncintervalinminutes was edited at Gate 3, include it in the same PATCH.
 **Targeted PublishXml — the maker portal's pattern** (empirical 2026-05-24):
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
-  "PublishXml" --body '{
-    "ParameterXml": "<publish><mobileofflineprofiles><mobileofflineprofile>'"$PROFILE_ID"'</mobileofflineprofile></mobileofflineprofiles></publish>"
+  "PublishXml" --tenant-id "<tenantId>" --body '{
+    "ParameterXml": "<publish><mobileofflineprofiles><mobileofflineprofile><profileId></mobileofflineprofile></mobileofflineprofiles></publish>"
   }'
 ```
 
@@ -514,8 +582,9 @@ For fresh `/setup-offline-profile` runs this error should never fire because Ste
 **Fallback — `PublishAllXml`:** if the targeted publish fails with anything other than the circular-relationship error, try the broad publish. This was the v0.1 default and works correctly but rate-limits aggressively on shared envs:
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
-  "PublishAllXml" --body '{}'
+  "PublishAllXml" --tenant-id "<tenantId>" --body '{}'
 ```
 
 **Handle the timeout-but-success pattern** — empirically observed on shared envs (CRM527116 + chanel-rm demos): `PublishAllXml` triggers a 4-retry 429 backoff, `dataverse-request.js` times out client-side after ~2 min, but the publish **DID** commit server-side. The targeted `PublishXml` should avoid this in most cases, but the fallback path still needs to handle it.
@@ -599,6 +668,7 @@ After confirmed success, re-GET the profile and check `publishedon` for the arti
 Example node script (writes the file in one shot — no read-modify-write against `power.config.json`):
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node -e '
   const fs = require("fs");
 
@@ -666,6 +736,7 @@ associationsCount: <M>
 > "→ Verifying the on-server profile matches offline-profile.json…"
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/verify-offline-profile.js" <envUrl>
 ```
 

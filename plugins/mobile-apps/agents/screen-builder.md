@@ -1153,7 +1153,7 @@ Follow these whenever the spec touches navigation, list rows, or modals. Recipes
 Before returning a status, run the mobile changed-file dispatcher against exactly `target_file`:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root "<working_dir>" --file "<target_file>"
+node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root '<working_dir>' --file "<target_file>"
 ```
 
 If it exits `2`, repair every reported violation and rerun it. Do not return `DONE` until it exits `0`. This explicit mobile-owned gate replaces the former plugin-wide write hooks, which also ran during unrelated Canvas Apps workflows.

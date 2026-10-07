@@ -54,7 +54,7 @@ test('approved architecture precedes typed discovery without retrying the normal
   const publisher = skill.indexOf('Now execute the deferred Step 1.7');
   const snapshotStart = skill.indexOf('### Foreground Dataverse planning');
   const conceptsStart = skill.indexOf('Build `<working_dir>/.tmp/dataverse-concepts.json`');
-  const commandsStart = skill.indexOf('SNAPSHOT_PATH="');
+  const commandsStart = skill.indexOf("SNAPSHOT_PATH='");
   assert.ok(architectureStart >= 0 && architectureStart < publisher);
   assert.ok(publisher < snapshotStart && snapshotStart < conceptsStart);
   assert.ok(conceptsStart < commandsStart);

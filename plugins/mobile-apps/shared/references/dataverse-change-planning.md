@@ -120,8 +120,8 @@ After every proposal or revision, normalize and validate:
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
-  --normalize-contract "<working_dir>/.tmp/dataverse-schema-contract.json" \
-  --output "<working_dir>/.tmp/dataverse-schema-contract.json"
+  --normalize-contract '<working_dir>/.tmp/dataverse-schema-contract.json' \
+  --output '<working_dir>/.tmp/dataverse-schema-contract.json'
 ```
 
 Only if normalization succeeds:
@@ -129,7 +129,7 @@ Only if normalization succeeds:
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/validate-dataverse-planning-decisions.js" \
-  --contract "<working_dir>/.tmp/dataverse-schema-contract.json" \
+  --contract '<working_dir>/.tmp/dataverse-schema-contract.json' \
   --snapshot "<SNAPSHOT_PATH>"
 ```
 

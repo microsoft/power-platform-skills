@@ -282,8 +282,8 @@ Context:
   approved_scope: <approved Data Model delta and answers, contract_sha256, plan_sha256>
 
 Arguments:
-  --working-dir "<working_dir>"
-  --plan-section "<working_dir>/native-app-plan.md#data-model"
+  --working-dir '<working_dir>'
+  --plan-section '<working_dir>/native-app-plan.md#data-model'
   --skip-planning
 ```
 
@@ -329,7 +329,7 @@ Context:
   approved_scope: <approved connector row and answers>
 
 Arguments:
-  --working-dir "<working_dir>"
+  --working-dir '<working_dir>'
   --connector <api-name>
 ```
 
@@ -346,7 +346,7 @@ Context:
   approved_scope: <refresh operation, exact registered name, verified API/dataset/resource and connection ID/reference>
 
 Arguments:
-  --working-dir "<working_dir>"
+  --working-dir '<working_dir>'
   --connector <verified-api-id>
   --refresh
   --data-source-name "<registered-name>"
@@ -359,7 +359,7 @@ Run sequentially. Skip if `## Connectors` is "None".
 For each explicitly approved retirement, invoke the matching leaf with
 `--remove`, `MOBILE_APP_ORCHESTRATING=1`, `orchestrator: setup-datamodel`,
 `phase: implementation`, `working_dir: <working_dir>`, the argument
-`--working-dir "<working_dir>"`, and its `approved_scope`.
+`--working-dir '<working_dir>'`, and its `approved_scope`.
 Follow [data-source-removal.md](../../shared/references/data-source-removal.md).
 This standalone data-only flow does not edit consumers: if any remain, stop and
 report their integration work to the user or current owner instead of breaking
@@ -380,7 +380,7 @@ Run the local, no-network delta check:
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js" --project-root "<working_dir>"
+node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js" --project-root '<working_dir>'
 ```
 
 Capture the exit status and stdout/stderr. Before any status dispatch or
@@ -399,7 +399,7 @@ exists). For `delta`, obtain offline-update approval, then use the reference's
 **Scoped helper handoffs** with `orchestrator: setup-datamodel`,
 `working_dir: <working_dir>`, `phase: implementation`, and the exact approved
 environment/profile/table/filter-or-column scope. Pass
-`--working-dir "<working_dir>" --table <logicalName>` to
+`--working-dir '<working_dir>' --table <logicalName>` to
 `add-table-to-offline-profile` for `missingTables[]`, or those same arguments
 plus `--columns "add:<newColumns>"` to `edit-offline-profile` for
 `tablesWithNewColumns[]`. Re-check to `in-sync` using the same failure path.

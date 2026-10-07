@@ -186,7 +186,7 @@ Print confirmation:
 Read the flag and act:
 
 ```bash
-grep -E "^visual_companion:[[:space:]]*(yes|no)" "<working_dir>/memory-bank.md" 2>/dev/null
+grep -E "^visual_companion:[[:space:]]*(yes|no)" '<working_dir>/memory-bank.md' 2>/dev/null
 ```
 
 | Flag | Action |
@@ -205,8 +205,8 @@ grep -E "^visual_companion:[[:space:]]*(yes|no)" "<working_dir>/memory-bank.md" 
 Then try OS-appropriate openers in sequence and fall back to printing the link if none work:
 
 ```bash
-open "<working_dir>/preview.html" 2>/dev/null \
-  || xdg-open "<working_dir>/preview.html" 2>/dev/null \
+open '<working_dir>/preview.html' 2>/dev/null \
+  || xdg-open '<working_dir>/preview.html' 2>/dev/null \
   || powershell.exe -NoProfile -Command "Start-Process '<working_dir>\preview.html'" 2>/dev/null \
   || echo "Could not auto-open. Open this URL in your browser: file://<working_dir>/preview.html"
 ```

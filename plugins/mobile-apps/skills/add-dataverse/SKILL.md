@@ -393,7 +393,7 @@ node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --contract "<schema-contract-path>" \
   --approval-receipt "<approval-receipt-path>" \
   --reconciliation "<execution-reconciliation-path>" \
-  --plan "<working_dir>/native-app-plan.md" \
+  --plan '<working_dir>/native-app-plan.md' \
   --environment-id "<environmentId>" \
   --env-url "<envUrl>" \
   --tenant-id "<tenantId>" \
@@ -503,7 +503,7 @@ semantics. Before classifying any such existing column as compatible:
    cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
    node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> \
      BATCH-METADATA derived-reconciliation \
-     --operations "$(cat "<working_dir>/.tmp/derived-metadata-operations.json")" \
+     --operations "$(cat '<working_dir>/.tmp/derived-metadata-operations.json')" \
      --tenant-id '<tenantId-from-resolve-environment>'
    ```
 
@@ -524,8 +524,8 @@ semantics. Before classifying any such existing column as compatible:
    ```bash
    cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
    node "${PLUGIN_ROOT}/scripts/validate-derived-metadata.js" \
-     --expected "<working_dir>/.tmp/derived-metadata-expected.json" \
-     --actual "<working_dir>/.tmp/derived-metadata-live.json"
+     --expected '<working_dir>/.tmp/derived-metadata-expected.json' \
+     --actual '<working_dir>/.tmp/derived-metadata-live.json'
    ```
 
 5. A lookup is compatible only when its complete target set matches. Planned choice
@@ -582,13 +582,13 @@ manifest, then execute every phase with the same project-local atomic journal:
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-EXECUTION_JOURNAL="<working_dir>/.tmp/dataverse-metadata-execution-journal.json"
-ALL_MANIFEST_OPERATIONS="<working_dir>/.tmp/dataverse-operation-all.json"
+EXECUTION_JOURNAL='<working_dir>/.tmp/dataverse-metadata-execution-journal.json'
+ALL_MANIFEST_OPERATIONS='<working_dir>/.tmp/dataverse-operation-all.json'
 # Write the flattened operations from every manifest phase to ALL_MANIFEST_OPERATIONS once.
 
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> \
   BATCH-METADATA "manifest-<phase-name>" \
-  --operations "$(cat "<working_dir>/.tmp/dataverse-operation-phase-<name>.json")" \
+  --operations "$(cat '<working_dir>/.tmp/dataverse-operation-phase-<name>.json')" \
   --solution "<solution-uniquename>" \
   --tenant-id "<tenantId>" \
   --journal "$EXECUTION_JOURNAL" \
@@ -661,7 +661,7 @@ node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --journal "$EXECUTION_JOURNAL" \
   --contract "$SCHEMA_CONTRACT" \
   --approval-receipt "$APPROVAL_RECEIPT" \
-  --plan "<working_dir>/native-app-plan.md" \
+  --plan '<working_dir>/native-app-plan.md' \
   --output "$PUBLISH_CHECKPOINT" \
   --environment-id "<environmentId>" \
   --env-url "<envUrl>" \
@@ -691,7 +691,7 @@ cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1;
 node -e "const checkpoint = process.argv[1]; if (checkpoint) require('node:fs').rmSync(checkpoint, { force: true });" \
   "${PUBLISH_CHECKPOINT:-}"
 if ! node "${PLUGIN_ROOT}/scripts/dataverse-inventory-cache.js" \
-  --file "<working_dir>/.tmp/dataverse-inventory-cache.json" --invalidate; then
+  --file '<working_dir>/.tmp/dataverse-inventory-cache.json' --invalidate; then
   printf 'NEEDS_RECOVERY: dataverse-inventory-cache\n' >&2
   exit 2
 fi
@@ -1263,7 +1263,7 @@ logical name. The verifier also accepts the legacy nested
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/verify-dataverse-services.js" \
-  --project-root "<working_dir>" \
+  --project-root '<working_dir>' \
   --manifest "$OPERATION_MANIFEST"
 ```
 
@@ -1308,7 +1308,7 @@ verification so a later planning run cannot reuse pre-publication inventory:
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 if ! node "${PLUGIN_ROOT}/scripts/dataverse-inventory-cache.js" \
-  --file "<working_dir>/.tmp/dataverse-inventory-cache.json" --invalidate; then
+  --file '<working_dir>/.tmp/dataverse-inventory-cache.json' --invalidate; then
   printf 'NEEDS_RECOVERY: dataverse-inventory-cache\n' >&2
   exit 2
 fi
@@ -1494,7 +1494,7 @@ Branch on the JSON `status` per [offline-profile-reconciliation.md](${PLUGIN_ROO
 |---|---|
 | `no-manifest` / `no-profile` / `in-sync` | Continue to Step 9 silently. For `no-profile` (no offline profile exists) do not nag — the app may not use offline. |
 | `error` | `offline-profile.json` is unreadable — the script prints `status: error` and **exits non-zero**. Do NOT treat this as an `/add-dataverse` failure (the tables are already created): surface the `error` string, **skip reconciliation** (never drive the update workflows against a corrupt file), and finish with `DONE_WITH_CONCERNS` telling the user to fix `offline-profile.json`. |
-| `delta` | Prompt the user (one `AskUserQuestion`, default = update now) to add the missing tables / new columns. Use the reconciliation reference's **Scoped helper handoffs** with `orchestrator: add-dataverse`, the absolute `working_dir`, `phase: implementation`, and the approved environment/profile/table delta. For `missingTables[]`, read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` with `--working-dir "<working_dir>" --table <t>`; for `tablesWithNewColumns[]`, read and execute `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` with those arguments plus `--columns add:<newColumns>`. Re-run the delta check using the reference's failure dispatch; it should read `in-sync`. |
+| `delta` | Prompt the user (one `AskUserQuestion`, default = update now) to add the missing tables / new columns. Use the reconciliation reference's **Scoped helper handoffs** with `orchestrator: add-dataverse`, the absolute `working_dir`, `phase: implementation`, and the approved environment/profile/table delta. For `missingTables[]`, read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` with `--working-dir '<working_dir>' --table <t>`; for `tablesWithNewColumns[]`, read and execute `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` with those arguments plus `--columns add:<newColumns>`. Re-run the delta check using the reference's failure dispatch; it should read `in-sync`. |
 
 ### Step 9 — Summary
 

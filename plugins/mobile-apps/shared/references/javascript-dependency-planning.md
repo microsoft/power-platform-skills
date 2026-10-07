@@ -78,7 +78,7 @@ Then verify:
 
 	```bash
 	node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" \
-		--project-root "<working_dir>" \
+		--project-root '<working_dir>' \
 		--file package.json \
 		--approved-js-dependency "<package>@<exact-version>" \
 		[--approved-js-dependency "<another-package>@<exact-version>" ...]

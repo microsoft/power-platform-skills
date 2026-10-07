@@ -85,7 +85,7 @@ so a teammate opening the repo months later can see the environment, the approve
 and the screen plan without re-reading a transcript.
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" <command>
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' <command>
 ```
 
 | Command | Use |
@@ -116,12 +116,12 @@ the pattern each one follows:
 ```bash
 DOCS="${PLUGIN_ROOT}/scripts/app-docs.js"
 # 1. propose - the tab shows "Proposed - review this, then answer the prompt in your terminal"
-node "$DOCS" --working-dir "<working_dir>" set --section dataModel --json-file <tmp>/data-model.json --state proposed
-node "$DOCS" --working-dir "<working_dir>" step --id data-model --status active --note "Gate 2 — awaiting your approval"
+node "$DOCS" --working-dir '<working_dir>' set --section dataModel --json-file <tmp>/data-model.json --state proposed
+node "$DOCS" --working-dir '<working_dir>' step --id data-model --status active --note "Gate 2 — awaiting your approval"
 # 2. point the user at that tab, then ask the gate question
 # 3. on approval
-node "$DOCS" --working-dir "<working_dir>" set --section dataModel --json-file <tmp>/data-model.json --state approved
-node "$DOCS" --working-dir "<working_dir>" step --id data-model --status done --note "Gate 2 — approved"
+node "$DOCS" --working-dir '<working_dir>' set --section dataModel --json-file <tmp>/data-model.json --state approved
+node "$DOCS" --working-dir '<working_dir>' step --id data-model --status done --note "Gate 2 — approved"
 ```
 
 Pass a fresh `--note` when you close a gate. A note belongs to the status it was written with, so
@@ -190,10 +190,10 @@ If `$ARGUMENTS` includes a `--working-dir` (or the user names an existing direct
   **Reopen the build plan on resume.** A resume skips Step 2b, where the plan is created and
   opened, so open `<working_dir>/docs/create-app-plan.html` in the browser yourself when it exists.
   If the earlier run stopped on a failure, the plan still says so and has stopped reloading. Run
-  `node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" show`, and if it reports a `failedPhase`, reopen that phase before continuing:
+  `node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' show`, and if it reports a `failedPhase`, reopen that phase before continuing:
 
   ```bash
-  node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id <failedPhase> --status active
+  node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id <failedPhase> --status active
   ```
 - **Bank absent** → fresh project. Continue to Step 1.
 - **Bank present but corrupted** (missing required headings) → surface the parse error, ask the user whether to overwrite (lose history) or fix manually before proceeding.
@@ -379,8 +379,8 @@ a `"`, a backtick or `$(…)` in it would break out of a shell argument before N
 
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" init --json-file <tmp>/plan-init.json
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id requirements --status active --note "Waiting for your answers to the setup questions"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' init --json-file <tmp>/plan-init.json
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id requirements --status active --note "Waiting for your answers to the setup questions"
 ```
 
 The note is what raises the waiting-for-input banner on the plan, so the user can tell from the page
@@ -508,8 +508,8 @@ and none of it may go through the shell:
 ```
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" set --section requirements --json-file <tmp>/requirements.json
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id requirements --status active --note "Brief confirmed"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' set --section requirements --json-file <tmp>/requirements.json
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id requirements --status active --note "Brief confirmed"
 ```
 
 ### Step 2c — Plan preview (rough, always shown)
@@ -578,9 +578,9 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 Raise the wait before showing the estimate, and close the phase once the user approves:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id requirements --status active --note "Waiting for you to approve the plan preview"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id requirements --status active --note "Waiting for you to approve the plan preview"
 # ... after they approve ...
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id requirements --status done
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id requirements --status done
 ```
 
 > "Brief locked in. Planning surfaces up to 4 approval prompts (data platform + native capabilities + connectors → data model when Dataverse is selected → screen graph → screen specs). Data-model readiness is quality-first, with a 10–15 minute target:
@@ -620,7 +620,7 @@ between gates the agents work for minutes, and the plan must not tell the user t
 on them while it is not.
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id architecture --status active --note "Planning the architecture"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id architecture --status active --note "Planning the architecture"
 ```
 
 **Raise every gate in the plan as you present it, and take it down as soon as it is answered** -
@@ -637,11 +637,11 @@ browser, and its banner is how they can tell the run is waiting on them rather t
 ```bash
 DOCS="${PLUGIN_ROOT}/scripts/app-docs.js"
 # Just before presenting gate <N>:
-node "$DOCS" --working-dir "<working_dir>" set --section <section> --json-file <tmp>/<section>.json --state proposed
-node "$DOCS" --working-dir "<working_dir>" step --id <id> --status active --note "Gate <N> — awaiting your approval"
+node "$DOCS" --working-dir '<working_dir>' set --section <section> --json-file <tmp>/<section>.json --state proposed
+node "$DOCS" --working-dir '<working_dir>' step --id <id> --status active --note "Gate <N> — awaiting your approval"
 # As soon as the user approves it:
-node "$DOCS" --working-dir "<working_dir>" set --section <section> --json-file <tmp>/<section>.json --state approved
-node "$DOCS" --working-dir "<working_dir>" step --id <next id> --status active --note "<note from the table>"
+node "$DOCS" --working-dir '<working_dir>' set --section <section> --json-file <tmp>/<section>.json --state approved
+node "$DOCS" --working-dir '<working_dir>' step --id <next id> --status active --note "<note from the table>"
 ```
 
 Flip each section to `approved` when its gate is answered, not later in the Step 3.9 batch. A
@@ -760,10 +760,10 @@ Detailed advisory discovery is quality-bounded:
   expansion, at most once per newly selected logical name.
 
 ```bash
-SNAPSHOT_PATH="<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json"
-CONCEPTS_PATH="<working_dir>/.tmp/dataverse-concepts.json"
-ARCHITECT_EVIDENCE_PATH="<working_dir>/.tmp/dataverse-architect-evidence.json"
-INVENTORY_CACHE_PATH="<working_dir>/.tmp/dataverse-inventory-cache.json"
+SNAPSHOT_PATH='<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json'
+CONCEPTS_PATH='<working_dir>/.tmp/dataverse-concepts.json'
+ARCHITECT_EVIDENCE_PATH='<working_dir>/.tmp/dataverse-architect-evidence.json'
+INVENTORY_CACHE_PATH='<working_dir>/.tmp/dataverse-inventory-cache.json'
 
 run_dataverse_planning_attempt() {
 if ! node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
@@ -1272,7 +1272,7 @@ user-facing design decision without another planning question.
 4. Persist the answer:
 
    ```bash
-   echo "<chosen-industry-slug>" > "<working_dir>/.industry-confirmed"
+   echo "<chosen-industry-slug>" > '<working_dir>/.industry-confirmed'
    ```
 
    For option (e), let the user free-text a description; map it to the closest slug (or `productivity` as final fallback) and store that.
@@ -1376,13 +1376,13 @@ document explaining what was agreed:
 
 ```bash
 DOCS="${PLUGIN_ROOT}/scripts/app-docs.js"
-node "$DOCS" --working-dir "<working_dir>" set --section architecture --json-file <tmp>/architecture.json --state approved
-node "$DOCS" --working-dir "<working_dir>" step --id architecture --status done --note "Gate 1 — approved"
-node "$DOCS" --working-dir "<working_dir>" set --section trust --json-file <tmp>/trust.json --state proposed
-node "$DOCS" --working-dir "<working_dir>" set --section dataModel --json-file <tmp>/data-model.json --state approved
-node "$DOCS" --working-dir "<working_dir>" step --id data-model --status done --note "Gate 2 — <n> tables approved"
-node "$DOCS" --working-dir "<working_dir>" set --section screens --json-file <tmp>/screens.json --state approved
-node "$DOCS" --working-dir "<working_dir>" step --id screen-plan --status done --note "Gates 3-4 — <n> screens approved"
+node "$DOCS" --working-dir '<working_dir>' set --section architecture --json-file <tmp>/architecture.json --state approved
+node "$DOCS" --working-dir '<working_dir>' step --id architecture --status done --note "Gate 1 — approved"
+node "$DOCS" --working-dir '<working_dir>' set --section trust --json-file <tmp>/trust.json --state proposed
+node "$DOCS" --working-dir '<working_dir>' set --section dataModel --json-file <tmp>/data-model.json --state approved
+node "$DOCS" --working-dir '<working_dir>' step --id data-model --status done --note "Gate 2 — <n> tables approved"
+node "$DOCS" --working-dir '<working_dir>' set --section screens --json-file <tmp>/screens.json --state approved
+node "$DOCS" --working-dir '<working_dir>' step --id screen-plan --status done --note "Gates 3-4 — <n> screens approved"
 ```
 
 **Write a first-pass trust report here.** Gate 1 settles the device capabilities and connectors,
@@ -1401,8 +1401,8 @@ the ER diagram, the column tables, and the new/reused/extended colours are all d
 pending, or the plan never reaches 100%:
 
 ```bash
-node "$DOCS" --working-dir "<working_dir>" step --id data-model --status skipped
-node "$DOCS" --working-dir "<working_dir>" step --id dataverse --status skipped
+node "$DOCS" --working-dir '<working_dir>' step --id data-model --status skipped
+node "$DOCS" --working-dir '<working_dir>' step --id dataverse --status skipped
 ```
 
 ### Step 4 — Auth & environment selection
@@ -1422,7 +1422,7 @@ If the resolved environment doesn't match what the planner used in Step 3, ask t
 Open the scaffold phase:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id scaffold --status active
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id scaffold --status active
 ```
 
 This step is template-only and foreground-only. Do not clone/copy templates, do not run background scaffold jobs, and do not use any legacy fallback path.
@@ -1505,7 +1505,7 @@ Bundle ID and scheme are left as template defaults — they are fixed across all
 Manual `npm run dev` must remain the normal Expo entry point. The template's `metro.config.js` delegates to `createPowerAppsMetroConfig` from `@microsoft/power-apps-native-host/config/metroConfig`; that factory installs sanitized Metro terminal and HTTP bundle-failure logging under `.powernative/metro-logs/`. Manual starts and `/debug-app` use the same log source without a process-owning wrapper. Verify these script entries only; do not add wrapper-specific scripts:
 
 ```bash
-node - "<working_dir>" <<'NODE'
+node - '<working_dir>' <<'NODE'
 const fs = require('node:fs');
 const path = require('node:path');
 const root = process.argv[2];
@@ -1638,7 +1638,7 @@ do not add this CLI-generated file to Step 5's manual validation targets or hand
 This step verifies dependencies only. The user must have run `npm install` before invoking the skill.
 
 ```bash
-[ -d "<working_dir>/node_modules/expo" ] && echo "✓ node_modules present" || echo "✗ missing — run npm install in the template folder and rerun"
+[ -d '<working_dir>/node_modules/expo' ] && echo "✓ node_modules present" || echo "✗ missing — run npm install in the template folder and rerun"
 ```
 
 If `node_modules/expo` is missing, STOP. Tell the user to run `npm install` in the template folder. Do not provision ADO tokens or run `npm install` from this skill.
@@ -1673,13 +1673,13 @@ This is the **Scaffold gate** from the TypeScript Gate Policy. If it fails, capt
 A clean scaffold gate is what completes the scaffold phase:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id scaffold --status done
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id scaffold --status done
 ```
 
 ### Step 6.7 — Seed the memory bank
 
 ```bash
-cp "${PLUGIN_ROOT}/shared/memory-bank.md" "<working_dir>/memory-bank.md"
+cp "${PLUGIN_ROOT}/shared/memory-bank.md" '<working_dir>/memory-bank.md'
 ```
 
 Fill in the Project facts and Power Platform context sections from Steps 2 and 4. From here on, every step appends to the relevant section of `<working_dir>/memory-bank.md` immediately after success — not at the end. This is what enables Step 0's resume on a future run.
@@ -1709,7 +1709,7 @@ visual_companion: <yes|no>   # default from Step 2b; applied at Step 6.75 and la
 it open, because this branch never reaches the `done` call below:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id design --status skipped
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id design --status skipped
 ```
 
 Marking it `active` here instead would leave it active through auth and most of Step 8, until
@@ -1721,7 +1721,7 @@ opening the next phase auto-closed it as `done` — reporting a design system th
 asks for brand inputs, a cost choice and a style pick, so the phase opens as waiting:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id design --status active --note "Waiting for your brand and design choices"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id design --status active --note "Waiting for your brand and design choices"
 ```
 
 ```
@@ -1744,7 +1744,7 @@ As soon as `/design-system` returns, replace the note — the user has answered 
 working again:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id design --status active --note "Applying your design system"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id design --status active --note "Applying your design system"
 ```
 
 Handle the return per the status protocol (AGENTS.md rule #10):
@@ -1794,7 +1794,7 @@ ownership contract during this phase.
 of TSX exists. Those same per-screen blocks become the carousel:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" phone --stage screens --screens-file <tmp>/screens-preview.json
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' phone --stage screens --screens-file <tmp>/screens-preview.json
 ```
 
 `screens-preview.json` is `[{ "name": "Today's route", "html": "<the screen's markup>" }, …]`, in
@@ -1827,8 +1827,8 @@ goes to a file rather than through the shell:
 
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" set --section design --json-file <tmp>/design.json
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id design --status done
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' set --section design --json-file <tmp>/design.json
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id design --status done
 ```
 
 Only `#rrggbb` literals render as swatches; any other value is shown as text rather than
@@ -1843,7 +1843,7 @@ own the plan showed nothing in progress here at all: the design phase closes bef
 Dataverse phase does not open until Step 8.
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id auth --status active --note "Waiting for your Entra ID app registration"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id auth --status active --note "Waiting for your Entra ID app registration"
 ```
 
 **Print before starting:**
@@ -2044,8 +2044,8 @@ Do NOT touch `src/playerConfig.ts` — auth identifiers live in `auth.config.jso
 Close the auth phase once the client ID is written and the config is in place:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" set --section auth --json-file <tmp>/auth.json
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id auth --status done
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' set --section auth --json-file <tmp>/auth.json
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id auth --status done
 ```
 
 `auth.json` is `{"status":"<Configured — how sign-in was set up|Deferred — why>"}`. It goes to a
@@ -2066,7 +2066,7 @@ Otherwise open the Dataverse phase now. Creating tables is one of the longest wa
 with no phase open the plan reads "Waiting to start" through all of it:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id dataverse --status active
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id dataverse --status active
 ```
 
 **Print before starting:**
@@ -2093,23 +2093,23 @@ resolved context and these structured artifacts, never values inferred from
 free-form Markdown:
 
 ```bash
-SCHEMA_CONTRACT="<working_dir>/.tmp/dataverse-schema-contract.json"
-APPROVAL_RECEIPT="<working_dir>/.tmp/mobile-plan-status.json"
-FOREGROUND_PLANNING_SNAPSHOT="<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json"
-RECONCILIATION_SCOPE="<working_dir>/.tmp/dataverse-reconciliation-scope.json"
-EXECUTION_RECONCILIATION="<working_dir>/.tmp/dataverse-execution-reconciliation.json"
-OPERATION_MANIFEST="<working_dir>/.tmp/dataverse-operation-manifest.json"
-PUBLISH_CHECKPOINT="<working_dir>/.tmp/dataverse-publish-pending.json"
+SCHEMA_CONTRACT='<working_dir>/.tmp/dataverse-schema-contract.json'
+APPROVAL_RECEIPT='<working_dir>/.tmp/mobile-plan-status.json'
+FOREGROUND_PLANNING_SNAPSHOT='<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json'
+RECONCILIATION_SCOPE='<working_dir>/.tmp/dataverse-reconciliation-scope.json'
+EXECUTION_RECONCILIATION='<working_dir>/.tmp/dataverse-execution-reconciliation.json'
+OPERATION_MANIFEST='<working_dir>/.tmp/dataverse-operation-manifest.json'
+PUBLISH_CHECKPOINT='<working_dir>/.tmp/dataverse-publish-pending.json'
 ACTIVE_SOLUTION_UNIQUE_NAME="Default"
 
 test -f "$SCHEMA_CONTRACT" -a -f "$APPROVAL_RECEIPT" \
   -a -f "$FOREGROUND_PLANNING_SNAPSHOT" \
-  -a -f "<working_dir>/native-app-plan.md"
+  -a -f '<working_dir>/native-app-plan.md'
 
 node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --bind-plan "$SCHEMA_CONTRACT" \
   --approval-receipt "$APPROVAL_RECEIPT" \
-  --plan "<working_dir>/native-app-plan.md" \
+  --plan '<working_dir>/native-app-plan.md' \
   --output "$SCHEMA_CONTRACT"
 
 node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
@@ -2132,7 +2132,7 @@ node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --contract "$SCHEMA_CONTRACT" \
   --approval-receipt "$APPROVAL_RECEIPT" \
   --reconciliation "$EXECUTION_RECONCILIATION" \
-  --plan "<working_dir>/native-app-plan.md" \
+  --plan '<working_dir>/native-app-plan.md' \
   --output "$OPERATION_MANIFEST" \
   --environment-id "$ACTIVE_ENV_ID" \
   --env-url "$ACTIVE_ENV_URL" \
@@ -2154,7 +2154,7 @@ node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --contract "$SCHEMA_CONTRACT" \
   --approval-receipt "$APPROVAL_RECEIPT" \
   --reconciliation "$EXECUTION_RECONCILIATION" \
-  --plan "<working_dir>/native-app-plan.md" \
+  --plan '<working_dir>/native-app-plan.md' \
   --environment-id "$ACTIVE_ENV_ID" \
   --env-url "$ACTIVE_ENV_URL" \
   --tenant-id "$ACTIVE_TENANT_ID" \
@@ -2216,7 +2216,7 @@ If this fails, do not continue to native capabilities, connectors, navigation, o
 Before sample data or offline setup, require the materialized table inventory
 from `/add-dataverse` Step 6d, including verified reused tables. Compare its
 coverage with the validated operation manifest's `service.requiredTables` and
-run `verify-dataverse-services.js --project-root "<working_dir>" --manifest "$OPERATION_MANIFEST"`.
+run `verify-dataverse-services.js --project-root '<working_dir>' --manifest "$OPERATION_MANIFEST"`.
 Zero schema writes is a valid reuse-only result, not failed materialization.
 If an older run produced an empty or partial table inventory, recover through
 `/add-dataverse` Steps 6c–6d using the approved service list and verified live
@@ -2251,7 +2251,7 @@ Context:
   retiring_tables: <empty for fresh creation>
 
 Arguments:
-  --working-dir "<working_dir>"
+  --working-dir '<working_dir>'
   --tables "<approved-seed-table-logical-names>"
 ```
 
@@ -2292,7 +2292,7 @@ Otherwise ask one neutral foreground question. Say so in the plan first, and rep
 once the user answers:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id dataverse --status active --note "Waiting for your offline support choice"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id dataverse --status active --note "Waiting for your offline support choice"
 ```
 
 
@@ -2311,6 +2311,12 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --i
 >   `status: not-applicable`, then continue to Step 9
 
 If the user selects Yes, invoke `/setup-offline-profile` from the project root.
+Pass `--working-dir '<working_dir>'` and invocation context
+`MOBILE_APP_ORCHESTRATING=1`, `orchestrator: create-mobile-app`, the same absolute
+`working_dir`, `phase: implementation`, and the selected environment ID/URL/tenant.
+This choice approves entering the offline wizard, not its prerequisite or
+profile mutations; the wizard retains its own gates and forwards their exact
+approved scope to its helpers.
 It consumes the materialized manifest, owns its own profile approval flow, and
 writes `offline-profile.json`. Surface concerns and stop on a substantive
 failure. Do not reopen data-model or screen approvals after this choice.
@@ -2318,7 +2324,7 @@ failure. Do not reopen data-model or screen approvals after this choice.
 Tables and generated services now exist, so the Dataverse phase is complete:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id dataverse --status done
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id dataverse --status done
 ```
 
 ### Step 9 — Apply native capabilities
@@ -2328,7 +2334,7 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --i
 Open the capabilities phase; Step 10 closes it after connectors are added:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id capabilities --status active
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id capabilities --status active
 ```
 
 **Print before starting:**
@@ -2463,7 +2469,7 @@ Run sequentially — each generates files under `src/generated/`. Parallel write
 Device capabilities and connectors are both wired, so close the phase:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id capabilities --status done
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id capabilities --status done
 ```
 
 **Finalise the trust report.** Gate 1 wrote a first pass from the approved plan; everything it
@@ -2472,7 +2478,7 @@ what the offline profile syncs. Rewrite it in full and mark it `approved`, so it
 app *does* rather than what was intended. `set` merges, so restate every key you want to change.
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" set --section trust --json-file <tmp>/trust.json --state approved
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' set --section trust --json-file <tmp>/trust.json --state approved
 ```
 
 `trust.json` has four keys:
@@ -2530,7 +2536,7 @@ Open the screens phase here rather than at the first screen wave. Navigation, sh
 first wave are most of what is left of the run, and the plan should say what is being built:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id screens --status active
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id screens --status active
 ```
 
 Read `## Screens → Navigation Pattern` from `native-app-plan.md`.
@@ -2763,7 +2769,7 @@ Read all per-screen specs in `## Screens → ### Per-Screen Specs`. Identify:
 
 ```bash
 # Example — if plan has "Inspections" entity used on list + detail + home screens:
-cat > "<working_dir>/src/components/InspectionRow.tsx" << 'EOF'
+cat > '<working_dir>/src/components/InspectionRow.tsx' << 'EOF'
 ... generated component ...
 EOF
 ```
@@ -3043,7 +3049,7 @@ npx --no-install tsc --noEmit
 **Mark screen progress in the plan** once the wave's TypeScript gate is clean:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id screens --status active --note "<n> of <total> screens built"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id screens --status active --note "<n> of <total> screens built"
 ```
 
 The plan's phone is already showing the screen carousel from Step 6.75, so there is nothing to
@@ -3134,7 +3140,7 @@ After `tsc` passes, offer a static HTML preview. The dev server starts next (Ste
 Mark the wait, since the run does not continue until the user picks:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id screens --status active --note "Waiting for your preview choice"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id screens --status active --note "Waiting for your preview choice"
 ```
 
 
@@ -3157,7 +3163,7 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --i
 Every screen is built and type-checked, so close the screens phase:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id screens --status done
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id screens --status done
 ```
 
 ### Step 12 — Start dev server (Metro writes project-local logs)
@@ -3170,7 +3176,7 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --i
 Open the final phase (Step 13 marks it done):
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id run --status active
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id run --status active
 ```
 
 This skill launches the template's canonical `npm run dev` command. Its `predev` lifecycle runs schema generation followed by the final TypeScript gate before Expo starts, and logging is configured in `metro.config.js`.
@@ -3201,7 +3207,7 @@ This is a long-running dev server. In hosts that support background terminals, r
 Read the initial terminal output and locate the generated `.powernative` log directly:
 
 ```bash
-ls -t "<working_dir>/.powernative/metro-logs"/metro-*-pid-*-port-*.log 2>/dev/null | head -1
+ls -t '<working_dir>/.powernative/metro-logs'/metro-*-pid-*-port-*.log 2>/dev/null | head -1
 ```
 
 Branch as follows:
@@ -3215,7 +3221,7 @@ Branch as follows:
 **When Expo prints a Metro URL:** Do not rely on Expo's terminal-rendered QR as the only presentation path.
 
 1. **Generate QR code PNG and present it to the user** (chat-first, deterministic fallback):
-  - Define `METRO_QR="<working_dir>/.expo/metro-qr.png"` and run `npx --no-install qrcode -o "$METRO_QR" "<metro-url>"`. The template pins `qrcode` as a devDependency, so this runs the copy from the user's `npm install` and never downloads. If it fails (for example, a project created before the pin), continue without the image — never retry with `--yes`, a bare `npx qrcode`, or a different registry.
+  - Define `METRO_QR='<working_dir>/.expo/metro-qr.png'` and run `npx --no-install qrcode -o "$METRO_QR" "<metro-url>"`. The template pins `qrcode` as a devDependency, so this runs the copy from the user's `npm install` and never downloads. If it fails (for example, a project created before the pin), continue without the image — never retry with `--yes`, a bare `npx qrcode`, or a different registry.
   - Verify the PNG with a host-neutral Node check: `node -e "const fs=require('node:fs'); process.exit(fs.existsSync(process.argv[1]) ? 0 : 1)" "$METRO_QR"`. If it fails, print the qrcode error and continue without the image.
   - **Chat-first render (best effort):** read and base64-encode the file with Node (`node -e "process.stdout.write(require('node:fs').readFileSync(process.argv[1]).toString('base64'))" "$METRO_QR"`) and embed in markdown as a data URI (`![QR](data:image/png;base64,<data>)`) so hosts that support inline image markdown show the QR directly in chat.
   - **Guaranteed visible fallback: the build plan, not a new window.** If inline chat image rendering is unavailable, do **not** open the PNG with the host's file-open tool or an OS command. The plan already draws the QR in its phone frame and links the file underneath it for scanning full size, so a window opening on top of a run the user is watching adds nothing. Print the quoted path instead, and point at the plan. Never interpolate an unquoted project path.
@@ -3240,8 +3246,8 @@ Do not persist PIDs, ports, or Metro URLs to the memory bank. They are ephemeral
 **Put the QR in the plan** so the document ends on the thing the user acts on:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" phone --stage qr \
-  --qr-image "<working_dir>/.expo/metro-qr.png" --qr-url "<metro-url>"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' phone --stage qr \
+  --qr-image '<working_dir>/.expo/metro-qr.png' --qr-url "<metro-url>"
 ```
 
 The PNG is inlined as a data URI, so the plan still shows the code after `.expo/` is cleaned. This
@@ -3292,7 +3298,7 @@ Debug logs    : .powernative/metro-logs/
 Close the build plan before printing the summary:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id run --status done
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id run --status done
 ```
 
 Point the user at `docs/create-app-plan.html` once — it holds the environment, the approved data

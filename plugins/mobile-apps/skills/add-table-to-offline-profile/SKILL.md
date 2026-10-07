@@ -94,9 +94,9 @@ Manifest path (dual-location, both within the bound root):
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 if [ -f .datamodel-manifest.json ]; then
-  printf '%s\n' "<working_dir>/.datamodel-manifest.json"
+  printf '%s\n' '<working_dir>/.datamodel-manifest.json'
 elif [ -f docs/plan-artifacts/.datamodel-manifest.json ]; then
-  printf '%s\n' "<working_dir>/docs/plan-artifacts/.datamodel-manifest.json"
+  printf '%s\n' '<working_dir>/docs/plan-artifacts/.datamodel-manifest.json'
 else
   echo "NEEDS_CONTEXT: no manifest in working_dir" >&2
   exit 1
@@ -271,7 +271,7 @@ change to the owner for approval first, then read the helper at its absolute
 `${PLUGIN_ROOT}/skills/<helper>/SKILL.md` path. Forward:
 
 ```text
-Arguments: --working-dir "<working_dir>" --profile-id "<profileId>" --table "<table>" <exact-approved-change-flags>
+Arguments: --working-dir '<working_dir>' --profile-id "<profileId>" --table "<table>" <exact-approved-change-flags>
 Context: MOBILE_APP_ORCHESTRATING=1, orchestrator, working_dir, phase, approved_scope,
          selected environment ID/URL/tenant, profile ID, table allowlist, item ID,
          supplied answers, --plan-only (if present)
@@ -293,7 +293,7 @@ distinct from `selectedColumns` (the curated sync set) — see
 Match the canonical entry shape in
 [`/setup-offline-profile` Step 9a](${PLUGIN_ROOT}/skills/setup-offline-profile/SKILL.md)
 without executing that workflow. Any delta check uses
-`--project-root "<working_dir>"` in its own guarded call.
+`--project-root '<working_dir>'` in its own guarded call.
 
 Append to `<working_dir>/memory-bank.md` `## Offline profile` block:
 

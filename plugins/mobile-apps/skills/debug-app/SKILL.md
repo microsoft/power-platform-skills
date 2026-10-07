@@ -142,7 +142,7 @@ Do not resolve the environment or call Dataverse during ordinary bundle, React, 
 Use the validated `<working_dir>` from argument parsing. Enumerate **all** matching logs, newest first:
 
 ```bash
-LOG_DIR="<working_dir>/.powernative/metro-logs"
+LOG_DIR='<working_dir>/.powernative/metro-logs'
 ls -t "$LOG_DIR"/metro-*-pid-*-port-*.log 2>/dev/null
 ```
 
@@ -272,7 +272,7 @@ Run the bundled verifier for every candidate diagnostic before writing:
 ```bash
 printf '%s' "$DIAGNOSTIC_SUMMARY" | node \
    "${PLUGIN_ROOT}/scripts/redact-debug-diagnostic.js" \
-  --working-dir "<working_dir>"
+  --working-dir '<working_dir>'
 ```
 
 Persist only the verifier's stdout. Build `DIAGNOSTIC_SUMMARY` from minimal fields first; do not pass a full Metro window or response body and rely on redaction to make it safe.

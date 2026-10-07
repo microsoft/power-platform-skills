@@ -224,7 +224,7 @@ to the owner for approval first, then read the helper at its absolute
 `${PLUGIN_ROOT}/skills/<helper>/SKILL.md` path. Forward:
 
 ```text
-Arguments: --working-dir "<working_dir>" --profile-id "<profileId>" --table "<table>" <exact-approved-change-flags>
+Arguments: --working-dir '<working_dir>' --profile-id "<profileId>" --table "<table>" <exact-approved-change-flags>
 Context: MOBILE_APP_ORCHESTRATING=1, orchestrator, working_dir, phase, approved_scope,
          selected environment ID/URL/tenant, profile ID, table allowlist, item ID,
          supplied answers, --plan-only (if present)
@@ -242,7 +242,7 @@ table's **columns** (`--columns add:/remove:/reset`), also refresh that entry's
 manifest. This re-baselines the schema-reconciliation marker for the next
 `${PLUGIN_ROOT}/scripts/offline-profile-delta.js` run; leave `schemaColumns`
 untouched for scope/sync/rename-only edits. Any delta check uses
-`--project-root "<working_dir>"` in its own guarded call. See
+`--project-root '<working_dir>'` in its own guarded call. See
 [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md).
 
 Append a one-line entry to `<working_dir>/memory-bank.md` `## Offline profile` block:

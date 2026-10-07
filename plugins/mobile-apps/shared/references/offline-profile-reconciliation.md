@@ -26,7 +26,7 @@ file tools, and retries; do not rediscover a root in a child invocation.
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js" --project-root "<working_dir>"
+node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js" --project-root '<working_dir>'
 ```
 
 Purely local and deterministic — no `az` token, no Dataverse call — so it is safe and
@@ -120,10 +120,10 @@ normal approval gate. The initial prompt is not blanket profile-write consent.
 
 1. For each `missingTables[]` entry, read and execute
   `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` with
-  `--working-dir "<working_dir>" --table <logicalName>`.
+  `--working-dir '<working_dir>' --table <logicalName>`.
 2. For each `tablesWithNewColumns[]` entry, read and execute
   `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` with
-  `--working-dir "<working_dir>" --table <logicalName> --columns add:<comma-separated newColumns>`.
+  `--working-dir '<working_dir>' --table <logicalName> --columns add:<comma-separated newColumns>`.
 
 ### Scoped helper handoffs
 
@@ -138,11 +138,11 @@ Context:
   approved_scope: <exact environment/profile identity, target logical table, and approved filter/column delta>
 
 Arguments for add-table-to-offline-profile:
-  --working-dir "<working_dir>"
+  --working-dir '<working_dir>'
   --table "<logicalName>"
 
 Arguments for edit-offline-profile:
-  --working-dir "<working_dir>"
+  --working-dir '<working_dir>'
   --table "<logicalName>"
   --columns "add:<comma-separated newColumns>"
 ```
