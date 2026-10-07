@@ -448,6 +448,31 @@ node "${PLUGIN_ROOT}/scripts/emit-skill-configured-telemetry.js" --skillName "ad
 contains the complete resulting set. The helper strips private-use and extension
 subtags before emission.
 
+After this configuration event, emit a failure completion before any terminal
+workflow stop caused by implementation, verification, or explicit maker
+rejection. Do not emit failure while retrying a recoverable check, for a
+revision loop, or when deployment is skipped. Use only the matching stable
+classification:
+
+| Terminal reason | `errorClass` |
+|---|---|
+| Installed package no longer passes validation/provenance | `package-revalidation-failed` |
+| Localization validator cannot be remediated | `localization-validation-failed` |
+| Project build cannot be remediated | `localization-build-failed` |
+| Rendered/browser verification cannot be remediated | `browser-verification-failed` |
+| Final site-integrity errors cannot be remediated | `site-integrity-validation-failed` |
+| Maker explicitly rejects the implemented localization and ends the workflow | `maker-rejected` |
+
+Run the matching command silently immediately before the terminal stop:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/emit-localization-completed-telemetry.js" --projectRoot "<PROJECT_ROOT>" --outcome "failure" --validationOutcome "failed" --errorClass "<STABLE_ERROR_CLASS>"
+```
+
+Never pass raw errors, file paths, URLs, user text, or dynamically invented
+classifications. An abrupt host/process termination cannot run this best-effort
+command; its invocation state expires normally.
+
 ---
 
 ## Phase 4: Configure localization infrastructure
@@ -474,8 +499,9 @@ result. Require all of the following before editing localization files:
 - `lockfileProvenance.present` and `lockfileProvenance.verified` are both
   `true`.
 
-If any check fails, stop. Do not delete or rewrite a conflicting lockfile
-entry outside the approved repair plan. Follow
+If any check fails and cannot be remediated, emit failure completion with
+`package-revalidation-failed`, then stop. Do not delete or rewrite a
+conflicting lockfile entry outside the approved repair plan. Follow
 `${PLUGIN_ROOT}/references/i18n-frameworks.md` for the selected framework/mode.
 
 Adopt valid existing conventions rather than creating a second initialization
@@ -579,9 +605,12 @@ Run the independent validator:
 node "${PLUGIN_ROOT}/skills/add-localization/scripts/validate-localization.js" --projectRoot "<PROJECT_ROOT>"
 ```
 Fix all reported errors.
+If the errors cannot be remediated and the workflow must end, emit failure
+completion with `localization-validation-failed` before stopping.
 
-Run the project's existing build. Start or reuse its dev server and verify
-with Playwright:
+Run the project's existing build. If the build cannot be remediated, emit
+failure completion with `localization-build-failed` before stopping. Start or
+reuse its dev server and verify with Playwright:
 
 - Default locale and one target locale.
 - Selector behavior or equivalent static locale navigation.
@@ -603,8 +632,9 @@ that stale resource requests cannot overwrite a newer selection.
 
 For an explicitly unverified package, all build, initialization, switching or
 route navigation, resource loading, `lang`/`dir`, and console checks are
-mandatory. If any check fails, stop and recommend the framework package; do
-not silently replace the approved package.
+mandatory. If any browser or rendered check fails and cannot be remediated,
+emit failure completion with `browser-verification-failed`, then stop and
+recommend the framework package; do not silently replace the approved package.
 
 Repeat the AI translation warning when applicable.
 
@@ -617,9 +647,11 @@ are complete, run:
 node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
 ```
 
-Fix every blocking error before reviewing or completing the skill. Inspect and report review
-findings in both directions and with expanded content. Rerun this gate after any subsequent source
-change.
+Fix every blocking error before reviewing or completing the skill. If the
+blocking errors cannot be remediated, emit failure completion with
+`site-integrity-validation-failed` before stopping. Inspect and report review
+findings in both directions and with expanded content. Rerun this gate after
+any subsequent source change.
 
 ---
 
@@ -674,7 +706,7 @@ after implementation, validation, build, browser verification, and maker
 review are complete:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/emit-localization-completed-telemetry.js" --projectRoot "<PROJECT_ROOT>"
+node "${PLUGIN_ROOT}/scripts/emit-localization-completed-telemetry.js" --projectRoot "<PROJECT_ROOT>" --outcome "success" --validationOutcome "passed"
 ```
 
 Run it silently. The helper is fail-closed and reads only the approved

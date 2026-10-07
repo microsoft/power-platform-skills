@@ -121,3 +121,124 @@ test("emits completion only from the explicit final workflow command", (t) => {
     null
   );
 });
+
+test("emits an allowlisted failure when no manifest is available", (t) => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-failed-"));
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-localized-"));
+  const probePath = path.join(configDir, "probe.json");
+  const ikeyPath = writeProvisionedConfig(configDir);
+  const originalConfigDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+  process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = configDir;
+  t.after(() => {
+    if (originalConfigDir === undefined) {
+      delete process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+    } else {
+      process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = originalConfigDir;
+    }
+  });
+  invocationState.recordStart(
+    "add-localization",
+    "failure-session",
+    projectRoot,
+    Date.now() - 250
+  );
+  invocationState.markConfigured("add-localization", projectRoot);
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      SCRIPT,
+      "--projectRoot", projectRoot,
+      "--outcome", "failure",
+      "--validationOutcome", "failed",
+      "--errorClass", "localization-build-failed",
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: "",
+        POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
+        POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath,
+        POWER_PLATFORM_SKILLS_FAKE_HTTPS: probePath,
+        POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "",
+      },
+      timeout: 30_000,
+    }
+  );
+
+  assert.equal(result.status, 0);
+  assert.ok(waitForFile(probePath, 5_000), "failure dispatcher should write probe");
+  const envelope = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
+  const eventInfo = JSON.parse(envelope.data.eventInfo);
+  assert.equal(envelope.data.sessionId, "failure-session");
+  assert.equal(envelope.data.outcome, "failure");
+  assert.equal(envelope.data.errorClass, "localization-build-failed");
+  assert.equal(envelope.data.severity, "Error");
+  assert.equal(eventInfo.validationOutcome, "failed");
+  assert.equal(eventInfo.configuredLocaleCount, undefined);
+  assert.equal(eventInfo.unavailableLocaleCount, undefined);
+  assert.equal(
+    invocationState.findActive(
+      "add-localization",
+      projectRoot,
+      { requireConfigured: true }
+    ),
+    null
+  );
+});
+
+test("rejects non-allowlisted failure classifications", (t) => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-failed-"));
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-localized-"));
+  const probePath = path.join(configDir, "probe.json");
+  const ikeyPath = writeProvisionedConfig(configDir);
+  const originalConfigDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+  process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = configDir;
+  t.after(() => {
+    if (originalConfigDir === undefined) {
+      delete process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+    } else {
+      process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = originalConfigDir;
+    }
+  });
+  invocationState.recordStart(
+    "add-localization",
+    "invalid-failure-session",
+    projectRoot
+  );
+  invocationState.markConfigured("add-localization", projectRoot);
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      SCRIPT,
+      "--projectRoot", projectRoot,
+      "--outcome", "failure",
+      "--validationOutcome", "failed",
+      "--errorClass", "C:\\customer\\private-error.txt",
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: "",
+        POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
+        POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath,
+        POWER_PLATFORM_SKILLS_FAKE_HTTPS: probePath,
+        POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "",
+      },
+      timeout: 30_000,
+    }
+  );
+
+  assert.equal(result.status, 0);
+  assert.equal(waitForFile(probePath, 250), false);
+  assert.ok(
+    invocationState.findActive(
+      "add-localization",
+      projectRoot,
+      { requireConfigured: true }
+    )
+  );
+});

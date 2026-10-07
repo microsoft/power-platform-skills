@@ -27,26 +27,48 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   if (typeof args.projectRoot !== "string" || !args.projectRoot.trim()) return;
   const projectRoot = path.resolve(args.projectRoot);
-  const manifest = JSON.parse(
-    fs.readFileSync(
-      path.join(projectRoot, ".powerpages-localization.json"),
-      "utf8"
-    )
-  );
+  const outcome = String(args.outcome || "success").trim().toLowerCase();
+  const validationOutcome = String(
+    args.validationOutcome || (outcome === "failure" ? "failed" : "passed")
+  ).trim().toLowerCase();
+  if (!new Set(["success", "failure"]).has(outcome)) return;
+  if (!new Set(["passed", "failed"]).has(validationOutcome)) return;
+  if (
+    outcome === "failure" &&
+    !telemetry.LOCALIZATION_COMPLETION_ERROR_CLASSES.has(args.errorClass)
+  ) {
+    return;
+  }
+  let manifest = null;
+  try {
+    manifest = JSON.parse(
+      fs.readFileSync(
+        path.join(projectRoot, ".powerpages-localization.json"),
+        "utf8"
+      )
+    );
+  } catch {
+    if (outcome === "success") return;
+  }
   const readiness = manifest?.bidirectionalReadiness?.status;
   telemetry.emitLocalizationCompleted(projectRoot, {
     sessionId: "",
-    outcome: "success",
+    outcome,
+    errorClass: outcome === "failure" ? args.errorClass : undefined,
     eventInfo: telemetry.buildLocalizationCompletionEventInfo({
-      validationOutcome: "passed",
+      validationOutcome,
       bidirectionalReadiness:
-        typeof readiness === "string" ? readiness : "not-required",
+        typeof readiness === "string"
+          ? readiness
+          : manifest
+            ? "not-required"
+            : undefined,
       unavailableLocaleCount: Array.isArray(manifest?.unavailableLocales)
         ? manifest.unavailableLocales.length
-        : 0,
+        : undefined,
       configuredLocaleCount: Array.isArray(manifest?.locales)
         ? manifest.locales.length
-        : 0,
+        : undefined,
       translationMethod:
         manifest?.translationMethod === "agent" ||
         manifest?.translationMethod === "blank"

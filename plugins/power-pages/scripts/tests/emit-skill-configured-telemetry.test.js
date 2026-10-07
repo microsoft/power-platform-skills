@@ -24,10 +24,17 @@ function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function waitForFile(filePath, timeoutMs) {
+function waitForEnvelope(filePath, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
-  while (!fs.existsSync(filePath) && Date.now() < deadline) sleep(25);
-  return fs.existsSync(filePath);
+  while (Date.now() < deadline) {
+    try {
+      const probe = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      return JSON.parse(probe.body);
+    } catch {
+      sleep(25);
+    }
+  }
+  return null;
 }
 
 function writeTelemetryConfig(configDir) {
@@ -107,8 +114,9 @@ function runCreateSiteConfigured({ configDir, projectRoot, ikeyPath, probeName }
     }
   );
   assert.equal(result.status, 0);
-  assert.ok(waitForFile(probePath, 5_000), "configured dispatcher should write probe");
-  return JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
+  const envelope = waitForEnvelope(probePath, 5_000);
+  assert.ok(envelope, "configured dispatcher should write a complete probe");
+  return envelope;
 }
 
 function invocationFileCount(configDir, skillName) {
@@ -125,6 +133,44 @@ function invocationFileCount(configDir, skillName) {
     return 0;
   }
 }
+
+test("configuration helper exits 0 when optional telemetry cannot load", () => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-config-load-"));
+  const preload = path.join(configDir, "block-telemetry-load.js");
+  fs.writeFileSync(
+    preload,
+    [
+      '"use strict";',
+      'const Module = require("node:module");',
+      "const originalLoad = Module._load;",
+      "Module._load = function (request, parent, isMain) {",
+      '  if (String(request).includes("power-pages-telemetry")) {',
+      '    throw new Error("simulated telemetry load failure");',
+      "  }",
+      "  return originalLoad.call(this, request, parent, isMain);",
+      "};",
+      "",
+    ].join("\n"),
+    "utf8"
+  );
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--require",
+      preload,
+      SCRIPT,
+      "--skillName",
+      "create-site",
+      "--projectRoot",
+      configDir,
+    ],
+    { encoding: "utf8", timeout: 30_000 }
+  );
+
+  assert.equal(result.status, 0);
+  assert.doesNotMatch(result.stderr, /simulated telemetry load failure/);
+});
 
 test("emits approved localization configuration with the start-hook session", (t) => {
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-config-event-"));
@@ -199,8 +245,8 @@ test("emits approved localization configuration with the start-hook session", (t
   );
 
   assert.equal(result.status, 0);
-  assert.ok(waitForFile(probePath, 5_000), "configured dispatcher should write probe");
-  const envelope = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
+  const envelope = waitForEnvelope(probePath, 5_000);
+  assert.ok(envelope, "configured dispatcher should write a complete probe");
   const eventInfo = JSON.parse(envelope.data.eventInfo);
   assert.equal(envelope.data.eventName, "skill_configured");
   assert.equal(envelope.data.sessionId, "configured-session");

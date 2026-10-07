@@ -40,6 +40,14 @@ const READINESS_STATUSES = new Set([
   "pending-remediation",
   "not-required",
 ]);
+const LOCALIZATION_COMPLETION_ERROR_CLASSES = new Set([
+  "package-revalidation-failed",
+  "localization-validation-failed",
+  "localization-build-failed",
+  "browser-verification-failed",
+  "site-integrity-validation-failed",
+  "maker-rejected",
+]);
 const PACKAGE_FAILURE_CODES = new Set([
   "package-not-resolvable",
   "package-deprecated",
@@ -183,6 +191,7 @@ function buildPackageValidationEventInfo(input) {
 }
 
 function nonNegativeInteger(value) {
+  if (value === undefined || value === null || value === "") return undefined;
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? Math.floor(number) : 0;
 }
@@ -190,11 +199,14 @@ function nonNegativeInteger(value) {
 function buildLocalizationCompletionEventInfo(input) {
   return compactObject({
     validationOutcome: enumValue(input.validationOutcome, new Set(["passed", "failed"])),
-    bidirectionalReadiness: enumValue(
-      input.bidirectionalReadiness,
-      READINESS_STATUSES,
-      "not-required"
-    ),
+    bidirectionalReadiness:
+      input.bidirectionalReadiness === undefined
+        ? undefined
+        : enumValue(
+          input.bidirectionalReadiness,
+          READINESS_STATUSES,
+          "not-required"
+        ),
     unavailableLocaleCount: nonNegativeInteger(input.unavailableLocaleCount),
     configuredLocaleCount: nonNegativeInteger(input.configuredLocaleCount),
     translationMethod: enumValue(input.translationMethod, TRANSLATION_METHODS),
@@ -359,6 +371,15 @@ function emitPackageValidation(projectRoot, eventInfo) {
 }
 
 function emitLocalizationCompleted(projectRoot, input) {
+  const outcome = enumValue(
+    input.outcome,
+    new Set(["success", "failure"])
+  );
+  const errorClass =
+    outcome === "failure"
+      ? enumValue(input.errorClass, LOCALIZATION_COMPLETION_ERROR_CLASSES)
+      : undefined;
+  if (!outcome || (outcome === "failure" && !errorClass)) return false;
   const active = invocationState.findActive(
     "add-localization",
     projectRoot,
@@ -378,9 +399,9 @@ function emitLocalizationCompleted(projectRoot, input) {
     projectRoot,
     input.eventInfo,
     compactObject({
-      outcome: input.outcome,
+      outcome,
       durationMs,
-      errorClass: input.errorClass,
+      errorClass,
     }),
     { active }
   );
@@ -389,6 +410,7 @@ function emitLocalizationCompleted(projectRoot, input) {
 }
 
 module.exports = {
+  LOCALIZATION_COMPLETION_ERROR_CLASSES,
   PACKAGE_FAILURE_CODES,
   buildCreateSiteEventInfo,
   buildLocalizationPackageValidationEvent,

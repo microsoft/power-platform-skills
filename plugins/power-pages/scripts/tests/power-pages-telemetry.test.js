@@ -158,4 +158,17 @@ test("completion telemetry constrains readiness and count values", () => {
       translationMethod: "blank",
     }
   );
+  assert.deepEqual(
+    telemetry.buildLocalizationCompletionEventInfo({
+      validationOutcome: "failed",
+    }),
+    {
+      validationOutcome: "failed",
+    }
+  );
+  assert.ok(
+    telemetry.LOCALIZATION_COMPLETION_ERROR_CLASSES.has(
+      "browser-verification-failed"
+    )
+  );
 });

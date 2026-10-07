@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 "use strict";
 
-const telemetry = require("./lib/telemetry/power-pages-telemetry");
+let telemetry = null;
+try {
+  telemetry = require("./lib/telemetry/power-pages-telemetry");
+} catch {
+  // Configuration telemetry is optional and must never affect the workflow.
+}
 
 function parseArgs(argv) {
   const args = {};
@@ -21,6 +26,7 @@ function parseBoolean(value) {
 }
 
 function main() {
+  if (!telemetry) return;
   const args = parseArgs(process.argv.slice(2));
   const skillName = args.skillName;
   if (skillName === "create-site") {
