@@ -130,7 +130,7 @@ evidence path must be supplied. Before planning, validate their hash, environmen
 table facts, candidate order, and top-three cap without reading the full snapshot:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/render-dataverse-architect-evidence.js" \
   --snapshot "<foreground snapshot path>" \
   --output "<compact architect evidence path>" \
@@ -208,7 +208,7 @@ Look for `power.config.json` in the working directory:
 If present, read the `environmentId` field and resolve it with `scripts/resolve-environment.js`. Otherwise, ask the orchestrator for the target environment URL or ID from context and resolve that:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/resolve-environment.js" <environment-id-or-url> --no-cache --require-tenant
 ```
 
@@ -232,7 +232,7 @@ If resolution fails (not authenticated or environment not visible to the logged-
 `resolve-environment.js` only resolves environment metadata; it does not prove Dataverse user access. Verify access before metadata discovery:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/verify-dataverse-access.js" <envUrl> --tenant-id "<tenantId>"
 ```
 
@@ -250,7 +250,7 @@ If it fails, skip Step 3 and Step 5's live queries, prepend a `Dataverse access 
 Query custom tables to discover conceptual reuse candidates. This broad query is advisory only; Step 5 still queries every selected custom, standard, and managed table by exact logical name before classifying it:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions?\$select=MetadataId,LogicalName,DisplayName,Description,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes&\$filter=IsCustomEntity eq true" \
   --tenant-id "<tenantId>"
@@ -259,7 +259,7 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
 For the relevant tables, fetch their user-defined columns in a single call (system columns like `createdon`, `modifiedby`, `statecode`, `ownerid`, `versionnumber` are filtered out automatically):
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/list-table-columns.js" <envUrl> <table1> <table2> ... --tenant-id "<tenantId>"
 ```
 
@@ -306,7 +306,7 @@ legacy live path, resolve every required entity — including `contact`,
 dependencies — in a **single** filtered query that also expands their columns:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions?\$select=MetadataId,LogicalName,SchemaName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes,PrimaryIdAttribute,PrimaryNameAttribute&\$filter=LogicalName eq '<table1>' or LogicalName eq '<table2>'&\$expand=Attributes(\$select=LogicalName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName)" \
   --tenant-id "<tenantId>"
@@ -677,7 +677,7 @@ representable integer bounds; never emit JavaScript-unsafe defaults.
 After writing the JSON, normalize and validate it in place:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --normalize-contract "<working_dir>/.tmp/dataverse-schema-contract.json" \
   --output "<working_dir>/.tmp/dataverse-schema-contract.json"

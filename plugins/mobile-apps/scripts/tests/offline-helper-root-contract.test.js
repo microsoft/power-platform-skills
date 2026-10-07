@@ -70,8 +70,6 @@ const { spawnSync } = require('node:child_process');
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.TRACE_FILE, JSON.stringify({
   cwd: process.cwd(), args,
-  tenant: process.env.POWER_PLATFORM_TENANT_ID,
-  dataverseTenant: process.env.DATAVERSE_TENANT_ID,
 }) + '\\n');
 if (args[0] === '-p') {
   assert.equal(args[1], "require('./power.config.json').environmentId || ''");
@@ -93,6 +91,7 @@ if (script === 'resolve-environment.js') {
   console.log('{"status":204}');
 } else {
   assert.deepEqual(args.slice(2, 4), ['--table', 'cr123_visit']);
+  assert.equal(args[args.indexOf('--tenant-id') + 1], ${JSON.stringify(context.tenantId)});
   console.log('{"status":204}');
 }
 `);
@@ -110,7 +109,8 @@ if (script === 'resolve-environment.js') {
 }
 
 function render(block, root) {
-  let command = block.replaceAll(/"<working_dir>([^"]*)"/g,
+  let command = block.replaceAll("'<working_dir>'", shellQuote(slashPath(root)))
+    .replaceAll(/"<working_dir>([^"]*)"/g,
     (_match, suffix) => shellQuote(slashPath(root) + suffix));
   for (const [token, value] of Object.entries({
     'selected-environment-id': context.environmentId,
@@ -265,8 +265,7 @@ for (const name of helpers) {
         }
       } else if (script.endsWith('/update-entity-offline-flags.js')) {
         assert.equal(args[0], context.environmentUrl);
-        assert.equal(call.tenant, context.tenantId);
-        assert.equal(call.dataverseTenant, context.tenantId);
+        assert.equal(args[args.indexOf('--tenant-id') + 1], context.tenantId);
       } else {
         assert.equal(script, '-p');
       }

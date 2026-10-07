@@ -114,7 +114,7 @@ test('setup-datamodel resolves the owner before inspecting project or environmen
   assert.match(discovery, /a mismatch returns `NEEDS_CONTEXT` before any project or cloud work/);
   assert.match(discovery, /Only a direct call without an override may use that invocation/);
   assert.match(discovery, /A missing nested owner path is an error/);
-  assert.match(discovery, /cd "<working_dir>" \|\| exit 1/);
+  assert.match(discovery, /cd -- '<working_dir>' \|\| \{ echo "BLOCKED: cannot enter working_dir" >&2; exit 1; \}/);
   assert.match(discovery, /selected working directory is not an initialized mobile app/);
   assert.match(discovery, /ERROR: selected app has no environmentId/);
   assert.match(discovery, /resolve-environment\.js" "\$environment_id"/);

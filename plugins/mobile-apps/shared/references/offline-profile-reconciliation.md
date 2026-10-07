@@ -25,7 +25,7 @@ Keep the owner's resolved absolute `working_dir` for checks, helper handoffs,
 file tools, and retries; do not rediscover a root in a child invocation.
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js" --project-root "<working_dir>"
 ```
 

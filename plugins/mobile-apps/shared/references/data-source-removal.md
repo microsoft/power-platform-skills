@@ -58,7 +58,7 @@ Resolve `$PA` using [cli-binary.md](../cli-binary.md). The examples use grouped
 reference. The skill's `--data-source-name` becomes the grouped CLI's `--name`.
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 $PA app refresh data-source --name '<registered-name>' --non-interactive
 npm run generate-schemas
 npx --no-install tsc --noEmit
@@ -137,7 +137,7 @@ mapping; the approval and scope checks still apply. Run only the applicable
 command below:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 # Dataverse: use the registered data-source key, not a guessed display label.
 $PA app remove data-source --connector dataverse --name '<registered-name>' --force --non-interactive
 
@@ -180,7 +180,7 @@ generator-owned files or continue to deployment.
 After verified removal:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npm run generate-schemas
 npx --no-install tsc --noEmit
 ```

@@ -72,7 +72,7 @@ Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/sh
 Also confirm we're inside a Power Apps mobile app:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 if [ ! -f power.config.json ] || [ ! -f app.config.js ]; then
   echo "BLOCKED: working_dir is not an initialized app" >&2
   exit 1
@@ -98,7 +98,7 @@ Use aliases only for routing; pass the exact discovered API ID to CLI commands.
 **Dataverse actions/functions: discover and return here.**
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 $PA app find-dataverse-api --search '<operation-name>' --json
 ```
 
@@ -167,14 +167,14 @@ environment-specific Connections URL from `power.config.json` `environmentId`:
 Then run:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 $PA app add data-source --connector <apiId> --connection-id <connectionId>
 ```
 
 **For table-based connectors, discover datasets and tables first:**
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 $PA connection list-datasets --connector <apiId> --connection-id <connectionId> --json
 $PA connection list-tables --connector <apiId> --connection-id <connectionId> --dataset '<dataset>' --json
 ```
@@ -185,14 +185,14 @@ approval; proposal-only discovery returns without adding sources.
 Add one data source per approved table:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 $PA app add data-source --connector <apiId> --connection-id <connectionId> --dataset '<dataset>' --table '<table>'
 ```
 
 **For SQL stored procedures, discover procedures only when the user asks to invoke a stored procedure rather than a table:**
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 $PA connection list-procedures --connection-id <connectionId> --dataset '<database>' --json
 ```
 
@@ -200,7 +200,7 @@ Approve the exact procedure binding before generation if it was not already in
 the current approved scope; proposal-only discovery returns without adding it.
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 $PA app add data-source --connector shared_sql --connection-id <connectionId> --dataset '<database>' --procedure '<procedure>'
 ```
 
@@ -249,7 +249,7 @@ service availability separately from consumer integration.
 `pa app add data-source` (Step 3) wrote new files into `.power/schemas/<connector>/`. The `connectorSchemas.ts` consumed by `app/_layout.tsx` is now stale — regenerate it before type-checking so the new connector is wired into the runtime schema map:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npm run generate-schemas
 npx --no-install tsc --noEmit
 ```

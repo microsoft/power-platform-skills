@@ -12,7 +12,7 @@ const normalize = (text) => text.replace(/\r\n?/g, '\n');
 const read = (file) => normalize(fs.readFileSync(file, 'utf8'));
 const appRootReference = read(path.join(pluginRoot, 'shared/references/app-working-directory.md'));
 const appRootLink = '[app-working-directory.md](${PLUGIN_ROOT}/shared/references/app-working-directory.md)';
-const guard = 'cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }';
+const guard = "cd -- '<working_dir>' || { echo \"BLOCKED: cannot enter working_dir\" >&2; exit 1; }";
 const powershellGuard = "Set-Location -LiteralPath '<working_dir>' -ErrorAction Stop";
 
 function shellBlocks(text, language = 'bash') {
@@ -47,7 +47,7 @@ const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
 function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'app-working-dir-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-  const owner = path.join(directory, "owner's app [test] $root `literal`");
+  const owner = path.join(directory, "owner's app [test] $root $(printf expanded) `literal`");
   const caller = path.join(directory, 'different app');
   for (const root of [owner, caller]) {
     fs.mkdirSync(root, { recursive: true });
@@ -64,7 +64,7 @@ function fixture(t) {
 }
 
 function run(block, owner, caller) {
-  const command = block.replaceAll('"<working_dir>"', shellQuote(owner.replaceAll('\\', '/')));
+  const command = block.replaceAll("'<working_dir>'", shellQuote(owner.replaceAll('\\', '/')));
   // Use the current Node executable; mutation tests supply local CLI probes.
   const result = spawnSync(bash, ['-s'], {
     input: `node() { "$REAL_NODE" "$@"; }\nPA="npx --no-install pa"\nPA_KIND=pa\n${command}`,
@@ -105,6 +105,8 @@ test('shared root contract distinguishes direct defaults from required child con
   assert.match(scope, /inaccessible directory is `BLOCKED`/);
   assert.match(scope, /does not persist across tool calls/);
   assert.match(scope, /shell-quoted literal argument/);
+  assert.match(scope, /keep the surrounding single quotes/);
+  assert.match(scope, /Never interpolate a path inside double quotes/);
   assert.match(scope, /File tools do not inherit shell cwd/);
   assert.match(scope, /Read\/Edit\/Write\/Grep\/Glob absolute\s+project paths/);
   assert.match(scope, /grants no additional approval and does not relax\nplan-only mode/);
@@ -117,6 +119,17 @@ test('shared root contract distinguishes direct defaults from required child con
   assert.match(scope, /Re-supply both in each fresh shell\s+call after binding the root/);
   assert.equal(shellBlocks(scope)[0], guard);
   assert.equal(shellBlocks(scope, 'powershell')[0], powershellGuard);
+});
+
+test('canonical root guard treats dollar and backtick syntax as literal path contents', (t) => {
+  const { owner, caller } = fixture(t);
+  const literalPath = owner.replaceAll('\\', '/').replaceAll("'", "'\\''");
+  const command = guard.replace('<working_dir>', literalPath) +
+    '\nnode -p "process.cwd()"';
+  const result = run(command, owner, caller);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.equal(fs.realpathSync.native(result.stdout.trim()), fs.realpathSync.native(owner));
 });
 
 const removal = read(path.join(pluginRoot, 'shared/references/data-source-removal.md'));
@@ -253,12 +266,15 @@ az() { record_call az "$@"; }
       // Whole quoted paths are replaced as literal arguments, including nested
       // $(cat "...") paths. Other placeholders are inert values for the CLI stubs.
       const command = block
+        .replaceAll("'<working_dir>'", shellQuote(owner.replaceAll('\\', '/')))
         .replaceAll(/"<working_dir>([^"]*)"/g, (_match, suffix) =>
           shellQuote(owner.replaceAll('\\', '/') + suffix.replaceAll(/<[^>]+>/g, 'fixture')))
         .replaceAll(/<[^>]+>/g, 'fixture');
       const result = run(`${probes}\n${command}`, owner, caller);
       assert.equal(result.status, 0, `${name}:\n${block}\n${result.stderr}`);
-      const missing = block.replaceAll(/"<working_dir>([^"]*)"/g, (_match, suffix) =>
+      const missing = block
+        .replaceAll("'<working_dir>'", shellQuote(path.join(directory, 'missing app').replaceAll('\\', '/')))
+        .replaceAll(/"<working_dir>([^"]*)"/g, (_match, suffix) =>
         shellQuote(path.join(directory, 'missing app').replaceAll('\\', '/') + suffix.replaceAll(/<[^>]+>/g, 'fixture')))
         .replaceAll(/<[^>]+>/g, 'fixture');
       const before = fs.existsSync(trace) ? fs.readFileSync(trace, 'utf8') : '';
@@ -310,7 +326,7 @@ npx() { node "$@"; }
     assert.ok(blocks.length >= 3);
     for (const block of blocks) {
       const materialize = (root) => block
-        .replaceAll('"<working_dir>"', shellQuote(root.replaceAll('\\', '/')))
+        .replaceAll("'<working_dir>'", shellQuote(root.replaceAll('\\', '/')))
         .replaceAll(/<[^>]+>/g, 'fixture');
       const succeeded = run(`${probes}\n${materialize(owner)}`, owner, caller);
       assert.equal(succeeded.status, 0, `${block}\n${succeeded.stderr}`);

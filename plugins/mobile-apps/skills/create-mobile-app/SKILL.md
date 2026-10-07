@@ -3190,7 +3190,7 @@ The **port** is the log identity: it is what the QR encodes, what the device dia
 **Launch command:**
 
 ```bash
-cd "<working_dir>"
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npm run dev
 ```
 

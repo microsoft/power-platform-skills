@@ -14,11 +14,16 @@ Field semantics are in [offline-profile-schema.md](./offline-profile-schema.md).
 
 **Why not `dataverse-request.js`:** the PUT needs the `MSCRM.MergeLabels: true` header to preserve display labels, and the generic script does not accept arbitrary headers. Use the purpose-built helper instead:
 
+Use the tenant resolved for the approved environment as `<tenantId>`; the
+explicit argument also binds token refresh and fails closed if that tenant is
+unavailable. Do not substitute an ambient tenant.
+
 ```bash
 node "${PLUGIN_ROOT}/scripts/update-entity-offline-flags.js" <envUrl> \
   --table <table_logical_name> \
   --offline true \
-  --tracking true
+  --tracking true \
+  --tenant-id "<tenantId>"
 ```
 
 The helper internally:

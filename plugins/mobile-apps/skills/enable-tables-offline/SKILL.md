@@ -29,10 +29,13 @@ Sequential (Dataverse metadata lock) and idempotent: re-running on an already-en
 
 ```bash
 test -f power.config.json && test -f app.config.js
-node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -p "require('./power.config.json').environmentId")" --require-tenant
 ```
 
-Capture the **Environment URL** from the resolver for `<envUrl>`. STOP if not authenticated.
+Capture the **Environment URL** and **Tenant ID** from the resolver for
+`<envUrl>` and `<tenantId>`. Pass this tenant explicitly on every helper call
+and retry below; missing or conflicting tenant context is `NEEDS_CONTEXT`.
+STOP if not authenticated.
 
 ### Step 2 — Resolve table list
 
@@ -55,7 +58,8 @@ For each table, in sequence:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions(LogicalName='<table>')?\$select=LogicalName,DisplayName,IsAvailableOffline,ChangeTrackingEnabled,IsCustomizable"
+  "EntityDefinitions(LogicalName='<table>')?\$select=LogicalName,DisplayName,IsAvailableOffline,ChangeTrackingEnabled,IsCustomizable" \
+  --tenant-id "<tenantId>"
 ```
 
 Build a status table:
@@ -102,7 +106,8 @@ For each table needing change (skip ones already in target state):
 node "${PLUGIN_ROOT}/scripts/update-entity-offline-flags.js" <envUrl> \
   --table <table> \
   --offline true \
-  --tracking true
+  --tracking true \
+  --tenant-id "<tenantId>"
 ```
 
 The helper:
@@ -129,7 +134,7 @@ Print `✓ <table>` after each 204; print `↷ <table> (already enabled)` for no
 ```bash
 # Build the <entities> XML body from the list of tables modified in Step 4
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
-  "PublishXml" --body '{
+  "PublishXml" --tenant-id "<tenantId>" --body '{
     "ParameterXml": "<importexportxml><entities><entity>cr720_fcbflag</entity><entity>cr720_rolloutevent</entity></entities></importexportxml>"
   }'
 ```
@@ -144,7 +149,7 @@ Substitute `<entity>...</entity>` lines for every table the helper PUT'd flags o
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
-  "PublishAllXml" --body '{}'
+  "PublishAllXml" --tenant-id "<tenantId>" --body '{}'
 ```
 
 Same timeout-but-success handling as `/setup-offline-profile` Step 8: if the client times out but a follow-up GET on the table's EntityMetadata shows the flags are set, treat as success.

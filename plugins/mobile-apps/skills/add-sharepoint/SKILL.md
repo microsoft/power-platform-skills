@@ -59,7 +59,7 @@ Check for `memory-bank.md` per [shared-instructions.md](${PLUGIN_ROOT}/shared/sh
 Also confirm this is a mobile app:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 if [ ! -f power.config.json ] || [ ! -f app.config.js ]; then
   echo "BLOCKED: working_dir is not an initialized app" >&2
   exit 1
@@ -155,7 +155,7 @@ before any lookup or creation. Use **`shared_sharepointonline`** as `apiId`.
   blank, or wrong-environment supplied bindings must be clarified, not replaced.
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 $PA connection create --connector shared_sharepointonline --json
 ```
 
@@ -176,7 +176,7 @@ Skip this picker when the approved site URL is already supplied.
 > "→ Discovering SharePoint sites accessible to this connection…"
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 $PA connection list-datasets --connector shared_sharepointonline --connection-id '<connectionId>' --json
 ```
 
@@ -196,7 +196,7 @@ Skip this picker for supplied list/library identities; reuse the approved values
 For each selected site:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 $PA connection list-tables --connector shared_sharepointonline --connection-id '<connectionId>' --dataset '<site-url>' --json
 ```
 
@@ -217,7 +217,7 @@ owner. A picker selection alone is not execution approval.
 Run only the applicable command:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 # Supplied/resolved connection ID
 $PA app add data-source --connector shared_sharepointonline --connection-id '<connectionId>' --dataset '<site-url>' --table '<table-name>'
 
@@ -277,7 +277,7 @@ await SharePointOnlineService.PatchItem({
 `pa app add data-source` wrote new files into `.power/schemas/sharepointonline/`. Regenerate `connectorSchemas.ts` before type-checking so the new list is wired into the runtime schema map:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npm run generate-schemas
 npx --no-install tsc --noEmit
 ```

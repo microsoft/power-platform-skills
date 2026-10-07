@@ -108,7 +108,7 @@ If a seed file cannot be mapped safely, fall back to generated contextual sample
 Run app-local commands from the resolved `working_dir` in each shell call.
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 if [ ! -f power.config.json ] || [ ! -f app.config.js ]; then
   echo "BLOCKED: working_dir is not an initialized app" >&2
   exit 1
@@ -138,7 +138,7 @@ Missing or conflicting tenant context returns `NEEDS_CONTEXT` before the call.
 Verify Azure CLI auth (the script needs an Azure CLI token):
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 az account show --query "user.name" -o tsv
 ```
 
@@ -151,7 +151,7 @@ If empty, instruct `az login` and stop.
 #### Step 2a — Path A: read `.datamodel-manifest.json` (preferred)
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 test -f .datamodel-manifest.json
 ```
 
@@ -175,7 +175,7 @@ only for those logical names. The following broad discovery is for a standalone
 request without a table list, to propose candidates for approval:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions?\$select=LogicalName,DisplayName,EntitySetName&\$filter=IsCustomEntity eq true" \
   --tenant-id '<tenantId-from-resolve-environment>'
@@ -185,7 +185,7 @@ For each candidate that the project uses (or each explicitly scoped table),
 fetch its custom columns:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<table>')/Attributes?\$select=LogicalName,DisplayName,AttributeType,RequiredLevel&\$filter=IsCustomAttribute eq true" \
   --tenant-id '<tenantId-from-resolve-environment>'
@@ -208,7 +208,7 @@ set name from the manifest, or fetch that name from metadata as in Step 5a.
 Never derive it by appending `s` to a logical name.
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "<entitySetName>?\$top=5&\$select=<primaryKeyColumn>" \
   --tenant-id '<tenantId-from-resolve-environment>'
@@ -336,7 +336,7 @@ For each selected table, generate N rows. Match values to column names + types:
 For every choice column in the selected tables, query its option set before generating rows:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<table>')/Attributes(LogicalName='<column>')/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?\$expand=OptionSet" \
   --tenant-id '<tenantId-from-resolve-environment>'
@@ -392,7 +392,7 @@ Insert in the tier order from Step 3c. **Within a tier, parallelize across both 
 For each table, get its `EntitySetName` (the URL-path name, usually plural — e.g. `cr3e9_jobsites`). Read from `.datamodel-manifest.json` if it carries this; otherwise:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<table>')?\$select=EntitySetName" \
   --tenant-id '<tenantId-from-resolve-environment>'
@@ -428,7 +428,7 @@ an out-of-scope operation is a scope error, not a record failure to continue pas
 2. **Fire BATCH-RECORDS once per tier.** The script handles concurrency, retry, GUID extraction, and adaptive throttling internally:
 
    ```bash
-   cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+   cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
    node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> BATCH-RECORDS \
      "Tier <N>" \
      --operations '<json-from-step-1>' \
@@ -468,7 +468,7 @@ For Tier 1+ tables, build each row's body with `@odata.bind` referencing the par
 Then:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> BATCH-RECORDS \
   "Tier 1" \
   --operations '<json-with-bound-lookups>' \
@@ -561,7 +561,7 @@ removed from the current scope; never retry a retiring table.
 1. **Re-query parent GUIDs by a stable business key.** For every parent table referenced in the failed tier's `@odata.bind` values, run a fresh GET filtered by the row's natural identifier (name, tail-number, code — whatever you used as the primary name when seeding). Example:
 
    ```bash
-   cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+   cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
    node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
      "<parentEntitySet>?\$select=<parentIdColumn>,<naturalKey>&\$filter=startswith(<naturalKey>,'<seed prefix>')&\$top=50" \
      --tenant-id '<tenantId-from-resolve-environment>'

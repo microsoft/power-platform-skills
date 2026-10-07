@@ -174,7 +174,7 @@ read, and helper call to that same root.
 Run the local, no-network delta check (`.datamodel-manifest.json` vs `offline-profile.json`):
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js" --project-root "<working_dir>"
 ```
 

@@ -54,7 +54,7 @@ All relative app paths below, including diagram inputs, `native-app-plan.md`,
 `_dm_section.md`, `.datamodel-manifest.json`, `offline-profile.json`, and
 `memory-bank.md`, are relative to this resolved root, not a later tool's cwd.
 Use absolute paths with file tools. Begin every shell invocation that reads or
-writes app-local files with `cd "<working_dir>" || exit 1`; shell state does not
+writes app-local files with the single-quoted fail-closed app-root guard; shell state does not
 carry across tool calls.
 
 Confirm the selected root is a Power Apps mobile app:
@@ -66,7 +66,7 @@ Incomplete or conflicting context returns `NEEDS_CONTEXT` after read-only
 recovery; never retry without the safety flags or redirect into app configuration.
 
 ```bash
-cd "<working_dir>" || exit 1
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 if [ ! -f power.config.json ] || [ ! -f app.config.js ]; then
   printf '%s\n' 'ERROR: selected working directory is not an initialized mobile app' >&2
   exit 1
@@ -379,7 +379,7 @@ If Phase 5 created or extended Dataverse tables, an existing Mobile Offline Prof
 Run the local, no-network delta check:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js" --project-root "<working_dir>"
 ```
 

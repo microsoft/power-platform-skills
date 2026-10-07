@@ -58,7 +58,7 @@ returns `NEEDS_CONTEXT` after read-only recovery; never remove the safety flags
 or redirect output into configuration to make planning succeed.
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 if [ ! -f power.config.json ] || [ ! -f app.config.js ]; then
   echo "BLOCKED: working_dir is not an initialized app" >&2
   exit 1
@@ -78,7 +78,7 @@ owner's absolute `working_dir` for every command and artifact.
 Look for `native-app-plan.md` in the project root:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 test -f native-app-plan.md
 ```
 
@@ -306,7 +306,7 @@ bindings with no schema mutation, skip to Step 6, not the schema-write phases.
 The Power Apps CLI (`$PA`) and `az` authenticate independently — they can point to different accounts. Verify `power.config.json` resolves and `az` can token for the target tenant before making any Dataverse API calls:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 ENVIRONMENT_ID=$(node -p "require('./power.config.json').environmentId") || exit 1
 ENV_JSON=$(node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ENVIRONMENT_ID") || exit 1
 echo "$ENV_JSON"
@@ -321,7 +321,7 @@ Compare the resolved environment URL with `<envUrl>` captured in Step 1. If they
 >
 > The Dataverse API token comes from `az`, which must target the same tenant as the selected environment. Run:
 > ```bash
-> cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+> cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 > az login --tenant <tenant-id>      # switch az to the right tenant
 > ```
 > Then re-run `/add-dataverse`."
@@ -331,7 +331,7 @@ Compare the resolved environment URL with `<envUrl>` captured in Step 1. If they
 #### Step 3b — Acquire token
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 az account show --query "user.name" -o tsv
 ```
 
@@ -340,7 +340,7 @@ If empty, instruct `az login` and stop.
 **Script invocation contract — read this once, all subsequent calls in this skill follow it:**
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> <METHOD> <apiPath> \
   [--body '<json>'] [--include-headers] \
   --tenant-id '<tenantId-from-resolve-environment>'
@@ -358,7 +358,7 @@ If the tenant is unknown, omit `--tenant-id` — discovery still works, it is ju
 Acquire a Dataverse access token and verify connectivity:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET WhoAmI \
   --tenant-id '<tenantId-from-resolve-environment>'
 ```
@@ -369,7 +369,7 @@ priority over shell environment variables and Azure account discovery.
 `WhoAmI` is the Dataverse identity endpoint — capital W/A/I (case-sensitive). The response gives `UserId`, `BusinessUnitId`, `OrganizationId` but **does NOT include the publisher prefix**. To get the publisher prefix, query the solution's publisher (defaults to `Default`; pass a different solution name if the env uses a custom solution):
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/detect-publisher-prefix.js" <envUrl> [solutionName] \
   --tenant-id '<tenantId-from-resolve-environment>'
 # solutionName defaults to "Default" if omitted
@@ -387,7 +387,7 @@ the resolved environment, tenant (when available), publisher, solution, current
 plan bytes, structured-schema bytes, and fresh reconciliation bytes:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --validate "<operation-manifest-path>" \
   --contract "<schema-contract-path>" \
@@ -447,7 +447,7 @@ normalized contract and its required dependencies, never all saved-plan rows.
 Do not substitute the planning snapshot or inventory cache for this live read.
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions?\$select=MetadataId,LogicalName,SchemaName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes,PrimaryIdAttribute,PrimaryNameAttribute&\$filter=LogicalName eq '<table1>' or LogicalName eq '<table2>'&\$expand=Attributes(\$select=MetadataId,LogicalName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName,SourceType,SourceTypeMask)" \
   --tenant-id '<tenantId-from-resolve-environment>'
@@ -500,7 +500,7 @@ semantics. Before classifying any such existing column as compatible:
    `<working_dir>/.tmp/derived-metadata-operations.json`, then run:
 
    ```bash
-   cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+   cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
    node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> \
      BATCH-METADATA derived-reconciliation \
      --operations "$(cat "<working_dir>/.tmp/derived-metadata-operations.json")" \
@@ -522,7 +522,7 @@ semantics. Before classifying any such existing column as compatible:
    Boolean mappings must contain exactly values 0 and 1. Then run:
 
    ```bash
-   cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+   cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
    node "${PLUGIN_ROOT}/scripts/validate-derived-metadata.js" \
      --expected "<working_dir>/.tmp/derived-metadata-expected.json" \
      --actual "<working_dir>/.tmp/derived-metadata-live.json"
@@ -581,7 +581,7 @@ For each non-empty phase, write just that phase's `operations` array to
 manifest, then execute every phase with the same project-local atomic journal:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 EXECUTION_JOURNAL="<working_dir>/.tmp/dataverse-metadata-execution-journal.json"
 ALL_MANIFEST_OPERATIONS="<working_dir>/.tmp/dataverse-operation-all.json"
 # Write the flattened operations from every manifest phase to ALL_MANIFEST_OPERATIONS once.
@@ -654,7 +654,7 @@ Bind the contract through that pre-existing receipt, then roll the existing
 publish checkpoint forward:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --roll-forward-checkpoint "$PUBLISH_CHECKPOINT" \
   --previous-manifest "$OPERATION_MANIFEST" \
@@ -687,7 +687,7 @@ computed dependencies have already crossed the exact derived-metadata barrier;
 unsupported projections are explicit `defer` rows. After the `publish` phase succeeds, delete the publish checkpoint and invalidate the planning-only inventory cache:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node -e "const checkpoint = process.argv[1]; if (checkpoint) require('node:fs').rmSync(checkpoint, { force: true });" \
   "${PUBLISH_CHECKPOINT:-}"
 if ! node "${PLUGIN_ROOT}/scripts/dataverse-inventory-cache.js" \
@@ -729,7 +729,7 @@ issues requests strictly one at a time in array order, stopping on the first
 non-2xx response by default.
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> \
   BATCH-METADATA schema-writes \
   --operations '<ordered-json-array>' \
@@ -761,7 +761,7 @@ Before each create, confirm the target name is actually free: name-prefix collis
 Only re-probe a single name when Step 4's batch did not cover it (for example a rename candidate generated later in this step):
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<prefix>_<table>')?\$select=MetadataId,LogicalName,IsCustomEntity,IsManaged,IsCustomizable,CanCreateAttributes" \
   --tenant-id '<tenantId-from-resolve-environment>'
@@ -896,7 +896,7 @@ For each `Create` decision, in **tier order** (Tier 0 → Tier 1 → Tier 2 → 
 **Scratch files:** When writing request body JSON to disk (e.g. table definitions, column metadata, relationship payloads), always write to `<working_dir>/.tmp/`, never to `/tmp/`. Keeping request bodies project-local prevents cross-project writes and makes cleanup deterministic. After the per-call root guard, create the folder if it doesn't exist: `mkdir -p .tmp`.
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST EntityDefinitions \
   --body '<json-body-with-all-columns-inline>' \
   --solution '<solution-uniquename-from-memory-bank>' \
@@ -977,7 +977,7 @@ For each `Extend` decision, POST a new column to the existing table.
 > **⚠️ Table-level pre-flight (HARD — required for idempotent re-runs).** Reuse the complete attribute snapshot fetched for this table in Step 4. If the table was discovered only during collision recovery, or no current snapshot exists, fetch all attributes exactly once:
 >
 > ```bash
-> cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+> cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 > node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
 >   "EntityDefinitions(LogicalName='<table>')/Attributes?\$select=MetadataId,LogicalName,SchemaName,AttributeType,AttributeTypeName,RequiredLevel,IsManaged,IsCustomizable,IsPrimaryId,IsPrimaryName" \
 >   --tenant-id '<tenantId-from-resolve-environment>'
@@ -996,7 +996,7 @@ For each `Extend` decision, POST a new column to the existing table.
 After the complete comparison passes, POST the missing-column queue **one column at a time, sequentially** (no `$batch`; always pass `--solution`):
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "EntityDefinitions(LogicalName='<table>')/Attributes" \
   --body '<column-json>' \
@@ -1047,7 +1047,7 @@ Column shapes that have non-obvious gotchas (handle carefully):
   Invocation (apiPath is `RelationshipDefinitions`, body via `--body`, always pass `--solution`):
 
   ```bash
-  cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+  cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
   node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
     RelationshipDefinitions \
     --body '<json-body-from-skeleton-above>' \
@@ -1177,7 +1177,7 @@ https://learn.microsoft.com/power-apps/developer/data-platform/specialized-colum
 **Do NOT use the `CreateEntityKey` action route.** In practice it can return 404 depending on route shape / environment. The reliable metadata route is POSTing to the table's `Keys` navigation collection:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "EntityDefinitions(LogicalName='<table>')/Keys" \
   --body '<entity-key-json>' \
@@ -1199,7 +1199,7 @@ Body skeleton:
 **Pre-flight each key before POST** so re-runs are idempotent. A key can only pre-exist on a table that already existed at Step 4, so for a table created in this run, skip straight to the POST. Otherwise read `Keys` from that table's Step 4 snapshot. Query it directly only when the snapshot did not cover that table:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions(LogicalName='<table>')?\$select=LogicalName&\$expand=Keys(\$select=SchemaName,KeyAttributes,EntityKeyIndexStatus)" \
   --tenant-id '<tenantId-from-resolve-environment>'
@@ -1246,7 +1246,7 @@ are intentionally absent from creation tiers. The CLI reads the environment ID
 from `power.config.json`; pass the environment URL resolved earlier in the skill:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 $PA app add data-source --connector dataverse --org-url <envUrl> --table <table-logical-name>
 ```
 
@@ -1261,7 +1261,7 @@ logical name. The verifier also accepts the legacy nested
 `databaseReferences.default.cds` shape:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/verify-dataverse-services.js" \
   --project-root "<working_dir>" \
   --manifest "$OPERATION_MANIFEST"
@@ -1291,7 +1291,7 @@ publish retry.
 Only after **every** Step 5 metadata POST and **every** Step 6 `pa app add data-source` has returned successfully, publish so the new tables and columns are available to the runtime. `PublishXml` takes the same exclusive metadata lock as the create/extend calls — do not run it concurrently with anything from Steps 5 or 6.
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "PublishXml" \
   --body "{\"ParameterXml\":\"<importexportxml><entities><entity>cr123_table1</entity><entity>cr123_table2</entity></entities></importexportxml>\"}" \
@@ -1306,7 +1306,7 @@ After a 2xx publish, invalidate the planning-only inventory cache before
 verification so a later planning run cannot reuse pre-publication inventory:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 if ! node "${PLUGIN_ROOT}/scripts/dataverse-inventory-cache.js" \
   --file "<working_dir>/.tmp/dataverse-inventory-cache.json" --invalidate; then
   printf 'NEEDS_RECOVERY: dataverse-inventory-cache\n' >&2
@@ -1328,7 +1328,7 @@ standalone path's verified service list, not Creation Order alone. Use **one**
 filtered query for the bounded set, not one request per table:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
   "EntityDefinitions?\$select=LogicalName,DisplayName&\$filter=LogicalName eq '<table1>' or LogicalName eq '<table2>'" \
   --tenant-id '<tenantId-from-resolve-environment>'
@@ -1464,7 +1464,7 @@ if (!upload.success) {
 `pa app add data-source` (Step 5) wrote new files into `.power/schemas/<connector>/`. The `connectorSchemas.ts` consumed by `app/_layout.tsx` is now stale — regenerate it before type-checking, otherwise the new tables won't be wired into the runtime schema map and `tsc` will pass against an out-of-date snapshot:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npm run generate-schemas
 npx --no-install tsc --noEmit
 ```
@@ -1484,7 +1484,7 @@ The flag alone must not suppress standalone reconciliation.
 Otherwise (manual `/add-dataverse`), run the local, no-network delta check:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js"
 ```
 

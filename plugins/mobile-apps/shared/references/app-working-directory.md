@@ -30,10 +30,14 @@ call after binding the root; use the shared grouped/flat command and flag mappin
 ## Shell guards
 
 Use a shell-quoted literal argument for the resolved root, including in Git Bash
-on Windows. Never execute an unresolved placeholder.
+on Windows. Replace `<working_dir>` with the literal path and escape each
+embedded apostrophe as `'\''`; keep the surrounding single quotes. Apply the
+same escaping to every literal app-root path argument in a command, including
+paths to files under that root. Never interpolate a path inside double quotes
+or execute an unresolved placeholder.
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 ```
 
 For an existing PowerShell helper, use a single-quoted literal path and double

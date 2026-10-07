@@ -176,10 +176,29 @@ function runMetadataHelper(t, script, args, env = {}) {
 const fs = require('node:fs');
 require(${JSON.stringify(FAKE_AZ_PRELOAD)});
 const helpers = require(${JSON.stringify(HELPERS)});
-helpers.makeRequest = async ({ url, headers }) => {
+let puts = 0;
+helpers.makeRequest = async ({ url, headers, method = 'GET' }) => {
   fs.appendFileSync(${JSON.stringify(requestLog)}, JSON.stringify({
-    url, authorization: headers.Authorization,
+    url, method, authorization: headers.Authorization,
   }) + '\\n');
+  if (method === 'PUT') {
+    if (++puts === 1 && process.env.FAKE_METADATA_PUT_401 === '1') {
+      if (process.env.FAKE_METADATA_REFRESH_FAIL === '1') {
+        process.env.FAKE_AZ_FAIL_TENANTS = 'selected-tenant';
+      }
+      return { statusCode: 401, body: '{}' };
+    }
+    return { statusCode: 204, body: '' };
+  }
+  if (url.includes('/EntityDefinitions(') && !url.includes('/Attributes')) {
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        MetadataId: 'mock-metadata', LogicalName: 'cr_visit', SchemaName: 'cr_Visit',
+        IsAvailableOffline: false, ChangeTrackingEnabled: false, IsCustomizable: { Value: true },
+      }),
+    };
+  }
   return {
     statusCode: 200,
     body: JSON.stringify(url.endsWith('/WhoAmI')
@@ -205,6 +224,8 @@ require(${JSON.stringify(path.join(__dirname, '..', 'emit-telemetry-checkpoint.j
       FAKE_AZ_LOG: logPath,
       FAKE_AZ_STATIC_TOKEN: '',
       FAKE_AZ_FAIL_TENANTS: '',
+      FAKE_METADATA_PUT_401: '',
+      FAKE_METADATA_REFRESH_FAIL: '',
       POWER_PLATFORM_TENANT_ID: 'tenant-from-env',
       DATAVERSE_TENANT_ID: 'secondary-tenant',
       FAKE_AZ_ACCOUNT_TENANT: 'tenant-from-az-account',
@@ -224,6 +245,7 @@ require(${JSON.stringify(path.join(__dirname, '..', 'emit-telemetry-checkpoint.j
 for (const [script, positionals, count] of [
   ['verify-dataverse-access.js', [], 1],
   ['list-table-columns.js', ['cr_visit', 'cr_airport'], 2],
+  ['update-entity-offline-flags.js', ['--table', 'cr_visit'], 2],
 ]) {
   for (const explicit of [true, false]) {
     test(`${script} preserves output with ${explicit ? 'explicit' : 'legacy environment'} tenant selection`, (t) => {
@@ -231,7 +253,7 @@ for (const [script, positionals, count] of [
       const { result, calls, requests } = runMetadataHelper(t, script, args);
       assert.equal(result.status, 0, result.stderr);
       const tenant = explicit ? 'selected-tenant' : 'tenant-from-env';
-      assert.equal(calls.length, count);
+      assert.equal(calls.length, script === 'update-entity-offline-flags.js' ? 1 : count);
       assert.ok(calls.every((call) => call.includes(`--tenant ${tenant}`)));
       assert.equal(requests.length, count);
       assert.ok(requests.every((request) => request.authorization === `Bearer token-for:${tenant}`));
@@ -240,7 +262,7 @@ for (const [script, positionals, count] of [
         assert.equal(data.userId, 'mock-user');
         assert.equal(data.organizationId, 'mock-organization');
         assert.equal(data.token, `token-for:${tenant}`);
-      } else {
+      } else if (script === 'list-table-columns.js') {
         assert.deepEqual(Object.keys(data), positionals);
         for (const table of positionals) {
           assert.deepEqual(data[table], [
@@ -248,7 +270,30 @@ for (const [script, positionals, count] of [
           ]);
           assert.ok(requests.some((request) => request.url.includes(`LogicalName='${table}'`)));
         }
+      } else {
+        assert.equal(data.status, 204);
+        assert.equal(data.table, 'cr_visit');
+        assert.deepEqual(data.after, { isAvailableOffline: true, changeTrackingEnabled: true });
+        assert.deepEqual(requests.map((request) => request.method), ['GET', 'PUT']);
       }
+    });
+  }
+
+  for (const rejectRefresh of [false, true]) {
+    test(`offline prerequisite refresh ${rejectRefresh ? 'fails closed' : 'retains the explicit tenant'}`, (t) => {
+      const { result, calls, requests } = runMetadataHelper(t, 'update-entity-offline-flags.js',
+        ['--table', 'cr_visit', '--tenant-id', 'selected-tenant'], {
+          FAKE_METADATA_PUT_401: '1',
+          FAKE_METADATA_REFRESH_FAIL: rejectRefresh ? '1' : '',
+        });
+      assert.equal(result.status, rejectRefresh ? 1 : 0, result.stderr);
+      assert.equal(calls.length, 2);
+      assert.ok(calls.every((call) => call.includes('--tenant selected-tenant')));
+      assert.equal(requests.length, rejectRefresh ? 2 : 3);
+      assert.ok(requests.every((request) => request.authorization === 'Bearer token-for:selected-tenant'));
+      const data = JSON.parse(result.stdout);
+      assert.equal(data.status, rejectRefresh ? 401 : 204);
+      if (rejectRefresh) assert.equal(data.error, 'token refresh failed');
     });
   }
 

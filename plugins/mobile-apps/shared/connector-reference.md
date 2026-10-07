@@ -44,7 +44,7 @@ reference in the final `add-data-source`; never create another connection to
 make discovery convenient.
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 $PA connection create --connector <apiId> --json
 $PA connection list-references --solution-id <solutionId> --json
 ```
@@ -65,7 +65,7 @@ If `pa connection create` fails because browser-based connection creation is dis
 Use long-form flags. Run from the app root after `power.config.json` exists, and use the exact `apiId` plus either a `connectionId` from `pa connection create`/the portal or a `connectionRef` from `pa connection list-references`:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 # Non-tabular connectors (Teams, Office 365 Users, Azure DevOps, etc.)
 $PA app add data-source --connector <apiId> --connection-id <connectionId>
 
@@ -78,7 +78,7 @@ $PA app add data-source --connector shared_sql --connection-id <connectionId> --
 
 **Dataverse is different** — never needs a connection ID:
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 $PA app add data-source --connector dataverse --org-url <environmentUrl> --table <table-logical-name>
 ```
 
@@ -101,7 +101,7 @@ These are common connector API IDs you may see in connection output:
 ## Discovering datasets and tables (tabular connectors)
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 $PA connection list-datasets --connector <apiId> --connection-id <connectionId> --json
 $PA connection list-tables --connector <apiId> --connection-id <connectionId> --dataset '<dataset>' --json
 $PA connection list-procedures --connection-id <connectionId> --dataset '<database>' --json
@@ -114,7 +114,7 @@ For SharePoint, the **dataset** is the site URL (e.g., `https://contoso.sharepoi
 Use these instead of hand-rolled discovery when they match the user's goal:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 $PA connection list-references --solution-id <solutionId> --json
 $PA app list-environment-variables --json
 $PA app find-dataverse-api --search '<operation-name>' --json

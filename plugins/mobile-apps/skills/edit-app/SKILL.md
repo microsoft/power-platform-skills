@@ -88,7 +88,7 @@ fail-closed guard, and use absolute paths for file tools. Forward that same root
 to every data child; a previous `cd` or inherited launch cwd is not a handoff.
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 test -f native-app-plan.md && echo "OK: plan found" || echo "ERROR: no plan"
 test -f package.json && echo "OK: package found" || echo "ERROR: no package"
 test -d app && echo "OK: app routes found" || echo "ERROR: no app routes"
@@ -157,7 +157,7 @@ Infer from `$ARGUMENTS` when possible, but do not mutate files until you have a 
 First inspect the app so questions can use real options instead of abstractions:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 find app -name '*.tsx' -not -name '_layout.tsx' -not -name '+not-found.tsx' | sort
 ls -1 src/generated/services/*.ts 2>/dev/null | sed 's|src/generated/services/||;s|\.ts$||'
 ls -1 src/generated/models/*.ts 2>/dev/null | sed 's|src/generated/models/||;s|\.ts$||'
@@ -460,7 +460,7 @@ After any Data Model, Connector/Data Source, JavaScript Dependency, or Native Ca
 Run this after any data-source/schema/connector mutation and before any screen-builder prompt:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 for svc in src/generated/services/*.ts; do
   [ -e "$svc" ] || continue
   name=$(basename "$svc" .ts)
@@ -480,7 +480,7 @@ If Step 5 created or extended Dataverse tables, an existing Mobile Offline Profi
 Run the local, no-network delta check:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js" --project-root "<working_dir>"
 ```
 
@@ -544,7 +544,7 @@ Shared scaffold algorithm:
 Run the navigation/skeleton gate before screen-builder work:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npx --no-install tsc --noEmit
 ```
 
@@ -591,7 +591,7 @@ Run verification after mutations. Batch-fix root causes, then rerun the failed g
 Required gates, selected by what changed:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npm run generate-schemas      # if any data source/schema/connector changed
 npx --no-install tsc --noEmit              # always after app mutation
 npm run check-routes --if-present
@@ -600,14 +600,14 @@ npm run check-routes --if-present
 If `npm run check-routes` is absent but `scripts/check-routes.js` exists, run:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node scripts/check-routes.js
 ```
 
 When screen files changed, run the mobile plugin's report-mode validators explicitly:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/hooks/validate-screen-quality.js" --report <changed-screen-files-or-app-dir>
 node "${PLUGIN_ROOT}/hooks/validate-color-contrast.js" --report <changed-screen-files-or-app-dir>
 ```

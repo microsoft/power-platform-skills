@@ -63,7 +63,7 @@ File tools use absolute `<working_dir>/...` paths; plugin reads/scripts use
 ### Step 1 — Verify project + locate profile
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 if [ ! -f power.config.json ] || [ ! -f app.config.js ]; then
   echo "BLOCKED: working_dir is not an initialized app" >&2
   exit 1
@@ -75,7 +75,7 @@ matching the owner's selected environment. Reuse matching complete environment
 context, or perform this non-persisting lookup from the bound root:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 environment_id=$(node -p "require('./power.config.json').environmentId || ''") || {
   echo "BLOCKED: unreadable power.config.json" >&2; exit 1;
 }
@@ -143,7 +143,7 @@ to the owner, not expanding an existing approval.
 GET the current item state from Dataverse for any tables being edited:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<envUrl>" GET \
   "mobileofflineprofileitems(<itemId>)?\$select=name,recorddistributioncriteria,recordsownedbyme,recordsownedbymyteam,recordsownedbymybusinessunit,syncintervalinminutes,selectedcolumns" \
   --tenant-id "<tenantId>"
@@ -170,7 +170,7 @@ If `Apply` → continue. If `Cancel` → STOP.
 Build the PATCH body with only the fields that changed:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<envUrl>" PATCH \
   "mobileofflineprofileitems(<itemId>)" --tenant-id "<tenantId>" \
   --body '{
@@ -184,7 +184,7 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<envUrl>" PATCH \
 For profile-level edits (name / description):
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<envUrl>" PATCH \
   "mobileofflineprofiles(<profileId>)" --tenant-id "<tenantId>" \
   --body '{"name": "...", "description": "..."}'
@@ -199,7 +199,7 @@ bypass permissions. Preserve every field and table outside the approved delta.
 Use the **targeted `PublishXml`** recipe from [shared/references/dataverse-offline-api.md §9](${PLUGIN_ROOT}/shared/references/dataverse-offline-api.md):
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<envUrl>" POST \
   "PublishXml" --tenant-id "<tenantId>" --body '{
     "ParameterXml": "<publish><mobileofflineprofiles><mobileofflineprofile><profileId></mobileofflineprofile></mobileofflineprofiles></publish>"

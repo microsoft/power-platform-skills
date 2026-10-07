@@ -46,14 +46,14 @@ If the caller provided a connector API ID and needs a new connection, create it 
 > Resolve the CLI first (see [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md)): run as `$PA connection create …` (`npx --no-install pa …`), never a bare `pa`. On `power-apps`-only projects, translate to `power-apps create-connection --api-id …`.
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 $PA connection create --connector <api-id> --json
 ```
 
 Use the returned `connectionId` for `--connection-id <connectionId>`. Optional display names are supported:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 $PA connection create --connector <api-id> --display-name '<display-name>' --json
 ```
 
@@ -64,7 +64,7 @@ Browser-based connection creation is disabled by default. If the connector is no
 If the caller provided a solution ID and needs a connection reference name, list connection references from the app root:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 $PA connection list-references --solution-id <solution-id> --json
 ```
 

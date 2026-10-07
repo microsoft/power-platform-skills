@@ -61,7 +61,7 @@ that absolute path; never search another app when a file is absent.
 ### Step 1 — Verify project + locate profile
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 if [ ! -f power.config.json ] || [ ! -f app.config.js ]; then
   echo "BLOCKED: working_dir is not an initialized app" >&2
   exit 1
@@ -73,7 +73,7 @@ matching the owner's selected environment. Reuse matching complete environment
 context, or perform this non-persisting lookup from the bound root:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 environment_id=$(node -p "require('./power.config.json').environmentId || ''") || {
   echo "BLOCKED: unreadable power.config.json" >&2; exit 1;
 }
@@ -92,7 +92,7 @@ to recover a failure. Use that exact `<envUrl>` and `<tenantId>` for every reque
 Manifest path (dual-location, both within the bound root):
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 if [ -f .datamodel-manifest.json ]; then
   printf '%s\n' "<working_dir>/.datamodel-manifest.json"
 elif [ -f docs/plan-artifacts/.datamodel-manifest.json ]; then
@@ -132,7 +132,7 @@ POSTs serialize. Every iteration keeps the same root/environment/profile context
 Query the target table's `EntityMetadata`:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<envUrl>" GET \
   "EntityDefinitions(LogicalName='<table>')?\$select=IsAvailableOffline,ChangeTrackingEnabled,OwnershipType,IsCustomizable" \
   --tenant-id "<tenantId>"
@@ -144,14 +144,14 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<envUrl>" GET \
 | Either `false` AND IsCustomizable | Use `update-entity-offline-flags.js` only if the current offline approval covers these exact prerequisite changes and publication; otherwise show the changes and obtain owner/user approval first |
 | `IsCustomizable.Value = false` | STOP with `BLOCKED: <table> is system-managed and cannot be flagged for offline. Use a different table or accept this row is read-only-offline.` |
 
-After approval, execute the helper for this table only (it accepts tenant context
-through environment variables, not a `--tenant-id` flag):
+After approval, execute the helper for this table only with the resolved tenant.
+`--tenant-id` binds both initial authentication and 401 refresh; never rely on
+ambient tenant variables for this prerequisite mutation.
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-POWER_PLATFORM_TENANT_ID="<tenantId>" DATAVERSE_TENANT_ID="<tenantId>" \
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/update-entity-offline-flags.js" "<envUrl>" \
-  --table "<table>" --offline true --tracking true
+  --table "<table>" --offline true --tracking true --tenant-id "<tenantId>"
 ```
 
 Check the returned HTTP status, not just process exit. A 403/`PrivilegeCheckFailed`
@@ -159,7 +159,7 @@ is `BLOCKED`; do not change identity or profile to bypass permissions.
 After a successful change, issue the approved prerequisite publication:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<envUrl>" POST \
   "PublishAllXml" --tenant-id "<tenantId>" --body '{}'
 ```
@@ -194,7 +194,7 @@ this gate.
 #### Step 5a — POST profile item
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<envUrl>" POST \
   "mobileofflineprofileitems" --tenant-id "<tenantId>" \
   --body '{
@@ -220,7 +220,7 @@ After the new item is created, walk the new table's relationships (from the mani
 Recipe per [shared/references/dataverse-offline-api.md §5–§6](${PLUGIN_ROOT}/shared/references/dataverse-offline-api.md):
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<envUrl>" POST \
   "mobileofflineprofileitemassociations" --tenant-id "<tenantId>" \
   --body '{
@@ -241,7 +241,7 @@ For new tables that are `recorddistributioncriteria: 0` (Related rows only), at 
 Build `selectedcolumns` using the deterministic union from [offline-profile-architect.md](${PLUGIN_ROOT}/agents/offline-profile-architect.md) Step 6 (always-include ∪ lookups ∪ screen-grep'd, dedupe, sort). Scope file-tool greps to absolute `<working_dir>/app/` and `<working_dir>/src/` paths and the selected table; use the same proposed columns approved in Step 4.
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<envUrl>" PATCH \
   "mobileofflineprofileitems(<itemId>)" --tenant-id "<tenantId>" \
   --body '{"selectedcolumns":"{\"Columns\":[...]}"}'
@@ -250,7 +250,7 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<envUrl>" PATCH \
 ### Step 6 — Publish (targeted PublishXml)
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<envUrl>" POST \
   "PublishXml" --tenant-id "<tenantId>" --body '{
     "ParameterXml": "<publish><mobileofflineprofiles><mobileofflineprofile><profileId></mobileofflineprofile></mobileofflineprofiles></publish>"

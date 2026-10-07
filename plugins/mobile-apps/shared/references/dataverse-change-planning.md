@@ -34,7 +34,7 @@ Read the selected environment ID from the owner's `power.config.json`.
 Resolve missing context using the shared non-persisting environment rule:
 
 ```bash
-cd "<working_dir>" || exit 1
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "<selected-environment-id>" --no-cache --require-tenant
 ```
 
@@ -118,7 +118,7 @@ plan later; do not replace its unaffected sections with the scoped contract.
 After every proposal or revision, normalize and validate:
 
 ```bash
-cd "<working_dir>" || exit 1
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --normalize-contract "<working_dir>/.tmp/dataverse-schema-contract.json" \
   --output "<working_dir>/.tmp/dataverse-schema-contract.json"
@@ -127,7 +127,7 @@ node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
 Only if normalization succeeds:
 
 ```bash
-cd "<working_dir>" || exit 1
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/validate-dataverse-planning-decisions.js" \
   --contract "<working_dir>/.tmp/dataverse-schema-contract.json" \
   --snapshot "<SNAPSHOT_PATH>"
