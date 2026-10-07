@@ -18,6 +18,7 @@ const {
   protectedTokenSignature,
   resolveProjectRelativePath,
   resolveLocale,
+  resolveSiteLanguageContext,
   verifyInitializationEvidence,
   validateLocalizationManifestShape,
   validateLocales,
@@ -267,12 +268,63 @@ test('canonicalizes, visibly deduplicates, and validates registry subtags', () =
   assert.match(result.invalid[0].reason, /unknown language subtag "xx"/);
 });
 
-test('resolves a single locale and its writing direction', () => {
+test('resolves a single locale, direction, and canonical display names', () => {
   const spanish = resolveLocale('es-es');
   assert.equal(spanish.locale, 'es-ES');
   assert.equal(spanish.direction, 'ltr');
+  assert.equal(spanish.languageName, 'Spanish');
+  assert.equal(spanish.localeName, 'European Spanish');
+  assert.equal(spanish.nativeLanguageName, 'español');
+  assert.equal(spanish.nativeLocaleName, 'español de España');
+
+  const traditionalChinese = resolveLocale('zh-Hant-TW');
+  assert.equal(traditionalChinese.languageName, 'Chinese');
+  assert.match(traditionalChinese.localeName, /Traditional/);
+  assert.equal(traditionalChinese.nativeLanguageName, '中文');
+  assert.ok(traditionalChinese.nativeLocaleName);
+
   assert.equal(getLocaleDirection('ar-SA'), 'rtl');
   assert.equal(getLocaleDirection('x-contoso'), 'ltr');
+});
+
+test('does not invent display names for private-use-only locales', () => {
+  const result = resolveLocale('x-contoso');
+
+  assert.equal(result.valid, true);
+  assert.equal(result.locale, 'x-contoso');
+  assert.equal(result.direction, 'ltr');
+  assert.equal(result.languageName, null);
+  assert.equal(result.localeName, null);
+  assert.equal(result.nativeLanguageName, null);
+  assert.equal(result.nativeLocaleName, null);
+});
+
+test('returns null display names for invalid locale input', () => {
+  const result = resolveLocale('not_a_locale');
+
+  assert.equal(result.valid, false);
+  assert.equal(result.locale, null);
+  assert.equal(result.direction, null);
+  assert.equal(result.languageName, null);
+  assert.equal(result.localeName, null);
+  assert.equal(result.nativeLanguageName, null);
+  assert.equal(result.nativeLocaleName, null);
+});
+
+test('resolve-locale CLI returns canonical display names for create-site', () => {
+  const result = spawnSync(
+    process.execPath,
+    [CONFIG_PATH, 'resolve-locale', '--locale', 'pt-br'],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.locale, 'pt-BR');
+  assert.equal(output.languageName, 'Portuguese');
+  assert.equal(output.localeName, 'Brazilian Portuguese');
+  assert.equal(output.nativeLanguageName, 'português');
+  assert.equal(output.nativeLocaleName, 'português (Brasil)');
 });
 
 test('detects the persisted single-site language from document attributes', (t) => {
@@ -307,6 +359,131 @@ test('reports missing or incorrect document direction', (t) => {
     detectSiteLanguage(mismatchedRoot, 'angular').conflicts.join('\n'),
     /resolves to "rtl"/
   );
+});
+
+test('uses only the framework document path for React and Vue', (t) => {
+  for (const framework of ['react', 'vue']) {
+    const projectRoot = createTempProject(t);
+    writeProjectFile(
+      projectRoot,
+      'src/index.html',
+      '<html lang="fr-FR" dir="ltr"><body></body></html>'
+    );
+
+    const result = detectSiteLanguage(projectRoot, framework);
+    assert.equal(result.detected, false);
+    assert.equal(result.reason, 'document-not-found');
+    assert.deepEqual(result.expectedSources, ['index.html']);
+  }
+});
+
+test('uses the Angular index configured in angular.json', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'angular.json', JSON.stringify({
+    projects: {
+      portal: {
+        projectType: 'application',
+        targets: {
+          build: {
+            options: {
+              index: {
+                input: 'src/site-shell.html',
+                output: 'index.html',
+              },
+            },
+          },
+        },
+      },
+    },
+  }));
+  writeProjectFile(
+    projectRoot,
+    'index.html',
+    '<html lang="de-DE" dir="ltr"><body></body></html>'
+  );
+  writeProjectFile(
+    projectRoot,
+    'src/site-shell.html',
+    '<html lang="es-ES" dir="ltr"><body></body></html>'
+  );
+
+  const result = detectSiteLanguage(projectRoot, 'angular');
+  assert.equal(result.valid, true, result.conflicts.join('\n'));
+  assert.equal(result.locale, 'es-ES');
+  assert.equal(result.source, 'src/site-shell.html');
+});
+
+test('does not use an unrelated root index for Angular', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(
+    projectRoot,
+    'index.html',
+    '<html lang="de-DE" dir="ltr"><body></body></html>'
+  );
+
+  const result = detectSiteLanguage(projectRoot, 'angular');
+  assert.equal(result.detected, false);
+  assert.equal(result.reason, 'document-not-found');
+  assert.deepEqual(result.expectedSources, ['src/index.html']);
+});
+
+test('reports ambiguous Angular application index configuration', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'angular.json', JSON.stringify({
+    projects: {
+      first: {
+        targets: { build: { options: { index: 'src/first.html' } } },
+      },
+      second: {
+        architect: { build: { options: { index: 'src/second.html' } } },
+      },
+    },
+  }));
+
+  const result = detectSiteLanguage(projectRoot, 'angular');
+  assert.equal(result.detected, false);
+  assert.equal(result.reason, 'document-ambiguous');
+  assert.deepEqual(result.expectedSources, ['src/first.html', 'src/second.html']);
+});
+
+test('detects Astro document language in layouts and nested pages', (t) => {
+  const layoutRoot = createTempProject(t);
+  writeProjectFile(
+    layoutRoot,
+    'src/layouts/Base.astro',
+    '<html lang="ja-JP" dir="ltr"><body><slot /></body></html>'
+  );
+  assert.equal(detectSiteLanguage(layoutRoot, 'astro').source, 'src/layouts/Base.astro');
+
+  const pageRoot = createTempProject(t);
+  writeProjectFile(
+    pageRoot,
+    'src/pages/account/index.astro',
+    '<html lang="ar-SA" dir="rtl"><body></body></html>'
+  );
+  const pageResult = detectSiteLanguage(pageRoot, 'astro');
+  assert.equal(pageResult.valid, true, pageResult.conflicts.join('\n'));
+  assert.equal(pageResult.locale, 'ar-SA');
+  assert.equal(pageResult.source, 'src/pages/account/index.astro');
+});
+
+test('distinguishes a missing document from missing html language attributes', (t) => {
+  const missingDocumentRoot = createTempProject(t);
+  const missingDocument = detectSiteLanguage(missingDocumentRoot, 'react');
+  assert.equal(missingDocument.reason, 'document-not-found');
+  assert.deepEqual(missingDocument.expectedSources, ['index.html']);
+
+  const missingAttributesRoot = createTempProject(t);
+  writeProjectFile(
+    missingAttributesRoot,
+    'index.html',
+    '<html><body></body></html>'
+  );
+  const missingAttributes = detectSiteLanguage(missingAttributesRoot, 'react');
+  assert.equal(missingAttributes.detected, true);
+  assert.equal(missingAttributes.reason, 'language-attributes-missing');
+  assert.equal(missingAttributes.source, 'index.html');
+  assert.match(missingAttributes.conflicts.join('\n'), /static html lang attribute/);
 });
 
 test('does not inspect site language until one supported framework is resolved', (t) => {
@@ -384,6 +561,99 @@ test('detects site language after an evidence-backed framework selection', (t) =
     () => detectSiteLanguageForFramework(projectRoot, 'vue'),
     /not supported by the detected project evidence/
   );
+});
+
+test('uses valid localization default locale before static document attributes', (t) => {
+  const projectRoot = createTempProject(t);
+  writePackage(projectRoot, {
+    react: '^19.0.0',
+    'react-dom': '^19.0.0',
+    i18next: '^25.0.0',
+    'react-i18next': '^16.0.0',
+  });
+  writeProjectFile(
+    projectRoot,
+    'index.html',
+    '<html lang="de-DE" dir="ltr"><body></body></html>'
+  );
+  writeProjectFile(projectRoot, 'src/i18n/index.ts', "i18next.init({ fallbackLng: 'es-ES' });");
+  writeProjectFile(projectRoot, 'src/i18n/locales/es-ES.json', '{"home":"Inicio"}');
+  writeProjectFile(projectRoot, 'src/i18n/locales/ar-SA.json', '{"home":"الرئيسية"}');
+  writeProjectFile(
+    projectRoot,
+    'src/components/LanguageSelector.tsx',
+    "export function LanguageSelector(){ changeLanguage('ar-SA'); document.documentElement.lang='ar-SA'; document.documentElement.dir='rtl'; }"
+  );
+
+  const result = inspectProject(projectRoot);
+  assert.equal(result.localization.valid, true, result.localization.conflicts.join('\n'));
+  assert.deepEqual(result.siteLanguage, {
+    detected: true,
+    valid: true,
+    locale: 'es-ES',
+    direction: 'ltr',
+    source: 'localization configuration',
+    conflicts: [],
+    reason: 'localization-default',
+  });
+});
+
+test('does not treat localized document roots as single-language conflicts', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(
+    projectRoot,
+    'src/pages/en/index.astro',
+    '<html lang="en-US" dir="ltr"><body></body></html>'
+  );
+  writeProjectFile(
+    projectRoot,
+    'src/pages/ar/index.astro',
+    '<html lang="ar-SA" dir="rtl"><body></body></html>'
+  );
+
+  const result = resolveSiteLanguageContext(projectRoot, 'astro', {
+    detected: true,
+    valid: true,
+    manifestPath: path.join(projectRoot, '.powerpages-localization.json'),
+    defaultLocale: 'ar-SA',
+    conflicts: [],
+  });
+
+  assert.deepEqual(result, {
+    detected: true,
+    valid: true,
+    locale: 'ar-SA',
+    direction: 'rtl',
+    source: '.powerpages-localization.json',
+    conflicts: [],
+    reason: 'localization-default',
+  });
+});
+
+test('reports invalid localization instead of document-root language conflicts', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(
+    projectRoot,
+    'src/pages/en/index.astro',
+    '<html lang="en-US" dir="ltr"><body></body></html>'
+  );
+  writeProjectFile(
+    projectRoot,
+    'src/pages/fr/index.astro',
+    '<html lang="fr-FR" dir="ltr"><body></body></html>'
+  );
+
+  const result = resolveSiteLanguageContext(projectRoot, 'astro', {
+    detected: true,
+    valid: false,
+    manifestPath: path.join(projectRoot, '.powerpages-localization.json'),
+    defaultLocale: 'en-US',
+    conflicts: ['localization initialization could not be determined'],
+  });
+
+  assert.equal(result.reason, 'localization-invalid');
+  assert.deepEqual(result.conflicts, ['localization initialization could not be determined']);
+  assert.doesNotMatch(result.conflicts.join('\n'), /Conflicting document languages/);
 });
 
 test('detect-site-language CLI reruns detection for a selected framework', (t) => {

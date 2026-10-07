@@ -643,7 +643,53 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        - **No, finish here**: mark **Select template or choose from-scratch** as `completed`, then stop.
        - **Yes, customize now**: append the template customization tasks (see [Progress Tracking](#progress-tracking)), then continue below.
 
-   20. Mark **Plan template customizations** as `in_progress`, then ask what the user wants changed in `PROJECT_ROOT`. Use the existing Phase 3/4/5/6/7 implementation, verification, and review flow against the cloned project; do **not** run Phase 2 scaffold/copy-template. In Phase 3, skip the Brand sub-prompt and set `BRAND_SOURCE` to `template` - the template's existing theme tokens are the source of truth unless the user asks for a redesign. On this path Phase 5 edits the cloned project in place: keep the existing theme file, layout, and pages, change only what the approved plan names, and skip every `scaffold-status.json` step (no loader is running). Run the Phase 5.7 design critique on the pages you changed.
+   20. Mark **Plan template customizations** as `in_progress`, then inspect the
+       cloned project before asking what the user wants changed:
+
+       ```bash
+       node "${PLUGIN_ROOT}/scripts/lib/localization-config.js" inspect --projectRoot "<PROJECT_ROOT>"
+       ```
+
+       Establish the language context required by the Phase 4 plan in this order:
+       - When `localization.detected=true` and `localization.valid=true`, use
+         `localization.defaultLocale` as the authoritative locale. Resolve it
+         with `resolve-locale`, set `SITE_LOCALE`, `SITE_DIRECTION`, and
+         `SITE_LANGUAGE` from the returned `locale`, `direction`, and
+         `languageName`, and retain `localeName` when regional or script detail
+         needs to be displayed. Do not scan locale-specific document roots as
+         though they described one single-language site.
+       - When `localization.detected=true` and `localization.valid=false`, show
+         the localization conflicts and stop before planning customization. The
+         localization configuration must be repaired; do not fall back to
+         static document attributes or report localized roots as a
+         single-language conflict.
+       - When no localization is detected and `siteLanguage.detected=true` with
+         `siteLanguage.valid=true`, resolve `siteLanguage.locale` with
+         `resolve-locale`. Use the returned `locale`, `direction`, and
+         `languageName` to establish `SITE_LOCALE`, `SITE_DIRECTION`, and
+         `SITE_LANGUAGE`.
+       - When `siteLanguage.reason` is `document-not-found`,
+         `html-root-not-found`, `document-ambiguous`, or
+         `document-configuration-invalid`, show its conflicts and
+         `expectedSources`, then stop before planning customization. Locate or
+         repair the actual application root document before asking for a
+         content language.
+       - When the document exists but its static language attributes are
+         missing or invalid, ask the **Content language** question below,
+         resolve the answer with `resolve-locale`, and include repairing
+         `siteLanguage.source` in the approved customization plan.
+
+       After `SITE_LANGUAGE`, `SITE_LOCALE`, and `SITE_DIRECTION` are all
+       established, ask what the user wants changed in `PROJECT_ROOT`. Use the
+       existing Phase 3/4/5/6/7 implementation, verification, and review flow
+       against the cloned project; do **not** run Phase 2 scaffold/copy-template.
+       In Phase 3, skip the Brand sub-prompt and set `BRAND_SOURCE` to
+       `template` - the template's existing theme tokens are the source of truth
+       unless the user asks for a redesign. On this path Phase 5 edits the cloned
+       project in place: keep the existing theme file, layout, and pages, change
+       only what the approved plan names, and skip every `scaffold-status.json`
+       step because no loader is running. Run the Phase 5.7 design critique on
+       the pages you changed.
    21. After the customization plan is approved, mark **Plan template customizations** as `completed`, **Implement pages and components** as `in_progress`, and make the requested changes.
    22. Run the existing validation/review flow. Do not automatically deploy unless the user explicitly asks to run `/deploy-site`.
 
@@ -683,11 +729,16 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    node "${PLUGIN_ROOT}/scripts/lib/localization-config.js" resolve-locale --locale "<LOCALE>"
    ```
 
-   Reject invalid input and re-prompt with the reason. Record:
+   Reject invalid input and re-prompt with the reason. Record the canonical
+   resolver output rather than inventing a language label:
 
-   - `SITE_LANGUAGE` — readable language name, such as `Spanish`
+   - `SITE_LANGUAGE` — resolver `languageName`, such as `Spanish`; if display
+     names are unavailable, show the canonical locale and ask the maker for a
+     readable label rather than guessing
    - `SITE_LOCALE` — canonical BCP-47 tag, such as `es-ES`
    - `SITE_DIRECTION` — `ltr` or `rtl` from the resolver
+   - `SITE_LOCALE_NAME` — resolver `localeName`, such as `European Spanish`,
+     retained for plan text that needs regional or script specificity
 
 11. Resolve the project location:
    - **If "Current directory"**: Project root = `<cwd>`.
@@ -1246,7 +1297,27 @@ and its existing deployment prompt.
 
 When `LOCALIZATION_REQUESTED=false`, skip the child workflow.
 
-> **GATE: Do NOT proceed to Phase 6 until the Phase 5.7 design critique is complete and any requested localization has completed.**
+### 5.9 Validate the Approved Site Language
+
+Run the create-site validator explicitly with the approved language context.
+Use only the canonical `SITE_LOCALE` returned by `resolve-locale` and the
+validated `SITE_DIRECTION` enum; never pass the maker's original free-text
+answer. Run the command with its working directory set to `PROJECT_ROOT`:
+
+```bash
+node "${PLUGIN_ROOT}/skills/create-site/scripts/validate-site.js" \
+  --expectedLocale "<SITE_LOCALE>" \
+  --expectedDirection "<SITE_DIRECTION>"
+```
+
+Treat exit code `2` as blocking. Repair the reported document or
+localization-default mismatch and rerun the command until it passes. The
+automatic skill validator runs without these arguments and still checks that
+the detected document or localization context is internally valid. The
+explicit invocation verifies that it also matches the locale and direction
+approved in this create-site session without temporary or persistent metadata.
+
+> **GATE: Do NOT proceed to Phase 6 until the Phase 5.7 design critique is complete, any requested localization has completed, and the approved site language validation passes.**
 
 **Output**: All pages, components, design elements, and requested localization implemented and verified
 

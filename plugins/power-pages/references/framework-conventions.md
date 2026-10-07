@@ -14,7 +14,7 @@ Only static SPA frameworks are supported. Server-rendered frameworks (Next.js, N
 |-----------|-----------|--------|--------------|-----------------|------------|
 | React | Vite | react-router-dom | `dist` | `public/` | `index.html` (project root) |
 | Vue | Vite | vue-router | `dist` | `public/` | `index.html` (project root) |
-| Angular | Angular CLI | @angular/router | `dist/__SITE_NAME__/browser` | `public/` | `src/index.html` |
+| Angular | Angular CLI | @angular/router | `dist/__SITE_NAME__/browser` | `public/` | `angular.json` build target `index`; defaults to `src/index.html` |
 | Astro | Astro | File-based + View Transitions | `dist` | `public/` | `src/layouts/*.astro` or `src/pages/*.astro` |
 
 ## Framework Detection
