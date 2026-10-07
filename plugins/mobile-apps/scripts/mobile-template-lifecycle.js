@@ -94,17 +94,21 @@ function assertEmptyDestination(destination) {
 
 function run(command, args, cwd) {
   const isNpm = command === 'npm';
+  const configuredTimeoutMs = Number.parseInt(process.env.MOBILE_TEMPLATE_NPM_TIMEOUT_MS ?? '', 10);
+  const timeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
+    ? configuredTimeoutMs
+    : 10 * 60 * 1000;
   const result = spawnSync(isNpm && process.platform === 'win32' ? 'npm.cmd' : command, args, {
     cwd,
     encoding: 'utf8',
-    timeout: 120000,
+    timeout: timeoutMs,
     maxBuffer: 4 * 1024 * 1024,
     // Only fixed npm options and a validated package@version reach cmd.exe.
     shell: isNpm && process.platform === 'win32',
     env: { ...process.env, npm_config_ignore_scripts: 'true' },
   });
   if (result.error || result.status !== 0) {
-    throw new Error(`${isNpm ? 'Template package installation' : 'Template CLI'} failed; check registry access or package support locally (raw output withheld)`);
+    throw new Error(`${isNpm ? 'Template package installation' : 'Template CLI'} failed; check registry access, slow network conditions, package support locally, or increase MOBILE_TEMPLATE_NPM_TIMEOUT_MS if the command is timing out (raw output withheld)`);
   }
   return result.stdout;
 }
