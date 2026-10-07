@@ -604,6 +604,28 @@ function validateCanonicalTag(canonicalTag, registry) {
   return errors;
 }
 
+const MAX_LOCALE_CANDIDATE_LENGTH = 255;
+const MAX_LOCALE_LIST_CANDIDATE_LENGTH = 4096;
+const SAFE_LOCALE_CANDIDATE_PATTERN =
+  /^[A-Za-z0-9]{1,8}(?:-[A-Za-z0-9]{1,8})*$/;
+
+function isSafeLocaleCandidate(value) {
+  return (
+    typeof value === 'string' &&
+    value.length <= MAX_LOCALE_CANDIDATE_LENGTH &&
+    SAFE_LOCALE_CANDIDATE_PATTERN.test(value)
+  );
+}
+
+function isSafeLocaleListCandidate(value) {
+  return (
+    typeof value === 'string' &&
+    value.length <= MAX_LOCALE_LIST_CANDIDATE_LENGTH &&
+    value.length > 0 &&
+    value.split(',').every(isSafeLocaleCandidate)
+  );
+}
+
 function validateLocales(input, options = {}) {
   const registry = loadRegistry(options.registryPath);
   const rawValues = Array.isArray(input) ? input : String(input || '').split(',');
@@ -617,6 +639,14 @@ function validateLocales(input, options = {}) {
     const original = String(rawValue).trim();
     if (!original) {
       invalid.push({ input: original, reason: 'empty language tag' });
+      continue;
+    }
+    if (!isSafeLocaleCandidate(original)) {
+      invalid.push({
+        input: original,
+        reason:
+          'language tag must contain only 1-8 character ASCII alphanumeric subtags separated by hyphens',
+      });
       continue;
     }
 
@@ -1759,6 +1789,8 @@ module.exports = {
   resolveSiteLanguageContext,
   getLocaleDirection,
   inspectProject,
+  isSafeLocaleCandidate,
+  isSafeLocaleListCandidate,
   loadRegistry,
   resolveProjectRelativePath,
   resolveLocale,

@@ -15,6 +15,8 @@ const {
   discoverLocalizationImplementation,
   getLocaleDirection,
   inspectProject,
+  isSafeLocaleCandidate,
+  isSafeLocaleListCandidate,
   protectedTokenSignature,
   resolveProjectRelativePath,
   resolveLocale,
@@ -266,6 +268,47 @@ test('canonicalizes, visibly deduplicates, and validates registry subtags', () =
   assert.deepEqual(result.canonicalization, [{ input: 'en-us', canonical: 'en-US' }]);
   assert.deepEqual(result.duplicates, [{ input: 'en-US', canonical: 'en-US' }]);
   assert.match(result.invalid[0].reason, /unknown language subtag "xx"/);
+});
+
+test('accepts only constrained locale candidates before canonicalization', () => {
+  assert.equal(isSafeLocaleCandidate('es-ES'), true);
+  assert.equal(isSafeLocaleCandidate('zh-Hant-TW'), true);
+  assert.equal(isSafeLocaleCandidate('x-contoso'), true);
+  assert.equal(isSafeLocaleCandidate('Spanish (es-ES)'), false);
+  assert.equal(isSafeLocaleCandidate('en_US'), false);
+  assert.equal(isSafeLocaleCandidate('en-US;whoami'), false);
+  assert.equal(isSafeLocaleCandidate('$(whoami)'), false);
+  assert.equal(isSafeLocaleCandidate('en-US|whoami'), false);
+  assert.equal(isSafeLocaleCandidate("en-US\nwhoami"), false);
+  assert.equal(isSafeLocaleCandidate(`en-${'a'.repeat(256)}`), false);
+});
+
+test('accepts only compact comma-separated safe locale lists', () => {
+  assert.equal(isSafeLocaleListCandidate('en-US,fr-FR,ar-SA'), true);
+  assert.equal(isSafeLocaleListCandidate('en-US, fr-FR'), false);
+  assert.equal(isSafeLocaleListCandidate('en-US;whoami,fr-FR'), false);
+  assert.equal(isSafeLocaleListCandidate('en-US,$(whoami)'), false);
+  assert.equal(isSafeLocaleListCandidate('en-US|whoami,fr-FR'), false);
+  assert.equal(isSafeLocaleListCandidate("en-US,\nfr-FR"), false);
+  assert.equal(isSafeLocaleListCandidate(`en-US,${'a'.repeat(4096)}`), false);
+});
+
+test('rejects unsafe locale syntax before BCP-47 canonicalization', () => {
+  const result = validateLocales([
+    'Spanish (es-ES)',
+    'en_US',
+    'en-US;whoami',
+    '$(whoami)',
+    'en-US|whoami',
+    "en-US\nwhoami",
+  ]);
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.locales, []);
+  assert.equal(result.invalid.length, 6);
+  for (const invalid of result.invalid) {
+    assert.match(invalid.reason, /ASCII alphanumeric subtags separated by hyphens/);
+  }
 });
 
 test('resolves a single locale, direction, and canonical display names', () => {

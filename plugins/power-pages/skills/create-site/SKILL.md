@@ -723,14 +723,21 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    The question UI's free-text option lets the maker enter another language or
    locale, such as `Spanish (es-ES)`, `Japanese (ja-JP)`, or `Arabic (ar-SA)`.
    Convert a language name to an appropriate BCP-47 tag, preserving an explicit
-   region or script when supplied. Validate and canonicalize it:
+   region or script when supplied. Keep the raw answer as data only: never place
+   it in a shell command. In agent memory, convert it to
+   `SAFE_LOCALE_CANDIDATE`, which must match
+   `^[A-Za-z0-9]{1,8}(?:-[A-Za-z0-9]{1,8})*$` and be at most 255 characters.
+   Reject and re-prompt before running a command if no safe candidate can be
+   derived. Validate and canonicalize only that constrained candidate:
 
    ```bash
-   node "${PLUGIN_ROOT}/scripts/lib/localization-config.js" resolve-locale --locale "<LOCALE>"
+   node "${PLUGIN_ROOT}/scripts/lib/localization-config.js" resolve-locale --locale "<SAFE_LOCALE_CANDIDATE>"
    ```
 
-   Reject invalid input and re-prompt with the reason. Record the canonical
-   resolver output rather than inventing a language label:
+   Do not quote, escape, sanitize, or otherwise interpolate the raw maker answer
+   into this command. Reject invalid resolver output and re-prompt with the
+   reason. Record the canonical resolver output rather than inventing a
+   language label:
 
    - `SITE_LANGUAGE` — resolver `languageName`, such as `Spanish`; if display
      names are unavailable, show the canonical locale and ask the maker for a

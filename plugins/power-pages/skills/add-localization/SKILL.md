@@ -156,16 +156,27 @@ Use `AskUserQuestion` for comma-separated BCP-47 tags. For add-languages mode,
 show existing locales and ask only for additions. For a new setup whose
 inspection found a valid single-site document language, show that source locale
 and ask only for additional locales; combine the source locale with the
-validated additions. Run:
+validated additions. Keep the raw answer as data only and never interpolate it
+into a shell command. In agent memory, convert each requested language to a
+BCP-47 candidate matching
+`^[A-Za-z0-9]{1,8}(?:-[A-Za-z0-9]{1,8})*$`, with a maximum of 255 characters
+per candidate. Join only those candidates with commas, without spaces, into
+`SAFE_COMMA_SEPARATED_TAGS`; the complete list must be at most 4096 characters.
+If any raw entry cannot be converted to that constrained form, reject and
+re-prompt before running a command. Run:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/lib/localization-config.js" validate-locales --locales "<COMMA_SEPARATED_TAGS>"
+node "${PLUGIN_ROOT}/scripts/lib/localization-config.js" validate-locales --locales "<SAFE_COMMA_SEPARATED_TAGS>"
 ```
 
-Reject invalid entries and re-prompt with each reason. Show canonicalization
-changes and duplicates. Confirm canonicalization before continuing. Require at
-least two unique locales for a new setup, including the detected source locale
-when present, and at least one genuinely new locale for add-languages mode.
+Do not quote, escape, sanitize, or otherwise place the raw maker answer in this
+command. Reject invalid entries and re-prompt with each reason. Show
+canonicalization changes and duplicates. Confirm canonicalization before
+continuing. From this point onward, use only the canonical locales returned by
+validation, including when resolving direction; never reuse the raw answer or
+the pre-canonicalized candidates. Require at least two unique locales for a new
+setup, including the detected source locale when present, and at least one
+genuinely new locale for add-languages mode.
 
 ### 2.2 Default locale
 
