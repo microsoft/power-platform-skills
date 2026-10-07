@@ -164,8 +164,9 @@ function findActive(
     return sessionMatches.length === 1 ? sessionMatches[0] : null;
   }
   if (!hash) return null;
-  return states.find((state) => state.projectHash === hash) ||
-    (allowLatestFallback ? states[0] : null);
+  const projectMatches = states.filter((state) => state.projectHash === hash);
+  if (projectMatches.length === 1) return projectMatches[0];
+  return allowLatestFallback && projectMatches.length === 0 ? states[0] : null;
 }
 
 function bindPending(skillName, projectRoot) {
@@ -207,26 +208,6 @@ function removeState(state) {
   }
 }
 
-function clearStates(skillName) {
-  let entries;
-  try {
-    entries = fs.readdirSync(stateDir(skillName), { withFileTypes: true });
-  } catch {
-    return 0;
-  }
-  let removed = 0;
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-    try {
-      fs.unlinkSync(path.join(stateDir(skillName), entry.name));
-      removed += 1;
-    } catch {
-      // Correlation cleanup is best-effort and must never affect the skill.
-    }
-  }
-  return removed;
-}
-
 function prune(skillName, now = Date.now()) {
   let entries;
   try {
@@ -255,7 +236,6 @@ function prune(skillName, now = Date.now()) {
 module.exports = {
   MAX_AGE_MS,
   bindPending,
-  clearStates,
   findActive,
   findOrBindActive,
   markConfigured,

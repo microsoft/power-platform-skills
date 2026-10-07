@@ -139,6 +139,33 @@ test("does not bind over an existing project invocation", (t) => {
   );
 });
 
+test("rejects ambiguous project-only matches", (t) => {
+  const original = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-state-"));
+  const projectRoot = path.join(configDir, "shared-project");
+  process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = configDir;
+  t.after(() => {
+    if (original === undefined) {
+      delete process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+    } else {
+      process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = original;
+    }
+  });
+
+  state.recordStart("add-localization", "first-session", projectRoot);
+  state.recordStart("add-localization", "second-session", projectRoot);
+
+  assert.equal(state.findActive("add-localization", projectRoot), null);
+  assert.equal(
+    state.findActive(
+      "add-localization",
+      projectRoot,
+      { sessionId: "first-session" }
+    ).sessionId,
+    "first-session"
+  );
+});
+
 test("keeps projects separate when a host session is reused", (t) => {
   const original = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-state-"));

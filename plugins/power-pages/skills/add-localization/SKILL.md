@@ -669,6 +669,17 @@ offer deployment in Phase 8.
 
 Record usage with skill name `AddLocalization`.
 
+After usage is recorded, emit completion telemetry. This command runs only
+after implementation, validation, build, browser verification, and maker
+review are complete:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/emit-localization-completed-telemetry.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Run it silently. The helper is fail-closed and reads only the approved
+localization manifest fields; do not add free-text arguments.
+
 If `$ARGUMENTS` contains `[FROM_CREATE_SITE]`, return control to create-site
 without asking about deployment.
 

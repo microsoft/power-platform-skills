@@ -216,7 +216,7 @@ test("emits approved localization configuration with the start-hook session", (t
   );
 });
 
-test("create-site finalizes normal and ambiguous invocation state", (t) => {
+test("create-site removes only the invocation matched by configuration", (t) => {
   const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-create-config-"));
   const hostRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-create-host-"));
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-create-project-"));
@@ -271,14 +271,49 @@ test("create-site finalizes normal and ambiguous invocation state", (t) => {
   assert.equal(second.data.sessionId, "create-session-2");
   assert.equal(invocationFileCount(configDir, "create-site"), 0);
 
+  const otherProjectRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "ppskills-create-other-project-")
+  );
+  invocationState.recordStart(
+    "create-site",
+    "other-project-session",
+    otherProjectRoot
+  );
   assert.equal(
     runStart({
       configDir,
       hostRoot,
       ikeyPath,
-      sessionId: "abandoned-session",
+      sessionId: "current-project-session",
       skillName: "create-site",
-      probeName: "start-abandoned.json",
+      probeName: "start-current.json",
+    }).status,
+    0
+  );
+  const current = runCreateSiteConfigured({
+    configDir,
+    projectRoot,
+    ikeyPath,
+    probeName: "configured-current.json",
+  });
+  assert.equal(current.data.sessionId, "current-project-session");
+  assert.equal(invocationFileCount(configDir, "create-site"), 1);
+  const other = invocationState.findActive(
+    "create-site",
+    otherProjectRoot,
+    { sessionId: "other-project-session" }
+  );
+  assert.ok(other);
+  invocationState.removeState(other);
+
+  assert.equal(
+    runStart({
+      configDir,
+      hostRoot,
+      ikeyPath,
+      sessionId: "ambiguous-session-1",
+      skillName: "create-site",
+      probeName: "start-ambiguous-1.json",
     }).status,
     0
   );
@@ -287,9 +322,9 @@ test("create-site finalizes normal and ambiguous invocation state", (t) => {
       configDir,
       hostRoot,
       ikeyPath,
-      sessionId: "retry-session",
+      sessionId: "ambiguous-session-2",
       skillName: "create-site",
-      probeName: "start-retry.json",
+      probeName: "start-ambiguous-2.json",
     }).status,
     0
   );
@@ -299,27 +334,7 @@ test("create-site finalizes normal and ambiguous invocation state", (t) => {
     ikeyPath,
     probeName: "configured-ambiguous.json",
   });
-  assert.notEqual(ambiguous.data.sessionId, "abandoned-session");
-  assert.notEqual(ambiguous.data.sessionId, "retry-session");
-  assert.equal(invocationFileCount(configDir, "create-site"), 0);
-
-  assert.equal(
-    runStart({
-      configDir,
-      hostRoot,
-      ikeyPath,
-      sessionId: "recovered-session",
-      skillName: "create-site",
-      probeName: "start-recovered.json",
-    }).status,
-    0
-  );
-  const recovered = runCreateSiteConfigured({
-    configDir,
-    projectRoot,
-    ikeyPath,
-    probeName: "configured-recovered.json",
-  });
-  assert.equal(recovered.data.sessionId, "recovered-session");
-  assert.equal(invocationFileCount(configDir, "create-site"), 0);
+  assert.notEqual(ambiguous.data.sessionId, "ambiguous-session-1");
+  assert.notEqual(ambiguous.data.sessionId, "ambiguous-session-2");
+  assert.equal(invocationFileCount(configDir, "create-site"), 2);
 });

@@ -335,26 +335,21 @@ function buildLocalizationPackageValidationEvent(envelopeName, input) {
 }
 
 function emitSkillConfigured(skillName, projectRoot, eventInfo) {
-  let emitted;
-  try {
-    emitted = emit(
-      "configured",
-      skillName,
-      projectRoot,
-      eventInfo
-    );
-    if (emitted && skillName === "add-localization") {
-      invocationState.markConfigured(skillName, projectRoot);
-    }
-    return Boolean(emitted);
-  } finally {
-    // Configuration is create-site's final correlated event. Clear both its
-    // matched record and any abandoned/ambiguous pending starts so one cancelled
-    // invocation cannot poison later runs.
-    if (skillName === "create-site") {
-      invocationState.clearStates(skillName);
-    }
+  const emitted = emit(
+    "configured",
+    skillName,
+    projectRoot,
+    eventInfo
+  );
+  if (emitted && skillName === "add-localization") {
+    invocationState.markConfigured(skillName, projectRoot);
+  } else if (emitted?.active && skillName === "create-site") {
+    // Configuration is create-site's final correlated event. Remove only the
+    // invocation used for this event; other projects and ambiguous starts may
+    // belong to concurrent workflows and must remain untouched.
+    invocationState.removeState(emitted.active);
   }
+  return Boolean(emitted);
 }
 
 function emitPackageValidation(projectRoot, eventInfo) {
@@ -393,20 +388,8 @@ function emitLocalizationCompleted(projectRoot, input) {
   return Boolean(emitted);
 }
 
-function abandonLocalizationInvocation(projectRoot, sessionId) {
-  const active = invocationState.findActive(
-    "add-localization",
-    projectRoot,
-    { sessionId }
-  );
-  if (!active) return false;
-  invocationState.removeState(active);
-  return true;
-}
-
 module.exports = {
   PACKAGE_FAILURE_CODES,
-  abandonLocalizationInvocation,
   buildCreateSiteEventInfo,
   buildLocalizationPackageValidationEvent,
   buildLocalizationCompletionEventInfo,

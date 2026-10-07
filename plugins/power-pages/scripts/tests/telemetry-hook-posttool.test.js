@@ -138,7 +138,7 @@ test("validation continues when the optional telemetry module cannot load", () =
   assert.doesNotMatch(result.stderr, /simulated telemetry load failure/);
 });
 
-test("emits localization-only completion with duration and stable failure class", (t) => {
+test("does not emit completion when the Skill hook runs before implementation", (t) => {
   const configDir = mkConfigDir();
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-localized-"));
   const probePath = path.join(configDir, "probe.json");
@@ -193,18 +193,14 @@ test("emits localization-only completion with duration and stable failure class"
   });
 
   assert.equal(status, 2);
-  assert.ok(waitForFile(probePath, 5_000), "completion dispatcher should write probe");
-  const envelope = JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
-  assert.equal(envelope.data.eventName, "skill_completed");
-  assert.equal(envelope.data.skillName, "add-localization");
-  assert.equal(envelope.data.sessionId, "completion-session");
-  assert.equal(envelope.data.outcome, "failure");
-  assert.equal(envelope.data.errorClass, "localization-validation-failed");
-  assert.ok(envelope.data.durationMs >= 250);
-  const eventInfo = JSON.parse(envelope.data.eventInfo);
-  assert.equal(eventInfo.validationOutcome, "failed");
-  assert.equal(eventInfo.configuredLocaleCount, 2);
-  assert.equal(eventInfo.translationMethod, "agent");
+  assert.equal(waitForFile(probePath, 250), false);
+  assert.ok(
+    invocationState.findActive(
+      "add-localization",
+      projectRoot,
+      { requireConfigured: true, sessionId: "completion-session" }
+    )
+  );
 });
 
 test("unexpected hook errors do not emit or remove ambiguous state", (t) => {

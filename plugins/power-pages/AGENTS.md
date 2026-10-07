@@ -52,6 +52,7 @@ scripts/
   audit-bidirectional-readiness.js ← Audits generated source for deterministic bidirectional blockers and review findings
   validate-site-integrity.js ← Shared post-modification/deployment localization and bidirectional integrity check
   validate-i18n-package.js      ← Validates npm localization package compatibility, stability, maintenance, mode, docs, and license
+  emit-localization-completed-telemetry.js ← Emits add-localization completion only after final workflow verification
   check-activation-status.js   ← Checks if site is already activated (used by deploy-site, activate-site)
   poll-async-operation.js      ← Polls Dataverse asyncoperations until terminal state (used by export-solution, import-solution)
   encode-solution-file.js      ← Base64-encodes a solution zip for OData request bodies (used by import-solution)
@@ -223,6 +224,7 @@ Shared utility scripts live at `scripts/` and are referenced by multiple skills 
 - `parse-deployment-errors.js`: Parses PAC CLI stderr output or OData error JSON into structured findings array. Each finding has `{ patternId, type, severity, message, rawMatch, autoFixAvailable, suggestedFix }`. Reads from `--input`, `--file`, or stdin. Used by `diagnose-deployment`.
 - `detect-framework.js`: Reports React, Vue, Angular, or Astro evidence for an explicit project root through the shared framework detector. Returns all candidates and does not guess when evidence is ambiguous.
 - `validate-i18n-package.js`: Validates an npm localization package/version against the detected framework, selected runtime/static mode, peer range, stable-release requirement, 24-month maintenance window, documented automatic license policy, and documentation metadata. Non-listed, compound, custom, or missing license metadata requires explicit maker confirmation; license confirmation never bypasses other validation failures. Returns stable `failureCodes` and emits a privacy-filtered `localization_package_validation` event when the add-localization workflow passes its canonical locale/operation/selection context. Used by `add-localization`.
+- `emit-localization-completed-telemetry.js`: Reads the completed localization manifest and emits privacy-filtered `skill_completed` telemetry only from add-localization's final workflow phase, after implementation, validation, build, browser verification, and maker review. It is fail-closed and removes correlation state only after a completion event is dispatched.
 
 Shared lib modules live at `scripts/lib/` and are imported by other scripts via `require('./validation-helpers')` or sibling requires. Never inline their logic in skill scripts — always require from `scripts/lib/`.
 
