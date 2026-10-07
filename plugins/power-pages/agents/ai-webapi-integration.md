@@ -927,6 +927,18 @@ Grep: "function getCsrfToken|const getCsrfToken" in src/**/*.{ts,tsx,js,jsx,vue,
 If more than one definition exists, consolidate — keep the original and delete the new one, updating
 the summarization service to import it.
 
+### 6.5 Final site-integrity gate
+
+After all integration source changes, header checks, and the build are complete, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every blocking error before returning completion to the orchestrator. Inspect and report review
+findings in both directions and with expanded content. Rerun this gate after any later source
+change.
+
 ---
 
 ## Return value (contract with the orchestrator)

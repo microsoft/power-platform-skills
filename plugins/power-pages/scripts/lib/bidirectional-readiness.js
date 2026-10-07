@@ -10,7 +10,9 @@ const SKIPPED_DIRECTORIES = new Set([
   '.git', 'dist', 'build', 'node_modules', '.output', 'coverage',
 ]);
 const PHYSICAL_DIRECTIVE_RE =
-  /bidi-physical:\s*(\S(?:.*\S)?)\s*;\s*verify=ltr,rtl\s*(?:\*\/)?\s*$/i;
+  /^\/\*\s*bidi-physical:\s*(\S(?:.*\S)?)\s*;\s*verify=ltr,rtl\s*\*\/$/i;
+const MALFORMED_PHYSICAL_DIRECTIVE_RE =
+  /^(?:(?:\/\*|\/\/|<!--)\s*)?bidi-physical:/i;
 const BLOCKING_PROPERTY_RE =
   /(?:^|[;{,"'])\s*['"]?(?:(?:margin|padding|border)-(?:left|right)(?:-(?:color|style|width))?|border-(?:top|bottom)-(?:left|right)-radius)['"]?\s*:/gi;
 const BLOCKING_STYLE_OBJECT_PROPERTY_RE =
@@ -23,7 +25,7 @@ const VISUAL_ORDER_RE =
 const GEOMETRY_RE =
   /\b(?:translateX|transform-origin|linear-gradient\s*\([^)]*(?:left|right)|clip-path|mask(?:-image)?\s*:)/i;
 const FIXED_TEXT_SIZE_RE =
-  /^\s*(?:height|width|inline-size|block-size)\s*:\s*\d+(?:\.\d+)?(?:px|rem|em)\s*;/i;
+  /(?:^|[;{])\s*(?:height|width|inline-size|block-size)\s*:\s*\d+(?:\.\d+)?(?:px|rem|em)\s*(?:;|(?=}))/i;
 const BIDI_CONTROL_RE = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
 
 function collectSourceFiles(projectRoot) {
@@ -39,12 +41,15 @@ function collectSourceFiles(projectRoot) {
 
 function walk(target, files) {
   if (!fs.existsSync(target)) return;
-  const stat = fs.statSync(target);
+  const stat = fs.lstatSync(target);
+  if (stat.isSymbolicLink()) return;
   if (stat.isFile()) {
     if (SOURCE_EXTENSIONS.has(path.extname(target).toLowerCase())) files.push(target);
     return;
   }
+  if (!stat.isDirectory()) return;
   for (const entry of fs.readdirSync(target, { withFileTypes: true })) {
+    if (entry.isSymbolicLink()) continue;
     if (entry.isDirectory() && SKIPPED_DIRECTORIES.has(entry.name)) continue;
     walk(path.join(target, entry.name), files);
   }
@@ -82,7 +87,8 @@ function auditBidirectionalReadiness(projectRoot) {
         };
         continue;
       }
-      if (!commentState.blockEnd && !commentState.quote && /bidi-physical:/i.test(trimmed)) {
+      if (!commentState.blockEnd && !commentState.quote &&
+          MALFORMED_PHYSICAL_DIRECTIVE_RE.test(trimmed)) {
         findings.push(finding(
           relativePath,
           index + 1,

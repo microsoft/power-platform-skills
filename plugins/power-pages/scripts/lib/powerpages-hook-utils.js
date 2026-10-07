@@ -122,9 +122,10 @@ const ALM_PLAN_SKILLS = new Set([
   'force-link-environment',
 ]);
 
-// These workflows can add or change visible SPA source. Their skill-specific
-// validator still runs first; the shared integrity pass then catches localization
-// resource drift and bidirectional regressions across skill boundaries.
+// These workflows can add or change visible SPA source. Each one must include
+// the shared site-integrity command as a final post-implementation gate. The
+// Skill PostToolUse hook fires when instructions are loaded, before implementation,
+// so it cannot enforce this lifecycle boundary.
 const VISIBLE_SOURCE_SKILLS = new Set([
   'create-site',
   'add-localization',
@@ -134,6 +135,7 @@ const VISIBLE_SOURCE_SKILLS = new Set([
   'add-cloud-flow',
   'add-server-logic',
   'add-seo',
+  'migrate-webapi-selectall',
 ]);
 
 /**

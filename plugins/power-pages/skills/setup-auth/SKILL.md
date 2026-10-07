@@ -2108,6 +2108,18 @@ Use Playwright to navigate to the site and take a snapshot to confirm the auth b
 
 If the auth button is not visible or the page has rendering errors, fix the issues.
 
+#### 7.4 Final site-integrity gate
+
+After all auth source changes, the build, and browser verification are complete, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every blocking error before presenting completion or asking to deploy. Inspect and report
+review findings in both directions and with expanded content. Rerun this gate after any later
+source change.
+
 ### Output
 
 - All auth files verified (present and contain expected exports)

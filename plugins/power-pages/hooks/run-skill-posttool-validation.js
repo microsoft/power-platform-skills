@@ -8,7 +8,6 @@ const {
   getValidatorScript,
   getBlockingSpawnStatus,
   isAlmPlanSkill,
-  modifiesVisibleSource,
 } = require('../scripts/lib/powerpages-hook-utils');
 const { planDataPath } = require('../scripts/lib/alm-paths');
 
@@ -61,28 +60,6 @@ process.stdin.on('end', () => {
         );
       }
       debug(`[power-pages hook] Validator exited with code ${validatorStatus}\n`);
-    }
-
-    // A skill-specific validator knows its own artifacts, but cannot enforce
-    // cross-cutting localization and direction invariants. Run the shared pass
-    // only after that validator succeeds so its error remains the primary result.
-    if (validatorStatus === 0 && modifiesVisibleSource(skillName)) {
-      const integrityPath = path.join(__dirname, '..', 'scripts', 'validate-site-integrity.js');
-      const integrity = spawnSync(
-        process.execPath,
-        [integrityPath, '--projectRoot', cwd],
-        { encoding: 'utf8', cwd }
-      );
-      if (integrity.stdout) process.stdout.write(integrity.stdout);
-      if (integrity.stderr) process.stderr.write(integrity.stderr);
-      validatorStatus = getBlockingSpawnStatus(integrity);
-      if (integrity.error || integrity.signal) {
-        process.stderr.write(
-          `[power-pages] Site integrity validator did not complete: ` +
-          `${integrity.error?.message || `signal ${integrity.signal}`}.\n`
-        );
-      }
-      debug(`[power-pages hook] Site integrity exited with code ${validatorStatus}\n`);
     }
 
     // ALM plan reconcile backstop (auto-heal). The refresh-alm-plan-data.js calls

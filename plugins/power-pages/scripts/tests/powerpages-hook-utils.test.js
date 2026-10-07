@@ -16,6 +16,8 @@ const {
 } = require('../lib/powerpages-hook-utils');
 
 const SKILLS_DIR = path.join(__dirname, '..', '..', 'skills');
+const FINAL_INTEGRITY_COMMAND =
+  'node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"';
 
 test('detectTrackedSkill recognizes tracked skill references', () => {
   assert.equal(detectTrackedSkill('create-site'), 'create-site');
@@ -188,6 +190,7 @@ test('modifiesVisibleSource identifies workflows that can change SPA UI', () => 
     'add-cloud-flow',
     'add-server-logic',
     'add-seo',
+    'migrate-webapi-selectall',
   ]) {
     assert.equal(modifiesVisibleSource(`/power-pages:${skillName}`), true);
   }
@@ -199,6 +202,22 @@ test('modifiesVisibleSource identifies workflows that can change SPA UI', () => 
 test('VISIBLE_SOURCE_SKILLS members are all real tracked skills', () => {
   for (const name of VISIBLE_SOURCE_SKILLS) {
     assert.ok(TRACKED_SKILLS[name], `VISIBLE_SOURCE_SKILLS member "${name}" must be tracked`);
+  }
+});
+
+test('every visible-source skill has an explicit final site-integrity gate', () => {
+  for (const name of VISIBLE_SOURCE_SKILLS) {
+    const skillPath = path.join(SKILLS_DIR, name, 'SKILL.md');
+    const source = fs.readFileSync(skillPath, 'utf8');
+    assert.match(
+      source,
+      /Final site-integrity gate/i,
+      `${name} must identify the post-implementation integrity phase`
+    );
+    assert.ok(
+      source.includes(FINAL_INTEGRITY_COMMAND),
+      `${name} must run the shared integrity validator after implementation`
+    );
   }
 });
 

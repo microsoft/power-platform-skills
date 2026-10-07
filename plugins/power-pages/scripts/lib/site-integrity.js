@@ -32,7 +32,11 @@ function validateSiteIntegrity(projectRoot) {
   const directionSet = Array.isArray(manifest?.locales)
     ? classifyLocaleDirections(manifest.locales)
     : null;
-  const unavailableLocales = new Set(manifest?.unavailableLocales || []);
+  const unavailableLocales = new Set(
+    Array.isArray(manifest?.unavailableLocales)
+      ? manifest.unavailableLocales
+      : []
+  );
   const defaultDirection = manifest?.defaultLocale
     ? getLocaleDirection(manifest.defaultLocale)
     : null;

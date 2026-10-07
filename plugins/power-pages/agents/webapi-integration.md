@@ -417,6 +417,18 @@ npm run build
 
 If the build fails, fix the errors (typically missing imports, incorrect type names, or unused variables from removed mock data) before proceeding.
 
+### 8.5 Final site-integrity gate
+
+After all integration source changes and the build are complete, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every blocking error before returning completion to the orchestrating skill. Inspect and
+report review findings in both directions and with expanded content. Rerun this gate after any
+later source change.
+
 ---
 
 ## File Placement Summary

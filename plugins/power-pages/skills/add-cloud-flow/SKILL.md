@@ -588,6 +588,18 @@ Read the service file created in Phase 7 and verify:
 
 If any check fails, fix the issue in the service file or UI before continuing.
 
+### 8.1c Final site-integrity gate
+
+After all cloud-flow UI integration and skill-specific verification are complete, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every blocking error before presenting completion or asking to deploy. Inspect and report
+review findings in both directions and with expanded content. Rerun this gate after any later
+source change.
+
 ### 8.2 Record Skill Usage
 
 > Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`

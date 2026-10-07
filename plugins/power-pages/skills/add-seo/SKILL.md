@@ -307,6 +307,18 @@ If a dev server is running (or start one):
 2. Navigate to `/robots.txt` and verify it loads
 3. Navigate to `/sitemap.xml` and verify it loads
 
+#### 7.2b Final site-integrity gate
+
+After all SEO source and metadata changes and browser verification are complete, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every blocking error before recording completion or creating the final commit. Inspect and
+report review findings in both directions and with expanded content. Rerun this gate after any
+later source change.
+
 #### 7.3 Record Skill Usage
 
 > Reference: `${PLUGIN_ROOT}/references/skill-tracking-reference.md`

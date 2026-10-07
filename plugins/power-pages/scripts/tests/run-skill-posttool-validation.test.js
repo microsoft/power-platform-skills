@@ -201,19 +201,19 @@ test('reconcile backstop is exit-code-neutral: a blocking validator status is un
     'the reconcile backstop must not change the validator-determined exit code');
 });
 
-test('hook blocks a source-mutating skill when shared site integrity fails', (t) => {
+test('hook does not claim post-implementation integrity at Skill tool return time', (t) => {
   const root = makeProject(t);
   writeJson(path.join(root, 'powerpages.config.json'), {});
   fs.mkdirSync(path.join(root, 'src'), { recursive: true });
   fs.writeFileSync(path.join(root, 'src', 'bad.css'), '.bad { margin-left: 1rem; }', 'utf8');
 
-  // add-localization approves an otherwise unlocalized code site, allowing the
-  // shared cross-cutting validator to own this failure.
+  // Skill PostToolUse runs when instructions finish loading, before the agent
+  // applies the skill. Shared integrity is therefore an explicit final phase in
+  // source-mutating SKILL.md files, not an early hook responsibility.
   const res = runHook(root, 'add-localization');
 
-  assert.equal(res.status, 2);
-  assert.match(res.stderr, /site integrity validation failed/i);
-  assert.match(res.stderr, /directional-physical-css/i);
+  assert.equal(res.status, 0);
+  assert.doesNotMatch(res.stderr, /site integrity validation failed/i);
 });
 
 test('hook does not run site integrity for a non-source-mutating skill', (t) => {

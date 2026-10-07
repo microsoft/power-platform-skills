@@ -563,6 +563,19 @@ git commit -m "Add table permissions and Web API site settings for [table names]
 
 **Output**: Table permissions and site settings created, verified, and (in normal mode) committed
 
+### 6.6 Final site-integrity gate
+
+After all integration source changes, permission/settings work, and build verification are
+complete, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every blocking error before presenting completion or asking to deploy. Inspect and report
+review findings in both directions and with expanded content. Rerun this gate after any later
+source change.
+
 ---
 
 ## Phase 7: Review & Deploy

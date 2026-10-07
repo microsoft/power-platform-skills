@@ -758,6 +758,18 @@ identifier.)
 
 **Build status:** Pass / Fail (with details).
 
+### 7.5 Final site-integrity gate
+
+After all AI integration source changes and the build verification are complete, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every blocking error before presenting completion or asking to deploy. Inspect and report
+review findings in both directions and with expanded content. Rerun this gate after any later
+source change.
+
 **Output**: all integration files verified; project builds.
 
 ---

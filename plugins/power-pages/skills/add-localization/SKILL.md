@@ -571,6 +571,19 @@ not silently replace the approved package.
 
 Repeat the AI translation warning when applicable.
 
+### Final site-integrity gate
+
+After localization implementation, the localization validator, the build, and browser verification
+are complete, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every blocking error before reviewing or completing the skill. Inspect and report review
+findings in both directions and with expanded content. Rerun this gate after any subsequent source
+change.
+
 ---
 
 ## Phase 7: Review changes

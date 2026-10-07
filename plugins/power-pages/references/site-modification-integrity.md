@@ -54,11 +54,16 @@ Design text containers to wrap and grow:
 
 ## Completion
 
-Run the normal skill validator, then:
+After all planned file changes are complete, run the normal skill validator and build first, then:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
 ```
+
+This is an explicit post-implementation gate. Validation performed before all planned file changes
+are complete does not satisfy this step. Do not present completion, create the final commit, or ask
+to deploy until this command exits successfully. If further source changes are made during review,
+rerun it.
 
 Deterministic localization or bidirectional errors block completion. Review findings such as
 fixed text geometry, visual reordering, transforms, gradients, and clipping must be inspected in

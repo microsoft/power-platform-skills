@@ -143,8 +143,13 @@ function createLocalizedReactProject(t, overrides = {}) {
   return projectRoot;
 }
 
-function createUnavailableLocaleProject(t, availabilitySource) {
+function createUnavailableLocaleProject(
+  t,
+  availabilitySource,
+  { includeCoordinator = true } = {}
+) {
   const availabilityPath = 'src/i18n/localeAvailability.ts';
+  const coordinatorPath = 'src/i18n/localeCoordinator.ts';
   const projectRoot = createLocalizedReactProject(t, {
     locales: ['en-US', 'ar-SA'],
     resourcePaths: {
@@ -152,7 +157,11 @@ function createUnavailableLocaleProject(t, availabilitySource) {
       'ar-SA': 'src/i18n/locales/ar-SA.json',
     },
     unavailableLocales: ['ar-SA'],
-    managedFiles: ['src/i18n/index.ts', availabilityPath],
+    managedFiles: [
+      'src/i18n/index.ts',
+      availabilityPath,
+      ...(includeCoordinator ? [coordinatorPath] : []),
+    ],
     bidirectionalReadiness: {
       status: 'pending-remediation',
       findings: [{ rule: 'directional-physical-css' }],
@@ -177,6 +186,19 @@ function createUnavailableLocaleProject(t, availabilitySource) {
     "\nimport { isLocaleAvailable } from './localeAvailability';\n" +
     "export const selectorLocales = ['en-US', 'ar-SA'].filter(isLocaleAvailable);\n"
   );
+  if (includeCoordinator) {
+    writeProjectFile(projectRoot, coordinatorPath, `
+      import i18next from 'i18next';
+      import { isLocaleAvailable } from './localeAvailability';
+      export async function switchLocale(locale: string) {
+        if (!isLocaleAvailable(locale)) return;
+        await i18next.changeLanguage(locale);
+        document.documentElement.lang = locale;
+        document.documentElement.dir = locale === 'ar-SA' ? 'rtl' : 'ltr';
+        localStorage.setItem('site-locale', locale);
+      }
+    `);
+  }
   return projectRoot;
 }
 
@@ -564,45 +586,29 @@ test('enforces unavailable locales for same-direction locale sets', (t) => {
 });
 
 test('allows a mixed-direction locale to remain unavailable pending remediation', (t) => {
-  const availabilityPath = 'src/i18n/localeAvailability.ts';
-  const projectRoot = createLocalizedReactProject(t, {
-    locales: ['en-US', 'ar-SA'],
-    resourcePaths: {
-      'en-US': 'src/i18n/locales/en-US.json',
-      'ar-SA': 'src/i18n/locales/ar-SA.json',
-    },
-    unavailableLocales: ['ar-SA'],
-    managedFiles: ['src/i18n/index.ts', availabilityPath],
-    bidirectionalReadiness: {
-      status: 'pending-remediation',
-      findings: [{ rule: 'directional-physical-css' }],
-    },
-  });
-  writeProjectFile(projectRoot, 'src/i18n/locales/ar-SA.json', JSON.stringify({
-    greeting: 'مرحبا {{name}}',
-    navigation: { home: 'الرئيسية' },
-  }));
-  writeProjectFile(projectRoot, 'src/theme.css', '.callout { padding-left: 1rem; }');
-  writeProjectFile(projectRoot, availabilityPath, `
+  const projectRoot = createUnavailableLocaleProject(t, `
     const unavailableLocales = new Set(['ar-SA']);
     export const isLocaleAvailable = (locale: string) => !unavailableLocales.has(locale);
   `);
-  writeProjectFile(projectRoot, 'src/components/LanguageSelector.tsx', `
-    import { isLocaleAvailable } from '../i18n/localeAvailability';
-    export const LanguageSelector = () => {
-      document.documentElement.lang = 'en-US';
-      document.documentElement.dir = 'ltr';
-      return ['en-US', 'ar-SA'].filter(isLocaleAvailable).map((locale) => locale);
-    };
-  `);
-  fs.appendFileSync(
-    path.join(projectRoot, 'src/i18n/index.ts'),
-    "\nimport { isLocaleAvailable } from './localeAvailability';\n" +
-    "export const selectorLocales = ['en-US', 'ar-SA'].filter(isLocaleAvailable);\n"
-  );
 
   const result = runValidator(projectRoot);
   assert.equal(result.status, 0, result.stderr);
+});
+
+test('requires a coordinator while an opposite-direction locale is unavailable', (t) => {
+  const projectRoot = createUnavailableLocaleProject(
+    t,
+    `
+      const unavailableLocales = new Set(['ar-SA']);
+      export const isLocaleAvailable = (locale: string) =>
+        !unavailableLocales.has(locale);
+    `,
+    { includeCoordinator: false }
+  );
+
+  const result = runValidator(projectRoot);
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /requires one managed locale coordinator/i);
 });
 
 test('accepts equivalent unavailable-locale rejection forms', (t) => {
@@ -702,6 +708,33 @@ test('rejects inverted unavailable-locale predicates', (t) => {
     `,
     `
       const unavailableLocales = new Set(['ar-SA']);
+      export function isLocaleAvailable(locale: string) {
+        if (unavailableLocales.has(locale)) return false;
+        return false;
+      }
+    `,
+    `
+      const unavailableLocales = new Set(['ar-SA']);
+      export function isLocaleAvailable(locale: string) {
+        if (unavailableLocales.has(locale)) return false;
+      }
+    `,
+    `
+      const unavailableLocales = new Set(['ar-SA']);
+      export const isLocaleAvailable = (locale: string) => {
+        if (unavailableLocales.has(locale)) {
+          return false;
+        } else {
+          return false;
+        }
+      };
+    `,
+    `
+      const unavailableLocales = new Set(['ar-SA']);
+      export const isLocaleAvailable = () => false;
+    `,
+    `
+      const unavailableLocales = new Set(['ar-SA']);
       function unrelated(locale: string) {
         return !unavailableLocales.has(locale);
       }
@@ -726,7 +759,10 @@ test('rejects inverted unavailable-locale predicates', (t) => {
     const projectRoot = createUnavailableLocaleProject(t, implementation);
     const result = runValidator(projectRoot);
     assert.equal(result.status, 2);
-    assert.match(result.stderr, /must export isLocaleAvailable and reject entries/i);
+    assert.match(
+      result.stderr,
+      /must export isLocaleAvailable.*reject entries.*allow other configured locales/is
+    );
   }
 });
 

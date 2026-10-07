@@ -580,12 +580,7 @@ function validateLocalization(projectRoot, warnings = []) {
           );
         }
       }
-      const availableLocales = manifest.locales.filter(
-        (locale) => !unavailableLocaleSet.has(locale)
-      );
-      const availableDirectionSet = classifyLocaleDirections(availableLocales);
-      if (manifest.mode === 'runtime' &&
-          availableDirectionSet.classification === 'mixed') {
+      if (manifest.mode === 'runtime') {
         validateRuntimeCoordinator(projectRoot, allManagedFiles, errors);
       }
     }
@@ -828,6 +823,8 @@ function rejectsUnavailableLocales(source) {
   const normalizedSource = normalizeMembershipCalls(source);
   const membership = '__UNAVAILABLE_MEMBERSHIP__';
   const returnedExpression = String.raw`(?:return\s+|=>\s*)`;
+  const falseStatement = String.raw`return\s+false\s*(?:;|(?=\}))`;
+  const trueStatement = String.raw`return\s+true\s*(?:;|(?=\}))`;
 
   // Generated and subsequently refactored projects can express the same boolean
   // contract in several forms. Keep this allowlist narrow so a direct, inverted
@@ -847,7 +844,9 @@ function rejectsUnavailableLocales(source) {
     ),
     new RegExp(
       String.raw`if\s*\(\s*${membership}\s*\)\s*` +
-      String.raw`(?:return\s+false\b|\{[^{}]*\breturn\s+false\b[^{}]*\})`,
+      String.raw`(?:${falseStatement}|\{[^{}]*${falseStatement}[^{}]*\})\s*` +
+      String.raw`(?:else\s*)?` +
+      String.raw`(?:${trueStatement}|\{[^{}]*${trueStatement}[^{}]*\})`,
       's'
     ),
   ];
@@ -900,8 +899,8 @@ function validateLocaleAvailability(
   if (!/\bexport\s+(?:function|const)\s+isLocaleAvailable\b/.test(availabilitySource) ||
       !rejectsUnavailableLocales(availabilitySource)) {
     errors.push(
-      'The locale availability module must export isLocaleAvailable and reject ' +
-      'entries in unavailableLocales.'
+      'The locale availability module must export isLocaleAvailable, reject entries ' +
+      'in unavailableLocales, and allow other configured locales.'
     );
     valid = false;
   }

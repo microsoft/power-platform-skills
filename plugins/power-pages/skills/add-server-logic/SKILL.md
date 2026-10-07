@@ -1169,6 +1169,19 @@ Re-read each `.serverlogic.yml` file and verify:
 - [ ] Fields are alphabetically sorted
 - [ ] File names match: folder name, `.js` name, `.serverlogic.yml` name, and `name` field all use the same value
 
+### 10.1b Final site-integrity gate
+
+After server logic and any optional client-side integration are complete, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every blocking error before presenting completion or asking to deploy. Inspect and report
+review findings in both directions and with expanded content. Backend-only runs still execute this
+gate; it is a no-op for visible-source integrity when no SPA source changed. Rerun it after any
+later source change.
+
 ### 10.2 Provide API URL
 
 Tell the user each endpoint URL:

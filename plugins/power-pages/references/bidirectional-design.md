@@ -31,7 +31,7 @@ Use logical CSS whenever placement follows reading direction:
 | `padding-left/right` | `padding-inline-start/end` |
 | `left/right` | `inset-inline-start/end` |
 | `border-left/right` | `border-inline-start/end` |
-| physical corner radii | `border-start/end-start/end-radius` |
+| physical corner radii | `border-start-start-radius`, `border-start-end-radius`, `border-end-start-radius`, or `border-end-end-radius` |
 | `text-align: left/right` | `text-align: start/end` |
 | `width` for flow-relative sizing | `inline-size` |
 

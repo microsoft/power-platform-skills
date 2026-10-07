@@ -1466,6 +1466,18 @@ Present a summary table to the user:
    > "The site is ready for review at `<dev server URL>`. Please check it out in your browser. Would you like any changes?"
 5. If the user requests changes, apply them, re-verify by browsing via `browser_snapshot`, and re-run the axe-core audit (6.2) on every affected route - a new control, form field, or restructured section can add violations without any visual change. When a change affects what the page looks like, also run a review round on the affected routes before moving on
 
+### 7.1 Final site-integrity gate
+
+After the user-approved source changes and all normal validation are complete, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every blocking error before proceeding. Inspect and report review findings in the relevant
+directions and with expanded content. If review causes further source changes, rerun this gate.
+Do not enter the deployment phase until it exits successfully.
+
 **Output**: User-approved site ready for deployment
 
 ---

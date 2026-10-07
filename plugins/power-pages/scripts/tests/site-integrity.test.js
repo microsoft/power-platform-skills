@@ -16,6 +16,47 @@ const {
 } = require('./test-utils');
 
 const CLI_PATH = path.join(__dirname, '..', 'validate-site-integrity.js');
+const LOCALE_COORDINATOR_PATH = 'src/i18n/localeCoordinator.ts';
+
+function verifiedNpmArtifact(packageName, version) {
+  return {
+    license: 'MIT',
+    licenseReview: { status: 'automatically-accepted' },
+    artifact: {
+      version,
+      registry: 'https://registry.npmjs.org/',
+      tarballUrl: `https://registry.npmjs.org/${packageName}/-/${packageName}-${version}.tgz`,
+      integrity: 'sha512-dGVzdA==',
+    },
+  };
+}
+
+function writeVerifiedPackageLock(projectRoot, packageName, version) {
+  const { artifact } = verifiedNpmArtifact(packageName, version);
+  writeProjectFile(projectRoot, 'package-lock.json', JSON.stringify({
+    packages: {
+      [`node_modules/${packageName}`]: {
+        version: artifact.version,
+        resolved: artifact.tarballUrl,
+        integrity: artifact.integrity,
+      },
+    },
+  }));
+}
+
+function writeRuntimeCoordinator(projectRoot) {
+  writeProjectFile(projectRoot, LOCALE_COORDINATOR_PATH, `
+    import i18next from 'i18next';
+    import { isLocaleAvailable } from './localeAvailability';
+    export async function switchLocale(locale: string) {
+      if (!isLocaleAvailable(locale)) return;
+      await i18next.changeLanguage(locale);
+      document.documentElement.lang = locale;
+      document.documentElement.dir = locale === 'ar-SA' ? 'rtl' : 'ltr';
+      localStorage.setItem('site-locale', locale);
+    }
+  `);
+}
 
 test('parses an optional project root without consuming other options', () => {
   assert.deepEqual(parseArgs([]), {});
@@ -97,6 +138,54 @@ test('includes localization resource failures when a manifest exists', (t) => {
   assert.ok(result.errors.some((error) => /not valid JSON/.test(error)));
 });
 
+test('reports malformed unavailableLocales values without throwing', (t) => {
+  for (const unavailableLocales of [
+    { 'ar-SA': true },
+    'ar-SA',
+    42,
+    null,
+  ]) {
+    const projectRoot = createTempProject(t);
+    writeProjectFile(projectRoot, 'powerpages.config.json', '{}');
+    writeProjectFile(
+      projectRoot,
+      '.powerpages-localization.json',
+      JSON.stringify({ schemaVersion: 1, unavailableLocales })
+    );
+
+    const result = validateSiteIntegrity(projectRoot);
+    assert.ok(
+      result.errors.some((error) =>
+        /Manifest unavailableLocales must be an array of non-empty strings/.test(error)
+      ),
+      JSON.stringify({ unavailableLocales, errors: result.errors })
+    );
+  }
+});
+
+test('CLI reports malformed unavailableLocales as a validation error', (t) => {
+  const projectRoot = createTempProject(t);
+  writeProjectFile(projectRoot, 'powerpages.config.json', '{}');
+  writeProjectFile(
+    projectRoot,
+    '.powerpages-localization.json',
+    JSON.stringify({
+      schemaVersion: 1,
+      unavailableLocales: { 'ar-SA': true },
+    })
+  );
+
+  const result = spawnSync(
+    process.execPath,
+    [CLI_PATH, '--projectRoot', projectRoot],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /Manifest unavailableLocales must be an array/);
+  assert.doesNotMatch(result.stderr, /not iterable/i);
+});
+
 test('defers known bidi blockers while opposite-direction locales remain unavailable', (t) => {
   const projectRoot = createTempProject(t);
   const availabilityPath = 'src/i18n/localeAvailability.ts';
@@ -109,6 +198,7 @@ test('defers known bidi blockers while opposite-direction locales remain unavail
       'react-i18next': '^16.0.0',
     },
   }));
+  writeVerifiedPackageLock(projectRoot, 'react-i18next', '16.0.0');
   writeProjectFile(projectRoot, 'src/i18n/locales/en-US.json', '{"title":"Home"}');
   writeProjectFile(projectRoot, 'src/i18n/locales/ar-SA.json', '{"title":"الرئيسية"}');
   writeProjectFile(
@@ -122,6 +212,7 @@ test('defers known bidi blockers while opposite-direction locales remain unavail
     const unavailableLocales = new Set(['ar-SA']);
     export const isLocaleAvailable = (locale: string) => !unavailableLocales.has(locale);
   `);
+  writeRuntimeCoordinator(projectRoot);
   writeProjectFile(projectRoot, 'src/components/LanguageSelector.tsx', `
     import { isLocaleAvailable } from '../i18n/localeAvailability';
     export function LanguageSelector() {
@@ -137,7 +228,11 @@ test('defers known bidi blockers while opposite-direction locales remain unavail
     mode: 'runtime',
     packageName: 'react-i18next',
     packageVersion: '^16.0.0',
-    packageVerification: { status: 'verified', source: 'known-capability' },
+    packageVerification: {
+      status: 'verified',
+      source: 'known-capability',
+      ...verifiedNpmArtifact('react-i18next', '16.0.0'),
+    },
     locales: ['en-US', 'ar-SA'],
     defaultLocale: 'en-US',
     translationMethod: 'agent',
@@ -146,7 +241,7 @@ test('defers known bidi blockers while opposite-direction locales remain unavail
       'ar-SA': 'src/i18n/locales/ar-SA.json',
     },
     generatedFiles: ['src/components/LanguageSelector.tsx'],
-    managedFiles: ['src/i18n/index.ts', availabilityPath],
+    managedFiles: ['src/i18n/index.ts', availabilityPath, LOCALE_COORDINATOR_PATH],
     unavailableLocales: ['ar-SA'],
     bidirectionalReadiness: {
       status: 'pending-remediation',
@@ -183,6 +278,7 @@ test('pending remediation still blocks newly introduced bidi defects', (t) => {
       'react-i18next': '^16.0.0',
     },
   }));
+  writeVerifiedPackageLock(projectRoot, 'react-i18next', '16.0.0');
   writeProjectFile(projectRoot, 'src/i18n/locales/en-US.json', '{"title":"Home"}');
   writeProjectFile(projectRoot, 'src/i18n/locales/ar-SA.json', '{"title":"الرئيسية"}');
   writeProjectFile(
@@ -196,6 +292,7 @@ test('pending remediation still blocks newly introduced bidi defects', (t) => {
     const unavailableLocales = new Set(['ar-SA']);
     export const isLocaleAvailable = (locale: string) => !unavailableLocales.has(locale);
   `);
+  writeRuntimeCoordinator(projectRoot);
   writeProjectFile(projectRoot, 'src/components/LanguageSelector.tsx', `
     import { isLocaleAvailable } from '../i18n/localeAvailability';
     export function LanguageSelector() {
@@ -215,7 +312,11 @@ test('pending remediation still blocks newly introduced bidi defects', (t) => {
     mode: 'runtime',
     packageName: 'react-i18next',
     packageVersion: '^16.0.0',
-    packageVerification: { status: 'verified', source: 'known-capability' },
+    packageVerification: {
+      status: 'verified',
+      source: 'known-capability',
+      ...verifiedNpmArtifact('react-i18next', '16.0.0'),
+    },
     locales: ['en-US', 'ar-SA'],
     defaultLocale: 'en-US',
     translationMethod: 'agent',
@@ -224,7 +325,7 @@ test('pending remediation still blocks newly introduced bidi defects', (t) => {
       'ar-SA': 'src/i18n/locales/ar-SA.json',
     },
     generatedFiles: ['src/components/LanguageSelector.tsx'],
-    managedFiles: ['src/i18n/index.ts', availabilityPath],
+    managedFiles: ['src/i18n/index.ts', availabilityPath, LOCALE_COORDINATOR_PATH],
     unavailableLocales: ['ar-SA'],
     bidirectionalReadiness: {
       status: 'pending-remediation',
@@ -259,6 +360,7 @@ test('one recorded finding cannot defer a second same-line declaration', (t) => 
       'react-i18next': '^16.0.0',
     },
   }));
+  writeVerifiedPackageLock(projectRoot, 'react-i18next', '16.0.0');
   writeProjectFile(projectRoot, 'src/i18n/locales/en-US.json', '{"title":"Home"}');
   writeProjectFile(projectRoot, 'src/i18n/locales/ar-SA.json', '{"title":"الرئيسية"}');
   writeProjectFile(
@@ -272,6 +374,7 @@ test('one recorded finding cannot defer a second same-line declaration', (t) => 
     const unavailableLocales = new Set(['ar-SA']);
     export const isLocaleAvailable = (locale: string) => !unavailableLocales.has(locale);
   `);
+  writeRuntimeCoordinator(projectRoot);
   writeProjectFile(projectRoot, 'src/components/LanguageSelector.tsx', `
     import { isLocaleAvailable } from '../i18n/localeAvailability';
     export function LanguageSelector() {
@@ -288,7 +391,11 @@ test('one recorded finding cannot defer a second same-line declaration', (t) => 
     mode: 'runtime',
     packageName: 'react-i18next',
     packageVersion: '^16.0.0',
-    packageVerification: { status: 'verified', source: 'known-capability' },
+    packageVerification: {
+      status: 'verified',
+      source: 'known-capability',
+      ...verifiedNpmArtifact('react-i18next', '16.0.0'),
+    },
     locales: ['en-US', 'ar-SA'],
     defaultLocale: 'en-US',
     translationMethod: 'agent',
@@ -297,7 +404,7 @@ test('one recorded finding cannot defer a second same-line declaration', (t) => 
       'ar-SA': 'src/i18n/locales/ar-SA.json',
     },
     generatedFiles: ['src/components/LanguageSelector.tsx'],
-    managedFiles: ['src/i18n/index.ts', availabilityPath],
+    managedFiles: ['src/i18n/index.ts', availabilityPath, LOCALE_COORDINATOR_PATH],
     unavailableLocales: ['ar-SA'],
     bidirectionalReadiness: {
       status: 'pending-remediation',
