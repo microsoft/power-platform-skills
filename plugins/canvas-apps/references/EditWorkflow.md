@@ -46,6 +46,8 @@ Read:
 
 Determine:
 
+- An original-request capability inventory for every changed requirement, captured before
+   reducing it to screens or implementation tasks
 - Requested capability families from `${PLUGIN_ROOT}/references/BehaviorGuide.md`
 - Every changed action's precondition, source-of-truth transition, and visible postcondition
 - Screens to modify and exact changes
@@ -53,6 +55,9 @@ Determine:
 - Existing palette, layout strategy, variables, and data bindings to preserve
 - New controls, data sources, connectors, or shared state
 - Required changes to `[working directory]/App.pa.yaml`
+
+For changed time ordering, preserve typed Date/Time semantics or introduce a validated
+canonical 24-hour sort key; do not retain direct sorting of mixed display strings.
 
 Present:
 
@@ -85,6 +90,12 @@ Wait for user approval. Revise and re-present if requested.
 
 ## 4. Invoke the Planner
 
+Before delegation, write `[working directory]/canvas-app-requirements.md` from the approved edit plan and
+original request using the `Original Requirements Contract` template in
+`${PLUGIN_ROOT}/references/PlanTemplates.md`. Include every requested edit clause and every existing
+behavior made regression-sensitive by the edit. This artifact is orchestrator-owned and
+the planner must not edit it.
+
 
 Before delegation, use the top-level skill's MCP connection for discovery introduced by
 the edit. List resources only when the edit introduces resources not already present.
@@ -107,6 +118,7 @@ Shared plan: `[working directory]/canvas-app-shared.md`
 Plugin root: `${PLUGIN_ROOT}`
 Edit requirements: [user requirements]
 Approved plan: [full approved plan]
+Original requirements contract: `[working directory]/canvas-app-requirements.md`
 Current app state: [palette, variables, layout, screens, controls]
 Synced files: [absolute working-directory paths]
 Discovery packet: [complete results gathered above]

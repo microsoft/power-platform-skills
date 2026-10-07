@@ -21,6 +21,73 @@ test('a clean spec passes with no errors', () => {
   assert.strictEqual(r.errors.length, 0);
 });
 
+// Views, charts and forms belong to a table, and the build finds each by table and name (a form also by
+// type). The same name on two tables is the supported shape — two tables' "By Status" charts — and used
+// to be warned about as a duplicate; only a repeat on ONE table collides.
+test('a view, chart or form name repeated on another table is not a duplicate; on the same table it is', () => {
+  const s = base();
+  s.views = [{ entity: 'new_customer', name: 'Active', columns: ['new_name'] }, { entity: 'new_ticket', name: 'active', columns: ['new_name'] }];
+  s.charts = [{ entity: 'new_customer', name: 'By Status', chartType: 'Pie', groupBy: 'new_name', measure: 'count' },
+    { entity: 'new_ticket', name: 'By Status', chartType: 'Pie', groupBy: 'new_priority', measure: 'count' }];
+  s.forms = [{ entity: 'new_customer', name: 'Main' }, { entity: 'new_ticket', name: 'Main' }, { entity: 'new_ticket', name: 'Main', formType: 'QuickCreate' }];
+  assert.deepStrictEqual(lintAppSpec(s).warnings.filter((w) => /Duplicate/.test(w)), []);
+
+  s.views.push({ entity: 'NEW_TICKET', name: 'Active', columns: ['new_name'] });
+  s.charts.push({ entity: 'new_ticket', name: 'by status', chartType: 'Bar', groupBy: 'new_priority', measure: 'count' });
+  s.forms.push({ entity: 'new_ticket', name: 'main', formType: 'Main' });
+  assert.deepStrictEqual(lintAppSpec(s).warnings.filter((w) => /Duplicate/.test(w)), [
+    'Duplicate view name on NEW_TICKET: Active',
+    'Duplicate chart name on new_ticket: by status',
+    'Duplicate form name on new_ticket: main',
+  ]);
+});
+
+// pac stores each ASCII `"` in a page's name as `\"` on the page's own record (live-measured) and changes nothing else.
+// A warning: the navigation shows the subarea title, which the build writes as given.
+test('a page name with an ASCII double quote is warned about; the characters pac keeps are not', () => {
+  const s = base();
+  s.pages = [
+    { key: 'a', name: 'Say "hi" now', source: { kind: 'tsx', file: 'pages/a.tsx' } },
+    { key: 'b', name: 'Back\\slash “curly” \'single\' 東京', source: { kind: 'tsx', file: 'pages/b.tsx' } },
+  ];
+  const r = lintAppSpec(s);
+  assert.deepStrictEqual(r.warnings.filter((w) => /double quote/.test(w)), [
+    'Page \'Say "hi" now\': pac stores each ASCII double quote (") in a page\'s name as \\" on the page\'s own record — use typographic quotes (“ ”) or an apostrophe instead',
+  ]);
+  assert.strictEqual(r.errors.length, 0, 'a warning, never an error');
+});
+
+// Under an auto layout the build writes readOnly/hidden only on the fields the layout places — the primary column, the
+// declared columns and the parent lookups. A flag on any other field is never applied, so the author is told.
+test('an auto layout\'s fieldOptions flag on a field the layout does not place is warned about', () => {
+  const s = base();
+  s.forms = [{ entity: 'new_ticket', name: 'Ticket Main', layout: 'auto', fieldOptions: {
+    ownerid: { readOnly: true }, // not placed: a stock column the spec does not declare
+    createdon: { hidden: true, readOnly: true },
+    new_priority: { readOnly: true }, // a declared column
+    new_name: { hidden: true }, // the primary column
+    new_customerid: { readOnly: true }, // the parent lookup
+    statuscode: { after: 'new_name' }, // no flag: nothing to apply
+  } }];
+  const warned = lintAppSpec(s).warnings.filter((w) => /does not place/.test(w));
+  assert.deepStrictEqual(warned, [
+    "Form new_ticket 'Ticket Main': fieldOptions['ownerid'] sets readOnly on a field the auto layout does not place — it places the primary column, the table's declared columns and its parent lookups — so the build never applies it. Declare 'ownerid' as a column, or list it in an explicit layout (prune: false keeps the rest of the form).",
+    "Form new_ticket 'Ticket Main': fieldOptions['createdon'] sets readOnly and hidden on a field the auto layout does not place — it places the primary column, the table's declared columns and its parent lookups — so the build never applies it. Declare 'createdon' as a column, or list it in an explicit layout (prune: false keeps the rest of the form).",
+  ]);
+  // An explicit layout places what it lists; this rule is about the auto layout alone.
+  s.forms[0] = { entity: 'new_ticket', name: 'Ticket Main', prune: false, tabs: [{ label: 'G', sections: [{ fields: ['new_name'] }] }], fieldOptions: { ownerid: { readOnly: true } } };
+  assert.deepStrictEqual(lintAppSpec(s).warnings.filter((w) => /does not place/.test(w)), []);
+  // A DECLARED column the auto layout leaves off is not told to declare itself: a BigInt has no form control at all;
+  // a Customer column has one, but the auto layout places only scalar columns — an explicit layout can list it.
+  s.entities[1].columns.push({ schemaName: 'new_bigcount', displayName: 'Big Count', type: 'BigInt' },
+    { schemaName: 'new_payer', displayName: 'Payer', type: 'Customer' });
+  s.forms[0] = { entity: 'new_ticket', name: 'Ticket Main', layout: 'auto', fieldOptions: { new_bigcount: { hidden: true }, new_payer: { readOnly: true } } };
+  assert.deepStrictEqual(lintAppSpec(s).warnings.filter((w) => /fieldOptions\['new_(bigcount|payer)'\]/.test(w)), [
+    "Form new_ticket 'Ticket Main': fieldOptions['new_bigcount'] sets hidden on a BigInt column, which has no form control, so the auto layout leaves it off the form and the build never applies it.",
+    "Form new_ticket 'Ticket Main': fieldOptions['new_payer'] sets readOnly on a Customer column, a type the auto layout does not place, so the build never applies it. List 'new_payer' in an explicit layout to place it (prune: false keeps the rest of the form).",
+  ]);
+});
+
 test('malformed top-level collections return lint errors instead of throwing', () => {
   for (const spec of [
     null,
@@ -293,6 +360,22 @@ test('errors on an explicit relationship schemaName that lacks the publisher pre
   const r = lintAppSpec(s);
   assert.strictEqual(r.ok, false);
   assert.ok(r.errors.some((m) => /must start with the publisher prefix 'new_'/.test(m)), JSON.stringify(r.errors));
+});
+
+test('an existing relationship keeps a foreign-prefix schemaName as a warning, not an error', () => {
+  const adopted = base();
+  adopted.relationships[0].schemaName = 'zzz_CustomerLink';
+  adopted.relationships[0].existing = true;
+  const kept = lintAppSpec(adopted);
+  assert.strictEqual(kept.ok, true, JSON.stringify(kept.errors));
+  assert.ok(kept.warnings.some((m) => /zzz_CustomerLink/.test(m) && /publisher prefix/.test(m) && /already exists/.test(m)), JSON.stringify(kept.warnings));
+  assert.ok(!kept.errors.some((m) => /publisher prefix/.test(m)));
+
+  const authored = base();
+  authored.relationships[0].schemaName = 'zzz_CustomerLink';
+  const fresh = lintAppSpec(authored);
+  assert.strictEqual(fresh.ok, false);
+  assert.ok(fresh.errors.some((m) => /must start with the publisher prefix 'new_'/.test(m)), JSON.stringify(fresh.errors));
 });
 
 test('a system-table relationship with NO schemaName is clean (auto-prefixed default is valid)', () => {

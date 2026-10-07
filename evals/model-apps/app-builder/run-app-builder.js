@@ -29,6 +29,35 @@ function loadEvals() {
   return JSON.parse(fs.readFileSync(path.join(__dirname, 'evals.json'), 'utf8'));
 }
 
+// Grades one fixture: `notes` are the TAP comment lines (lint warnings, omitted page models) and
+// `results` the assertions in report order, `kind` saying which list each came from. main() reports
+// exactly these, and evals/model-apps/tests/eval-coverage-contract.test.js reads the same results.
+async function gradeFixture(fix, ev, evalsData) {
+  if (!ev) {
+    return { notes: [], results: [{ kind: 'gate', text: `fixture references eval id ${fix.id}`, result: { status: 'fail', reason: `no eval id ${fix.id} in evals.json` } }] };
+  }
+  let facts;
+  try { facts = await stageFacts(fix.spec, { fixture: fix }); }
+  catch (e) {
+    return { notes: [], results: [{ kind: 'gate', text: 'stage facts computed without error', result: { status: 'fail', reason: e.message } }] };
+  }
+  const notes = [
+    ...(facts.author.lint.warnings || []).map((warning) => `    # lint warning: ${JSON.stringify(warning)}`),
+    ...(facts.roundTrip.unkeptModels || []).map((model) => `    # page model omitted (a rebuild stores it empty): ${JSON.stringify(model)}`),
+  ];
+  const texts = [
+    ...evalsData.common_stage_assertions.map((text) => ({ kind: 'common', text })),
+    ...(ev.expectations || []).map((text) => ({ kind: 'expectation', text })),
+  ];
+  const results = texts.map(({ kind, text }) => {
+    const check = ASSERTIONS.get(text);
+    return { kind, text, result: check
+      ? check({ facts, spec: fix.spec, eval: ev })
+      : { status: 'skip', reason: 'no check registered for this assertion text' } };
+  });
+  return { notes, results };
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const fixturesDir = args.fixtures ? path.resolve(args.fixtures) : path.join(__dirname, 'fixtures');
@@ -51,26 +80,9 @@ async function main() {
 
   for (const fix of selected) {
     reporter.startFixture(fix.dirName);
-    const ev = evalById.get(fix.id);
-    if (!ev) {
-      reporter.assertion(`fixture references eval id ${fix.id}`, { status: 'fail', reason: `no eval id ${fix.id} in evals.json` });
-      reporter.endFixture();
-      continue;
-    }
-    let facts;
-    try { facts = await stageFacts(fix.spec); }
-    catch (e) {
-      reporter.assertion('stage facts computed without error', { status: 'fail', reason: e.message });
-      reporter.endFixture();
-      continue;
-    }
-    const texts = [...evalsData.common_stage_assertions, ...(ev.expectations || [])];
-    for (const text of texts) {
-      const check = ASSERTIONS.get(text);
-      reporter.assertion(text, check
-        ? check({ facts, spec: fix.spec, eval: ev })
-        : { status: 'skip', reason: 'no check registered for this assertion text' });
-    }
+    const { notes, results } = await gradeFixture(fix, evalById.get(fix.id), evalsData);
+    for (const line of notes) reporter.write(line);
+    for (const { text, result } of results) reporter.assertion(text, result);
     reporter.endFixture();
   }
 
@@ -79,4 +91,4 @@ async function main() {
 }
 
 if (require.main === module) main();
-module.exports = { main, parseArgs };
+module.exports = { main, parseArgs, gradeFixture };

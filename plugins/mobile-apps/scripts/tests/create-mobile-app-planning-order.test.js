@@ -187,7 +187,10 @@ test('preview preferences keep deferred Gate 4 markdown-only', () => {
   assert.match(brandedPreview, /\/design-system` owns rendering of `_plan_preview\.html`/);
   const skippedDesign = section(design, '#### Branch B', '**Preview timing:**');
   assert.match(skippedDesign, /\*\*Render `_plan_preview\.html`\*\*/);
-  assert.match(skippedDesign, /Print the preview path; open in browser only if `<visual_companion> = yes`/);
+  // The build plan shows these screens in its phone frame and links out to the file, so the
+  // create run no longer opens a browser tab for them.
+  assert.match(skippedDesign, /Do not open it in a browser/);
+  assert.doesNotMatch(skippedDesign, /xdg-open|Start-Process/);
 });
 
 test('offline completion summary reflects the bundled native host runtime', () => {
@@ -366,4 +369,56 @@ test('offline profile opt-in runs after Dataverse materialization and before nat
     createSkill,
     /missing, malformed, or contains no Dataverse[\s\S]*BLOCKED: Dataverse materialization/i,
   );
+});
+
+test('the screen preview has exactly one filename, everywhere it is named', () => {
+  const designSystem = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'design-system', 'SKILL.md'), 'utf8',
+  );
+
+  // `/create-mobile-app` extracts its carousel from this file and the build plan links it, so a
+  // path that only some branches write leaves both empty. The default no-brand path wrote
+  // `_design_preview.html`, and when that was corrected the message it prints was missed - the
+  // user was handed a link to a file the run no longer creates.
+  assert.doesNotMatch(designSystem, /_design_preview/,
+    'the screen preview is _plan_preview.html on every path');
+
+  // The path written and the path printed must be the same one.
+  const written = [...designSystem.matchAll(/Write to `<working_dir>\/([a-z_.]+)`/g)].map((m) => m[1]);
+  const printed = [...designSystem.matchAll(/preview ready at file:\/\/<working_dir>\/([a-z_.]+)/g)].map((m) => m[1]);
+  assert.ok(written.length > 0 && printed.length > 0, 'the preview must be written and announced');
+  assert.deepEqual([...new Set(written.concat(printed))], ['_plan_preview.html']);
+});
+
+test('no instruction promises a browser window during an orchestrated run', () => {
+  const skill = fs.readFileSync(
+    path.resolve(__dirname, '..', '..', 'skills', 'create-mobile-app', 'SKILL.md'), 'utf8',
+  );
+  // Step 6.75 guarantees no window opens, but the Step 2b preference definition still told the
+  // agent that `visual_companion = yes` opens one - a directive it could legitimately follow.
+  const preference = skill.split('\n').find((l) => l.startsWith('- `<visual_companion> = yes`'));
+  assert.ok(preference, 'the preference must be defined');
+  assert.doesNotMatch(preference, /automatically open/);
+  assert.match(preference, /Nothing is opened in a browser during a create run/);
+
+  // The guarantee is about windows that appear on their own. Step 11.4 offers a preview the
+  // user picks, defaulting to skip, and `/preview-screens` honours this same flag - so the
+  // definition must not claim the flag is irrelevant inside a create run.
+  assert.doesNotMatch(preference, /governs only a later standalone/);
+  assert.match(preference, /Step 11\.4 offer/);
+
+  // And every opener in the nested skill says which runs it applies to - including the style
+  // picker's refinement loops, which "re-open" the preview after each hybrid, mix or reject.
+  // These are instructions an agent follows, not a runtime branch, so one unqualified "open
+  // browser" is enough to put a tab over the build plan. Lines about the plan page itself
+  // ("its build plan open in the browser") describe it rather than open anything.
+  const OPENER = /\bre-?open\b|\bopens? (the )?browser\b|\bopen (it )?in (the )?browser\b|\bopen the browser\b/i;
+  for (const file of ['SKILL.md', path.join('references', 'vibe', 'style-picker.md')]) {
+    const text = fs.readFileSync(path.resolve(__dirname, '..', '..', 'skills', 'design-system', file), 'utf8');
+    const openers = text.split('\n').filter((l) => OPENER.test(l) && !/build plan open/.test(l));
+    assert.ok(openers.length > 0, `${file}: the opener pattern no longer finds anything`);
+    for (const line of openers) {
+      assert.match(line, /standalone runs only/, `${file}: ungated opener: ${line.trim().slice(0, 70)}`);
+    }
+  }
 });

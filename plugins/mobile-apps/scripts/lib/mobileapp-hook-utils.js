@@ -5,6 +5,35 @@ const path = require('node:path');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
 const SKILLS_DIR = path.join(PLUGIN_ROOT, 'skills');
+const TELEMETRY_STATES = Object.freeze([
+  'started',
+  'completed',
+  'failed',
+  'blocked',
+  'cancelled',
+  'skipped',
+  'needs_context',
+]);
+const TELEMETRY_ERROR_CLASSES = Object.freeze([
+  'auth_required',
+  'permission_denied',
+  'network_error',
+  'timeout',
+  'invalid_input',
+  'validation_failed',
+  'unsupported',
+  'missing_dependency',
+  'user_cancelled',
+  'unknown',
+]);
+const TELEMETRY_STATIC_INFO = new Set([
+  'app_not_initialized',
+  'dependency_missing',
+  'with_dataverse',
+  'connector_only',
+  'inline',
+  'delegated',
+]);
 
 function readInvocationMetadata(skillFile) {
   let text;
@@ -101,11 +130,46 @@ function getTrackedSkillFromPrompt(prompt) {
   return command ? detectTrackedSkill(command[1]) : null;
 }
 
+function getTelemetryCheckpointNames(skillName) {
+  const normalized = trackedName(skillName);
+  if (!normalized || normalized === 'telemetry') return new Set();
+  let source;
+  try {
+    source = fs.readFileSync(path.join(SKILLS_DIR, normalized, 'SKILL.md'), 'utf8');
+  } catch {
+    return new Set();
+  }
+  return new Set(
+    [...source.matchAll(/\*\*Telemetry checkpoint: `([^`]+)`\*\*/g)]
+      .map((match) => match[1]),
+  );
+}
+
+function isKnownTelemetryEvent(skillName, eventName) {
+  const normalized = trackedName(skillName);
+  if (!normalized || typeof eventName !== 'string') return false;
+  if (eventName === 'app_insights_selection') return normalized === 'setup-app-insights';
+  if (new RegExp(`^skill_(?:${TELEMETRY_STATES.join('|')})$`).test(eventName)) return true;
+  const match = new RegExp(`^(.+)_(?:${TELEMETRY_STATES.join('|')})$`).exec(eventName);
+  if (!match) return false;
+  if (getTelemetryCheckpointNames(normalized).has(match[1])) return true;
+  return normalized === 'create-mobile-app' && ['planning', 'template_gate'].includes(match[1]);
+}
+
+function isTelemetryStaticInfo(value) {
+  return typeof value === 'string' && TELEMETRY_STATIC_INFO.has(value);
+}
+
 module.exports = {
+  TELEMETRY_ERROR_CLASSES,
+  TELEMETRY_STATES,
   TRACKED_SKILL_NAMES,
   detectTrackedSkill,
+  getTelemetryCheckpointNames,
   getTrackedSkillFromPrompt,
   getTrackedSkillFromToolInput,
+  isKnownTelemetryEvent,
+  isTelemetryStaticInfo,
   isInvocable,
   readInvocationMetadata,
 };

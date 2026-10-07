@@ -17,7 +17,9 @@ const os = require('node:os');
 const path = require('node:path');
 const fs = require('node:fs');
 
-const { main } = require('../genpage-upload.js');
+const uploadMod = require('../genpage-upload.js');
+const { notPlainFile } = uploadMod;
+const { pageHash, writeMarker } = require('../lib/genpage-base.js');
 const { buildPacInvocation, makeGenpageCli } = require('../lib/genpage-cli.js');
 
 const dirs = [];
@@ -26,6 +28,43 @@ function tmp() {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'gp589-'));
   dirs.push(d);
   return d;
+}
+
+// What a capturing download writes as page.tsx, and what a dummy `--code-file` is replaced with.
+// Legacy update tests named `c.tsx` / `p.tsx` without a base marker. An update now refuses that
+// (`no-base`) and, on success, would write a marker next to the dummy path in this directory.
+// Those tests still prove their own rule; the replacement only supplies the base they now need.
+const LIVE_PAGE = 'export default function Page() { return null; }\n';
+const DUMMY_CODE = new Set(['p.tsx', 'c.tsx', 'page.tsx', 'CODE.tsx']);
+function maybeBase(argv, deps) {
+  if (!argv || (deps && deps.skipBase)) return argv;
+  const fileIdx = argv.indexOf('--code-file');
+  const pageIdx = argv.indexOf('--page-id');
+  if (fileIdx < 0 || pageIdx < 0) return argv;
+  const current = argv[fileIdx + 1];
+  if (!DUMMY_CODE.has(current)) return argv;
+  const file = path.join(tmp(), 'page.tsx');
+  fs.writeFileSync(file, LIVE_PAGE);
+  const appIdx = argv.indexOf('--app-id');
+  writeMarker(file, {
+    version: 1,
+    pageId: argv[pageIdx + 1],
+    appId: appIdx >= 0 ? argv[appIdx + 1] : 'app',
+    deployedSha256: pageHash(LIVE_PAGE),
+    localSha256: pageHash(LIVE_PAGE),
+    source: 'download',
+  });
+  const next = argv.slice();
+  next[fileIdx + 1] = file;
+  return next;
+}
+function main(argv, deps) {
+  return uploadMod.main(maybeBase(argv, deps), deps);
+}
+function writeLivePage(outputDir, pageId) {
+  const dir = path.join(outputDir, pageId);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'page.tsx'), `\uFEFF${LIVE_PAGE.replace(/\n/g, '\r\n')}`);
 }
 
 // Every hazard the live failure and the issue name, in one string:
@@ -43,19 +82,34 @@ const TRANSCRIPT = 'Conversation with 3 prompts:\r\n1. Build a list of inspectio
 
 function capturingCli(opts = {}) {
   const calls = [];
+  const downloads = [];
+  const nameReads = [];
   return {
     calls,
+    downloads,
+    nameReads,
     factory: () => ({
       upload: async (o) => { calls.push(o); return { pageId: '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8' }; },
       // Default: the requested page exists. Tests that care override this.
       enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+      enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
+      // An update without a name re-sends the page's CURRENT name, read from its Dataverse row.
+      pageName: async (pid) => {
+        nameReads.push(pid);
+        if (opts.liveNameError) throw new Error(opts.liveNameError);
+        return opts.liveName !== undefined ? opts.liveName : 'Current Page';
+      },
+      // A pac.cmd shim cannot receive `%` or `"`; `opts.shim` makes this fake installation one.
+      argumentRefusal: (value) => (opts.shim && /[%"]/.test(value) ? `cannot pass ${JSON.stringify(value)} to pac.cmd: a Windows batch file cannot receive a double quote, %, a control character unchanged` : null),
       // An update reads the page's CURRENT bindings so omitting `--data-sources` preserves them
       // instead of persisting `[]`. pac writes this config UTF-8 with a BOM, so the fixture does too.
       download: async ({ outputDir, pageIds }) => {
+        downloads.push(pageIds);
         for (const pid of (pageIds || [])) {
           fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
-          const body = JSON.stringify({ dataSources: opts.liveDataSources || ['contoso_ticket'] });
+          const body = JSON.stringify({ dataSources: opts.liveDataSources || ['contoso_ticket'], ...(opts.liveModel !== undefined ? { model: opts.liveModel } : {}) });
           fs.writeFileSync(path.join(outputDir, pid, 'config.json'), Buffer.from('\uFEFF' + body, 'utf8'));
+          fs.writeFileSync(path.join(outputDir, pid, 'page.tsx'), `\uFEFF${LIVE_PAGE.replace(/\n/g, '\r\n')}`);
         }
         return true;
       },
@@ -153,6 +207,95 @@ test('a hostile multi-line prompt reaches upload() byte-identical when passed by
   assert.strictEqual(r.payload.pageId, '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8');
 });
 
+// The page's display name travelled on the command line (`--name "<name>"`): PowerShell expanded `$(…)` in it before
+// the script ran — a name could run a command — and `Revenue $100` arrived as `Revenue `. By file it keeps every
+// character; the line break an editor adds at its end is not part of it.
+test('a display name passed by file reaches upload() intact, and a blank or doubled one is refused', async () => {
+  const d = tmp();
+  const pf = path.join(d, 'prompt.txt');
+  const af = path.join(d, 'agent.txt');
+  const nf = path.join(d, 'page-name.txt');
+  fs.writeFileSync(pf, 'Build the revenue page', 'utf8');
+  fs.writeFileSync(af, 'Initial deploy', 'utf8');
+  const NAME = 'Revenue $100 \u2014 \u201cQ3\u201d $(whoami) `x` 100% & it\'s more';
+  fs.writeFileSync(nf, `\uFEFF${NAME}\r\n`, 'utf8');
+  const base = ['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'page.tsx', '--prompt-file', pf, '--agent-message-file', af];
+  const cli = capturingCli();
+  const r = await runMain([...base, '--name-file', nf], cli);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(cli.calls[0].name, NAME, 'every character, and no BOM or trailing line break');
+  const both = capturingCli();
+  const doubled = await runMain([...base, '--name', 'x', '--name-file', nf], both);
+  assert.strictEqual(doubled.ok, false);
+  assert.match(doubled.payload.error, /only one of --name or --name-file/);
+  assert.strictEqual(both.calls.length, 0);
+  fs.writeFileSync(nf, '\r\n', 'utf8');
+  const empty = capturingCli();
+  const blank = await runMain([...base, '--name-file', nf], empty);
+  assert.strictEqual(blank.ok, false);
+  assert.match(blank.payload.error, /the page name resolved to empty/);
+  assert.strictEqual(empty.calls.length, 0, 'no generated name deployed in place of the one supplied');
+});
+
+// The skill writes these files into the working directory just before the upload, and a write through a link left at
+// one of those names — a symbolic link or junction, or a hard link — rewrote the file it points to, outside the working
+// directory included. An input that is not a plain file stops the upload, and says the other file may have changed.
+test('a prompt, agent-message, name, connectors or actions file that is a link or a folder stops the upload', async (t) => {
+  const d = tmp();
+  const outside = tmp();
+  const plain = (name, text) => { const p = path.join(d, name); fs.writeFileSync(p, text, 'utf8'); return p; };
+  const pf = plain('prompt.txt', 'Build the revenue page');
+  const af = plain('agent-message.txt', 'Initial deploy');
+  const nf = plain('page-name.txt', 'Revenue');
+  const cf = plain('connectors.json', '[]');
+  const xf = plain('actions.json', '[]');
+  const victim = path.join(outside, 'victim.txt');
+  fs.writeFileSync(victim, 'not the skill\'s file', 'utf8');
+  const argv = (over = {}) => {
+    const files = { 'prompt-file': pf, 'agent-message-file': af, 'name-file': nf, connectors: cf, actions: xf, ...over };
+    return ['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'page.tsx',
+      ...Object.entries(files).flatMap(([k, v]) => [`--${k}`, v])];
+  };
+  // CONTROL: every input a plain file — the upload runs.
+  const ok = capturingCli();
+  assert.strictEqual((await runMain(argv(), ok)).ok, true);
+  assert.strictEqual(ok.calls.length, 1);
+  for (const flag of ['prompt-file', 'agent-message-file', 'name-file', 'connectors', 'actions']) {
+    const hard = path.join(d, `hard-${flag}`);
+    fs.linkSync(victim, hard);
+    const cli = capturingCli();
+    const r = await runMain(argv({ [flag]: hard }), cli);
+    assert.strictEqual(r.ok, false, flag);
+    assert.match(r.payload.error, new RegExp(`^--${flag} .*hard-${flag} is a hard link \\(2 names for one file\\)`), flag);
+    assert.match(r.payload.error, /changed its other names too/, flag);
+    assert.strictEqual(cli.calls.length, 0, `${flag}: nothing uploaded`);
+    fs.unlinkSync(hard);
+  }
+  const folder = path.join(d, 'folder.txt');
+  fs.mkdirSync(folder);
+  const inFolder = capturingCli();
+  const r = await runMain(argv({ 'name-file': folder }), inFolder);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /^--name-file .*folder\.txt is not a plain file \(a folder or a special file\)/);
+  assert.strictEqual(inFolder.calls.length, 0);
+  const sym = path.join(d, 'sym-prompt.txt');
+  try { fs.symlinkSync(victim, sym, 'file'); } catch (e) { t.skip(`cannot create a file symlink here: ${e.message}`); return; }
+  const viaLink = capturingCli();
+  const s = await runMain(argv({ 'prompt-file': sym }), viaLink);
+  assert.strictEqual(s.ok, false);
+  assert.match(s.payload.error, /^--prompt-file .*sym-prompt\.txt is a symbolic link or junction, not a file written in place — writing it may have changed the file it points to/);
+  assert.strictEqual(viaLink.calls.length, 0);
+});
+
+// Fail closed: an input that cannot be inspected is not one proven to be a plain file. A missing one is left to the
+// read, which says it could not be read.
+test('an input file that cannot be inspected is refused; a missing one is left to the read', (t) => {
+  const d = tmp();
+  assert.strictEqual(notPlainFile(path.join(d, 'absent.txt')), null);
+  t.mock.method(fs, 'lstatSync', () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }); });
+  assert.match(notPlainFile(path.join(d, 'prompt.txt')), /prompt\.txt could not be inspected \(EPERM\)/);
+});
+
 test('a downloaded conversation transcript survives an update by file', async () => {
   const d = tmp();
   const pf = path.join(d, 'prompt.txt');
@@ -163,8 +306,8 @@ test('a downloaded conversation transcript survives an update by file', async ()
     '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt-file', pf, '--agent-message', 'Re-upload after edit'], cli);
 
   assert.strictEqual(r.ok, true);
-  // \r\n is normalized by neither side: only a SINGLE trailing newline is stripped, so every
-  // interior line break — which is what makes a transcript a transcript — is preserved.
+  // \r\n is normalized by neither side, and nothing is trimmed — not even a trailing newline — so every
+  // line break, which is what makes a transcript a transcript, is preserved.
   assert.strictEqual(cli.calls[0].prompt, TRANSCRIPT, 'the transcript must not be flattened');
   assert.strictEqual(cli.calls[0].pageId, '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d');
   assert.strictEqual(r.payload.updated, true, 'an upload carrying --page-id is an update');
@@ -220,7 +363,7 @@ test('a U+FEFF inside the prompt body is preserved', async () => {
   assert.strictEqual(cli.calls[0].prompt, body, 'only a LEADING BOM is an encoding marker');
 });
 
-// Adversarial review (astra HIGH 3 / grok MEDIUM 4). The wrapper OMITS `--add-to-sitemap` on an
+// The wrapper OMITS `--add-to-sitemap` on an
 // update as a backstop, but omission is not an answer to an explicit contradictory request: the
 // caller believes a placement happened and it never did. The docs claimed "refused"; now it is.
 test('--add-to-sitemap combined with --page-id is refused, not silently dropped', async () => {
@@ -232,7 +375,7 @@ test('--add-to-sitemap combined with --page-id is refused, not silently dropped'
   assert.strictEqual(cli.calls.length, 0, 'nothing may be uploaded on a contradictory request');
 });
 
-// grok MEDIUM 5 — `upload()` substitutes `Generative page <name>` for a blank prompt. That is fine
+// `upload()` substitutes `Generative page <name>` for a blank prompt. That is fine
 // when no prompt was supplied, but a caller who passed --prompt-file asked for THAT text, and
 // deploying a generated placeholder instead is exactly the provenance break this path exists to
 // prevent. A blank, newline-only or BOM-only file is the realistic way it happens.
@@ -257,7 +400,7 @@ test('a prompt file that resolves to empty is refused rather than silently defau
   assert.strictEqual(cli.calls[0].prompt, 'A real approved prompt');
 });
 
-// astra HIGH 3b — the worse half. A CREATE that asked for placement, crashed mid-flight and was
+// The worse half of the sitemap problem. A CREATE that asked for placement, crashed mid-flight and was
 // recovered as an UPDATE leaves the page deployed but absent from the app's navigation, and the old
 // code returned plain success. An unreachable page is an incomplete deployment, not a success.
 test('a page deployed but left out of the sitemap is reported as incomplete, with its id', async () => {
@@ -309,7 +452,7 @@ test('WINDOWS: the prompt never appears on the command line pac is invoked with'
   // Fragments must be unique to the PROMPT: `--name` is legitimately passed inline (a short,
   // caller-controlled value), and the first version of this test matched the quoted name instead
   // of the prompt — a test that would have failed on correct code.
-  const win = buildPacInvocation(args, 'win32');
+  const win = { command: buildPacInvocation(args, { platform: 'win32', env: { Path: 'C:\\pac', PATHEXT: '.CMD', SystemRoot: 'C:\\Windows' }, exists: (p) => p === 'C:\\pac\\pac.cmd' }).args[4] };
   for (const fragment of ['résumé', '$(whoami)', '<b>bold</b>', '%PATH%', "apostrophe's"]) {
     assert.ok(!win.command.includes(fragment),
       `prompt fragment ${JSON.stringify(fragment)} leaked onto the command line:\n${win.command}`);
@@ -369,9 +512,9 @@ test('the standalone flags are emitted, and --add-to-sitemap only on a create', 
   assert.strictEqual(update[update.indexOf('--data-sources') + 1], 'account,contact');
 });
 
-// astra MEDIUM 8 — the option tests above call the LIBRARY directly and mostly check flag presence.
-// Astra mutated `main()` to drop forwarding of model/connectors/actions/addToSitemap, and replaced
-// the library's model and file arguments with "WRONG", and every committed test stayed green. So the
+// The option tests above call the LIBRARY directly and mostly check flag presence. A mutation run
+// that made `main()` drop forwarding of model/connectors/actions/addToSitemap, and replaced
+// the library's model and file arguments with "WRONG", left every committed test green. So the
 // wiring from CLI flag → wrapper → actual pac invocation was unprotected.
 //
 // This drives the REAL wrapper through `main()` and asserts exact flag/value pairs on the captured
@@ -450,14 +593,131 @@ test('an /app-builder-shaped upload sends none of the standalone flags', async (
 
 // pac's env-wide listing, in the LIVE shape (auto-sized fixed-width columns) — an invented format is
 // correctly rejected as 'unrecognized', so a fixture that only LOOKS plausible tests the wrong path.
-const envListing = (ids) => {
-  const names = ids.map((_, i) => `Page${i}`);
+const envListing = (ids, names = ids.map((_, i) => `Page${i}`)) => {
   const nameW = Math.max(4, ...names.map((n) => n.length));
   const header = 'Page ID'.padEnd(37) + 'Name'.padEnd(nameW + 1) + 'Published';
   const body = ids.map((id, i) => `${id} ${names[i].padEnd(nameW)} -`).join('\n');
   return `Connected as tester@contoso.com\nRetrieving generated pages...\n`
     + `Found ${ids.length} generated page(s):\n\n${header}\n${body}\n`;
 };
+
+test('implicit update metadata reaches real wrapper argv', async () => {
+  const id = 'aaaaaaaa-0000-4000-8000-000000000001';
+  const appId = 'bbbbbbbb-0000-4000-8000-000000000002';
+  const env = 'https://contoso.crm.dynamics.com';
+  const navigationTitle = 'Navigation title';
+  const d = tmp();
+  const codeFile = path.join(d, 'page.tsx');
+  fs.writeFileSync(codeFile, 'export default function Page() { return null; }', 'utf8');
+  // No executable is started: both PAC installation shapes use the real invocation constructor.
+  const winPac = (file) => ({
+    platform: 'win32', env: { Path: 'C:\\pac', PATHEXT: '.EXE;.CMD', SystemRoot: 'C:\\Windows' },
+    exists: (p) => p === file, readFile: () => '@"%~dp0tools\\pac.exe" %*\r\n',
+  });
+  for (const [installation, storedName, expectedName] of [
+    ['pac.exe', 'Say \\"hi\\"', 'Say "hi"'],
+    ['pac.exe', 'Revenue 100%', 'Revenue 100%'],
+    ['pac.cmd', 'Revenue 100%', undefined],
+  ]) {
+    const seen = [];
+    const requests = [];
+    const probeDirs = [];
+    const uploadDirs = [];
+    const pacInvocation = winPac(`C:\\pac\\${installation}`);
+    const factory = (url) => makeGenpageCli(url, {
+      pacInvocation,
+      request: async (...args) => {
+        requests.push(args);
+        return { status: 200, data: { name: storedName } };
+      },
+      run: async (args) => {
+        const invocation = buildPacInvocation(args, pacInvocation);
+        seen.push({ args: [...args], invocation });
+        const valueOf = (flag) => args[args.indexOf(flag) + 1];
+        if (args[2] === 'list') {
+          const name = args.includes('--app-id') ? navigationTitle : storedName;
+          return { status: 0, stdout: envListing([id], [name]), stderr: '' };
+        }
+        if (args[2] === 'download') {
+          assert.strictEqual(valueOf('--page-id'), id);
+          const outputDir = valueOf('--output-directory');
+          probeDirs.push(outputDir);
+          dirs.push(outputDir);
+          const pageDir = path.join(outputDir, id.toUpperCase());
+          fs.mkdirSync(pageDir, { recursive: true });
+          const config = Buffer.from('\uFEFF' + JSON.stringify({ model: ' gpt-4.1 ', dataSources: ['contoso_ticket', 'contoso_asset'] }), 'utf8');
+          fs.writeFileSync(path.join(pageDir, 'config.json'), config);
+          fs.writeFileSync(path.join(pageDir, 'page.tsx'), `\uFEFF${fs.readFileSync(codeFile, 'utf8').replace(/\n/g, '\r\n')}`);
+          assert.deepStrictEqual([...config.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+          return { status: 0, stdout: 'Downloaded 1 page(s)', stderr: '' };
+        }
+        assert.strictEqual(args[2], 'upload', 'only fake list/download/upload operations are permitted');
+        uploadDirs.push(path.dirname(valueOf('--prompt-file')));
+        dirs.push(uploadDirs[uploadDirs.length - 1]);
+        assert.strictEqual(fs.readFileSync(valueOf('--prompt-file'), 'utf8'), 'Fix the sort handler');
+        assert.strictEqual(fs.readFileSync(valueOf('--agent-message-file'), 'utf8'), 'Preserve page metadata');
+        return { status: 0, stdout: `Page ID: ${id}`, stderr: '' };
+      },
+      sleep: async () => {},
+    });
+    let result;
+    let cleanupAtEmit;
+    writeMarker(codeFile, {
+      version: 1, pageId: id, appId, source: 'download',
+      deployedSha256: pageHash(fs.readFileSync(codeFile, 'utf8')),
+      localSha256: pageHash(fs.readFileSync(codeFile, 'utf8')),
+    });
+    await main(['--env', env, '--app-id', appId, '--code-file', codeFile, '--page-id', id,
+      '--prompt', 'Fix the sort handler', '--agent-message', 'Preserve page metadata'], {
+      makeGenpageCli: factory,
+      emit: (ok, payload) => {
+        cleanupAtEmit = [...probeDirs, ...uploadDirs].map((dir) => fs.existsSync(dir));
+        result = { ok, payload };
+      },
+    });
+    assert.strictEqual(result.ok, true, `${installation}: ${JSON.stringify(result.payload)}`);
+    assert.deepStrictEqual([result.payload.pageId, result.payload.appId, result.payload.updated], [id, appId, true]);
+    assert.deepStrictEqual(requests, [[env, 'GET', `uxagentprojects(${id})?$select=name`]], 'the page row, not its navigation title, supplies the implicit name');
+    const listings = seen.filter((call) => call.args[2] === 'list');
+    assert.strictEqual(listings.length, 2);
+    assert.ok(listings.some((call) => !call.args.includes('--app-id') && call.args.includes('--include-unpublished')), 'existence is checked environment-wide');
+    assert.ok(listings.some((call) => call.args.includes('--app-id')), 'app membership is also checked');
+    const uploads = seen.filter((call) => call.args[2] === 'upload');
+    assert.strictEqual(uploads.length, 1);
+    const { args, invocation } = uploads[0];
+    const valueOf = (flag) => {
+      assert.strictEqual(args.filter((a) => a === flag).length, 1, `${installation}: ${flag} appears exactly once`);
+      return args[args.indexOf(flag) + 1];
+    };
+    assert.strictEqual(valueOf('--environment'), env);
+    assert.strictEqual(valueOf('--app-id'), appId);
+    assert.strictEqual(valueOf('--page-id'), id);
+    assert.strictEqual(valueOf('--code-file'), codeFile);
+    assert.strictEqual(valueOf('--model'), 'gpt-4.1');
+    assert.strictEqual(valueOf('--data-sources'), 'contoso_ticket,contoso_asset');
+    for (const flag of ['--connectors', '--actions', '--add-to-sitemap']) assert.ok(!args.includes(flag), flag);
+    if (expectedName !== undefined) {
+      assert.strictEqual(valueOf('--name'), expectedName);
+      assert.notStrictEqual(valueOf('--name'), navigationTitle);
+      assert.strictEqual(result.payload.warnings, undefined, 'metadata that reaches native PAC intact produces no warning');
+      assert.strictEqual(invocation.file, 'C:\\pac\\pac.exe');
+      assert.deepStrictEqual(invocation.args, args, 'native PAC receives every argument verbatim');
+      assert.strictEqual(invocation.options.shell, false);
+    } else {
+      assert.ok(!args.includes('--name'), 'an implicit name containing % must never reach a batch shim');
+      assert.strictEqual(result.payload.warnings.length, 1);
+      assert.match(result.payload.warnings[0], /name "Revenue 100%" could not be sent to keep it \(cannot pass .* to pac\.cmd/);
+      assert.match(result.payload.warnings[0], /pac may have renamed the page to its navigation title/);
+      assert.strictEqual(invocation.file, 'C:\\Windows\\System32\\cmd.exe');
+      assert.ok(!invocation.args[4].includes('Revenue 100%'));
+      assert.ok(invocation.args[4].includes('--model gpt-4.1'));
+      assert.ok(invocation.args[4].includes('--data-sources contoso_ticket,contoso_asset'));
+      assert.strictEqual(invocation.options.windowsVerbatimArguments, true);
+    }
+    assert.deepStrictEqual([probeDirs.length, uploadDirs.length], [2, 1], 'the update probes once, then re-reads the stored page to record its hash');
+    assert.deepStrictEqual(cleanupAtEmit, [false, false, false], 'every temp directory is gone before the emitter can exit');
+  }
+});
 
 test('REAL wrapper: updating an id absent from the environment is refused and never uploads', async () => {
   const seen = [];
@@ -494,6 +754,7 @@ test('REAL wrapper: a target that DOES exist still updates (the guard blocks not
         fs.mkdirSync(path.join(out, id), { recursive: true });
         fs.writeFileSync(path.join(out, id, 'config.json'),
           Buffer.from('\uFEFF' + JSON.stringify({ dataSources: ['contoso_ticket'] }), 'utf8'));
+        writeLivePage(out, id);
         return { status: 0, stdout: 'Downloaded 1 page(s)', stderr: '' };
       }
       return { status: 0, stdout: `Page ID: ${id}`, stderr: '' };
@@ -602,11 +863,18 @@ test('an explicit --data-sources still WINS over the preserved list', async () =
   assert.strictEqual(cli.calls[0].dataSources, 'contoso_other', 'an explicit value is the caller\'s intent');
 });
 
-test('--clear-data-sources really unbinds, and does not read the old list first', async () => {
+test('--clear-data-sources really unbinds, and does not depend on reading the old list first', async () => {
   let probed = false;
   const factory = () => ({
     enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
-    download: async () => { probed = true; return true; },
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
+    // The page is read for its MODEL (the update omits --model) — and here that read fails, which must
+    // not stop a deliberate unbind: the model is metadata, reported, never a reason to refuse.
+    // page.tsx is present so the failure is the missing config, not an unreadable deployed page.
+    download: async ({ outputDir, pageIds }) => {
+      probed = true;
+      for (const pid of pageIds || []) writeLivePage(outputDir, pid);
+    },
     upload: async (o) => { probed = probed || false; return { pageId: o.pageId, _ds: o.dataSources }; },
   });
   const seen = [];
@@ -621,7 +889,166 @@ test('--clear-data-sources really unbinds, and does not read the old list first'
   });
   assert.strictEqual(r.ok, true, `a deliberate unbind must be allowed; got ${JSON.stringify(r.payload)}`);
   assert.strictEqual(seen[0].dataSources, undefined, 'nothing is sent, so pac clears the bindings');
-  assert.strictEqual(probed, false, 'a deliberate clear need not read the list it is discarding');
+  assert.strictEqual(probed, true, 'the page is read for its model');
+  assert.match(r.payload.warnings[0], /could not read page 9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d's current model/);
+  assert.strictEqual(seen[0].model, undefined);
+});
+
+// pac stores whatever `--model` an upload sends, so an update without one wiped the deployed model id to
+// "" (live-measured). Absence is "no opinion", as for the bindings: the current model is re-sent.
+test('an update that omits --model re-sends the page\'s current model; an explicit one wins', async () => {
+  const run = (cli, extra) => new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p', ...extra],
+    { makeGenpageCli: cli.factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  const kept = capturingCli({ liveModel: ' gpt-4.1 ' });
+  assert.strictEqual((await run(kept, [])).ok, true);
+  assert.strictEqual(kept.calls[0].model, 'gpt-4.1');
+
+  // Named bindings do not stop the model being read: the download is then for the model alone.
+  const withBindings = capturingCli({ liveModel: 'gpt-4.1' });
+  assert.strictEqual((await run(withBindings, ['--data-sources', 'contoso_other'])).ok, true);
+  assert.deepStrictEqual([withBindings.downloads.length, withBindings.calls[0].model, withBindings.calls[0].dataSources], [2, 'gpt-4.1', 'contoso_other']);
+
+  const explicit = capturingCli({ liveModel: 'gpt-4.1' });
+  assert.strictEqual((await run(explicit, ['--model', 'gpt-5', '--data-sources', 'contoso_other'])).ok, true);
+  assert.deepStrictEqual([explicit.downloads.length, explicit.calls[0].model], [2, 'gpt-5'], 'naming both still probes for divergence and re-reads the stored hash');
+
+  // A page with no model has nothing to re-send — and a model that is not a string is reported, not sent.
+  const none = capturingCli({});
+  const noneRun = await run(none, []);
+  assert.deepStrictEqual([noneRun.ok, none.calls[0].model, noneRun.payload.warnings], [true, undefined, undefined]);
+  const odd = capturingCli({ liveModel: 42 });
+  const oddRun = await run(odd, []);
+  assert.strictEqual(oddRun.ok, true);
+  assert.strictEqual(odd.calls[0].model, undefined);
+  assert.match(oddRun.payload.warnings[0], /config\.json model is number, not a string/);
+
+  // A create has no current model to keep.
+  const created = capturingCli({ liveModel: 'gpt-4.1' });
+  const createRun = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx', '--prompt', 'p', '--agent-message', 'm'],
+      { makeGenpageCli: created.factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.deepStrictEqual([createRun.ok, created.downloads.length, created.calls[0].model], [true, 0, undefined]);
+});
+
+// pac stores every ASCII `"` in a page name as `\"` — in the page row and in the navigation title it writes —
+// and nothing else (live-measured). Such a name is refused before anything is read or deployed.
+test('a page name with an ASCII double quote is refused before anything is deployed', async () => {
+  const d = tmp();
+  const nf = path.join(d, 'page-name.txt');
+  fs.writeFileSync(nf, 'Say "hi" now\n', 'utf8');
+  const base = ['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx', '--prompt', 'p', '--agent-message', 'm'];
+  for (const [label, extra] of [
+    ['create, by file', ['--name-file', nf]],
+    ['create, inline', ['--name', 'Say "hi" now']],
+    ['update, by file', ['--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--name-file', nf]],
+  ]) {
+    const cli = capturingCli();
+    const r = await runMain([...base, ...extra], cli);
+    assert.strictEqual(r.ok, false, label);
+    assert.match(r.payload.error, /the page name "Say \\"hi\\" now" contains an ASCII double quote/, label);
+    assert.match(r.payload.error, /typographic quotes \(“ ”\) or an apostrophe/, label);
+    assert.deepStrictEqual([cli.calls.length, cli.downloads.length, cli.nameReads.length], [0, 0, 0], `${label}: nothing read or deployed`);
+  }
+  // CONTROL — the characters pac keeps as they are still deploy.
+  const ok = capturingCli();
+  const kept = await runMain([...base, '--name', 'Back\\slash “curly” \'single\' 東京'], ok);
+  assert.strictEqual(kept.ok, true, JSON.stringify(kept.payload));
+  assert.strictEqual(ok.calls[0].name, 'Back\\slash “curly” \'single\' 東京');
+});
+
+// An update without a name renamed the page to its navigation title (live-reproduced after an earlier rename), so the
+// update re-sends the page's current name, read from its row. pac stores `"` as `\"`, so a stored `\"` is sent back as
+// `"` — pac's escaping then stores the same value again.
+test('an update without a name re-sends the page\'s current name; a named update or a create reads nothing', async () => {
+  const PID = '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d';
+  const update = ['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx', '--page-id', PID, '--prompt', 'p'];
+  const renamed = capturingCli({ liveName: 'Renamed Alpha' });
+  const r = await runMain(update, renamed);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.deepStrictEqual([renamed.nameReads, renamed.calls[0].name, r.payload.warnings], [[PID], 'Renamed Alpha', undefined]);
+
+  // What pac stored for `Say "hi" \"x\"` — every quote escaped once — goes back exactly one escape shorter.
+  const escaped = capturingCli({ liveName: 'Say \\"hi\\" \\\\"x\\\\"' });
+  const e = await runMain(update, escaped);
+  assert.strictEqual(e.ok, true);
+  assert.strictEqual(escaped.calls[0].name, 'Say "hi" \\"x\\"');
+  assert.strictEqual(e.payload.warnings, undefined, 'a name pac wrote is kept exactly, so there is nothing to report');
+
+  // A `"` pac did not write cannot be stored as it is. The update still goes ahead, and says what changed.
+  for (const raw of ['Say "hi"', '"Quoted', 'Mixed \\"a\\" and "b"']) {
+    const cli = capturingCli({ liveName: raw });
+    const run = await runMain(update, cli);
+    assert.strictEqual(run.ok, true, raw);
+    assert.strictEqual(cli.calls[0].name, raw.replace(/\\"/g, '"'), raw);
+    assert.strictEqual(run.payload.warnings.length, 1, raw);
+    assert.match(run.payload.warnings[0], /has a double quote \(\"\) pac cannot store as it is, so the page now shows \\" there/, raw);
+  }
+
+  // Not knowing the name never blocks the update: it is reported, and pac is left to its default.
+  const unread = capturingCli({ liveNameError: 'Request failed: socket hang up' });
+  const u = await runMain(update, unread);
+  assert.strictEqual(u.ok, true);
+  assert.strictEqual(unread.calls[0].name, undefined);
+  assert.match(u.payload.warnings[0], new RegExp(`could not read page ${PID}'s current name \\(Request failed: socket hang up\\), so pac may have renamed it to its navigation title`));
+  const noMethod = capturingCli();
+  const plain = noMethod.factory;
+  noMethod.factory = () => { const f = plain(); delete f.pageName; return f; };
+  const m = await runMain(update, noMethod);
+  assert.strictEqual(m.ok, true);
+  assert.match(m.payload.warnings[0], /cannot read a page name/);
+  // A blank stored name has nothing to keep.
+  const blank = capturingCli({ liveName: '  ' });
+  const b = await runMain(update, blank);
+  assert.deepStrictEqual([b.ok, blank.calls[0].name, b.payload.warnings], [true, undefined, undefined]);
+
+  // A name pac cannot be handed here — a pac.cmd shim cannot receive `%` or `"` — is not sent: the update goes ahead
+  // as it did before names were kept (pac may rename the page to its title), and says so. Refusing it would block an
+  // ordinary content edit on the page's name.
+  for (const stored of ['Revenue 100%', 'Say \\"hi\\"']) {
+    const shim = capturingCli({ liveName: stored, shim: true });
+    const s = await runMain(update, shim);
+    assert.strictEqual(s.ok, true, stored);
+    assert.strictEqual(shim.calls[0].name, undefined, `${stored}: not sent`);
+    assert.strictEqual(s.payload.warnings.length, 1, stored);
+    assert.match(s.payload.warnings[0], /could not be sent to keep it \(cannot pass .* to pac\.cmd/, stored);
+    assert.match(s.payload.warnings[0], /pac may have renamed the page to its navigation title/, stored);
+  }
+  const shimPlain = capturingCli({ liveName: 'Renamed Alpha', shim: true });
+  const sp = await runMain(update, shimPlain);
+  assert.deepStrictEqual([sp.ok, shimPlain.calls[0].name, sp.payload.warnings], [true, 'Renamed Alpha', undefined], 'a name the shim can receive is still kept');
+
+  // A named update and a create read nothing: the caller's name is the one deployed.
+  const named = capturingCli({ liveName: 'Renamed Alpha' });
+  assert.strictEqual((await runMain([...update, '--name', 'New Title'], named)).ok, true);
+  assert.deepStrictEqual([named.nameReads.length, named.calls[0].name], [0, 'New Title']);
+  const created = capturingCli({ liveName: 'Renamed Alpha' });
+  const c = await runMain(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx', '--prompt', 'p', '--agent-message', 'm'], created);
+  assert.deepStrictEqual([c.ok, created.nameReads.length, created.calls[0].name], [true, 0, undefined]);
+});
+
+// The row is read over the Web API with the az token — pac cannot read it: its listing shows each page's navigation
+// title. The id goes into a key segment, so anything but a bare GUID is refused before a request is made.
+test('pageName() reads the page row\'s name, and refuses an id that is not a GUID', async () => {
+  const seen = [];
+  const request = async (env, method, apiPath) => {
+    seen.push([env, method, apiPath]);
+    if (apiPath.startsWith('uxagentprojects(0')) return { status: 404, data: { error: { message: 'Does Not Exist' } } };
+    if (apiPath.startsWith('uxagentprojects(1')) return { status: 200, data: {} };
+    return { status: 200, data: { name: 'Renamed Alpha' } };
+  };
+  const cli = makeGenpageCli('https://contoso.crm.dynamics.com', { request });
+  assert.strictEqual(await cli.pageName('9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'), 'Renamed Alpha');
+  assert.deepStrictEqual(seen[0], ['https://contoso.crm.dynamics.com', 'GET', 'uxagentprojects(9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d)?$select=name']);
+  assert.strictEqual(await cli.pageName('1f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'), null, 'a row without a name');
+  await assert.rejects(cli.pageName('0f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'), /name returned HTTP 404/);
+  for (const bad of ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d)?$select=name,prompt&x=(', ' 9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '', undefined]) {
+    await assert.rejects(cli.pageName(bad), /is not a page id/, String(bad));
+  }
+  assert.strictEqual(seen.length, 3, 'no request for an id that is not a GUID');
 });
 
 test('an unreadable current binding list refuses the update rather than unbinding the page', async () => {
@@ -629,7 +1056,10 @@ test('an unreadable current binding list refuses the update rather than unbindin
   let uploads = 0;
   const factory = () => ({
     enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
-    download: async () => true, // writes nothing — the config is then missing
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
+    download: async ({ outputDir, pageIds }) => {
+      for (const pid of pageIds || []) writeLivePage(outputDir, pid);
+    },
     upload: async () => { uploads += 1; return { pageId: 'x' }; },
   });
   const r = await new Promise((resolve) => {
@@ -667,9 +1097,11 @@ test('a page whose config has no dataSources key updates normally (it simply has
   const seen = [];
   const factory = () => ({
     enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
     download: async ({ outputDir, pageIds }) => {
       for (const pid of (pageIds || [])) {
         fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
+        writeLivePage(outputDir, pid);
         fs.writeFileSync(path.join(outputDir, pid, 'config.json'),
           Buffer.from('\uFEFF' + JSON.stringify({ model: 'some-model' }), 'utf8'));
       }
@@ -694,9 +1126,11 @@ test('a config that is PRESENT but unparseable refuses the update', async () => 
     let uploads = 0;
     const factory = () => ({
       enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+      enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
       download: async ({ outputDir, pageIds }) => {
         for (const pid of (pageIds || [])) {
           fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
+          writeLivePage(outputDir, pid);
           fs.writeFileSync(path.join(outputDir, pid, 'config.json'), Buffer.from(body, 'utf8'));
         }
         return true;
@@ -726,9 +1160,11 @@ test('the current bindings are found even when --page-id casing differs from pac
   const seen = [];
   const factory = () => ({
     enumerateEnvironment: async () => ({ ok: true, ids: [canonical] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: canonical, name: 'Current Page' }] }),
     download: async ({ outputDir }) => {
       // pac writes the directory in ITS casing, not the caller's.
       fs.mkdirSync(path.join(outputDir, canonical), { recursive: true });
+      writeLivePage(outputDir, canonical);
       fs.writeFileSync(path.join(outputDir, canonical, 'config.json'),
         Buffer.from('\uFEFF' + JSON.stringify({ dataSources: ['contoso_ticket'] }), 'utf8'));
       return true;
@@ -744,7 +1180,7 @@ test('the current bindings are found even when --page-id casing differs from pac
   assert.deepStrictEqual(seen[0].dataSources, ['contoso_ticket'], 'the bindings must still be preserved');
 });
 
-// --- Review follow-ups on the unbind guard --------------------------------------------------------
+// --- The unbind guard: flag values that must NOT authorise clearing --------------------------------
 
 // `parseArgs` yields the STRING "false" for `--clear-data-sources=false`, which is truthy. Testing
 // the raw flag read an explicit refusal to clear as permission to clear — unbinding the page the
@@ -765,6 +1201,7 @@ test('--clear-data-sources combined with --data-sources is refused, not silently
   let uploads = 0;
   const factory = () => ({
     enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
     upload: async () => { uploads += 1; return { pageId: 'x' }; },
   });
   const r = await new Promise((resolve) => {
@@ -785,6 +1222,7 @@ test('a dataSources value of the wrong type refuses the update, rather than unbi
     let uploads = 0;
     const factory = () => ({
       enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+      enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
       download: async ({ outputDir, pageIds }) => {
         for (const pid of (pageIds || [])) {
           fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
@@ -813,6 +1251,7 @@ test('the probe directory is removed even when the read fails', async () => {
   const probes = [];
   const factory = () => ({
     enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
     download: async ({ outputDir }) => { probes.push(outputDir); return true; }, // writes no config
     upload: async () => ({ pageId: 'x' }),
   });
@@ -844,7 +1283,7 @@ test('a cleanup failure does not fail an update whose bindings were read', async
   assert.deepStrictEqual(cli.calls[0].dataSources, ['contoso_ticket']);
 });
 
-// --- PR review: --prompt-file must deliver the file byte-for-byte -------------------------------
+// --- --prompt-file must deliver the file byte-for-byte --------------------------------------------
 // A trailing newline used to be stripped here while the direct /app-builder wrapper path preserved
 // it, so the SAME text deployed differently depending on which path carried it. This transport
 // exists precisely so an arbitrary prompt survives verbatim.
@@ -895,4 +1334,555 @@ test('a BOM is still stripped even though the rest of the file is passed through
     { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
   });
   assert.strictEqual(onDisk, 'keep this\n', 'the BOM goes, the trailing newline stays');
+});
+
+// --- Task D: an update must target a page placed in the supplied app -----------------------------
+
+test('an update refuses a page that exists but is not in the supplied app navigation, without probing or uploading', async () => {
+  let downloads = 0;
+  let uploads = 0;
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', name: 'Other Page' }] }),
+    download: async () => { downloads += 1; return true; },
+    upload: async () => { uploads += 1; return { pageId: 'x' }; },
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'app-a', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /page 9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d is not in app app-a's navigation/);
+  assert.match(r.payload.error, /would rename it and attach its tables to that app/);
+  assert.strictEqual(downloads, 0, 'membership refusal must happen before the data-source probe');
+  assert.strictEqual(uploads, 0, 'membership refusal must happen before upload');
+});
+
+test('an update refuses an app that lists no generative pages, without probing or uploading', async () => {
+  let downloads = 0;
+  let uploads = 0;
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: true, pages: [], empty: true }),
+    download: async () => { downloads += 1; return true; },
+    upload: async () => { uploads += 1; return { pageId: 'x' }; },
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'missing-app', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /app missing-app has no generative pages, or could not be found/);
+  assert.strictEqual(downloads, 0);
+  assert.strictEqual(uploads, 0);
+});
+
+test('an update refuses when the app-scoped page listing cannot be read', async () => {
+  let downloads = 0;
+  let uploads = 0;
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    enumeratePages: async () => ({ ok: false, error: 'pac list failed' }),
+    download: async () => { downloads += 1; return true; },
+    upload: async () => { uploads += 1; return { pageId: 'x' }; },
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'app-a', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /cannot verify that page 9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d belongs to app app-a \(pac list failed\)/);
+  assert.strictEqual(downloads, 0);
+  assert.strictEqual(uploads, 0);
+});
+
+test('an update whose page is a member of the supplied app proceeds, case-insensitively', async () => {
+  const canonical = '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d';
+  const seen = [];
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: [canonical] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: canonical.toUpperCase(), name: 'Current Page' }] }),
+    download: async ({ outputDir }) => {
+      writeLivePage(outputDir, canonical);
+      fs.writeFileSync(path.join(outputDir, canonical, 'config.json'), JSON.stringify({ dataSources: ['contoso_ticket'] }));
+      return true;
+    },
+    upload: async (o) => { seen.push(o); return { pageId: o.pageId }; },
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'app-a', '--code-file', 'c.tsx',
+      '--page-id', canonical.toUpperCase(), '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(seen.length, 1);
+  assert.deepStrictEqual(seen[0].dataSources, ['contoso_ticket']);
+});
+
+test('a wrapper exposing no app-scoped enumeratePages is refused for updates', async () => {
+  let uploads = 0;
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+    upload: async () => { uploads += 1; return { pageId: 'x' }; },
+  });
+  const r = await new Promise((resolve) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'app-a', '--code-file', 'c.tsx',
+      '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+  });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /exposes no app-scoped page listing/);
+  assert.strictEqual(uploads, 0);
+});
+
+// Each listing is its own pac process of about five seconds, so an update runs the existence and
+// membership listings together. The overlap must not change what the guard DECIDES: verdicts are
+// still reached existence-first, so each failure is reported exactly as it was when the listings
+// ran one after the other.
+const OVERLAP_PAGE = '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d';
+function updateWith(factory) {
+  return new Promise((resolve, reject) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'app-a', '--code-file', 'c.tsx',
+      '--page-id', OVERLAP_PAGE, '--prompt', 'p'],
+    { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) }).catch(reject);
+  });
+}
+
+test('an update starts its existence and membership listings together', async () => {
+  const started = [];
+  const release = new Map();
+  const held = (name, value) => new Promise((resolve) => {
+    started.push(name);
+    release.set(name, () => resolve(value));
+  });
+  const base = capturingCli().factory();
+  const factory = () => ({
+    ...base,
+    enumerateEnvironment: () => held('existence', { ok: true, ids: [OVERLAP_PAGE] }),
+    enumeratePages: () => held('membership', { ok: true, pages: [{ pageId: OVERLAP_PAGE, name: 'Current Page' }] }),
+  });
+  const done = updateWith(factory);
+  // Neither listing has answered yet, so a guard that awaited them in turn would still be on the first.
+  const deadline = Date.now() + 2000;
+  while (started.length < 2 && Date.now() < deadline) await new Promise((r) => setImmediate(r));
+  assert.deepStrictEqual([...started].sort(), ['existence', 'membership'],
+    'both listings must be in flight before either answers');
+  // Membership answers FIRST: which listing finishes first must not matter.
+  release.get('membership')();
+  release.get('existence')();
+  const r = await done;
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(r.payload.updated, true);
+});
+
+test('when both update listings fail, the existence failure is the one reported', async () => {
+  const factory = () => ({
+    enumerateEnvironment: async () => ({ ok: false, error: 'EXISTENCE-LISTING-DOWN' }),
+    enumeratePages: async () => ({ ok: false, error: 'MEMBERSHIP-LISTING-DOWN' }),
+    upload: async () => { throw new Error('must not upload'); },
+  });
+  const r = await updateWith(factory);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /cannot verify that page \S+ exists before updating it \(EXISTENCE-LISTING-DOWN\)/);
+  assert.doesNotMatch(r.payload.error, /MEMBERSHIP-LISTING-DOWN/);
+});
+
+// Running the membership listing early must not let ITS failure pre-empt the existence verdict. A
+// listing that throws surfaces only once the guard reaches its verdict, as it did when it ran second.
+test('a listing that throws surfaces only when the guard reaches its verdict', async () => {
+  const absent = () => ({
+    enumerateEnvironment: async () => ({ ok: true, ids: ['aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'] }),
+    enumeratePages: async () => { throw new Error('MEMBERSHIP-THREW'); },
+    upload: async () => { throw new Error('must not upload'); },
+  });
+  const r = await updateWith(absent);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /does not exist in this environment/);
+
+  const present = () => ({ ...absent(), enumerateEnvironment: async () => ({ ok: true, ids: [OVERLAP_PAGE] }) });
+  await assert.rejects(updateWith(present), /MEMBERSHIP-THREW/);
+
+  const existenceThrows = () => ({
+    ...absent(),
+    enumerateEnvironment: async () => { throw new Error('EXISTENCE-THREW'); },
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: OVERLAP_PAGE, name: 'Current Page' }] }),
+  });
+  await assert.rejects(updateWith(existenceThrows), /EXISTENCE-THREW/);
+});
+
+test('preserved data-source bindings must be non-empty strings', async () => {
+  for (const dataSources of [[null], [{}], [18], ['contoso_ticket', '']]) {
+    let uploads = 0;
+    const factory = () => ({
+      enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
+      enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
+      download: async ({ outputDir, pageIds }) => {
+        for (const pid of pageIds) {
+          fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
+          writeLivePage(outputDir, pid);
+          fs.writeFileSync(path.join(outputDir, pid, 'config.json'), JSON.stringify({ dataSources }));
+        }
+        return true;
+      },
+      upload: async () => { uploads += 1; return { pageId: 'x' }; },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    const r = await new Promise((resolve) => {
+      main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'app-a', '--code-file', 'c.tsx',
+        '--page-id', '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', '--prompt', 'p'],
+      { makeGenpageCli: factory, emit: (ok, payload) => resolve({ ok, payload }) });
+    });
+    assert.strictEqual(r.ok, false, `must refuse ${JSON.stringify(dataSources)}`);
+    assert.match(r.payload.error, /cannot read the current data-source bindings/);
+    assert.strictEqual(uploads, 0, `must not upload ${JSON.stringify(dataSources)}`);
+  }
+});
+
+// #673 — an update must not replace a deployed page that drifted from the base marker. A create
+// records the uploaded file's hash. A readback that hashes equal (BOM / final CRLF) confirms it;
+// a readback that differs is not the trusted base, or the next update would treat that rewrite as ours.
+const { readMarker, markerPath, deployedCopyPath } = require('../lib/genpage-base.js');
+
+const DIV_PAGE = '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d';
+const DIV_APP = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+const DIV_TEXT = 'export const n = 1;\n';
+
+function divCode(text = DIV_TEXT) {
+  const d = tmp();
+  const file = path.join(d, 'page.tsx');
+  fs.writeFileSync(file, text);
+  return file;
+}
+function seedBase(file, { pageId = DIV_PAGE, appId = DIV_APP, deployed = DIV_TEXT, local = DIV_TEXT, source = 'download' } = {}) {
+  writeMarker(file, {
+    version: 1, pageId, appId, source,
+    deployedSha256: pageHash(deployed),
+    localSha256: pageHash(local),
+  });
+}
+function writeProbe(outputDir, pageId, { page = DIV_TEXT, config = { dataSources: ['contoso_ticket'], model: 'gpt-4.1' } } = {}) {
+  const dir = path.join(outputDir, pageId);
+  fs.mkdirSync(dir, { recursive: true });
+  if (page != null) fs.writeFileSync(path.join(dir, 'page.tsx'), `\uFEFF${String(page).replace(/\n/g, '\r\n')}`);
+  if (config != null) fs.writeFileSync(path.join(dir, 'config.json'), Buffer.from(`\uFEFF${JSON.stringify(config)}`, 'utf8'));
+}
+function divFactory(opts = {}) {
+  const calls = [];
+  const probes = [];
+  return {
+    calls,
+    probes,
+    factory: () => ({
+      upload: async (o) => { calls.push(o); return { pageId: o.pageId || opts.createdId || '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8' }; },
+      enumerateEnvironment: async () => ({ ok: true, ids: [DIV_PAGE, opts.createdId].filter(Boolean) }),
+      enumeratePages: async () => ({ ok: true, pages: [{ pageId: DIV_PAGE, name: 'Current Page' }] }),
+      pageName: async () => opts.liveName || 'Current Page',
+      download: opts.download || (async ({ outputDir, pageIds }) => {
+        probes.push(outputDir);
+        for (const pid of pageIds || []) writeProbe(outputDir, pid, opts);
+      }),
+    }),
+  };
+}
+function divRun(argv, cli, extra) {
+  return new Promise((resolve, reject) => {
+    main(argv, { makeGenpageCli: cli.factory, emit: (ok, payload) => resolve({ ok, payload }), ...extra }).catch(reject);
+  });
+}
+
+test('an update with a matching base marker uploads, and records the observed deployed hash', async () => {
+  const file = divCode();
+  seedBase(file);
+  const cli = divFactory();
+  const r = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--page-id', DIV_PAGE, '--prompt', 'p'], cli);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(cli.calls.length, 1);
+  assert.strictEqual(r.payload.overwroteDeployed, undefined);
+  const marker = readMarker(file);
+  assert.strictEqual(marker.source, 'upload');
+  assert.strictEqual(marker.deployedSha256, pageHash(DIV_TEXT));
+  assert.strictEqual(marker.localSha256, pageHash(DIV_TEXT));
+  assert.strictEqual(marker.pageId, DIV_PAGE);
+  assert.strictEqual(marker.appId, DIV_APP);
+});
+
+test('an update with no marker, or a marker for another page, is refused no-base and does not upload', async () => {
+  const file = divCode();
+  const cli = divFactory();
+  const absent = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--page-id', DIV_PAGE, '--prompt', 'p'], cli);
+  assert.strictEqual(absent.ok, false);
+  assert.strictEqual(absent.payload.code, 'no-base');
+  assert.match(absent.payload.error, /overwrite-deployed/);
+  assert.strictEqual(cli.calls.length, 0);
+
+  seedBase(file, { pageId: 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb' });
+  const other = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--page-id', DIV_PAGE, '--prompt', 'p'], divFactory());
+  assert.strictEqual(other.payload.code, 'no-base');
+  assert.strictEqual(other.ok, false);
+});
+
+test('a deployed page that drifted is refused, with a copy and a line summary, and is not uploaded', async () => {
+  const file = divCode();
+  seedBase(file);
+  const deployed = 'export const n = 2;\n';
+  const cli = divFactory({ page: deployed });
+  const r = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--page-id', DIV_PAGE, '--prompt', 'p'], cli);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.payload.code, 'deployed-changed');
+  assert.strictEqual(cli.calls.length, 0);
+  assert.ok(r.payload.lines.added + r.payload.lines.removed > 0);
+  assert.strictEqual(r.payload.deployedCopy, deployedCopyPath(file));
+  assert.match(fs.readFileSync(r.payload.deployedCopy, 'utf8'), /export const n = 2/);
+});
+
+test('--overwrite-deployed uploads and says so; =false does not authorize an overwrite', async () => {
+  const file = divCode();
+  const changed = divFactory({ page: 'export const n = 9;\n' });
+  const r = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--page-id', DIV_PAGE, '--prompt', 'p', '--overwrite-deployed'], changed);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(r.payload.overwroteDeployed, true);
+  assert.strictEqual(changed.calls.length, 1);
+
+  const fresh = divCode();
+  const refused = divFactory({ page: 'export const n = 9;\n' });
+  const no = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', fresh,
+    '--page-id', DIV_PAGE, '--prompt', 'p', '--overwrite-deployed=false'], refused);
+  assert.strictEqual(no.ok, false);
+  assert.strictEqual(no.payload.code, 'no-base');
+  assert.strictEqual(refused.calls.length, 0);
+});
+
+test('a create trusts a readback only when it hashes equal, so a rewrite is unverified and the fix-up refuses', async () => {
+  const fileSame = divCode('export const A = 1;\n');
+  const fileRewritten = divCode('export const B = 1;\n');
+  const idSame = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+  const idRewritten = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb';
+  const stored = {
+    [idSame]: 'export const A = 1;\n',
+    [idRewritten]: 'export const B = 1;\n// stored\n',
+  };
+  let created = idSame;
+  const calls = [];
+  const factory = () => ({
+    upload: async (o) => { calls.push({ ...o }); return { pageId: o.pageId || created }; },
+    enumerateEnvironment: async () => ({ ok: true, ids: [idSame, idRewritten] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: idSame }, { pageId: idRewritten }] }),
+    pageName: async () => 'Page',
+    download: async ({ outputDir, pageIds }) => {
+      for (const pid of pageIds) writeProbe(outputDir, pid, { page: stored[pid] });
+    },
+  });
+  const create = (file) => divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--name', 'N', '--prompt', 'p'], { factory });
+  created = idSame;
+  const same = await create(fileSame);
+  assert.strictEqual(same.ok, true, JSON.stringify(same.payload));
+  assert.strictEqual(readMarker(fileSame).source, 'upload');
+  assert.strictEqual(readMarker(fileSame).deployedSha256, pageHash('export const A = 1;\n'));
+  assert.strictEqual(same.payload.warnings, undefined, 'BOM and a final CRLF are not a rewrite');
+
+  created = idRewritten;
+  const rewritten = await create(fileRewritten);
+  assert.strictEqual(rewritten.ok, true, JSON.stringify(rewritten.payload));
+  assert.strictEqual(readMarker(fileRewritten).source, 'upload-unverified');
+  assert.strictEqual(readMarker(fileRewritten).deployedSha256, pageHash('export const B = 1;\n'));
+  assert.notStrictEqual(readMarker(fileRewritten).deployedSha256, pageHash(stored[idRewritten]));
+  assert.match(rewritten.payload.warnings.join('\n'), /differs from what was just uploaded \(1 lines added, 0 removed\)/);
+  assert.match(rewritten.payload.warnings.join('\n'), /genpage-base\.js check/);
+  assert.match(rewritten.payload.warnings.join('\n'), /deployed-changed/);
+
+  const before = calls.length;
+  const fixSame = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', fileSame,
+    '--page-id', idSame, '--prompt', 'resolve PAGEREF'], { factory });
+  assert.strictEqual(fixSame.ok, true, `a verified readback must not false-positive the fix-up: ${JSON.stringify(fixSame.payload)}`);
+  assert.strictEqual(calls.length, before + 1);
+
+  const fixRewritten = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', fileRewritten,
+    '--page-id', idRewritten, '--prompt', 'resolve PAGEREF'], { factory });
+  assert.strictEqual(fixRewritten.ok, false);
+  assert.strictEqual(fixRewritten.payload.code, 'deployed-changed');
+  assert.strictEqual(calls.length, before + 1, 'an unverified rewrite must not be uploaded as if it were our base');
+});
+
+test('a save that lands between upload and readback is not trusted, and the next update is refused deployed-changed', async () => {
+  const file = divCode('export const n = 1;\n');
+  const id = 'cccccccc-3333-4333-8333-cccccccccccc';
+  const other = 'export const other = 1;\n';
+  const calls = [];
+  const factory = () => ({
+    upload: async (o) => { calls.push({ ...o }); return { pageId: o.pageId || id }; },
+    enumerateEnvironment: async () => ({ ok: true, ids: [id] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: id }] }),
+    pageName: async () => 'Page',
+    download: async ({ outputDir, pageIds }) => {
+      for (const pid of pageIds) writeProbe(outputDir, pid, { page: other });
+    },
+  });
+  const created = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--name', 'N', '--prompt', 'p'], { factory });
+  assert.strictEqual(created.ok, true, JSON.stringify(created.payload));
+  assert.ok(created.payload.pageId);
+  assert.ok(Array.isArray(created.payload.warnings), 'a differing readback must warn, not become the trusted hash');
+  assert.match(created.payload.warnings.join('\n'), /differs from what was just uploaded \(1 lines added, 1 removed\)/);
+  assert.match(created.payload.warnings.join('\n'), /another save landed right after/);
+  const marker = readMarker(file);
+  assert.strictEqual(marker.source, 'upload-unverified');
+  assert.strictEqual(marker.deployedSha256, pageHash('export const n = 1;\n'));
+  assert.notStrictEqual(marker.deployedSha256, pageHash(other));
+
+  const next = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--page-id', id, '--prompt', 'p'], { factory });
+  assert.strictEqual(next.ok, false);
+  assert.strictEqual(next.payload.code, 'deployed-changed');
+  assert.strictEqual(calls.length, 1, 'the next update must refuse before PAC writes');
+});
+
+test('a failure anywhere in base recording never turns a completed upload into a failure', async () => {
+  const file = divCode('export const recorded = 1;\n');
+  const real = require('../lib/genpage-base.js');
+  const r = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--name', 'N', '--prompt', 'p'], divFactory(), {
+    base: { ...real, pageHash() { throw new Error('hash failure'); } },
+  });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.ok(r.payload.pageId, 'the page this run created must still be reported');
+  assert.match((r.payload.warnings || []).join('\n'), /could not record a base marker \(hash failure\)/);
+});
+
+test('a temp-dir failure after a successful create still returns the page id', async () => {
+  const file = divCode('export const fresh = 1;\n');
+  const cli = divFactory();
+  const r = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--name', 'N', '--prompt', 'p'], cli, {
+    mkdtempSync() {
+      const e = new Error('ENOSPC: no space left on device');
+      e.code = 'ENOSPC';
+      throw e;
+    },
+  });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.ok(r.payload.pageId, 'a create that already succeeded must still report its page id');
+  assert.match((r.payload.warnings || []).join('\n'), /unverified/);
+  assert.strictEqual(readMarker(file).source, 'upload-unverified');
+  assert.strictEqual(readMarker(file).deployedSha256, pageHash('export const fresh = 1;\n'));
+});
+
+test('a marker write failure warns and deletes a stale marker; a missing download is unverified on create and unreadable on update', async () => {
+  const file = divCode();
+  seedBase(file, { source: 'download' });
+  const real = require('../lib/genpage-base.js');
+  const cli = divFactory();
+  const failed = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--page-id', DIV_PAGE, '--prompt', 'p'], cli, {
+    base: { ...real, writeMarker() { throw new Error('disk full'); } },
+  });
+  assert.strictEqual(failed.ok, true, JSON.stringify(failed.payload));
+  assert.match(failed.payload.warnings.join('\n'), /base marker/);
+  assert.strictEqual(fs.existsSync(markerPath(file)), false, 'a failed write must not leave the previous marker');
+
+  const created = divCode('export const fresh = 1;\n');
+  const noDownload = divFactory({ download: undefined });
+  noDownload.factory = () => {
+    const f = divFactory().factory();
+    delete f.download;
+    return f;
+  };
+  const create = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', created,
+    '--name', 'N', '--prompt', 'p'], noDownload);
+  assert.strictEqual(create.ok, true, JSON.stringify(create.payload));
+  assert.match(create.payload.warnings.join('\n'), /unverified/);
+  assert.strictEqual(readMarker(created).source, 'upload-unverified');
+  assert.strictEqual(readMarker(created).deployedSha256, pageHash('export const fresh = 1;\n'));
+
+  const update = divFactory();
+  update.factory = () => {
+    const f = divFactory().factory();
+    delete f.download;
+    f.upload = async () => { throw new Error('must not upload'); };
+    return f;
+  };
+  const unread = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--page-id', DIV_PAGE, '--prompt', 'p', '--data-sources', 'contoso_ticket', '--model', 'gpt-4.1'], update);
+  assert.strictEqual(unread.ok, false);
+  assert.strictEqual(unread.payload.code, 'deployed-unreadable');
+});
+
+test('a divergence refusal is emitted only after the probe directory is gone', async () => {
+  const file = divCode();
+  let probe;
+  let existedAtEmit = 'not-called';
+  const cli = divFactory({
+    download: async ({ outputDir, pageIds }) => {
+      probe = outputDir;
+      for (const pid of pageIds) writeProbe(outputDir, pid);
+    },
+  });
+  const r = await new Promise((resolve, reject) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+      '--page-id', DIV_PAGE, '--prompt', 'p'], {
+      makeGenpageCli: cli.factory,
+      emit: (ok, payload) => {
+        existedAtEmit = probe ? fs.existsSync(probe) : 'no-probe';
+        resolve({ ok, payload });
+      },
+    }).catch(reject);
+  });
+  assert.strictEqual(r.payload.code, 'no-base');
+  assert.strictEqual(existedAtEmit, false, 'emitResult calls process.exit, so cleanup after emit would leak the probe');
+});
+
+test('an update reads the page name and the deployed page together, and a guard failure still wins', async () => {
+  const file = divCode();
+  seedBase(file);
+  const started = [];
+  const release = new Map();
+  const held = (name, value) => new Promise((resolve) => {
+    started.push(name);
+    release.set(name, () => resolve(value));
+  });
+  const base = divFactory().factory();
+  const factory = () => ({
+    ...base,
+    pageName: () => held('pageName', 'Current Page'),
+    // Only the pre-upload probe is held. The post-upload re-read must not wait on the same gate,
+    // or the success emit never runs and the overlap is never observable.
+    download: ({ outputDir, pageIds }) => {
+      const write = () => { for (const pid of pageIds) writeProbe(outputDir, pid); };
+      if (started.includes('download')) { write(); return; }
+      return held('download').then(write);
+    },
+  });
+  const done = divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--page-id', DIV_PAGE, '--prompt', 'p'], { factory });
+  const deadline = Date.now() + 2000;
+  while (started.length < 2 && Date.now() < deadline) await new Promise((r) => setImmediate(r));
+  assert.deepStrictEqual([...started].sort(), ['download', 'pageName'], 'name read and probe download must overlap');
+  release.get('pageName')();
+  release.get('download')();
+  const r = await done;
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+
+  let downloaded = false;
+  let named = false;
+  const guarded = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--page-id', DIV_PAGE, '--prompt', 'p'], {
+    factory: () => ({
+      enumerateEnvironment: async () => ({ ok: false, error: 'EXISTENCE-DOWN' }),
+      enumeratePages: async () => ({ ok: true, pages: [{ pageId: DIV_PAGE }] }),
+      download: async () => { downloaded = true; },
+      pageName: async () => { named = true; return 'N'; },
+      upload: async () => { throw new Error('must not upload'); },
+    }),
+  });
+  assert.match(guarded.payload.error, /EXISTENCE-DOWN/);
+  assert.strictEqual(downloaded, false);
+  assert.strictEqual(named, false);
 });

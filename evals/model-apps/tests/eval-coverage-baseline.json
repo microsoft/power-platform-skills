@@ -1,0 +1,149 @@
+{
+  "about": [
+    "Committed coverage baseline read by eval-coverage-contract.test.js. Every list is a ratchet: a new gap fails",
+    "the contract until it is closed or recorded here, and an entry that is closed (now captured, now checked, now",
+    "graded) or no longer exists fails it until the entry is removed.",
+    "uncaptured: registered genpage prompts with no stored fixture, so neither runner grades them.",
+    "unscored: per-eval genpage expectations with no registered check in either runner, so they report SKIP.",
+    "status is \"deferred\" when an offline check could grade the stored artifacts, \"manual\" when a person has to",
+    "judge the generated page (Layer 3).",
+    "neverGraded: registered checks that return SKIP on every fixture they run on, so they verify nothing yet.",
+    "eval null is a common assertion. reason is the SKIP reason the check gives."
+  ],
+  "genpage": {
+    "uncaptured": [],
+    "unscored": [
+      {
+        "eval": 2,
+        "status": "deferred",
+        "text": "Phase 1 (Planner): Plan mentions mock data, D3.js for chart, DataGrid for customers table, KPI cards"
+      },
+      {
+        "eval": 3,
+        "status": "deferred",
+        "text": "Edit Phase 1b: If the app has zero genpages, the user is told there are no pages to edit and the flow stops"
+      },
+      {
+        "eval": 3,
+        "status": "manual",
+        "text": "Edit Phase 5: Existing functionality is preserved per the edit plan's Preservation Constraints"
+      },
+      {
+        "eval": 4,
+        "status": "manual",
+        "text": "Phase 5 (Page Builder): Generated code includes step state management (current step tracking) and Next/Back navigation"
+      },
+      {
+        "eval": 4,
+        "status": "manual",
+        "text": "Phase 5 (Page Builder): Step 3 (review) shows a summary of entered data before submission"
+      },
+      {
+        "eval": 9,
+        "status": "manual",
+        "text": "Phase 2b (Entity Builder): Sample data is provisioned via provision-entities.js; realistic values (not lorem ipsum)"
+      },
+      {
+        "eval": 10,
+        "status": "deferred",
+        "text": "Phase 1 (Planner): cr_widget is identified as NOT existing (exact logical-name match, not fuzzy)"
+      },
+      {
+        "eval": 10,
+        "status": "deferred",
+        "text": "Phase 2a: If blocker:'whoami_403', orchestrator surfaces the message including the specific `az login --username <pacUser>` command and halts"
+      },
+      {
+        "eval": 10,
+        "status": "deferred",
+        "text": "Phase 2a: If ok:true but identitiesMatch:false, orchestrator proceeds but surfaces a one-line warning"
+      },
+      {
+        "eval": 12,
+        "status": "manual",
+        "text": "Phase 5 (Page Builder): Generated code implements the revised plan (includes BOTH filter toolbar AND search box)"
+      },
+      {
+        "eval": 13,
+        "status": "deferred",
+        "text": "Phase 5 (Page Builder): Generated .tsx fetches usersettings via dataApi.retrieveRow and uses formatDate/formatNumber/formatCurrency helpers"
+      },
+      {
+        "eval": 15,
+        "status": "deferred",
+        "text": "Phase 2b (Entity Builder): cr_ticket is provisioned with choice columns via provision-entities.js input JSON; picklist options include {value,label} pairs"
+      }
+    ],
+    "neverGraded": [
+      {
+        "runner": "layer-1",
+        "eval": 1,
+        "text": "Phase 5b: Generated .tsx uses only column names verified from RuntimeTypes.ts — no guessed names",
+        "reason": "column-name verification needs schema cross-check"
+      },
+      {
+        "runner": "layer-2",
+        "eval": null,
+        "text": "For Dataverse pages with fetching, separate setState calls inside async callbacks are batched into a single setData(...) call (Rule 14)",
+        "reason": "Rule 14 batched-setState requires AST analysis"
+      },
+      {
+        "runner": "layer-2",
+        "eval": 1,
+        "text": "Phase 5b: Generated .tsx uses only column names verified from RuntimeTypes.ts — no guessed names",
+        "reason": "column-name verification requires RuntimeTypes.ts fixture"
+      },
+      {
+        "runner": "layer-2",
+        "eval": 4,
+        "text": "Phase 5 (Page Builder): All form fields have aria-labels or aria-labelledby for accessibility",
+        "reason": "aria-label coverage requires AST analysis"
+      },
+      {
+        "runner": "layer-2",
+        "eval": 5,
+        "text": "Phase 5 (Page Builder): All components and utilities are separate top-level functions (no nested function definitions)",
+        "reason": "nested function detection requires AST analysis"
+      },
+      {
+        "runner": "layer-2",
+        "eval": 7,
+        "text": "Phase 5 (Page Builder): Generated code uses ONLY verified column names from RuntimeTypes.ts",
+        "reason": "column-name verification requires RuntimeTypes.ts fixture"
+      },
+      {
+        "runner": "layer-1",
+        "eval": 10,
+        "text": "Phase 2a: If the script returns blocker:'az_not_logged_in', orchestrator surfaces the message ('Run `az login`...') to the user and halts (entity-builder is NOT invoked)",
+        "reason": "az_not_logged_in blocker not in scenario"
+      },
+      {
+        "runner": "layer-1",
+        "eval": 10,
+        "text": "Phase 2b: genpage-entity-builder is only invoked AFTER check-auth returns ok:true",
+        "reason": "entity-builder not invoked"
+      },
+      {
+        "runner": "layer-2",
+        "eval": 13,
+        "text": "Phase 5 (Page Builder): All user-visible text goes through a translate() helper — no hardcoded display strings in JSX",
+        "reason": "translate() coverage requires AST analysis"
+      },
+      {
+        "runner": "layer-2",
+        "eval": 15,
+        "text": "Phase 5 (Page Builder): Generated .tsx uses the choice enum names from RuntimeTypes.ts (not magic numbers)",
+        "reason": "choice enum verification requires RuntimeTypes.ts fixture"
+      },
+      {
+        "runner": "layer-2",
+        "eval": 6,
+        "text": "Phase 5 (Page Builder): Generated code has no unnecessary complexity matching the 'clean and minimal' request",
+        "reason": "subjective; defer to Layer 3 UX rubric"
+      }
+    ]
+  },
+  "appBuilder": {
+    "neverGraded": []
+  }
+}

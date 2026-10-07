@@ -60,37 +60,48 @@ connector wiring.
     When prompted to sign in, use credentials for the tenant where the Dataverse
     environment belongs.
 
-4. Create the Microsoft Entra app registration from Power Apps Wrap.
+4. Select or create the Microsoft Entra app registration.
 
-    Open the app-registration page for the Power Platform environment selected
-    during `/create-mobile-app`:
+    `/create-mobile-app` uses your Azure CLI sign-in to list all app registrations
+    that Microsoft Graph allows you to read in the selected environment's tenant.
+    Registrations passing every applicable native runtime permission check appear first, and
+    the rest remain available through pagination. Each choice shows only a short
+    client-ID prefix and either `✓ All required permissions configured` or
+    `✗ Missing required permissions`. The full client ID and missing-permission
+    details are shown after selection.
+    Discovery is best-effort: if Azure CLI,
+    Microsoft Graph, tenant validation, or permission checking fails, the skill
+    immediately falls back to asking for the app registration client ID and
+    continues with its permission check marked unavailable.
+
+    To create a registration or repair one whose permissions are incomplete,
+    open the Power Apps Wrap page for the selected environment:
 
     ```text
     https://make.powerapps.com/environments/<environment-id>/wraps#create-app-registration
     ```
 
-    Create the registration on that page, copy its **Application (client) ID**,
-    and paste it when `/create-mobile-app` asks. The Wrap experience configures
-    the native app registration for this flow. You do not need to add redirect
-    URIs or API permissions manually, and tenant-wide admin consent is not
-    required.
+    The Wrap experience configures the native registration, flags missing
+    permissions, and offers one-click repair. Do not add redirect URIs or API
+    permissions manually. Some repairs and consent operations require an Azure
+    tenant admin.
 
     If the app was created without a client ID, run
-    `/set-app-registration-native` later from the app folder. It opens the same
-    environment-specific page and writes the pasted client ID to
-    `auth.config.json`.
+    `/set-app-registration-native` later from the app folder. It provides the
+    same discovery and verification flow before writing `auth.config.json`.
 
     ### Required API permissions
 
-    The Microsoft Entra app registration requires these delegated permissions
-    from the **Power Platform API**:
-
-    - `PowerApps.Apps.Play`
-    - `PowerApps.Apps.Read`
-    - `Connectivity.Connectors.Read`
-    - `Connectivity.Connections.Read`
-    - `Connectivity.Connections.Write`
-    - `Connectivity.Connections.UserConsent`
+    The read-only checker validates the native runtime profile. The baseline is
+    Dynamics CRM `user_impersonation` plus Power Platform API
+    `PowerApps.Apps.Read`. Apps using Power Platform connectors additionally
+    require Azure API Connections `Runtime.All` and the Power Platform API
+    `Connectivity.Connectors.Read`, `Connectivity.Connections.Read`,
+    `Connectivity.Connections.Write`, and
+    `Connectivity.Connections.UserConsent` scopes. The checker does not require
+    unrelated Wrap packaging permissions. Platform redirects, packaging
+    permissions, third-party-app allowlisting, and admin consent are finalized
+    in Wrap.
 
 5. Start mobile app:
 
@@ -201,9 +212,10 @@ For other capabilities (only those actually shipped by the template):
 > /add-native secure-store      # expo-secure-store wrapper
 > /add-native file-system       # expo-file-system wrapper
 > /add-native sharing           # expo-sharing wrapper
+> /add-native haptics           # expo-haptics impact, selection, and notification wrapper
 ```
 
-Native modules are allowlist-bound by the current template `package.json`. If the relevant package is present and not runtime-banned, `/add-native` can use it through the proper wrapper or host control. If the package is absent, the skill does not install it or fake support; it adds a transparency note and stops for that capability. For example, push notifications require `expo-notifications`; if the template does not ship it, notifications cannot be added until the upstream template includes it.
+Native modules are allowlist-bound by the current template `package.json`. If the relevant package is present, `/add-native` can use it through the proper wrapper or host control. If the package is absent, the skill does not install it or fake support; it adds a transparency note and stops for that capability. For example, push notifications require `expo-notifications`; if the template does not ship it, notifications cannot be added until the upstream template includes it.
 
 ### 4. Add a connector
 
@@ -256,12 +268,12 @@ Example edit flows:
 
 | Command | Status | Description |
 | --- | --- | --- |
-| `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `npx power-apps init`, resolves the selected environment tenant, lets the user paste an app registration client ID, create one in the portal and paste it, or skip auth for later, then applies data/native/connectors, builds screens, starts dev server |
-| `/set-app-registration-native` | ✅ v0 | Manual auth helper — opens the Power Apps Wrap app-registration page for the selected environment, captures the pasted client ID, and writes `auth.config.json`. |
+| `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `npx power-apps init`, resolves the selected environment tenant, discovers tenant-visible app registrations and checks the complete required permission profile, lets the user select or create one (or skip auth), then applies data/native/connectors, builds screens, starts dev server |
+| `/set-app-registration-native` | ✅ v0 | Auth helper — discovers tenant-visible app registrations, checks the applicable native runtime permission profile, opens the environment-specific Wrap page for creation or repair, and writes the selected client ID to `auth.config.json`. |
 | `/add-dataverse` | ✅ v0 | Add Dataverse — connect to existing tables, or create / extend tables in Tier 0 → N order via the Dataverse Web API, then generate TS services. Accepts ER diagrams via image / Mermaid / text, or spawns the data-model-architect agent. |
 | `/setup-datamodel` | ✅ v0 | Discoverable alias for `/add-dataverse` optimized for the design-first entry point ("how do I plan my Dataverse schema?"). Same workflow under a more searchable name. |
 | `/add-connector` | ✅ v0 | Generic connector — runs `npx power-apps add-data-source` for any first-party or custom connector |
-| `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
+| `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, haptics, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
 | `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx power-apps add-data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
 | `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. `--plan-only` preserves the old docs-only behavior. |
 | `/debug-app` | ✅ v0 | Monitors live `.powernative/metro-logs/` files with a durable byte cursor, stores host-neutral cursor/audit/health state under `.powernative/debug-app/`, diagnoses runtime and silent data-path failures, and verifies bounded fixes without depending on host terminal IDs. |
@@ -294,9 +306,13 @@ Example edit flows:
 
 ## Telemetry and privacy
 
-The Mobile Apps plugin sends start-only usage telemetry to Microsoft. A start event can include the skill name, plugin version, session and per-start correlation IDs, OS/Node versions, AI-agent name/version, invocation source, and a random per-project app instance ID. It never includes prompts, skill arguments, tool inputs, file paths, cwd, app/site names, URLs, credentials, usernames, hostnames, Dataverse organization or tenant IDs, or Entra object IDs.
+The Mobile Apps plugin sends usage and measured workflow telemetry to Microsoft by default. Events can include skill and checkpoint names, plugin/agent/OS/Node versions, random app/run/span/event IDs, measured durations, outcomes, retry attempts, and fixed error classifications. When verified target metadata is available, events can also include Power Platform environment and Entra tenant IDs plus the Dataverse organization ID.
 
-Both host surfaces are covered — an explicit slash command and a programmatic Skill-tool call — so some hosts may produce two `skill_started` records for one visible run. The plugin does not emit `skill_completed`, success/failure, error, or duration data because the available hook boundary does not prove that the workflow itself completed.
+Events never include Entra user/object IDs, Dataverse user IDs, prompts, arguments, tool inputs, business records, document contents, file paths, cwd, app/site names, URLs, credentials, usernames, email addresses, hostnames, or raw error descriptions. Organization and environment identifiers are identifying metadata, not anonymous user counts. The same field filtering applies before local logging and transmission.
+
+Before local logging and again before transmission (including replay), the dispatcher retains organization, tenant, and environment IDs only when they match the current project's verified span or ancestor context. A missing, pruned, or mismatched verification record drops those identifiers while preserving the remaining usage event.
+
+Prompt and Skill-tool hooks remain legacy activity observations and can both fire for one visible command. Measured metrics use schema-v2 lifecycle records with explicit run/span IDs instead. A missing terminal event remains incomplete; it is not inferred from a hook return. Each measured run returns a Support ID that can be included in an issue report without exposing project content.
 
 Control the per-user transmission preference with:
 
@@ -306,7 +322,7 @@ Control the per-user transmission preference with:
 /mobile-app:telemetry on
 ```
 
-`off` stops network transmission but retains the sanitized local diagnostic mirror under `~/.power-platform-skills/telemetry/mobile-app/sessions/<sessionId>/events.jsonl`. Automation can force transmission off with `POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT=1`; this overrides the saved preference and `on`.
+`off` stops network transmission but retains the sanitized local diagnostic mirror under `~/.power-platform-skills/telemetry/mobile-app/sessions/<sessionId>/events.jsonl`. Private lifecycle state is retained separately under `~/.power-platform-skills/telemetry/mobile-app/runs/` for support reports and cross-process timing; it contains generated IDs, registered skill/checkpoint names, fixed states, and timestamps, never prompts or command content. Automation can force transmission off with `POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT=1`; this overrides the saved preference and `on`.
 
 ## Known blockers
 

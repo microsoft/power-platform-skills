@@ -19,6 +19,14 @@ Canvas apps are extensible through controls, Power Fx, data sources, connectors,
 
 Implement only capabilities supported by discovered controls, data sources, APIs, and the approved scope. If exact behavior is unavailable, use an explicitly approved approximation or mark it blocked. Never substitute static UI for a behavior from this inventory.
 
+Before summarizing or reorganizing the request, preserve each independently testable
+original clause in the plan's `## Original Request Capability Inventory`. Give it a stable
+key, capability family, required outcome and scope, mapped Action Contract(s), named
+observer(s), and Functional Test Matrix scenario(s). Inventory first, then design. A later
+planner summary must not erase create/edit lifecycles, relationships, alert rules,
+aggregation scope, or other requested behavior. Do not invent universal CRUD: map only
+what the original request or approved plan requires.
+
 ## Functional-first priority
 
 Allocate implementation effort in this order:

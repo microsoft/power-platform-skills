@@ -1,0 +1,16 @@
+{
+  "contractVersion": 2,
+  "provenance": "synthetic",
+  "description": "Constructed attended single-page trace, not an agent capture. The first plan presentation is rejected with 'add a search box in addition to the filter toolbar'; the planner revises, the revised plan is re-presented and approved, and only then is genpage-plan.md written and provenance-verified against the approved (revised) body. The generated page has both the search box and the filter toolbar.",
+  "contracts": [
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 1: Plan, Steps 5-7 (revision re-presentation, approval writeback, plan provenance)",
+    "plugins/model-apps/agents/genpage-planner.md Step 5: Hand the Plan Back for Approval",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 5a and 5b: Validate the plan; Single-page fast path",
+    "plugins/model-apps/skills/genpage/SKILL.md Phase 6: Deploy",
+    "plugins/model-apps/references/rules.md DataGrid Requirements and Data Fetching"
+  ],
+  "expectedOutcome": "deployed",
+  "toolResults": "tool-results.json",
+  "artifacts": [".approved-genpage-plan.md", "prompt.txt", "agent-message.txt", "page-name.txt"],
+  "worker": { "targets": ["account-list.tsx"] }
+}

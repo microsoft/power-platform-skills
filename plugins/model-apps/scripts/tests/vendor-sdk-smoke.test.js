@@ -66,6 +66,22 @@ test('vendored bundle exports createMakerSdk', () => {
   assert.strictEqual(typeof mod.createMakerSdk, 'function');
 });
 
+// The SDK's genPage compiler takes TypeScript from its host, and its `loadNodeTypeScript` helper loads
+// it with a dynamic import that esbuild would otherwise follow: the compiler then made up 3.5 MB of a
+// 4.4 MB bundle. The plugin supplies no compiler, so `_vendor-build/build.js` marks `typescript`
+// external. A rebuild that drops that flag inlines it again, and this fails on the size of the text.
+test('the vendored bundle does not carry the TypeScript compiler, and loading one fails closed', async () => {
+  const text = fs.readFileSync(BUNDLE, 'utf8');
+  assert.ok(text.length < 2 * 1024 * 1024, `bundle is ${Math.round(text.length / 1024)} KB — was the TypeScript compiler inlined?`);
+  const mod = require(BUNDLE);
+  assert.strictEqual(typeof mod.loadNodeTypeScript, 'function', 'the SDK still offers the loader');
+  // Only while `typescript` cannot be resolved from the bundle's folder: then the loader must reject
+  // with the resolution error, never resolve to something the bundle carried itself.
+  let resolvable = true;
+  try { require.resolve('typescript', { paths: [path.dirname(BUNDLE)] }); } catch { resolvable = false; }
+  if (!resolvable) await assert.rejects(mod.loadNodeTypeScript(), /Cannot find module 'typescript'/);
+});
+
 test('createArtifact serializes every artifact type headlessly (no browser)', async () => {
   const sdk = await freshSdk();
   for (const [type, def] of [

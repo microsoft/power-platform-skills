@@ -1,33 +1,39 @@
 'use strict';
 const path = require('node:path');
+const fs = require('node:fs');
 
 // Reach the plugin's pure primitives (4 levels up from evals/model-apps/app-builder/lib/ → repo root,
 // same depth genpage/lib uses to reach references/verified-icons.txt). These are offline-only modules
-// with no I/O, no SDK handle, and no network access, so they are safe to call from the eval harness.
+// with no SDK handle or network access. Download/content helpers read fixture files only.
 function pluginLib(name) { return require(path.join(__dirname, '..', '..', '..', '..', 'plugins', 'model-apps', 'scripts', 'lib', name)); }
 // Same, for a top-level script rather than a lib module. download-model-app.js exports its pure
 // helpers and performs no I/O at require time, so it is safe to load from the offline harness.
 function pluginLib2(name) { return require(path.join(__dirname, '..', '..', '..', '..', 'plugins', 'model-apps', 'scripts', name)); }
 
-const { migrateAppSpec, validateAppSpec, lookupColumnsFor, SDK_ROLE_MARKER } = pluginLib('app-spec.js');
+const { migrateAppSpec, validateAppSpec, lookupColumnsFor, normalizePageSource, SDK_ROLE_MARKER, FORM_TYPE_CODE } = pluginLib('app-spec.js');
 const { lintAppSpec } = pluginLib('spec-lint.js');
 const { planFor, PHASES, appDef, viewDef, chartDef, compileFormIntent, formFieldLogicals, defaultViewColumns, enrichesDefaultViews, subgridLabel, personaRoleSpecFor, businessRuleDef, bpfDef } = pluginLib('sdk-build.js');
-const { subgridSectionIntent } = pluginLib('artifact-intent.js');
+const { subgridSectionIntent, isNonFieldControl } = pluginLib('artifact-intent.js');
+const { decodeXmlEntities } = pluginLib('sitemap-pages.js');
 const { schemaFacts } = pluginLib('schema-facts.js');
 const { verifySpec } = pluginLib('verify-spec.js');
+const { isMainForm, plannedMainFormSequence } = pluginLib('form-order.js');
 // Round-trip (edit/download) + teardown oracles: both plugin primitives are PURE — planTeardown does
-// no I/O, and hydrateSpec takes an injected `read`, so we can grade the download→rebuild round-trip
-// and the reverse-of-build teardown plan fully offline (no live env). See EVAL_GUIDE.md.
+// no I/O, and hydrateSpec takes an injected `read`, so we can grade the compared hydration subset
+// and the reverse-of-build teardown plan offline. This does not execute a rebuild. See EVAL_GUIDE.md.
 const { planTeardown } = pluginLib('sdk-teardown.js');
 const { hydrateSpec } = pluginLib('hydrate-spec.js');
 // entityFromMetadata is the PURE metadata->spec projection the downloader uses for a table's
 // `columns[]`. Grading it here (rather than only in the plugin's unit tests) puts the download
 // side of the round-trip under the same fixture corpus as the build side.
-const { entityFromMetadata } = pluginLib2('download-model-app.js');
+const { entityFromMetadata, parseDownloadedPages, assignPageKeys } = pluginLib2('download-model-app.js');
+const { unescapePacName } = pluginLib('genpage-cli.js');
+const { classifyChanges } = pluginLib('classify-changes.js');
+const { annotateContentHashes, pageSourceFileErrors } = pluginLib('content-hash.js');
+const { makeEnvelope, markEligible, parseEnvelope, serializeEnvelope, isFastPathEligible } = pluginLib('apply-snapshot.js');
 
-// Plan 3's pure PAGEREF_ resolver may not be landed yet — load it optionally so the page oracle
-// degrades to a SKIP instead of crashing the harness. It IS present on this branch, but the
-// try/catch keeps the harness portable across checkouts where Plan 3 isn't available (design §13.2).
+// Retain the legacy optional resolver path for older plugin checkouts. The current verifier also
+// requires this module, so its absence is already a required-plugin load error on current versions.
 let pagerefResolver = null;
 try { pagerefResolver = pluginLib('pageref-resolver.js'); } catch { pagerefResolver = null; }
 
@@ -75,8 +81,25 @@ function flattenPrivileges(personaLike) {
 
 // author: design-profile validation + lint. The harness runs in autopilot/design mode — pages are
 // intents, so 'plan' is the right profile (design §7.1 — deploy profile would reject intent pages).
-function authorFacts(spec) {
-  return { validate: validateAppSpec(spec, { profile: 'plan' }), lint: lintAppSpec(spec) };
+function authorFacts(spec, approvedPageNames) {
+  const validate = validateAppSpec(spec, { profile: 'plan' });
+  const lint = lintAppSpec(spec);
+  // Artifact identity is authored input, independent of the linter's grouping. Otherwise a linter
+  // that regressed to global name scope would supply both the wrong warning and its own expectation.
+  const artifactNames = ['form', 'view', 'chart'].flatMap((kind) => (spec[`${kind}s`] || []).filter((a) => a && a.name).map((a) => ({
+    kind, entity: lc(a.entity), name: a.name, formType: kind === 'form' ? (a.formType || 'Main') : null,
+  })));
+  const groups = new Map();
+  for (const record of artifactNames) {
+    const key = [record.kind, record.entity, lc(record.formType), lc(record.name)].join('|');
+    const prior = groups.get(key);
+    groups.set(key, { ...record, count: prior ? prior.count + 1 : 1 });
+  }
+  return {
+    validate, lint, artifactNames, approvedPageNames,
+    artifactNameCollisions: [...groups.values()].filter((g) => g.count > 1),
+    pageNames: (spec.pages || []).map((p) => ({ key: p.key || p.name, name: p.name })),
+  };
 }
 
 // plan: the deterministic phase-grouped plan (planFor is pure for a fixed spec/opts — design §13.2).
@@ -94,14 +117,17 @@ function wireFacts(spec) {
     views: (spec.views || []).map((v) => { const d = viewDef(spec, v); return { entity: d.entityLogicalName, name: d.name, columns: d.columns.map((c) => c.name) }; }),
     charts: (spec.charts || []).map((c) => { const d = chartDef(spec, c); return { entity: d.entityLogicalName, name: d.name, measure: d.series[0].aggregate, groupBy: d.categories[0].attribute }; }),
     forms: (spec.forms || []).map((f) => {
+      const authoredShape = authoredFormShape(f);
+      const authoredPlacements = authoredFormPlacements(f);
       const intent = compileFormIntent(spec, f, {});
       return {
         entity: intent.entityLogicalName,
         name: intent.name,
         fields: formFieldLogicals(intent),
         explicit: !!intent.__explicitLayout,
-        authoredShape: authoredFormShape(f),
+        authoredShape,
         compiledShape: compiledFormShape(intent),
+        authoredPlacements,
         placements: formPlacements(intent),
       };
     }),
@@ -177,18 +203,25 @@ function authoredFormShape(f) {
   // Normalised HERE rather than through the plugin's own helper, so the oracle states the structure
   // independently of the code it grades.
   const columnsOf = (t) => (Array.isArray(t.columns) ? t.columns : [{ width: null, sections: t.sections || [] }]);
-  return f.tabs.map((t) => ({
+  return f.tabs.map((t, ti) => ({
+    name: t.name || `tab_${ti}`,
     label: labelOf(t),
     expanded: t.expanded !== false,
+    visible: t.visible !== false,
     columnCount: Array.isArray(t.columns) ? t.columns.length : 1,
-    // Only widths the author actually WROTE. Omitted widths are split evenly by the compiler, and
-    // asserting the eval's own copy of that split would grade the compiler against itself.
+    // Keep authored overrides distinct from the independently stated default-split contract below.
     declaredWidths: Array.isArray(t.columns) ? t.columns.map((c) => (c && c.width) || null) : [null],
+    // State the percentage-split contract from authored input, not compileFormIntent's output.
+    // In particular, two omitted widths must still mean 50/50, never 100/100 or "not checked".
+    expectedWidths: columnsOf(t).map((c, ci, cols) => (c && c.width) || `${Math.floor(100 / cols.length) + (ci === 0 ? 100 % cols.length : 0)}%`),
     // Grouped BY FORM-COLUMN, not flattened. A flat list cannot see a section that moved from column
     // 0 to column 1 with its order and fields intact — which is precisely the topology this fixture
     // exists to prove, so flattening let the oracle pass a form it should have failed.
-    sectionsByColumn: columnsOf(t).map((c) => ((c && c.sections) || []).map((s) => ({
+    sectionsByColumn: columnsOf(t).map((c, ci) => ((c && c.sections) || []).map((s, si) => ({
+      name: s.name || `section_${ti}${ci > 0 ? `_${ci}` : ''}_${si}`,
       label: labelOf(s),
+      visible: s.visible !== false,
+      showLabel: s.showLabel !== false,
       columns: s.columns === undefined ? 1 : s.columns,
       fields: (s.fields || []).map((x) => lc(typeof x === 'string' ? x : x && x.name)),
     }))),
@@ -197,18 +230,46 @@ function authoredFormShape(f) {
 
 function compiledFormShape(intent) {
   return (intent.tabs || []).map((t) => ({
+    name: t.name,
     label: labelOf(t),
     expanded: t.expanded !== false,
+    visible: t.visible !== false,
     columnCount: (t.columns || []).length,
     declaredWidths: (t.columns || []).map((c) => (c && c.width) || null),
     sectionsByColumn: (t.columns || []).map((c) => ((c && c.sections) || [])
       .filter((s) => !cellsOfSection(s).some(isSubgridCell))
       .map((s) => ({
+        name: s.name,
         label: labelOf(s),
+        visible: s.visible !== false,
+        showLabel: s.showLabel !== false,
         columns: s.columns === undefined ? 1 : s.columns,
         fields: cellsOfSection(s).map((cell) => lc(cell.control && cell.control.fieldName)),
       }))),
   }));
+}
+
+function authoredFormPlacements(form) {
+  const out = [];
+  const defaults = Object.fromEntries(Object.entries(form.fieldOptions || {}).map(([key, value]) => [lc(key), value]));
+  for (const [ti, tab] of (form.tabs || []).entries()) {
+    const cols = Array.isArray(tab.columns) ? tab.columns : [{ sections: tab.sections || [] }];
+    for (const [ci, col] of cols.entries()) for (const [si, section] of (col.sections || []).entries()) {
+      for (const entry of section.fields || []) {
+        const field = lc(typeof entry === 'string' ? entry : entry.name);
+        const inline = typeof entry === 'string' ? {} : entry;
+        const base = defaults[field] || {};
+        out.push({
+          tab: tab.name || `tab_${ti}`,
+          section: section.name || `section_${ti}${ci > 0 ? `_${ci}` : ''}_${si}`,
+          field,
+          hidden: inline.hidden === true || base.hidden === true,
+          readOnly: inline.readOnly === true || base.readOnly === true,
+        });
+      }
+    }
+  }
+  return out;
 }
 
 // Every placed control, flattened. Feeds the two invariants that hold on EVERY layout: a field is
@@ -220,13 +281,15 @@ function formPlacements(intent) {
     for (const c of t.columns || []) {
       for (const s of (c && c.sections) || []) {
         for (const cell of cellsOfSection(s)) {
-          if (isSubgridCell(cell)) continue;
+          if (isSubgridCell(cell) || isNonFieldControl(cell.control)) continue;
           out.push({
             tab: t.name,
             section: s.name,
             field: lc(cell.control && cell.control.fieldName),
             colspan: cell.colspan === undefined ? 1 : cell.colspan,
             rowspan: cell.rowspan === undefined ? 1 : cell.rowspan,
+            hidden: cell.visible === false,
+            readOnly: !!(cell.control && cell.control.isReadOnly === true),
           });
         }
       }
@@ -323,19 +386,15 @@ function downloadFacts(spec) {
 // app: sitemap subarea target facts + navigation-graph validity. appDef resolves page/dashboard
 // subareas from a result map; synthesize deterministic ids offline (no build) so the shape is stable.
 //
-// Page lookup: appDef resolves `result.pages[sa.page]`; lintAppSpec validates `sa.page` against
-// `p.name`. We key result.pages by BOTH `p.key` and `p.name` so appDef can resolve subareas
-// regardless of whether the author used the key or the name as the `page` reference — matching
-// the linting behavior without requiring key === name in the fixture.
+// Page lookup: v2 subareas use stable keys; legacy subareas may use display names. Preserve both
+// aliases in this synthetic result map without forcing the key and display name to be identical.
 function appFacts(spec) {
   const result = { forms: {}, views: {}, charts: {}, dashboards: {}, pages: {} };
   for (const d of spec.dashboards || []) result.dashboards[d.name] = `dash-${d.name}`;
   for (const p of spec.pages || []) {
     const k = p.key || p.name;
     result.pages[k] = `gp-${k}`;
-    // Also key by name so appDef can resolve a subarea whose `page` field holds the display name.
-    // The linter validates sa.page against p.name (spec-lint.js), and authors naturally use names
-    // as subarea references. Without the name key, appDef would throw on those subareas.
+    // Also retain the display-name alias for legacy references.
     if (p.name && p.name !== k) result.pages[p.name] = `gp-${k}`;
   }
   const def = appDef(spec, result);
@@ -370,69 +429,75 @@ function appFacts(spec) {
 // `formTopology`, and verify now (correctly) reports an explicit layout as UNVERIFIED — a gap in
 // the fixture, not a finding about the spec.
 //
-// Cells are packed by WIDTH exactly as the compiler packs them, because the oracle checks that no
-// row carries more columns of content than its section declares. `columns` is emitted as the width
-// RATIO string FormXML actually uses ("11" = two equal columns), not as a count.
-function formXmlForAuthoredLayout(form) {
+// Rendered from the COMPILER's own output (compileFormIntent) rather than re-derived, because every
+// attribute below is one verify compares: tab and section display flags, the form-column widths the
+// compiler fills in (an equal split where the author gave none), its row packing, and each cell's spans
+// and read-only / hidden state. A second derivation here drifted from it — an undeclared width rendered
+// as 100% in every form-column, and no display flag at all. `columns` is emitted as the width RATIO
+// string FormXML actually uses ("11" = two equal columns), not as a count.
+function formXmlForAuthoredLayout(spec, form) {
   const esc = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   const labels = (text) => `<labels><label description="${esc(text)}" languagecode="1033"/></labels>`;
-  const tabsXml = (form.tabs || []).map((t, ti) => {
-    const cols = Array.isArray(t.columns) ? t.columns : [{ width: '100%', sections: t.sections || [] }];
-    const colsXml = cols.map((col, ci) => {
-      const secsXml = ((col && col.sections) || []).map((sec, si) => {
+  const cellXml = (cell) => {
+    const control = cell.control || {};
+    const classId = control.classId && control.classId !== 'undefined' ? String(control.classId).replace(/[{}]/g, '') : '';
+    return `<cell colspan="${cell.colspan || 1}" rowspan="${cell.rowspan || 1}"${cell.visible === false ? ' visible="false"' : ''}>`
+      + `<control${control.fieldName ? ` datafieldname="${esc(control.fieldName)}"` : ''}${classId ? ` classid="{${esc(classId)}}"` : ''}`
+      + `${control.isReadOnly ? ' disabled="true"' : ''} /></cell>`;
+  };
+  const tabsXml = (compileFormIntent(spec, form).tabs || []).map((t) => {
+    const colsXml = (t.columns || []).map((col) => {
+      const secsXml = (col.sections || []).map((sec) => {
         const width = Math.max(1, Math.min(4, Number(sec.columns) || 1));
-        const entries = (sec.fields || []).map((f) => (typeof f === 'string' ? { name: f } : (f || {})));
-        const rows = [];
-        let cur = [];
-        let used = 0;
-        for (const e of entries) {
-          const span = Math.min(width, Math.max(1, Number(e.colspan) || 1));
-          if (used + span > width && cur.length) { rows.push(cur); cur = []; used = 0; }
-          cur.push({ name: String(e.name || '').toLowerCase(), colspan: span, rowspan: Math.max(1, Number(e.rowspan) || 1) });
-          used += span;
-        }
-        if (cur.length) rows.push(cur);
-        const rowsXml = rows.map((r) => `<row>${r.map((c) => `<cell colspan="${c.colspan}" rowspan="${c.rowspan}">`
-          + `<control datafieldname="${esc(c.name)}" /></cell>`).join('')}</row>`).join('');
-        const name = sec.name || `section_${ti}_${ci}_${si}`;
-        return `<section name="${esc(name)}" columns="${'1'.repeat(width)}">${labels(sec.label || 'Details')}`
-          + `<rows>${rowsXml}</rows></section>`;
+        const rowsXml = (sec.rows || []).map((r) => `<row>${(r.cells || []).map(cellXml).join('')}</row>`).join('');
+        return `<section name="${esc(sec.name)}" columns="${'1'.repeat(width)}" visible="${sec.visible !== false}" showlabel="${sec.showLabel !== false}">`
+          + `${labels(sec.label)}<rows>${rowsXml}</rows></section>`;
       }).join('');
-      return `<column width="${esc((col && col.width) || '100%')}"><sections>${secsXml}</sections></column>`;
+      return `<column width="${esc(col.width)}"><sections>${secsXml}</sections></column>`;
     }).join('');
-    const tabName = t.name || `tab_${ti}`;
-    return `<tab name="${esc(tabName)}">${labels(t.label || 'General')}<columns>${colsXml}</columns></tab>`;
+    return `<tab name="${esc(t.name)}" expanded="${t.expanded !== false}" visible="${t.visible !== false}">${labels(t.label)}<columns>${colsXml}</columns></tab>`;
   }).join('');
   return `<form><tabs>${tabsXml}</tabs></form>`;
 }
 
-function makeAllPresentReader(spec) {
+function makeAllPresentReader(spec, formEvidence = null) {
   const entities = new Set((spec.entities || []).map((e) => lc(e.schemaName)));
   const columnsByEntity = {};
   for (const e of spec.entities || []) {
     columnsByEntity[lc(e.schemaName)] = (e.columns || []).map((c) => ({ logicalName: lc(c.schemaName) }));
   }
+  const implementedPages = (spec.pages || []).filter((p) => {
+    const source = normalizePageSource(p);
+    return source && source.kind === 'tsx' && source.codeFile;
+  });
+  const idOfPage = (p) => p.pageId || `gp-${p.key || p.name}`;
+  const pageByKey = new Map((spec.pages || []).map((p) => [p.key || p.name, p]));
 
   // Build a sitemap XML fragment covering the entity subareas declared in appShell. The page/icon
   // checks in verifySpec only fire for implemented pages (source.kind==='tsx') — intent-only specs
-  // skip them — so omitting GenPage XML is safe for our offline-only fixtures.
-  const tags = [];
+  // skip them — so omitting GenPage XML is safe for our offline-only fixtures. Nested the way Dataverse
+  // stores a sitemap: verifySpec reads nav entries only as a SubArea directly under SiteMap/Area/Group.
+  const areasXml = [];
   for (const a of (spec.appShell && spec.appShell.areas) || []) {
-    if (a.icon) tags.push(`<Area Icon="${lc(a.icon)}"/>`);
+    const groupsXml = [];
     for (const g of a.groups || []) {
+      const tags = [];
       for (const sa of g.subAreas || []) {
         const attrs = [];
         if (sa.entity) attrs.push(`Entity="${lc(sa.entity)}"`);
-        if (sa.page) attrs.push(`Type="GenPage" GenPageId="gp-${sa.page}"`);
+        if (sa.page) attrs.push(`Type="GenPage" GenPageId="${pageByKey.has(sa.page) ? idOfPage(pageByKey.get(sa.page)) : `gp-${sa.page}`}"`);
         // Dashboard subarea: verifySpec resolves the dashboard id via queryRecords (which returns
-        // formid 'x' below) and then confirms a SubArea points at THAT id via DefaultDashboard.
-        if (sa.dashboard) attrs.push(`Type="Dashboard" DefaultDashboard="x"`);
+        // formid 'x' below) and then confirms a SubArea points at THAT id via DefaultDashboard — and
+        // carries the dashboard launcher Url, as every dashboard entry the build writes does.
+        if (sa.dashboard) attrs.push(`Type="Dashboard" DefaultDashboard="x" Url="/workplace/home_dashboards.aspx"`);
         if (sa.icon) attrs.push(`Icon="${lc(sa.icon)}"`);
         tags.push(`<SubArea ${attrs.join(' ')}/>`);
       }
+      groupsXml.push(`<Group>${tags.join('')}</Group>`);
     }
+    areasXml.push(`<Area${a.icon ? ` Icon="${lc(a.icon)}"` : ''}>${groupsXml.join('')}</Area>`);
   }
-  const xml = `<SiteMap>${tags.join('')}</SiteMap>`;
+  const xml = `<SiteMap>${areasXml.join('')}</SiteMap>`;
 
   // Business rules and BPFs are both `workflows` rows, and verifySpec reads them with a raw OData
   // filter rather than by name — so an "all present" reader has to answer that query specifically.
@@ -457,37 +522,230 @@ function makeAllPresentReader(spec) {
     return [{ workflowid: `wf-${wanted}`, statecode: (hit.status || 'Active') === 'Active' ? 1 : 0 }];
   };
 
+  // A table's Main form order is part of the spec too (AB#6736948), so each Main form resolves to its
+  // OWN id (`form:<name>`) and its formxml carries the <DisplayConditions Order> the build writes, in
+  // the build's order (lib/form-order.js). Every other lookup keeps the shared 'x' — dashboards resolve
+  // through it in the sitemap above. A Main form is named as verify names it: its `name`, else
+  // "<entity> form".
+  const mainFormName = (f) => f.name || `${f.entity} form`;
+  const withOrder = (xml, entityLogical, form) => {
+    const at = (plannedMainFormSequence(spec, entityLogical) || []).indexOf(form);
+    return xml.replace(/<\/form>$/, `<DisplayConditions Order="${at < 0 ? 0 : at}" FallbackForm="true"><Everyone /></DisplayConditions></form>`);
+  };
+
   return {
     findTable: async (logical) => (entities.has(logical) ? { logicalName: logical } : null),
     findColumns: async (logical) => columnsByEntity[logical] || [],
     // All view/chart/form/dashboard existence checks pass — the reader always reports present. A
     // `role` query (verifySpec's persona-role check) returns an SDK-authored (marker) role, and a
     // `businessunit` query returns a root BU so the BU-scoped, fail-closed role check resolves offline.
-    queryRecords: async (set, opts) => (set === 'role'
-      ? [{ roleid: 'role-x', description: SDK_ROLE_MARKER, ismanaged: false }]
-      : set === 'businessunit'
-      ? [{ businessunitid: '00000000-0000-0000-0000-000000000001' }]
-      : set === 'workflow'
-      ? workflowRow(opts && opts.filter)
-      : [{ savedqueryid: 'x', savedqueryvisualizationid: 'x', formid: 'x' }]),
+    queryRecords: async (set, opts) => {
+      const filter = String((opts && opts.filter) || '');
+      if (set === 'systemform' && formEvidence) {
+        // Real resolver filters include both the table and numeric type, e.g.
+        // objecttypecode eq 'cnt_workitem' and name eq 'Work Item' and type eq 2.
+        const name = /\bname eq '((?:[^']|'')*)'/.exec(filter);
+        const entity = /\bobjecttypecode eq '((?:[^']|'')*)'/.exec(filter);
+        const type = /\btype eq (\d+)/.exec(filter);
+        const pin = /\bformid eq ([0-9a-f-]+)/i.exec(filter);
+        return (formEvidence.forms || []).filter((f) =>
+          (!name || f.name === name[1].replace(/''/g, "'"))
+          && (!entity || lc(f.entity) === lc(entity[1].replace(/''/g, "'")))
+          && (!type || FORM_TYPE_CODE[f.formType || 'Main'] === Number(type[1]))
+          && (!pin || lc(f.id) === lc(pin[1])))
+          .map((f) => ({ formid: f.id, objecttypecode: f.entity, type: FORM_TYPE_CODE[f.formType || 'Main'], name: f.name }));
+      }
+      const mainForm = set === 'systemform' && / type eq 2\b/.test(filter) && /\bname eq '((?:[^']|'')*)'/.exec(filter);
+      if (mainForm) return [{ formid: `form:${mainForm[1].replace(/''/g, "'")}` }];
+      return set === 'role'
+        ? [{ roleid: 'role-x', description: SDK_ROLE_MARKER, ismanaged: false }]
+        : set === 'businessunit'
+        ? [{ businessunitid: '00000000-0000-0000-0000-000000000001' }]
+        : set === 'workflow'
+        ? workflowRow(opts && opts.filter)
+        : [{ savedqueryid: 'x', savedqueryvisualizationid: 'x', formid: 'x' }];
+    },
     sitemapXml: async () => xml,
+    sitemapPageIds: async () => implementedPages.map(idOfPage),
+    existenceIds: async () => implementedPages.map(idOfPage),
+    manifest: async () => ({ pages: implementedPages.map((p) => ({ key: p.key || p.name, pageId: idOfPage(p) })) }),
     // The layout oracle. An "all present" reader that cannot read layouts would make verify report
     // every explicit form as UNVERIFIED — correct behaviour, but a fixture gap rather than a finding
     // about the spec. Rendering the AUTHORED layout is the honest synthesis here: the reader's whole
-    // premise is "the environment already matches the spec".
-    formTopology: async (entityLogical, _formId) => {
-      const form = (spec.forms || []).find((f) => lc(f.entity) === lc(entityLogical)
-        && Array.isArray(f.tabs) && f.tabs.length);
-      return form ? formXmlForAuthoredLayout(form) : null;
+    // premise is "the environment already matches the spec". A Main form with an auto layout has no
+    // authored tabs to render, so it answers with its form order alone.
+    formTopology: async (entityLogical, formId) => {
+      if (formEvidence) {
+        const deployed = (formEvidence.forms || []).find((f) => lc(f.entity) === lc(entityLogical) && lc(f.id) === lc(formId));
+        return deployed ? deployed.xml : null;
+      }
+      const named = /^form:([\s\S]*)$/.exec(String(formId || ''));
+      const form = named
+        ? (spec.forms || []).find((f) => isMainForm(f) && lc(f.entity) === lc(entityLogical) && mainFormName(f) === named[1])
+        : (spec.forms || []).find((f) => lc(f.entity) === lc(entityLogical) && Array.isArray(f.tabs) && f.tabs.length);
+      if (!form) return null;
+      const layout = Array.isArray(form.tabs) && form.tabs.length ? formXmlForAuthoredLayout(spec, form) : '<form><tabs></tabs></form>';
+      return isMainForm(form) ? withOrder(layout, lc(entityLogical), form) : layout;
     },
+    servedMainForms: async (entityLogical) => formEvidence
+      ? ((formEvidence.servedMainForms || {})[lc(entityLogical)] || [])
+      : (plannedMainFormSequence(spec, entityLogical) || []).map((f) => ({ id: `form:${mainFormName(f)}`, name: mainFormName(f) })),
   };
 }
 
-async function verifyFacts(spec) {
-  try { return await verifySpec(spec, makeAllPresentReader(spec)); }
-  // If verifySpec calls a reader method not in our synthetic reader (Plan 3 extensions), the
-  // assertion layer degrades the result to a SKIP rather than failing the harness.
-  catch (e) { return { skipped: e.message }; }
+function requiredVerifyChecks(spec, reader) {
+  const mains = [...new Set((spec.forms || []).filter(isMainForm).map((f) => lc(f.entity)))];
+  const ordered = mains.filter((entity) => plannedMainFormSequence(spec, entity));
+  const pages = (spec.pages || []).filter((p) => {
+    const source = normalizePageSource(p);
+    return source && source.kind === 'tsx' && source.codeFile;
+  });
+  const subareas = ((spec.appShell && spec.appShell.areas) || []).flatMap((a) => (a.groups || []).flatMap((g) => g.subAreas || []));
+  const counts = {
+    entity: (spec.entities || []).length,
+    column: (spec.entities || []).reduce((n, e) => n + (e.columns || []).length, 0),
+    view: (spec.views || []).length,
+    chart: (spec.charts || []).length,
+    form: (spec.forms || []).length,
+    dashboard: (spec.dashboards || []).length,
+    'form-order': ordered.length,
+    'form-topology': (spec.forms || []).filter((f) => Array.isArray(f.tabs) && f.tabs.length).length,
+    'form-order-served': typeof reader.servedMainForms === 'function' ? ordered.length : 0,
+    'business-rule': (spec.businessRules || []).length,
+    'business-process-flow': (spec.businessProcessFlows || []).length,
+    role: (spec.personas || []).length,
+    subarea: subareas.filter((s) => s.entity || s.dashboard).length,
+    'subarea-dashboard-launcher': subareas.filter((s) => s.dashboard).length,
+    page: pages.length,
+    'page-subarea': pages.length,
+  };
+  return {
+    requiredChecks: Object.fromEntries(Object.entries(counts).filter(([, n]) => n > 0)),
+    optionalUnavailable: ordered.length && typeof reader.servedMainForms !== 'function'
+      ? [{ capability: 'servedMainForms', reason: 'servedMainForms is unavailable (optional served Main form order reader)' }]
+      : [],
+  };
+}
+
+async function verifyFacts(spec, options = {}) {
+  const formEvidence = options.fixture && options.fixture.evidence && options.fixture.evidence.formReconcile;
+  const reader = options.verifyReader || makeAllPresentReader(spec, formEvidence);
+  const coverage = requiredVerifyChecks(spec, reader);
+  try {
+    const result = await (options.verifier || verifySpec)(spec, reader);
+    if (!result || typeof result.ok !== 'boolean' || !Array.isArray(result.checks) || !Array.isArray(result.missing)) {
+      throw new Error('verifySpec returned no valid verification result');
+    }
+    return { ...result, ...coverage };
+  } catch (e) {
+    // Required verification is fail-closed. A missing method, broken import or exception is evidence
+    // the eval could not prove correctness, not permission to make the corpus greener with a SKIP.
+    const error = (e && e.message) || String(e);
+    return { ok: false, error, checks: [], missing: [{ kind: 'verify-error', name: 'verifySpec', present: false, detail: error }], ...coverage };
+  }
+}
+
+const QUICK_VIEW_CLASS_ID = '5c5600e0-1d6e-4205-a272-be80da87fd42';
+function quickViewsFromXml(xml) {
+  const attr = (raw, name) => {
+    const hit = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i').exec(raw || '');
+    return hit ? decodeXmlEntities(hit[1] === undefined ? hit[2] : hit[1]) : '';
+  };
+  const out = [];
+  // Quick View parameters are nested wire XML, not an ordinary field state:
+  // <control classid="{5C5600E0-...}" datafieldname="cnt_projectid"><parameters>
+  //   <QuickForms><QuickFormIds><QuickFormId entityname="cnt_project">GUID</QuickFormId>...
+  // Also retain a wrong-class control with these parameters so it cannot disappear into a skip.
+  const source = String(xml || '').replace(/<!--[\s\S]*?-->/g, '');
+  for (const control of source.matchAll(/<control\b([^>]*?)(?:\/>|>([\s\S]*?)<\/control>)/gi)) {
+    const classId = attr(control[1], 'classid').replace(/[{}]/g, '').toLowerCase();
+    const form = /<QuickFormId\b([^>]*)>([^<]*)<\/QuickFormId>/i.exec(control[2] || '');
+    if (classId !== QUICK_VIEW_CLASS_ID && !form) continue;
+    out.push({
+      classId,
+      lookup: lc(attr(control[1], 'datafieldname')),
+      targetEntity: form ? lc(attr(form[1], 'entityname')) : '',
+      formId: form ? lc(form[2].trim().replace(/[{}]/g, '')) : '',
+    });
+  }
+  return out;
+}
+
+function formReconcileFacts(spec, fixture) {
+  const evidence = fixture && fixture.evidence && fixture.evidence.formReconcile;
+  if (!evidence) return null;
+  if (!fixture.baselineSpec) return { error: 'form reconciliation evidence has no baseline App Spec' };
+  const before = migrateAppSpec(fixture.baselineSpec);
+  const edits = (spec.forms || []).filter((f) => Array.isArray(f.tabs)).map((f) => {
+    const prior = (before.forms || []).find((p) => lc(p.entity) === lc(f.entity) && p.name === f.name && (p.formType || 'Main') === (f.formType || 'Main'));
+    return { entity: lc(f.entity), name: f.name, before: authoredFormShape(prior), after: authoredFormShape(f) };
+  });
+  const quickViews = [];
+  for (const f of spec.forms || []) for (const qv of f.quickViews || []) {
+    const host = (evidence.forms || []).find((p) => lc(p.entity) === lc(f.entity) && p.name === f.name && (p.formType || 'Main') === (f.formType || 'Main'));
+    const target = (evidence.forms || []).find((p) => lc(p.entity) === lc(qv.targetEntity) && p.name === qv.form && p.formType === 'QuickView');
+    quickViews.push({
+      host: f.name, lookup: lc(qv.lookup), targetEntity: lc(qv.targetEntity), form: qv.form,
+      formId: target ? lc(target.id) : null,
+      deployed: quickViewsFromXml(host && host.xml),
+    });
+  }
+  return {
+    baselineValidation: validateAppSpec(before, { profile: 'plan' }),
+    edits,
+    beforeMainFormOrder: (before.entities || []).map((e) => ({ entity: lc(e.schemaName), forms: e.mainFormOrder || [] })),
+    afterMainFormOrder: (spec.entities || []).map((e) => ({ entity: lc(e.schemaName), forms: e.mainFormOrder || [] })),
+    quickViews,
+  };
+}
+
+async function changedOnlyFacts(spec, fixture) {
+  const evidence = fixture && fixture.evidence && fixture.evidence.changedOnly;
+  if (!evidence) return null;
+  try {
+    if (!fixture.baselineSpec || !fixture.entityEditSpec) throw new Error('changed-only evidence needs baseline and entity-edited App Specs');
+    const baselineDir = path.join(fixture.dir, 'baseline');
+    const baseline = migrateAppSpec(fixture.baselineSpec);
+    const entityEdit = migrateAppSpec(fixture.entityEditSpec);
+    const annotate = (input, dir) => {
+      const validation = validateAppSpec(input, { profile: 'deploy' });
+      if (!validation.ok) throw new Error(`changed-only input validation: ${validation.errors.join('; ')}`);
+      const sourceErrors = pageSourceFileErrors(input, dir);
+      if (sourceErrors.length) throw new Error(`changed-only sources: ${sourceErrors.join('; ')}`);
+      return annotateContentHashes(input, (relative) => fs.readFileSync(path.join(dir, relative)));
+    };
+    const prior = annotate(baseline, baselineDir);
+    const current = annotate(spec, fixture.dir);
+    const columnEdited = annotate(entityEdit, baselineDir);
+    const verified = await verifyFacts(baseline);
+    if (!verified.ok || Object.entries(verified.requiredChecks).some(([kind, n]) => verified.checks.filter((c) => c.kind === kind).length < n)) {
+      throw new Error(`changed-only baseline could not be verified: ${JSON.stringify(verified.missing)}`);
+    }
+    // Exercise the real envelope lifecycle, including its serialization boundary. No workspace
+    // lease, disk snapshot or live identity query is needed to test this pure eligibility gate.
+    const envelope = makeEnvelope(evidence.identity, { generation: evidence.generation, priorSpec: prior });
+    const promoted = markEligible(envelope);
+    if (!promoted.ok) throw new Error(`changed-only snapshot promotion failed: ${promoted.reason}`);
+    const persisted = parseEnvelope(serializeEnvelope(envelope));
+    if (!persisted) throw new Error('changed-only snapshot could not be parsed after serialization');
+    const snapshot = isFastPathEligible(persisted, evidence.identity);
+    return {
+      baselineVerified: verified.ok,
+      snapshot,
+      contentHashes: (current.pages || []).map((p) => ({
+        key: p.key || p.name,
+        before: (persisted.priorSpec.pages || []).find((b) => (b.key || b.name) === (p.key || p.name)).__contentSha,
+        after: p.__contentSha,
+      })),
+      cases: [
+        { name: 'page-only', ...classifyChanges(current, persisted.priorSpec) },
+        { name: 'column-edit', ...classifyChanges(columnEdited, persisted.priorSpec) },
+        { name: 'identical', ...classifyChanges(annotate(baseline, baselineDir), persisted.priorSpec) },
+      ],
+    };
+  } catch (e) {
+    return { error: (e && e.message) || String(e) };
+  }
 }
 
 // page: PAGEREF_ resolution facts (Plan 3). Returns null when pageref-resolver isn't loaded →
@@ -594,7 +852,8 @@ function processFacts(spec) {
 // pages with a GenPageId, entities, dashboards keyed by id), then hydrated back. Synthetic ids are
 // deterministic (`gp-<key>` / `dash-<name>`) so GenPage/DashBoard subareas resolve back to their
 // page-key / dashboard-name exactly as a live download would.
-function buildDeployedReader(spec) {
+function buildDeployedReader(spec, downloadedPages = null) {
+  const idOf = (p) => p.pageId || `gp-${p.key || p.name}`;
   const areas = ((spec.appShell && spec.appShell.areas) || []).map((a) => ({
     title: a.label,
     ...(a.icon ? { icon: a.icon } : {}),
@@ -604,7 +863,10 @@ function buildDeployedReader(spec) {
       subAreas: (g.subAreas || []).map((sa) => {
         const base = { title: sa.title, ...(sa.icon ? { icon: sa.icon } : {}), ...(sa.vectorIcon ? { vectorIcon: sa.vectorIcon } : {}) };
         if (sa.entity) return { ...base, type: 'Entity', entity: sa.entity };
-        if (sa.page) return { ...base, type: 'GenPage', genPageId: `gp-${sa.page}` };
+        if (sa.page) {
+          const page = (spec.pages || []).find((p) => (p.key || p.name) === sa.page);
+          return { ...base, type: 'GenPage', genPageId: page ? idOf(page) : `gp-${sa.page}` };
+        }
         if (sa.dashboard) return { ...base, type: 'DashBoard', dashboardId: `dash-${sa.dashboard}` };
         if (sa.url) return { ...base, type: 'URL', url: sa.url };
         return base;
@@ -614,8 +876,9 @@ function buildDeployedReader(spec) {
   return {
     app: async () => ({ name: spec.app.name, description: spec.app.description || '', siteMap: { areas } }),
     // Emit the v2 (keyed) page shape so hydrate resolves GenPage subareas by key and preserves them.
-    pages: async () => (spec.pages || []).map((p) => ({
-      pageId: `gp-${p.key || p.name}`, key: p.key || p.name, name: p.name,
+    pages: async () => downloadedPages || (spec.pages || []).map((p) => ({
+      pageId: idOf(p), key: p.key || p.name, name: p.name,
+      ...(p.model !== undefined ? { model: p.model } : {}),
       ...(p.purpose !== undefined ? { purpose: p.purpose } : {}),
       ...(p.dataSources ? { dataSources: p.dataSources } : {}),
       ...(p.navigatesTo ? { navigatesTo: p.navigatesTo } : {}),
@@ -636,13 +899,32 @@ function buildDeployedReader(spec) {
 }
 
 // round-trip: project the spec into a deployed app, hydrate it back, and expose the recovered
-// solution / tables / page-keys / sitemap so assertions can prove the download→rebuild is lossless
-// (create == edit). Never throws — a hydrate error is captured as `error` and surfaced by the assertion.
-async function roundTripFacts(spec) {
-  let hydrated;
-  try { hydrated = await hydrateSpec(buildDeployedReader(spec)); }
-  catch (e) { return { error: e.message }; }
+// solution / tables / page metadata / sitemap for the compared hydration subset. A hydrate error is
+// captured as `error` and surfaced by assertions; no build or live download is executed here.
+async function roundTripFacts(spec, options = {}) {
+  let hydrated, downloadedPages = null;
+  const unreadableConfigs = [], unkeptModels = [];
+  const fixture = options.fixture;
+  const evidence = fixture && fixture.evidence && fixture.evidence.pageRoundTrip;
+  try {
+    if (evidence) {
+      const rawNames = new Map((evidence.envPages || []).map((p) => [lc(p.pageId), p.name]));
+      const titles = new Map();
+      for (const a of (spec.appShell && spec.appShell.areas) || []) for (const g of a.groups || []) for (const sa of g.subAreas || []) {
+        if (sa.page) titles.set(sa.page, sa.title);
+      }
+      // Match download's seam: env-wide names outrank sitemap titles; PAC's \" is decoded before
+      // parseDownloadedPages reads the real config files, then assignPageKeys supplies stable keys.
+      const nameById = new Map((spec.pages || []).map((p) => [lc(p.pageId),
+        unescapePacName(rawNames.get(lc(p.pageId)) || titles.get(p.key || p.name) || p.pageId)]));
+      downloadedPages = parseDownloadedPages(path.join(fixture.dir, 'pages'), fixture.dir, nameById, unreadableConfigs, unkeptModels);
+      assignPageKeys(downloadedPages, { pages: spec.pages || [] }, new Map((spec.pages || []).map((p) => [p.key || p.name, p.pageId])));
+    }
+    hydrated = await (options.hydrator || hydrateSpec)(buildDeployedReader(spec, downloadedPages));
+  }
+  catch (e) { return { error: (e && e.message) || String(e) }; }
   return {
+    source: evidence ? 'pac-download-fixture' : 'synthetic-reader',
     solution: hydrated.solution && hydrated.solution.uniqueName,
     tables: (hydrated.entities || []).map((e) => lc(e.schemaName)).sort(),
     pageKeys: (hydrated.pages || []).map((p) => p.key || p.name).sort(),
@@ -653,6 +935,13 @@ async function roundTripFacts(spec) {
     // value from a silently rewritten one.
     origDirectEntry: directEntryByKey(spec.pages),
     hydratedDirectEntry: directEntryByKey(hydrated.pages),
+    pageMetadata: (hydrated.pages || []).map((p) => ({
+      key: p.key || p.name, pageId: p.pageId || null, name: p.name,
+      model: p.model === undefined ? null : p.model,
+      dataSources: p.dataSources || [],
+    })).sort((a, b) => String(a.key).localeCompare(String(b.key))),
+    unreadableConfigs,
+    unkeptModels,
   };
 }
 
@@ -712,21 +1001,26 @@ function securityFacts(spec) {
   });
 }
 
-async function stageFacts(rawSpec) {
+async function stageFacts(rawSpec, options = {}) {
+  // Capture approved text before any producer sees the input. Comparing with rawSpec after a
+  // mutating lint/migration would let a sanitizer rewrite both the result and its expectation.
+  const approvedPageNames = (Array.isArray(rawSpec && rawSpec.pages) ? rawSpec.pages : []).map((p) => p && p.name);
   const spec = migrateAppSpec(rawSpec);
   return {
-    author: authorFacts(spec),
+    author: authorFacts(spec, approvedPageNames),
     plan: planFacts(spec),
     data: schemaFacts(spec),
     ui: wireFacts(spec),
     app: appFacts(spec),
     security: securityFacts(spec),
-    verify: await verifyFacts(spec),
+    verify: await verifyFacts(spec, options),
+    formReconcile: formReconcileFacts(spec, options.fixture),
+    changedOnly: await changedOnlyFacts(spec, options.fixture),
     page: pageFacts(spec),
     process: processFacts(spec),
     teardown: teardownFacts(spec),
     download: downloadFacts(spec),
-    roundTrip: await roundTripFacts(spec),
+    roundTrip: await roundTripFacts(spec, options),
     PHASES,
   };
 }

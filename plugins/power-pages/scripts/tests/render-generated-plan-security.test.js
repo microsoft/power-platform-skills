@@ -459,6 +459,17 @@ test('backend and create-site plans allowlist dynamic attributes and escape nest
     AESTHETIC: attack,
     MOOD: attack,
     SUMMARY: attack,
+    DESIGN_DIRECTION_DATA: {
+      thesis: attack,
+      brandSource: attack,
+      audience: attack,
+      primaryAction: attack,
+      secondaryAction: attack,
+      principalDoubt: attack,
+      proofStrategy: attack,
+      heroConcept: attack,
+      signatureMoment: attack,
+    },
     TYPOGRAPHY_DATA: {
       primary: { name: attack, sample: attack, reason: attack },
       secondary: null,
@@ -474,6 +485,8 @@ test('backend and create-site plans allowlist dynamic attributes and escape nest
   });
   const createSiteElements = executeInlineRenderer(createSiteHtml);
   const createSiteRendered = [
+    'thesisBox',
+    'directionContainer',
     'typographyContainer',
     'paletteContainer',
     'motionContainer',
@@ -485,6 +498,8 @@ test('backend and create-site plans allowlist dynamic attributes and escape nest
     'deploymentContainer',
   ].map(id => createSiteElements.get(id).innerHTML).join('');
   assert.doesNotMatch(createSiteRendered, /<img\b|<script\b|onclick=/i);
+  assert.match(createSiteElements.get('directionContainer').innerHTML, /Hero concept[\s\S]*Signature moment[\s\S]*Secondary action[\s\S]*Audience and job[\s\S]*Brand source/);
+  assert.match(createSiteElements.get('thesisBox').innerHTML, /&lt;img src=x/);
   assert.match(createSiteRendered, /font-family:var\(--sans\)/);
   assert.match(createSiteRendered, /background:transparent/);
 });

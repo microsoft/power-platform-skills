@@ -1,9 +1,30 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { makeGenpageCli, parsePageId, parseList, quoteArg, buildPacInvocation, classifyListOutput, parseListCount } = require('../lib/genpage-cli.js');
+const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { makeGenpageCli: realMakeGenpageCli, parsePageId, parseList, buildPacInvocation, classifyListOutput, parseListCount, runPac } = require('../lib/genpage-cli.js');
+
+// Keep every new Dataverse read offline, including one added by a future recovery change.
+const makeGenpageCli = (env, deps = {}) => realMakeGenpageCli(env, {
+  request: async () => { throw new Error('unexpected offline Dataverse read'); },
+  ...deps,
+});
+const createdPage = (name = 'Overview') => async () => ({ status: 200, data: { name, createdon: new Date().toISOString() } });
 
 const GUID = '6e0c28a2-cdbf-41ec-9186-d10fd5de6e35';
+// Scratch goes in the OS temp dir, never beside this file. Tests that walk scripts/ (the await scan in
+// sdk-async-surface.test.js) list every .js file first and read each one seconds later, so a scratch
+// directory this file deletes in between failed them with ENOENT.
+const scratchDirs = [];
+const scratch = (prefix) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  scratchDirs.push(dir);
+  return dir;
+};
+test.after(() => { for (const d of scratchDirs) fs.rmSync(d, { recursive: true, force: true }); });
 
 // REAL `pac model genpage list` output — a fixed-width TABLE (header + GUID/Name/Published rows), captured
 // LIVE from a Dataverse test environment (2026-07). Columns auto-size to the longest name. `listText` reproduces
@@ -35,46 +56,169 @@ function envList(rows) {
   return `Connected as user@contoso.com\nRetrieving generated pages...\nFound ${count} generated page(s):\n\n${header}\n${body}\n`;
 }
 
-test('quoteArg quotes args with spaces/specials, leaves plain args', () => {
-  assert.strictEqual(quoteArg('Overview'), 'Overview');
-  assert.strictEqual(quoteArg('A responsive cards overview'), '"A responsive cards overview"');
-  assert.strictEqual(quoteArg('has"quote'), '"has""quote"');
-  assert.strictEqual(quoteArg('https://x'), 'https://x');
+// A Windows machine where pac is either the dotnet-tool pac.exe or an MSI-style pac.cmd shim.
+// The fake pac.cmd forwards %* like an MSI install's shim, without turning delayed expansion on.
+const winPac = (file) => ({ platform: 'win32', env: { Path: 'C:\\pac', PATHEXT: '.EXE;.CMD', SystemRoot: 'C:\\Windows' }, exists: (p) => p === file, readFile: () => '@"%~dp0tools\\pac.exe" %*\r\n' });
+const PAC_EXE = winPac('C:\\pac\\pac.exe');
+const PAC_CMD = winPac('C:\\pac\\pac.cmd');
+
+// A listing row whose GUID runs straight into more identifier text is not a page id followed by a
+// name. The row parser used an ASCII `\b`, which JavaScript places before `東`, so `<guid>東京` was
+// read as a valid id and a count-matched listing was accepted as authoritative.
+test('parseList skips a row whose GUID runs into more identifier text, and the listing fails closed', () => {
+  for (const suffix of ['東京', 'é', '_x', '-x']) {
+    const out = listText([{ pageId: GUID + suffix, name: 'Overview' }]);
+    assert.deepStrictEqual(parseList(out), [], `a row starting ${JSON.stringify(GUID + suffix)} is not a page`);
+    assert.strictEqual(classifyListOutput(out).kind, 'unrecognized', `suffix ${JSON.stringify(suffix)} must fail closed`);
+  }
+  const mixed = listText([{ pageId: GUID, name: 'Overview' }, { pageId: GP_A + '東京', name: 'Detail' }]);
+  assert.strictEqual(classifyListOutput(mixed).kind, 'unrecognized', 'one bad row makes the whole listing untrustworthy');
+  // Control: the same listing with a clean id is authoritative, so the refusals above are about the suffix.
+  assert.deepStrictEqual(classifyListOutput(listText([{ pageId: GUID, name: 'Overview' }])),
+    { kind: 'pages', pages: [{ pageId: GUID, name: 'Overview' }] });
+});
+test('buildPacInvocation starts pac.exe directly with every argument unchanged, and no shell', () => {
+  const inv = buildPacInvocation(['model', 'genpage', 'upload', '--name', 'a "quote" & 50%!'], PAC_EXE);
+  assert.strictEqual(inv.file, 'C:\\pac\\pac.exe');
+  assert.deepStrictEqual(inv.args, ['model', 'genpage', 'upload', '--name', 'a "quote" & 50%!']);
+  assert.strictEqual(inv.options.shell, false);
 });
 
-test('quoteArg collapses newlines to spaces (a multi-line prompt must not break the command line)', () => {
-  assert.strictEqual(quoteArg('Conversation with 2 prompts:\r\n1. A\r\n2. B'), '"Conversation with 2 prompts: 1. A 2. B"');
-  assert.strictEqual(quoteArg('line1\nline2'), '"line1 line2"');
-  assert.ok(!quoteArg('a\r\nb').includes('\n'), 'no raw newline survives into the command line');
+// An update sends a page's CURRENT name on the user's behalf. Whether pac can be handed it is decided without
+// starting anything, so an update can leave out a name a pac.cmd shim would refuse instead of failing on it.
+test('argumentRefusal says why a pac.cmd shim cannot receive a value, and is null when pac can', () => {
+  const shim = makeGenpageCli('https://contoso.crm.dynamics.com', { pacInvocation: PAC_CMD });
+  for (const value of ['Revenue 100%', 'Say "hi"']) assert.match(shim.argumentRefusal(value), /cannot pass .* to pac\.cmd/, value);
+  assert.strictEqual(shim.argumentRefusal('Plain name — “curly” it\'s 東京'), null);
+  const exe = makeGenpageCli('https://contoso.crm.dynamics.com', { pacInvocation: PAC_EXE });
+  for (const value of ['Revenue 100%', 'Say "hi"']) assert.strictEqual(exe.argumentRefusal(value), null, value);
+  // pac not installed at all is the upload's own error to report, not a refusal of the value.
+  const none = makeGenpageCli('https://contoso.crm.dynamics.com', { pacInvocation: { ...PAC_EXE, exists: () => false } });
+  assert.strictEqual(none.argumentRefusal('Revenue 100%'), null);
 });
 
-test('quoteArg caret-escapes % so cmd.exe does not expand %VAR% inside the quoted arg (Windows)', () => {
-  // cmd.exe expands %VAR% even inside double quotes; breaking out of the quotes and caret-escaping each
-  // % (verified to round-trip literally through cmd.exe) keeps prompts/names with env-var syntax intact.
-  assert.strictEqual(quoteArg('plain%PATH%end'), '"plain"^%"PATH"^%"end"');
-  assert.ok(quoteArg('50% off').includes('"^%"'), 'a bare % triggers quoting + escaping');
-});
-
-test('buildPacInvocation (win32) builds a shell command line with cmd-style quoting', () => {
-  const inv = buildPacInvocation(['model', 'genpage', 'upload', '--prompt', 'a "quote"'], 'win32');
-  assert.strictEqual(inv.options.shell, true);
-  assert.strictEqual(inv.args, undefined);
-  assert.ok(inv.command.startsWith('pac '));
-  assert.ok(inv.command.includes('"a ""quote"""'), 'embedded quotes are cmd-escaped by doubling');
+test('buildPacInvocation runs a pac.cmd shim through cmd.exe and refuses what cmd.exe would reinterpret', () => {
+  const inv = buildPacInvocation(['model', 'genpage', 'list', '--name', 'Order Detail'], PAC_CMD);
+  assert.strictEqual(inv.file, 'C:\\Windows\\System32\\cmd.exe');
+  assert.strictEqual(inv.args[4], '""C:\\pac\\pac.cmd" model genpage list --name "Order Detail""');
+  assert.strictEqual(inv.options.windowsVerbatimArguments, true);
+  for (const name of ['50% off', 'a "quote"']) {
+    assert.throws(() => buildPacInvocation(['--name', name], PAC_CMD), (e) => e.code === 'EARGUMENT', name);
+  }
+  assert.ok(buildPacInvocation(['--name', 'Hello!'], PAC_CMD).args[4].endsWith('--name "Hello!""'), '! is literal with delayed expansion off');
 });
 
 test('buildPacInvocation (posix) spawns pac directly with an args array and no shell', () => {
-  const inv = buildPacInvocation(['model', 'genpage', 'upload', '--prompt', 'a "quote" & more'], 'linux');
-  assert.strictEqual(inv.command, 'pac');
-  assert.strictEqual(inv.options.shell, undefined, 'no shell on POSIX so metacharacters round-trip verbatim');
+  const posix = { platform: 'linux', env: { PATH: '/usr/bin' }, exists: (p) => p === '/usr/bin/pac' };
+  const inv = buildPacInvocation(['model', 'genpage', 'upload', '--prompt', 'a "quote" & more'], posix);
+  assert.strictEqual(inv.file, '/usr/bin/pac');
+  assert.strictEqual(inv.options.shell, false, 'no shell on POSIX so metacharacters round-trip verbatim');
   assert.deepStrictEqual(inv.args, ['model', 'genpage', 'upload', '--prompt', 'a "quote" & more']);
 });
 
-test('buildPacInvocation collapses embedded newlines in args (both platforms)', () => {
-  const posix = buildPacInvocation(['--prompt', 'l1\r\nl2\nl3'], 'linux');
+test('buildPacInvocation collapses embedded newlines in args (every platform and pac form)', () => {
+  const posix = buildPacInvocation(['--prompt', 'l1\r\nl2\nl3'], { platform: 'linux', env: { PATH: '/b' }, exists: () => true });
   assert.deepStrictEqual(posix.args, ['--prompt', 'l1 l2 l3'], 'multi-line prompt collapsed to spaces');
-  const win = buildPacInvocation(['--prompt', 'l1\r\nl2'], 'win32');
-  assert.ok(!win.command.includes('\n'), 'no raw newline survives into the Windows command line');
+  const win = buildPacInvocation(['--prompt', 'l1\r\nl2'], PAC_CMD);
+  assert.ok(!win.args[4].includes('\n'), 'no raw newline survives into a batch shim command line');
+});
+// Put a directory first on PATH for the duration of `fn`, so `pac` resolves to whatever it holds.
+async function withPathFirst(dir, fn, { only = false } = {}) {
+  const saved = process.env.PATH;
+  process.env.PATH = only ? dir : dir + path.delimiter + saved;
+  try { return await fn(); } finally { process.env.PATH = saved; }
+}
+
+// A fake `pac` to put first on PATH: `pac.cmd` on Windows, reached through cmd.exe exactly as the
+// real one is, and an executable script elsewhere. By default it writes a multibyte character in two
+// pieces 200 ms apart, then its argv, then an error, and exits 3. With `--big` it writes 1.5 MiB.
+// With `--late` it starts a process that shares its stdout and writes 300 ms after the fake exits.
+const BIG_OUTPUT_BYTES = 1536 * 1024;
+function makeFakePac() {
+  const dir = scratch('genpage-cli-fakepac-');
+  const script = path.join(dir, 'fake-pac.js');
+  fs.writeFileSync(script, [
+    `if (process.argv.includes('--big')) process.stdout.write('x'.repeat(${BIG_OUTPUT_BYTES}));`,
+    "else if (process.argv.includes('--late')) {",
+    "  require('child_process').spawn(process.execPath, ['-e', \"setTimeout(() => process.stdout.write('late'), 300)\"],",
+    "    { stdio: ['ignore', 'inherit', 'inherit'], detached: true, windowsHide: true }).unref();",
+    "  process.stdout.write('early ');",
+    '} else {',
+    "  const bytes = Buffer.from('東京', 'utf8');",
+    '  process.stdout.write(bytes.subarray(0, 1));',
+    '  setTimeout(() => {',
+    "    process.stdout.write(Buffer.concat([bytes.subarray(1), Buffer.from(' ' + JSON.stringify(process.argv.slice(2)) + '\\n', 'utf8')]));",
+    "    process.stderr.write('Error: fake failure\\n');",
+    '    process.exitCode = 3;',
+    '  }, 200);',
+    '}',
+    '',
+  ].join('\n'), 'utf8');
+  if (process.platform === 'win32') {
+    fs.writeFileSync(path.join(dir, 'pac.cmd'), `@"${process.execPath}" "${script}" %*\r\n`, 'utf8');
+  } else {
+    fs.writeFileSync(path.join(dir, 'pac'), `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`, { mode: 0o755 });
+  }
+  return dir;
+}
+
+// The default runner must YIELD while pac runs. genpage-upload.js overlaps an update's two
+// listings, which saves nothing if every pac call freezes the process the way spawnSync did. The
+// fake's split character catches a runner that decodes each chunk as it arrives.
+test('runPac lets the event loop run while pac runs, and decodes output split mid-character', async () => {
+  const dir = makeFakePac();
+  const args = ['model', 'genpage', 'list', '--name', 'Order Detail'];
+  let ticks = 0;
+  const timer = setInterval(() => { ticks += 1; }, 10);
+  try {
+    const r = await withPathFirst(dir, () => runPac(args));
+    assert.strictEqual(r.status, 3, 'the exit code is passed through');
+    assert.strictEqual(r.stdout, `東京 ${JSON.stringify(args)}\n`, 'the split character arrives whole, and the args intact');
+    assert.match(r.stderr, /Error: fake failure/);
+    assert.ok(ticks > 0, 'timers fired while pac was running, so the process was not blocked');
+  } finally {
+    clearInterval(timer);
+  }
+});
+
+// spawnSync capped output at 1 MiB (its maxBuffer): past that it killed pac and returned a
+// truncated listing as a failure. The runner keeps everything, and reads each pipe to its end before
+// settling — pac can exit while the tail of a large write is still unread in the pipe.
+test('runPac keeps output past 1 MiB, read to the end of the pipe', async () => {
+  const dir = makeFakePac();
+  const r = await withPathFirst(dir, () => runPac(['model', 'genpage', 'list', '--big']));
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout.length, BIG_OUTPUT_BYTES);
+});
+
+// Settling when pac EXITS would lose output a process it started writes afterwards. spawnSync
+// returned only once the pipes closed, and so does the runner.
+test('runPac settles when the pipes close, as spawnSync did, not when pac exits', async () => {
+  const r = await withPathFirst(makeFakePac(), () => runPac(['model', 'genpage', 'list', '--late']));
+  assert.strictEqual(r.stdout, 'early late');
+  assert.strictEqual(r.status, 0, r.stderr);
+});
+
+// A pac that cannot be started must come back as an ordinary failed result — every caller branches
+// on `status` and none of them catches. That is spawn's 'error' event (ENOENT), which spawnSync
+// reported as status 1 with no text at all. On Windows pac runs through cmd.exe, which would print
+// its own "not recognized" and exit, so the shell itself is made unstartable to reach that path.
+test('runPac resolves with a non-zero status and the launch error when pac cannot be started', async () => {
+  const empty = scratch('genpage-cli-nopac-');
+  const savedComSpec = process.env.ComSpec;
+  if (process.platform === 'win32') process.env.ComSpec = path.join(empty, 'no-such-shell.exe');
+  let r;
+  try {
+    r = await withPathFirst(empty, () => runPac(['model', 'genpage', 'list']), { only: true });
+  } finally {
+    if (process.platform === 'win32') {
+      if (savedComSpec === undefined) delete process.env.ComSpec;
+      else process.env.ComSpec = savedComSpec;
+    }
+  }
+  assert.notStrictEqual(r.status, 0);
+  assert.strictEqual(r.stdout, '');
+  assert.match(r.stderr, /ENOENT/, `the failure must say why; got ${JSON.stringify(r)}`);
 });
 
 test('parsePageId extracts the guid from upload output', () => {
@@ -229,10 +373,8 @@ test('upload retries a transient pac failure then succeeds', async () => {
   assert.ok(n >= 2, 'retried after the transient failure');
 });
 
-// Updated for Plan 5 (C2): recovery now uses a strict env-wide before/after id diff (no name matching).
-// The mock returns an empty env BEFORE the first CREATE and a page-present env AFTER so the diff finds
-// exactly one new id, which is adopted — the second attempt is an UPDATE (not another CREATE).
-test('upload converts a failed CREATE to an UPDATE on retry (env-id-diff recovery, no duplicate)', async () => {
+// The diff discovers a candidate, not authority to turn a failed CREATE into an UPDATE.
+test('upload reports a failed CREATE candidate without an automatic UPDATE', async () => {
   const uploadArgs = [];
   let up = 0;
   let listN = 0;
@@ -245,10 +387,10 @@ test('upload converts a failed CREATE to an UPDATE on retry (env-id-diff recover
     up += 1; uploadArgs.push(args);
     return up === 1 ? { status: 1, stdout: '', stderr: 'flaky' } : { status: 0, stdout: `Page ID: ${GUID}`, stderr: '' };
   };
-  const r = await makeGenpageCli('https://x', { run, sleep: async () => {} }).upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' });
-  assert.strictEqual(r.pageId, GUID);
+  await assert.rejects(makeGenpageCli('https://x', { run, sleep: async () => {}, request: createdPage() }).upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' }),
+    (e) => e.message.includes(GUID) && /createdon|--page-id/.test(e.message));
+  assert.strictEqual(uploadArgs.length, 1);
   assert.ok(!uploadArgs[0].includes('--page-id'), 'first attempt was a create (no page-id)');
-  assert.ok(uploadArgs[1].includes('--page-id') && uploadArgs[1].includes(GUID), 'retry updates in place via the env-diff adopted id (never duplicates)');
 });
 
 // Updated for Plan 5 (C2): the BEFORE-snapshot is taken PRIOR to issuing any CREATE; if it fails,
@@ -286,6 +428,9 @@ test('classifyListOutput: pages / empty / unrecognized (tri-state, COMPLETE-list
   assert.deepStrictEqual(classifyListOutput(LIST_EMPTY).pages, []);
   // recognized-empty: "no pages" phrase variant (observed in older pac builds)
   assert.strictEqual(classifyListOutput('No generated pages found.\n').kind, 'empty');
+  assert.strictEqual(classifyListOutput('  No pages found  \n').kind, 'empty', 'a standalone no-pages line is accepted');
+  assert.strictEqual(classifyListOutput('Warning: no pages could be retrieved because the service is unavailable\n').kind, 'unrecognized', 'a warning sentence is not proof of an empty app');
+  assert.strictEqual(classifyListOutput('Status: No generated pages found after retry\n').kind, 'unrecognized', 'the no-pages phrase must occupy the whole trimmed line');
   // unrecognized: blank output (not proof of empty — could be a timeout or help-dump with no banner)
   assert.strictEqual(classifyListOutput('').kind, 'unrecognized');
   // unrecognized: help/usage banner (pac dumps usage on a flag error but exits 0 on some builds)
@@ -301,6 +446,16 @@ test('classifyListOutput: pages / empty / unrecognized (tri-state, COMPLETE-list
 // stdout (names + descriptions), so a page NAMED or DESCRIBED with "no page(s)" text must NOT force an app
 // WITH live pages to classify as EMPTY. A false 'empty' → reconcile sees zero live → duplicate CREATE on
 // build + silent page-drop on download. Empty requires NO positive page evidence.
+test('classifyListOutput: repeated page ids make a matching-count listing unrecognized', () => {
+  const duplicateId = listText([
+    { pageId: GUID, name: 'Overview' },
+    { pageId: GUID.toUpperCase(), name: 'Summary' },
+  ], 2);
+  const k = classifyListOutput(duplicateId);
+  assert.strictEqual(k.kind, 'unrecognized', `duplicate page identity must fail closed; got ${JSON.stringify(k)}`);
+  assert.deepStrictEqual(k.pages, [], 'duplicate identities are not an authoritative set of pages');
+});
+
 test('classifyListOutput: a page NAMED "no pages" does NOT force empty when real pages are listed', () => {
   // A page literally named "No Pages" with a valid 1-page summary → 'pages', not 'empty'. The "no pages"
   // phrase is tested against the whole stdout (which includes page NAMES), so it must not fire here.
@@ -381,8 +536,8 @@ test('upload: a possibly-successful CREATE + a failing enumeration NEVER issues 
   assert.ok(lists >= 1, 'it tried to enumerate before deciding');
 });
 
-// Updated for Plan 5 (C2): adopt by strict env-id diff (before=empty, after=GUID appeared), not name.
-test('upload: an uncertain CREATE adopts the one new env id and UPDATES it (no duplicate)', async () => {
+// A matching name and recent creation time are still only diagnostic data.
+test('upload: an uncertain CREATE stops at the new env id without a duplicate or update', async () => {
   let creates = 0, updates = 0;
   let listN = 0;
   const run = async (args) => {
@@ -394,11 +549,10 @@ test('upload: an uncertain CREATE adopts the one new env id and UPDATES it (no d
     // before-snapshot (listN=1): env empty; after-snapshot (listN=2): GUID appeared
     return { status: 0, stdout: listN === 1 ? LIST_EMPTY : LIST_ONE, stderr: '' };
   };
-  const cli = makeGenpageCli('env', { run, sleep: async () => {}, attempts: 3 });
-  const r = await cli.upload({ appId: 'app-1', codeFile: 'x.tsx', name: 'Overview' });
-  assert.strictEqual(r.pageId, GUID);
+  const cli = makeGenpageCli('env', { run, sleep: async () => {}, attempts: 3, request: createdPage() });
+  await assert.rejects(cli.upload({ appId: 'app-1', codeFile: 'x.tsx', name: 'Overview' }), (e) => e.message.includes(GUID) && /--page-id/.test(e.message));
   assert.strictEqual(creates, 1, 'one create attempt');
-  assert.strictEqual(updates, 1, 'retry UPDATED the adopted env-diff id in place — no second create');
+  assert.strictEqual(updates, 0, 'no candidate is automatically updated');
 });
 
 test('upload: an uncertain CREATE whose enumeration shows ZERO matches safely retries the CREATE', async () => {
@@ -418,7 +572,7 @@ test('upload: an uncertain CREATE whose enumeration shows ZERO matches safely re
 test('upload (I7): direct UPDATE with caller-provided pageId returns wrong Page ID → throws', async () => {
   const WRONG_ID = 'aaaaaaaa-0000-0000-0000-000000000000';
   const run = async () => ({ status: 0, stdout: `Page ID: ${WRONG_ID}`, stderr: '' });
-  const cli = makeGenpageCli('env', { run, sleep: async () => {} });
+  const cli = makeGenpageCli('env', { run, sleep: async () => {}, request: createdPage() });
   // pageId: GUID but pac returns WRONG_ID → mismatch must halt
   await assert.rejects(
     cli.upload({ appId: 'app-1', pageId: GUID, codeFile: 'x.tsx', name: 'Overview' }),
@@ -426,25 +580,26 @@ test('upload (I7): direct UPDATE with caller-provided pageId returns wrong Page 
   );
 });
 
-// Updated for Plan 5 (C2): adoption is now by strict env-id diff. Before=empty, after=GUID → adopt
-// GUID → UPDATE returns WRONG_ID → I7 guard fires (adopted id != returned id → refuse to persist).
-test('upload (I7): uncertain-CREATE adopts env id then UPDATE returns wrong Page ID → throws', async () => {
+// Stop before any candidate update; the explicit-update returned-id guard remains above.
+test('upload: uncertain CREATE cannot reach a candidate UPDATE returning another id', async () => {
   const WRONG_ID = 'aaaaaaaa-0000-0000-0000-000000000000';
   let listN = 0;
+  let updates = 0;
   const run = async (args) => {
     if (args.includes('upload')) {
-      if (args.includes('--page-id')) return { status: 0, stdout: `Page ID: ${WRONG_ID}`, stderr: '' }; // UPDATE returns wrong id
+      if (args.includes('--page-id')) { updates++; return { status: 0, stdout: `Page ID: ${WRONG_ID}`, stderr: '' }; }
       return { status: 0, stdout: 'no id', stderr: '' }; // CREATE uncertain
     }
     listN++;
-    // before-snapshot (listN=1): empty; after-snapshot (listN=2): GUID appeared → adopt GUID
+    // Before is empty; after contains the candidate, which must be reported without an update.
     return { status: 0, stdout: listN === 1 ? LIST_EMPTY : LIST_ONE, stderr: '' };
   };
-  const cli = makeGenpageCli('env', { run, sleep: async () => {} });
+  const cli = makeGenpageCli('env', { run, sleep: async () => {}, request: createdPage() });
   await assert.rejects(
     cli.upload({ appId: 'app-1', codeFile: 'x.tsx', name: 'Overview' }),
-    /unexpected Page ID|mismatched/i
+    (e) => e.message.includes(GUID) && /refusing.*update/i.test(e.message)
   );
+  assert.strictEqual(updates, 0);
 });
 
 // ── Task 2: enumerateEnv (env-wide EXISTENCE authority) ──────────────────────────────────────────
@@ -493,13 +648,13 @@ test('enumerateEnv is FAIL-CLOSED on a non-zero exit, returns ok:false after ret
 
 // ── Task 2: uncertain-CREATE strict env-id diff (C2 / addenda) ───────────────────────────────────
 
-test('upload uncertain-CREATE: strict env-id diff finds ONE new id → adopt and UPDATE (C2)', async () => {
+test('upload uncertain-CREATE: one new id requires explicit user resolution', async () => {
   let uploadCalls = 0;
   let listN = 0;
   const run = async (args) => {
     if (args.includes('upload')) {
       uploadCalls++;
-      // First call is the uncertain CREATE (returns no id); second is the UPDATE after adoption
+      // A second mutation would be a failure of the stop rule.
       if (uploadCalls === 1) return { status: 0, stdout: 'created, no id returned', stderr: '' };
       return { status: 0, stdout: `Page ID: ${GP_A}`, stderr: '' };
     }
@@ -507,10 +662,10 @@ test('upload uncertain-CREATE: strict env-id diff finds ONE new id → adopt and
     if (listN === 1) return { status: 0, stdout: envList([]), stderr: '' };                 // before: empty
     return { status: 0, stdout: envList([{ pageId: GP_A, name: 'Overview' }]), stderr: '' }; // after: GP_A appeared
   };
-  const r = await makeGenpageCli('https://x', { run, sleep: async () => {}, attempts: 3 })
-    .upload({ appId: 'app', codeFile: 'o.tsx', name: 'Overview', prompt: 'p', agentMessage: 'm' });
-  assert.strictEqual(r.pageId, GP_A, 'adopted the single new env id (== the env-diff result)');
-  assert.strictEqual(uploadCalls, 2, 'first CREATE (uncertain) + one UPDATE (adopted id) — never a blind 2nd CREATE');
+  await assert.rejects(makeGenpageCli('https://x', { run, sleep: async () => {}, attempts: 3, request: createdPage() })
+    .upload({ appId: 'app', codeFile: 'o.tsx', name: 'Overview', prompt: 'p', agentMessage: 'm' }),
+    (e) => e.message.includes(GP_A) && /otherwise.*leave.*create/i.test(e.message));
+  assert.strictEqual(uploadCalls, 1, 'no automatic second mutation');
 });
 
 test('upload uncertain-CREATE: newIds>1 → throws (ambiguous — cannot attribute) (C2)', async () => {
@@ -601,12 +756,9 @@ test('download passes --page-id for a single id (no trailing comma)', async () =
   assert.ok(i > 0 && seen[i + 1] === GP_A, 'single id, no trailing comma');
 });
 
-// --- PR review: duplicate-create recovery must not depend on a NAME ------------------------------
-// Both the pre-create snapshot and the uncertain-result reconciliation used to require `name`, so a
-// name-less create skipped both and retried BLINDLY after an uncertain result — the way pac ends up
-// with duplicate pages. The recovery is pure id arithmetic (enumerateEnv is id-keyed and name
-// matching is explicitly never used), so the name was vestigial in those gates.
-test('a name-less create still snapshots and reconciles an uncertain result (no blind retry)', async () => {
+// A nameless request still needs the id snapshot to detect a possible landed create, but it cannot
+// corroborate the resulting candidate by name and must not turn it into an UPDATE.
+test('a name-less uncertain create reports its candidate without retrying or updating it', async () => {
   const GP_NEW = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
   const seen = [];
   let uploads = 0;
@@ -624,15 +776,12 @@ test('a name-less create still snapshots and reconciles an uncertain result (no 
     },
     sleep: async () => {},
   });
-  const res = await cli.upload({ appId: 'a1', codeFile: 'p.tsx', prompt: 'p', agentMessage: 'm' }); // NO name
-  assert.strictEqual(res.pageId, GP_NEW,
-    'the landed create must be ADOPTED, not created a second time');
-  // The retry must have run as an UPDATE against the adopted id, never as a second blind create.
+  await assert.rejects(cli.upload({ appId: 'a1', codeFile: 'p.tsx', prompt: 'p', agentMessage: 'm' }), (e) =>
+    e.message.includes(GP_NEW) && /--page-id/.test(e.message));
   const uploadCalls = seen.filter((a) => a.includes('upload'));
-  assert.strictEqual(uploadCalls.length, 2, `expected one create + one adopted update; got ${uploadCalls.length}`);
+  assert.strictEqual(uploadCalls.length, 1);
   assert.ok(!uploadCalls[0].includes('--page-id'), 'the first attempt is a create');
-  assert.deepStrictEqual(uploadCalls[1].slice(uploadCalls[1].indexOf('--page-id'), uploadCalls[1].indexOf('--page-id') + 2),
-    ['--page-id', GP_NEW], 'the retry targets the adopted page instead of creating a duplicate');
+  assert.strictEqual(seen.filter((a) => a.includes('list')).length, 2, 'both id snapshots still run');
 });
 
 // --- #588.1: a page NAME must not be able to supply the list summary ----------------------------
@@ -681,7 +830,7 @@ test('parsePageId still accepts a real id, in either case, with trailing output'
 });
 
 // A malformed id must not simply vanish: with no parsable identity the upload is UNCERTAIN, and the
-// env-wide before/after diff has to run so a landed create is adopted rather than blindly retried.
+// env-wide before/after diff must still run, so a candidate is reported rather than blindly retried.
 test('a malformed Page ID drives uncertain-create reconciliation, not a blind retry', async () => {
   const seen = [];
   let uploads = 0;
@@ -697,13 +846,11 @@ test('a malformed Page ID drives uncertain-create reconciliation, not a blind re
       return { status: 0, stdout: `Page ID: ${GUID}`, stderr: '' };
     },
     sleep: async () => {},
+    request: createdPage('N'),
   });
-  const res = await cli.upload({ appId: 'a1', codeFile: 'p.tsx', name: 'N', prompt: 'p', agentMessage: 'm' });
-  assert.strictEqual(res.pageId, GUID,
-    'the landed create must be ADOPTED by id diff, not identified by the malformed token');
+  await assert.rejects(cli.upload({ appId: 'a1', codeFile: 'p.tsx', name: 'N', prompt: 'p', agentMessage: 'm' }), (e) => e.message.includes(GUID) && /--page-id/.test(e.message));
   const uploadCalls = seen.filter((a) => a.includes('upload'));
-  assert.strictEqual(uploadCalls.length, 2, 'one create + one adopted update');
-  assert.ok(uploadCalls[1].includes('--page-id'), 'the retry targets the adopted page');
+  assert.strictEqual(uploadCalls.length, 1, 'one create, no automatic adopted update');
 });
 
 // --- G4: keep the diagnostic pac produced, and do not retry a deterministic failure -------------
@@ -786,25 +933,24 @@ test('a trailing backslash is doubled so it cannot escape the closing quote', ()
   // `String.raw` cannot be used here: a template literal may not END with a backslash, because it
   // escapes the closing backtick. Ordinary escapes it is.
   const dir = 'C:\\Users\\Power User\\download\\';
-  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', dir, '--app-id', 'after'], 'win32');
+  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', dir, '--app-id', 'after'], PAC_CMD);
   // The run before the closing quote is doubled; the following flag stays a separate argument.
-  assert.match(inv.command, /--output-directory "C:\\Users\\Power User\\download\\\\" --app-id after$/,
-    `the trailing separator must be escaped; got ${inv.command}`);
+  assert.match(inv.args[4], /--output-directory "C:\\Users\\Power User\\download\\\\" --app-id after"$/,
+    `the trailing separator must be escaped; got ${inv.args[4]}`);
 });
 
 test('interior backslashes are left alone (every Windows path has them)', () => {
-  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', String.raw`C:\Users\Power User\download`], 'win32');
-  assert.match(inv.command, /"C:\\Users\\Power User\\download"/,
-    `an ordinary path must round-trip unchanged; got ${inv.command}`);
+  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', String.raw`C:\Users\Power User\download`], PAC_CMD);
+  assert.match(inv.args[4], /"C:\\Users\\Power User\\download"/,
+    `an ordinary path must round-trip unchanged; got ${inv.args[4]}`);
 });
 
 test('POSIX passes args verbatim, with no cmd-style quoting at all', () => {
   const dir = '/home/user/download\\';
-  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', dir], 'linux');
+  const inv = buildPacInvocation(['model', 'genpage', 'download', '--output-directory', dir], { platform: 'linux', env: { PATH: '/b' }, exists: () => true });
   assert.deepStrictEqual(inv.args, ['model', 'genpage', 'download', '--output-directory', dir],
     'the POSIX path spawns pac directly, so nothing may be rewritten');
 });
-
 // --- review follow-up: a TRANSIENT message must NOT be mistaken for a deterministic one --------
 // The first version matched the bare phrases "does not exist" and "could not be found", so a
 // service message like "The resource does not exist yet; please retry." aborted the retry loop —
@@ -892,6 +1038,8 @@ test('parsePageId refuses a GUID followed by any identifier character, not just 
       `a token continuing with ${JSON.stringify(suffix)} must be refused, not trimmed to the GUID`);
   }
   // ...but punctuation genuinely ENDS the token — pac prints the id inside prose.
+  assert.strictEqual(parsePageId(`Page ID: ${G}東京`), null,
+    'a Unicode letter continues the token and must not be silently dropped');
   for (const suffix of ['.', ',', ')', ' ', '\n']) {
     assert.strictEqual(parsePageId(`Page ID: ${G}${suffix}`), G,
       `${JSON.stringify(suffix)} terminates the id and must still parse`);
@@ -958,13 +1106,8 @@ test('a transient failure on an ordinary update is still retried', async () => {
     `a transient fault must still be retried; ran ${attempts} attempt(s)`);
 });
 
-// The ONE case the deterministic-failure stop must not break: an uncertain CREATE that actually
-// landed. Once the env diff adopts the new page, the next attempt is an UPDATE by id — a different
-// command — so the create's argument fault says nothing about it. Every other adoption test used a
-// transient error, so a guard that ignored the adoption transition survived the whole suite; and
-// that mutant is a duplicate-create hazard, because the call throws without returning the id the
-// create already minted.
-test('a deterministic-looking error on a CREATE that landed is still adopted and returned', async () => {
+// Even a deterministic-looking failure can leave a row, but its id does not authorize another mutation.
+test('a deterministic-looking uncertain CREATE reports its candidate and stops', async () => {
   const uploads = [];
   let listN = 0;
   const run = async (args) => {
@@ -978,10 +1121,22 @@ test('a deterministic-looking error on a CREATE that landed is still adopted and
       ? { status: 1, stdout: '', stderr: "Error: The value passed to '--code-file' is invalid. The file 'o.tsx' could not be found." }
       : { status: 0, stdout: `Successfully pushed page. Page ID: ${GUID}`, stderr: '' };
   };
-  const r = await makeGenpageCli('https://x', { run, sleep: async () => {} })
-    .upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' });
-  assert.strictEqual(r.pageId, GUID, 'the adopted page must be returned, not lost to a thrown error');
-  assert.strictEqual(uploads.length, 2, 'exactly one follow-up attempt — the UPDATE of the adopted page');
+  await assert.rejects(makeGenpageCli('https://x', { run, sleep: async () => {}, request: createdPage() })
+    .upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' }), (e) => e.message.includes(GUID) && /--page-id/.test(e.message));
+  assert.strictEqual(uploads.length, 1, 'the uncertain create is the only mutation');
   assert.ok(!uploads[0].includes('--page-id'), 'the first attempt was the create');
-  assert.ok(uploads[1].includes('--page-id') && uploads[1].includes(GUID), 'the second attempt updated the adopted id');
+});
+
+
+test('enumeratePages can include unpublished app-scoped pages without changing the default enumerate call', async () => {
+  const seen = [];
+  const run = async (args) => { seen.push(args); return { status: 0, stdout: LIST_ONE, stderr: '' }; };
+  const cli = makeGenpageCli('https://x', { run, sleep: async () => {} });
+  await cli.enumerate({ appId: 'app-1' });
+  await cli.enumeratePages('app-1', { includeUnpublished: true });
+
+  assert.ok(seen[0].includes('--app-id') && seen[0].includes('app-1'), 'default enumerate stays app-scoped');
+  assert.ok(!seen[0].includes('--include-unpublished'), 'default enumerate call is unchanged for existing callers');
+  assert.ok(seen[1].includes('--app-id') && seen[1].includes('app-1'), 'option still combines with --app-id');
+  assert.ok(seen[1].includes('--include-unpublished'), 'the requested option reaches pac argv');
 });

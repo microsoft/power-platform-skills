@@ -6,7 +6,7 @@
  *   node render-audit-report.js --output <path> --data <json-file>
  *
  * Required keys in the JSON data file:
- *   SITE_NAME, AUDIT_DESC, SUMMARY, FINDINGS_DATA, INVENTORY_DATA
+ *   SITE_NAME, AUDIT_DESC, SUMMARY, FINDINGS_DATA, INVENTORY_DATA, SCORECARD_DATA (object or null)
  */
 
 const path = require('path');
@@ -25,5 +25,5 @@ renderTemplate({
   templatePath: path.join(__dirname, '..', 'skills', 'audit-permissions', 'assets', 'audit-report.html'),
   outputPath: path.resolve(args.output),
   dataPath: path.resolve(args.data),
-  requiredKeys: ['SITE_NAME', 'AUDIT_DESC', 'SUMMARY', 'FINDINGS_DATA', 'INVENTORY_DATA'],
+  requiredKeys: ['SITE_NAME', 'AUDIT_DESC', 'SUMMARY', 'FINDINGS_DATA', 'INVENTORY_DATA', 'SCORECARD_DATA'],
 });

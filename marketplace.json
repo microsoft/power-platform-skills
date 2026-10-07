@@ -43,6 +43,14 @@
         {
             "name": "process-intelligence",
             "source": "./plugins/process-intelligence"
+        },
+        {
+            "name": "dataverse",
+            "source": {
+                "source": "github",
+                "repo": "microsoft/Dataverse-skills",
+                "path": ".github/plugins/dataverse"
+            }
         }
     ]
 }

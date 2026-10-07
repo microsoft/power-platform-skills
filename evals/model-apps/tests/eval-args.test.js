@@ -61,3 +61,19 @@ test('eval-args: --tier accepts only a known tier and names the choices', () => 
   for (const t of TIERS) assert.match(errors[0], new RegExp(t), `the error lists ${t}`);
   for (const t of TIERS) assert.equal(parse(['--tier', t]).args.tier, t);
 });
+
+test('eval-args: every tier an eval definition declares can be selected with --tier', () => {
+  // The genpage suite declares `stress` evals, but the list here once held only smoke and full, so
+  // the documented `--tier stress` exited 2 and those evals could only be run one by one.
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const declared = new Set();
+  for (const file of ['genpage/evals.json', 'app-builder/evals.json']) {
+    const full = path.join(__dirname, '..', file);
+    if (!fs.existsSync(full)) continue;
+    const parsed = JSON.parse(fs.readFileSync(full, 'utf8'));
+    for (const ev of Array.isArray(parsed) ? parsed : (parsed.evals || [])) if (ev.tier) declared.add(ev.tier);
+  }
+  assert.ok(declared.has('stress'), 'the genpage suite declares stress evals');
+  for (const t of declared) assert.equal(parse(['--tier', t]).args.tier, t, `--tier ${t} must be accepted`);
+});

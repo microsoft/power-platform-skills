@@ -7,8 +7,8 @@ const { EventEmitter } = require('node:events');
 const {
   buildMcpArgs,
   launch,
-  quoteShellArg,
 } = require('../launch-playwright-mcp');
+const { invocation } = require('../lib/process-runner');
 
 test('buildMcpArgs launches Playwright MCP with fullscreen config', () => {
   const expectedConfigPath = path.join(__dirname, '..', 'playwright-mcp-fullscreen.config.json');
@@ -18,17 +18,19 @@ test('buildMcpArgs launches Playwright MCP with fullscreen config', () => {
   assert.deepEqual(args.slice(0, 4), ['-y', '@playwright/mcp@latest', '--browser', 'chrome']);
   assert.equal(args.includes('--viewport-size'), false);
   assert.notEqual(configIndex, -1);
-  assert.equal(args[configIndex + 1], quoteShellArg(expectedConfigPath));
+  assert.equal(args[configIndex + 1], expectedConfigPath, 'the path is passed as-is; the process runner quotes it where needed');
 });
 
-test('buildMcpArgs quotes Windows config paths containing spaces', () => {
+test('a Windows config path containing spaces reaches the npx shim as one quoted argument', () => {
   const configPath = 'C:\\Users\\Power User\\.claude\\plugins\\model-apps\\scripts\\playwright-mcp-fullscreen.config.json';
-  const args = buildMcpArgs('msedge', { configPath, platform: 'win32' });
-  const configIndex = args.indexOf('--config');
-
-  assert.equal(args[configIndex + 1], `"${configPath}"`);
+  const inv = invocation('npx', buildMcpArgs('msedge', { configPath }), {
+    platform: 'win32',
+    env: { Path: 'C:\\nodejs', PATHEXT: '.EXE;.CMD', SystemRoot: 'C:\\Windows' },
+    exists: (p) => p === 'C:\\nodejs\\npx.cmd',
+  });
+  assert.equal(inv.options.shell, false);
+  assert.ok(inv.args[4].endsWith(`--config "${configPath}""`), inv.args[4]);
 });
-
 test('fullscreen config maximizes the browser and uses the real viewport size', () => {
   const configPath = path.join(__dirname, '..', 'playwright-mcp-fullscreen.config.json');
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -54,7 +56,7 @@ test('launch wires spawn and process exit handling', () => {
 
   assert.equal(spawnCall.command, 'npx');
   assert.deepEqual(spawnCall.args.slice(0, 4), ['-y', '@playwright/mcp@latest', '--browser', 'msedge']);
-  assert.deepEqual(spawnCall.options, { stdio: 'inherit', shell: true });
+  assert.deepEqual(spawnCall.options, { stdio: 'inherit' }, 'no shell: the process runner decides how npx starts');
 
   child.emit('exit', 7);
   assert.equal(spawnCall.exitCode, 7);
@@ -72,6 +74,16 @@ test('launch handles the child error event (npx fails to spawn)', () => {
   assert.equal(handled, 'spawn npx ENOENT');
 });
 
+test('launch reports a launch that cannot start (npx not on PATH) through onError', () => {
+  let handled;
+  const child = launch({
+    browser: 'chrome',
+    spawnFn: () => { const e = new Error('spawn npx ENOENT: not found on PATH'); e.code = 'ENOENT'; throw e; },
+    onError: (err) => { handled = err.code; },
+  });
+  assert.equal(handled, 'ENOENT');
+  assert.equal(child, null);
+});
 // --- #588.7: a signal termination is a failure, not a clean shutdown -----------------------------
 // Node calls the exit handler with (code, signal); on a SIGNAL death `code` is null and `signal`
 // carries the name. `process.exit(code || 0)` therefore reported every crash and every kill as exit

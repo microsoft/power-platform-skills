@@ -33,9 +33,8 @@ outcomes — because the eval harness greps the log for these tokens. Concretely
   `AskUserQuestion` is required.
 - The plan-presentation call is recorded as `EnterPlanMode called` followed
   by the user's response (`approved` / `revised`).
-- The PAC CLI version output is recorded explicitly (the assertion checks
-  for `>= 2.7.0`-shaped text — `PAC CLI Version 2.7.x` is the canonical
-  form).
+- The PAC CLI version output is recorded explicitly (the assertion parses the recorded version and
+  requires `> 2.10.0`, e.g. `PAC CLI Version 2.11.0`; an older pac fails).
 
 Decisions and outcomes can be summarized at the end of the section, but they
 do **not** substitute for command-level entries. See an existing fixture
@@ -55,8 +54,8 @@ node --version
 pac help
 ```
 
-`pac help` output includes the version number. Verify the version is **>= 2.7.0**
-(required for `pac model create` support). If the version is older, instruct the
+`pac help` output includes the version number. Verify the version is **> 2.10.0**
+(the plugin's minimum; see the README prerequisites). If the version is older, instruct the
 user to update: `dotnet tool update --global Microsoft.PowerApps.CLI.Tool`.
 
 If either command fails, inform the user and provide installation instructions.
@@ -745,6 +744,7 @@ even though the underlying spec stores the schemaName as provided:
 ### App
 - Name: [app name]
 - Description: [description]
+- Routing description: [app.aiDescription — omit the line when the spec does not set one]
 - Action: [Create new | Use existing: <app-id>]
 
 ### Solution
@@ -843,7 +843,7 @@ The spec shape follows `plugins/model-apps/samples/app-spec.support-desk.json`:
 {
   "schemaVersion": 2,
   "solution": { "uniqueName": "...", "displayName": "...", "publisherPrefix": "..." },
-  "app": { "name": "...", "description": "..." },
+  "app": { "name": "...", "description": "...", "aiDescription?": "..." },
   "entities": [ { "schemaName", "displayName", "pluralName", "primaryAttribute", "columns" } ],
   "relationships": [ { "type", "referenced", "referencing", "lookup" } ],
   "forms": [ { "entity", "type", "name", "layout", "subgrids?" } ],

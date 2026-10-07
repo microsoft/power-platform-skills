@@ -1,9 +1,10 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { verifySpec, hasElement, parseFetchXml } = require('../lib/verify-spec.js');
+const { verifySpec, hasElement, parseFetchXml, liveNavEntries, subareaDashboardHasLauncher } = require('../lib/verify-spec.js');
 const { sitemapXmlFor } = require('../verify-model-app.js');
 const { SDK_ROLE_MARKER } = require('../lib/app-spec.js');
+const { OBJECT_DIVISION_PAGE, MISREAD_PAGES, TEMPLATE_LINE_PAGE, JSX_TEXT_PAGE, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, ELEMENT_PAGE_TOKEN_LINE, FUNCTION_TYPE_PAGES } = require('./helpers/misread-page.js');
 
 const idFor = (set) => ({ savedquery: 'savedqueryid', savedqueryvisualization: 'savedqueryvisualizationid', systemform: 'formid' }[set] || 'id');
 
@@ -19,6 +20,7 @@ test('verifySpec: everything present -> ok', async () => {
     findTable: async () => ({ logicalName: 'new_o' }),
     findColumns: async () => [{ logicalName: 'new_s' }],
     queryRecords: async (set) => [{ [idFor(set)]: 'id-1' }],
+    formTopology: async () => '<form><DisplayConditions Order="0"/></form>',
     sitemapXml: async () => '<SiteMap><Area Icon="a.png"><SubArea Entity="new_o" Icon="ic.png"/></Area></SiteMap>',
   };
   const r = await verifySpec(spec, read);
@@ -138,6 +140,227 @@ test('verifySpec: dashboard subarea resolves the dashboard id and matches the si
   assert.ok(bad.missing.some((m) => m.kind === 'subarea'), 'a different dashboard id does not satisfy the check');
 });
 
+// AB#6726727: an entry wired to the dashboard but without the launcher Url shows a placeholder icon, and
+// the designer does not treat it as a dashboard entry. That is the shape earlier builds wrote over
+// designer-made entries, and the wiring check alone passed it.
+test('verifySpec: a dashboard nav entry must carry the launcher Url', async () => {
+  const DASH = 'aaaa1111-2222-3333-4444-555566667777';
+  const spec = { entities: [], views: [], charts: [], forms: [], appShell: { areas: [{ groups: [{ subAreas: [{ dashboard: 'Ops', title: 'Ops' }] }] }] } };
+  const reader = (tag) => ({
+    findTable: async () => null, findColumns: async () => [],
+    queryRecords: async (set, opts) => (set === 'systemform' && /name eq 'Ops'/.test(opts.filter) ? [{ formid: DASH }] : []),
+    sitemapXml: async () => `<SiteMap><Area><Group>${tag}</Group></Area></SiteMap>`,
+  });
+  const launcher = (r) => r.checks.find((c) => c.kind === 'subarea-dashboard-launcher');
+  const damaged = await verifySpec(spec, reader(`<SubArea Id="sub_0_0_0" DefaultDashboard="${DASH}" ResourceId="SitemapDesigner.NewSubArea" />`));
+  assert.strictEqual(launcher(damaged).present, false);
+  assert.match(launcher(damaged).detail, /placeholder icon/);
+  // Attribute order and GUID spelling are Dataverse's to choose.
+  const designer = await verifySpec(spec, reader(`<SubArea DefaultDashboard="{${DASH.toUpperCase()}}" Id="ops" Url="/workplace/home_dashboards.aspx" Client="All,Web" />`));
+  assert.strictEqual(launcher(designer).present, true);
+  // Only the entry for THIS dashboard counts: another entry's launcher Url proves nothing.
+  const elsewhere = await verifySpec(spec, reader(`<SubArea Id="x" DefaultDashboard="${DASH}" /><SubArea Id="y" Url="/workplace/home_dashboards.aspx" DefaultDashboard="99999999-0000-0000-0000-000000000000" />`));
+  assert.strictEqual(launcher(elsewhere).present, false);
+  // Only the exact launcher satisfies both consumers: the runtime's glyph test is case-sensitive, and
+  // the designer compares the whole Url.
+  for (const url of ['/WorkPlace/Home_Dashboards.aspx', '/workplace/home_dashboards.aspx?pagetype=dashboard']) {
+    const near = await verifySpec(spec, reader(`<SubArea Id="ops" Url="${url.replace(/&/g, '&amp;')}" DefaultDashboard="${DASH}" />`));
+    assert.strictEqual(launcher(near).present, false, url);
+  }
+  // Not wired at all: the wiring check fails, and there is no second check to double-count it.
+  const unwired = await verifySpec(spec, reader('<SubArea Id="x" Entity="account" />'));
+  assert.strictEqual(launcher(unwired), undefined);
+});
+
+// Only a real nav entry — a SubArea directly under SiteMap/Area/Group — can carry the launcher Url for its
+// dashboard. A `<SubArea …>` in a comment, a CDATA section, a processing instruction or anywhere else is
+// no entry, so a decoy there carrying the Url must not pass the real entry that lacks it.
+test('verifySpec: a SubArea that is no nav entry cannot satisfy the dashboard launcher check', async () => {
+  const DASH = 'aaaa1111-2222-3333-4444-555566667777';
+  const spec = { entities: [], views: [], charts: [], forms: [], appShell: { areas: [{ groups: [{ subAreas: [{ dashboard: 'Ops', title: 'Ops' }] }] }] } };
+  const readerOf = (xml) => ({
+    findTable: async () => null, findColumns: async () => [],
+    queryRecords: async (set, opts) => (set === 'systemform' && /name eq 'Ops'/.test(opts.filter) ? [{ formid: DASH }] : []),
+    sitemapXml: async () => xml,
+  });
+  const launcher = (r) => r.checks.find((c) => c.kind === 'subarea-dashboard-launcher');
+  const decoy = `<SubArea Id="decoy" Url="/workplace/home_dashboards.aspx" DefaultDashboard="${DASH}" />`;
+  const damaged = `<SubArea Id="ops" DefaultDashboard="{${DASH.toUpperCase()}}" />`;
+  for (const xml of [
+    `<SiteMap><Area><Group>${damaged}<!-- ${decoy} --></Group></Area></SiteMap>`,
+    `<SiteMap><Area><Group>${damaged}<![CDATA[${decoy}]]></Group></Area></SiteMap>`,
+    `<?decoy ${decoy}?><SiteMap><Area><Group>${damaged}</Group></Area></SiteMap>`,
+    `<SiteMap>${decoy}<Area><Group>${damaged}</Group></Area></SiteMap>`,
+    `<SiteMap><Area>${decoy}<Group>${damaged}</Group></Area></SiteMap>`,
+    `<SiteMap><Area><Group><SubArea Id="outer" Entity="account">${decoy}</SubArea>${damaged}</Group></Area></SiteMap>`,
+  ]) {
+    const r = await verifySpec(spec, readerOf(xml));
+    assert.strictEqual(launcher(r).present, false, xml);
+    assert.match(launcher(r).detail, /placeholder icon/, xml);
+    assert.strictEqual(subareaDashboardHasLauncher(xml, DASH), false, xml);
+  }
+  // Only a decoy wires it, or the walk cannot read the sitemap at all: no nav entry to fault for a missing
+  // Url, so the check fails with what is actually wrong.
+  for (const xml of [
+    `<SiteMap><Area><Group><!-- ${decoy} --></Group></Area></SiteMap>`,
+    `<SiteMap><Area>${decoy}</Area></SiteMap>`,
+    `<!DOCTYPE SiteMap><SiteMap><Area><Group>${decoy}</Group></Area></SiteMap>`,
+  ]) {
+    const r = await verifySpec(spec, readerOf(xml));
+    assert.strictEqual(launcher(r).present, false, xml);
+    assert.match(launcher(r).detail, /no nav entry points at it/, xml);
+  }
+  // The real entry passes with children of its own and its Url read XML-decoded, as the runtime reads it.
+  const real = `<SiteMap><Area><Group><SubArea Id="ops" Url="&#47;workplace/home_dashboards.aspx" DefaultDashboard="{${DASH.toUpperCase()}}"><Titles><Title LCID="1033" Title="Ops" /></Titles></SubArea></Group></Area></SiteMap>`;
+  assert.strictEqual(launcher(await verifySpec(spec, readerOf(real))).present, true);
+  assert.strictEqual(subareaDashboardHasLauncher(real, DASH), true);
+});
+
+test('verifySpec: a pinned dashboardId verifies a dashboard renamed since the download', async () => {
+  const PIN = 'aaaa1111-2222-3333-4444-555566667777';
+  const spec = { entities: [], views: [], charts: [], forms: [],
+    dashboards: [{ name: 'Command Center - Event operations', dashboardId: PIN, tiles: [{ type: 'list', entity: 'account', viewId: 'v1' }] }],
+    appShell: { areas: [{ groups: [{ subAreas: [{ dashboard: 'Command Center - Event operations', title: 'Event operations' }] }] }] } };
+  const read = {
+    findTable: async () => null, findColumns: async () => [],
+    queryRecords: async (set, opts) => {
+      if (set !== 'systemform') return [];
+      if (opts.filter === `formid eq ${PIN}`) return [{ formid: PIN, name: 'Event operations', type: 0 }];
+      return []; // the stale name finds nothing
+    },
+    sitemapXml: async () => `<SiteMap><Area><Group><SubArea Id="ops" Url="/workplace/home_dashboards.aspx" DefaultDashboard="{${PIN.toUpperCase()}}" /></Group></Area></SiteMap>`,
+  };
+  const r = await verifySpec(spec, read);
+  for (const kind of ['dashboard', 'subarea', 'subarea-dashboard-launcher']) {
+    const chk = r.checks.find((c) => c.kind === kind);
+    assert.ok(chk && chk.present, `${kind}: ${JSON.stringify(chk)}`);
+  }
+});
+
+// The build KEEPS a nav entry's icon that was changed in the designer since the spec's baseline when
+// the spec still has the baseline's value (sitemap-merge.js), so verify must accept exactly that case —
+// or the build's own --verify fails on a value it deliberately left alone.
+test('verifySpec: an icon the build kept from the designer passes only in the case the build keeps it', async () => {
+  const spec = { entities: [{ schemaName: 'new_order', displayName: 'Order', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] }], views: [], charts: [], forms: [],
+    appShell: { areas: [{ groups: [{ subAreas: [{ entity: 'new_order', title: 'Orders', vectorIcon: '$webresource:new_old.svg' }] }] }] } };
+  const read = {
+    findTable: async () => ({ logicalName: 'new_order' }), findColumns: async () => [{ logicalName: 'new_name' }],
+    sitemapXml: async () => '<SiteMap><Area><Group><SubArea Id="o" Entity="new_order" VectorIcon="$webresource:new_designer.svg" /></Group></Area></SiteMap>',
+  };
+  const vec = (r) => r.checks.find((c) => c.kind === 'subarea-vectorIcon');
+  assert.strictEqual(vec(await verifySpec(spec, read)).present, false, 'no baseline: the spec value is required');
+  const kept = vec(await verifySpec(spec, read, { baselineSpec: JSON.parse(JSON.stringify(spec)) }));
+  assert.strictEqual(kept.present, true, 'the spec still has the baseline value: the designer\u2019s is kept');
+  assert.match(kept.detail, /changed in the designer since the spec\u2019s baseline/);
+  // The SPEC changed it since the baseline: the build writes it, so it must be there.
+  const baseline = JSON.parse(JSON.stringify(spec));
+  baseline.appShell.areas[0].groups[0].subAreas[0].vectorIcon = '$webresource:new_older.svg';
+  assert.strictEqual(vec(await verifySpec(spec, read, { baselineSpec: baseline })).present, false, 'an edit the spec made is still verified');
+});
+
+// The exemption is for a value the build KEPT on an entry that is there — never for a missing entry,
+// whose icon check is the one thing that fails when a URL entry is gone (there is no separate check).
+test('verifySpec: a nav entry missing from the sitemap fails its icon check, baseline or not', async () => {
+  const spec = { entities: [], views: [], charts: [], forms: [],
+    appShell: { areas: [{ groups: [{ subAreas: [{ url: 'https://contoso.example/help?a=1&b=2', title: 'Help', vectorIcon: '$webresource:new_help.svg' }] }] }] } };
+  const baselineSpec = JSON.parse(JSON.stringify(spec));
+  const vec = (r) => r.checks.find((c) => c.kind === 'subarea-vectorIcon');
+  for (const xml of ['<SiteMap />', '', null]) {
+    const read = { findTable: async () => null, findColumns: async () => [], sitemapXml: async () => xml };
+    assert.strictEqual(vec(await verifySpec(spec, read, { baselineSpec })).present, false, JSON.stringify(xml));
+  }
+  // The same entry present with a designer icon IS kept — its URL matched after the XML escaping is read.
+  const read = { findTable: async () => null, findColumns: async () => [],
+    sitemapXml: async () => '<SiteMap><Area><Group><SubArea Id="h" Url="https://contoso.example/help?a=1&amp;b=2" VectorIcon="$webresource:new_designer.svg" /></Group></Area></SiteMap>' };
+  assert.strictEqual(vec(await verifySpec(spec, read, { baselineSpec })).present, true);
+  // Two live entries for the same target: which one the build kept cannot be told, so nothing is.
+  const twice = { ...read, sitemapXml: async () => '<SiteMap><Area><Group><SubArea Id="h" Url="https://contoso.example/help?a=1&amp;b=2" VectorIcon="$webresource:new_designer.svg" /><SubArea Id="h2" Url="https://contoso.example/help?a=1&amp;b=2" /></Group></Area></SiteMap>' };
+  assert.strictEqual(vec(await verifySpec(spec, twice, { baselineSpec })).present, false);
+});
+
+// Only real elements are navigation, and their values are read the way an XML parser reads them.
+test('verifySpec: a kept icon is judged on real SubArea elements, fully XML-decoded', async () => {
+  const spec = { entities: [], views: [], charts: [], forms: [],
+    appShell: { areas: [{ groups: [{ subAreas: [{ url: 'https://contoso.example/help?a=1&b=2', title: 'Help', vectorIcon: '$webresource:new_help.svg' }] }] }] } };
+  const baselineSpec = JSON.parse(JSON.stringify(spec));
+  const vec = (r) => r.checks.find((c) => c.kind === 'subarea-vectorIcon');
+  const liveOf = (inner) => ({ findTable: async () => null, findColumns: async () => [], sitemapXml: async () => `<SiteMap><Area><Group>${inner}</Group></Area></SiteMap>` });
+  // `extra` goes FIRST: an attribute holding a raw `>` must come before the ones the match needs.
+  const entry = (url, extra = '') => `<SubArea Id="h"${extra} Url="${url}" VectorIcon="$webresource:new_designer.svg" />`;
+  // Commented out, or inside CDATA or a processing instruction, an entry is text — nothing was kept.
+  for (const wrapped of [`<!-- ${entry('https://contoso.example/help?a=1&amp;b=2')} -->`, `<![CDATA[${entry('https://contoso.example/help?a=1&amp;b=2')}]]>`, `<?note ${entry('https://contoso.example/help?a=1&amp;b=2')} ?>`]) {
+    assert.strictEqual(vec(await verifySpec(spec, liveOf(wrapped), { baselineSpec })).present, false, wrapped);
+  }
+  // Nor is an element the SDK does not model as navigation: another name that starts the same way, or a
+  // SubArea anywhere but directly under SiteMap/Area/Group (the SDK keeps those as opaque XML).
+  const url = 'https://contoso.example/help?a=1&amp;b=2';
+  for (const other of [
+    `<SubArea-Archived Id="h" Url="${url}" VectorIcon="$webresource:new_designer.svg" />`,
+    `<SubArea:Archived Id="h" Url="${url}" VectorIcon="$webresource:new_designer.svg" />`,
+    `<SubAreaÜ Id="h" Url="${url}" VectorIcon="$webresource:new_designer.svg" />`,
+    `<保存>${entry(url)}</保存>`,
+    `<Descriptions>${entry(url)}</Descriptions>`,
+    `<SubArea Id="outer" Entity="account">${entry(url)}</SubArea>`,
+  ]) {
+    assert.strictEqual(vec(await verifySpec(spec, liveOf(other), { baselineSpec })).present, false, other);
+  }
+  // A document the walk cannot account for completely grants no exemption at all: a document type
+  // declaration, a `<` that starts no tag, a closing tag out of order.
+  for (const xml of [
+    `<!DOCTYPE SiteMap><SiteMap><Area><Group>${entry(url)}</Group></Area></SiteMap>`,
+    `<SiteMap><Area><Group>${entry(url)} a < b</Group></Area></SiteMap>`,
+    `<SiteMap><Area><Group>${entry(url)}</Area></Group></SiteMap>`,
+    `<SiteMap><Area><Group>${entry(url)}`,
+  ]) {
+    const read = { findTable: async () => null, findColumns: async () => [], sitemapXml: async () => xml };
+    assert.strictEqual(vec(await verifySpec(spec, read, { baselineSpec })).present, false, xml);
+    assert.strictEqual(liveNavEntries(xml), null, `unreadable: ${xml}`);
+  }
+  // ...while the real entry after such a sibling is still found: the walk returns to the Group level.
+  assert.strictEqual(vec(await verifySpec(spec, liveOf(`<Descriptions><Description LCID="1033" Description="x" /></Descriptions>${entry(url)}`), { baselineSpec })).present, true);
+  // A numeric reference, either quote style, and a raw `>` inside a value are all the same live entry.
+  for (const live of [
+    entry('https://contoso.example/help?a=1&#38;b=2'),
+    entry('https://contoso.example/help?a=1&#x26;b=2'),
+    "<SubArea Id='h' Url='https://contoso.example/help?a=1&amp;b=2' VectorIcon='$webresource:new_designer.svg' />",
+    entry('https://contoso.example/help?a=1&amp;b=2', ' Description="a > b"'),
+  ]) {
+    assert.strictEqual(vec(await verifySpec(spec, liveOf(live), { baselineSpec })).present, true, live);
+  }
+});
+
+// Verify must line the baseline up the way the build does: by the id each dashboard and page resolves
+// to here. A pin the author dropped, while the name still finds the same dashboard, is the same entry.
+test('verifySpec: an icon kept on a dashboard or page entry is judged by the ids resolved here', async () => {
+  const A = 'aaaa1111-2222-3333-4444-555566667777';
+  const P = 'bbbb1111-2222-3333-4444-555566667777';
+  const spec = { schemaVersion: 2, entities: [], views: [], charts: [], forms: [],
+    dashboards: [{ name: 'Ops', tiles: [{ type: 'list', entity: 'account', viewId: 'v1' }] }],
+    pages: [{ key: 'home', name: 'Home', source: { kind: 'tsx', codeFile: 'home.tsx' } }],
+    appShell: { areas: [{ groups: [{ subAreas: [
+      { dashboard: 'Ops', title: 'Ops', vectorIcon: '$webresource:new_old.svg' },
+      { page: 'home', title: 'Home', vectorIcon: '$webresource:new_oldpage.svg' },
+    ] }] }] } };
+  const baselineSpec = JSON.parse(JSON.stringify(spec));
+  baselineSpec.dashboards[0].dashboardId = A; // downloaded pinned; the author has since dropped the pin
+  baselineSpec.__deployedIds = { dashboards: { Ops: A }, pages: { home: P } };
+  const read = {
+    findTable: async () => null, findColumns: async () => [],
+    queryRecords: async (set, opts) => (set === 'systemform' && /name eq 'Ops'/.test(opts.filter) ? [{ formid: A, name: 'Ops' }] : []),
+    manifest: async () => ({ pages: [{ key: 'home', pageId: P }] }),
+    sitemapPageIds: async () => [P], existenceIds: async () => [P],
+    sitemapXml: async () => '<SiteMap><Area><Group>'
+      + `<SubArea Id="ops" Url="/workplace/home_dashboards.aspx" DefaultDashboard="{${A.toUpperCase()}}" VectorIcon="$webresource:new_designer.svg" />`
+      + `<SubArea Id="home" GenPageId="${P}" VectorIcon="$webresource:new_designerpage.svg" />`
+      + '</Group></Area></SiteMap>',
+  };
+  const icons = (r) => r.checks.filter((c) => c.kind === 'subarea-vectorIcon').map((c) => [c.name, c.present]);
+  assert.deepStrictEqual(icons(await verifySpec(spec, read, { baselineSpec })), [['Ops', true], ['Home', true]]);
+  // Without the ids a dashboard or page resolves to here, nothing lines up and both are required again.
+  const unresolved = { ...read, queryRecords: async () => [], manifest: async () => ({ pages: [] }) };
+  assert.deepStrictEqual(icons(await verifySpec(spec, unresolved, { baselineSpec })), [['Ops', false], ['Home', false]]);
+});
+
 test('sitemapXmlFor resolves appmodule -> component 62 -> sitemap', async () => {
   const sdk = {
     queryRecords: async (set) => {
@@ -249,6 +472,123 @@ test('verifySpec pages: a residual PAGEREF_ in deployed nav code FAILS the no-pa
   const r = await verifySpec(pageSpec(), read);
   assert.ok(r.checks.some((c) => c.kind === 'page-no-pageref' && !c.present));
   assert.strictEqual(r.ok, false);
+});
+
+// Verification reads a deployed page with the reader the build uses, and trusts it no further than the build does. An id in a "call" that
+// the lexer read only by guess proves no edge: after `of/2` it reads a regex up to the next `/`, and the `/*` inside it opens a comment that
+// ends inside a string, so the string's text — here a navigation call to the target — is read as code.
+test('verifySpec pages: an id in a call the lexer reads only by guess does not prove the nav edge', async () => {
+  const forgery = ['const of = 12;', 'const count = of/2; const re = /\\/*$/;', `const note = "*/ navigateTo({pageType:'generative', pageId:'${GP_DETAIL}'}) /*";`, ''].join('\n');
+  const verify = async (code) => verifySpec(pageSpec(), pageRead({ sitemapIds: [GP_OVERVIEW, GP_DETAIL], existenceIds: [GP_OVERVIEW, GP_DETAIL], manifest: BOTH_MANIFEST, sitemap: SITEMAP_OK, code: { [GP_OVERVIEW]: code } }));
+  const forged = await verify(forgery);
+  assert.ok(forged.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && !c.present), 'the string is not a navigation');
+  assert.strictEqual(forged.ok, false);
+  // The same call, with nothing read by guess before it, proves the edge.
+  const real = await verify(`${forgery.split('\n')[0]}\n${NAV_TO(GP_DETAIL)}\n`);
+  assert.ok(real.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && c.present));
+  assert.strictEqual(real.ok, true, JSON.stringify(real.missing));
+});
+
+// A PAGEREF_ token the lexer hides is still a token that shipped: this page was resolved the way a build resolved it, and its second call
+// sits behind a false comment, so the oracle finds no target for it and the old check passed.
+test('verifySpec pages: a PAGEREF_ token the lexer hid in deployed code FAILS the no-pageref check, naming where', async () => {
+  const deployed = OBJECT_DIVISION_PAGE.replace('"PAGEREF_detail"', `"${GP_DETAIL}"`);
+  assert.strictEqual(deployed.split('PAGEREF_detail').length - 1, 1, 'one call resolved, one left');
+  const read = pageRead({ sitemapIds: [GP_OVERVIEW, GP_DETAIL], existenceIds: [GP_OVERVIEW, GP_DETAIL], manifest: BOTH_MANIFEST, sitemap: SITEMAP_OK, code: { [GP_OVERVIEW]: deployed } });
+  const r = await verifySpec(pageSpec(), read);
+  const check = r.checks.find((c) => c.kind === 'page-no-pageref');
+  assert.ok(check && !check.present);
+  assert.match(check.detail, /PAGEREF_detail \(line 5, column \d+, after the "brace" ambiguity at line 4, column \d+\)/);
+  assert.ok(r.checks.some((c) => c.kind === 'page-nav' && c.present), 'the call before the guess still proves the edge');
+  assert.strictEqual(r.ok, false);
+  // No comment is exempt: a token in one is a token that shipped. A comment with none is not a leftover.
+  const withComment = (comment) => verifySpec(pageSpec(), pageRead({ sitemapIds: [GP_OVERVIEW, GP_DETAIL], existenceIds: [GP_OVERVIEW, GP_DETAIL], manifest: BOTH_MANIFEST, sitemap: SITEMAP_OK, code: { [GP_OVERVIEW]: `${comment}\n${NAV_TO(GP_DETAIL)}` } }));
+  const commented = await withComment('// PAGEREF_detail was resolved at deploy');
+  const leftover = commented.checks.find((c) => c.kind === 'page-no-pageref');
+  assert.ok(leftover && !leftover.present, 'a token in a // comment on its own line is a leftover');
+  assert.match(leftover.detail, /PAGEREF_detail \(line 1, column 4\)/);
+  assert.strictEqual(commented.ok, false);
+  const clean = await withComment('// the link was resolved at deploy');
+  assert.ok(clean.checks.some((c) => c.kind === 'page-no-pageref' && c.present));
+  assert.strictEqual(clean.ok, true, JSON.stringify(clean.missing));
+});
+
+// A call is trusted only if all of it lies before the first place the lexer guessed. The members of an options object after a guess are
+// not read for certain, and a getter or a computed key there can make the call something else — here the call is
+// `{ pageType: "entityrecord", … }` when it runs — so an id in a call whose object runs through a guess proves no edge.
+test('verifySpec pages: an id in a call whose options object reaches a guess does not prove the nav edge, and one closed before it does', async () => {
+  const verify = (code) => verifySpec(pageSpec(), pageRead({ sitemapIds: [GP_OVERVIEW, GP_DETAIL], existenceIds: [GP_OVERVIEW, GP_DETAIL], manifest: BOTH_MANIFEST, sitemap: SITEMAP_OK, code: { [GP_OVERVIEW]: code } }));
+  const reaching = await verify(MISREAD_PAGES['inside an options object'].code.replace('"PAGEREF_detail"', `"${GP_DETAIL}"`));
+  assert.ok(!reaching.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && c.present), 'the edge is never reported present');
+  assert.ok(reaching.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && !c.present));
+  assert.strictEqual(reaching.ok, false);
+  // The same guess after a call that is closed before it changes nothing about that call.
+  const closed = await verify(`${NAV_TO(GP_DETAIL)}\nconst count = {valueOf(){return 12;}}/2; const half = total / 2;\n`);
+  assert.ok(closed.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && c.present));
+  assert.strictEqual(closed.ok, true, JSON.stringify(closed.missing));
+});
+
+// Every misread page (tests/helpers/misread-page.js), as the build would deploy it: only what the reader trusts is
+// resolved. Verification must not pass it — a token that lies at or after the first guess is still in the page, and an id in a call that
+// reaches the guess proves no edge — and a call in a template line that starts with `//`, which runs, is evidence like any other.
+test('verifySpec pages: a misread page deployed as far as the reader trusts it FAILS, and a call in a template line that starts with // proves the edge', async () => {
+  const verify = (code) => verifySpec(pageSpec(), pageRead({ sitemapIds: [GP_OVERVIEW, GP_DETAIL], existenceIds: [GP_OVERVIEW, GP_DETAIL], manifest: BOTH_MANIFEST, sitemap: SITEMAP_OK, code: { [GP_OVERVIEW]: code } }));
+  for (const [name, { code }] of Object.entries(MISREAD_PAGES)) {
+    const r = await verify(code.replace('"PAGEREF_detail"', `"${GP_DETAIL}"`));
+    assert.strictEqual(r.ok, false, name);
+  }
+  // JSX text that looks like parameters is text: the regex after the next arrow holds a token that no rewrite resolved, and verification says so.
+  const text = await verify(JSX_TEXT_PAGE.replace('"PAGEREF_detail"', `"${GP_DETAIL}"`));
+  const leftover = text.checks.find((c) => c.kind === 'page-no-pageref');
+  assert.ok(leftover && !leftover.present);
+  assert.match(leftover.detail, /PAGEREF_detail \(line 5, column \d+\)/);
+  assert.strictEqual(text.ok, false);
+  const ok = await verify(TEMPLATE_LINE_PAGE.replace('"PAGEREF_detail"', `"${GP_DETAIL}"`));
+  assert.ok(ok.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && c.present));
+  assert.ok(ok.checks.some((c) => c.kind === 'page-no-pageref' && c.present));
+  assert.strictEqual(ok.ok, true, JSON.stringify(ok.missing));
+});
+
+// After a unary or binary operator a `<` opens an element whatever follows its name (`a === <T extends X>text</T>`), so the regex after it is data. Deployed as the build
+// resolves it — the real call only — the token in the regex is still in the page, and verification says so with no guess named; the real call still proves the edge.
+test('verifySpec pages: a regex after an element that follows a unary or binary operator leaves a token that shipped, and FAILS the no-pageref check', async () => {
+  const verify = (code) => verifySpec(pageSpec(), pageRead({ sitemapIds: [GP_OVERVIEW, GP_DETAIL], existenceIds: [GP_OVERVIEW, GP_DETAIL], manifest: BOTH_MANIFEST, sitemap: SITEMAP_OK, code: { [GP_OVERVIEW]: code } }));
+  for (const { name, code } of ELEMENT_AFTER_OPERATOR_PAGES) {
+    const r = await verify(code.replace('"PAGEREF_detail"', `"${GP_DETAIL}"`));
+    const leftover = r.checks.find((c) => c.kind === 'page-no-pageref');
+    assert.ok(leftover && !leftover.present, name);
+    assert.match(leftover.detail, new RegExp(`PAGEREF_detail \\(line ${ELEMENT_PAGE_TOKEN_LINE}, column \\d+\\)`), name);
+    assert.doesNotMatch(leftover.detail, /ambiguity/, name);
+    assert.ok(r.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && c.present), `${name}: the real call still proves the edge`);
+    assert.strictEqual(r.ok, false, name);
+  }
+});
+
+// JSX that holds what looks like a function type's parameter list compiles as an element, so the regex after it is data. Deployed as the build resolves it — the real call only —
+// the token in the regex is still in the page, and verification says so with no guess named; the real call still proves the edge.
+test('verifySpec pages: a regex after an element whose text looks like a parameter list leaves a token that shipped, and FAILS the no-pageref check', async () => {
+  const verify = (code) => verifySpec(pageSpec(), pageRead({ sitemapIds: [GP_OVERVIEW, GP_DETAIL], existenceIds: [GP_OVERVIEW, GP_DETAIL], manifest: BOTH_MANIFEST, sitemap: SITEMAP_OK, code: { [GP_OVERVIEW]: code } }));
+  for (const { name, code } of ELEMENT_LOOKALIKE_PAGES) {
+    const r = await verify(code.replace('"PAGEREF_detail"', `"${GP_DETAIL}"`));
+    const leftover = r.checks.find((c) => c.kind === 'page-no-pageref');
+    assert.ok(leftover && !leftover.present, name);
+    assert.match(leftover.detail, new RegExp(`PAGEREF_detail \\(line ${ELEMENT_PAGE_TOKEN_LINE}, column \\d+\\)`), name);
+    assert.doesNotMatch(leftover.detail, /ambiguity/, name);
+    assert.ok(r.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && c.present), `${name}: the real call still proves the edge`);
+    assert.strictEqual(r.ok, false, name);
+  }
+});
+
+// A generic function type whose parameter list holds a type argument or an object type is a type, for certain: a page deployed with it is read as it is, the call after it proves the
+// edge, and no token or guess is left. (A rule that took each for a guess at the `<` trusted nothing after it, so the edge was never proved.)
+test('verifySpec pages: a call after a generic function type with a type argument or an object type in its parameter list proves the nav edge', async () => {
+  const verify = (code) => verifySpec(pageSpec(), pageRead({ sitemapIds: [GP_OVERVIEW, GP_DETAIL], existenceIds: [GP_OVERVIEW, GP_DETAIL], manifest: BOTH_MANIFEST, sitemap: SITEMAP_OK, code: { [GP_OVERVIEW]: code } }));
+  for (const { name, code } of FUNCTION_TYPE_PAGES) {
+    const r = await verify(code.replace('"PAGEREF_detail"', `"${GP_DETAIL}"`));
+    assert.ok(r.checks.some((c) => c.kind === 'page-nav' && c.name === 'Overview -> detail' && c.present), `${name}: the edge is proved`);
+    assert.ok(r.checks.some((c) => c.kind === 'page-no-pageref' && c.present), `${name}: no token is left`);
+    assert.strictEqual(r.ok, true, `${name}: ${JSON.stringify(r.missing)}`);
+  }
 });
 
 test('verifySpec pages: a page missing from existence FAILS the page check', async () => {
@@ -579,11 +919,12 @@ test('verifySpec: no default-form check is emitted for a reused or stock table t
     "the solution's own custom table is still checked");
 });
 
-test('verifySpec: default-form check is reader-gated for existence-only callers', async () => {  const spec = { entities: [], views: [], charts: [], appShell: { areas: [] },
+test('verifySpec: default-form flag check remains reader-gated with readable form identities', async () => {  const spec = { entities: [], views: [], charts: [], appShell: { areas: [] },
     forms: [{ entity: 'new_ticket', name: 'Agent Form', formType: 'Main', isDefault: true }] };
   const read = {
     findTable: async () => null, findColumns: async () => [], sitemapXml: async () => '',
     queryRecords: async (set) => (set === 'systemform' ? [{ formid: 'agent-form-id' }] : []),
+    formTopology: async () => '<form><DisplayConditions Order="0"/></form>',
   };
 
   const r = await verifySpec(spec, read);
@@ -861,21 +1202,23 @@ const aiRead = (overrides, effective, opts = {}) => {
   };
 };
 const ALL_ON = { formFill: true, nlSearch: true, nlChart: true, m365: true };
-// The AI form-fill family does not use 1/0: 0 = platform default, 1 = DISABLED, 2 = ENABLED
-// (SDK SETTING_CODEC, mirroring the admin UI). An ENABLED override therefore holds '2'.
+// Every per-app AI setting is a tri-state, not 1/0, and On is '2' for all of them: most use
+// 0 = Default, 1 = Off, 2 = On, while NL charts use 0 = Off, 1 = Auto, 2 = On (the platform's own
+// settings UI; AB#6714731). An ENABLED override therefore holds '2'.
 const ALL_SETTINGS_ON = {
   FormFillBarUXEnabled: '2',
-  NLGridSearchSetting: '1',
-  NLChartDataVisualizationSetting: '1',
-  m365copilotmodelappenabled: '1',
+  NLGridSearchSetting: '2',
+  NLChartDataVisualizationSetting: '2',
+  m365copilotmodelappenabled: '2',
 };
 // The overrides a DEFAULT build writes: `resolveAiFlags` seeds formFill/nlSearch/nlChart on and
-// m365 off for any spec carrying `ai`, and verify reconciles that whole set — so a test focusing on
-// ONE feature must still satisfy the other three or it is asserting on unrelated misses.
+// leaves m365 at its platform default ('0') for any spec carrying `ai`, and verify reconciles that
+// whole set — so a test focusing on ONE feature must still satisfy the other three or it is
+// asserting on unrelated misses.
 const DEFAULT_SETTINGS = {
   FormFillBarUXEnabled: '2',
-  NLGridSearchSetting: '1',
-  NLChartDataVisualizationSetting: '1',
+  NLGridSearchSetting: '2',
+  NLChartDataVisualizationSetting: '2',
   m365copilotmodelappenabled: '0',
 };
 const aiMissing = (r, feature) => r.missing.find((m) => m.kind === 'ai-feature' && m.name === feature);
@@ -924,14 +1267,33 @@ test('verifySpec: an explicit numeric AI value (2 = on for everyone) is compared
   assert.strictEqual(match.ok, true, JSON.stringify(match.missing));
 });
 
-test('verifySpec: an explicit OFF request is verified against 0, not treated as dont-care', async () => {
+test('verifySpec: an explicit OFF request is verified against the setting\u2019s Off value, not treated as dont-care', async () => {
   const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: { formFill: false } } }, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '2' }));
   assert.strictEqual(r.ok, false);
-  // An explicit disable is still WRITTEN (disabling is never gated), so the override must hold '0'.
+  // An explicit disable is still WRITTEN (disabling is never gated), so the override must hold Off.
   // OFF for this family is '1' (DISABLED). '0' would be the platform default — deliberately NOT
-  // accepted as off, because it defers to flighting rather than turning the feature off.
+  // accepted as off, because it defers to the platform rather than turning the feature off.
   const ok = await verifyAi({ ...AI_BASE, ai: { appFeatures: { formFill: false } } }, aiRead({ ...DEFAULT_SETTINGS, FormFillBarUXEnabled: '1' }));
   assert.strictEqual(ok.ok, true, JSON.stringify(ok.missing));
+});
+
+test('verifySpec: Off is each setting\u2019s own value \u2014 1 for grid search and M365, 0 for charts (AB#6714731)', async () => {
+  const spec = { ...AI_BASE, ai: { appFeatures: { formFill: true, nlSearch: false, nlChart: false, m365: false } } };
+  const ok = await verifyAi(spec, aiRead({ FormFillBarUXEnabled: '2', NLGridSearchSetting: '1', NLChartDataVisualizationSetting: '0', m365copilotmodelappenabled: '1' }));
+  assert.strictEqual(ok.ok, true, JSON.stringify(ok.missing));
+  // What earlier builds wrote for `false` was '0' everywhere: Off for charts, but only Default for grid
+  // search and M365, which defers to the platform rather than turning the feature off.
+  const old = await verifyAi(spec, aiRead({ FormFillBarUXEnabled: '2', NLGridSearchSetting: '0', NLChartDataVisualizationSetting: '0', m365copilotmodelappenabled: '0' }));
+  assert.deepStrictEqual(old.missing.filter((m) => m.kind === 'ai-feature').map((m) => m.name).sort(), ['m365', 'nlSearch']);
+});
+
+test('verifySpec: the values earlier builds wrote for ON do not verify as on (AB#6714731)', async () => {
+  // `true` used to be written as '1' outside the form-fill family — Off for grid search and M365,
+  // Auto for charts — and verify expected the same '1', so the build and its check agreed on it.
+  const r = await verifyAi({ ...AI_BASE, ai: { appFeatures: ALL_ON } }, aiRead({ FormFillBarUXEnabled: '2', NLGridSearchSetting: '1', NLChartDataVisualizationSetting: '1', m365copilotmodelappenabled: '1' }));
+  assert.deepStrictEqual(r.missing.filter((m) => m.kind === 'ai-feature').map((m) => m.name).sort(), ['m365', 'nlChart', 'nlSearch']);
+  assert.match(aiMissing(r, 'nlSearch').detail, /requested '2'/);
+  assert.match(aiMissing(r, 'nlChart').detail, /holds '1'/);
 });
 
 test('verifySpec: an unreadable override row fails CLOSED (cannot prove => not present)', async () => {
@@ -969,8 +1331,9 @@ test('verifySpec: an undeclared feature is still checked when the spec declares 
   // The partial-declaration half of the same hole: `{ appFeatures: { m365: true } }` still causes
   // the build to write formFill/nlSearch/nlChart.
   const spec = { ...AI_BASE, ai: { appFeatures: { m365: true } } };
-  const r = await verifyAi(spec, aiRead({ m365copilotmodelappenabled: '1' }));
+  const r = await verifyAi(spec, aiRead({ m365copilotmodelappenabled: '2' }));
   assert.strictEqual(r.checks.filter((c) => c.kind === 'ai-feature').length, 4);
+  assert.ok(!aiMissing(r, 'm365'), 'the declared feature itself is in place');
   assert.ok(aiMissing(r, 'formFill'), 'the undeclared formFill default is reconciled');
   assert.strictEqual(r.ok, false);
 });
@@ -1053,17 +1416,20 @@ test('verifySpec: a Boolean-spelled override value compares as on/off, independe
   // The normalization is deliberately UNCONDITIONAL: branching on a `dataType` read made the
   // authoritative comparison depend on a second request that can fail independently, so a transport
   // error on that read silently flipped a correctly-applied feature to FAIL.
-  // Requested on nlSearch, not formFill: this asserts that a Boolean SPELLING of the stored value is
-  // reconciled with the requested one, and that only makes sense for a setting whose on/off really
-  // is 1/0. The form-fill family is a 0/1/2 enum (0 = platform default, 1 = disabled, 2 = enabled)
-  // and never stores 'true'/'false', so pointing this at formFill would assert a shape the platform
-  // cannot produce — and, with the request and the stub naming different settings, it could pass or
-  // fail for reasons unrelated to the normalisation under test.
+  // No per-app AI setting is Boolean today — all of them store 0/1/2 — so this guards the
+  // normalisation itself: a Boolean spelling means the feature's OWN on/off value ('true' is '2'),
+  // never the generic '1', which for grid search is Off. Mapping it to '1' would let a stored
+  // 'true' satisfy an explicit OFF request.
   const spec = { ...AI_BASE, ai: { appFeatures: { nlSearch: true } } };
   return verifyAi(spec, aiRead({ ...DEFAULT_SETTINGS, NLGridSearchSetting: 'true' })).then(async (on) => {
     assert.strictEqual(on.ok, true, JSON.stringify(on.missing));
     const off = await verifyAi(spec, aiRead({ ...DEFAULT_SETTINGS, NLGridSearchSetting: 'false' }));
     assert.strictEqual(off.ok, false, 'a Boolean-spelled setting reading false must still fail');
+    const wantOff = { ...AI_BASE, ai: { appFeatures: { nlSearch: false } } };
+    const inverted = await verifyAi(wantOff, aiRead({ ...DEFAULT_SETTINGS, NLGridSearchSetting: 'true' }));
+    assert.ok(aiMissing(inverted, 'nlSearch'), "a stored 'true' must not satisfy an explicit OFF ('1') request");
+    const offOk = await verifyAi(wantOff, aiRead({ ...DEFAULT_SETTINGS, NLGridSearchSetting: 'false' }));
+    assert.ok(!aiMissing(offOk, 'nlSearch'), "a stored 'false' is this setting's Off");
   });
 });
 
@@ -1076,6 +1442,37 @@ test('verifySpec: a failing context read cannot flip a proven feature to FAIL', 
   return verifyAi(spec, read).then((r) => {
     assert.strictEqual(r.ok, true, JSON.stringify(r.missing));
   });
+});
+
+// #583: the routing description is asserted only when the spec sets one, against the row's own
+// `appmodule.aiappdescription`, found by the identity the build wrote under.
+test('#583 verify checks the deployed routing description when the spec sets one', async () => {
+  const base = { solution: { publisherPrefix: 'new' }, app: { name: 'Ops', uniqueName: 'new_ops' } };
+  const withRouting = { ...base, app: { ...base.app, aiDescription: 'Route ops work here.' } };
+  const reader = (rows, fail) => ({
+    sitemapXml: async () => '',
+    queryRecords: async (set, o) => {
+      if (set !== 'appmodule') return [];
+      if (fail) throw new Error('read denied');
+      assert.match(o.filter, /uniquename eq 'new_ops'/, 'read by the identity the build wrote under');
+      return rows;
+    },
+  });
+  const check = async (spec, read) => (await verifySpec(spec, read)).checks.find((c) => c.kind === 'app-ai-description');
+
+  assert.strictEqual((await check(withRouting, reader([{ aiappdescription: 'Route ops work here.' }]))).present, true);
+  for (const [what, read, re] of [
+    ['a different value', reader([{ aiappdescription: 'Other text' }]), /differs from the spec/],
+    ['no value', reader([{ aiappdescription: null }]), /no routing description/],
+    ['no app', reader([]), /no app module with unique name 'new_ops'/],
+    ['an unreadable row', reader([], true), /could not read the app's routing description: read denied/],
+  ]) {
+    const c = await check(withRouting, read);
+    assert.strictEqual(c.present, false, what);
+    assert.match(c.detail, re, what);
+  }
+  assert.strictEqual(await check(base, reader([{ aiappdescription: 'Written by the platform.' }])), undefined,
+    'nothing is asserted when the spec leaves it to the platform');
 });
 
 // ---------------------------------------------------------------------------
@@ -1312,6 +1709,84 @@ test('verify tolerates deployed sections and fields the spec never declared', as
   const chk = await topoCheck(xml);
   assert.strictEqual(chk.present, true, `extras must not fail the authored subset; got ${chk && chk.detail}`);
 });
+
+// An authored section may share the name the engine gives its timeline host. Verify matches containers
+// the way the BUILD does, and the build never lets an authored section take an engine host by name —
+// so neither may verify, or it grades the author's fields against the timeline section.
+test('verify never matches an authored section to an engine host that shares its name', async () => {
+  const xml = `<form><tabs><tab name="tab_overview"><columns>`
+    + `<column width="60%"><sections><section name="sec_left"><rows><row><cell><control datafieldname="new_name" /></cell></row></rows></section></sections></column>`
+    + `<column width="40%"><sections>`
+    + `<section name="section_notes"><rows><row><cell><control id="notescontrol" classid="{06375649-c143-495e-a496-c962e5b4488e}" /></cell></row></rows></section>`
+    + `<section name="section_notes"><rows><row><cell><control datafieldname="new_notes" /></cell></row></rows></section>`
+    + `</sections></column>`
+    + `</columns></tab></tabs></form>`;
+  const chk = await topoCheck(xml, (spec) => { spec.forms[0].tabs[0].columns[1].sections[0].name = 'section_notes'; });
+  assert.strictEqual(chk.present, true, `the authored section is the one holding its field; got ${chk && chk.detail}`);
+});
+
+// A host a maker added a bound field to is no longer engine-owned by structure, yet it still holds the
+// timeline — and verify reads FormXML, so it must see the control's classid to know. The build skips such a
+// host by name, label and position, so verify must too, or it grades the author's fields against it.
+test('verify never matches an authored section to an engine host a maker added a field to', async () => {
+  const host = `<section name="section_notes"><labels><label description="Notes" languagecode="1033" /></labels><rows>`
+    + `<row><cell><control id="notescontrol" classid="{06375649-C143-495E-A496-C962E5B4488E}" /></cell></row>`
+    + `<row><cell><control id="new_x" classid="{4273EDBD-AC1D-40d3-9FB2-095C621B552D}" datafieldname="new_x" /></cell></row></rows></section>`;
+  const xml = (second) => `<form><tabs><tab name="tab_overview"><columns>`
+    + `<column width="60%"><sections><section name="sec_left"><rows><row><cell><control datafieldname="new_name" /></cell></row></rows></section></sections></column>`
+    + `<column width="40%"><sections>${host}${second}</sections></column>`
+    + `</columns></tab></tabs></form>`;
+  // By name: the author's own section_notes sits after the host.
+  const byName = await topoCheck(xml(`<section name="section_notes"><rows><row><cell><control datafieldname="new_notes" /></cell></row></rows></section>`),
+    (spec) => { spec.forms[0].tabs[0].columns[1].sections[0].name = 'section_notes'; });
+  assert.strictEqual(byName.present, true, `by name; got ${byName && byName.detail}`);
+  // By label: the author's section was deployed under another name, and carries the host's label.
+  const byLabel = await topoCheck(xml(`<section name="section_x"><labels><label description="Notes" languagecode="1033" /></labels><rows><row><cell><control datafieldname="new_notes" /></cell></row></rows></section>`),
+    (spec) => Object.assign(spec.forms[0].tabs[0].columns[1].sections[0], { name: 'sec_renamed', label: 'Notes' }));
+  assert.strictEqual(byLabel.present, true, `by label; got ${byLabel && byLabel.detail}`);
+});
+
+// Engine-owned is a STRUCTURE (only unbound controls), which cannot say who laid a section out: an
+// authored section declared with no fields that a maker filled with a web resource looks the same. Its
+// authored name is the evidence it is the author's, so verify finds it by that name — as the build does —
+// instead of reporting it absent.
+test('verify finds an authored section a maker filled with a control by its name', async () => {
+  const xml = `<form><tabs><tab name="tab_overview"><columns>`
+    + `<column width="60%"><sections>`
+    + `<section name="sec_left"><rows><row><cell><control datafieldname="new_name" /></cell></row></rows></section>`
+    + `<section name="sec_related"><rows><row><cell><control id="WebResource_banner" classid="{9FDF5F91-88B1-47f4-AD53-C11EFC01A01D}" /></cell></row></rows></section>`
+    + `</sections></column>`
+    + `<column width="40%"><sections><section name="sec_right"><rows><row><cell><control datafieldname="new_notes" /></cell></row></rows></section></sections></column>`
+    + `</columns></tab></tabs></form>`;
+  const chk = await topoCheck(xml, (spec) => { spec.forms[0].tabs[0].columns[0].sections.push({ name: 'sec_related', label: 'Related', fields: [] }); });
+  assert.strictEqual(chk.present, true, `the maker's control does not hide the authored section; got ${chk && chk.detail}`);
+});
+
+// Verify matches containers exactly as the build does, and the build no longer lets a label or
+// position match take a section ANOTHER authored section owns by name (it moves that section to where
+// its own want places it). Here the section NAMED sec_wide sits in tab_one holding sec_main's field,
+// and an unnamed one in tab_two holds sec_wide's: every field is in the right tab, but a form script
+// that addresses sec_wide by name reaches tab_one. Matching sec_main to it by label passed that form.
+test('verify: the label pass skips a section another authored section owns by name', async () => {
+  const section = (name, label, field) => `<section${name ? ` name="${name}"` : ''}><labels><label description="${label}" languagecode="1033"/></labels>`
+    + `<rows><row><cell><control datafieldname="${field}" /></cell></row></rows></section>`;
+  const tab = (name, label, sections) => `<tab name="${name}"><labels><label description="${label}" languagecode="1033"/></labels>`
+    + `<columns><column width="100%"><sections>${sections}</sections></column></columns></tab>`;
+  const twoTabs = (spec) => {
+    spec.forms[0].tabs = [
+      { name: 'tab_one', label: 'One', columns: [{ width: '100%', sections: [{ name: 'sec_main', label: 'Main', columns: 1, fields: ['new_name'] }] }] },
+      { name: 'tab_two', label: 'Two', columns: [{ width: '100%', sections: [{ name: 'sec_wide', label: 'Wide', columns: 1, fields: ['new_notes'] }] }] },
+    ];
+  };
+  const misnamed = `<form><tabs>${tab('tab_one', 'One', section('sec_wide', 'Main', 'new_name'))}${tab('tab_two', 'Two', section(null, 'Wide', 'new_notes'))}</tabs></form>`;
+  const chk = await topoCheck(misnamed, twoTabs);
+  assert.strictEqual(chk.present, false, 'a form whose sec_wide is in the wrong tab must not verify');
+  assert.match(chk.detail, /section 'sec_main' is absent from tab 'tab_one'/);
+  // Control: the shape the build produces for that spec verifies.
+  const built = `<form><tabs>${tab('tab_one', 'One', section('sec_main', 'Main', 'new_name'))}${tab('tab_two', 'Two', section('sec_wide', 'Wide', 'new_notes'))}</tabs></form>`;
+  const ok = await topoCheck(built, twoTabs);
+  assert.strictEqual(ok.present, true, `got ${ok.detail}`);
+});
 // --- #N3: the verifier must match containers the way the BUILD does ------------------------------
 // LIVE-REPRODUCED: reshaping an auto-built form to an explicit layout succeeds — the build reuses
 // the existing containers and deliberately does NOT rename them, because form scripts and business
@@ -1483,6 +1958,60 @@ const shapeSpec = (fields, cols = 2) => (spec) => {
   spec.forms[0].tabs = [{ name: 'tab_overview', label: 'Overview', columns: [
     { width: '100%', sections: [{ name: 'sec_left', label: 'L', columns: cols, fields }] }] }];
 };
+
+const identityXml = (secondCellId, secondControlId, suffix = '') =>
+  `<form><DisplayConditions Order="0"/><tabs><tab name="tab_overview"><labels><label description="Overview"/></labels><columns>`
+  + `<column width="100%"><sections><section name="sec_left" columns="11"><labels><label description="L"/></labels><rows>`
+  + `<row><cell id="00000000-0000-4000-8000-000000000001"><control id="new_name" datafieldname="new_name"/></cell>`
+  + `<cell id="${secondCellId}"><control id="${secondControlId}" datafieldname="new_notes"/></cell></row>`
+  + `</rows></section></sections></column></columns></tab></tabs>${suffix}</form>`;
+
+for (const [what, cellId, controlId, detail] of [
+  ['cell', '00000000-0000-4000-8000-000000000001', 'new_notes', /duplicate cell id/i],
+  ['brace-wrapped cell', '{00000000-0000-4000-8000-000000000001}', 'new_notes', /duplicate cell id/i],
+  ['control', '00000000-0000-4000-8000-000000000002', 'new_name', /duplicate control id/i],
+]) {
+  for (const explicit of [true, false]) {
+    test(`form identities: duplicate ${what} ids fail ${explicit ? 'explicit' : 'auto'} verification`, async () => {
+      const spec = TOPO_SPEC();
+      if (explicit) shapeSpec(['new_name', 'new_notes'])(spec);
+      else spec.forms = [{ entity: 'new_ticket', name: 'Ticket Main' }];
+      const result = await verifySpec(spec, topoRead(identityXml(cellId, controlId)));
+      assert.strictEqual(result.ok, false, 'field membership and occupancy cannot excuse a duplicated identity');
+      assert.ok(result.missing.some((c) => detail.test(c.detail)), JSON.stringify(result.checks));
+    });
+  }
+}
+
+test('form identities: header and body controls share the form-wide uniqueness scope', async () => {
+  const spec = TOPO_SPEC();
+  shapeSpec(['new_name', 'new_notes'])(spec);
+  const result = await verifySpec(spec, topoRead(identityXml('00000000-0000-4000-8000-000000000002', 'new_notes',
+    '<header><control id="new_name" datafieldname="new_name"/></header>')));
+  assert.strictEqual(result.ok, false);
+  assert.ok(result.missing.some((c) => /duplicate control id.*new_name/i.test(c.detail)));
+});
+
+test('form identities: repeated field bindings with distinct ids and XML trivia are not duplicates', async () => {
+  const spec = TOPO_SPEC();
+  shapeSpec(['new_name', 'new_notes'])(spec);
+  const xml = identityXml('00000000-0000-4000-8000-000000000002', 'new_notes',
+    '<header><control id="header_new_name" datafieldname="new_name"/></header>'
+    + '<!-- <cell id="00000000-0000-4000-8000-000000000001"><control id="new_name"/></cell> -->'
+    + '<opaque><![CDATA[<control id="new_name"/>]]></opaque>');
+  const result = await verifySpec(spec, topoRead(xml));
+  assert.strictEqual(result.ok, true, JSON.stringify(result.missing));
+});
+
+test('form identities: an auto form without a readable XML source cannot claim verified identities', async () => {
+  const spec = TOPO_SPEC();
+  spec.forms = [{ entity: 'new_ticket', name: 'Ticket Main' }];
+  const read = topoRead(null);
+  delete read.formTopology;
+  const result = await verifySpec(spec, read);
+  assert.strictEqual(result.ok, false);
+  assert.ok(result.missing.some((c) => /identit|layout.*unverified/i.test(c.detail)));
+});
 
 test('verify FAILS when a deployed row carries more content than its grid', async () => {
   // Two colspan-1 cells plus a widened one: 2 + 1 = 3 columns of content in a 2-column section.
@@ -1673,4 +2202,437 @@ test('verify PASSES when the field really is in the requested tab', async () => 
       { width: '100%', sections: [{ name: 'sec_fields', label: 'F', columns: 1, fields: ['new_name'] }] }] }];
   });
   assert.strictEqual(chk.present, true, `a real relocation must verify; got ${chk && chk.detail}`);
+});
+
+// --- Verify proves the ORDER, form-column WIDTHS and display STATE a layout declares ------------------
+//
+// Each of these deployed wrong and verified PASS: a form-column's width, a tab's or section's visibility,
+// expansion or label display, a field's hidden or read-only state, and the order of tabs and of the
+// sections in a form-column. The build converges every one of them, so each is now proven — against what
+// the COMPILER emits, so an undeclared width is the equal split and an undeclared flag is `true`.
+const attrsOf = (o) => Object.entries(o || {}).map(([k, v]) => ` ${k}="${v}"`).join('');
+const layoutXml = (tabs) => '<form><tabs>' + tabs.map((t) => `<tab name="${t.name}"${attrsOf(t.attrs)}><columns>`
+  + t.columns.map((c) => `<column width="${c.width}"><sections>`
+    + c.sections.map((s) => `<section name="${s.name}" columns="1"${attrsOf(s.attrs)}><rows>`
+      + (s.cells || []).map((cell) => `<row><cell${attrsOf(cell.attrs)}><control datafieldname="${cell.field}"${attrsOf(cell.control)} /></cell></row>`).join('')
+      + '</rows></section>').join('')
+    + '</sections></column>').join('')
+  + '</columns></tab>').join('') + '</tabs></form>';
+// TOPO_SPEC's form as deployed — tab_overview at 60%/40%, sec_left holding new_name, sec_right new_notes —
+// with every display flag absent unless a test sets it.
+const overview = (over = {}) => ({ name: 'tab_overview', attrs: over.tab, columns: [
+  { width: over.leftWidth || '60%', sections: [{ name: 'sec_left', attrs: over.left, cells: [{ field: 'new_name', attrs: over.nameCell, control: over.nameControl }] }] },
+  { width: over.rightWidth || '40%', sections: [{ name: 'sec_right', attrs: over.right, cells: [{ field: 'new_notes' }] }] },
+] });
+
+test('verify FAILS a form-column deployed at a width the spec does not declare', async () => {
+  const chk = await topoCheck(layoutXml([overview({ leftWidth: '10%', rightWidth: '90%' })]));
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /tab_overview' form-column 1 is deployed 10% wide, the spec declares 60%/);
+  assert.match(chk.detail, /tab_overview' form-column 2 is deployed 90% wide, the spec declares 40%/);
+  const same = await topoCheck(layoutXml([overview()]));
+  assert.strictEqual(same.present, true, same.detail);
+});
+
+test('verify expects the compiler\'s equal split for a width the spec leaves out', async () => {
+  const undeclared = (spec) => { for (const c of spec.forms[0].tabs[0].columns) delete c.width; };
+  const split = await topoCheck(layoutXml([overview({ leftWidth: '50%', rightWidth: '50%' })]), undeclared);
+  assert.strictEqual(split.present, true, split.detail);
+  const chk = await topoCheck(layoutXml([overview()]), undeclared);
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /form-column 1 is deployed 60% wide, the spec declares 50%/);
+});
+
+test('verify FAILS a tab or section whose display state differs from the spec', async () => {
+  const hideAll = (spec) => {
+    const t = spec.forms[0].tabs[0];
+    Object.assign(t, { visible: false, expanded: false });
+    Object.assign(t.columns[0].sections[0], { visible: false, showLabel: false });
+  };
+  // Every flag absent — the attributes a form nobody set them on carries — reads as the rendered default.
+  const chk = await topoCheck(layoutXml([overview()]), hideAll);
+  assert.strictEqual(chk.present, false);
+  for (const re of [
+    /tab 'tab_overview' is deployed with expanded="true" \(absent, the default\), the spec declares expanded: false/,
+    /tab 'tab_overview' is deployed with visible="true" \(absent, the default\), the spec declares visible: false/,
+    /section 'sec_left' is deployed with visible="true" \(absent, the default\), the spec declares visible: false/,
+    /section 'sec_left' is deployed with showlabel="true" \(absent, the default\), the spec declares showLabel: false/,
+  ]) assert.match(chk.detail, re);
+  const applied = await topoCheck(layoutXml([overview({ tab: { expanded: 'false', visible: 'false' }, left: { visible: 'false', showlabel: 'false' } })]), hideAll);
+  assert.strictEqual(applied.present, true, applied.detail);
+  // …and a spec that declares none of them expects a shown, expanded, labelled layout (xs:boolean "0" too).
+  const hidden = await topoCheck(layoutXml([overview({ tab: { visible: 'false' }, right: { showlabel: '0' } })]));
+  assert.strictEqual(hidden.present, false);
+  assert.match(hidden.detail, /tab 'tab_overview' is deployed with visible="false", the spec declares visible: true/);
+  assert.match(hidden.detail, /section 'sec_right' is deployed with showlabel="false", the spec declares showLabel: true/);
+});
+
+// FormXML booleans are xs:boolean — "1" and "0" are as valid as "true" and "false", and Dataverse writes either.
+test('verify reads xs:boolean "1" and "0" in a control\'s disabled state', async () => {
+  const readOnly = (spec) => { spec.forms[0].fieldOptions = { new_name: { readOnly: true } }; };
+  const one = await topoCheck(layoutXml([overview({ nameControl: { disabled: '1' } })]), readOnly);
+  assert.strictEqual(one.present, true, one.detail);
+  const zero = await topoCheck(layoutXml([overview({ nameControl: { disabled: '0' } })]), readOnly);
+  assert.strictEqual(zero.present, false);
+  assert.match(zero.detail, /field 'new_name' is deployed with disabled="false", the spec declares readOnly: true/);
+});
+
+// A quick view binds a lookup's datafieldname too, but it is not that field. Read as the field, it lent the field its
+// state and its section: a quick view placed FIRST made a correctly deployed form fail, and the opposite flags would
+// have passed a wrong one. Verify skips it, as the build does when it picks the cell to patch.
+test('verify reads a field\'s state and placement from the field, never from a quick view bound to it', async () => {
+  const QV = '{5C5600E0-1D6E-4205-A272-BE80DA87FD42}';
+  const form = (realName) => layoutXml([{ name: 'tab_overview', columns: [
+    { width: '60%', sections: [{ name: 'sec_left', cells: [
+      { field: 'new_notes', control: { classid: QV } },
+      { field: 'new_name', control: { classid: QV } },
+      { field: 'new_name', control: realName },
+    ] }] },
+    { width: '40%', sections: [{ name: 'sec_right', cells: [{ field: 'new_notes' }] }] },
+  ] }]);
+  const readOnly = (spec) => { spec.forms[0].tabs[0].columns[0].sections[0].fields = [{ name: 'new_name', readOnly: true }]; };
+  const ok = await topoCheck(form({ disabled: 'true' }), readOnly);
+  assert.strictEqual(ok.present, true, ok.detail);
+  // CONTROL — the real field still decides: editable, it fails, whatever the quick view says.
+  const bad = await topoCheck(form({ disabled: 'false' }), readOnly);
+  assert.strictEqual(bad.present, false);
+  assert.match(bad.detail, /field 'new_name' is deployed with disabled="false", the spec declares readOnly: true/);
+  assert.doesNotMatch(bad.detail, /new_notes/, 'the quick view bound to new_notes does not place new_notes in sec_left');
+  // An auto layout's field state is read the same way.
+  const auto = TOPO_SPEC();
+  auto.forms = [{ entity: 'new_ticket', name: 'Ticket Main', fieldOptions: { new_name: { readOnly: true } } }];
+  const state = async (xml) => ((await verifySpec(auto, topoRead(xml))).checks || []).find((c) => c.kind === 'form-field-state');
+  assert.strictEqual((await state(form({ disabled: 'true' }))).present, true);
+  assert.strictEqual((await state(form({ disabled: 'false' }))).present, false);
+});
+
+test('verify FAILS a field the spec declares hidden and read-only that deployed shown and editable', async () => {
+  const flagged = (spec) => { spec.forms[0].tabs[0].columns[0].sections[0].fields = [{ name: 'new_name', hidden: true, readOnly: true }]; };
+  const chk = await topoCheck(layoutXml([overview()]), flagged);
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /field 'new_name' is deployed with visible="true" \(absent, the default\), the spec declares hidden: true/);
+  assert.match(chk.detail, /field 'new_name' is deployed with disabled="false" \(absent, the default\), the spec declares readOnly: true/);
+  const applied = await topoCheck(layoutXml([overview({ nameCell: { visible: 'false' }, nameControl: { disabled: 'true' } })]), flagged);
+  assert.strictEqual(applied.present, true, applied.detail);
+});
+
+test('verify proves a read-only flag declared through form-level fieldOptions on a plain entry', async () => {
+  const viaOptions = (spec) => { spec.forms[0].fieldOptions = { new_name: { readOnly: true } }; };
+  const chk = await topoCheck(layoutXml([overview()]), viaOptions);
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /field 'new_name' .*readOnly: true/);
+  const applied = await topoCheck(layoutXml([overview({ nameControl: { disabled: 'true' } })]), viaOptions);
+  assert.strictEqual(applied.present, true, applied.detail);
+});
+
+test('verify FAILS tabs, or the sections of a form-column, deployed out of the layout\'s order', async () => {
+  const twoTabs = (spec) => { spec.forms[0].tabs.push({ name: 'tab_more', label: 'More', sections: [{ name: 'sec_more', label: 'M', fields: [] }] }); };
+  const more = { name: 'tab_more', columns: [{ width: '100%', sections: [{ name: 'sec_more' }] }] };
+  const chk = await topoCheck(layoutXml([more, overview()]), twoTabs);
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /the tabs are deployed in the order tab_more, tab_overview; the spec orders them tab_overview, tab_more/);
+  const maker = { name: 'tab_maker', columns: [{ width: '100%', sections: [{ name: 'sec_maker' }] }] };
+  const inOrder = await topoCheck(layoutXml([overview(), maker, more]), twoTabs);
+  assert.strictEqual(inOrder.present, true, `a maker's own tab between them is not disorder; got ${inOrder.detail}`);
+
+  const twoSections = (spec) => { spec.forms[0].tabs[0].columns[0].sections.push({ name: 'sec_left2', label: 'L2', fields: [] }); };
+  const swapped = overview();
+  swapped.columns[0].sections.unshift({ name: 'sec_left2' });
+  const secChk = await topoCheck(layoutXml([swapped]), twoSections);
+  assert.strictEqual(secChk.present, false);
+  assert.match(secChk.detail, /the sections of tab 'tab_overview' form-column 1 are deployed in the order sec_left2, sec_left; the spec orders them sec_left, sec_left2/);
+  const ordered = overview();
+  ordered.columns[0].sections.push({ name: 'sec_left2' });
+  const secOrdered = await topoCheck(layoutXml([ordered]), twoSections);
+  assert.strictEqual(secOrdered.present, true, secOrdered.detail);
+});
+
+// An AUTO layout has no shape to prove, but its fieldOptions flags are asserted by the build on every
+// apply — so they are proven on their own, and an unreadable form is not proven.
+test('verify proves the read-only and hidden flags an AUTO layout declares in fieldOptions', async () => {
+  // new_notes is a declared column, so the auto layout places it — and the build asserts its flag.
+  const autoForm = (flags) => (spec) => {
+    spec.entities[0].columns = [{ schemaName: 'new_notes', displayName: 'Notes', type: 'Text' }];
+    spec.forms = [{ entity: 'new_ticket', name: 'Ticket Main', fieldOptions: flags }];
+  };
+  const checks = async (xml, mutate, over) => {
+    const spec = TOPO_SPEC();
+    mutate(spec);
+    const res = await verifySpec(spec, topoRead(xml, over));
+    return { state: (res.checks || []).filter((c) => c.kind === 'form-field-state'), topo: (res.checks || []).filter((c) => c.kind === 'form-topology') };
+  };
+  const flags = autoForm({ new_name: { readOnly: true }, new_notes: { hidden: true } });
+  const bare = await checks(layoutXml([overview()]), flags);
+  assert.strictEqual(bare.topo.length, 0, 'an auto layout still has no topology to prove');
+  assert.strictEqual(bare.state.length, 1);
+  assert.strictEqual(bare.state[0].present, false);
+  assert.match(bare.state[0].detail, /field 'new_name' .*readOnly: true/);
+  assert.match(bare.state[0].detail, /field 'new_notes' .*hidden: true/);
+  const appliedXml = layoutXml([overview({ nameControl: { disabled: 'true' } })])
+    .replace('<cell><control datafieldname="new_notes"', '<cell visible="false"><control datafieldname="new_notes"');
+  const applied = await checks(appliedXml, flags);
+  assert.strictEqual(applied.state[0].present, true, applied.state[0].detail);
+  assert.strictEqual((await checks(layoutXml([overview()]), autoForm({ new_name: { after: 'new_notes' } }))).state.length, 0, 'nothing to prove without a flag');
+  const unreadable = await checks(null, flags, { formTopology: async () => { throw new Error('boom'); } });
+  assert.strictEqual(unreadable.state[0].present, false);
+  assert.match(unreadable.state[0].detail, /could not read/);
+});
+
+// The auto layout places every field it flags, so a flagged field the deployed form does not carry is a mismatch —
+// skipping it passed a form whose read-only field a maker had removed. A flag on a field the auto layout never
+// places is never written by the build, so it is not proven: checking it failed a stock field the build never touched.
+test('verify FAILS an auto layout\'s flagged field that is missing, and ignores a flag the build never writes', async () => {
+  const spec = (fieldOptions) => {
+    const s = TOPO_SPEC();
+    s.entities[0].columns = [{ schemaName: 'new_notes', displayName: 'Notes', type: 'Text' }];
+    s.forms = [{ entity: 'new_ticket', name: 'Ticket Main', fieldOptions }];
+    return s;
+  };
+  const stateOf = async (s, xml) => ((await verifySpec(s, topoRead(xml))).checks || []).filter((c) => c.kind === 'form-field-state');
+  // new_notes is flagged and placed by the layout, but the deployed form only carries new_name.
+  const onlyName = layoutXml([{ name: 'tab_overview', columns: [{ width: '100%', sections: [{ name: 'sec_left', cells: [{ field: 'new_name', control: { disabled: 'true' } }] }] }] }]);
+  const missing = await stateOf(spec({ new_name: { readOnly: true }, new_notes: { hidden: true, readOnly: true } }), onlyName);
+  assert.strictEqual(missing.length, 1);
+  assert.strictEqual(missing[0].present, false);
+  assert.match(missing[0].detail, /field 'new_notes' is not on the deployed form, so its readOnly: true and hidden: true is not deployed/);
+  assert.doesNotMatch(missing[0].detail, /new_name/, 'the field that is there and locked passes');
+
+  // ownerid is not a field the auto layout places (not the primary, not a declared column, not a lookup), so the
+  // build never writes its flag: it is not proven — present and editable, or absent — and alone it adds no check.
+  const withOwner = layoutXml([overview({ nameControl: { disabled: 'true' } })]).replace('</rows></section></sections></column></columns>',
+    '<row><cell><control datafieldname="ownerid" /></cell></row></rows></section></sections></column></columns>');
+  const stock = await stateOf(spec({ new_name: { readOnly: true }, ownerid: { readOnly: true } }), withOwner);
+  assert.deepStrictEqual(stock.map((c) => c.present), [true], stock.map((c) => c.detail).join(' | '));
+  assert.deepStrictEqual(await stateOf(spec({ ownerid: { readOnly: true } }), withOwner), [], 'no flag the build writes, no check');
+
+  // A spec validation would refuse (a table with no primary column) cannot say which fields the layout places:
+  // reported as unverified, never a crash and never a pass.
+  const noPrimary = spec({ new_notes: { hidden: true } });
+  delete noPrimary.entities[0].primaryAttribute;
+  const unverified = await stateOf(noPrimary, withOwner);
+  assert.deepStrictEqual(unverified.map((c) => c.present), [false]);
+  assert.match(unverified[0].detail, /could not compile the layout to tell which fields the build places[\s\S]*unverified, not proven correct/);
+});
+
+// --- #586 item 3: a deployed dashboard must be internally consistent, not merely present ----------
+// A chart tile names a table, a view and a chart. The platform accepts and publishes a tile whose
+// chart belongs to another table — and a same-named chart elsewhere made the build produce exactly
+// that, live, while verify passed. So each chart tile's chart and view must both be on its table.
+const DASH_VIEW = '{11111111-1111-1111-1111-111111111111}';
+const DASH_CHART = '{22222222-2222-2222-2222-222222222222}';
+const dashSpec = () => ({ solution: { uniqueName: 's', publisherPrefix: 'new' }, app: { name: 'A' }, entities: [],
+  dashboards: [{ name: 'Ops', tiles: [{ type: 'chart', name: 'By Priority', entity: 'new_ticket', viewId: 'v', visualizationId: 'c' }] }] });
+const chartTile = (over) => ({ type: 'chart', name: 'By Priority', parameters: { TargetEntityType: 'new_ticket', ViewId: DASH_VIEW, VisualizationId: DASH_CHART, ...over } });
+const dashRead = ({ dashboards = [{ formid: 'dash-1' }], chartTable = 'new_ticket', viewTable = 'new_ticket', components = [chartTile()], reader = {} } = {}) => Object.assign({
+  findTable: async () => null,
+  findColumns: async () => [],
+  sitemapXml: async () => '',
+  queryRecords: async (set, q) => {
+    if (set === 'systemform') { if (dashboards instanceof Error) throw dashboards; return dashboards; }
+    if (set === 'savedqueryvisualization') {
+      if (chartTable instanceof Error) throw chartTable;
+      assert.match(q.filter, /^savedqueryvisualizationid eq 22222222-2222-2222-2222-222222222222$/, 'the braced tile GUID is queried bare and unquoted');
+      return chartTable ? [{ primaryentitytypecode: chartTable }] : [];
+    }
+    if (set === 'savedquery') return viewTable ? [{ returnedtypecode: viewTable }] : [];
+    return [];
+  },
+  dashboardComponents: async () => { if (components instanceof Error) throw components; return components; },
+}, reader);
+const dashCheck = async (opts) => (await verifySpec(dashSpec(), dashRead(opts))).checks.find((c) => c.kind === 'dashboard');
+
+test('verify PASSES a dashboard whose chart tile shows its own table\'s view and chart', async () => {
+  const chk = await dashCheck();
+  assert.strictEqual(chk.present, true, chk.detail);
+});
+
+test('verify FAILS a chart tile whose chart belongs to another table (the live cross-wiring)', async () => {
+  const chk = await dashCheck({ chartTable: 'new_customer' });
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /chart tile 'By Priority' shows new_ticket, but its chart belongs to new_customer/);
+});
+
+test('verify FAILS a chart tile whose view belongs to another table, or whose chart no longer exists', async () => {
+  assert.match((await dashCheck({ viewTable: 'new_customer' })).detail, /its view belongs to new_customer/);
+  assert.match((await dashCheck({ chartTable: null })).detail, /its chart does not exist/);
+});
+
+test('verify FAILS a missing dashboard, and an ambiguous name it cannot identify', async () => {
+  assert.strictEqual((await dashCheck({ dashboards: [] })).present, false);
+  const ambiguous = await dashCheck({ dashboards: [{ formid: 'a' }, { formid: 'b' }] });
+  assert.strictEqual(ambiguous.present, false);
+  assert.match(ambiguous.detail, /2 dashboards share this name and this app's solution cannot say which is its own/);
+});
+
+// A name can also match another app's dashboard. The build reuses the one the app's solution holds, so
+// verify checks THAT one — a namesake elsewhere must neither fail a correct app nor hide a broken one.
+test('verify checks the dashboard the app\'s solution holds when a namesake exists elsewhere', async () => {
+  const withSolution = (inSolution, onComponents) => ({
+    reader: {
+      queryRecords: async (set, q) => {
+        if (set === 'systemform') return [{ formid: 'dash-foreign' }, { formid: 'dash-ours' }];
+        if (set === 'solution') return [{ solutionid: 'sol-1' }];
+        if (set === 'solutioncomponent') return inSolution.filter((id) => q.filter.includes(`objectid eq ${id}`)).map((objectid) => ({ objectid }));
+        return dashRead().queryRecords(set, q);
+      },
+      dashboardComponents: async (id) => { onComponents.push(id); return [chartTile()]; },
+    },
+  });
+  const read = [];
+  const ok = await dashCheck(withSolution(['dash-ours'], read));
+  assert.strictEqual(ok.present, true, ok.detail);
+  assert.deepStrictEqual(read, ['dash-ours'], 'the tiles checked are the solution\'s dashboard, not the first match');
+  const none = await dashCheck(withSolution([], []));
+  assert.strictEqual(none.present, false);
+  assert.match(none.detail, /none of them is in this app's solution/);
+});
+
+// The sitemap subarea check resolves its dashboard the SAME way. It used to take the first name match:
+// live, another app's same-named dashboard sorted first and failed a correctly wired app's nav entry.
+test('the dashboard subarea check follows the app\'s solution too, never the first name match', async () => {
+  const OURS = 'aaaaaaaa-0000-0000-0000-000000000002';
+  const FOREIGN = 'aaaaaaaa-0000-0000-0000-000000000001';
+  const spec = { ...dashSpec(), appShell: { areas: [{ groups: [{ subAreas: [{ dashboard: 'Ops', title: 'Ops nav' }] }] }] } };
+  const subarea = async (inSolution, sitemapPointsAt, systemforms = [{ formid: FOREIGN }, { formid: OURS }]) => {
+    const lookups = [];
+    const read = dashRead({ reader: {
+      queryRecords: async (set, q) => {
+        if (set === 'systemform') { lookups.push(q); if (systemforms instanceof Error) throw systemforms; return systemforms; }
+        if (set === 'solution') return [{ solutionid: 'sol-1' }];
+        if (set === 'solutioncomponent') {
+          if (inSolution instanceof Error) throw inSolution;
+          return inSolution.filter((id) => q.filter.includes(`objectid eq ${id}`)).map((objectid) => ({ objectid }));
+        }
+        return dashRead().queryRecords(set, q);
+      },
+      sitemapXml: async () => `<SiteMap><Area><SubArea Id="s" DefaultDashboard="{${sitemapPointsAt.toUpperCase()}}"/></Area></SiteMap>`,
+    } });
+    const r = await verifySpec(spec, read);
+    return { chk: r.checks.find((c) => c.kind === 'subarea'), lookups };
+  };
+  const ok = await subarea([OURS], OURS);
+  assert.strictEqual(ok.chk.present, true, `a nav entry wired to the app's own dashboard verifies; got ${ok.chk.detail}`);
+  assert.strictEqual(ok.lookups.length, 1, 'the dashboard check and the subarea check share one lookup per name');
+  assert.strictEqual(ok.lookups[0].paginate, true, 'read in full, not one page of ten the app\'s own could sort beyond');
+  assert.strictEqual((await subarea([OURS], FOREIGN)).chk.present, false, 'a nav entry wired to another app\'s namesake does not');
+  const unknown = (await subarea([], OURS)).chk;
+  assert.strictEqual(unknown.present, false);
+  assert.match(unknown.detail, /2 dashboards share this name and none of them is in this app's solution/);
+  const cannotAsk = (await subarea(new Error('HTTP 503'), OURS)).chk;
+  assert.strictEqual(cannotAsk.present, false, 'an unreadable solution proves nothing');
+  assert.match(cannotAsk.detail, /this app's solution cannot say which is its own \(HTTP 503\)/);
+  const unreadable = (await subarea([OURS], OURS, new Error('boom'))).chk;
+  assert.strictEqual(unreadable.present, false);
+  assert.match(unreadable.detail, /unverified, not proven correct/);
+});
+
+test('verify reports unreadable dashboards, tiles and tile targets as UNVERIFIED, never as correct', async () => {
+  for (const opts of [{ dashboards: new Error('boom') }, { components: new Error('boom') }, { chartTable: new Error('boom') }]) {
+    const chk = await dashCheck(opts);
+    assert.strictEqual(chk.present, false, JSON.stringify(Object.keys(opts)));
+    assert.match(chk.detail, /unverified, not proven correct/);
+  }
+});
+
+test('verify checks dashboard EXISTENCE only when the reader cannot read tiles (additive, reader-gated)', async () => {
+  const chk = await dashCheck({ reader: { dashboardComponents: undefined } });
+  assert.strictEqual(chk.present, true);
+});
+
+// A pinned dashboardId is what the build binds first, so a read of it that FAILS leaves the dashboard
+// unverified — it must not fall through to the name (which may find another app's namesake) or pass.
+test('verifySpec: a pinned dashboardId whose read fails is reported unverified, not proven', async () => {
+  const PIN = 'aaaa1111-2222-3333-4444-555566667777';
+  const spec = { entities: [], views: [], charts: [], forms: [],
+    dashboards: [{ name: 'Operations', dashboardId: PIN, tiles: [{ type: 'list', entity: 'account', viewId: 'v1' }] }],
+    appShell: { areas: [{ groups: [{ subAreas: [{ dashboard: 'Operations', title: 'Operations' }] }] }] } };
+  let byName = 0;
+  const read = {
+    findTable: async () => null, findColumns: async () => [],
+    queryRecords: async (set, opts) => {
+      if (set !== 'systemform') return [];
+      if (opts.filter === `formid eq ${PIN}`) throw new Error('read refused (403)');
+      byName += 1;
+      return [{ formid: 'bbbb1111-2222-3333-4444-555566667777', name: 'Operations', type: 0 }];
+    },
+    sitemapXml: async () => '<SiteMap><Area><Group><SubArea Id="ops" Url="/workplace/home_dashboards.aspx" DefaultDashboard="{BBBB1111-2222-3333-4444-555566667777}" /></Group></Area></SiteMap>',
+  };
+  const r = await verifySpec(spec, read);
+  const chk = r.checks.find((c) => c.kind === 'dashboard');
+  assert.ok(chk && !chk.present, JSON.stringify(chk));
+  assert.match(chk.detail, /its dashboardId could not be resolved \(read refused \(403\)\) — unverified, not proven correct/);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(byName, 0, 'the name is not tried after the pinned read failed — it could find another app\u2019s namesake');
+});
+
+test('verify ignores non-chart tiles when proving a dashboard', async () => {
+  const chk = await dashCheck({ components: [{ type: 'list', name: 'L', parameters: { TargetEntityType: 'new_ticket', ViewId: DASH_VIEW } }, { type: 'iframe', name: 'I', parameters: { Url: 'https://x' } }] });
+  assert.strictEqual(chk.present, true, chk.detail);
+});
+
+test('verifySpec: a plain-string relationship list stays name-only', async () => {
+  const spec = { solution: { publisherPrefix: 'contoso' }, entities: [], views: [], charts: [], forms: [], appShell: { areas: [] },
+    relationships: [{ type: 'OneToMany', referenced: 'contoso_project', referencing: 'contoso_task', lookup: { schemaName: 'contoso_ProjectId' } }] };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], queryRecords: async () => [], sitemapXml: async () => '',
+    entityRelationships: async () => ['contoso_project_contoso_task'],
+  };
+  const r = await verifySpec(spec, read);
+  const rc = r.checks.find((c) => c.kind === 'relationship');
+  assert.strictEqual(rc && rc.present, true, JSON.stringify(rc));
+});
+
+test('verifySpec: a 1:N passes only when the name and both endpoints match', async () => {
+  const spec = { solution: { publisherPrefix: 'contoso' }, entities: [], views: [], charts: [], forms: [], appShell: { areas: [] },
+    relationships: [{ type: 'OneToMany', referenced: 'contoso_project', referencing: 'contoso_task', lookup: { schemaName: 'contoso_ProjectId' } }] };
+  const row = { schemaName: 'CONTOSO_PROJECT_CONTOSO_TASK', type: 'OneToMany', referencedEntity: 'contoso_project', referencingAttribute: 'contoso_projectid' };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], queryRecords: async () => [], sitemapXml: async () => '',
+    entityRelationships: async () => [row],
+  };
+  const ok = await verifySpec(spec, read);
+  assert.strictEqual(ok.checks.find((c) => c.kind === 'relationship').present, true);
+
+  const wrongLookup = await verifySpec(spec, { ...read, entityRelationships: async () => [{ ...row, referencingAttribute: 'contoso_ownerid' }] });
+  const bad = wrongLookup.checks.find((c) => c.kind === 'relationship');
+  assert.strictEqual(bad.present, false);
+  assert.match(bad.detail, /exists as 1:N/);
+  assert.match(bad.detail, /contoso_ownerid/);
+});
+
+test('verifySpec: an N:N passes on an unordered pair and fails when the name is a different relationship', async () => {
+  const spec = { solution: { publisherPrefix: 'contoso' }, entities: [], views: [], charts: [], forms: [], appShell: { areas: [] },
+    relationships: [{ type: 'ManyToMany', entity1: 'contoso_task', entity2: 'contoso_project' }] };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], queryRecords: async () => [], sitemapXml: async () => '',
+    entityRelationships: async () => [{ schemaName: 'contoso_project_contoso_task', type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_task' }],
+  };
+  const ok = await verifySpec(spec, read);
+  assert.strictEqual(ok.checks.find((c) => c.kind === 'relationship').present, true);
+
+  const other = await verifySpec(spec, {
+    ...read,
+    entityRelationships: async () => [{ schemaName: 'contoso_project_contoso_task', type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_tag' }],
+  });
+  const bad = other.checks.find((c) => c.kind === 'relationship');
+  assert.strictEqual(bad.present, false);
+  assert.match(bad.detail, /exists as N:N contoso_project <-> contoso_tag/);
+});
+
+test('verifySpec: when the typed read cannot see the holder, relationshipHolder names it', async () => {
+  const spec = { solution: { publisherPrefix: 'contoso' }, entities: [], views: [], charts: [], forms: [], appShell: { areas: [] },
+    relationships: [{ type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_task' }] };
+  const read = {
+    findTable: async () => null, findColumns: async () => [], queryRecords: async () => [], sitemapXml: async () => '',
+    entityRelationships: async () => [],
+    relationshipHolder: async (name, candidates) => {
+      assert.strictEqual(name, 'contoso_project_contoso_task');
+      assert.ok(candidates.map((c) => String(c).toLowerCase()).includes('contoso_project'));
+      return { found: true, holder: { schemaName: 'contoso_project_contoso_task', type: 'OneToMany', referencedEntity: 'contoso_project', referencingEntity: 'contoso_task', referencingAttribute: 'contoso_projectid' } };
+    },
+  };
+  const r = await verifySpec(spec, read);
+  const rc = r.checks.find((c) => c.kind === 'relationship');
+  assert.strictEqual(rc.present, false);
+  assert.match(rc.detail, /contoso_project_contoso_task exists as 1:N contoso_project -> contoso_task \(lookup contoso_projectid\), not as the declared N:N/);
 });

@@ -1,0 +1,30 @@
+{
+  "contractVersion": 2,
+  "provenance": "synthetic",
+  "description": "Constructed create, independent existing-page edit and quote-refusal evidence, not an agent capture. Forwarded fields represent the offline PAC argument/file seam; config and own-page metadata read-backs are separate.",
+  "contracts": ["plugins/model-apps/skills/genpage/SKILL.md Phase 6: Deploy and Prompt semantics", "plugins/model-apps/skills/genpage/edit-flow.md Edit Phase 6"],
+  "toolResults": "tool-results.json",
+  "artifacts": ["create/page-name.txt", "create/prompt.txt", "create/agent-message.txt", "create/config-after.json", "create/page-after.json", "edit/prompt.txt", "edit/agent-message.txt", "edit/config-before.json", "edit/config-after.json", "edit/page-before.json", "edit/page-after.json", "quote/page-name.txt"],
+  "uploads": [
+    {
+      "event": "create", "mode": "create",
+      "approvedName": "Revenue $100 $(Get-Date)",
+      "approvedPrompt": "Build the \"Revenue\" summary.\nKeep %PATH%, &, | and all approved text.\n",
+      "approvedAgentMessage": "Created the approved \"Revenue\" summary.\n",
+      "afterConfig": "create/config-after.json", "afterPage": "create/page-after.json", "changes": {}
+    },
+    {
+      "event": "edit", "mode": "update",
+      "approvedPrompt": "Add sorting only.\n",
+      "approvedAgentMessage": "Added sorting; kept the own name, model and all existing bindings.\n",
+      "beforeConfig": "edit/config-before.json", "afterConfig": "edit/config-after.json",
+      "beforePage": "edit/page-before.json", "afterPage": "edit/page-after.json", "changes": {}
+    },
+    {
+      "event": "quote-refusal", "mode": "create", "outcome": "refused",
+      "approvedName": "Say \"hi\"",
+      "approvedPrompt": "Build the \"Revenue\" summary.\nKeep %PATH%, &, | and all approved text.\n",
+      "approvedAgentMessage": "Created the approved \"Revenue\" summary.\n", "changes": {}
+    }
+  ]
+}

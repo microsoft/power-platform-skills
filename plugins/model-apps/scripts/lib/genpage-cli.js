@@ -2,57 +2,73 @@
 // Injectable wrapper around `pac model genpage upload/list` — the seam the build's pages phase uses
 // to author/deploy generative pages. Page CONTENT only: uploads run WITHOUT --add-to-sitemap because
 // the SDK owns the sitemap (it writes the GenPage subareas). Real impl spawns pac; tests inject `run`.
-const { spawnSync } = require('node:child_process');
+const { invocation, spawnProcess } = require('./process-runner.js');
+const { dataverseRequest } = require('./dataverse-auth.js');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-// Quote an arg for a Windows/POSIX shell command line (needed because pac resolves as pac.cmd on
-// Windows, which requires shell:true — and shell:true does not quote an args array). Embedded
-// newlines terminate the Windows command line (pac then sees a truncated command and dumps its
-// help), so collapse them to spaces first. This is now purely a DEFENSIVE net for whatever args
-// still flow inline — e.g. a page --name; it is NOT how multi-line prompts survive. upload() passes
-// the prompt and agent-message to pac BY FILE (--prompt-file/--agent-message-file) precisely because
-// collapsing THEIR newlines was lossy (a downloaded prompt is a multi-line conversation transcript).
-function quoteArg(a) {
-  const s = String(a).replace(/\r\n|[\r\n]/g, ' ');
-  const q = s.replace(/"/g, '""').replace(/%/g, '"^%"');
-  // cmd.exe expands %VAR% even inside double quotes; break out of the quoted segment and caret-escape
-  // each percent so prompts/names containing environment-variable syntax round-trip literally.
-  if (!/[\s"'&|<>^()%]/.test(s)) return s;
-  // A run of backslashes immediately before the closing quote must be DOUBLED. Windows command-line
-  // parsing treats `\"` as an escaped quote, so a directory argument ending in a separator —
-  //   --output-directory "C:\Users\Power User\download\"
-  // — escaped its own closing quote and swallowed the following flags into the path. MEASURED via a
-  // real cmd.exe parse:
-  //   ["--output-directory", "C:\\Users\\Power User\\download\" --app-id after"]
-  // Only the trailing run matters: an interior `\` is literal to the parser, so escaping those would
-  // corrupt every ordinary Windows path.
-  // See: https://learn.microsoft.com/cpp/cpp/main-function-command-line-args#parsing-c-command-line-arguments
-  const trailingSlashesDoubled = q.replace(/(\\+)$/, (m) => m + m);
-  return `"${trailingSlashesDoubled}"`;
+// Build the spawn call for a `pac` call. `pac` is resolved to an absolute path on PATH, never from
+// the project directory, and started without a shell: `pac.exe` (a dotnet-tool install) directly,
+// with every argument passed as-is, and a `pac.cmd` shim through cmd.exe with each argument checked
+// or refused (lib/process-runner.js explains the rules). Embedded newlines are collapsed to spaces on
+// every arg — a DEFENSIVE net for any arg that still flows inline (e.g. a page --name), since a
+// newline would end a batch shim's command line. It is not relied on for prompts: upload() passes
+// prompt/agent-message via file precisely because collapsing THEIR newlines was lossy for multi-line
+// transcripts.
+// @returns {{file: string, args: string[], options: object}}
+// @throws when pac is not on PATH, or an argument cannot reach a pac.cmd shim unchanged
+const cleanPacArgs = (args) => args.map((a) => String(a).replace(/\r\n|[\r\n]/g, ' '));
+function buildPacInvocation(args, deps = {}) {
+  return invocation('pac', cleanPacArgs(args), deps);
 }
-
-// Build the spawnSync invocation for a `pac` call, per platform. Windows: pac resolves as pac.cmd,
-// which requires a shell; shell:true ignores an args array, so pass a single cmd-quoted command
-// line ("" escapes an embedded quote). POSIX: spawn pac directly with the args array (no shell) so
-// embedded quotes and other shell metacharacters round-trip verbatim instead of being mangled by
-// cmd-style quoting. Embedded newlines are still collapsed to spaces on every arg — a DEFENSIVE net
-// for any arg that still flows inline (e.g. a page --name), since a newline truncates the Windows
-// command line. It is no longer relied on for prompts: upload() passes prompt/agent-message via file
-// precisely because collapsing THEIR newlines was lossy for multi-line transcripts.
-function buildPacInvocation(args, platform = process.platform) {
-  const clean = args.map((a) => String(a).replace(/\r\n|[\r\n]/g, ' '));
-  if (platform === 'win32') {
-    return { command: 'pac ' + clean.map(quoteArg).join(' '), args: undefined, options: { encoding: 'utf8', shell: true } };
-  }
-  return { command: 'pac', args: clean, options: { encoding: 'utf8' } };
-}
-
 function runPac(args) {
-  const inv = buildPacInvocation(args);
-  const r = inv.args ? spawnSync(inv.command, inv.args, inv.options) : spawnSync(inv.command, inv.options);
-  return { status: r.status == null ? 1 : r.status, stdout: r.stdout || '', stderr: r.stderr || '' };
+  // Asynchronous, and it NEVER rejects. It was spawnSync, which froze the whole process for the
+  // length of every pac call — about five seconds for one `pac model genpage list` — so two
+  // independent listings could not overlap even when a caller awaited them together (an update in
+  // genpage-upload.js does). Every caller already awaits `run`, and branches on `status` without a
+  // catch, so a child that cannot be started resolves as a failed result, as spawnSync's did.
+  //
+  // Output is collected as raw Buffers and decoded ONCE, when the child closes. Decoding each chunk
+  // as it arrives corrupts a multibyte UTF-8 character that a pipe read happens to split, and pac
+  // prints page names, which are user text; spawnSync's `encoding: 'utf8'` decoded the whole buffer,
+  // so this keeps that behaviour. It also drops spawnSync's 1 MiB maxBuffer, past which the child
+  // was killed and its output truncated.
+  return new Promise((resolve) => {
+    const out = [];
+    const err = [];
+    let settled = false;
+    const finish = (status, launchError) => {
+      if (settled) return;
+      settled = true;
+      const stderr = Buffer.concat(err).toString('utf8');
+      resolve({
+        status: status == null ? 1 : status,
+        stdout: Buffer.concat(out).toString('utf8'),
+        // POSIX reports a missing pac as a spawn 'error' (ENOENT) with nothing on stderr; carry its
+        // message so the diagnostic says why instead of "pac exited 1 with no output".
+        stderr: stderr || (launchError ? String(launchError.message || launchError) : ''),
+      });
+    };
+    let child;
+    try {
+      // Resolution and argument checks throw here too, and resolve as a failed result like a launch error.
+      child = spawnProcess('pac', cleanPacArgs(args), { stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (e) {
+      finish(1, e);
+      return;
+    }
+    // EMFILE/ENFILE leave the stdio pipes unset, hence the guards.
+    if (child.stdout) child.stdout.on('data', (c) => out.push(c));
+    if (child.stderr) child.stderr.on('data', (c) => err.push(c));
+    // 'error' (the child could not be started) may or may not be followed by 'close'; `finish`
+    // keeps whichever comes first. 'close' rather than 'exit': 'exit' fires as soon as pac itself
+    // ends, while a process it started can still hold the pipes and write. 'close' waits for every
+    // holder to let go, which is also when spawnSync returned (measured: a grandchild writing 1 s
+    // after its parent exited was captured by spawnSync and 'close', and missed by 'exit').
+    child.on('error', (e) => finish(1, e));
+    child.on('close', (code) => finish(code));
+  });
 }
 
 // Extract the "Page ID: <guid>" pac prints on a successful upload.
@@ -72,13 +88,25 @@ function runPac(args) {
 // IDENTIFIER character so a too-long token is REFUSED rather than trimmed. Restricting the boundary
 // to the GUID alphabet was not enough: `6e0c28a2-cdbf-41ec-9186-d10fd5de6e35oops` has a non-hex
 // character next, so the lookahead passed and the id was accepted with the suffix silently dropped.
-// `[\w-]` is the right class — a following `.` or `,` or `)` genuinely ends the token (pac prints the
-// id inside prose), while any letter, digit, underscore or hyphen means the token continues.
-// Returning null is the safe outcome: the caller treats a zero exit with no parsable id as an
-// UNCERTAIN create and reconciles by env-wide id diff.
+// The boundary must be Unicode-aware: a suffix such as `東京` is still a continuing identifier
+// token even though JavaScript `\w` is ASCII-only. A following `.` or `,` or `)` genuinely ends the
+// token (pac prints the id inside prose), while any Unicode letter/number/mark, underscore or hyphen
+// means the token continues. Returning null is the safe outcome: the caller treats a zero exit with
+// no parsable id as an UNCERTAIN create and reconciles by env-wide id diff.
 const GUID_RE = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
+// A value that IS a GUID and nothing else — what may go into a Dataverse key segment, `uxagentprojects(<id>)`.
+const GUID_ONLY_RE = new RegExp(`^${GUID_RE.source}$`);
+// pac stores every ASCII `"` in a page name as `\"` — in the page's row and in a navigation title it writes (live-measured:
+// `Say "hi" now` became `Say \"hi\" now` in both) — and changes nothing else. This is the inverse: the name pac was given.
+// Sent back as the name, it makes pac store the same value again; a name read back and re-sent as it is would gain a
+// backslash on every upload.
+function unescapePacName(name) {
+  return String(name).replace(/\\"/g, '"');
+}
+// The end of a GUID token, for a RegExp built with the 'u' flag. Shared by both parsers below.
+const GUID_END = '(?![\\p{L}\\p{N}\\p{M}_-])';
 function parsePageId(out) {
-  const m = new RegExp('Page ID:\\s*(' + GUID_RE.source + ')(?![\\w-])').exec(String(out || ''));
+  const m = new RegExp('Page ID:\\s*(' + GUID_RE.source + ')' + GUID_END, 'u').exec(String(out || ''));
   return m ? m[1] : null;
 }
 
@@ -92,12 +120,17 @@ function parsePageId(out) {
 //   13ecbc57-a3a4-4132-b0a2-a6c6b12691e8 Overview -
 //
 // Column boundaries are derived from the header's "Name"/"Published" offsets so a Name containing spaces
-// (e.g. "Order Detail") is not split on whitespace. A data row is matched by a leading 36-char GUID.
+// (e.g. "Order Detail") is not split on whitespace. A data row is matched by a leading 36-char GUID that
+// ENDS there, by the same Unicode-aware rule as parsePageId: `<guid>東京` or `<guid>_x` is a longer token,
+// not a page id plus a name, so the row is skipped and the count check below fails the listing closed.
+// An ASCII `\b` accepted those, because JavaScript counts `東` as a non-word character.
 // Returns [{ pageId, name }]. NOTE (live-confirmed): pac lists only pages reachable from the app SITEMAP —
 // a headless nav-target page (declared in pages[] but not an appShell subarea) is NOT returned here.
+// With --app-id, `name` is the page's SITEMAP TITLE, not the page record's own name (measured: after an
+// update renamed the page with --name, the app-scoped listing still showed the subarea title), so a
+// listed name is never evidence of what the page itself is called.
 function parseList(out) {
-  const GUID = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
-  const rowRe = new RegExp(`^\\s*(${GUID})\\b`);
+  const rowRe = new RegExp('^\\s*(' + GUID_RE.source + ')' + GUID_END, 'u');
   const lines = String(out || '').split('\n');
   // Locate the header row to find the Name (and Published) column offsets. pac auto-sizes columns to the
   // longest value, so the offsets must be read from THIS output, not hard-coded.
@@ -181,8 +214,24 @@ function classifyListOutput(stdout) {
   // download. An explicit "Found 0" is trustworthy only when no row was actually parsed (else it is a
   // contradictory/truncated listing → fail-closed 'unrecognized').
   if (count === 0) return pages.length === 0 ? { kind: 'empty', pages: [] } : { kind: 'unrecognized', pages: [] };
-  if (count === null && pages.length === 0 && /\bno\s+(?:generated\s+)?pages?\b/i.test(s)) return { kind: 'empty', pages: [] };
-  // A complete, authoritative listing: at least one page, every page has a name, count matches
+  // Older pac builds have printed a no-pages marker as its own line. Treat only that complete,
+  // trimmed line as authoritative:
+  //   No generated pages found.
+  //   No pages found
+  // A warning such as "no pages could be retrieved" means the service failed to enumerate, not
+  // that the app is empty, so it must fail closed.
+  if (count === null && pages.length === 0 && /^[^\S\r\n]*no[^\S\r\n]+(?:generated[^\S\r\n]+)?pages[^\S\r\n]+found\.?[^\S\r\n]*$/im.test(s)) {
+    return { kind: 'empty', pages: [] };
+  }
+  const seenIds = new Set();
+  const hasDuplicateIds = pages.some((p) => {
+    const key = String(p.pageId || '').toLowerCase();
+    if (seenIds.has(key)) return true;
+    seenIds.add(key);
+    return false;
+  });
+  if (hasDuplicateIds) return { kind: 'unrecognized', pages: [] };
+  // A complete, authoritative listing: at least one DISTINCT page, every page has a name, count matches
   const allNamed = pages.length > 0 && pages.every((p) => p.name && String(p.name).trim());
   if (allNamed && count !== null && count === pages.length) return { kind: 'pages', pages };
   return { kind: 'unrecognized', pages: [] };
@@ -269,10 +318,12 @@ function makeGenpageCli(env, deps = {}) {
   //                                       UNRECOGNIZED/INCOMPLETE output (count mismatch, blank,
   //                                       help banner, unnamed page) — never masquerade as empty.
   // Callers that drive a create decision MUST check ok before trusting pages:[] as "truly empty".
-  async function enumeratePages(appId) {
+  async function enumeratePages(appId, options = {}) {
     let lastErr = '';
     for (let i = 0; i < attempts; i += 1) {
-      const r = await run(['model', 'genpage', 'list', '--environment', env, '--app-id', appId]);
+      const args = ['model', 'genpage', 'list', '--environment', env, '--app-id', appId];
+      if (options && options.includeUnpublished === true) args.push('--include-unpublished');
+      const r = await run(args);
       if (r.status === 0) {
         const c = classifyListOutput(r.stdout);
         if (c.kind !== 'unrecognized') return { ok: true, pages: c.pages, empty: c.kind === 'empty' };
@@ -290,9 +341,9 @@ function makeGenpageCli(env, deps = {}) {
   // Env-WIDE EXISTENCE enumeration (NO --app-id): returns the set of ALL generative-page ids that exist
   // in the environment, regardless of which app they belong to or whether they are in any sitemap.
   // `--include-unpublished` ensures a just-created draft counts before it has been finalized into a
-  // sitemap — this is what makes uncertain-CREATE recovery crash-safe (C2): a page created+manifested
-  // but not yet sitemap-finalized still appears here and is reused on a second run instead of being
-  // created again. Reuses classifyListOutput (fail-closed): an unrecognized/incomplete listing NEVER
+  // sitemap, so uncertain results can report their candidates and receipted build creates remain
+  // discoverable before placement. Enumeration itself grants no ownership or update authority.
+  // Reuses classifyListOutput (fail-closed): an unrecognized/incomplete listing NEVER
   // masquerades as an empty environment. `ids` are lower-cased for case-insensitive set membership.
   async function enumerateEnv() {
     let lastErr = '';
@@ -313,24 +364,33 @@ function makeGenpageCli(env, deps = {}) {
     return { ok: false, ids: [], error: `pac genpage list (env-wide) failed after ${attempts} attempt(s): ${lastErr}` };
   }
 
+  async function readPageRow(pageId, select) {
+    if (!GUID_ONLY_RE.test(String(pageId || ''))) throw new Error(`'${pageId}' is not a page id`);
+    const request = deps.request || dataverseRequest;
+    const res = await request(env, 'GET', `uxagentprojects(${pageId})?$select=${select}`);
+    if (!res || !Number.isInteger(res.status) || res.status < 200 || res.status >= 300) {
+      throw new Error(`reading page ${pageId}'s ${select === 'name' ? 'name' : 'creation details'} returned HTTP ${res && res.status}`);
+    }
+    return res.data;
+  }
+
   return {
     // Create (no pageId) or update (with pageId) a page's content. Returns { pageId }. Retries transient
     // pac failures. On an UNCERTAIN CREATE (non-zero, or zero-exit with no Page ID) resolves via a
-    // STRICT ENV-WIDE before/after id diff (C2 — addenda overrides the plan here): the env-wide id set
+    // STRICT ENV-WIDE before/after id diff: the env-wide id set
     // is snapshotted BEFORE the first CREATE so the diff reveals exactly which id appeared.
-    //   newIds.length === 1 → adopt that id (UPDATE it; I7 guard verifies returned id)
+    //   newIds.length >= 1 → report stored details and stop; only the user can confirm ownership
     //   newIds.length === 0 → CREATE did NOT land → safe to retry
-    //   newIds.length > 1   → THROW (ambiguous; concurrent creates or noise — never guess)
-    // NO name matching anywhere in recovery (names are unreliable — app-scoped list misses
-    // pre-sitemap pages; env-wide names drift with sitemap titles). Any enumerateEnv failure → THROW.
+    // Names and dates describe candidates, never establish identity. Read failures also stop,
+    // with the candidate id retained in the diagnostic. No uncertain result changes the command to UPDATE.
     async upload({ appId, pageId, codeFile, compiledCodeFile, name, prompt, agentMessage, dataSources,
       addToSitemap, model, connectors, actions }) {
       // pac REQUIRES both a prompt and an agent-message for a new page. Resolve the effective text
       // (preserving the historical defaults) ONCE, then hand both to pac BY FILE via --prompt-file /
       // --agent-message-file rather than inline --prompt / --agent-message. A downloaded page prompt is
       // a multi-line conversation transcript ("Conversation with N prompts:\r\n1. …\r\n2. …"); passed
-      // inline it hits the newline-collapsing in quoteArg/buildPacInvocation (a defensive guard so a
-      // stray newline can't truncate the Windows command line) and silently loses every line break on
+      // inline it hits the newline-collapsing in buildPacInvocation (a defensive guard so a stray
+      // newline can't truncate a Windows batch shim's command line) and silently loses every line break on
       // an edit-rebuild. A file round-trips the text verbatim. See `pac model genpage upload --help`.
       const promptText = prompt && String(prompt).trim() ? String(prompt) : `Generative page ${name || ''}`.trim();
       // The default applies only when NO agent message was supplied. An explicitly EMPTY one (a
@@ -381,12 +441,8 @@ function makeGenpageCli(env, deps = {}) {
           if (addToSitemap && !pid) args.push('--add-to-sitemap');
           return run(args);
         };
-        let pid = pageId;
+        const pid = pageId;
         let lastErr = '';
-        // Set when a CREATE asked for sitemap placement but recovery adopted an existing page id,
-        // turning the retry into an UPDATE — which cannot carry --add-to-sitemap. The page then
-        // exists but is UNPLACED, and reporting plain success would hide that.
-        let sitemapPending = false;
         // Snapshot taken once (lazily on the first CREATE attempt) so the before/after diff is anchored
         // to the exact env state before this operation. Fail-closed: if we can't snapshot, we can't
         // safely attribute a later uncertain result — halt to prevent a blind duplicate.
@@ -401,13 +457,12 @@ function makeGenpageCli(env, deps = {}) {
             }
             beforeIds = new Set(before.ids);
           }
-          const pidBeforeAttempt = pid;
           const r = await once(pid);
           if (r.status === 0) {
             const id = parsePageId(r.stdout);
             if (id) {
-              // I7 guard: when performing an UPDATE (pid is set — whether caller-provided or adopted after
-              // uncertain-CREATE reconciliation), the returned Page ID MUST equal the pid we used. A mismatch
+              // When performing an explicitly requested UPDATE, the returned Page ID MUST equal
+              // the pid we used. A mismatch
               // means pac silently operated on a different page — halt rather than let a wrong record persist.
               // Case-insensitive: PAC can normalize GUID casing across writes.
               if (pid && id.toLowerCase() !== pid.toLowerCase()) {
@@ -415,15 +470,15 @@ function makeGenpageCli(env, deps = {}) {
                   `pac genpage upload for '${name || '(unnamed)'}': UPDATE returned an unexpected Page ID (got ${id}, expected ${pid}) — refusing to persist a mismatched update`
                 );
               }
-              return sitemapPending ? { pageId: id, sitemapPending: true } : { pageId: id };
+              return { pageId: id };
             }
             lastErr = `returned no Page ID: ${pacDiagnostic(r)}`;
           } else {
             lastErr = pacDiagnostic(r);
           }
           // Uncertain CREATE: no caller pid and result was non-zero or zero-without-Page-ID.
-          // Strict env-wide before/after id diff — never use name matching (names drift; app-scoped
-          // lists miss pre-sitemap pages; a page's list "Name" is its sitemap title, not its identity).
+          // The env-wide diff discovers candidates, not ownership. A concurrent create can have
+          // the same name and date, so even a single candidate cannot authorize an automatic UPDATE.
           if (!pid) {
             const after = await enumerateEnv();
             if (!after.ok) {
@@ -432,34 +487,35 @@ function makeGenpageCli(env, deps = {}) {
               );
             }
             const newIds = after.ids.filter((id) => !beforeIds.has(id));
-            if (newIds.length === 1) {
-              pid = newIds[0]; // CREATE landed → adopt; I7 guard verifies returned id on the UPDATE
-              // The adopted retry runs as an UPDATE, so `--add-to-sitemap` is no longer emitted.
-              // Record that the placement the caller asked for did not happen rather than letting
-              // a successful-looking result imply a page that is actually unreachable from the nav.
-              if (addToSitemap) sitemapPending = true;
-            } else if (newIds.length === 0) {
-              // CREATE did NOT land → safe to retry (pid stays undefined; beforeIds unchanged)
+            if (newIds.length > 0) {
+              const details = [];
+              let readFailure;
+              for (const candidate of newIds) {
+                try {
+                  // uxagentprojects(<id>)?$select=name,createdon, e.g.
+                  // { "name": "Contoso Overview", "createdon": "2026-01-01T00:00:00Z" }.
+                  // These fields are diagnostic data only, not permission to update the row.
+                  const row = await readPageRow(candidate, 'name,createdon');
+                  const storedName = row && typeof row.name === 'string' ? JSON.stringify(unescapePacName(row.name)) : '[unreadable]';
+                  const createdon = row && typeof row.createdon === 'string' ? JSON.stringify(row.createdon) : '[unreadable]';
+                  details.push(`${candidate}: stored name ${storedName}, createdon ${createdon}`);
+                } catch (e) {
+                  readFailure = readFailure || e;
+                  details.push(`${candidate}: stored name [unreadable], createdon [unreadable]; read failed (${(e && e.message) || e})`);
+                }
+              }
+              throw new Error(`pac genpage upload for '${name || '(unnamed)'}' had an uncertain create (ambiguous ownership). Candidates: ${details.join('; ')}. Refusing to adopt or update any candidate. If it is yours, re-run the upload as an update with ${newIds.map((id) => `--page-id ${id}`).join(' or ')}; otherwise leave it and re-run the create.`, readFailure ? { cause: readFailure } : undefined);
             } else {
-              throw new Error(
-                `pac genpage upload for '${name || '(unnamed)'}': ${newIds.length} new pages appeared after an uncertain create — cannot attribute (ambiguous)`
-              );
+              // CREATE did NOT land → safe to retry (pid stays undefined; beforeIds unchanged)
             }
           }
           // A DETERMINISTIC failure will repeat for the same inputs, so retrying it only burns the
           // caller's time and buries the real message under "after 3 attempt(s)". Break out and
           // report it immediately.
           //
-          // The test is "will the NEXT attempt run the SAME command?", not "is this a create?".
-          // Keying on `!pid` got that wrong in one direction: an ordinary update — where the caller
-          // supplied `pageId`, so `pid` is truthy from the very first attempt — sat through all three
-          // attempts on a fault that could never resolve itself. The case the guard must NOT break is
-          // narrower than "pid is set": it is the single attempt in which an uncertain create was
-          // just ADOPTED, because the retry then becomes an update by id and the previous command's
-          // argument fault says nothing about it. Comparing `pid` across the attempt identifies
-          // exactly that transition.
-          const commandChanged = pid !== pidBeforeAttempt;
-          if (!commandChanged && isDeterministic(lastErr)) break;
+          // The next attempt always uses the same explicit id (or remains CREATE); recovery
+          // never changes command identity, so deterministic failures must stop in both modes.
+          if (isDeterministic(lastErr)) break;
           if (i < attempts - 1) await sleep(500 * (i + 1));
         }
         throw new Error(`pac genpage upload failed for '${name || '(unnamed)'}': ${lastErr}`);
@@ -483,6 +539,9 @@ function makeGenpageCli(env, deps = {}) {
     enumerate({ appId }) {
       return enumeratePages(appId);
     },
+    enumeratePages(appId, options) {
+      return enumeratePages(appId, options);
+    },
     enumerateEnv() {
       return enumerateEnv();
     },
@@ -497,6 +556,28 @@ function makeGenpageCli(env, deps = {}) {
       if (r.status !== 0) throw new Error(`pac genpage download failed: ${pacDiagnostic(r)}`);
       return true;
     },
+    // The page's current display name, from its Dataverse row (`uxagentproject.name`). An update without
+    // `--name` renames the page to its navigation title, so a caller that wants to keep the name must read
+    // it and send it. pac's app-scoped listing shows the navigation title instead, and its env-wide listing
+    // prints the name trimmed, in a fixed-width table — so the row itself is read, through Dataverse (the
+    // az token). The row cannot be written there: a PATCH of `name` answers 204 and changes nothing
+    // (live-measured), so pac's `--name` is the only way to set it.
+    async pageName(pageId) {
+      const row = await readPageRow(pageId, 'name');
+      return row && typeof row.name === 'string' ? row.name : null;
+    },
+    // Why pac, as installed here, cannot be handed `value` as an argument — null when it can. A `pac.cmd` shim
+    // (Windows) cannot receive a double quote or `%` unchanged, and the runner refuses such a value rather than
+    // let cmd.exe rewrite it. Checked without starting anything, so a caller can decide BEFORE an upload
+    // whether a value it chose on the user's behalf — a page's current name — can be sent at all.
+    argumentRefusal(value) {
+      try {
+        buildPacInvocation(['--name', value], deps.pacInvocation);
+        return null;
+      } catch (e) {
+        return e && e.code === 'EARGUMENT' ? e.message : null;
+      }
+    },
   };
 }
 
@@ -507,4 +588,4 @@ function makeGenpageCli(env, deps = {}) {
 function suppliedButBlank(value) {
   return value !== undefined && value !== null && !String(value).trim();
 }
-module.exports = { makeGenpageCli, suppliedButBlank, parsePageId, parseList, parseListCount, classifyListOutput, quoteArg, buildPacInvocation, runPac };
+module.exports = { makeGenpageCli, suppliedButBlank, unescapePacName, parsePageId, parseList, parseListCount, classifyListOutput, buildPacInvocation, runPac };

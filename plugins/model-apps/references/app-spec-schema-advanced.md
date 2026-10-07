@@ -17,6 +17,10 @@ and ~24% of it described features most apps never use.
 [ { "name": "new_priority", "displayName": "Priority", "options": ["Low","Medium","High"] } ]
 ```
 Reference from a column via `"globalChoice": "new_priority"` (built before the columns that bind it).
+- **`existing`** *(optional, download-emitted)* — `true` on a set **download** declared: an option set
+  is org-wide and may be shared with other apps, and a download cannot prove this app created it. The
+  build still creates it if missing (reuses it if present); teardown **retains** it, exactly as it
+  retains an `existing: true` table.
 
 ## webResources[] (optional — client-side logic)
 
@@ -28,6 +32,12 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   should be named with a `.js` extension).
 - Source comes from **one** of: `content` (inline text), `contentPath` (a file read relative to the
   app folder at build time), or `contentBase64` (for binary types).
+- `contentPath` must name a regular file inside the app folder. Absolute, rooted,
+  drive-relative and alternate-stream paths, parent escapes, symlinks and junctions are refused.
+  The build and `lint-app-spec.js` check the file before anything is written, alongside page
+  `codeFile` sources. Inline `content` or `contentBase64` takes precedence, so a `contentPath`
+  beside it is never read and not checked. Teardown reads no source, so a spec with an older
+  unconfined path can still be torn down.
 - Built **before** forms and added to the solution; reference one from a form `events[]` handler.
 - **Content edits are NOT applied on rebuild.** Like commands, the phase is discover-then-skip: a web
   resource that already exists is reused as-is, so changing `content` and rebuilding deploys nothing
@@ -116,6 +126,10 @@ Reference from a column via `"globalChoice": "new_priority"` (built before the c
   **skips** `businessRules[]`, warns once naming the member, and builds everything else normally —
   so you get a working app without the rules, not a half-built one. `--verify` will report those
   rules as not deployed, which is the truth.
+- **Same-name definitions are not automatically disposable.** Rebuild reuses the oldest matching
+  definition and keeps additional pre-existing ids with a warning. After a create, the SDK's returned
+  definition is kept. Every other same-name id is reported as not attributable to this run, including
+  ids that appeared concurrently; a snapshot delta never authorizes deactivation or deletion.
 - **Operators**, all of which the SDK's own table defines:
   `Equals` · `DoesNotEqual` · `IsGreaterThan` · `IsGreaterThanEqualTo` · `IsLessThan` ·
   `IsLessThanEqualTo` · `Contains` · `DoesNotContain` · `BeginsWith` · `DoesNotBeginWith` ·
@@ -205,10 +219,10 @@ works through.
 - **`status`** matters more than it does for a rule: an inactive BPF is not merely inert, it is
   **invisible** — the stage bar does not render at all. `Active` is the default for that reason.
 - **v1 is single-entity and linear.** Every stage must be on the flow's own `entity`. The SDK also
-  models cross-entity stages, branching, stage actions and security-role grants; keys carrying them
-  are **rejected** at flow, stage **and** step level (the allowed keys are `name`/`entity`/
-  `description`/`status`/`order`/`stages`; per stage `name`/`entity`/`steps`; per step
-  `name`/`field`/`required`). The rejection is an allow-list rather than a list of known-bad names
+  models cross-entity stages, branching and stage actions; keys carrying them are **rejected** at
+  flow, stage **and** step level (the allowed keys are `name`/`entity`/`description`/`status`/
+  `order`/`stages`/`securityRoles` — the last is covered in its own section below; per stage
+  `name`/`entity`/`steps`; per step `name`/`field`/`required`). The rejection is an allow-list rather than a list of known-bad names
   because the SDK's own normalizers silently discard any key they do not copy — so an unguarded
   `branch` on a stage, or `fieldLogicalName` instead of `field` on a step, would validate clean and
   deploy as though it had never been written. Configure those in Maker after the flow deploys.
@@ -231,9 +245,35 @@ works through.
 - A **chart** tile needs both a declared `chart` (the visualization) **and** a declared `view` (its
   data); a **list** tile needs a declared `view`. The target entity is derived from the view. `name`
   defaults to the chart/view name; `colspan`/`rowspan` optional (default 1×4).
+- **View and chart names are unique only per table.** When the tile's view name is declared on more
+  than one table, set the tile's `entity` to say which; the chart must be declared on that **same**
+  table. Both are rejected at the spec gate otherwise — a same-named chart on another table would
+  plot a different table's data over this view.
+- **Dashboard names must be unique**, compared the way Dataverse compares them: ignoring case,
+  accents, full/half width and trailing spaces (`Overview`, `OVERVIEW `, `Café`/`Cafe`) — but not a
+  leading space, and not a vowel sign in scripts where it is a letter. A sitemap subarea names a
+  dashboard, and a rebuild finds it by name unless the spec pins its id (below), so two names that
+  compare equal would collapse into one. A download **withholds** such a pair and says why, rather
+  than emit a spec that cannot be rebuilt: rename one in Maker and download again. Because a name can
+  also match **another app's** dashboard, ownership comes from the app's solution, which holds every
+  dashboard the build creates (one the build cannot add to it is removed again, or named in the halt
+  when that fails too). When several in the
+  environment match, the build reuses — and verify checks, its sitemap entry included — the one the
+  solution holds, and halts if that does not single one out; a single match is used as it is. Teardown
+  deletes only the ones the solution holds, never a namesake, and none when the spec has no real
+  solution to ask (`Default`) or that solution is already gone.
 - Built after views/charts (it references their ids). The dashboard is **global** (not entity-scoped)
   and added to the solution. To surface it in the app nav, add a `dashboard` sitemap subarea (below) —
   that also auto-pins it as an app component.
+- **`dashboardId` (optional — what a download writes).** A downloaded spec carries each dashboard's
+  deployed id (bare GUID, environment-specific, like `pages[].pageId`); leave it out of an authored
+  spec. A rebuild binds to that dashboard **before** trying the name, so one renamed in the designer
+  since the download is reused — a build never renames an existing dashboard, so it warns and names
+  the new name to put in the spec — instead of a second dashboard being created under the old name
+  and the nav entry pointed at it. In an environment without that id (the spec was downloaded
+  elsewhere) the name is used as usual. Verify and teardown resolve the pin the same way — when it
+  resolves it is the only candidate — and teardown still deletes only a dashboard the app's solution
+  holds.
 - **ID-passthrough tiles (what a download emits).** A tile may instead carry the *deployed* ids —
   `viewId` (+ `visualizationId` for a chart) and the target `entity` — with no `chart`/`view` name.
   That form binds to artifacts that **already exist**, which is what a downloaded app needs: its

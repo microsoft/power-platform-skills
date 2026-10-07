@@ -1,0 +1,1 @@
+Created an Accounts page with a search box, a filter toolbar (status, industry, country/region) and sortable columns.

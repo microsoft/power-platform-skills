@@ -17,7 +17,7 @@
 //                 layout:'auto' forms don't even carry placement), so form edits are conservatively
 //                 full-build + debt-candidate; the build-time verifier clears the debt iff it converged.
 //   #3 view     — pure APPEND of columns (prior columns are a prefix of current; nothing else changed).
-//   #4 app-shell— structural sitemap change only (app.name/description/icon unchanged).
+//   #4 app-shell— structural sitemap change only (the whole app object unchanged).
 //
 // PURE + I/O-free. Consumes the ANNOTATED specs (caller runs annotateContentHashes first).
 
@@ -137,16 +137,17 @@ function classifyViews(cur, prior) {
   return out;
 }
 
-// #4 app-shell: fast ONLY when the SITEMAP structure (appShell) changed but the app object (name /
-// description / icon) is byte-identical. An app-icon/description/name change is not a sitemap-only edit.
+// #4 app-shell: fast ONLY when the SITEMAP structure (appShell) changed but the app object is
+// byte-identical. The object is compared WHOLE, so a change to any app field — name, description,
+// routing description, icon — is not a sitemap-only edit.
 function classifyAppShell(cur, prior) {
   const out = { fast: [], full: [], debt: [] };
   const appSame = stableStringify(cur.app || null) === stableStringify(prior.app || null);
   const shellSame = stableStringify(cur.appShell || null) === stableStringify(prior.appShell || null);
   if (appSame && !shellSame) {
-    out.fast.push({ shape: 'app-shell', phase: 'app-shell', identity: 'sitemap', detail: 'sitemap structure changed (app icon/description unchanged)' });
+    out.fast.push({ shape: 'app-shell', phase: 'app-shell', identity: 'sitemap', detail: 'sitemap structure changed (app object unchanged)' });
   } else if (!appSame) {
-    out.full.push('app-shell: the app object (name/description/icon) changed — not a sitemap-only edit');
+    out.full.push('app-shell: the app object changed — not a sitemap-only edit');
   }
   return out;
 }

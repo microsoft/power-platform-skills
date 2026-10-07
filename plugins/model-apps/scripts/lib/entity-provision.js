@@ -23,6 +23,7 @@ const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 // OData string-literal escaping for spec-controlled values interpolated into $filter (a solution
 // uniquename / publisher prefix with a `'` would otherwise break the query or inject a clause).
 const { odataLit } = require('./odata.js');
+const { readRelationshipsOf, findRelationshipHolder, sameRelationship, describeRelationship, pickProjectionRow, projectionHolder } = require('./relationship-metadata.js');
 // Transport-level language reads. Needed here because `MakerSdkOptions.languageCode` is a
 // construction-time option, so the LCID must be known before the SDK that would normally read it.
 const { readOrgLanguageCode, readProvisionedLanguages } = require('./dataverse-auth.js');
@@ -419,12 +420,15 @@ async function findExistingColumns(provision, logical, warn) {
 // (C,F,F,C): `createRelationship` alone kept a bilingual `lookupDisplayName` 2/2;
 // `fetchEntityMetadata` then `createRelationship` kept it 0/2.
 //
-// `$select=SchemaName` on the relationship collection is the smallest question that answers this.
-// Falls back to `fetchEntityMetadata` when the raw client is unavailable (unit-test doubles).
+// The collection select is SchemaName plus the endpoint scalars (readRelationshipsOf). Still no
+// labels — a label-bearing select here is what strips every non-base language. Falls back to
+// `fetchEntityMetadata` when the raw client is unavailable (unit-test doubles).
 //
-// Returns `true`/`false`, or `null` when it genuinely could not tell — the caller treats null the
-// way the old `catch {}` did (assume absent and let the create's own already-exists handling deal
-// with it), because a table created moments ago legitimately 404s here.
+// Without `declared`, returns `true`/`false`/`null` (name-only; the live plan). With `declared`, a
+// name whose type or endpoints differ returns `{ mismatch: true, holder }` so the build halts
+// instead of skipping. `null` is still "could not tell" — the caller treats it as absent and lets
+// the create's own already-exists handling deal with it, because a table created moments ago
+// legitimately 404s here.
 //
 // `hasLocalizedLabels` closes the same hole `findExistingTable` documents, for the same reason and
 // with the same rule. `fetchEntityMetadata` → `createRelationship` is one of the three broad-read →
@@ -435,28 +439,56 @@ async function findExistingColumns(provision, logical, warn) {
 // "assume absent" costs at most a redundant create that already-exists handling absorbs, whereas the
 // poisoning read costs a label nobody can see is wrong until a user switches language.
 // A relationship with a plain-string label keeps the fallback exactly as before.
-async function relationshipExists(provision, entityLogical, schemaName, type, { hasLocalizedLabels = false } = {}) {
-  const collection = type === 'ManyToMany' ? 'ManyToManyRelationships' : 'OneToManyRelationships';
+async function relationshipExists(provision, entityLogical, schemaName, type, opts = {}) {
+  const hasLocalizedLabels = opts.hasLocalizedLabels === true;
+  const declared = opts.declared;
+  const collectionKind = type === 'ManyToMany' ? 'ManyToMany' : 'OneToMany';
   const raw = provision && provision.dataverse;
+  let probed = null;
   if (raw && typeof raw.get === 'function') {
+    // Same narrow collection read as before, now selecting the endpoint scalars too. Scalars only —
+    // readRelationshipsOf documents why a label-bearing select must not precede createRelationship.
+    const read = await readRelationshipsOf(raw, entityLogical, collectionKind, opts.cache);
+    if (read.ok) {
+      const want = String(schemaName).toLowerCase();
+      const hit = (read.rows || []).find((r) => String(r.schemaName || '').toLowerCase() === want);
+      probed = hit ? { state: 'present', holder: hit } : { state: 'absent' };
+    } else if (hasLocalizedLabels) {
+      // Inconclusive AND localized: never resolve it with the broad read.
+      probed = { state: 'unknown' };
+    }
+  }
+  if (!probed && typeof (provision && provision.fetchEntityMetadata) === 'function') {
     try {
-      const res = await raw.get(`/EntityDefinitions(LogicalName='${odataLit(entityLogical)}')/${collection}?$select=SchemaName`);
-      if (res && res.status >= 200 && res.status < 300 && res.body && Array.isArray(res.body.value)) {
-        return res.body.value.some((r) => String(r.SchemaName || '').toLowerCase() === String(schemaName).toLowerCase());
-      }
-      if (res && res.status === 404) return false;
-    } catch { /* fall through */ }
-    // Inconclusive AND localized: never resolve it with the broad read.
-    if (hasLocalizedLabels) return null;
+      const meta = await provision.fetchEntityMetadata(entityLogical);
+      const hit = pickProjectionRow(meta && meta.relationships, schemaName);
+      // A ManyToOne projection has no lookup (relatedAttribute is the parent key). Two
+      // self-references can share a name and differ only by lookup, so an unknown lookup is not
+      // a match — return null and let the create's holder classification read the cast, which has it.
+      // Only an OneToMany projection row can decide a 1:N match from this fallback.
+      const lookupUnknown = hit && hit.type === 'ManyToOne' && declared && declared.lookup && declared.lookup.schemaName;
+      probed = !hit
+        ? { state: 'absent' }
+        : lookupUnknown
+          ? { state: 'unknown' }
+          : { state: 'present', holder: projectionHolder(hit, entityLogical) };
+    } catch {
+      probed = { state: 'unknown' };
+    }
   }
-  if (typeof (provision && provision.fetchEntityMetadata) !== 'function') return null;
-  try {
-    const meta = await provision.fetchEntityMetadata(entityLogical);
-    return ((meta && meta.relationships) || []).some((r) => String(r.schemaName || '').toLowerCase() === String(schemaName).toLowerCase());
-  } catch {
-    return null;
+  if (!probed) probed = { state: 'unknown' };
+  // Callers that do not pass the declared relationship (the live plan) keep the name-only answer.
+  if (!declared) {
+    if (probed.state === 'unknown') return null;
+    return probed.state === 'present';
   }
+  if (probed.state === 'unknown') return null;
+  if (probed.state === 'absent') return false;
+  const declaredWithName = Object.assign({}, declared, { schemaName: declared.schemaName || schemaName });
+  if (sameRelationship(declaredWithName, probed.holder)) return true;
+  return { mismatch: true, holder: probed.holder };
 }
+
 
 async function readAttributeRequiredLevels({ sdk, provision, logical }) {
   const client = (provision && provision.dataverse) || (sdk && sdk.dataverse);
@@ -506,16 +538,32 @@ async function runBestEffort(runner, phase, label, fn, warn, warning) {
 
 // Bounded-concurrency map — parallelize independent ops without flooding Dataverse (which
 // raises SQL-deadlock risk). Preserves input order in the result.
+//
+// On the first failure, no further item is STARTED, and the failure is reported only after every
+// item already in flight has settled. Rejecting at once (a plain Promise.all over the workers) left
+// the other workers running — still writing — after the phase had already failed. The build's
+// transient retry then re-ran the phase while one of those writes was still pending; its discovery
+// found no row yet and created the same view a second time under a new id, which the next fetch
+// then refused as an ambiguous match. Only the first error is rethrown; a later in-flight failure is
+// the same phase failing again and adds nothing the first did not already report.
 async function mapLimit(items, limit, fn) {
   const out = new Array(items.length);
   let i = 0;
+  let failed = false;
+  let firstError;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (i < items.length) {
+    while (!failed && i < items.length) {
       const idx = i++;
-      out[idx] = await fn(items[idx], idx);
+      try {
+        out[idx] = await fn(items[idx], idx);
+      } catch (err) {
+        if (!failed) { failed = true; firstError = err; }
+        return;
+      }
     }
   });
   await Promise.all(workers);
+  if (failed) throw firstError;
   return out;
 }
 
@@ -546,11 +594,70 @@ function makeRunner({ emit, total }) {
         return undefined;
       }
       emit({ phase, status: 'error', label, n: myN, total, detail: String((err && err.message) || err) });
-      throw new BuildHalt(`${phase} failed: ${(err && err.message) || err}`, { phase, code: (err && err.code) || 'sdk-error', recoverable, cause: err });
+      throw new BuildHalt(`${phase} failed: ${(err && err.message) || err}${operatorRemedy(err)}`, { phase, code: (err && err.code) || 'sdk-error', recoverable, cause: err });
     }
   };
   const skip = (phase, label) => { emit({ phase, status: 'skip', label, n: (n += 1), total }); };
   return { run, mapLimit, skip, emit, total };
+}
+
+// How an operator resets a workspace by hand, where the build cannot do it itself. Most of `.maker-workspace`
+// is state a re-run rebuilds — the SDK's copies are re-read from the environment, and without the
+// changed-only snapshot the next `--changed-only` run just does a full build — but two files record things
+// the environment cannot give back:
+//   - last-applied.json, what was last applied or downloaded: the baseline that keeps a nav change made in
+//     the designer from being reverted by a stale spec (AB#6726727);
+//   - destructive-approval.json, the removals a maker approved: without it the next --allow-destructive
+//     authorizes whatever that run finds, not what was shown.
+// And the changed-only snapshot can hold a RUNNING teardown's registration and a build's lease, which are
+// that run's guard against a concurrent one: deleting them under a live run removes it. Every remedy that
+// resets the workspace says exactly this.
+const RESET_WORKSPACE = 'stop any other build or teardown using the .maker-workspace directory (or the --workspace one), then delete everything in it except last-applied.json and destructive-approval.json';
+
+// Some SDK refusals end with the SDK call that fixes them — `fetchArtifact(...)` — which an operator of this
+// plugin cannot make. Where the operator's step is known, the halt names it too.
+//
+// ARTIFACT_PROJECTION_STALE: the SDK refuses to push a workspace copy projected by a different version of its
+// parsers — one an earlier version of this plugin saved. The build's plain fetch re-reads every CLEAN copy
+// before it edits one, so the refusal is reached only by a copy still holding edits an earlier build never
+// pushed (an interrupted build, say): a plain fetch keeps those while the server has not moved. The edits
+// were projected from the spec, so the re-run after a reset re-applies them.
+//
+// The build does NOT reset the copy itself, although `fetchArtifact(..., { overwrite: true })` would. The
+// SDK's per-artifact lock is per process, so an overwrite here could replace the copy a second build on
+// the same workspace has just re-read and edited, and that build would then push without its edit —
+// reporting success. The manual reset starts by stopping every other run, which is what makes it safe.
+//
+// LOCAL_EDITS_WOULD_BE_LOST: a plain fetch keeps a copy holding unpushed edits only while the environment's
+// copy has NOT moved; once it has, the fetch refuses rather than discard the edits, and the SDK's advice —
+// "Push or discard your edits first, or pass { overwrite: true }" — is again an API call. Two things leave
+// such a copy: an interrupted build (measured live on a 2.10.0 workspace, where the build then stopped at a
+// form's fetch, not its push), and a push refused as a concurrent edit (VERSION_CONFLICT), after which the
+// copy is KEPT on purpose as the fence that stops a blind re-run (see discardUnrecordedEdits, sdk-build.js).
+// Either way the environment has changed since, maybe by a maker, so clearing the copy and rebuilding the
+// same spec could overwrite that change: the navigation baseline covers nav chrome only, and not a field the
+// spec changed too. So the halt asks for the one step only a person can take first — look at the change and
+// put into the spec what should stay — and then the usual reset. A re-download is no substitute: it does not
+// capture forms, views or charts, and the artifact may predate the app (an interrupted FIRST build leaves
+// views and forms before the app exists). Both codes are pinned against the real bundle in
+// workspace-projection-real-bundle.test.js.
+function operatorRemedy(err) {
+  if (err && err.code === 'ARTIFACT_PROJECTION_STALE') {
+    return ` — the workspace copy was saved by an earlier version of this plugin and still holds edits no build pushed (an interrupted build, say). To reset it, ${RESET_WORKSPACE}, and re-run: the build re-reads the copies and re-applies every edit from the spec.`;
+  }
+  if (err && err.code === 'LOCAL_EDITS_WOULD_BE_LOST') {
+    return ` — the environment's copy changed after this workspace copy was fetched, and the workspace copy holds edits no build pushed (an interrupted build, or one halted by a concurrent edit). A re-run applies the spec over that change, so first look at it in Maker and put into the spec anything that should stay; then ${RESET_WORKSPACE}, and re-run.`;
+  }
+  return '';
+}
+
+// Whether a push RESULT is a failure. The SDK reports some failures by value instead of throwing (see
+// requireSuccessfulPush below for which, and why both spellings of the commit flag are read). Shared so
+// every caller that reacts to a failed push decides "failed" exactly as the halt does.
+function pushFailed(result) {
+  if (!result) return false;
+  const committed = result.saved !== undefined ? result.saved : result.success;
+  return committed === false || (committed === undefined && Boolean(result.error));
 }
 
 // Route every artifact push (form/view/chart/app/command/dashboard) through this. The SDK's
@@ -570,8 +677,7 @@ function makeRunner({ emit, total }) {
 // the check is written to fail CLOSED against both bundle generations rather than assume one.
 function requireSuccessfulPush(result, what, warn) {
   if (!result) return result;
-  const committed = result.saved !== undefined ? result.saved : result.success;
-  if (committed === false || (committed === undefined && result.error)) {
+  if (pushFailed(result)) {
     // SEVERAL different by-value failures reach here and they need different remedies, so the
     // diagnosis is SELECTED from the SDK's own error code rather than assumed.
     //
@@ -597,7 +703,7 @@ function requireSuccessfulPush(result, what, warn) {
     // conditional update. The SDK's own advice (`fetchArtifact(..., { overwrite: true })`) is an API
     // call an operator of this plugin cannot make, so this names the step they can.
     if (sdkCode === 'ARTIFACT_ALREADY_EXISTS') {
-      throw new BuildHalt(`push ${label} failed: ${detail} — a row already exists at that id and no duplicate was created. The workspace still holds the local copy that push never recorded, and a re-run keeps it and halts here again: delete the .maker-workspace directory (or the --workspace one), then re-run the build to adopt the existing row.`, { ...opts, code: 'already-exists' });
+      throw new BuildHalt(`push ${label} failed: ${detail} — a row already exists at that id and no duplicate was created. The workspace still holds the local copy that push never recorded, and a re-run keeps it and halts here again. To reset it, ${RESET_WORKSPACE}, and re-run the build to adopt the existing row.`, { ...opts, code: 'already-exists' });
     }
     // No code at all is the bare 412 this guard was originally written for, and `VERSION_CONFLICT`
     // is the code the SDK actually attaches to one — both mean the artifact moved under us, and
@@ -757,7 +863,7 @@ async function findExistingTable(provision, schemaName, { hasLocalizedLabels = f
   return (hits || []).find((t) => t.logicalName === logical) || null;
 }
 
-async function provisionDataModel({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode }) {
+async function provisionDataModel({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode, sleep }) {
   const result = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [] };
   // The CLI resolves the authoring LCID BEFORE constructing the SDK, because
   // `MakerSdkOptions.languageCode` is a construction-time option (#455) — the App/Form/Dashboard
@@ -1046,40 +1152,111 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
   // 2c. Relationships — 1:N and N:N; skip those already present. The publisher prefix is threaded
   //     into the schema-name defaulting so a relationship to a standard/system table gets a valid,
   //     prefixed name Dataverse accepts (see prefixedRelationshipName).
+  //     A name that already exists is not enough to skip: Dataverse allows one relationship per
+  //     schema name, so a second 1:N on the same pair, or an N:N that derived the 1:N's name, must
+  //     halt rather than be reported as already created.
   const publisherPrefix = spec.solution && spec.solution.publisherPrefix;
   for (const rel of spec.relationships || []) {
-    if (rel.type === 'OneToMany') {
-      const schema = relationshipSchemaName(rel, publisherPrefix);
-      // `null` (could not tell) is treated as absent, exactly as the previous `catch {}` did: a table
-      // created moments earlier legitimately 404s here, and the create's own already-exists handling
-      // covers the race. A localized lookup label suppresses the broad-read fallback inside the
-      // probe — see relationshipExists.
-      const exists = await relationshipExists(provision, rel.referenced.toLowerCase(), schema, 'OneToMany',
-        { hasLocalizedLabels: localizedLabelLcids(rel.lookup && rel.lookup.displayName).length > 0 });
-      if (exists === true) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
-      await runner.run('data-model', `relationship 1:N ${rel.referenced}->${rel.referencing}`, async () => {
-        const res = await sdk.createRelationship({ type: 'OneToMany', schemaName: schema, referencedEntity: rel.referenced.toLowerCase(), referencingEntity: rel.referencing.toLowerCase(), lookupSchemaName: rel.lookup.schemaName, lookupDisplayName: rel.lookup.displayName, languageCode: resolvedLanguageCode });
-        result.relationships.push({
-          schemaName: res.schemaName || schema,
-          metadataId: res.metadataId,
-          kind: '1n',
-          lookupLogicalName: res.lookupLogicalName
-        });
-      }, { skipIf: isAlreadyExists });
-    } else if (rel.type === 'ManyToMany') {
-      const schema = manyToManySchemaName(rel, publisherPrefix);
-      const exists = await relationshipExists(provision, rel.entity1.toLowerCase(), schema, 'ManyToMany');
-      if (exists === true) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
-      await runner.run('data-model', `relationship N:N ${rel.entity1}<->${rel.entity2}`, async () => {
-        const res = await sdk.createRelationship({ type: 'ManyToMany', schemaName: schema, entity1: rel.entity1.toLowerCase(), entity2: rel.entity2.toLowerCase(), intersectEntityName: rel.intersectEntityName, languageCode: resolvedLanguageCode });
-        result.relationships.push({
-          schemaName: res.schemaName || schema,
-          metadataId: res.metadataId,
-          kind: 'nn'
-        });
-      }, { skipIf: isAlreadyExists });
+    if (rel.type !== 'OneToMany' && rel.type !== 'ManyToMany') continue;
+    const schema = rel.type === 'OneToMany' ? relationshipSchemaName(rel, publisherPrefix) : manyToManySchemaName(rel, publisherPrefix);
+    const entityLogical = (rel.type === 'OneToMany' ? rel.referenced : rel.entity1).toLowerCase();
+    const label = rel.type === 'OneToMany'
+      ? `relationship 1:N ${rel.referenced}->${rel.referencing}`
+      : `relationship N:N ${rel.entity1}<->${rel.entity2}`;
+    const declared = Object.assign({}, rel, { schemaName: rel.schemaName || schema });
+    const exists = await relationshipExists(provision, entityLogical, schema, rel.type, {
+      hasLocalizedLabels: rel.type === 'OneToMany' && localizedLabelLcids(rel.lookup && rel.lookup.displayName).length > 0,
+      declared,
+    });
+    if (exists === true) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
+    if (exists && exists.mismatch) {
+      const halt = new BuildHalt(
+        `relationship schema name '${schema}' is already used by ${describeRelationship(exists.holder)}; the spec declares ${describeRelationship(declared)}. Give it an explicit "schemaName".`,
+        { phase: 'data-model', code: 'relationship-name-taken', recoverable: false },
+      );
+      halt.transient = false;
+      throw halt;
     }
+    const createOpts = rel.type === 'OneToMany'
+      ? { type: 'OneToMany', schemaName: schema, referencedEntity: rel.referenced.toLowerCase(), referencingEntity: rel.referencing.toLowerCase(), lookupSchemaName: rel.lookup.schemaName, lookupDisplayName: rel.lookup.displayName, languageCode: resolvedLanguageCode }
+      : { type: 'ManyToMany', schemaName: schema, entity1: rel.entity1.toLowerCase(), entity2: rel.entity2.toLowerCase(), intersectEntityName: rel.intersectEntityName, languageCode: resolvedLanguageCode };
+    await runner.run('data-model', label, async () => {
+      try {
+        const res = await sdk.createRelationship(createOpts);
+        result.relationships.push(rel.type === 'OneToMany'
+          ? { schemaName: res.schemaName || schema, metadataId: res.metadataId, kind: '1n', lookupLogicalName: res.lookupLogicalName }
+          : { schemaName: res.schemaName || schema, metadataId: res.metadataId, kind: 'nn' });
+      } catch (err) {
+        if (!isAlreadyExists(err)) throw err;
+        // skipIf is synchronous, so classify the holder here and rethrow a marked error. The
+        // SchemaName key is case-sensitive; findRelationshipHolder falls back to the declared
+        // endpoints when the exact spelling 404s.
+        let holder = await findRelationshipHolder(provision && provision.dataverse, schema, {
+          candidates: rel.type === 'ManyToMany' ? [rel.entity1, rel.entity2] : [rel.referenced, rel.referencing],
+        });
+        if (holder.found === true && sameRelationship(declared, holder.holder)) {
+          err.sameRelationshipExists = true;
+          throw err;
+        }
+        if (holder.found === true) {
+          const taken = new Error(`relationship schema name '${schema}' is already used by ${describeRelationship(holder.holder)}; the spec declares ${describeRelationship(declared)}. Give it an explicit "schemaName".`);
+          taken.transient = false;
+          throw taken;
+        }
+        if (holder.found === false) {
+          // The generated name is free, but the lookup column may already belong to a relationship
+          // under a different name (a download that omitted the deployed name, or an authored spec
+          // that derived one). That is not lag: say which name to set.
+          if (rel.type === 'OneToMany' && rel.lookup && rel.lookup.schemaName) {
+            const owned = await readRelationshipsOf(provision && provision.dataverse, rel.referencing, 'ManyToOne');
+            const wantLookup = String(rel.lookup.schemaName).toLowerCase();
+            const owner = owned.ok && (owned.rows || []).find((row) => String(row.referencingAttribute || '').toLowerCase() === wantLookup);
+            if (owner) {
+              // The row may have become visible on this read — the lag case. If it is the
+              // relationship we declared, skip. Only a different owner (same lookup, other name) halts.
+              if (sameRelationship(declared, owner)) {
+                err.sameRelationshipExists = true;
+                throw err;
+              }
+              const at = (spec.relationships || []).indexOf(rel);
+              const taken = new Error(`lookup '${wantLookup}' on '${String(rel.referencing).toLowerCase()}' already belongs to relationship '${owner.schemaName}' (${describeRelationship(owner)}); set relationships[${at}].schemaName to '${owner.schemaName}' to reuse it`);
+              taken.transient = false;
+              throw taken;
+            }
+          }
+          // The create said the name is taken, but neither the case-sensitive key nor the endpoint
+          // collections showed a row. A create the SDK retried after the server had already created
+          // it looks exactly like this until the metadata read catches up — the same lag family as
+          // the view retry. Two more reads, ~2s then ~4s, before calling the name unidentified.
+          const wait = typeof sleep === 'function' ? sleep : ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+          const candidates = rel.type === 'ManyToMany' ? [rel.entity1, rel.entity2] : [rel.referenced, rel.referencing];
+          for (const delay of [2000, 4000]) {
+            await wait(delay);
+            holder = await findRelationshipHolder(provision && provision.dataverse, schema, { candidates });
+            if (holder.found === true && sameRelationship(declared, holder.holder)) {
+              err.sameRelationshipExists = true;
+              throw err;
+            }
+            if (holder.found === true) {
+              const taken = new Error(`relationship schema name '${schema}' is already used by ${describeRelationship(holder.holder)}; the spec declares ${describeRelationship(declared)}. Give it an explicit "schemaName".`);
+              taken.transient = false;
+              throw taken;
+            }
+            if (holder.found !== false) break;
+          }
+          if (holder.found === false) {
+            const unknown = new Error(`relationship schema name '${schema}' is already used by a relationship the build could not identify. Give it an explicit "schemaName".`);
+            unknown.transient = false;
+            throw unknown;
+          }
+        }
+        const unread = new Error(`could not identify the relationship that already uses schema name '${schema}' (${holder.error || 'read failed'}); the create failed because it already exists: ${(err && err.message) || err}`);
+        unread.statusCode = holder.status;
+        throw unread;
+      }
+    }, { skipIf: (e) => isAlreadyExists(e) && e.sameRelationshipExists === true });
   }
+
 
   return result;
 }
@@ -1344,4 +1521,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, requireSuccessfulPush, reportPartialPush, errorCodeChain, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists };
+module.exports = { makeRunner, runBestEffort, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists };

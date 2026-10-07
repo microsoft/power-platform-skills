@@ -14,6 +14,17 @@ const SAMPLE_DATA = {
   AESTHETIC: 'Minimal & Clean',
   MOOD: 'Professional & Trustworthy',
   SUMMARY: 'An internal portal for Contoso consultants with directory, announcements, and docs.',
+  DESIGN_DIRECTION_DATA: {
+    thesis: 'Calm and precise: warm paper surfaces, Schibsted Grotesk headlines, one deep-teal action color.',
+    brandSource: 'Fresh identity',
+    audience: 'Contoso consultants staffing client projects',
+    primaryAction: 'Find a consultant',
+    secondaryAction: 'Browse announcements',
+    principalDoubt: 'Is this directory current?',
+    proofStrategy: 'An "updated today" stamp from live data beside the search',
+    heroConcept: 'Task-first welcome with search and live project counts',
+    signatureMoment: 'Directory filters instantly with an animated reflow',
+  },
   TYPOGRAPHY_DATA: {
     primary: { name: 'DM Sans', sample: 'Aa Bb Cc', reason: 'Neutral sans for body and UI' },
     secondary: { name: 'Space Grotesk', sample: 'Headings', reason: 'Geometric display for headings' },
@@ -87,6 +98,8 @@ test('render-createsite-plan renders HTML from --data file', () => {
   assert.match(html, /Directory/);
   assert.match(html, /Navbar/);
   assert.match(html, /Deploy now to Power Pages/);
+  assert.match(html, /<script id="designDirectionData" type="application\/json">\{"thesis":"Calm and precise/);
+  assert.match(html, /Directory filters instantly with an animated reflow/);
   assert.match(html, /<img class="logo" src="\.\/power-pages-icon\.png" alt="Power Pages" \/>/);
 
   const iconPath = path.join(tempDir, 'power-pages-icon.png');
@@ -94,6 +107,29 @@ test('render-createsite-plan renders HTML from --data file', () => {
     __dirname, '..', '..', 'skills', 'create-site', 'assets', 'shared', 'power-pages-icon.png'
   );
   assert.deepEqual(fs.readFileSync(iconPath), fs.readFileSync(sourceIcon), 'icon bytes should match shared asset');
+});
+
+test('render-createsite-plan reads --data - from stdin and keeps shell characters as data', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'createsite-plan-'));
+  const outputPath = path.join(tempDir, 'plan.html');
+  // A user-typed brand URL with characters that would end a single-quoted shell argument.
+  const brandUrl = "https://contoso.example/it's?a=1&b=$(echo hi)";
+  const data = { ...SAMPLE_DATA, DESIGN_DIRECTION_DATA: { ...SAMPLE_DATA.DESIGN_DIRECTION_DATA, brandSource: brandUrl } };
+
+  const result = spawnSync(process.execPath, [scriptPath, '--output', outputPath, '--data', '-'], {
+    encoding: 'utf8',
+    input: JSON.stringify(data),
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const html = fs.readFileSync(outputPath, 'utf8');
+  assert.match(html, /Contoso Portal/);
+  assert.ok(html.includes('it\\u0027s') || html.includes("it's"), 'the brand URL arrives intact');
+
+  const bad = spawnSync(process.execPath, [scriptPath, '--output', path.join(tempDir, 'bad.html'), '--data', '-'], { encoding: 'utf8', input: 'not json' });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /JSON on stdin is not valid/);
+  fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
 test('render-createsite-plan renders HTML from --data-inline JSON', () => {
@@ -187,6 +223,7 @@ test('render-createsite-plan fails when required keys are missing', () => {
   const incomplete = { ...SAMPLE_DATA };
   delete incomplete.PAGES_DATA;
   delete incomplete.ROUTES_DATA;
+  delete incomplete.DESIGN_DIRECTION_DATA;
 
   const result = spawnSync(
     process.execPath,
@@ -198,6 +235,7 @@ test('render-createsite-plan fails when required keys are missing', () => {
   assert.match(result.stderr, /Missing required keys/);
   assert.match(result.stderr, /PAGES_DATA/);
   assert.match(result.stderr, /ROUTES_DATA/);
+  assert.match(result.stderr, /DESIGN_DIRECTION_DATA/);
 });
 
 test('render-createsite-plan escapes </script> and < inside JSON data to prevent HTML injection', () => {

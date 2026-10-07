@@ -16,12 +16,14 @@ const json = async file => JSON.parse(await readFile(file, 'utf8'));
 const analysisSkills = ['analytics', 'analyze-performance', 'analyze-variants', 'analyze-drivers',
   'compare-cohorts', 'derive-metric', 'analyze-objects', 'investigate-process'];
 
-test('marketplace is a minimal index and both manifest mirrors match', async () => {
-  const index = await json(path.join(marketplace, 'marketplace.json'));
-  assert.deepEqual(index, await json(path.join(marketplace, '.claude-plugin', 'marketplace.json')));
-  assert.deepEqual(index.plugins.find(entry => entry.name === 'process-intelligence'),
-    { name: 'process-intelligence', source: './plugins/process-intelligence' });
-  for (const entry of index.plugins) assert.deepEqual(Object.keys(entry).sort(), ['name', 'source']);
+test('marketplace entries are minimal and Process Intelligence manifests match', async () => {
+  // External plugins have host-specific sources; the repository validator checks their pairing.
+  for (const file of ['marketplace.json', '.claude-plugin/marketplace.json']) {
+    const index = await json(path.join(marketplace, file));
+    assert.deepEqual(index.plugins.filter(entry => entry.name === 'process-intelligence'),
+      [{ name: 'process-intelligence', source: './plugins/process-intelligence' }]);
+    for (const entry of index.plugins) assert.deepEqual(Object.keys(entry).sort(), ['name', 'source']);
+  }
   const plugin = await json(path.join(root, '.plugin', 'plugin.json'));
   assert.deepEqual(plugin, await json(path.join(root, '.claude-plugin', 'plugin.json')));
   assert.equal(plugin.name, 'process-intelligence');

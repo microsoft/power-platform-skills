@@ -14,6 +14,8 @@ Build and deploy generative pages (genux) for Power Apps model-driven apps. This
 ### From a local clone
 
 ```bash
+copilot --plugin-dir /path/to/power-platform-skills/plugins/model-apps
+# or
 claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
 ```
 
@@ -27,6 +29,11 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
 
 After installing `az`, run `az login` with the same identity as your active `pac auth list` profile. Without `az`, the `/genpage` skill still works for pages over existing entities or mock data — it only fails when entity creation is needed.
 
+Each Azure CLI call (a token, `az account show`) may take up to **60 seconds** — a busy machine can
+take most of that just to start `az`. A call that runs out of time is reported as a timeout (the
+pre-flight's `az_timeout`), never as a missing or signed-out CLI. To allow longer, set
+`POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS` in milliseconds (1000–900000), for example `120000`.
+
 ## Feature flags (experimental & in-progress)
 
 Some capabilities ship **OFF by default** while their cross-repo dependencies roll
@@ -37,13 +44,10 @@ status) in `scripts/lib/feature-flags.js`; their on/off value lives in
 
 | Flag | Status | Enables | Depends on |
 |---|---|---|---|
-| `connectors` | **ga (on by default)** | GenPage connector authoring (SharePoint, weather, Office 365, SQL, custom REST) + ALM packaging of connection references | pac CLI connector verbs, the GenUX authoring control, and the maker/admin ECS setting — all live in PROD |
 | `custom-api` | in-progress | Calling a Dataverse Custom API Action or Function from a generated page (`executeAction` / `executeFunction` / `listBoundActions`) | the AIBuilder action prompt, the shared action runtime, the UCI and Controls host runtimes, a pac CLI `model genpage upload --actions` verb, and the `GenUxPluginActionAllowList` setting — all live in PROD |
 | `custom-telemetry` | in-progress | A generated page reporting its own events, metrics, traces and exceptions to your Application Insights resource via `props.appInsights` | the page telemetry facade in the UCI host runtime, the GenUX authoring control, the AIBuilder telemetry prompt, and the `GenUxEnableCustomTelemetry` setting — all live in PROD |
 
-Connector authoring is **GA and on by default**. Its flag is kept for one release as a
-rollback switch: set `GENPAGE_ENABLE_CONNECTORS=0` (or `"connectors": false`) if your
-environment turns out to be missing one of the dependencies above.
+Connector authoring is in **public preview** and no longer has a feature flag. Connector discovery, binding, deploy, and ALM packaging are always available when the required PAC and host capabilities are present.
 
 **See the current state** (status, whether each flag is on, and why):
 
@@ -72,7 +76,9 @@ export GENPAGE_ENABLE_CUSTOM_API=1
 Precedence is **env var → `feature-flags.json` → default OFF** (fail-closed). Only
 turn a flag on once its "Depends on" items are actually available in your
 environment — otherwise the feature's commands will fail with a clear "disabled" or
-capability error. The env var name is always `GENPAGE_ENABLE_<FLAG>` (uppercased).
+capability error. The env var name is always `GENPAGE_ENABLE_` plus the flag name in upper case, with
+`-` turned into `_` (`custom-api` → `GENPAGE_ENABLE_CUSTOM_API`), and unknown flags stay disabled even if
+a matching env var is set.
 
 ## Skills
 
@@ -142,6 +148,22 @@ Creates, updates, and deploys generative pages for model-driven Power Apps. Hand
 
 The plugin invokes multiple tools during a session. To reduce approval prompts:
 
+### GitHub Copilot CLI
+
+**Option 1 — Allow specific tools (recommended)**
+
+```bash
+copilot --allow-tool 'write' --allow-tool 'shell(pac *)' --allow-tool 'shell(node *)' --allow-tool 'shell(powershell *)' --allow-tool 'shell(az *)'
+```
+
+**Option 2 — Allow all tools**
+
+```bash
+copilot --allow-all-tools
+```
+
+### Claude Code
+
 **Option 1 — Permission mode (recommended)**
 
 ```jsonc
@@ -201,11 +223,10 @@ export MODEL_APPS_DISABLE_HOOKS=1
 
 ## Telemetry
 
-model-apps ships opt-out usage telemetry (1DS). The committed config ships
-**disabled** (`disabled: true`) — until go-live it builds, sends and mirrors nothing, even though it now
-carries the provisioned model-apps key + stream (staged, not yet enabled). `disabled:
-true` is the active guard; the placeholder-key check is only a secondary guard for
-un-provisioned copies. Once enabled it is **on by default** (you opt out), and then:
+model-apps ships opt-out usage telemetry (1DS). It is **on by default** (you opt
+out). Events go to the collector for your environment's cloud — the US or EU data
+boundary for a public-cloud org, or the matching sovereign collector (GCC, GCC High,
+DoD, China); an unrecognized cloud sends nothing. Then:
 
 - **What's collected:** skill name, plugin/PAC/agent versions, OS/Node versions,
   session/correlation IDs, and Dataverse organization and Entra tenant GUIDs when

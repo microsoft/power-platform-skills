@@ -1,14 +1,14 @@
 # Power Automate plugin
 
-Build, edit, run, and debug **Power Automate cloud flows** from Claude Code or
-GitHub Copilot CLI, powered by the **FlowAgent** MCP server.
+Build, edit, run, and debug **Power Automate cloud flows** from GitHub Copilot CLI or
+Claude Code, powered by the **FlowAgent** MCP server.
 
 This folder is the marketplace-packaged plugin: skills, MCP wiring, and a
 self-contained MCP engine bundled at `server/mcp.mjs`.
 
 ## Install
 
-From a Claude Code or GitHub Copilot CLI session:
+From a GitHub Copilot CLI or Claude Code session:
 
 ```bash
 /plugin marketplace add microsoft/power-platform-skills
@@ -58,3 +58,17 @@ error if the bundle is missing. That file is a single self-contained ESM bundle
 
 Auth uses Azure CLI (`az login`) plus MSAL for connectivity endpoints — see
 `CLAUDE.md` and `references/connection-patterns.md` in this folder.
+
+## Telemetry logs
+
+Power Automate hook telemetry writes per-session logs under
+`~/.power-platform-skills/telemetry/power-automate/sessions/` by default; the
+base directory follows `POWER_PLATFORM_SKILLS_CONFIG_DIR` when set. Old
+session logs are pruned after 14 days.
+
+The FlowAgent CLI/MCP engine writes a separate local mirror to
+`~/.flowagent/telemetry.jsonl` by default. Set `FLOWAGENT_TELEMETRY_LOG` to
+change its path. The core log is not automatically pruned. See
+[`skills/telemetry/SKILL.md`](skills/telemetry/SKILL.md) for telemetry controls and
+[`references/telemetry.md`](references/telemetry.md) for collection and routing
+details. Both guides ship inside the plugin.

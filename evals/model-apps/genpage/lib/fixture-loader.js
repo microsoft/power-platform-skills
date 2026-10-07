@@ -12,7 +12,7 @@ const path = require('node:path');
 //       page.tsx                      ← .tsx output (consumed by Layer 2)
 //       workflow-log.md               ← log of agent actions (consumed by Layer 1)
 //       genpage-plan.md               ← plan doc (consumed by Layer 1)
-//       entity-creation-log.md        ← entity-builder transactions (Layer 1)
+//       genpage-entity-creation-log.md ← entity-builder transactions (Layer 1)
 //     2-mock-dashboard/
 //       dashboard.tsx
 //
@@ -22,7 +22,67 @@ const path = require('node:path');
 //   workflowLog: string | null         ← workflow-log.md content (Layer 1)
 //   genpagePlan: string | null         ← genpage-plan.md content (Layer 1)
 //   genpageEditPlan: string | null     ← genpage-edit-plan.md content (Layer 1 edit flow)
-//   entityCreationLog: string | null   ← entity-creation-log.md content (Layer 1)
+//   runtimeTypes: string | null        ← RuntimeTypes.ts content when captured (Layer 1)
+//   entityCreationLog: string | null   ← current log or legacy alias (Layer 1)
+//   contractVersion, manifest, events, artifacts ← versioned synthetic evidence
+
+const ENTITY_CREATION_LOG = 'genpage-entity-creation-log.md';
+// Historical captures predate the skill-specific prefix; keep their old name as a read-only alias.
+const LEGACY_ENTITY_CREATION_LOG = 'entity-creation-log.md';
+
+function readJson(dir, name) {
+  const text = readOptional(dir, name);
+  if (text === null) return null;
+  try {
+    return JSON.parse(text.replace(/^\uFEFF/, ''));
+  } catch (error) {
+    throw new Error(`${path.basename(dir)}: invalid JSON in ${name}: ${error.message}`);
+  }
+}
+
+function evidenceFile(dir, name) {
+  if (typeof name !== 'string' || !name || path.win32.isAbsolute(name) || path.posix.isAbsolute(name)
+    || name.split(/[\\/]/).some((part) => part === '..' || part === '.' || !part)) {
+    throw new Error(`${path.basename(dir)}: invalid artifact path ${JSON.stringify(name)}`);
+  }
+  const full = path.resolve(dir, ...name.split(/[\\/]/));
+  const root = fs.realpathSync(dir);
+  const real = fs.realpathSync(full);
+  const relative = path.relative(root, real);
+  const stat = fs.lstatSync(full);
+  if (relative.startsWith('..' + path.sep) || path.isAbsolute(relative) || !stat.isFile() || stat.nlink > 1) {
+    throw new Error(`${path.basename(dir)}: artifact path is outside the fixture or not a plain file: ${name}`);
+  }
+  return fs.readFileSync(full, 'utf8');
+}
+
+function fixtureEvidence(dir, dirName, historicalContracts) {
+  const manifest = readJson(dir, 'fixture.json') || historicalContracts[dirName]
+    || { contractVersion: 1, provenance: 'historical' };
+  if (!manifest || ![1, 2].includes(manifest.contractVersion)) {
+    throw new Error(`${dirName}: unsupported fixture contract version`);
+  }
+  if (manifest.contractVersion === 2 && manifest.provenance !== 'synthetic') {
+    throw new Error(`${dirName}: current eval fixtures must be labelled synthetic`);
+  }
+  const artifacts = {};
+  for (const name of manifest.artifacts || []) {
+    artifacts[name.replace(/\\/g, '/')] = evidenceFile(dir, name);
+  }
+  let events;
+  if (manifest.toolResults) {
+    const text = evidenceFile(dir, manifest.toolResults);
+    try { events = JSON.parse(text); } catch (error) {
+      throw new Error(`${dirName}: invalid JSON in ${manifest.toolResults}: ${error.message}`);
+    }
+    if (!Array.isArray(events) || events.some((event) => !event || typeof event.command !== 'string' || !event.command.trim())) {
+      throw new Error(`${dirName}: tool results must be an ordered array of command/result events`);
+    }
+    const ids = events.map((event) => event.id).filter((id) => id !== undefined);
+    if (new Set(ids).size !== ids.length) throw new Error(`${dirName}: duplicate tool-result event id`);
+  }
+  return { contractVersion: manifest.contractVersion, manifest, events, artifacts };
+}
 
 function loadFixtures(fixturesDir) {
   if (!fs.existsSync(fixturesDir)) {
@@ -31,6 +91,9 @@ function loadFixtures(fixturesDir) {
   const entries = fs.readdirSync(fixturesDir, { withFileTypes: true })
     .filter((e) => e.isDirectory())
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  // Labels live beside, not INSIDE, captured directories: updating compatibility metadata must
+  // never rewrite the original transcript/source evidence.
+  const historicalContracts = readJson(fixturesDir, 'contracts.json') || {};
 
   const fixtures = [];
   for (const entry of entries) {
@@ -46,7 +109,13 @@ function loadFixtures(fixturesDir) {
       workflowLog: readOptional(dir, 'workflow-log.md'),
       genpagePlan: readOptional(dir, 'genpage-plan.md'),
       genpageEditPlan: readOptional(dir, 'genpage-edit-plan.md'),
-      entityCreationLog: readOptional(dir, 'entity-creation-log.md'),
+      // The schema `pac model genpage generate-types` wrote from the live environment. It is not a
+      // generated page (listTsxFiles skips it), but it is the only captured record of the choice
+      // values Dataverse actually holds after provisioning.
+      runtimeTypes: readOptional(dir, 'RuntimeTypes.ts'),
+      // Only absence permits the legacy alias. An empty current log must not borrow old transactions.
+      entityCreationLog: readOptional(dir, ENTITY_CREATION_LOG) ?? readOptional(dir, LEGACY_ENTITY_CREATION_LOG),
+      ...fixtureEvidence(dir, entry.name, historicalContracts),
     });
   }
   return fixtures;
@@ -71,4 +140,4 @@ function readOptional(dir, fileName) {
   return fs.readFileSync(full, 'utf8');
 }
 
-module.exports = { loadFixtures, listTsxFiles, readOptional };
+module.exports = { loadFixtures, listTsxFiles, readOptional, ENTITY_CREATION_LOG, LEGACY_ENTITY_CREATION_LOG };

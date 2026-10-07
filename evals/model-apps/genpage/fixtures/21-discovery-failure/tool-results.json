@@ -1,0 +1,13 @@
+[
+  {
+    "id": "discovery",
+    "command": "node scripts\\list-connections.js https://contoso.crm.dynamics.com",
+    "rawOutput": "Warning: failed to retrieve connector metadata.\n",
+    "result": {
+      "ok": false,
+      "error": "pac connection list output is unreadable; no recognized connection table or JSON."
+    },
+    "userMessage": "pac connection list output is unreadable; no recognized connection table or JSON.",
+    "exitCode": 1
+  }
+]
