@@ -207,6 +207,26 @@ function removeState(state) {
   }
 }
 
+function clearStates(skillName) {
+  let entries;
+  try {
+    entries = fs.readdirSync(stateDir(skillName), { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    try {
+      fs.unlinkSync(path.join(stateDir(skillName), entry.name));
+      removed += 1;
+    } catch {
+      // Correlation cleanup is best-effort and must never affect the skill.
+    }
+  }
+  return removed;
+}
+
 function prune(skillName, now = Date.now()) {
   let entries;
   try {
@@ -235,6 +255,7 @@ function prune(skillName, now = Date.now()) {
 module.exports = {
   MAX_AGE_MS,
   bindPending,
+  clearStates,
   findActive,
   findOrBindActive,
   markConfigured,

@@ -335,16 +335,26 @@ function buildLocalizationPackageValidationEvent(envelopeName, input) {
 }
 
 function emitSkillConfigured(skillName, projectRoot, eventInfo) {
-  const emitted = emit(
-    "configured",
-    skillName,
-    projectRoot,
-    eventInfo
-  );
-  if (emitted && skillName === "add-localization") {
-    invocationState.markConfigured(skillName, projectRoot);
+  let emitted;
+  try {
+    emitted = emit(
+      "configured",
+      skillName,
+      projectRoot,
+      eventInfo
+    );
+    if (emitted && skillName === "add-localization") {
+      invocationState.markConfigured(skillName, projectRoot);
+    }
+    return Boolean(emitted);
+  } finally {
+    // Configuration is create-site's final correlated event. Clear both its
+    // matched record and any abandoned/ambiguous pending starts so one cancelled
+    // invocation cannot poison later runs.
+    if (skillName === "create-site") {
+      invocationState.clearStates(skillName);
+    }
   }
-  return Boolean(emitted);
 }
 
 function emitPackageValidation(projectRoot, eventInfo) {

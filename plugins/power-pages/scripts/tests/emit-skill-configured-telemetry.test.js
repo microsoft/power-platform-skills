@@ -30,12 +30,7 @@ function waitForFile(filePath, timeoutMs) {
   return fs.existsSync(filePath);
 }
 
-test("emits approved localization configuration with the start-hook session", (t) => {
-  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-config-event-"));
-  const hostRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-config-host-"));
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-config-project-"));
-  const probePath = path.join(configDir, "probe.json");
-  const startProbePath = path.join(configDir, "start-probe.json");
+function writeTelemetryConfig(configDir) {
   const ikeyPath = path.join(configDir, "ikey.json");
   fs.writeFileSync(
     ikeyPath,
@@ -57,6 +52,87 @@ test("emits approved localization configuration with the start-hook session", (t
       path.join(PLUGIN_ROOT, "scripts", "lib", "telemetry", "resolver.js")
     )});\n`
   );
+  return ikeyPath;
+}
+
+function runStart({ configDir, hostRoot, ikeyPath, sessionId, skillName, probeName }) {
+  return spawnSync(
+    process.execPath,
+    [PRETOOL_HOOK],
+    {
+      input: JSON.stringify({
+        cwd: hostRoot,
+        session_id: sessionId,
+        tool_input: { skill: skillName },
+      }),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: "",
+        POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
+        POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath,
+        POWER_PLATFORM_SKILLS_FAKE_HTTPS: path.join(configDir, probeName),
+        POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "",
+      },
+      timeout: 30_000,
+    }
+  );
+}
+
+function runCreateSiteConfigured({ configDir, projectRoot, ikeyPath, probeName }) {
+  const probePath = path.join(configDir, probeName);
+  const result = spawnSync(
+    process.execPath,
+    [
+      SCRIPT,
+      "--skillName", "create-site",
+      "--projectRoot", projectRoot,
+      "--framework", "react",
+      "--siteContentLocale", "en-US",
+      "--purpose", "company-portal",
+      "--audience", "internal",
+      "--choiceSource", "prompt",
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: "",
+        POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
+        POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath,
+        POWER_PLATFORM_SKILLS_FAKE_HTTPS: probePath,
+        POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "",
+      },
+      timeout: 30_000,
+    }
+  );
+  assert.equal(result.status, 0);
+  assert.ok(waitForFile(probePath, 5_000), "configured dispatcher should write probe");
+  return JSON.parse(JSON.parse(fs.readFileSync(probePath, "utf8")).body);
+}
+
+function invocationFileCount(configDir, skillName) {
+  const dir = path.join(
+    configDir,
+    "telemetry",
+    "power-pages",
+    "invocations",
+    skillName
+  );
+  try {
+    return fs.readdirSync(dir).filter((entry) => entry.endsWith(".json")).length;
+  } catch {
+    return 0;
+  }
+}
+
+test("emits approved localization configuration with the start-hook session", (t) => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-config-event-"));
+  const hostRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-config-host-"));
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-config-project-"));
+  const probePath = path.join(configDir, "probe.json");
+  const startProbePath = path.join(configDir, "start-probe.json");
+  const ikeyPath = writeTelemetryConfig(configDir);
 
   const originalConfigDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
   process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = configDir;
@@ -138,4 +214,112 @@ test("emits approved localization configuration with the start-hook session", (t
       { requireConfigured: true }
     )
   );
+});
+
+test("create-site finalizes normal and ambiguous invocation state", (t) => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-create-config-"));
+  const hostRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-create-host-"));
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-create-project-"));
+  const ikeyPath = writeTelemetryConfig(configDir);
+  const originalConfigDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+  process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = configDir;
+  t.after(() => {
+    if (originalConfigDir === undefined) {
+      delete process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR;
+    } else {
+      process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR = originalConfigDir;
+    }
+  });
+
+  assert.equal(
+    runStart({
+      configDir,
+      hostRoot,
+      ikeyPath,
+      sessionId: "create-session-1",
+      skillName: "create-site",
+      probeName: "start-1.json",
+    }).status,
+    0
+  );
+  const first = runCreateSiteConfigured({
+    configDir,
+    projectRoot,
+    ikeyPath,
+    probeName: "configured-1.json",
+  });
+  assert.equal(first.data.sessionId, "create-session-1");
+  assert.equal(invocationFileCount(configDir, "create-site"), 0);
+
+  assert.equal(
+    runStart({
+      configDir,
+      hostRoot,
+      ikeyPath,
+      sessionId: "create-session-2",
+      skillName: "create-site",
+      probeName: "start-2.json",
+    }).status,
+    0
+  );
+  const second = runCreateSiteConfigured({
+    configDir,
+    projectRoot,
+    ikeyPath,
+    probeName: "configured-2.json",
+  });
+  assert.equal(second.data.sessionId, "create-session-2");
+  assert.equal(invocationFileCount(configDir, "create-site"), 0);
+
+  assert.equal(
+    runStart({
+      configDir,
+      hostRoot,
+      ikeyPath,
+      sessionId: "abandoned-session",
+      skillName: "create-site",
+      probeName: "start-abandoned.json",
+    }).status,
+    0
+  );
+  assert.equal(
+    runStart({
+      configDir,
+      hostRoot,
+      ikeyPath,
+      sessionId: "retry-session",
+      skillName: "create-site",
+      probeName: "start-retry.json",
+    }).status,
+    0
+  );
+  const ambiguous = runCreateSiteConfigured({
+    configDir,
+    projectRoot,
+    ikeyPath,
+    probeName: "configured-ambiguous.json",
+  });
+  assert.notEqual(ambiguous.data.sessionId, "abandoned-session");
+  assert.notEqual(ambiguous.data.sessionId, "retry-session");
+  assert.equal(invocationFileCount(configDir, "create-site"), 0);
+
+  assert.equal(
+    runStart({
+      configDir,
+      hostRoot,
+      ikeyPath,
+      sessionId: "recovered-session",
+      skillName: "create-site",
+      probeName: "start-recovered.json",
+    }).status,
+    0
+  );
+  const recovered = runCreateSiteConfigured({
+    configDir,
+    projectRoot,
+    ikeyPath,
+    probeName: "configured-recovered.json",
+  });
+  assert.equal(recovered.data.sessionId, "recovered-session");
+  assert.equal(invocationFileCount(configDir, "create-site"), 0);
 });
