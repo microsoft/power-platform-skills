@@ -41,6 +41,21 @@ default. Design a cohesive complete experience with purposeful imagery, hierarch
 section rhythm. The native Bootstrap/Studio structure and platform behavior remain protected;
 the baseline's generic appearance is not a design requirement.
 
+Use [page blueprints](../../../references/page-blueprints.md) to select narrative beats and a
+role-appropriate first screen from that same brief. Translate ideas through the native structures
+below: a product-moment split may use supported one-third or equal columns, not a guessed 7/5
+Studio serialization; a bento-like composition is supported sections/columns/elements, not a new
+component type. Keep the primary task clear without forcing oversized hero text onto every native
+form or list. A signature moment must use an approved, genuinely available capability or static
+explanatory composition, not invented data or new behavior.
+Read only the relevant blueprint/narrative patterns, not the SPA implementation contract. These
+are conceptual patterns, not required component types or serialized layouts. Keep existing native
+color roles and Bootstrap breakpoints rather than imposing SPA token names or grid counts.
+Do not invent testimonials, service levels, metrics, endorsements or live status counts, even
+behind a source comment. Use confirmed capability or truthful process explanation instead.
+Only when the calling scope expressly permits sample content, label it visibly as sample content
+and report it before any separately approved deployment.
+
 Do not ask about UUIDs, metadata filenames, serialization, indentation, escaping, or routine
 accessibility attributes.
 
@@ -78,6 +93,8 @@ Choose structure in this order:
 For new-site designs, include the final coordinated `style-site` treatment from the approved
 brief after every structural operation. Pass the verified Bootstrap major to the page-content
 owner; use the Bootstrap 5 examples only on verified Bootstrap 5 sites.
+Carry the approved narrative and first-screen intent in the resolved composition and `designContext`.
+Do not repeat the full design review at each page-element handoff.
 
 When an image is proposed, follow `visual-asset-planning.md` first. The content composition must
 consume the approved direct HTTPS URL for a new-site image addition. Put it in static inputs or

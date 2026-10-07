@@ -391,6 +391,8 @@ On **Customize now**, invoke `/customize-declarative-site` through the `Skill` t
 - `WEBSITE_RECORD_ID`;
 - configured base language;
 - the user's original site intent, when present;
+- any already established experience brief, brand source, primary action, and narrative intent;
+  let the customizer complete only missing decisions rather than asking for them again;
 - `creationIntent: "new-site"` and `verifiedBootstrapMajor: <BOOTSTRAP_VERSION>` with the inspected
   evidence; for the Standard path, include the user's explicit compatibility choice;
 - `imageDelivery: "external-url"`: record this as `newSiteDesign.imageDelivery` and use direct

@@ -1,6 +1,6 @@
 {
   "name": "power-pages",
-  "version": "2.7.0",
+  "version": "2.8.0",
   "description": "Create and deploy Power Pages sites using modern development approaches. Supports Enhanced data model sites provisioned from documented first-party templates and code sites (SPAs) with React, Angular, Vue, or Astro. Includes ALM orchestration, per-solution pipelines, solution splitting, and deployment diagnostics.",
   "author": {
     "name": "Microsoft",
