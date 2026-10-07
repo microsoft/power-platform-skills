@@ -63,8 +63,9 @@ function planUpdate(projectRoot, releaseId, catalog = readCatalog()) {
   const migrationRequired = target.templateVersion > source.templateVersion;
   if (!migrationRequired && ['android', 'ios'].some((platform) => (
     target.nativeRuntimeVersions[platform] !== source.nativeRuntimeVersions[platform]
+    || target.platforms[platform].fingerprint !== source.platforms[platform].fingerprint
   ))) {
-    throw new Error('Runtime changes require a published template migration, not metadata edits');
+    throw new Error('Runtime or fingerprint changes require a published template migration, not metadata edits');
   }
   assertMajorTransition(source, target);
   let kind = migrationRequired ? 'template-upgrade' : 'host-repair';
