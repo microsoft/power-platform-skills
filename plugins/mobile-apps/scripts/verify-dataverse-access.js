@@ -21,8 +21,8 @@ async function main() {
     process.exit(1);
   }
   const [envUrl] = parsed.positionals;
-  const explicitTenantId = parsed.values['tenant-id'];
-  if (!envUrl || parsed.positionals.length !== 1 || (explicitTenantId !== undefined && !explicitTenantId.trim())) {
+  const explicitTenantId = parsed.values['tenant-id'] ?? null;
+  if (!envUrl || parsed.positionals.length !== 1 || (explicitTenantId !== null && !explicitTenantId.trim())) {
     process.stderr.write(`${usage}\n`);
     process.exit(1);
   }

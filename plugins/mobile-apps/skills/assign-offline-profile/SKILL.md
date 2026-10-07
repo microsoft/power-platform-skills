@@ -19,6 +19,15 @@ Bind one or more users and/or teams to an existing Mobile Offline Profile. Witho
 
 Per the maker portal's UX (the "Assign profile to user" dialog under env settings), this is a separate operation from profile creation. Many users hit "I created the profile but offline still doesn't work" — the missing piece is membership.
 
+Before project reads or commands, apply
+[app-working-directory.md](${PLUGIN_ROOT}/shared/references/app-working-directory.md).
+Resolve one absolute `working_dir` for a direct call or require the child
+invocation's owner root. Keep every shell/file operation, referenced recipe,
+and retry on that root and the selected environment/tenant; missing or
+conflicting context is `NEEDS_CONTEXT`. File tools use `<working_dir>/...`.
+Planning-phase calls may discover and propose the membership diff but must
+return before the confirmation gate, POST/DELETE, or artifact updates.
+
 ## Workflow
 
 1. Verify project + locate profile → 2. Pick users/teams → 3. Discover existing memberships → 4. Confirm diff (single gate) → 5. POST memberships → 6. Verify → 7. Summary
@@ -28,9 +37,19 @@ Per the maker portal's UX (the "Assign profile to user" dialog under env setting
 ### Step 1 — Verify project + locate profile
 
 ```bash
-test -f power.config.json
-node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+environment_id=$(node -p "require('./power.config.json').environmentId || ''") || {
+  echo "BLOCKED: unreadable power.config.json" >&2; exit 1;
+}
+if [ -z "$environment_id" ]; then
+  echo "NEEDS_CONTEXT: selected app has no environmentId" >&2; exit 1;
+fi
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$environment_id" --no-cache --require-tenant
 ```
+
+Capture `<envUrl>` and `<tenantId>` and require them to match any supplied owner
+identity. Pass `--tenant-id "<tenantId>"` on every Dataverse request, including
+profile lookup, `WhoAmI`, membership discovery, mutation, readback, and retries.
 
 Profile ID resolution (in order):
 
@@ -38,7 +57,7 @@ Profile ID resolution (in order):
 |---|---|
 | `$ARGUMENTS` contains `--profile-id <guid>` | Explicit override |
 | `$ARGUMENTS` contains `--profile-name <name>` | Resolve via `GET /mobileofflineprofiles?$filter=name eq '<name>'&$select=mobileofflineprofileid` |
-| `offline-profile.json` in cwd | Read top-level `profileId` field |
+| `<working_dir>/offline-profile.json` | Read top-level `profileId` field |
 | Otherwise | `GET /mobileofflineprofiles` and present `AskUserQuestion` with the list (max 4 options) |
 
 STOP if no profile can be resolved. Print: `Run /setup-offline-profile first, or pass --profile-id`.
@@ -80,13 +99,16 @@ Then read the next user message and parse.
 For idempotency:
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 # Existing user memberships for this profile
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
-  "usermobileofflineprofilememberships?\$filter=_mobileofflineprofileid_value eq <profileId>&\$select=usermobileofflineprofilemembershipid,_systemuserid_value&\$expand=systemuserid_systemuser(\$select=domainname)"
+  "usermobileofflineprofilememberships?\$filter=_mobileofflineprofileid_value eq <profileId>&\$select=usermobileofflineprofilemembershipid,_systemuserid_value&\$expand=systemuserid_systemuser(\$select=domainname)" \
+  --tenant-id "<tenantId>"
 
 # Existing team memberships for this profile
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
-  "teammobileofflineprofilememberships?\$filter=_mobileofflineprofileid_value eq <profileId>&\$select=teammobileofflineprofilemembershipid,_teamid_value&\$expand=teamid_team(\$select=name)"
+  "teammobileofflineprofilememberships?\$filter=_mobileofflineprofileid_value eq <profileId>&\$select=teammobileofflineprofilemembershipid,_teamid_value&\$expand=teamid_team(\$select=name)" \
+  --tenant-id "<tenantId>"
 ```
 
 Build the set of `already-bound` UPNs and team names.
@@ -94,11 +116,13 @@ Build the set of `already-bound` UPNs and team names.
 For each candidate user/team from Step 2, look up their `systemuserid` / `teamid` (skip if already in `already-bound`):
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
-  "systemusers?\$filter=domainname eq '<upn>'&\$select=systemuserid,fullname,domainname&\$top=1"
+  "systemusers?\$filter=domainname eq '<upn>'&\$select=systemuserid,fullname,domainname&\$top=1" \
+  --tenant-id "<tenantId>"
 
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
-  "teams?\$filter=name eq '<team-name>' and teamtype eq 0&\$select=teamid,name&\$top=1"
+  "teams?\$filter=name eq '<team-name>' and teamtype eq 0&\$select=teamid,name&\$top=1" --tenant-id "<tenantId>"
 ```
 
 (`teamtype eq 0` excludes Access Teams and Owner Teams — only Manage Teams get profile assignments.)
@@ -152,8 +176,10 @@ For each in `to_add`, POST sequentially (parallel POSTs occasionally return 429)
 **User membership:**
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "usermobileofflineprofilememberships" \
+  --tenant-id "<tenantId>" \
   --body '{
     "MobileOfflineProfileId@odata.bind": "/mobileofflineprofiles(<profileId>)",
     "SystemUserId@odata.bind": "/systemusers(<systemuserid>)"
@@ -166,8 +192,10 @@ Expected 204 with `OData-EntityId` → capture membership GUID.
 **Team membership:**
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
   "teammobileofflineprofilememberships" \
+  --tenant-id "<tenantId>" \
   --body '{
     "MobileOfflineProfileId@odata.bind": "/mobileofflineprofiles(<profileId>)",
     "TeamId@odata.bind": "/teams(<teamid>)"
@@ -178,8 +206,9 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
 For each in `to_remove`, DELETE:
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> DELETE \
-  "usermobileofflineprofilememberships(<membershipid>)"
+  "usermobileofflineprofilememberships(<membershipid>)" --tenant-id "<tenantId>"
 ```
 
 > **⚠️ Duplicate handling:** POSTing a membership that already exists returns `409 Conflict`. The `dataverse-request.js` wrapper's `looksLikeDuplicate` rescue treats this as silent success (the Step 3 dedup should catch most cases first). Re-runs are safe.

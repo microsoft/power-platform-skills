@@ -571,6 +571,13 @@ node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
 
 Publishes ONLY this profile, not the entire org's customizations. Empirically much faster + less rate-limit-prone than `PublishAllXml` on shared envs.
 
+For the repair helpers below, use the reconciliation reference's
+[Scoped helper handoffs](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md#scoped-helper-handoffs)
+with `orchestrator: setup-offline-profile`, the same absolute `working_dir`,
+selected environment/tenant/profile, and the exact user-approved repair scope.
+Pass `--working-dir '<working_dir>'` and the selected profile/table arguments.
+Do not infer a new repair approval from the original profile-creation approval.
+
 **On `400 / 0x80071141` "circular relationship":** the profile's association graph has a cycle (e.g. `account → task → account`). Parse the path from the error message, prompt the user to drop ONE of the offending associations, re-DELETE that association row via DELETE `/mobileofflineprofileitemassociations(<id>)`, then re-attempt publish. See [shared/references/dataverse-offline-api.md §6b](${PLUGIN_ROOT}/shared/references/dataverse-offline-api.md).
 
 **On `400 / 0x80071140` "no relationships are specified" for a Related-only table:** a profile item has `recorddistributioncriteria=0` but no associations point at it. Parse the table name from the error message and prompt the user with two choices:
@@ -579,7 +586,10 @@ Publishes ONLY this profile, not the entire org's customizations. Empirically mu
 
 For fresh `/setup-offline-profile` runs this error should never fire because Step 7a POSTs associations before Step 8 publish. But it CAN fire on retrofit scenarios where a profile published under v0.1's old "no associations" recipe is later edited — Dataverse's publish-validator appears to compare against the previously-published snapshot, not the current uncommitted state. Empirically observed 2026-05-24 on chanel-rm.
 
-**Fallback — `PublishAllXml`:** if the targeted publish fails with anything other than the circular-relationship error, try the broad publish. This was the v0.1 default and works correctly but rate-limits aggressively on shared envs:
+**Fallback — `PublishAllXml`:** only if targeted publication cannot complete and
+the user separately approves publishing all pending environment customizations.
+A profile-scoped approval, timeout, or rate limit is not broader publication
+consent. Otherwise report the failure without widening scope.
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
@@ -595,8 +605,9 @@ Protocol after the POST call returns:
 2. If status `0` AND error contains `Request timed out` OR `429 rate-limited` → DO NOT treat as failure. Run the verification GET below:
 
    ```bash
+   cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
    node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
-     "mobileofflineprofiles(<profileId>)?\$select=componentstate,publishedon" 2>&1
+     "mobileofflineprofiles(<profileId>)?\$select=componentstate,publishedon" --tenant-id "<tenantId>"
    ```
 
    - `componentstate == 0` AND `publishedon` is a non-null ISO8601 timestamp within the last 5 minutes → treat as success. Print: `↷ PublishAllXml client timed out but committed server-side (componentstate=0, publishedon=<ts>).` Continue.
@@ -737,7 +748,8 @@ associationsCount: <M>
 
 ```bash
 cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
-node "${PLUGIN_ROOT}/scripts/verify-offline-profile.js" <envUrl>
+node "${PLUGIN_ROOT}/scripts/verify-offline-profile.js" <envUrl> \
+  --project-root '<working_dir>' --tenant-id "<tenantId>"
 ```
 
 Read the JSON output:

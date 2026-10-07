@@ -6,6 +6,7 @@ const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { shellBlocks } = require('./helpers/markdown-shell-blocks');
 
 const pluginRoot = path.resolve(__dirname, '../..');
 const read = (file) => fs.readFileSync(path.join(pluginRoot, file), 'utf8').replace(/\r\n?/g, '\n');
@@ -13,8 +14,6 @@ const helpers = ['add-table-to-offline-profile', 'edit-offline-profile', 'enable
 const documents = Object.fromEntries(helpers.map((name) => [name, read(`skills/${name}/SKILL.md`)]));
 const reference = read('shared/references/app-working-directory.md');
 const rootLink = '[app-working-directory.md](${PLUGIN_ROOT}/shared/references/app-working-directory.md)';
-const shellBlocks = (text) => [...text.replace(/\r\n?/g, '\n').matchAll(/^```bash\n([\s\S]*?)\n```/gm)]
-  .map((match) => match[1]);
 const guard = shellBlocks(reference)[0];
 const slashPath = (value) => value.replaceAll('\\', '/');
 
@@ -83,7 +82,7 @@ if (script === 'resolve-environment.js') {
   assert.deepEqual(args.slice(2), ['--no-cache', '--require-tenant']);
   console.log(JSON.stringify({ environmentId: args[1] }));
 } else if (script === 'dataverse-request.js') {
-  assert.ok(['GET', 'POST', 'PATCH'].includes(args[2]));
+  assert.ok(['GET', 'POST', 'PATCH', 'DELETE'].includes(args[2]));
   assert.ok(args[3] && !args[3].startsWith('--'), 'API path must precede options');
   const bodyIndex = args.indexOf('--body');
   if (bodyIndex >= 0) JSON.parse(args[bodyIndex + 1]);
@@ -124,6 +123,19 @@ function render(block, root) {
     bool: 'true',
     new: '10',
     'new-bool': 'true',
+    table_logical_name: context.table,
+    'table-logicalname': context.table,
+    'App Name': 'Test app',
+    'Table Display Name': 'Visit',
+    'URL-ENCODED-FETCH': 'fixture-fetch',
+    'relationship-schema-name': 'cr123_visit_contact',
+    'MetadataId-from-§5': '33333333-3333-3333-3333-333333333333',
+    parentItemId: context.itemId,
+    systemuserid: '44444444-4444-4444-4444-444444444444',
+    teamid: '55555555-5555-5555-5555-555555555555',
+    membershipid: '66666666-6666-6666-6666-666666666666',
+    upn: 'maker@example.test',
+    'team-name': 'Test team',
   })) command = command.replaceAll(`<${token}>`, value);
   // The recipes abbreviate the JSON-string selectedcolumns array with [...].
   return command.replaceAll('[...]', '[\\"cr123_title\\"]');
@@ -370,6 +382,72 @@ test('offline setup resolves identity only inside its selected app before handin
   assert.equal(failed.status, 1);
   assert.deepEqual(calls(f), before);
   assert.match(failed.stderr, /BLOCKED: cannot enter working_dir/);
+});
+
+test('all shared offline recipes retain owner root and tenant through fresh calls and missing-root failures', (t) => {
+  const f = fixture(t);
+  const blocks = shellBlocks(read('shared/references/dataverse-offline-api.md'));
+  assert.ok(blocks.length >= 18);
+  for (const block of blocks) {
+    assert.ok(block.startsWith(`${guard}\n`));
+    const result = run(block, f);
+    assert.equal(result.status, 0, `${block}\n${result.stderr}`);
+    const before = calls(f);
+    const failed = run(block, f, path.join(f.directory, 'missing owner'));
+    assert.equal(failed.status, 1);
+    assert.match(failed.stderr, /BLOCKED: cannot enter working_dir/);
+    assert.deepEqual(calls(f), before);
+  }
+  const recorded = calls(f);
+  assert.equal(recorded.length, 21);
+  for (const call of recorded) {
+    assert.equal(fs.realpathSync.native(call.cwd), fs.realpathSync.native(f.owner));
+    assert.equal(call.args[1], context.environmentUrl);
+    assert.equal(call.args[call.args.indexOf('--tenant-id') + 1], context.tenantId);
+  }
+});
+
+test('indented timeout recovery uses the same approved root profile and tenant', (t) => {
+  const f = fixture(t);
+  const setup = read('skills/setup-offline-profile/SKILL.md');
+  const recovery = section(setup, 'Protocol after the POST call returns:', '### Step 9');
+  const blocks = shellBlocks(recovery);
+  assert.equal(blocks.length, 1);
+  assert.ok(blocks[0].startsWith(`${guard}\n`));
+  const result = run(blocks[0], f);
+  assert.equal(result.status, 0, result.stderr);
+  const recorded = calls(f);
+  assert.equal(recorded.length, 1);
+  assert.equal(fs.realpathSync.native(recorded[0].cwd), fs.realpathSync.native(f.owner));
+  assert.equal(recorded[0].args[1], context.environmentUrl);
+  assert.equal(recorded[0].args[3],
+    `mobileofflineprofiles(${context.profileId})?$select=componentstate,publishedon`);
+  assert.equal(recorded[0].args[recorded[0].args.indexOf('--tenant-id') + 1], context.tenantId);
+});
+
+test('offline verification and recipe callers carry explicit root and tenant on every request', () => {
+  for (const file of [
+    'skills/setup-offline-profile/SKILL.md',
+    'skills/assign-offline-profile/SKILL.md',
+    'skills/preview-offline-scope/SKILL.md',
+    'shared/references/dataverse-offline-api.md',
+  ]) {
+    for (const block of shellBlocks(read(file))) {
+      assert.ok(block.startsWith(`${guard}\n`), `${file}:\n${block}`);
+      const commands = block.replace(/\\\n/g, ' ').split('\n').filter((line) =>
+        /^node "\$\{PLUGIN_ROOT\}\/scripts\/(?:dataverse-request|verify-offline-profile|update-entity-offline-flags)\.js"/.test(line));
+      for (const command of commands) assert.ok(command.includes('--tenant-id "<tenantId>"'), command);
+      if (block.includes('/verify-offline-profile.js')) {
+        assert.ok(block.includes("--project-root '<working_dir>'"));
+      }
+    }
+  }
+  const reference = read('shared/references/dataverse-offline-api.md');
+  assert.match(reference, /requires separate explicit approval/);
+  assert.match(reference, /owner separately approves publishing/);
+  assert.doesNotMatch(reference, /A single bulk publish at the end is correct/);
+  assert.match(read('skills/setup-offline-profile/SKILL.md'),
+    /user separately approves publishing all pending environment customizations/);
 });
 
 test('offline enablement cannot widen the owner table list or repeat approval in planning mode', () => {

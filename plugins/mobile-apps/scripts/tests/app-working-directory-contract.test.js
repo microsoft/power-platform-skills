@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { shellBlocks } = require('./helpers/markdown-shell-blocks');
 
 const pluginRoot = path.resolve(__dirname, '../..');
 const normalize = (text) => text.replace(/\r\n?/g, '\n');
@@ -15,10 +16,16 @@ const appRootLink = '[app-working-directory.md](${PLUGIN_ROOT}/shared/references
 const guard = "cd -- '<working_dir>' || { echo \"BLOCKED: cannot enter working_dir\" >&2; exit 1; }";
 const powershellGuard = "Set-Location -LiteralPath '<working_dir>' -ErrorAction Stop";
 
-function shellBlocks(text, language = 'bash') {
-  const unquoted = normalize(text).replace(/^> ?/gm, '');
-  return [...unquoted.matchAll(new RegExp('^```' + language + '\\n([\\s\\S]*?)\\n```', 'gm'))]
-    .map((match) => match[1]);
+for (const prefix of ['', '   ', '> ', '>   ']) {
+  for (const eol of ['\n', '\r\n']) {
+    test(`shell recipe extraction retains source quoting with prefix ${JSON.stringify(prefix)} and ${eol === '\n' ? 'LF' : 'CRLF'}`, () => {
+      const body = `${guard}\nnode tool.js --project-root '<working_dir>'`;
+      const markdown = ['```bash', ...body.split('\n'), '```']
+        .map((line) => prefix + line).join(eol);
+      assert.deepEqual(shellBlocks(markdown), [body]);
+      assert.deepEqual(shellBlocks(markdown, 'powershell'), []);
+    });
+  }
 }
 
 function assertRootBinding(text) {
@@ -36,6 +43,16 @@ function assertRootBinding(text) {
   for (const block of shellBlocks(text, 'powershell')) {
     assert.ok(block.startsWith(`${powershellGuard}\n`), 'PowerShell calls need a literal fail-closed root');
   }
+}
+
+function assertEveryGuardIsRequired(content, command, language = 'bash') {
+  let count = 0;
+  // Use source offsets: extracted list/blockquote snippets have already been dedented.
+  for (let index = content.indexOf(command); index !== -1; index = content.indexOf(command, index + command.length)) {
+    assert.throws(() => assertRootBinding(content.slice(0, index) + content.slice(index + command.length)));
+    count++;
+  }
+  assert.equal(count, shellBlocks(content, language).length);
 }
 
 // Use Git Bash, not WSL bash, for Windows checkout paths, as in the creation tests.
@@ -309,12 +326,8 @@ for (const file of dataFiles) {
   }
   test(`${name} rejects missing or deferred root guards`, () => {
     assert.throws(() => assertRootBinding(content.replace(appRootLink, '') + `\n${appRootLink}`));
-    for (const block of blocks) {
-      assert.throws(() => assertRootBinding(content.replace(block, block.slice(guard.length + 1))));
-    }
-    for (const block of shellBlocks(content, 'powershell')) {
-      assert.throws(() => assertRootBinding(content.replace(block, block.slice(powershellGuard.length + 1))));
-    }
+    assertEveryGuardIsRequired(content, guard);
+    assertEveryGuardIsRequired(content, powershellGuard, 'powershell');
   });
   test(`${name} executes documented Bash operations only in the owner app`, (t) => {
     const { directory, owner, caller } = fixture(t);
@@ -372,9 +385,7 @@ for (const file of ['agents/data-model-architect.md', 'skills/list-connections/S
   for (const [eolName, eol] of [['LF', '\n'], ['CRLF', '\r\n']]) {
     test(`${file} guards every project operation (${eolName})`, () => {
       assertRootBinding(content.replace(/\n/g, eol));
-      for (const block of shellBlocks(content)) {
-        assert.throws(() => assertRootBinding(content.replace(block, block.slice(guard.length + 1))));
-      }
+      assertEveryGuardIsRequired(content, guard);
     });
   }
   test(`${file} executes from the owner root and blocks missing roots`, (t) => {
