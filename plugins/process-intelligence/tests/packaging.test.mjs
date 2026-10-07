@@ -153,7 +153,8 @@ test('bundled license comment retains complete texts for every shipped package a
     for (const file of files)
       assert.ok(comment.includes(await readFile(path.join(directory, file), 'utf8')), `${name}/${file}`);
   }
-  assert.ok(comment.includes(await readFile(path.join(marketplace, 'LICENSE'), 'utf8')));
+  assert.ok(comment.includes((await readFile(path.join(marketplace, 'LICENSE'), 'utf8')).replace(/\r\n/g, '\n')),
+    'The complete project license must use deterministic LF line endings');
   assert.match(comment, /Copyright \(c\) Microsoft Corporation/);
   assert.doesNotMatch(comment, /@esbuild\/|esbuild@/);
 });

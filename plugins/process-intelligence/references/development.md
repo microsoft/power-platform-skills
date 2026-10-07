@@ -71,6 +71,10 @@ The same commands work on macOS/Linux. The plugin's path-filtered
 Node.js 22 and 24. It runs for plugin changes, its own workflow and the root `LICENSE` embedded
 by the build; repository-wide metadata checks remain separate. CI has read-only repository
 permissions and needs no secrets, Azure login or live service access.
+After building, CI runs `git diff --exit-code -- server/mcp.mjs server/bundle-meta.json`;
+either changed artifact fails the job before tests can mask a stale shipped runtime.
+The plugin's `.gitattributes` keeps source byte counts stable and compares generated artifacts
+without line-ending conversion. The build embeds the complete root license with LF line endings.
 Build uses the integrity-locked npm graph and esbuild metadata, rejects external non-builtin
 runtime imports, and embeds full required license texts in the runtime before replacing output.
 Keep the lockfile's registry integrity values and TLS verification intact.
@@ -90,6 +94,9 @@ they do not add arbitrary-token/endpoint environment switches to production.
 Mocked subprocess tests cover expiry, cloud/account/tenant drift, claims, no-subscription users,
 invalid responses, redaction, timeout/cancellation, actual Windows `.cmd` fixtures and executable
 Unix/shebang fixtures on native Unix. Windows ACLs are verified with native utilities.
+SDDL aliases use the inbox Windows PowerShell SID converter with no profile; the resolved SID
+must exactly match the current user. No additional .NET installation is required. An alias is
+not an exemption from the protected-DACL, single-ACE or full-control requirements.
 EOF-before-overflow tests use controlled streams and process-local spawn stubs: writes are
 released only after parent-side EOF, and rejection must wait for owned cleanup. This is distinct
 from native `.cmd`/shebang overflow and descendant-liveness checks. Closing a Node standard

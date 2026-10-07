@@ -178,10 +178,36 @@ export class PrivateDirectory {
       const text = (await fs.readFile(temporary)).toString('utf16le');
       const sddl = text.split(/\r?\n/).find(line => line.startsWith('D:'));
       const entries = sddl?.match(/\([^)]*\)/g) ?? [];
+      const trustee = entries.length === 1
+        ? new RegExp(`^\\(A;${directory ? 'OICI' : ''};FA;;;([A-Z]{2}|S-1-\\d+(?:-\\d+)+)\\)$`)
+          .exec(entries[0])?.[1]
+        : null;
+      let matchesUser = trustee === this.#sid;
+      if (sddl?.startsWith('D:P') && /^[A-Z]{2}$/.test(trustee ?? '')) {
+        // icacls can export e.g. D:P(A;OICI;FA;;;LA) rather than a numeric SID.
+        // Resolve the alias natively: a "-500" suffix alone does not distinguish
+        // the machine Administrator from a different domain's Administrator.
+        // Only a two-letter trustee is passed as data to this fixed inbox script;
+        // no profile, input code, path search or permission changes are involved.
+        // https://learn.microsoft.com/en-us/windows/win32/secauthz/sid-strings
+        const script = "$ErrorActionPreference='Stop';" +
+          "[System.Security.AccessControl.RawSecurityDescriptor]::new(" +
+          "'D:(A;;FA;;;' + $env:PROCESS_INTELLIGENCE_ACL_TRUSTEE + ')')" +
+          ".DiscretionaryAcl[0].SecurityIdentifier.Value";
+        const resolved = await runProcess(windowsUtility('powershell.exe'), [
+          '-NoProfile', '-NonInteractive', '-EncodedCommand',
+          Buffer.from(script, 'utf16le').toString('base64')
+        ], {
+          signal,
+          outputLimit: 8192,
+          env: { ...process.env, PROCESS_INTELLIGENCE_ACL_TRUSTEE: trustee }
+        });
+        matchesUser = resolved.code === 0 && resolved.stdout.trim() === this.#sid;
+      }
       if (
         !sddl?.startsWith('D:P') ||
-        entries.length !== 1 ||
-        !new RegExp(`^\\(A;${directory ? 'OICI' : ''};FA;;;${this.#sid}\\)$`).test(entries[0])
+        !trustee ||
+        !matchesUser
       ) {
         throw stateError(
           'Windows state ACL verification failed; unexpected access entries were not ignored.'

@@ -7724,12 +7724,15 @@ var ProcessOutput = class {
   }
 };
 function windowsUtility(name) {
-  if (!["taskkill.exe", "icacls.exe", "whoami.exe", "cmd.exe"].includes(name)) {
+  if (!["taskkill.exe", "icacls.exe", "whoami.exe", "cmd.exe", "powershell.exe"].includes(name)) {
     throw processError("Unsupported Windows utility.");
   }
   const root = process.env.SystemRoot;
   if (!root || !path.win32.isAbsolute(root)) {
     throw processError("Windows system directory is unavailable.");
+  }
+  if (name === "powershell.exe") {
+    return path.win32.join(root, "System32", "WindowsPowerShell", "v1.0", name);
   }
   return path.win32.join(root, "System32", name);
 }
@@ -8115,7 +8118,23 @@ var PrivateDirectory = class {
       const text = (await fs.readFile(temporary)).toString("utf16le");
       const sddl = text.split(/\r?\n/).find((line) => line.startsWith("D:"));
       const entries = sddl?.match(/\([^)]*\)/g) ?? [];
-      if (!sddl?.startsWith("D:P") || entries.length !== 1 || !new RegExp(`^\\(A;${directory ? "OICI" : ""};FA;;;${this.#sid}\\)$`).test(entries[0])) {
+      const trustee = entries.length === 1 ? new RegExp(`^\\(A;${directory ? "OICI" : ""};FA;;;([A-Z]{2}|S-1-\\d+(?:-\\d+)+)\\)$`).exec(entries[0])?.[1] : null;
+      let matchesUser = trustee === this.#sid;
+      if (sddl?.startsWith("D:P") && /^[A-Z]{2}$/.test(trustee ?? "")) {
+        const script = "$ErrorActionPreference='Stop';[System.Security.AccessControl.RawSecurityDescriptor]::new('D:(A;;FA;;;' + $env:PROCESS_INTELLIGENCE_ACL_TRUSTEE + ')').DiscretionaryAcl[0].SecurityIdentifier.Value";
+        const resolved = await runProcess(windowsUtility("powershell.exe"), [
+          "-NoProfile",
+          "-NonInteractive",
+          "-EncodedCommand",
+          Buffer.from(script, "utf16le").toString("base64")
+        ], {
+          signal,
+          outputLimit: 8192,
+          env: { ...process.env, PROCESS_INTELLIGENCE_ACL_TRUSTEE: trustee }
+        });
+        matchesUser = resolved.code === 0 && resolved.stdout.trim() === this.#sid;
+      }
+      if (!sddl?.startsWith("D:P") || !trustee || !matchesUser) {
         throw stateError(
           "Windows state ACL verification failed; unexpected access entries were not ignored."
         );

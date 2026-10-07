@@ -75,7 +75,8 @@ test('plugin CI is path-filtered, read-only and runs the local build and test en
   assert.match(workflow, /working-directory: plugins\/process-intelligence/);
   assert.match(workflow, /shell: bash/);
   assert.deepEqual([...workflow.matchAll(/^\s+run: (.+)$/gm)].map(match => match[1]),
-    ['npm ci --no-audit --no-fund', 'npm run build', 'npm test']);
+    ['npm ci --no-audit --no-fund', 'npm run build',
+      'git diff --exit-code -- server/mcp.mjs server/bundle-meta.json', 'npm test']);
   for (const file of ['AGENTS.md', 'references/development.md']) {
     const text = await fs.readFile(path.join(root, file), 'utf8');
     assert.doesNotMatch(text, /local-only|no automatic CI|do not add automatic CI/i);

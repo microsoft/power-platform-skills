@@ -28,12 +28,15 @@ class ProcessOutput {
 }
 
 export function windowsUtility(name) {
-  if (!['taskkill.exe', 'icacls.exe', 'whoami.exe', 'cmd.exe'].includes(name)) {
+  if (!['taskkill.exe', 'icacls.exe', 'whoami.exe', 'cmd.exe', 'powershell.exe'].includes(name)) {
     throw processError('Unsupported Windows utility.');
   }
   const root = process.env.SystemRoot;
   if (!root || !path.win32.isAbsolute(root)) {
     throw processError('Windows system directory is unavailable.');
+  }
+  if (name === 'powershell.exe') {
+    return path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', name);
   }
   return path.win32.join(root, 'System32', name);
 }

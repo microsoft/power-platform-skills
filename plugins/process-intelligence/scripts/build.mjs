@@ -40,7 +40,9 @@ try {
       bundled.add(packagePath);
     }
   }
-  const projectLicense = await fs.readFile(path.resolve(root, '..', '..', 'LICENSE'), 'utf8');
+  // Git may check the shared LICENSE out as CRLF on Windows. Preserve its complete
+  // text while making embedded notices and the recorded output size reproducible.
+  const projectLicense = (await fs.readFile(path.resolve(root, '..', '..', 'LICENSE'), 'utf8')).replace(/\r\n/g, '\n');
   const sections = [`Process Intelligence (MIT)\n\n${projectLicense}`];
   for (const packagePath of [...bundled].sort()) {
     const directory = path.join(root, ...packagePath.split('/'));

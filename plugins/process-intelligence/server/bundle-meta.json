@@ -28,7 +28,7 @@
       "format": "esm"
     },
     "src/process.mjs": {
-      "bytes": 8125,
+      "bytes": 8263,
       "imports": [
         {
           "path": "node:child_process",
@@ -59,7 +59,7 @@
       "format": "esm"
     },
     "src/private-files.mjs": {
-      "bytes": 6072,
+      "bytes": 7487,
       "imports": [
         {
           "path": "node:fs/promises",
@@ -5354,10 +5354,10 @@
           "bytesInOutput": 6082
         },
         "src/private-files.mjs": {
-          "bytesInOutput": 5849
+          "bytesInOutput": 6725
         },
         "src/process.mjs": {
-          "bytesInOutput": 7740
+          "bytesInOutput": 7878
         },
         "src/authentication.mjs": {
           "bytesInOutput": 14676
@@ -5741,7 +5741,7 @@
           "bytesInOutput": 7845
         }
       },
-      "bytes": 1267446
+      "bytes": 1268439
     }
   }
 }

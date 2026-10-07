@@ -61,6 +61,10 @@ jobs:
             - name: build-runtime
               run: npm run build
 
+            # Installations execute the committed runtime, not CI's rebuilt copy.
+            - name: verify-generated-artifacts
+              run: git diff --exit-code -- server/mcp.mjs server/bundle-meta.json
+
             # Tests use isolated state, fake Azure CLI and intercepted HTTP, never live credentials.
             - name: test-plugin
               run: npm test

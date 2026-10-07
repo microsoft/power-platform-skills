@@ -98,9 +98,14 @@ do not hand-format the bundle.
 Run `npm ci`, `npm run build` and `npm test` from this directory in a repository checkout.
 The plugin's path-filtered CI runs the same build and tests on Windows, Linux and macOS with
 Node.js 22/24. Keep its workflow scoped to this plugin, its own file and required build inputs.
+CI must reject changes to either generated artifact after building. Keep source checkout bytes
+stable with the plugin's `.gitattributes` and preserve byte-exact artifact comparisons.
 Review dependency licenses when updating the lockfile. The build embeds full notices
 for bundled dependencies and the repository's root MIT license in `server/mcp.mjs`;
 keep them with the runtime.
+Windows ACL verification permits only one protected, full-control ACE for the current user.
+When Windows emits an SDDL alias, resolve it with the inbox Windows PowerShell SID converter;
+never equate account RID suffixes or allow extra administrator/group access.
 For skill/reference changes, use `node --test tests/analysis-behavior.test.mjs tests/investigation-behavior.test.mjs tests/packaging.test.mjs`.
 See [development](references/development.md) for the packaged-bundle and fake-stdio checks.
 
