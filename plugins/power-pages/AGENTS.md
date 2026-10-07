@@ -33,6 +33,18 @@ HTML. Review external-host availability, license, privacy and CSP; do not silent
 The plan library validates completeness/dependencies, not visual fidelity. Status/approval HTML
 is not a site preview; local verification leaves Studio/runtime rendering pending.
 
+Customization-plan presentation preserves the approved JSON: neutral informational notes,
+structured navigation, distinct labeled Modify/Replace accents, and section/column/element
+wireframes. Hosted asset previews load lazily in the browser with no referrer, source attribution,
+and an explicit load-failure fallback/link; rendering HTML does not stage or import images.
+The review CLI checks unique external image URLs with bounded, public-only HTTPS requests
+before generating approval HTML. Keep this in `scripts/lib/declarative-image-verification.js`;
+it reuses the asset inspector where applicable and never persists image bytes. Publication
+requires the exact-plan `--imageChecks` report, retains it in the execution receipt, and passes
+it through operation resolution without probing again. Revisions need fresh checked approval;
+legacy approved receipts remain resumable without fabricated verification claims.
+Keep unknown layouts and unavailable local-image previews explicit rather than inventing data.
+
 ## Classic styling — local-only exception
 
 `/style-site` is **classic-site only**: downloaded server-rendered Power Pages content in VS Code Desktop, not a SPA framework. Show **Inspect/propose → Approve → Apply → Independently verify → Report** without mandatory phase-task bookkeeping. Ordinary broad declarations on one localized page, at most 3 components/10 style groups in one section, inline-only/stylesheet-only/inline+CSS with at most one existing stylesheet and guarded same-page class additions qualify for the small-change route. Require known Bootstrap and verified source/cascade. Any raw `style.css`, `global: true`, nonempty `externalResources`/`importantReason`, shared templates/metadata, new files, Studio-only/source-free descriptors or broader/ambiguous scope take expanded review. Generated-source and other true blockers need specific local next steps, never successful zero-write handoffs. Native components/forms/lists/Liquid are supported; PCF/third-party internals are not.

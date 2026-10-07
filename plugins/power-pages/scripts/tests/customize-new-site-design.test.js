@@ -3,9 +3,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const vm = require('node:vm');
+const { renderDocument, successfulImageCheck } = require('./customization-plan-test-helpers');
 const { validateCustomizationPlan, planHash } = require('../lib/customize-declarative-site-plan');
-const { renderCustomizationPlan } = require('../render-customize-declarative-site-plan');
+const { renderCustomizationPlan, renderReviewedPlan } = require('../render-customize-declarative-site-plan');
 const { publishApprovedPlan } = require('../promote-customize-declarative-site-plan');
 const { updateExecution } = require('../update-customize-declarative-site-execution');
 
@@ -64,28 +64,6 @@ function temporaryRoot(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'new-site-design-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
-}
-
-function renderDocument(html) {
-  const elements = new Map([...html.matchAll(/\bid="([^"]+)"/g)]
-    .map((match) => [match[1], { innerHTML: '', textContent: '' }]));
-  for (const match of html.matchAll(/<script id="([^"]+)" type="application\/json">([\s\S]*?)<\/script>/g)) {
-    elements.get(match[1]).textContent = match[2];
-  }
-  const document = {
-    getElementById: (id) => elements.get(id),
-    querySelectorAll: () => [],
-    createElement: () => ({
-      set textContent(value) {
-        this.innerHTML = String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-      },
-    }),
-  };
-  for (const script of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) {
-    vm.runInNewContext(script[1], { document });
-  }
-  return elements;
 }
 
 test('new-site design accepts meaningful imagery and transitive styling dependencies', () => {
@@ -169,7 +147,7 @@ test('external image URLs can be consumed by nested native component inputs', ()
   assert.equal(validateCustomizationPlan(plan), plan);
 });
 
-test('external image review escapes untrusted URL text without creating an image request', (t) => {
+test('external image review escapes untrusted URLs in preview and source-link attributes', (t) => {
   const root = temporaryRoot(t);
   const plan = externalImagePlan();
   plan.assets[0].source = { type: 'user-provided', license: 'User-approved source.' };
@@ -179,11 +157,12 @@ test('external image review escapes untrusted URL text without creating an image
   const html = fs.readFileSync(output, 'utf8');
   const card = renderDocument(html).get('assetChanges').innerHTML;
   assert.match(card, /label=&quot;&gt;&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
-  assert.doesNotMatch(card, /<script>|<img\b/);
+  assert.match(card, /<img\b[^>]*referrerpolicy="no-referrer"/);
+  assert.doesNotMatch(card, /<script>/);
   assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
 });
 
-test('URL-based creation renders exact delivery details and resolves image inputs without an import', (t) => {
+test('URL-based creation renders exact delivery details and resolves image inputs without an import', async (t) => {
   const root = temporaryRoot(t);
   const plan = externalImagePlan();
   const originalHash = planHash(plan);
@@ -191,14 +170,17 @@ test('URL-based creation renders exact delivery details and resolves image input
   assert.notEqual(planHash(plan), originalHash);
   const dataPath = path.join(root, 'url-plan.json');
   fs.writeFileSync(dataPath, JSON.stringify(plan), 'utf8');
-  publishApprovedPlan({ projectRoot: root, dataPath });
+  const review = await renderReviewedPlan(plan, path.join(root, 'review.html'), { check: successfulImageCheck });
+  publishApprovedPlan({ projectRoot: root, dataPath, imageChecksPath: review.imageChecks });
   const htmlPath = path.join(root, 'docs', 'customize-declarative-site', 'current-plan.html');
   const document = renderDocument(fs.readFileSync(htmlPath, 'utf8'));
   const assetCard = document.get('assetChanges').innerHTML;
   assert.match(assetCard, /Direct external HTTPS URL \(not imported\)/);
   assert.match(assetCard, /images\.unsplash\.com\/photo-example\?w=1200&amp;fit=crop&amp;h=800/);
   assert.match(assetCard, /Power Pages permissions do not protect this URL/);
-  assert.doesNotMatch(assetCard, /<img\b|Prepared file/);
+  assert.match(assetCard, /<img\b[^>]*alt="Conference speaker presenting to an audience"/);
+  assert.match(assetCard, /Open image source/);
+  assert.doesNotMatch(assetCard, /Prepared file/);
   assert.match(document.get('newSiteDesign').innerHTML, /no image downloads or Web File imports/);
   const resolved = updateExecution({
     projectRoot: root, action: 'resolve', operationId: 'create-speakers-page',

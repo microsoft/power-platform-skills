@@ -23,13 +23,14 @@ const {
 const {
   renderCustomizationPlan,
 } = require('./render-customize-declarative-site-plan');
+const { externalImageUrls, validateImageChecks } = require('./lib/declarative-image-verification');
 
 function main() {
   const args = parseArgs(process.argv);
   if (!args.projectRoot || !args.data) {
     console.error(
       'Usage: node promote-customize-declarative-site-plan.js ' +
-        '--projectRoot <path> --data <approved-json>'
+        '--projectRoot <path> --data <approved-json> [--imageChecks <review-image-checks-json>]'
     );
     process.exit(1);
   }
@@ -38,6 +39,7 @@ function main() {
     const result = publishApprovedPlan({
       projectRoot: path.resolve(args.projectRoot),
       dataPath: path.resolve(args.data),
+      imageChecksPath: args.imageChecks ? path.resolve(args.imageChecks) : null,
     });
     console.log(JSON.stringify({ status: 'ok', ...result }));
   } catch (error) {
@@ -46,7 +48,7 @@ function main() {
   }
 }
 
-function publishApprovedPlan({ projectRoot, dataPath, now = new Date() }) {
+function publishApprovedPlan({ projectRoot, dataPath, imageChecksPath = null, now = new Date() }) {
   if (!fs.existsSync(dataPath) || !fs.statSync(dataPath).isFile()) {
     throw new Error(`Approved JSON file not found: ${dataPath}`);
   }
@@ -58,6 +60,14 @@ function publishApprovedPlan({ projectRoot, dataPath, now = new Date() }) {
     throw new Error(`Approved JSON file is not valid JSON: ${dataPath}`);
   }
   validateCustomizationPlan(plan);
+  let imageChecks = null;
+  if (imageChecksPath) {
+    try { imageChecks = JSON.parse(fs.readFileSync(imageChecksPath, 'utf8')); }
+    catch (error) { throw new Error(`Cannot read image checks: ${error.message}. Render a fresh review before approval.`); }
+    validateImageChecks(plan, imageChecks);
+  } else if (externalImageUrls(plan).length) {
+    throw new Error('External images require --imageChecks from this plan review. Render and approve the verified plan first.');
+  }
 
   const paths = customizationPaths(projectRoot);
   const existing = inspectCurrentArtifacts(paths);
@@ -72,9 +82,11 @@ function publishApprovedPlan({ projectRoot, dataPath, now = new Date() }) {
     renderCustomizationPlan(plan, tempHtml, {
       copyIcon: false,
       emitStatus: false,
+      imageChecks,
     });
     const htmlText = fs.readFileSync(tempHtml, 'utf8');
     const execution = createExecutionReceipt(plan, runId, hash, now);
+    if (imageChecks) execution.imageChecks = imageChecks;
     execution.artifactHashes = {
       planSha256: hash,
       htmlSha256: hashText(htmlText),

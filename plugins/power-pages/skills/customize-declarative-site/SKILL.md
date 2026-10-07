@@ -172,6 +172,9 @@ owning skill supports the requested operation.
    inputs, with no Web File output binding. Review hosting/hotlink permission, privacy and known
    CSP `img-src` restrictions; report unknown runtime behavior honestly, and never change CSP
    implicitly. Do not call the staging helper for these images.
+   Copy the actual image resource URL from the chosen source; never derive an Unsplash CDN
+   path from a photo-page slug or search-result ID. The review renderer verifies final external
+   URLs before producing approval artifacts.
    Only assets intentionally delivered as new Web Files are prepared through
    `scripts/prepare-declarative-asset.js`. Keep approved bytes in the project-local ignored asset
    cache and record the returned hash, MIME type, dimensions, filename, and cache path. Do not
@@ -208,6 +211,14 @@ owning skill supports the requested operation.
    ```
 
    If either review filename exists, create a fresh review directory instead of overwriting it.
+   The renderer checks each unique external image URL once, with bounded parallel HTTPS GETs,
+   and writes `plan.html.image-checks.json` alongside successful review HTML. It rejects HTTP
+   errors (including 404), non-image responses, invalid image signatures, private destinations,
+   oversized responses, and timeouts. These requests inspect bytes in memory only; they do not
+   save images or create Web Files. Plans without external image additions make no image requests.
+   If a check fails, do not request approval. Choose a working direct source URL, update every
+   affected asset and consumer input, and render a fresh review. Do not repeatedly retry a 404,
+   silently drop required imagery, or claim an unchecked URL is verified.
 7. Open the rendered HTML with the OS-native default-browser launcher. A launch failure does not
    invalidate the plan; print the exact path as a fallback.
 
@@ -225,7 +236,8 @@ targets for maintainers; the validated JSON remains the execution source of trut
 > 🚦 **Gate (plan · customize-declarative-site:4.approve):** Approve the coordinated
 > customization plan before invoking any authoring skill.
 >
-> **Trigger:** JSON and HTML plan artifacts are complete.
+> **Trigger:** JSON and HTML plan artifacts are complete, with successful image checks for every
+> external image in this exact plan.
 > **Why:** The next phase can create or modify several related declarative records.
 > **Cancel leaves:** External review artifacts only; the downloaded site and current approved plan
 > remain unchanged.
@@ -244,13 +256,17 @@ After approval, publish the approved JSON:
 ```bash
 node "${PLUGIN_ROOT}/scripts/promote-customize-declarative-site-plan.js" \
   --projectRoot "<PROJECT_ROOT>" \
-  --data "<APPROVED_REVIEW_DIR>/plan.json"
+  --data "<APPROVED_REVIEW_DIR>/plan.json" \
+  --imageChecks "<APPROVED_REVIEW_DIR>/plan.html.image-checks.json"
 ```
 
 The publisher validates the approved JSON, renders canonical HTML from that exact data, creates
 `current-execution.json`, and records hashes plus a run ID. When a current approved run exists, it
 archives the plan, HTML, execution receipt, and icon together before replacement. Use only the
 published current plan and execution receipt for child-skill coordination.
+The publisher requires matching successful image checks for external images, copies them into
+the execution receipt, and performs no second network probe. Changed plans or missing/failed
+reports require fresh review and approval; never edit the report to make publication succeed.
 
 ## Phase 5: Execute through owning skills
 
@@ -262,6 +278,10 @@ For each ready operation:
 2. Mark the operation `start`, then pass that resolved operation and, when returned, its approved
    `designContext` to its owning skill. The shared brief supplies Bootstrap and visual direction,
    not permission to change unrelated records or bypass the owner's approval.
+   Also pass returned `imageChecks`: reuse these source checks for unchanged URLs instead of
+   probing once per child or placement. Keep local caller/URL verification and browser failure
+   handling. Previously approved receipts without this optional field remain resumable, but do
+   not claim their image sources were checked. A source change needs a new verified plan.
 3. Include the exact selected site root, action, target identity, locales, final values, callers,
    and preservation requirements. The operation may be expressed as structured YAML/JSON or
    unambiguous natural language; it must resolve the same decisions as the plan contract.

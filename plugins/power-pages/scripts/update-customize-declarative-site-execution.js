@@ -13,6 +13,7 @@ const {
   validateCustomizationPlan,
   writeJsonAtomic,
 } = require('./lib/customize-declarative-site-plan');
+const { validateImageChecks } = require('./lib/declarative-image-verification');
 
 function main() {
   const args = parseArgs(process.argv);
@@ -68,6 +69,7 @@ function updateExecution({
       runId: execution.runId,
       planHash: execution.planHash,
       operation,
+      ...(execution.imageChecks ? { imageChecks: execution.imageChecks } : {}),
       ...(plan.newSiteDesign ? {
         designContext: {
           ...plan.newSiteDesign,
@@ -190,6 +192,7 @@ function validateExecutionReceipt(execution, plan) {
   if (execution.planHash !== planHash(plan)) {
     throw new Error('current execution receipt does not match current-plan.json');
   }
+  if (execution.imageChecks) validateImageChecks(plan, execution.imageChecks);
   if (
     execution.site?.websiteRecordId?.toLowerCase() !==
       plan.site.websiteRecordId.toLowerCase() ||

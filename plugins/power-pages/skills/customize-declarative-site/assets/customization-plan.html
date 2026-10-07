@@ -9,6 +9,7 @@
   --ink:#242027;--muted:#67606b;--paper:#f7f6f8;--panel:#fff;--soft:#f1eef3;
   --line:#ded9e1;--plum:#6b2d75;--plum-dark:#43194d;--plum-soft:#f3e9f5;
   --cyan:#087e8b;--cyan-soft:#e6f5f6;--amber:#8a5200;--amber-soft:#fff3dc;
+  --modify:#1d4ed8;--modify-soft:#eff6ff;--replace:#9a3412;--replace-soft:#fff7ed;
   --green:#24744a;--green-soft:#e9f5ed;--shadow:0 12px 36px rgba(44,27,49,.08);
   --sans:"Segoe UI",system-ui,sans-serif;--mono:"Cascadia Code","Consolas",monospace;
 }
@@ -59,15 +60,24 @@ h3{margin:0;font-size:16px}
 .dot{width:10px;height:10px;border-radius:50%;margin-top:6px;background:var(--green)}
 .dot.blocked{background:var(--amber)}
 .readiness p,.change p,.deploy p{margin:5px 0 0;color:var(--muted)}
-.warning{background:var(--amber-soft);border-color:#e6c47f;color:#663d00}
+.plan-note{background:var(--panel);border-color:var(--line);color:var(--ink);overflow-wrap:anywhere}
 .change{border-left:4px solid var(--plum)}
 .change.content{border-left-color:var(--cyan)}
 .change.component{border-left-color:#6b5aa6}
 .change.styling{border-left-color:#b05d1e}
+.action-modify{--action-color:var(--modify);--action-surface:var(--modify-soft)}
+.action-replace{--action-color:var(--replace);--action-surface:var(--replace-soft)}
+.change.action-modify,.change.action-replace{border-left-color:var(--action-color)}
+.action-badge{flex-shrink:0;background:var(--action-surface,var(--plum-soft));color:var(--action-color,var(--plum-dark))}
 .asset-card{display:grid;grid-template-columns:minmax(180px,34%) 1fr;gap:20px;padding:0;overflow:hidden}
-.asset-preview{min-height:220px;background:linear-gradient(135deg,var(--plum-soft),var(--cyan-soft));display:grid;place-items:center;overflow:hidden}
-.asset-preview img{width:100%;height:100%;min-height:220px;object-fit:cover}
-.asset-preview span{padding:22px;color:var(--plum-dark);font:800 13px var(--mono);letter-spacing:.08em;text-align:center;text-transform:uppercase}
+.asset-preview{align-self:start;aspect-ratio:var(--asset-aspect,4/3);background:var(--soft);display:grid;overflow:hidden}
+.asset-preview img{grid-area:1/1;width:100%;height:100%;min-height:0;object-fit:contain}
+.asset-preview img.crop{object-fit:cover}
+.asset-fallback{grid-area:1/1;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:10px;padding:22px;background:var(--soft);color:var(--muted);text-align:center;overflow-wrap:anywhere}
+.asset-preview [hidden]{display:none}
+.asset-fallback strong{color:var(--ink)}
+.asset-body a,.asset-fallback a{color:var(--plum-dark);text-decoration:underline;text-underline-offset:3px;overflow-wrap:anywhere}
+.asset-body a:focus-visible,.asset-fallback a:focus-visible{outline:2px solid var(--plum);outline-offset:3px}
 .asset-body{padding:21px 21px 21px 0}
 .asset-purpose{margin:6px 0 14px;color:var(--muted)}
 .asset-placement{padding:11px 13px;border-radius:10px;background:var(--soft);margin-top:8px}
@@ -79,9 +89,30 @@ h3{margin:0;font-size:16px}
 .detail-row{display:grid;grid-template-columns:145px 1fr;gap:12px;padding:5px 0}
 .detail-name{color:var(--muted);font-size:12px}
 .detail-value{overflow-wrap:anywhere}
+.detail-list{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.detail-list>li{border-left:2px solid var(--line);padding-left:12px}
+.detail-fields{display:grid;gap:6px;margin:0}
+.detail-field{display:grid;grid-template-columns:minmax(80px,auto) minmax(0,1fr);gap:12px}
+.detail-field dt{color:var(--muted);font-size:12px}
+.detail-field dd{margin:0;min-width:0}
 .composition{display:grid;gap:9px;margin-top:10px}
-.composition-row{padding:12px 14px;border-radius:11px;background:var(--soft)}
-.composition-row strong{display:block;margin-bottom:3px}
+.composition-note{margin:4px 0;color:var(--muted);font-size:12px}
+.composition-row{min-width:0;padding:14px;border:1px solid var(--line);border-radius:11px;background:var(--soft)}
+.composition-heading{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px;margin-bottom:12px}
+.composition-heading span{color:var(--muted);font-size:12px}
+.wire-scroll{overflow-x:auto;padding:3px}
+.wire-scroll:focus-visible{outline:2px solid var(--plum);outline-offset:2px}
+.composition-scroll-hint{display:none}
+.wire-columns{display:grid;gap:10px;align-items:stretch}
+.wire-column{min-width:0;padding:10px;border:1px dashed #aca2b3;border-radius:8px;background:var(--panel)}
+.wire-column-label{margin-bottom:9px;color:var(--muted);font:600 11px/1.4 var(--mono)}
+.wire-elements{display:grid;gap:8px}
+.wire-element{min-width:0;padding:10px;border:1px solid var(--line);border-radius:6px;background:#faf9fb;overflow-wrap:anywhere}
+.wire-type{display:block;color:var(--ink);font-size:11px;font-weight:700}
+.wire-element.image,.wire-element.video{min-height:90px;display:grid;align-content:center;text-align:center;border-style:dashed;background:var(--cyan-soft)}
+.wire-element.button{background:var(--plum-soft);border-color:#ceb5d3;border-radius:16px;text-align:center}
+.wire-element.spacer{border-style:dashed;background:repeating-linear-gradient(135deg,var(--panel),var(--panel) 5px,var(--soft) 5px,var(--soft) 6px)}
+.wire-empty{margin:0;padding:12px 0;color:var(--muted);font-size:12px}
 .composition-copy{display:grid;gap:4px;margin-top:8px;color:var(--muted);font-size:12px}
 .composition-copy span:before{content:"“";color:var(--plum)}
 .composition-copy span:after{content:"”";color:var(--plum)}
@@ -104,7 +135,13 @@ code{font-family:var(--mono);font-size:12px;background:var(--soft);padding:2px 5
   .layout{grid-template-columns:1fr;padding-top:18px}.sidebar{position:static;display:flex;overflow:auto}
   .nav-label{display:none}.nav-btn{width:auto;white-space:nowrap}
   .facts,.stats{grid-template-columns:1fr}.detail-row{grid-template-columns:1fr;gap:2px}.hero{padding:26px}
-  .asset-card{grid-template-columns:1fr}.asset-preview,.asset-preview img{min-height:190px}.asset-body{padding:0 20px 20px}
+  .asset-card{grid-template-columns:1fr}.asset-body{padding:0 20px 20px}
+  .wire-columns{gap:6px}.wire-column{padding:7px}.wire-element{padding:7px}
+  .detail-field{grid-template-columns:1fr;gap:2px}
+}
+@media(max-width:600px){
+  .wire-scroll.multi .wire-columns{min-width:520px}
+  .composition-scroll-hint{display:block;margin:8px 0 0;color:var(--muted);font-size:12px}
 }
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.view.active{animation:none}}
 </style>
@@ -173,6 +210,8 @@ code{font-family:var(--mono);font-size:12px;background:var(--soft);padding:2px 5
     <section class="view" id="assets">
       <h2>Visual assets</h2>
       <p class="lede">Approved photography, logos, icons, illustrations, patterns, and their intended site usage.</p>
+      <p class="lede">Hosted previews load from the approved image providers when viewed. They do not verify how images will render on the site.</p>
+      <div id="imageVerification"></div>
       <div id="assetChanges"></div>
     </section>
     <section class="view" id="styling">
@@ -204,6 +243,7 @@ code{font-family:var(--mono);font-size:12px;background:var(--soft);padding:2px 5
 <script id="siteData" type="application/json">__JSON_SITE_DATA__</script>
 <script id="capabilitiesData" type="application/json">__JSON_CAPABILITIES_DATA__</script>
 <script id="assetsData" type="application/json">__JSON_ASSETS_DATA__</script>
+<script id="imageChecksData" type="application/json">__JSON_IMAGE_CHECKS_DATA__</script>
 <script id="newSiteDesignData" type="application/json">__JSON_NEW_SITE_DESIGN_DATA__</script>
 <script id="operationsData" type="application/json">__JSON_OPERATIONS_DATA__</script>
 <script id="warningsData" type="application/json">__JSON_WARNINGS_DATA__</script>
@@ -211,11 +251,15 @@ code{font-family:var(--mono);font-size:12px;background:var(--soft);padding:2px 5
 <script id="deploymentData" type="application/json">__JSON_DEPLOYMENT_DATA__</script>
 <script>
 const read=id=>JSON.parse(document.getElementById(id).textContent);
-const esc=value=>{const node=document.createElement("span");node.textContent=value==null?"":String(value);return node.innerHTML};
+const esc=value=>{const node=document.createElement("span");node.textContent=value==null?"":String(value);return node.innerHTML.replace(/"/g,"&quot;").replace(/'/g,"&#39;")};
 const words=value=>String(value||"").replace(/[-_]/g," ").replace(/([a-z])([A-Z])/g,"$1 $2").replace(/\b\w/g,char=>char.toUpperCase());
 const basename=value=>String(value||"").split(/[\\/]/).pop();
 const operations=read("operationsData");
 const assets=read("assetsData");
+const imageChecks=read("imageChecksData");
+if(imageChecks&&imageChecks.images.length){
+  document.getElementById("imageVerification").innerHTML=`<div class="card plan-note"><strong>Image source checks passed before review</strong><p>Each unique external URL returned an image response. These checks do not guarantee future availability or site rendering.</p><ul class="preserve-list">${imageChecks.images.map(image=>`<li>${esc(image.url)} · ${esc(image.mimeType)} · ${esc(image.checkedAt)}</li>`).join("")}</ul></div>`;
+}
 const categoryFor=skill=>{
   if(["author-webpage","author-page-template"].includes(skill))return"page";
   if(skill==="author-web-file")return"asset";
@@ -249,16 +293,40 @@ const facts=[
 ];
 document.getElementById("siteFacts").innerHTML=facts.map(([label,value])=>`<div class="fact"><div class="label">${esc(label)}</div><strong>${esc(value)}</strong></div>`).join("");
 const warnings=read("warningsData");
-document.getElementById("warnings").innerHTML=warnings.length?warnings.map(item=>`<div class="card warning">${esc(typeof item==="string"?item:item.description||item.label)}</div>`).join(""):`<div class="card empty">No plan-level warnings.</div>`;
+document.getElementById("warnings").innerHTML=warnings.length?warnings.map(item=>`<div class="card plan-note">${esc(typeof item==="string"?item:item.description||item.label)}</div>`).join(""):`<div class="card empty">No plan-level notes.</div>`;
 const capabilities=read("capabilitiesData");
 document.getElementById("capabilities").innerHTML=capabilities.length?capabilities.map(item=>`<div class="card readiness"><span class="dot ${item.status==="blocked"?"blocked":""}"></span><div><h3>${esc(item.name)}</h3><p>${esc(item.note||"")}</p></div></div>`).join(""):`<div class="card empty">No additional readiness findings.</div>`;
+// Inputs are owner-specific: retain nested navigation labels, routes and children,
+// as well as legacy strings, without coercing objects or inventing a new schema.
+const renderValue=value=>{
+  if(Array.isArray(value))return value.length?`<ul class="detail-list">${value.map(entry=>`<li>${renderValue(entry)}</li>`).join("")}</ul>`:`<span class="empty">None</span>`;
+  if(value&&typeof value==="object"){
+    const fields=Object.entries(value);
+    return fields.length?`<dl class="detail-fields">${fields.map(([key,entry])=>`<div class="detail-field"><dt>${esc(words(key))}</dt><dd>${renderValue(entry)}</dd></div>`).join("")}</dl>`:`<span class="empty">No details supplied.</span>`;
+  }
+  return esc(value);
+};
+// These large-screen proportions follow the five native layouts in
+// classic-site-skills/page-elements/references/design-studio-section-layouts.md.
+const layoutColumns={"one-column":[12],"two-equal-columns":[6,6],"three-equal-columns":[4,4,4],"one-third-left":[4,8],"one-third-right":[8,4]};
+const wireElement=element=>{
+  const type=element.type||"component";
+  const kind=["text","image","button","video","spacer"].includes(type)?type:"other";
+  const copy=collectCopy(element);
+  return`<div class="wire-element ${kind}"><span class="wire-type">${esc(words(type))}</span>${copy.length?`<div class="composition-copy">${copy.map(value=>`<span>${esc(value)}</span>`).join("")}</div>`:""}</div>`;
+};
 const composition=item=>{
   const sections=Array.isArray(item.inputs&&item.inputs.sections)?item.inputs.sections:[];
   if(!sections.length)return"";
-  return`<div class="change-detail"><div class="label">Page composition</div><div class="composition">${sections.map((section,index)=>{
-    const elements=(section.columns||[]).flatMap(column=>column.elements||[]).map(element=>words(element.type));
-    const copy=collectCopy(section);
-    return`<div class="composition-row"><strong>Section ${index+1}: ${esc(words(section.layout||"custom layout"))}</strong><span>${esc([...new Set(elements)].join(", ")||"Content to be resolved from the approved plan")}</span>${copy.length?`<div class="composition-copy">${copy.map(value=>`<span>${esc(value)}</span>`).join("")}</div>`:""}</div>`;
+  return`<div class="change-detail"><div class="label">Page composition</div><p class="composition-note">Structure only, not a live site preview. Column proportions show the planned large-screen layout, not final mobile rendering.</p><div class="composition">${sections.map((section,index)=>{
+    const columns=Array.isArray(section.columns)?section.columns:[];
+    const widths=Object.hasOwn(layoutColumns,section.layout)?layoutColumns[section.layout]:null;
+    const resolved=widths&&widths.length===columns.length;
+    const tracks=columns.map((_,columnIndex)=>`minmax(0,${resolved?widths[columnIndex]:1}fr)`).join(" ");
+    return`<section class="composition-row" aria-label="Section ${index+1}"><div class="composition-heading"><strong>Section ${index+1}${section.name?`: ${esc(section.name)}`:""}</strong><span>${esc(words(section.layout||"unspecified layout"))}</span></div>${!resolved?`<p class="composition-note">Column widths unresolved; confirm the layout and column count.</p>`:""}${columns.length?`<div class="wire-scroll${columns.length>1?" multi":""}"${columns.length>1?` tabindex="0" role="region" aria-label="Section ${index+1} columns"`:""}><div class="wire-columns" style="grid-template-columns:${tracks}">${columns.map((column,columnIndex)=>{
+      const elements=Array.isArray(column.elements)?column.elements:[];
+      return`<div class="wire-column"><div class="wire-column-label">Column ${columnIndex+1}${resolved?` · ${widths[columnIndex]}/12 width`:" · Width unspecified"}</div><div class="wire-elements">${elements.length?elements.map(wireElement).join(""):`<p class="wire-empty">Empty column</p>`}</div></div>`;
+    }).join("")}</div></div>${columns.length>1?`<p class="composition-scroll-hint">Scroll sideways to inspect columns.</p>`:""}`:`<p class="wire-empty">No columns specified.</p>`}</section>`;
   }).join("")}</div></div>`;
 };
 const visibleDetails=item=>{
@@ -275,9 +343,11 @@ const visibleDetails=item=>{
   if(inputs.typography)rows.push(["Typography",inputs.typography]);
   if(inputs.details)rows.push(["Design details",inputs.details]);
   if((item.locales||[]).length)rows.push(["Languages",item.locales.join(", ")]);
-  return rows.length?`<div class="change-detail">${rows.map(([name,value])=>`<div class="detail-row"><div class="detail-name">${esc(name)}</div><div class="detail-value">${esc(value)}</div></div>`).join("")}</div>`:"";
+  return rows.length?`<div class="change-detail">${rows.map(([name,value])=>`<div class="detail-row"><div class="detail-name">${esc(name)}</div><div class="detail-value">${renderValue(value)}</div></div>`).join("")}</div>`:"";
 };
-const changeCard=(item,category)=>`<article class="card change ${category}"><div class="change-head"><div><div class="change-title">${esc(item.summary||words(item.action)+" planned change")}</div><p>${esc(category==="page"?"Page structure and navigation":category==="styling"?"Visual treatment":"Visitor-facing content or reusable site component")}</p></div><span class="tag accent">${esc(words(item.action))}</span></div>${visibleDetails(item)}${composition(item)}${(item.preserve||[]).length?`<div class="change-detail"><div class="label">Preserve</div><ul class="preserve-list">${item.preserve.map(value=>`<li>${esc(value)}</li>`).join("")}</ul></div>`:""}</article>`;
+const actionClass=action=>["modify","replace"].includes(String(action).toLowerCase())?`action-${String(action).toLowerCase()}`:"";
+const actionBadge=action=>`<span class="tag action-badge ${actionClass(action)}">${esc(words(action))}</span>`;
+const changeCard=(item,category)=>`<article class="card change ${category} ${actionClass(item.action)}"><div class="change-head"><div><div class="change-title">${esc(item.summary||words(item.action)+" planned change")}</div><p>${esc(category==="page"?"Page structure and navigation":category==="styling"?"Visual treatment":"Visitor-facing content or reusable site component")}</p></div>${actionBadge(item.action)}</div>${visibleDetails(item)}${composition(item)}${(item.preserve||[]).length?`<div class="change-detail"><div class="label">Preserve</div><ul class="preserve-list">${item.preserve.map(value=>`<li>${esc(value)}</li>`).join("")}</ul></div>`:""}</article>`;
 const renderCategory=(id,items,category,empty)=>{document.getElementById(id).innerHTML=items.length?items.map(item=>changeCard(item,category)).join(""):`<div class="card empty">${esc(empty)}</div>`};
 renderCategory("pageChanges",categories.page,"page","No page or navigation changes are planned.");
 renderCategory("componentChanges",categories.component,"component","No content or reusable-component changes are planned.");
@@ -292,10 +362,22 @@ if(design){
   if(design.imageDelivery==="external-url")rows.push(["Image delivery","Direct HTTPS URLs; no image downloads or Web File imports."]);
   document.getElementById("newSiteDesign").innerHTML=`<article class="card change styling"><h3>New-site design direction</h3><div class="change-detail">${rows.map(([label,value])=>`<div class="detail-row"><div class="detail-name">${esc(label)}</div><div class="detail-value">${esc(value)}</div></div>`).join("")}</div><p>This is an approval plan, not a live site preview.</p></article>`;
 }
+const httpsUrl=value=>{
+  if(typeof value!=="string"||!/^https:\/\//i.test(value)||/[\\\s\u0000-\u001f\u007f]/.test(value))return null;
+  try{const url=new URL(value);return url.protocol==="https:"&&!url.username&&!url.password?value:null}catch{return null}
+};
+const sourceLink=(url,label)=>httpsUrl(url)?`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label||url)}</a>`:esc(url);
+const imageUrl=asset=>asset.kind==="font"?null:httpsUrl(asset.delivery==="external-url"?asset.externalUrl:asset.source&&asset.source.type==="unsplash"?asset.source.downloadUrl:null);
+const imageAspect=asset=>{
+  const match=/^(\d+(?:\.\d+)?)\s*[:/]\s*(\d+(?:\.\d+)?)$/.exec(asset.visual&&asset.visual.aspectRatio||"");
+  return match&&Number(match[1])>0&&Number(match[2])>0?`${Number(match[1])}/${Number(match[2])}`:"4/3";
+};
 const assetPreview=asset=>{
-  if(asset.delivery==="external-url")return`<span>Externally hosted image</span>`;
-  if(asset.source&&asset.source.type==="unsplash")return`<img src="${esc(asset.source.downloadUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">`;
-  return`<span>${esc(words(asset.kind))}</span>`;
+  const url=imageUrl(asset);
+  if(!url)return`<div class="asset-fallback"><strong>${asset.kind==="font"?"Font asset":"Image preview unavailable"}</strong><span>${esc(asset.preparation&&asset.preparation.fileName||asset.existingPublicUrl||"No hosted image URL is available for this asset.")}</span></div>`;
+  const alternatives=asset.accessibility&&asset.accessibility.altByLocale||{};
+  const alt=alternatives[site.languages[0]]||Object.values(alternatives).find(value=>value.trim())||`Preview of ${asset.name}`;
+  return`<img class="${asset.visual&&asset.visual.crop?"crop":""}" src="${esc(url)}" alt="${esc(alt)}" loading="lazy" referrerpolicy="no-referrer"><div class="asset-fallback" role="status"><strong>Loading image preview...</strong>${sourceLink(url,"Open image source")}</div>`;
 };
 const assetCard=asset=>{
   const source=asset.source||{};
@@ -304,20 +386,36 @@ const assetCard=asset=>{
   const details=[
     ["Source",source.type==="unsplash"?`Unsplash · ${source.photographer}`:words(source.type)],
     ["Delivery",asset.delivery==="external-url"?"Direct external HTTPS URL (not imported)":"Local Power Pages Web File"],
-    ["Image URL",asset.externalUrl],
+    ["Image URL",asset.externalUrl||source.downloadUrl],
+    ["Source page",source.sourcePage],
+    ["License",source.license],
     ["Hosting",asset.delivery==="external-url"?"Remote availability, content changes, privacy, and site CSP require review. Power Pages permissions do not protect this URL.":null],
     ["Prepared file",prep.fileName||basename(asset.existingPublicUrl)],
     ["Crop / aspect",[asset.visual&&asset.visual.aspectRatio,asset.visual&&asset.visual.crop].filter(Boolean).join(" · ")],
     ["Accessibility",alt]
   ].filter(([,value])=>value);
-  return`<article class="card asset-card"><div class="asset-preview">${assetPreview(asset)}</div><div class="asset-body"><div class="change-head"><div><div class="change-title">${esc(asset.name)}</div><div class="change-tags"><span class="tag accent">${esc(words(asset.kind))}</span><span class="tag">${esc(words(asset.role))}</span>${(asset.placements||[]).some(item=>item.scope==="sitewide")?`<span class="tag">Site-wide</span>`:""}</div></div></div><p class="asset-purpose">${esc(asset.purpose)}</p><div class="label">Why this asset</div><div>${esc(asset.visual&&asset.visual.rationale)}</div><div class="change-detail">${details.map(([name,value])=>`<div class="detail-row"><div class="detail-name">${esc(name)}</div><div class="detail-value">${esc(value)}</div></div>`).join("")}</div><div class="change-detail"><div class="label">Placements</div>${(asset.placements||[]).map(item=>`<div class="asset-placement"><strong>${esc(item.page)} · ${esc(item.section)}</strong><span>${esc(item.usage)}</span></div>`).join("")}</div></div></article>`;
+  return`<article class="card asset-card"><div class="asset-preview" style="--asset-aspect:${imageAspect(asset)}">${assetPreview(asset)}</div><div class="asset-body"><div class="change-head"><div><div class="change-title">${esc(asset.name)}</div><div class="change-tags"><span class="tag accent">${esc(words(asset.kind))}</span><span class="tag">${esc(words(asset.role))}</span>${(asset.placements||[]).some(item=>item.scope==="sitewide")?`<span class="tag">Site-wide</span>`:""}</div></div></div><p class="asset-purpose">${esc(asset.purpose)}</p><div class="label">Why this asset</div><div>${esc(asset.visual&&asset.visual.rationale)}</div><div class="change-detail">${details.map(([name,value])=>`<div class="detail-row"><div class="detail-name">${esc(name)}</div><div class="detail-value">${["Image URL","Source page"].includes(name)?sourceLink(value):esc(value)}</div></div>`).join("")}</div><div class="change-detail"><div class="label">Placements</div>${(asset.placements||[]).map(item=>`<div class="asset-placement"><strong>${esc(item.page)} · ${esc(item.section)}</strong><span>${esc(item.usage)}</span></div>`).join("")}</div></div></article>`;
 };
 document.getElementById("assetChanges").innerHTML=assets.length?assets.map(assetCard).join(""):`<div class="card empty">No new visual assets are needed for this customization.</div>`;
+document.querySelectorAll(".asset-preview img").forEach(image=>{
+  const fallback=image.parentElement.querySelector(".asset-fallback");
+  const settle=()=>{
+    const failed=image.naturalWidth===0;
+    image.hidden=failed;
+    fallback.hidden=!failed;
+    if(failed)fallback.querySelector("strong").textContent="Image preview unavailable";
+  };
+  image.addEventListener("load",settle);
+  image.addEventListener("error",settle);
+  // Cached images may finish before handlers are attached. Never leave their
+  // loading message visible, and retain the source link when loading fails.
+  if(image.complete)settle();
+});
 const checks=read("verificationData");
 document.getElementById("checks").innerHTML=checks.length?checks.map(item=>`<div class="card check"><span class="check-mark"></span><div><strong>${esc(typeof item==="string"?item:item.label)}</strong>${typeof item==="object"&&item.description?`<div>${esc(item.description)}</div>`:""}</div></div>`).join(""):`<div class="card empty">No verification checks recorded.</div>`;
 const deployments=read("deploymentData");
 document.getElementById("deployments").innerHTML=deployments.length?deployments.map(item=>`<div class="card deploy ${item.recommended?"recommended":""}"><strong>${esc(item.title)}</strong><p>${esc(item.description||"")}</p></div>`).join(""):`<div class="card empty">Keep the verified changes local.</div>`;
-const technical=item=>`<article class="trace"><div class="trace-title">${esc(item.id)}</div><div class="trace-meta"><span class="tag">${esc(item.skill)}</span><span class="tag">${esc(item.action)}</span>${(item.dependsOn||[]).map(value=>`<span class="tag">after ${esc(value)}</span>`).join("")}</div><pre>${esc(JSON.stringify({target:item.target,inputs:item.inputs,outputBindings:item.outputBindings,expectedOutputs:item.expectedOutputs},null,2))}</pre></article>`;
+const technical=item=>`<article class="trace"><div class="trace-title">${esc(item.id)}</div><div class="trace-meta"><span class="tag">${esc(item.skill)}</span>${actionBadge(item.action)}${(item.dependsOn||[]).map(value=>`<span class="tag">after ${esc(value)}</span>`).join("")}</div><pre>${esc(JSON.stringify({target:item.target,inputs:item.inputs,outputBindings:item.outputBindings,expectedOutputs:item.expectedOutputs},null,2))}</pre></article>`;
 document.getElementById("technicalOperations").innerHTML=operations.length?operations.map(technical).join(""):`<div class="technical-copy">No implementation operations are planned.</div>`;
 document.querySelectorAll(".nav-btn").forEach(button=>button.addEventListener("click",()=>{
   document.querySelectorAll(".nav-btn").forEach(node=>node.classList.toggle("active",node===button));

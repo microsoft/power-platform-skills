@@ -4,6 +4,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { renderReviewedPlan } = require('../render-customize-declarative-site-plan');
+const { updateExecution } = require('../update-customize-declarative-site-execution');
+const { externalImagePlan, successfulImageCheck } = require('./customization-plan-test-helpers');
 
 const scriptPath = path.join(__dirname, '..', 'promote-customize-declarative-site-plan.js');
 const fixturePath = path.join(
@@ -24,7 +27,8 @@ function writeReview(root, name, mutate = (plan) => plan) {
 function promote(projectRoot, review) {
   return spawnSync(
     process.execPath,
-    [scriptPath, '--projectRoot', projectRoot, '--data', review.data],
+    [scriptPath, '--projectRoot', projectRoot, '--data', review.data,
+      ...(review.imageChecks ? ['--imageChecks', review.imageChecks] : [])],
     { encoding: 'utf8' }
   );
 }
@@ -132,4 +136,58 @@ test('does not accept an independently supplied HTML document', () => {
     ),
     /unrelated/
   );
+});
+
+test('external images require matching pre-approval checks that are reused during publication and execution', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'image-check-publication-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const review = writeReview(root, 'review', () => externalImagePlan());
+  const missing = promote(root, review);
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /require --imageChecks/);
+  assert.equal(fs.existsSync(path.join(root, 'docs')), false);
+  let calls = 0;
+  const rendered = await renderReviewedPlan(review.plan, path.join(root, 'review', 'plan.html'), {
+    check: async (url) => { calls++; return successfulImageCheck(url); },
+  });
+  review.imageChecks = rendered.imageChecks;
+  const result = promote(root, review);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(fs.readFileSync(review.imageChecks, 'utf8'));
+  const execution = updateExecution({ projectRoot: root, action: 'status' });
+  assert.deepEqual(execution.imageChecks, report);
+  const resolved = updateExecution({ projectRoot: root, action: 'resolve', operationId: review.plan.operations[0].id });
+  assert.deepEqual(resolved.imageChecks, report);
+  assert.deepEqual(resolved.resolvedInputs, review.plan.operations[0].inputs);
+  assert.equal(calls, 1);
+  assert.equal(fs.existsSync(path.join(root, '.powerpages-customization')), false);
+  assert.match(fs.readFileSync(path.join(root, 'docs', 'customize-declarative-site', 'current-plan.html'), 'utf8'), /Image source checks passed before review/);
+});
+
+test('stale or failed image checks leave the current approved run unchanged', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stale-image-checks-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const current = writeReview(root, 'baseline');
+  assert.equal(promote(root, current).status, 0);
+  const currentPath = path.join(root, 'docs', 'customize-declarative-site', 'current-plan.json');
+  const before = fs.readFileSync(currentPath, 'utf8');
+  const review = writeReview(root, 'review', () => externalImagePlan());
+  const rendered = await renderReviewedPlan(review.plan, path.join(root, 'review', 'plan.html'), { check: successfulImageCheck });
+  review.imageChecks = rendered.imageChecks;
+  const report = JSON.parse(fs.readFileSync(review.imageChecks, 'utf8'));
+  report.images[0].statusCode = 404;
+  fs.writeFileSync(review.imageChecks, JSON.stringify(report));
+  const failed = promote(root, review);
+  assert.equal(failed.status, 1);
+  assert.match(failed.stderr, /failed or invalid/);
+  report.images[0].statusCode = 200;
+  fs.writeFileSync(review.imageChecks, JSON.stringify(report));
+  review.plan.operations[0].inputs.images[0] = 'https://cdn.example.com/different.png';
+  review.plan.assets[0].externalUrl = review.plan.operations[0].inputs.images[0];
+  fs.writeFileSync(review.data, JSON.stringify(review.plan));
+  const stale = promote(root, review);
+  assert.equal(stale.status, 1);
+  assert.match(stale.stderr, /stale image checks/);
+  assert.equal(fs.readFileSync(currentPath, 'utf8'), before);
+  assert.equal(fs.existsSync(path.join(root, 'docs', 'customize-declarative-site', 'history')), false);
 });

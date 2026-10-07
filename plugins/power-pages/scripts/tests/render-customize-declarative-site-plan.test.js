@@ -4,6 +4,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { renderReviewedPlan } = require('../render-customize-declarative-site-plan');
+const { externalImagePlan, renderDocument, successfulImageCheck } = require('./customization-plan-test-helpers');
 
 const scriptPath = path.join(__dirname, '..', 'render-customize-declarative-site-plan.js');
 const fixturePath = path.join(
@@ -302,4 +304,50 @@ test('refuses to overwrite an existing plan', () => {
   assert.equal(first.status, 0, first.stderr || first.stdout);
   assert.equal(second.status, 1);
   assert.match(second.stderr, /Output file already exists/);
+});
+
+test('a failed external image cannot create review HTML or a successful check report', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'failed-image-review-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const output = path.join(root, 'plan.html');
+  await assert.rejects(renderReviewedPlan(externalImagePlan(), output, {
+    check: async () => { throw new Error('Image URL returned HTTP 404.'); },
+  }), /HTTP 404/);
+  assert.deepEqual(fs.readdirSync(root), []);
+});
+
+test('review rendering records and displays image checks without changing image delivery', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'checked-image-review-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const plan = externalImagePlan();
+  const output = path.join(root, 'plan.html');
+  let calls = 0;
+  const result = await renderReviewedPlan(plan, output, {
+    check: async (url) => { calls++; return successfulImageCheck(url); },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.imageChecks, `${output}.image-checks.json`);
+  const report = JSON.parse(fs.readFileSync(result.imageChecks, 'utf8'));
+  const document = renderDocument(fs.readFileSync(output, 'utf8'));
+  assert.match(document.get('imageVerification').innerHTML, /Image source checks passed before review/);
+  assert.match(document.get('imageVerification').innerHTML, /2026-01-01T00:00:00.000Z/);
+  assert.equal(report.images[0].url, plan.assets[0].externalUrl);
+  assert.equal(result.verifiedImages, 1);
+  assert.deepEqual(fs.readdirSync(root).sort(), ['plan.html', 'plan.html.image-checks.json', 'power-pages-icon.png']);
+  await assert.rejects(renderReviewedPlan(plan, output, {
+    check: () => assert.fail('Existing artifacts must fail before repeating network checks.'),
+  }), /already exists/);
+});
+
+test('the CLI enforces public-image verification before rendering external sources', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'image-review-cli-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const plan = externalImagePlan(['https://127.0.0.1/image.png']);
+  const data = writePlan(root, plan);
+  const output = path.join(root, 'plan.html');
+  const result = spawnSync(process.execPath, [scriptPath, '--output', output, '--data', data], { encoding: 'utf8' });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /public Internet addresses/);
+  assert.equal(fs.existsSync(output), false);
+  assert.equal(fs.existsSync(`${output}.image-checks.json`), false);
 });

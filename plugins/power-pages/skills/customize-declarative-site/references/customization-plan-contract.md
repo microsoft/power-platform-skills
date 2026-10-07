@@ -38,6 +38,38 @@ The JSON and HTML serve different audiences without becoming separate sources of
 - The HTML may include a collapsed maintainer-only implementation trace, but it must not make
   operation mechanics the primary plan narrative or introduce data absent from the canonical JSON.
 
+The maker-facing rendering preserves the contract while making it readable:
+
+- Show routine **Important notes** on neutral informational surfaces without warning colors.
+  Preserve their wording; blocked capability indicators remain distinct.
+- Render navigation strings as text and structured navigation as nested lists and labeled fields.
+  Preserve entry order, labels, routes/target pages, and hierarchy; do not flatten objects into
+  strings or invent missing destinations.
+- Use consistent, distinct colors for **Modify** and **Replace** on change-card accents and
+  action badges, including the collapsed trace. Always keep the action text visible.
+- Show `inputs.sections` as a labeled wireframe in section, column, and element order. Use the
+  five native large-screen column proportions, preserve empty columns and repeated elements,
+  and disclose unspecified or inconsistent layouts rather than inventing widths. This is a
+  structural diagram, not a live site preview or a prediction of mobile rendering. On narrow
+  screens, keep multi-column diagrams readable in labeled, keyboard-scrollable regions.
+- Preview approved hosted images with the browser behavior in `visual-asset-planning.md`.
+  Keep source links and attribution visible even when the image fails to load. Previewing does
+  not mutate the asset manifest, execution receipt, or image-delivery policy.
+
+Before approval, the renderer verifies unique external image URLs and writes a sibling
+`plan.html.image-checks.json` report. The report contains `schemaVersion: 1`, the exact `planHash`,
+and one result per URL with `url`, `finalUrl`, `statusCode: 200`, `mimeType`, `sizeBytes`, and
+`checkedAt`. It records bounded HTTP/content verification, not stored image bytes or a full
+browser decode. A failed source prevents review HTML from being produced.
+
+Pass the report through `--imageChecks` when publishing. External-image plans cannot be newly
+published without matching successful results. The publisher stores the report as `imageChecks`
+in `current-execution.json`; operation resolution returns it separately from owner inputs.
+Publication and child authoring reuse it rather than performing repeated network checks.
+Do not insert report fields into `assets[].preparation` or change the plan schema. Existing
+approved receipts without this optional field remain valid for resume; their image availability
+must not be described as verified. Changed plans require a new checked review and approval.
+
 Render each proposed plan in a fresh external review directory outside the declarative site root.
 After approval, publish the JSON with
 `scripts/promote-customize-declarative-site-plan.js`; the publisher validates it and renders the
@@ -207,7 +239,8 @@ Rules:
 - At least one non-`author-web-file` consumer must carry the exact external URL in its static
   `inputs`, including nested component sources. No staging/import operation or output binding
   is needed. Availability, actual image content, hotlink permission, privacy and CSP are reviewed
-  separately; schema validation neither fetches nor certifies the remote resource.
+  separately; schema validation neither fetches nor certifies the remote resource. The
+  pre-approval image check supplies the separate HTTP/content evidence.
 - Unsplash external delivery uses `externalUrl` on `images.unsplash.com` plus its Unsplash photo
   page, photographer and license. Legacy `source.downloadUrl`, if supplied too, must match
   `externalUrl` exactly. Web File imports retain the required `source.downloadUrl`.

@@ -27,13 +27,41 @@ For each external image:
   restrictions. Power Pages permissions do not protect external URLs. Never relax CSP
   automatically; choose a permitted source or obtain separate approval for policy changes.
 - Keep localized alt text, aspect ratio, reserved layout space, crop/focal point, and appropriately
-  sized CDN variants. Verify the image resource using source evidence or an authorized check;
-  syntactic URL validation is not proof of MIME type, availability, or runtime rendering.
+  sized CDN variants. The review renderer must verify the final image resource before approval;
+  source-page evidence and syntactic URL validation alone are not proof of availability.
 
-The plan renderer shows the URL and hosting caveats without automatically fetching external-mode
-image previews. The site loads the image from its host at runtime. A local-only or newly authored
-image needs an approved hosted URL before it can use this route; do not upload it or invent a URL
-as a workaround.
+`render-customize-declarative-site-plan.js` checks each unique `externalUrl` once before writing
+review HTML. It uses up to three concurrent unauthenticated HTTPS GETs, a 20-second deadline per
+URL including redirects, at most three redirects, and the existing 15 MiB asset byte limit.
+Every destination must resolve to public Internet addresses; DNS answers are pinned for the
+request. No cookies, auth headers, referrers, or image files are retained.
+
+Require HTTP 200, a supported image Content-Type, non-empty bytes, and matching image content
+signatures (PNG/APNG, JPEG, WebP, GIF, AVIF, SVG, or ICO). This is an HTTP/content check, not a full
+browser decode or visual-fidelity guarantee. For oversized assets, choose a smaller CDN variant.
+A 404, HTML/gallery response, timeout, or other failure blocks review generation with the affected
+asset names and URLs. Select a working direct resource and update both its manifest entry and
+all consumer inputs before rendering again; never repeatedly retry a known 404 or substitute
+an unapproved image after approval.
+
+Successful checks are stored in `plan.html.image-checks.json`, bound to the complete plan hash
+and exact URLs, and displayed in the review. Publication requires that report and preserves it
+in `current-execution.json`; `--action resolve` passes it to child skills without more requests.
+Reuse it for unchanged URLs within that approved run. A revised plan requires a fresh check and
+approval. The timestamps describe observed availability, not a promise that remote content
+cannot change. Old approved receipts without reports remain resumable without claiming checks
+that were not performed.
+
+The generated plan lazily displays approved hosted images in the browser with localized preview
+alt text, the planned aspect ratio, and a no-referrer policy. Retain clickable image/source links,
+attribution, license, and hosting caveats alongside the preview. If an image cannot load, show an
+explicit unavailable state with an image-source link, not a broken-image box or endless loading
+message. Pure HTML serialization and publication do not fetch images; the pre-approval check
+reads them in memory without staging files or importing Web Files.
+Browser preview requests go to the approved provider; successful previews do not prove site CSP,
+final crop/focal-point treatment, or Studio/runtime rendering. A local-only or newly authored image
+without an approved hosted URL retains an explicit unavailable preview and its file metadata; do
+not upload it, guess a runtime host, or invent a URL to manufacture a preview.
 
 ## Design role before source
 
@@ -123,8 +151,13 @@ temperature, orientation, and available text space fit the page. Record both:
 - the direct `https://images.unsplash.com/...` image URL with explicit sizing/crop parameters and
   a supported format such as `fm=jpg`.
 
+Extract the actual CDN resource URL from that photo's source evidence. Do not build
+`photo-<id>` from the photo-page slug or a search-result identifier, and do not copy documentation
+placeholders. Preserve the real path and verify the final sizing/crop URL, not only the photo page.
+
 For URL-based creation, use the sized/cropped direct image URL as `externalUrl`; retain the
-photo page, photographer and license in `source`. Do not download it. For an explicitly selected
+photo page, photographer and license in `source`. Do not download it to a file; the renderer's
+bounded in-memory verification is the only preparation needed. For an explicitly selected
 Web File delivery outside that creation path, stage the selected image:
 
 ```bash

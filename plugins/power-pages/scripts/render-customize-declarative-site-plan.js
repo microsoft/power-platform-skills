@@ -9,6 +9,7 @@ const { parseArgs, renderTemplate } = require('./lib/render-template');
 const {
   validateCustomizationPlan,
 } = require('./lib/customize-declarative-site-plan');
+const { validateImageChecks, verifyPlanImages } = require('./lib/declarative-image-verification');
 
 const templatePath = path.join(
   __dirname,
@@ -21,6 +22,7 @@ const templatePath = path.join(
 
 function renderCustomizationPlan(plan, outputPath, options = {}) {
   validateCustomizationPlan(plan);
+  if (options.imageChecks) validateImageChecks(plan, options.imageChecks);
   return renderTemplate({
     templatePath,
     outputPath: path.resolve(outputPath),
@@ -35,6 +37,7 @@ function renderCustomizationPlan(plan, outputPath, options = {}) {
       SITE_DATA: plan.site,
       CAPABILITIES_DATA: plan.capabilities,
       ASSETS_DATA: plan.assets || [],
+      IMAGE_CHECKS_DATA: options.imageChecks || null,
       OPERATIONS_DATA: plan.operations,
       WARNINGS_DATA: plan.warnings,
       VERIFICATION_DATA: plan.verification,
@@ -51,6 +54,7 @@ function renderCustomizationPlan(plan, outputPath, options = {}) {
       'SITE_DATA',
       'CAPABILITIES_DATA',
       'ASSETS_DATA',
+      'IMAGE_CHECKS_DATA',
       'OPERATIONS_DATA',
       'WARNINGS_DATA',
       'VERIFICATION_DATA',
@@ -62,7 +66,20 @@ function renderCustomizationPlan(plan, outputPath, options = {}) {
   });
 }
 
-function main() {
+async function renderReviewedPlan(plan, outputPath, options = {}) {
+  const output = path.resolve(outputPath);
+  const imageChecksPath = `${output}.image-checks.json`;
+  if (fs.existsSync(output) || fs.existsSync(imageChecksPath)) {
+    throw new Error('Output file already exists. Choose a fresh review directory.');
+  }
+  const imageChecks = await verifyPlanImages(plan, options);
+  fs.mkdirSync(path.dirname(output), { recursive: true });
+  fs.writeFileSync(imageChecksPath, `${JSON.stringify(imageChecks, null, 2)}\n`, { flag: 'wx' });
+  renderCustomizationPlan(plan, output, { imageChecks, emitStatus: false });
+  return { status: 'ok', output, imageChecks: imageChecksPath, verifiedImages: imageChecks.images.length };
+}
+
+async function main() {
   const args = parseArgs(process.argv);
   if (!args.output || !args.data) {
     console.error(
@@ -86,7 +103,7 @@ function main() {
   }
 
   try {
-    renderCustomizationPlan(plan, args.output);
+    console.log(JSON.stringify(await renderReviewedPlan(plan, args.output)));
   } catch (error) {
     console.error(`Invalid plan: ${error.message}`);
     process.exit(1);
@@ -95,4 +112,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { renderCustomizationPlan };
+module.exports = { renderCustomizationPlan, renderReviewedPlan };

@@ -54,6 +54,10 @@ test('customize-declarative-site coordinates owning skills without authoring rec
   assert.match(skill, /outputBindings/);
   assert.match(skill, /--action resolve/);
   assert.match(skill, /publish the approved JSON/);
+  assert.match(skill, /--imageChecks "<APPROVED_REVIEW_DIR>\/plan.html.image-checks.json"/);
+  assert.match(skill, /If a check fails, do not request approval/);
+  assert.match(skill, /reuse these source checks for unchanged URLs/);
+  assert.match(contract, /External-image plans cannot be newly\s+published without matching successful results/);
   assert.match(contract, /"layout": "two-equal-columns"/);
   assert.match(contract, /do not flatten\s+elements into numeric column indexes/i);
   assert.match(contract, /immutable latest approved plan/);
