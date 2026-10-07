@@ -2,13 +2,13 @@
 'use strict';
 
 let emitTemplateOutcome = null;
-let formatJsonResult = null;
 try {
   ({ emitTemplateOutcome } = require('./lib/create-site-template-telemetry'));
-  ({ formatJsonResult } = require('./lib/template-cli-args'));
 } catch {
   // Template telemetry is optional and must never affect the create-site flow.
 }
+
+const { formatJsonResult } = require('./lib/template-cli-args');
 
 // Accepted argv shape:
 //   --eventName template_used --templateId company-portal --templateKind spa --framework react --audience internal
