@@ -21,6 +21,7 @@ login --profile NAME [--sign-in true] [--switch-account true]
 logout --profile NAME
 diagnostics --profile NAME [--remote true]
 serve --profile NAME
+Cloud values: Public, Gcc, GccHigh, DoD or Mooncake.
 Environment IDs: nonzero GUID, with or without hyphens; optional Default, Legacy or Primary prefix.
 Prefixes are case-insensitive and may have a separating hyphen. IDs are canonicalized before use.
 Azure CLI 2.54+ is required. Login binds the existing CLI organizational user by default.

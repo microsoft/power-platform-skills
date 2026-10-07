@@ -5,9 +5,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { IdentityClient } from '../src/authentication.mjs';
 import { resolveConnection, profile } from '../src/configuration.mjs';
-import { FakeAz, bound, token } from './helpers.mjs';
+import { FakeAz, bound, token, removedClouds } from './helpers.mjs';
 
-for (const Cloud of ['Public', 'Gcc', 'GccHigh', 'DoD', 'Mooncake', 'Tip1', 'Tip2'])
+for (const Cloud of ['Public', 'Gcc', 'GccHigh', 'DoD', 'Mooncake'])
   test(`allowlisted CLI token contract for ${Cloud}`, async () => {
     const selected = { ...bound, Cloud }, resolved = resolveConnection(selected), az = new FakeAz();
     az.cloud = resolved.cliCloud; az.authority = `https://${resolved.authorityHost}/`;
@@ -16,8 +16,8 @@ for (const Cloud of ['Public', 'Gcc', 'GccHigh', 'DoD', 'Mooncake', 'Tip1', 'Tip
     assert.deepEqual(az.calls.find(a => a[1] === 'get-access-token'), ['account', 'get-access-token', '--tenant',
       selected.TenantId, '--resource', resolved.resource, '--output', 'json', '--only-show-errors']);
   });
-test('removed Germany profiles fail validation before invoking authentication', async () => {
-  for (const Cloud of ['Germany', 'germany', 'GeRmAnY']) {
+test('removed cloud profiles fail validation before invoking authentication', async () => {
+  for (const Cloud of removedClouds) {
     const az = new FakeAz();
     await assert.rejects(async () => {
       const selected = profile({ ...bound, Cloud });
@@ -41,11 +41,9 @@ for (const [field, value] of [
   await assert.rejects(new IdentityClient(bound, az).silent(bound.HomeAccountId),
     e => !e.message.includes('private malformed output') && /invalid token|expired/.test(e.message));
 });
-test('Mooncake official authority alias and explicit Tip2 resource alternative are accepted without fallback', async () => {
+test('Mooncake official authority alias is accepted without resource fallback', async () => {
   const mooncake = { ...bound, Cloud: 'Mooncake' }, az = new FakeAz();
   az.cloud = 'AzureChinaCloud'; az.authority = 'https://login.chinacloudapi.cn/';
   az.tokenOutput = token({ aud: resolveConnection(mooncake).resource }); await new IdentityClient(mooncake, az).silent(bound.HomeAccountId);
-  const tip = { ...bound, Cloud: 'Tip2', Audience: 'https://api.preprod.powerplatform.com' }, other = new FakeAz();
-  other.tokenOutput = token({ aud: tip.Audience }); await new IdentityClient(tip, other).silent(bound.HomeAccountId);
-  assert.ok(other.calls.find(a => a[1] === 'get-access-token').includes(tip.Audience));
+  assert.ok(az.calls.find(a => a[1] === 'get-access-token').includes(resolveConnection(mooncake).resource));
 });

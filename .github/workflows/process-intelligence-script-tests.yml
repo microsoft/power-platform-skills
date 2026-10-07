@@ -1,0 +1,66 @@
+name: process-intelligence-script-tests
+
+on:
+    pull_request:
+        branches:
+            - main
+        paths:
+            - "plugins/process-intelligence/**"
+            - "LICENSE"
+            - ".github/workflows/process-intelligence-script-tests.yml"
+    push:
+        branches:
+            - main
+        paths:
+            - "plugins/process-intelligence/**"
+            - "LICENSE"
+            - ".github/workflows/process-intelligence-script-tests.yml"
+
+permissions:
+    contents: read
+
+concurrency:
+    group: process-intelligence-script-tests-${{ github.event.pull_request.number || github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    test-process-intelligence:
+        name: test-process-intelligence (${{ matrix.os }}, node ${{ matrix.node }})
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 15
+        # Exercise native subprocess cleanup and private-file permissions on each OS.
+        strategy:
+            fail-fast: false
+            matrix:
+                os:
+                    - ubuntu-latest
+                    - windows-latest
+                    - macos-latest
+                node:
+                    - 22
+                    - 24
+        defaults:
+            run:
+                shell: bash
+                working-directory: plugins/process-intelligence
+        steps:
+            - name: checkout
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+
+            - name: setup-node
+              uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+              with:
+                  node-version: ${{ matrix.node }}
+
+            - name: install-locked-dependencies
+              run: npm ci --no-audit --no-fund
+
+            # The build embeds the root LICENSE, which is also a trigger input.
+            - name: build-runtime
+              run: npm run build
+
+            # Tests use isolated state, fake Azure CLI and intercepted HTTP, never live credentials.
+            - name: test-plugin
+              run: npm test

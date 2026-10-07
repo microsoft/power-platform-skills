@@ -66,8 +66,11 @@ npm run build
 npm test
 ```
 
-The same commands work on macOS/Linux. Run these checks explicitly during local development.
-This plugin has no automatic CI test workflow; repository-wide metadata checks remain separate.
+The same commands work on macOS/Linux. The plugin's path-filtered
+`process-intelligence-script-tests` CI workflow runs them on Windows, Linux and macOS with
+Node.js 22 and 24. It runs for plugin changes, its own workflow and the root `LICENSE` embedded
+by the build; repository-wide metadata checks remain separate. CI has read-only repository
+permissions and needs no secrets, Azure login or live service access.
 Build uses the integrity-locked npm graph and esbuild metadata, rejects external non-builtin
 runtime imports, and embeds full required license texts in the runtime before replacing output.
 Keep the lockfile's registry integrity values and TLS verification intact.

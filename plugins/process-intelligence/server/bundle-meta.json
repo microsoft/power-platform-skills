@@ -6,7 +6,7 @@
       "format": "esm"
     },
     "src/configuration.mjs": {
-      "bytes": 5185,
+      "bytes": 4917,
       "imports": [
         {
           "path": "src/errors.mjs",
@@ -4927,7 +4927,7 @@
       "format": "esm"
     },
     "src/cli.mjs": {
-      "bytes": 10064,
+      "bytes": 10117,
       "imports": [
         {
           "path": "node:timers/promises",
@@ -5339,13 +5339,13 @@
           "bytesInOutput": 1783
         },
         "src/cli.mjs": {
-          "bytesInOutput": 9249
+          "bytesInOutput": 9302
         },
         "src/errors.mjs": {
           "bytesInOutput": 2146
         },
         "src/configuration.mjs": {
-          "bytesInOutput": 4798
+          "bytesInOutput": 4542
         },
         "src/state.mjs": {
           "bytesInOutput": 5222
@@ -5741,7 +5741,7 @@
           "bytesInOutput": 7845
         }
       },
-      "bytes": 1267649
+      "bytes": 1267446
     }
   }
 }

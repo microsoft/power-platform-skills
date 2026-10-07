@@ -7,7 +7,7 @@ import { PassThrough } from 'node:stream';
 import { setImmediate } from 'node:timers/promises';
 import { readFile } from 'node:fs/promises';
 import { run } from '../src/cli.mjs';
-import { FakeAz, sample, token } from './helpers.mjs';
+import { FakeAz, sample, token, removedClouds } from './helpers.mjs';
 
 const resource = 'https://api.bap.microsoft.com';
 const command = (environment = sample.EnvironmentId, cloud = 'Public') =>
@@ -123,7 +123,7 @@ test('challenge authority parameters accept whitespace around equals', async () 
   assert.equal(JSON.parse(f.err).tenantId, sample.TenantId);
 });
 
-for (const cloud of ['Tip1', 'Tip2', 'Gcc', 'GccHigh', 'DoD', 'Mooncake', 'Germany'])
+for (const cloud of ['Gcc', 'GccHigh', 'DoD', 'Mooncake', ...removedClouds])
   test(`no guessed directory route or credential request for ${cloud}`, async () => {
     const f = fixture();
     assert.equal(await run(command(sample.EnvironmentId, cloud), f), 2);

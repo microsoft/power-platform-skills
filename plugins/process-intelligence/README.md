@@ -59,8 +59,8 @@ for domain definitions, frozen comparison baselines and evidence statuses.
 ### Cloud support
 
 **GCC, GCC High, DoD and Mooncake are not supported yet.**
-`Public` is the commercial cloud configuration. TIP1 and TIP2 are internal configurations,
-not public onboarding options. The CLI accepts seven cloud values; configuration support does
+`Public` is the commercial cloud configuration.
+The CLI accepts five cloud values; configuration support does
 not make an unsupported cloud available.
 
 Use a normal PowerShell/Windows Terminal, macOS or Linux terminal for explicit login.

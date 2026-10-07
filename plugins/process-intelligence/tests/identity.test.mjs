@@ -40,16 +40,47 @@ test('public identity and lockfile use the relocated Process Intelligence plugin
     assert.deepEqual(entries, [{ name: 'process-intelligence', source: './plugins/process-intelligence' }]);
     assert.ok(index.plugins.length > 1);
   }
-  await assert.rejects(fs.access(path.join(workspace, '.github', 'workflows', 'process-intelligence-tests.yml')), { code: 'ENOENT' });
   await assert.rejects(fs.access(path.join(workspace, 'plugins', 'process-mining')), { code: 'ENOENT' });
   await assert.rejects(fs.access(path.join(workspace, '.github', 'workflows', 'process-mining-tests.yml')), { code: 'ENOENT' });
 });
 
-test('plugin tests remain locally runnable without an automatic CI test workflow', async () => {
+test('plugin CI is path-filtered, read-only and runs the local build and test entrypoints', async () => {
   const manifest = await json(path.join(root, 'package.json'));
   assert.equal(manifest.scripts.test, 'node scripts/test.mjs');
+  assert.equal(manifest.scripts.build, 'node scripts/build.mjs');
   await fs.access(path.join(root, 'scripts', 'test.mjs'));
-  await assert.rejects(fs.access(path.join(workspace, '.github', 'workflows', 'process-intelligence-script-tests.yml')), { code: 'ENOENT' });
+  const workflowFile = '.github/workflows/process-intelligence-script-tests.yml';
+  await assert.doesNotReject(fs.access(path.join(workspace, workflowFile)), 'Plugin CI must exist');
+  const workflow = (await fs.readFile(path.join(workspace, workflowFile), 'utf8')).replace(/\r\n/g, '\n');
+  // Match the complete trigger block, not a stray path in a comment or another event.
+  const triggers = /^on:\n([\s\S]*?)(?=^\S)/m.exec(workflow)?.[1].trimEnd();
+  const paths = ['plugins/process-intelligence/**', 'LICENSE', workflowFile];
+  assert.equal(triggers, ['pull_request', 'push'].flatMap(event => [
+    `    ${event}:`, '        branches:', '            - main', '        paths:',
+    ...paths.map(value => `            - "${value}"`)
+  ]).join('\n'));
+  assert.match(workflow, /^permissions:\n    contents: read\n/m);
+  assert.equal((workflow.match(/^\s*permissions:/gm) ?? []).length, 1);
+  assert.doesNotMatch(workflow, /pull_request_target|secrets[.[\s]|id-token|write-all|: write\b|azure\/login|az login/);
+  const actions = [...workflow.matchAll(/^\s+uses: ([^ ]+) # v[\d.]+$/gm)].map(match => match[1]);
+  assert.equal(actions.length, 2);
+  assert.match(actions[0], /^actions\/checkout@[a-f0-9]{40}$/);
+  assert.match(actions[1], /^actions\/setup-node@[a-f0-9]{40}$/);
+  assert.match(workflow, /persist-credentials: false/);
+  assert.match(workflow, /runs-on: \$\{\{ matrix\.os \}\}/);
+  assert.match(workflow, /node-version: \$\{\{ matrix\.node \}\}/);
+  assert.match(workflow, /os:\n\s+- ubuntu-latest\n\s+- windows-latest\n\s+- macos-latest\n/);
+  assert.match(workflow, /node:\n\s+- 22\n\s+- 24\n/);
+  assert.match(workflow, /timeout-minutes: 15/);
+  assert.match(workflow, /working-directory: plugins\/process-intelligence/);
+  assert.match(workflow, /shell: bash/);
+  assert.deepEqual([...workflow.matchAll(/^\s+run: (.+)$/gm)].map(match => match[1]),
+    ['npm ci --no-audit --no-fund', 'npm run build', 'npm test']);
+  for (const file of ['AGENTS.md', 'references/development.md']) {
+    const text = await fs.readFile(path.join(root, file), 'utf8');
+    assert.doesNotMatch(text, /local-only|no automatic CI|do not add automatic CI/i);
+    assert.match(text, /path-filtered/i);
+  }
 });
 
 test('repository README includes installation, local loading and every Process Intelligence skill', async () => {

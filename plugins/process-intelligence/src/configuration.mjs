@@ -85,8 +85,8 @@ export function profile(value) {
     Revision: value.Revision ?? ''
   };
   resolveConnection(result);
-  if (result.HomeAccountId !== null && typeof result.HomeAccountId !== 'string') {
-    throw invalid('Profile account selection is invalid.');
+  if (result.HomeAccountId !== null && !isGuid(result.HomeAccountId)) {
+    throw invalid('Profile account selection must be a tenant-local OID GUID or null.');
   }
   if (typeof result.Revision !== 'string') {
     throw invalid('Profile revision is invalid.');
@@ -118,22 +118,17 @@ export function resolveConnection(p) {
       'login.partner.microsoftonline.cn',
       1,
       'AzureChinaCloud'
-    ],
-    tip1: ['api.preprod.powerplatform.com', 'login.microsoftonline.com', 1, 'AzureCloud'],
-    tip2: ['api.test.powerplatform.com', 'login.microsoftonline.com', 1, 'AzureCloud']
+    ]
   };
   const cloud = typeof p.Cloud === 'string' ? p.Cloud.toLowerCase() : '';
   if (!Object.hasOwn(mapping, cloud)) {
     throw invalid(
-      'Unknown cloud or unsupported Dev. Choose Public, Gcc, GccHigh, DoD, Mooncake, Tip1 or Tip2.'
+      'Unknown or unsupported cloud. Choose Public, Gcc, GccHigh, DoD or Mooncake.'
     );
   }
   const [suffix, authorityHost, shard, cliCloud] = mapping[cloud];
   const resource = p.Audience ?? `https://${suffix}`;
-  if (
-    resource !== `https://${suffix}` &&
-    !(cloud === 'tip2' && resource === 'https://api.preprod.powerplatform.com')
-  ) {
+  if (resource !== `https://${suffix}`) {
     throw invalid(
       'Audience is not allowlisted for this cloud. No automatic resource fallback is permitted.'
     );

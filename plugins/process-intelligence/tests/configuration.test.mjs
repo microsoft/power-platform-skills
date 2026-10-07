@@ -5,29 +5,52 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { resolveConnection, profile, validateName, validateEnvironmentId } from '../src/configuration.mjs';
-import { bound, assertProfileBytes } from './helpers.mjs';
+import { bound, assertProfileBytes, removedClouds } from './helpers.mjs';
 
 export const base = profile({ Name: 'sample', Cloud: 'Public', TenantId: '11111111-1111-1111-1111-111111111111',
   EnvironmentId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeff' });
 test('normalized profiles contain only configuration, revision and OID account binding', () => {
   assertProfileBytes(JSON.stringify(base), null);
   assertProfileBytes(JSON.stringify(profile(bound)), bound.HomeAccountId);
-  for (const HomeAccountId of [1, false, {}]) assert.throws(() => profile({ ...bound, HomeAccountId }));
+});
+test('profile account binding preserves GUIDs and nullable unbound state', () => {
+  for (const HomeAccountId of [undefined, null]) {
+    assert.equal(profile({ ...bound, HomeAccountId }).HomeAccountId, null);
+  }
+  for (const HomeAccountId of [base.EnvironmentId, base.EnvironmentId.toUpperCase()]) {
+    const input = { ...bound, HomeAccountId };
+    assert.equal(profile(input).HomeAccountId, HomeAccountId);
+    assert.equal(input.HomeAccountId, HomeAccountId);
+  }
+});
+for (const HomeAccountId of [
+  '', 'not-an-oid', 'fixture@example.invalid', 1, false, {}, [],
+  bound.HomeAccountId.replaceAll('-', ''), `{${bound.HomeAccountId}}`,
+  ` ${bound.HomeAccountId}`, `${bound.HomeAccountId}\n`,
+  `${bound.HomeAccountId}.tenant`, `Default-${bound.HomeAccountId}`
+]) test(`profile rejects malformed OID binding ${JSON.stringify(HomeAccountId)}`, () => {
+  assert.throws(() => profile({ ...bound, HomeAccountId }), error => {
+    assert.equal(error.exitCode, 2);
+    assert.equal(error.errorCode, 'INVALID_CONFIGURATION');
+    assert.match(error.message, /account selection/i);
+    if (typeof HomeAccountId === 'string' && HomeAccountId) {
+      assert.equal(error.message.includes(HomeAccountId), false);
+    }
+    return true;
+  });
 });
 const clouds = [
   ['Public', 'api.powerplatform.com', 'login.microsoftonline.com', 2, 'AzureCloud'],
   ['Gcc', 'api.gov.powerplatform.microsoft.us', 'login.microsoftonline.com', 1, 'AzureCloud'],
   ['GccHigh', 'api.high.powerplatform.microsoft.us', 'login.microsoftonline.us', 1, 'AzureUSGovernment'],
   ['DoD', 'api.appsplatform.us', 'login.microsoftonline.us', 1, 'AzureUSGovernment'],
-  ['Mooncake', 'api.powerplatform.partner.microsoftonline.cn', 'login.partner.microsoftonline.cn', 1, 'AzureChinaCloud'],
-  ['Tip1', 'api.preprod.powerplatform.com', 'login.microsoftonline.com', 1, 'AzureCloud'],
-  ['Tip2', 'api.test.powerplatform.com', 'login.microsoftonline.com', 1, 'AzureCloud']
+  ['Mooncake', 'api.powerplatform.partner.microsoftonline.cn', 'login.partner.microsoftonline.cn', 1, 'AzureChinaCloud']
 ];
-for (const Cloud of ['Germany', 'germany', 'GeRmAnY']) test(`reject removed cloud in config and profile: ${Cloud}`, () => {
+for (const Cloud of removedClouds) test(`reject removed cloud in config and profile: ${Cloud}`, () => {
   for (const validate of [resolveConnection, profile]) assert.throws(() => validate({ ...base, Cloud }), error => {
     assert.equal(error.exitCode, 2);
     assert.equal(error.errorCode, 'INVALID_CONFIGURATION');
-    assert.match(error.message, /Choose Public, Gcc, GccHigh, DoD, Mooncake, Tip1 or Tip2\./);
+    assert.match(error.message, /Choose Public, Gcc, GccHigh, DoD or Mooncake\./);
     return true;
   });
 });
@@ -39,13 +62,13 @@ test('Mooncake configuration preserves the official Azure CLI cloud and endpoint
     assert.equal(connection.resource, 'https://api.powerplatform.partner.microsoftonline.cn');
   }
 });
-test('connection documentation separates seven accepted mappings from sovereign support policy', async () => {
+test('connection documentation separates five accepted mappings from sovereign support policy', async () => {
   for (const file of ['../README.md', '../skills/setup/SKILL.md', '../references/connection-patterns.md']) {
     const content = (await readFile(new URL(file, import.meta.url), 'utf8')).replace(/[`*]/g, '').replace(/\s+/g, ' ');
     assert.match(content, /GCC, GCC High, DoD and Mooncake are not supported yet/, file);
     assert.match(content, /Public is the commercial cloud configuration/, file);
-    assert.match(content, /TIP1 and TIP2 are internal configurations/, file);
-    assert.match(content, /CLI accepts seven cloud values/, file);
+    assert.doesNotMatch(content, /\btip[12]\b|internal configurations/i, file);
+    assert.match(content, /CLI accepts five cloud values/, file);
     assert.match(content, /configuration support does not make an unsupported cloud available/, file);
   }
   const readme = await readFile(new URL('../../../README.md', import.meta.url), 'utf8');
@@ -57,8 +80,8 @@ test('connection documentation separates seven accepted mappings from sovereign 
   assert.deepEqual(rows.map(row => row.slice(0, 4)), clouds.map(([cloud, suffix, host, shard]) =>
     [cloud, host, suffix, `Last ${shard} character${shard === 1 ? '' : 's'}`]));
   assert.deepEqual(rows.map(row => row[4]), ['Commercial target', 'Not supported yet', 'Not supported yet',
-    'Not supported yet', 'Not supported yet', 'Internal configuration only', 'Internal configuration only']);
-  assert.match(section, /AzureCloud` for Public\/Gcc\/Tip1\/Tip2,/);
+    'Not supported yet', 'Not supported yet']);
+  assert.match(section, /AzureCloud` for Public\/Gcc,/);
   assert.doesNotMatch(section, /germany/i);
 });
 test('authentication guidance states user prerequisites without provider-design history', async () => {
@@ -77,11 +100,16 @@ for (const [cloud, suffix, host, shard, cliCloud] of clouds) test(`routing parit
   assert.equal(r.scope, `https://${suffix}/.default`);
   assert.equal(r.cliCloud, cliCloud);
 });
-test('default prefix and Tip2 audience preserve route', () => {
+test('default prefix and explicit default audience preserve route', () => {
   assert.match(resolveConnection({ ...base, EnvironmentId: `Default-${base.EnvironmentId.toUpperCase()}` }).endpoint, /^https:\/\/default/);
-  const p = { ...base, Cloud: 'Tip2', Audience: 'https://api.preprod.powerplatform.com' };
-  assert.equal(resolveConnection(p).resource, p.Audience);
-  assert.equal(resolveConnection(p).endpoint, resolveConnection({ ...p, Audience: null }).endpoint);
+  for (const [Cloud, suffix] of clouds) {
+    const p = { ...base, Cloud, Audience: `https://${suffix}` };
+    assert.deepEqual(resolveConnection(p), resolveConnection({ ...p, Audience: null }));
+    for (const Audience of ['https://gateway.example.invalid', 'https://management.azure.com',
+      ...clouds.filter(([other]) => other !== Cloud).map(([, host]) => `https://${host}`)]) {
+      assert.throws(() => resolveConnection({ ...p, Audience }), /Audience is not allowlisted/);
+    }
+  }
 });
 test('environment IDs canonicalize recognized prefixes and D/N GUID formats', () => {
   for (const prefix of ['', 'Default', 'Legacy', 'Primary']) {

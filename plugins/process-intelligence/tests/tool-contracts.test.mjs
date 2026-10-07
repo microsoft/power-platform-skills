@@ -7,7 +7,7 @@ import { RemoteBridge, createBridgeServer } from '../src/bridge.mjs';
 import { FakeRemote, richTool, contractTools } from './fake-remote.mjs';
 import { bound } from './helpers.mjs';
 
-function setup(t, Cloud = 'Tip2') {
+function setup(t, Cloud = 'Public') {
   const remote = new FakeRemote({ stateless: true, postOnly: true });
   remote.tools = structuredClone(contractTools);
   const bridge = new RemoteBridge({ ...bound, Cloud }, { getToken: async () => 'synthetic' },
@@ -41,7 +41,7 @@ test('formula guidance uses only advertised query modes and preserves future exa
   remote.tools[1].inputSchema.properties.functionNames = { type: 'array', items: { type: 'string' } };
   assert.deepEqual((await bridge.list()).tools[1], remote.tools[1]);
 });
-const clouds = ['Public', 'Gcc', 'GccHigh', 'DoD', 'Mooncake', 'Tip1', 'Tip2', 'tip2', 'TIP2', 'tIp2'];
+const clouds = ['Public', 'Gcc', 'GccHigh', 'DoD', 'Mooncake', 'public', 'PUBLIC', 'pUbLiC'];
 test('ordinary tool metadata and schema defaults are preserved across configured clouds', async t => {
   for (const cloud of clouds) {
     const { remote, bridge } = setup(t, cloud);

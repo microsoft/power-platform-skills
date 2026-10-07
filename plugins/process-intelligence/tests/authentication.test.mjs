@@ -157,7 +157,7 @@ test('discovery and MCP token audiences never share a memory-cache entry', async
   ['https://api.powerplatform.com', 'https://api.bap.microsoft.com', 'https://api.powerplatform.com']);
 });
 test('discovery token acquisition rejects non-Public profiles before CLI calls', async () => {
-  const az = new FakeAz(), client = new IdentityClient({ ...bound, Cloud: 'Tip2' }, az);
+  const az = new FakeAz(), client = new IdentityClient({ ...bound, Cloud: 'Gcc' }, az);
   assert.equal(typeof client.environmentDiscoveryToken, 'function');
   await assert.rejects(client.environmentDiscoveryToken(), /Public/);
   assert.equal(az.calls.length, 0);

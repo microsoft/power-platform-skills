@@ -7,6 +7,9 @@ export const sample = { Name: 'sample', Cloud: 'Public', TenantId: '11111111-111
   EnvironmentId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeff', Audience: null, HomeAccountId: null, Revision: '' };
 export const oid = '33333333-3333-3333-3333-333333333333', username = 'fixture@example.invalid';
 export const bound = { ...sample, HomeAccountId: oid };
+export const removedClouds = [
+  'Germany', 'germany', 'GeRmAnY', 'Tip1', 'tip1', 'tIp1', 'Tip2', 'tip2', 'tIp2'
+];
 export const claim = '{"access_token":{"acrs":{"value":"c1"}}}';
 export function assertProfileBytes(bytes, accountId) {
   const saved = JSON.parse(bytes);

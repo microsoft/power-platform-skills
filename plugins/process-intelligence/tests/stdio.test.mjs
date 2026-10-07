@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { z } from 'zod';
-import { sample, bound, claim, assertProfileBytes } from './helpers.mjs';
+import { sample, bound, claim, assertProfileBytes, removedClouds } from './helpers.mjs';
 import { richTool, richResult, contractTools } from './fake-remote.mjs';
 import { bundleFixture as fixture, pluginRoot as root } from './bundle-fixtures.mjs';
 
@@ -33,7 +33,7 @@ test('actual isolated bundle resolves tenant without a profile and gates unsuppo
   const invoke = cloud => spawnSync(process.execPath, ['--import', preload, entry,
     'resolve-environment', '--cloud', cloud, '--environment', sample.EnvironmentId],
   { env, cwd: f.temp, encoding: 'utf8', timeout: 15000 });
-  const unsupported = invoke('Tip2');
+  const unsupported = invoke('Gcc');
   assert.equal(unsupported.status, 2, unsupported.stderr);
   assert.match(unsupported.stderr, /Public/);
   await assert.rejects(access(env.FIXTURE_AZ_REPORT), { code: 'ENOENT' });
@@ -120,6 +120,26 @@ test('actual bundle config, logout and explicit login remove selected stale chal
   assert.ok(calls.length > 0);
   assert.ok(calls.every(args => !['login', 'logout'].includes(args[0])));
 });
+test('actual isolated bundle rejects malformed stored OID before authentication or HTTP', async t => {
+  const f = await fixture(t);
+  const entry = path.join(f.plugin, 'server', 'mcp.mjs');
+  const preload = pathToFileURL(path.join(root, 'tests', 'bundle-preload.mjs')).href;
+  const env = { ...f.env, FIXTURE_AZ_REPORT: path.join(f.temp, 'az-report.jsonl') };
+  const file = f.state.file('sample');
+  const content = JSON.stringify({ ...await f.state.load('sample'), HomeAccountId: 'not-an-oid' });
+  await writeFile(file, content);
+  for (const args of [['diagnostics'], ['diagnostics', '--remote', 'true'], ['login'], ['serve']]) {
+    const output = spawnSync(process.execPath, ['--import', preload, entry, ...args, '--profile', 'sample'],
+      { env, cwd: f.temp, encoding: 'utf8', timeout: 15000 });
+    assert.equal(output.status, 2, output.stderr);
+    assert.match(output.stderr, /account selection.*OID GUID or null/);
+    assert.doesNotMatch(output.stderr, /not-an-oid|account-selected|TOKEN_ACQUIRED/);
+    assert.equal(output.stdout, '');
+    await assert.rejects(access(env.FIXTURE_AZ_REPORT), { code: 'ENOENT' });
+    assert.equal(JSON.parse(await readFile(env.FIXTURE_REPORT, 'utf8')).fetches, 0);
+    assert.equal(await readFile(file, 'utf8'), content);
+  }
+});
 test('actual bundle token-free diagnostics defer OID verification and remote acquisition rejects another principal', async t => {
   const f = await fixture(t);
   const entry = pathToFileURL(path.join(f.plugin, 'server', 'mcp.mjs')).href;
@@ -205,19 +225,19 @@ test('actual bundle keeps its early unsupported-Node guard without accessing pri
   assert.match(result.stderr, /requires supported Node.js 22 or 24/);
   await assert.rejects(access(f.configDir), { code: 'ENOENT' });
 });
-test('actual bundle and manifest reject Germany before auth, fetch or profile mutation', async t => {
+test('actual bundle and manifest reject removed clouds before auth, fetch or profile mutation', async t => {
   const f = await fixture(t), entry = path.join(f.plugin, 'server', 'mcp.mjs');
   const preload = pathToFileURL(path.join(root, 'tests', 'bundle-preload.mjs')).href;
   const manifest = JSON.parse(await readFile(path.join(f.plugin, '.mcp.json'), 'utf8')).mcpServers['process-intelligence'];
   const env = { ...f.env, FIXTURE_AZ_REPORT: path.join(f.temp, 'az-report.jsonl') };
   const file = path.join(f.state.root, 'sample.json'), original = await readFile(file, 'utf8');
-  for (const Cloud of ['Germany', 'germany', 'GeRmAnY']) {
+  for (const Cloud of removedClouds) {
     for (const name of ['new', 'sample']) {
       const output = spawnSync(process.execPath, ['--import', preload, entry, 'config', '--profile', name,
         '--cloud', Cloud, '--tenant', sample.TenantId, '--environment', sample.EnvironmentId],
       { env, cwd: f.temp, encoding: 'utf8', timeout: 15000 });
       assert.equal(output.status, 2, output.stderr);
-      assert.match(output.stderr, /Choose Public, Gcc, GccHigh, DoD, Mooncake, Tip1 or Tip2\./);
+      assert.match(output.stderr, /Choose Public, Gcc, GccHigh, DoD or Mooncake\./);
       assert.equal(output.stdout, '');
       assert.deepEqual(await readdir(f.state.root), ['sample.json']);
       assert.equal(await readFile(file, 'utf8'), original);
@@ -226,11 +246,17 @@ test('actual bundle and manifest reject Germany before auth, fetch or profile mu
     }
     const saved = JSON.stringify({ ...JSON.parse(original), Cloud });
     await writeFile(file, saved);
-    for (const args of [[entry, 'diagnostics', '--profile', 'sample', '--remote', 'true'], manifest.args]) {
+    for (const args of [
+      [entry, 'diagnostics', '--profile', 'sample'],
+      [entry, 'diagnostics', '--profile', 'sample', '--remote', 'true'],
+      [entry, 'login', '--profile', 'sample'],
+      [entry, 'logout', '--profile', 'sample'],
+      manifest.args
+    ]) {
       const output = spawnSync(process.execPath, ['--import', preload, ...args],
         { env, cwd: f.temp, encoding: 'utf8', timeout: 15000 });
       assert.equal(output.status, 2, output.stderr);
-      assert.match(output.stderr, /Choose Public, Gcc, GccHigh, DoD, Mooncake, Tip1 or Tip2\./);
+      assert.match(output.stderr, /Choose Public, Gcc, GccHigh, DoD or Mooncake\./);
       assert.equal(output.stdout, '');
       assert.equal(await readFile(file, 'utf8'), saved);
       assert.deepEqual(await readdir(f.state.root), ['sample.json']);
@@ -301,7 +327,6 @@ test('actual stdio cancellation leaves no replay and allows a separate reconnect
 });
 test('actual bundle exposes lifecycle/search guidance and forwards other tools unchanged', async t => {
   const f = await fixture(t);
-  await f.state.save({ ...await f.state.load('sample'), Cloud: 'Tip2' });
   const transport = new StdioClientTransport({ command: process.execPath,
     args: ['--import', pathToFileURL(path.join(root, 'tests', 'bundle-preload.mjs')).href, path.join(f.plugin, 'server', 'mcp.mjs')],
     env: { ...f.env, FIXTURE_CONTRACT_TOOLS: '1' }, cwd: f.temp, stderr: 'pipe' });

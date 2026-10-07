@@ -1,8 +1,8 @@
 # Connection patterns
 
 **GCC, GCC High, DoD and Mooncake are not supported yet.**
-`Public` is the commercial cloud configuration. TIP1 and TIP2 are internal configurations,
-not public onboarding options. The CLI accepts seven cloud values; configuration support does
+`Public` is the commercial cloud configuration.
+The CLI accepts five cloud values; configuration support does
 not make an unsupported cloud available.
 
 Run commands from the plugin directory as `node server/mcp.mjs COMMAND`.
@@ -53,7 +53,7 @@ Redirects, ambiguous responses and failures stop without retrying another audien
 See the [environment API](https://learn.microsoft.com/power-platform/admin/list-environments).
 
 For other clouds or unavailable discovery, use the manual path with an explicitly confirmed
-tenant GUID in `config`. No Public directory request is made for Tip1/Tip2 or sovereign clouds.
+tenant GUID in `config`. No Public directory request is made for sovereign clouds.
 Discovery does not save profiles, cache metadata or bind an account.
 Its target identifiers are setup output, not diagnostic logs. Treat returned fields as data,
 not executable commands. No private Azure CLI cache is read.
@@ -88,6 +88,8 @@ Only delegated organizational users are supported. Service principals, managed i
 Cloud Shell identities are rejected. Config requires an explicit GUID tenant; `--tenant select`,
 custom client IDs, browser modes and redirects are rejected, not silently ignored.
 Binding stores only the tenant-local object ID (`HomeAccountId`) alongside the configured `TenantId`.
+Stored account bindings must be GUIDs, or null when unbound. Malformed bindings are rejected
+before any Azure CLI or network request; this format check does not verify the current user's identity.
 Each cold token acquisition verifies that token's `tid`/`oid` against the saved principal before
 any MCP traffic. CLI cloud, tenant and delegated-user shape are checked before and after acquisition;
 token username claims must match the current CLI username. After successful validation, the username
@@ -114,7 +116,7 @@ it never invokes `az logout`, clears CLI credentials or signs other tools out.
 
 ## Clouds and resources
 
-The seven rows below record accepted configuration values, not seven supported clouds.
+The five rows below record accepted configuration values, not five supported clouds.
 
 | Cloud | Authority host | PPAPI resource / routing suffix | Shard | Plugin support status |
 |---|---|---|---|---|
@@ -123,11 +125,11 @@ The seven rows below record accepted configuration values, not seven supported c
 | GccHigh | login.microsoftonline.us | api.high.powerplatform.microsoft.us | Last 1 character | Not supported yet |
 | DoD | login.microsoftonline.us | api.appsplatform.us | Last 1 character | Not supported yet |
 | Mooncake | login.partner.microsoftonline.cn | api.powerplatform.partner.microsoftonline.cn | Last 1 character | Not supported yet |
-| Tip1 | login.microsoftonline.com | api.preprod.powerplatform.com | Last 1 character | Internal configuration only |
-| Tip2 | login.microsoftonline.com | api.test.powerplatform.com | Last 1 character | Internal configuration only |
 
 Cloud selection is explicit; unknown values and Dev are rejected.
-The bridge checks `AzureCloud` for Public/Gcc/Tip1/Tip2,
+Profiles with a cloud outside this list fail before authentication or network access.
+They are not modified or silently routed to Public.
+The bridge checks `AzureCloud` for Public/Gcc,
 `AzureUSGovernment` for GccHigh/DoD, or `AzureChinaCloud` for Mooncake.
 Both the CLI cloud name and official active-directory endpoint are checked (Mooncake accepts the
 official `login.chinacloudapi.cn` alias). Azure CLI's broad cloud name does not select the PPAPI
@@ -148,8 +150,8 @@ trailing shard with a dot before `.environment.` and the suffix. No prefix is in
 The MCP path is `/processmining/mcp?api-version=2024-10-01`.
 Token requests use `az account get-access-token --tenant <tenant-guid> --resource <allowlisted-resource>
 --output json`. The resource is separate from the environment host; login scope adds `/.default`.
-TIP2 permits an explicit `--audience https://api.preprod.powerplatform.com` where required;
-otherwise it uses the test resource. No audience cycling or arbitrary gateway overrides occur.
+An explicit `--audience` must equal the selected cloud's default resource.
+No audience cycling or arbitrary gateway overrides occur.
 Environment discovery runs only through the explicit Public setup command, never during MCP serving.
 
 ## Protected state and challenges

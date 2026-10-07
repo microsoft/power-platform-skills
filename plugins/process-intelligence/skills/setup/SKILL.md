@@ -10,8 +10,8 @@ Read the bundled [README](../../README.md) first. Resolve the root from `PLUGIN_
 `CLAUDE_PLUGIN_ROOT`, then the current plugin directory. All scripts are inside this plugin.
 
 **GCC, GCC High, DoD and Mooncake are not supported yet.**
-`Public` is the commercial cloud configuration. TIP1 and TIP2 are internal configurations,
-not public onboarding options. The CLI accepts seven cloud values; configuration support does
+`Public` is the commercial cloud configuration.
+The CLI accepts five cloud values; configuration support does
 not make an unsupported cloud available.
 
 Confirm the user-approved cloud and environment ID. Do not ask for a tenant GUID up front for Public.
@@ -19,6 +19,7 @@ Resolve it from the selected environment; never infer it from `Default-<guid>`, 
 credential caches or guess the working environment.
 Use `node server/mcp.mjs --help` for exact syntax and
 [connection patterns](../../references/connection-patterns.md) for cloud/claims details.
+Stop if the cloud is not one of the listed values; do not substitute Public or an arbitrary audience.
 
 **Before connection or analytical use, show this privacy notice:** analytical results may contain
 personal and business data, forwarded unredacted to the customer-selected host. Model routing,
