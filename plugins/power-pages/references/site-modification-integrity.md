@@ -67,14 +67,17 @@ node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT
 This is an explicit post-implementation gate. Validation performed before all planned file changes
 are complete does not satisfy this step. Do not present completion, create the final commit, or ask
 to deploy until this command exits successfully. If further source changes are made during review,
-rerun it.
+rerun it. Run it exactly as shown: `--allow-verified-localization-review` is reserved for
+add-localization's pre-review gate, and without it any remaining localization verification
+transaction blocks completion and deployment.
 
 Deterministic localization or bidirectional errors block completion. Review findings such as
 fixed text geometry, visual reordering, transforms, gradients, and clipping must be inspected in
 both directions and with expanded content; they do not fail the command by themselves. Deployment
 runs the same validator as a final backstop for changes made outside a skill.
 
-Rendered verification reports are reusable only while their recorded input fingerprint matches
-the project. Source, resources, locale availability, dependencies, and build configuration
+Rendered verification reports are reusable only when they came from a complete `standard` or
+`extensive` run and their recorded input fingerprint matches the project; `targeted` repair
+evidence is never reused. Source, resources, locale availability, dependencies, and build configuration
 invalidate the evidence; readiness-only metadata does not. After a focused repair, rerun the
 affected case IDs and a small locale smoke set rather than rebuilding an unchanged full matrix.

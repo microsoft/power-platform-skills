@@ -7,6 +7,7 @@ const {
   beginLocalizationVerification,
   extendLocalizationVerification,
   finalizeLocalizationVerification,
+  formatManualAvailabilityRestore,
   markLocalizationVerificationFailed,
 } = require('./lib/localization-verification-transaction');
 
@@ -14,7 +15,8 @@ const USAGE =
   'Usage: manage-localization-verification.js ' +
   '(--begin --locales <tag[,tag]> [--profile <standard|extensive>] | ' +
   '--extend --profile extensive | --fail | ' +
-  '--finalize [--manual-review-completed]) --projectRoot <path>';
+  '--finalize [--manual-review-completed] [--rendered-review-completed]) ' +
+  '--projectRoot <path>';
 
 function parseArgs(argv) {
   const parsed = {};
@@ -33,6 +35,15 @@ function parseArgs(argv) {
         );
       }
       parsed.manualReviewCompleted = true;
+      continue;
+    }
+    if (arg === '--rendered-review-completed') {
+      if (parsed.renderedReviewCompleted) {
+        throw new Error(
+          'Argument "--rendered-review-completed" may be specified only once.'
+        );
+      }
+      parsed.renderedReviewCompleted = true;
       continue;
     }
     if (!['--projectRoot', '--locales', '--profile'].includes(arg)) {
@@ -79,6 +90,11 @@ function parseArgs(argv) {
       '--manual-review-completed is valid only with --finalize.'
     );
   }
+  if (parsed.renderedReviewCompleted && parsed.operation !== 'finalize') {
+    throw new Error(
+      '--rendered-review-completed is valid only with --finalize.'
+    );
+  }
   return parsed;
 }
 
@@ -99,6 +115,12 @@ function main() {
   } else if (args.operation === 'fail') {
     transaction = markLocalizationVerificationFailed(args.projectRoot);
     abandonLocalizationVerificationAudit(args.projectRoot, transaction.runId);
+    // The transaction is now failed either way; a manual restore only adds one
+    // step before --finalize, so report it without failing this command.
+    const manualRestoreMessage = formatManualAvailabilityRestore(transaction);
+    if (manualRestoreMessage) {
+      process.stderr.write(`${manualRestoreMessage}\n`);
+    }
   } else {
     const {
       validateLocalization,
@@ -114,6 +136,7 @@ function main() {
     }
     transaction = finalizeLocalizationVerification(args.projectRoot, {
       manualReviewCompleted: args.manualReviewCompleted,
+      renderedReviewCompleted: args.renderedReviewCompleted,
     });
   }
   process.stdout.write(`${JSON.stringify(transaction, null, 2)}\n`);

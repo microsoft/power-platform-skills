@@ -13,10 +13,12 @@ const {
 } = require('./lib/site-integrity');
 
 const USAGE =
-  'Usage: validate-site-integrity.js [--projectRoot <path>] [--skip-localization]';
+  'Usage: validate-site-integrity.js [--projectRoot <path>] ' +
+  '[--skip-localization | --allow-verified-localization-review]';
 
 function parseArgs(argv) {
   let skipLocalization = false;
+  let allowVerifiedLocalizationReview = false;
   const remaining = [];
   for (const arg of argv) {
     if (arg === '--skip-localization') {
@@ -26,13 +28,29 @@ function parseArgs(argv) {
         );
       }
       skipLocalization = true;
+    } else if (arg === '--allow-verified-localization-review') {
+      if (allowVerifiedLocalizationReview) {
+        throw new Error(
+          'Argument "--allow-verified-localization-review" may be specified only once.'
+        );
+      }
+      allowVerifiedLocalizationReview = true;
     } else {
       remaining.push(arg);
     }
   }
+  // The review exception configures localization validation, so pairing it with
+  // a run that skips localization is contradictory and most likely a misuse.
+  if (skipLocalization && allowVerifiedLocalizationReview) {
+    throw new Error(
+      '"--allow-verified-localization-review" cannot be combined with ' +
+      `"--skip-localization".\n${USAGE}`
+    );
+  }
   return {
     ...parseOptionalProjectRootArgs(remaining, USAGE),
     skipLocalization,
+    allowVerifiedLocalizationReview,
   };
 }
 
@@ -47,6 +65,7 @@ function main() {
 
   const result = validateSiteIntegrity(projectRoot, {
     skipLocalization: args.skipLocalization,
+    allowVerifiedLocalizationReview: args.allowVerifiedLocalizationReview,
   });
   if (result.skipped) {
     process.stdout.write(`[power-pages] Site integrity skipped: ${result.reason}\n`);

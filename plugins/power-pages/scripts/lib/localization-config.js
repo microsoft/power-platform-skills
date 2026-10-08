@@ -318,6 +318,25 @@ function resolveProjectRelativePath(projectRoot, relativePath) {
   return { valid: true, reason: null, path: resolvedPath };
 }
 
+// The managed locale availability module is recognized by file name, e.g.
+// `src/i18n/localeAvailability.ts`, `src/app/locale-availability.ts`, or
+// `src/i18n/locale_availability.js`. The localization validator, the
+// verification transaction, and the evidence fingerprint must agree on which
+// file it is, so they all share this rule.
+const LOCALE_AVAILABILITY_FILE_PATTERN = /locale[-_.]?availability/i;
+
+function isLocaleAvailabilityModulePath(relativePath) {
+  return typeof relativePath === 'string' &&
+    LOCALE_AVAILABILITY_FILE_PATTERN.test(path.basename(relativePath));
+}
+
+function findLocaleAvailabilityModulePaths(manifest) {
+  return [...new Set([
+    ...(Array.isArray(manifest?.generatedFiles) ? manifest.generatedFiles : []),
+    ...(Array.isArray(manifest?.managedFiles) ? manifest.managedFiles : []),
+  ])].filter(isLocaleAvailabilityModulePath);
+}
+
 function validateManifestPath(errors, field, relativePath, projectRoot) {
   const result = projectRoot
     ? resolveProjectRelativePath(projectRoot, relativePath)
@@ -2335,6 +2354,8 @@ module.exports = {
   inspectProject,
   isSafeLocaleCandidate,
   isSafeLocaleListCandidate,
+  findLocaleAvailabilityModulePaths,
+  isLocaleAvailabilityModulePath,
   loadRegistry,
   resolveProjectRelativePath,
   resolveLocale,

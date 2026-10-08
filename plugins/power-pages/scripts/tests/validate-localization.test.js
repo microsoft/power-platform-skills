@@ -9,8 +9,16 @@ const { spawnSync } = require('child_process');
 const { createTempProject, writeProjectFile } = require('./test-utils');
 const {
   beginLocalizationVerification,
+  markLocalizationVerificationFailed,
   markLocalizationVerificationPassed,
 } = require('../lib/localization-verification-transaction');
+const {
+  computeVerificationInputFingerprint,
+  createVerificationEvidence,
+} = require('../lib/verification-evidence');
+const {
+  validateSiteIntegrity,
+} = require('../lib/site-integrity');
 
 const VALIDATOR_PATH = path.join(
   __dirname,
@@ -31,6 +39,21 @@ const VERIFICATION_MANAGER_PATH = path.join(
   '..',
   'manage-localization-verification.js'
 );
+const SITE_INTEGRITY_CLI_PATH = path.join(
+  __dirname,
+  '..',
+  'validate-site-integrity.js'
+);
+const ALLOW_VERIFIED_REVIEW = { allowVerifiedLocalizationReview: true };
+const UNFINISHED_TRANSACTION_ERROR = /verification is still active/;
+
+function runSiteIntegrity(projectRoot, extraArgs = []) {
+  return spawnSync(
+    process.execPath,
+    [SITE_INTEGRITY_CLI_PATH, '--projectRoot', projectRoot, ...extraArgs],
+    { encoding: 'utf8' }
+  );
+}
 
 function runValidator(projectRoot, options = {}) {
   if (options.verification) {
@@ -81,6 +104,7 @@ test('fails closed when hook input omits the working directory', () => {
 
 test('allows an explicitly active Phase 6 verification but blocks completion', (t) => {
   const projectRoot = createLocalizedReactProject(t, {
+    includeAvailabilitySnapshot: true,
     unavailableLocales: ['fr-FR'],
     bidirectionalReadiness: {
       status: 'pending-remediation',
@@ -111,6 +135,7 @@ test('allows an explicitly active Phase 6 verification but blocks completion', (
 
 test('finalizes an active verification only after full localization validation', (t) => {
   const projectRoot = createLocalizedReactProject(t, {
+    includeAvailabilitySnapshot: true,
     unavailableLocales: ['fr-FR'],
     bidirectionalReadiness: {
       status: 'pending-remediation',
@@ -123,19 +148,45 @@ test('finalizes an active verification only after full localization validation',
     },
   });
   beginLocalizationVerification(projectRoot, ['fr-FR']);
+  const manifestPath = path.join(projectRoot, '.powerpages-localization.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  manifest.unavailableLocales = [];
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest));
   markLocalizationVerificationPassed(projectRoot, null, {
     profile: 'extensive',
     representativeLocaleIds: { ltr: 'en', rtl: 'pseudo-rtl' },
     manualReview: [],
     evidence: {
       schemaVersion: 1,
-      inputFingerprint: 'a'.repeat(64),
+      inputFingerprint: computeVerificationInputFingerprint(projectRoot),
       specFingerprint: 'b'.repeat(64),
     },
   });
-  const manifestPath = path.join(projectRoot, '.powerpages-localization.json');
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-  manifest.unavailableLocales = [];
+
+  // Interrupted-session shape: the target passed but is still exposed and still
+  // pending the maker decision. Only add-localization's pre-review gate may
+  // accept it; the default gate that deploy-site runs must refuse it.
+  const awaitingReview = validateSiteIntegrity(
+    projectRoot,
+    ALLOW_VERIFIED_REVIEW
+  );
+  assert.deepEqual(
+    awaitingReview.errors,
+    [],
+    JSON.stringify(awaitingReview, null, 2)
+  );
+  const deployGate = validateSiteIntegrity(projectRoot);
+  assert.ok(deployGate.errors.some((error) =>
+    UNFINISHED_TRANSACTION_ERROR.test(error)
+  ), JSON.stringify(deployGate, null, 2));
+  const deployCli = runSiteIntegrity(projectRoot);
+  assert.equal(deployCli.status, 2, deployCli.stdout);
+  assert.match(deployCli.stderr, UNFINISHED_TRANSACTION_ERROR);
+  const reviewCli = runSiteIntegrity(projectRoot, [
+    '--allow-verified-localization-review',
+  ]);
+  assert.equal(reviewCli.status, 0, reviewCli.stderr);
+
   manifest.bidirectionalReadiness = {
     status: 'ready',
     localeReadiness: {
@@ -164,8 +215,207 @@ test('finalizes an active verification only after full localization validation',
   ));
 });
 
+test('site integrity accepts a current verified transaction only at the pre-review gate', (t) => {
+  const projectRoot = createLocalizedReactProject(t, {
+    includeAvailabilitySnapshot: true,
+    unavailableLocales: ['fr-FR'],
+    bidirectionalReadiness: {
+      status: 'pending-remediation',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'fr-FR': { status: 'pending-remediation' },
+      },
+      findings: [],
+      renderedFindings: [],
+    },
+  });
+  beginLocalizationVerification(projectRoot, ['fr-FR']);
+  const manifestPath = path.join(projectRoot, '.powerpages-localization.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  manifest.unavailableLocales = [];
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+  markLocalizationVerificationPassed(projectRoot, null, {
+    profile: 'extensive',
+    representativeLocaleIds: { ltr: 'en', rtl: 'pseudo-rtl' },
+    manualReview: [],
+    evidence: {
+      schemaVersion: 1,
+      inputFingerprint: computeVerificationInputFingerprint(projectRoot),
+      specFingerprint: 'b'.repeat(64),
+    },
+  });
+  manifest.bidirectionalReadiness = {
+    status: 'ready',
+    localeReadiness: {
+      'en-US': { status: 'ready' },
+      'fr-FR': { status: 'ready' },
+    },
+    findings: [],
+    renderedFindings: [],
+  };
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+
+  const verified = validateSiteIntegrity(projectRoot, ALLOW_VERIFIED_REVIEW);
+  assert.deepEqual(verified.errors, [], JSON.stringify(verified, null, 2));
+  const deployGate = validateSiteIntegrity(projectRoot);
+  assert.ok(deployGate.errors.some((error) =>
+    UNFINISHED_TRANSACTION_ERROR.test(error)
+  ), JSON.stringify(deployGate, null, 2));
+
+  writeProjectFile(projectRoot, 'src/App.tsx', 'export const changed = true;');
+  const stale = validateSiteIntegrity(projectRoot, ALLOW_VERIFIED_REVIEW);
+  assert.ok(stale.errors.some((error) =>
+    /rendered evidence is stale/.test(error)
+  ), JSON.stringify(stale, null, 2));
+});
+
+test('site integrity blocks unfinished and failed transactions', (t) => {
+  const inProgressRoot = createLocalizedReactProject(t, {
+    includeAvailabilitySnapshot: true,
+    unavailableLocales: ['fr-FR'],
+    bidirectionalReadiness: {
+      status: 'pending-remediation',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'fr-FR': { status: 'pending-remediation' },
+      },
+      findings: [],
+      renderedFindings: [],
+    },
+  });
+  beginLocalizationVerification(inProgressRoot, ['fr-FR']);
+  const inProgress = validateSiteIntegrity(
+    inProgressRoot,
+    ALLOW_VERIFIED_REVIEW
+  );
+  assert.ok(inProgress.errors.some((error) =>
+    /must be verified before the final site-integrity gate/.test(error)
+  ), JSON.stringify(inProgress, null, 2));
+  const inProgressDeploy = validateSiteIntegrity(inProgressRoot);
+  assert.ok(inProgressDeploy.errors.some((error) =>
+    UNFINISHED_TRANSACTION_ERROR.test(error)
+  ), JSON.stringify(inProgressDeploy, null, 2));
+
+  const failedRoot = createLocalizedReactProject(t, {
+    includeAvailabilitySnapshot: true,
+    unavailableLocales: ['fr-FR'],
+    bidirectionalReadiness: {
+      status: 'pending-remediation',
+      localeReadiness: {
+        'en-US': { status: 'ready' },
+        'fr-FR': { status: 'pending-remediation' },
+      },
+      findings: [],
+      renderedFindings: [],
+    },
+  });
+  beginLocalizationVerification(failedRoot, ['fr-FR']);
+  markLocalizationVerificationFailed(failedRoot);
+  const failed = validateSiteIntegrity(failedRoot, ALLOW_VERIFIED_REVIEW);
+  assert.ok(failed.errors.some((error) =>
+    /must be verified before the final site-integrity gate/.test(error)
+  ), JSON.stringify(failed, null, 2));
+  const failedDeploy = validateSiteIntegrity(failedRoot);
+  assert.ok(failedDeploy.errors.some((error) =>
+    UNFINISHED_TRANSACTION_ERROR.test(error)
+  ), JSON.stringify(failedDeploy, null, 2));
+});
+
+// Realistic localized site where ar-SA was exposed for a browser run that has
+// not been finalized yet. `hide()` returns ar-SA to its fail-closed state.
+function createExposedArabicTransaction(t) {
+  const hiddenAvailability =
+    "const unavailableLocales = new Set(['ar-SA']);\n" +
+    'export const isLocaleAvailable = (locale: string) => ' +
+    '!unavailableLocales.has(locale);\n';
+  const projectRoot = createUnavailableLocaleProject(t, hiddenAvailability);
+  const manifestPath = path.join(projectRoot, '.powerpages-localization.json');
+  const hiddenManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  hiddenManifest.bidirectionalReadiness.renderedFindings = [];
+  fs.writeFileSync(manifestPath, JSON.stringify(hiddenManifest));
+  beginLocalizationVerification(projectRoot, ['ar-SA']);
+  fs.writeFileSync(
+    manifestPath,
+    JSON.stringify({ ...hiddenManifest, unavailableLocales: [] })
+  );
+  writeProjectFile(
+    projectRoot,
+    'src/i18n/localeAvailability.ts',
+    hiddenAvailability.replace("['ar-SA']", '[]')
+  );
+  return {
+    projectRoot,
+    hide() {
+      fs.writeFileSync(manifestPath, JSON.stringify(hiddenManifest));
+      writeProjectFile(
+        projectRoot,
+        'src/i18n/localeAvailability.ts',
+        hiddenAvailability
+      );
+    },
+  };
+}
+
+function runVerificationManager(projectRoot, operation) {
+  return spawnSync(
+    process.execPath,
+    [VERIFICATION_MANAGER_PATH, operation, '--projectRoot', projectRoot],
+    { encoding: 'utf8' }
+  );
+}
+
+test('manage CLI finalizes a verified locale that the maker keeps unavailable', (t) => {
+  const { projectRoot, hide } = createExposedArabicTransaction(t);
+  markLocalizationVerificationPassed(projectRoot, null, {
+    profile: 'extensive',
+    representativeLocaleIds: { ltr: 'en-US', rtl: 'ar-SA' },
+    manualReview: [],
+    evidence: createVerificationEvidence(projectRoot, {}),
+  });
+
+  // Phase 7 "Save but keep locale unavailable": hide ar-SA again.
+  hide();
+
+  const finalized = runVerificationManager(projectRoot, '--finalize');
+  assert.equal(finalized.status, 0, finalized.stderr);
+  assert.ok(!fs.existsSync(
+    path.join(projectRoot, '.powerpages-localization-verification.json')
+  ));
+  const deployCli = runSiteIntegrity(projectRoot);
+  assert.equal(deployCli.status, 0, deployCli.stderr);
+});
+
+test('manage CLI recovers a run whose availability backup is missing', (t) => {
+  const { projectRoot, hide } = createExposedArabicTransaction(t);
+  fs.unlinkSync(path.join(
+    projectRoot,
+    '.powerpages-localization-verification.json.availability'
+  ));
+
+  const failed = runVerificationManager(projectRoot, '--fail');
+  assert.equal(failed.status, 0, failed.stderr);
+  assert.match(
+    failed.stderr,
+    /restore was skipped.*Exclude "ar-SA" in "src\/i18n\/localeAvailability\.ts"/s
+  );
+
+  // ar-SA is still exposed in source, so finalization and deployment stay
+  // blocked until the manual step is done.
+  const blocked = runVerificationManager(projectRoot, '--finalize');
+  assert.notEqual(blocked.status, 0);
+  assert.match(blocked.stderr, /does not exclude ar-SA/);
+  assert.equal(runSiteIntegrity(projectRoot).status, 2);
+
+  hide();
+  const finalized = runVerificationManager(projectRoot, '--finalize');
+  assert.equal(finalized.status, 0, finalized.stderr);
+  const deployCli = runSiteIntegrity(projectRoot);
+  assert.equal(deployCli.status, 0, deployCli.stderr);
+});
+
 test('keeps verification blocking when its localization manifest is missing', (t) => {
   const projectRoot = createLocalizedReactProject(t, {
+    includeAvailabilitySnapshot: true,
     unavailableLocales: ['fr-FR'],
     bidirectionalReadiness: {
       status: 'pending-remediation',
@@ -187,6 +437,10 @@ test('keeps verification blocking when its localization manifest is missing', (t
 });
 
 function createLocalizedReactProject(t, overrides = {}) {
+  const {
+    includeAvailabilitySnapshot = false,
+    ...manifestOverrides
+  } = overrides;
   const projectRoot = createTempProject(t);
   writeProjectFile(projectRoot, 'powerpages.config.json', '{}');
   writeProjectFile(projectRoot, 'package.json', JSON.stringify({
@@ -258,8 +512,28 @@ function createLocalizedReactProject(t, overrides = {}) {
     adoptedExistingConfiguration: false,
     lastOperation: 'create',
     updatedAt: '2026-07-30T00:00:00.000Z',
-    ...overrides,
+    ...manifestOverrides,
   };
+  if (includeAvailabilitySnapshot &&
+      (manifest.unavailableLocales || []).length > 0 &&
+      ![...manifest.generatedFiles, ...manifest.managedFiles].some(
+        (relativePath) =>
+          /locale[-_.]?availability/i.test(path.basename(relativePath))
+      )) {
+    manifest.managedFiles = [
+      ...manifest.managedFiles,
+      'src/i18n/localeAvailability.ts',
+    ];
+    writeProjectFile(
+      projectRoot,
+      'src/i18n/localeAvailability.ts',
+      `const unavailableLocales = new Set(${JSON.stringify(
+        manifest.unavailableLocales
+      )});\n` +
+      'export const isLocaleAvailable = (locale: string) => ' +
+      '!unavailableLocales.has(locale);\n'
+    );
+  }
   writeProjectFile(projectRoot, '.powerpages-localization.json', JSON.stringify(manifest));
   if (manifest.packageName !== 'astro-built-in' &&
       manifest.packageVerification?.artifact) {

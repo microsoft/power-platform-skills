@@ -37,7 +37,10 @@ function writeRuntimeCoordinator(projectRoot) {
 }
 
 test('parses an optional project root without consuming other options', () => {
-  assert.deepEqual(parseArgs([]), { skipLocalization: false });
+  assert.deepEqual(parseArgs([]), {
+    skipLocalization: false,
+    allowVerifiedLocalizationReview: false,
+  });
   assert.equal(parseArgs(['--projectRoot', '.']).projectRoot, path.resolve('.'));
   assert.equal(
     parseArgs(['--skip-localization']).skipLocalization,
@@ -46,6 +49,25 @@ test('parses an optional project root without consuming other options', () => {
   assert.throws(
     () => parseArgs(['--skip-localization', '--skip-localization']),
     /may be specified only once/
+  );
+  assert.equal(
+    parseArgs(['--allow-verified-localization-review'])
+      .allowVerifiedLocalizationReview,
+    true
+  );
+  assert.throws(
+    () => parseArgs([
+      '--allow-verified-localization-review',
+      '--allow-verified-localization-review',
+    ]),
+    /may be specified only once/
+  );
+  assert.throws(
+    () => parseArgs([
+      '--skip-localization',
+      '--allow-verified-localization-review',
+    ]),
+    /cannot be combined with "--skip-localization"/
   );
   assert.throws(
     () => parseArgs(['--projectRoot']),

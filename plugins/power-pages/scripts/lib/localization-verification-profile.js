@@ -5,6 +5,9 @@ const VERIFICATION_PROFILES = new Set([
   'extensive',
   'targeted',
 ]);
+// Profiles that exercise the complete required matrix. `targeted` re-runs only
+// selected repair cases, so its evidence can never stand in for a full run.
+const FULL_VERIFICATION_PROFILES = new Set(['standard', 'extensive']);
 const COMPONENT_RISKS = new Set(['low', 'medium', 'high']);
 
 function resolveVerificationProfile(spec) {
@@ -135,6 +138,7 @@ function buildManualReviewChecklist(spec, representatives) {
 
 module.exports = {
   COMPONENT_RISKS,
+  FULL_VERIFICATION_PROFILES,
   VERIFICATION_PROFILES,
   buildManualReviewChecklist,
   resolveComponentRisk,

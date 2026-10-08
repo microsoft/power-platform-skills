@@ -9,13 +9,18 @@ const {
   buildLocaleSmokeCases,
   buildVerificationGroups,
   buildVerificationCases,
+  getRequiredLoopbackOrigin,
+  resolveSameOriginNavigationUrl,
   runRenderedBidirectionalAudit,
   runWithConcurrency,
   summarizeFindings,
   validateRunSpec,
 } = require('../lib/rendered-bidirectional-readiness');
 const {
+  TRANSACTION_AUDIT_FILE,
+  beginLocalizationVerificationAudit,
   beginLocalizationVerification,
+  endLocalizationVerificationAudit,
   readLocalizationVerificationTransaction,
 } = require('../lib/localization-verification-transaction');
 const {
@@ -122,7 +127,10 @@ function pendingRuntimeManifest(options = {}) {
       'ar-SA': 'src/i18n/locales/ar-SA.json',
     },
     generatedFiles: [],
-    managedFiles: ['src/i18n/localeCoordinator.ts'],
+    managedFiles: [
+      'src/i18n/localeCoordinator.ts',
+      'src/i18n/localeAvailability.ts',
+    ],
     unavailableLocales: options.exposed ? [] : ['ar-SA'],
     bidirectionalReadiness: {
       status: 'pending-remediation',
@@ -148,6 +156,13 @@ function pendingRuntimeManifest(options = {}) {
 }
 
 function beginPendingVerification(projectRoot) {
+  const availabilityPath = writeProjectFile(
+    projectRoot,
+    'src/i18n/localeAvailability.ts',
+    "const unavailableLocales = new Set(['ar-SA']);\n" +
+      'export const isLocaleAvailable = (locale: string) => ' +
+      '!unavailableLocales.has(locale);\n'
+  );
   const manifestPath = writeProjectFile(
     projectRoot,
     '.powerpages-localization.json',
@@ -158,11 +173,53 @@ function beginPendingVerification(projectRoot) {
     manifestPath,
     JSON.stringify(pendingRuntimeManifest({ exposed: true }))
   );
+  fs.writeFileSync(
+    availabilityPath,
+    "const unavailableLocales = new Set([]);\n" +
+      'export const isLocaleAvailable = (locale: string) => ' +
+      '!unavailableLocales.has(locale);\n',
+    'utf8'
+  );
   return transaction;
 }
 
 test('validates a complete LTR and RTL rendered verification specification', () => {
   assert.deepEqual(validateRunSpec(validSpec()), []);
+});
+
+test('requires HTTP(S) loopback origins and exact-origin navigation', () => {
+  assert.equal(
+    getRequiredLoopbackOrigin('http://localhost:4173/site'),
+    'http://localhost:4173'
+  );
+  assert.equal(
+    getRequiredLoopbackOrigin('https://[::1]:4173'),
+    'https://[::1]:4173'
+  );
+  assert.throws(
+    () => getRequiredLoopbackOrigin('https://preview.example.test'),
+    /must use a loopback development URL/i
+  );
+  assert.throws(
+    () => getRequiredLoopbackOrigin('file://localhost/site/index.html'),
+    /must use a loopback development URL/i
+  );
+  assert.equal(
+    resolveSameOriginNavigationUrl(
+      '/contact',
+      'http://localhost:4173',
+      'http://localhost:4173'
+    ),
+    'http://localhost:4173/contact'
+  );
+  assert.throws(
+    () => resolveSameOriginNavigationUrl(
+      'http://localhost:5173/contact',
+      'http://localhost:4173',
+      'http://localhost:4173'
+    ),
+    /must remain on the required loopback origin/i
+  );
 });
 
 test('requires complete component, viewport, direction, and runtime round-trip coverage', () => {
@@ -239,6 +296,31 @@ test('rejects malformed nested checks instead of silently weakening coverage', (
     errors.filter((error) => /\.type is invalid/.test(error)).length,
     3
   );
+});
+
+test('requires state names to be unique within each component', () => {
+  const spec = validSpec();
+  spec.components[0].states.push({
+    ...spec.components[0].states[0],
+  });
+  spec.components.push({
+    ...spec.components[0],
+    id: 'secondary-search-form',
+    selector: '[data-bidi-id="secondary-search-form"]',
+    states: [{
+      ...spec.components[0].states[0],
+    }],
+  });
+
+  const errors = validateRunSpec(spec);
+  const duplicateStateErrors = errors.filter((error) =>
+    /duplicates state name "empty"/.test(error)
+  );
+
+  assert.deepEqual(duplicateStateErrors, [
+    'components[0].states[1].name duplicates state name "empty" ' +
+      'within components[0].states.',
+  ]);
 });
 
 test('validates explicit application-state preservation entries', () => {
@@ -393,6 +475,35 @@ test('requires transaction targets to use one locale-bound application control',
   assert.ok(errors.some((error) => /only activate-locale and wait actions/i.test(error)));
 });
 
+test('rejects direct attribute mutation for real locale activation', () => {
+  const spec = validSpec();
+  spec.locales[0].activate = [
+    { type: 'click', selector: '[data-locale="en-US"]' },
+    {
+      type: 'set-attribute',
+      selector: 'html',
+      name: 'lang',
+      value: 'en-US',
+    },
+  ];
+  spec.locales[1].activate.push({
+    type: 'set-attribute',
+    selector: 'html',
+    name: 'data-pseudo',
+    value: 'rtl',
+  });
+
+  const errors = validateRunSpec(spec);
+
+  assert.deepEqual(
+    errors.filter((error) => /cannot use set-attribute/.test(error)),
+    [
+      'locales[0] real locales cannot use set-attribute to synthesize ' +
+        'locale evidence.',
+    ]
+  );
+});
+
 test('does not allow a runtime manifest to disable runtime transition checks', () => {
   const errors = validateRunSpec(validSpec(), {
     locales: ['en-US'],
@@ -505,6 +616,9 @@ test('resettable states reuse one navigation per route, viewport, and locale', a
     },
   ];
   spec.components[0].viewports = ['desktop'];
+  spec.components[0].manualChecks = [
+    'Confirm that the resettable search states remain understandable.',
+  ];
 
   let newPageCount = 0;
   let navigationCount = 0;
@@ -582,6 +696,11 @@ test('resettable states reuse one navigation per route, viewport, and locale', a
   assert.equal(report.summary.errors, 0);
   assert.equal(report.verification.componentCaseCount, 4);
   assert.equal(report.verification.componentGroupCount, 2);
+  assert.equal(report.verification.reviewFindings.length, 4);
+  assert.ok(report.verification.reviewFindings.every((finding) =>
+    finding.rule === 'rendered-semantic-review' &&
+    finding.severity === 'review'
+  ));
   assert.equal(newPageCount, 2);
   assert.equal(navigationCount, 2);
 });
@@ -597,6 +716,13 @@ test('standard profile uses representative directions and locale smoke coverage'
     activate: [{ type: 'click', selector: '[data-locale="es-ES"]' }],
     expect: [{ selector: 'h1', text: 'Inicio' }],
   });
+  spec.locales.splice(2, 0, {
+    id: 'ar',
+    locale: 'ar-SA',
+    direction: 'rtl',
+    activate: [{ type: 'click', selector: '[data-locale="ar-SA"]' }],
+    expect: [{ selector: 'h1', text: 'الرئيسية' }],
+  });
   spec.components[0].classification = 'unknown-third-party';
   spec.components[0].states[0].targets = [{
     selector: '[data-bidi-id="search-form"]',
@@ -608,13 +734,16 @@ test('standard profile uses representative directions and locale smoke coverage'
     defaultLocale: 'en-US',
   };
   const cases = buildVerificationCases(spec, context);
-  const smokeCases = buildLocaleSmokeCases(spec, context);
+  const smokeCases = buildLocaleSmokeCases(spec);
 
   assert.deepEqual(
     new Set(cases.map((item) => item.locale.id)),
-    new Set(['es', 'pseudo-rtl'])
+    new Set(['es', 'ar'])
   );
-  assert.deepEqual(smokeCases.map((item) => item.locale.id), ['en']);
+  assert.deepEqual(
+    smokeCases.map((item) => item.locale.id),
+    ['en', 'es', 'ar']
+  );
 });
 
 test('standard runtime switching requires reverse round trips only for representatives', () => {
@@ -789,6 +918,7 @@ test('CLI exits 2 for an invalid run specification', (t) => {
 
 test('CLI reuses a successful report while verification inputs are unchanged', (t) => {
   const projectRoot = createTempProject(t);
+  const spec = validSpec();
   writeProjectFile(projectRoot, 'package.json', '{}');
   writeProjectFile(projectRoot, 'src/App.tsx', 'export const App = null;');
   const reportPath = writeProjectFile(
@@ -805,10 +935,23 @@ test('CLI reuses a successful report while verification inputs are unchanged', (
       },
       verification: {
         profile: 'standard',
-        evidence: createVerificationEvidence(projectRoot, validSpec()),
+        evidence: createVerificationEvidence(projectRoot, spec),
       },
       findings: [],
-      results: [],
+      results: [
+        {
+          id: 'locale-smoke--en',
+          type: 'locale-smoke',
+          status: 'passed',
+          findings: [],
+        },
+        {
+          id: 'header--default--desktop--en',
+          type: 'component-state',
+          status: 'passed',
+          findings: [],
+        },
+      ],
     })
   );
 
@@ -825,6 +968,25 @@ test('CLI reuses a successful report while verification inputs are unchanged', (
   assert.equal(reused.status, 0, reused.stderr);
   assert.equal(JSON.parse(reused.stdout).verification.reused, true);
 
+  const targetedReport = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+  targetedReport.verification.profile = 'targeted';
+  const targetedPath = writeProjectFile(
+    projectRoot,
+    'docs/bidirectional-evidence/targeted/report.json',
+    JSON.stringify(targetedReport)
+  );
+  const targeted = spawnSync(
+    process.execPath,
+    [
+      cliPath,
+      '--projectRoot', projectRoot,
+      '--reuse-report', targetedPath,
+    ],
+    { encoding: 'utf8' }
+  );
+  assert.equal(targeted.status, 2);
+  assert.match(targeted.stderr, /targeted repair evidence cannot be reused/);
+
   fs.writeFileSync(path.join(projectRoot, 'src/App.tsx'), 'export const App = 1;');
   const stale = spawnSync(
     process.execPath,
@@ -837,6 +999,29 @@ test('CLI reuses a successful report while verification inputs are unchanged', (
   );
   assert.equal(stale.status, 2);
   assert.match(stale.stderr, /evidence is stale/);
+});
+
+test('CLI rejects a run specification when reusing a report', (t) => {
+  const projectRoot = createTempProject(t);
+  const reportPath = writeProjectFile(
+    projectRoot,
+    'report.json',
+    JSON.stringify({})
+  );
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      cliPath,
+      '--projectRoot', projectRoot,
+      '--reuse-report', reportPath,
+      '--spec-inline', '{}',
+    ],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /Usage:/);
 });
 
 test('CLI argument errors mark an active verification transaction failed', (t) => {
@@ -858,6 +1043,20 @@ test('CLI argument errors mark an active verification transaction failed', (t) =
   assert.equal(
     readLocalizationVerificationTransaction(projectRoot).transaction.state,
     'remediation-required'
+  );
+  const restoredManifest = JSON.parse(
+    fs.readFileSync(
+      path.join(projectRoot, '.powerpages-localization.json'),
+      'utf8'
+    )
+  );
+  assert.deepEqual(restoredManifest.unavailableLocales, ['ar-SA']);
+  assert.match(
+    fs.readFileSync(
+      path.join(projectRoot, 'src/i18n/localeAvailability.ts'),
+      'utf8'
+    ),
+    /new Set\(\['ar-SA'\]\)/
   );
 });
 
@@ -937,6 +1136,50 @@ test('CLI marks an active verification transaction failed when browser startup f
   );
 });
 
+test('CLI lease contention preserves the active verification transaction', (t) => {
+  const projectRoot = createTempProject(t);
+  const transaction = beginPendingVerification(projectRoot);
+  beginLocalizationVerificationAudit(projectRoot, transaction.runId);
+  const manifestPath = path.join(
+    projectRoot,
+    '.powerpages-localization.json'
+  );
+  const availabilityPath = path.join(
+    projectRoot,
+    'src/i18n/localeAvailability.ts'
+  );
+  const leasePath = path.join(projectRoot, TRANSACTION_AUDIT_FILE);
+  const outputPath = path.join(projectRoot, 'report.json');
+  const manifestBefore = fs.readFileSync(manifestPath, 'utf8');
+  const availabilityBefore = fs.readFileSync(availabilityPath, 'utf8');
+  const leaseBefore = fs.readFileSync(leasePath, 'utf8');
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      cliPath,
+      '--url', 'http://localhost:4173',
+      '--projectRoot', projectRoot,
+      '--spec-inline', JSON.stringify(pendingRuntimeSpec()),
+      '--output', outputPath,
+    ],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /already exists.*Recover that audit first/);
+  assert.equal(
+    readLocalizationVerificationTransaction(projectRoot).transaction.state,
+    'in-progress'
+  );
+  assert.equal(fs.readFileSync(manifestPath, 'utf8'), manifestBefore);
+  assert.equal(fs.readFileSync(availabilityPath, 'utf8'), availabilityBefore);
+  assert.equal(fs.readFileSync(leasePath, 'utf8'), leaseBefore);
+  assert.equal(fs.existsSync(outputPath), false);
+  endLocalizationVerificationAudit(projectRoot, transaction.runId);
+  assert.equal(fs.existsSync(leasePath), false);
+});
+
 test('CLI refuses non-loopback locale verification URLs', (t) => {
   const projectRoot = createTempProject(t);
   beginPendingVerification(projectRoot);
@@ -958,6 +1201,42 @@ test('CLI refuses non-loopback locale verification URLs', (t) => {
     readLocalizationVerificationTransaction(projectRoot).transaction.state,
     'remediation-required'
   );
+});
+
+test('CLI refuses non-loopback URLs without an active transaction', (t) => {
+  const projectRoot = createTempProject(t);
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      cliPath,
+      '--url', 'https://preview.example.test',
+      '--projectRoot', projectRoot,
+      '--spec-inline', JSON.stringify(validSpec()),
+    ],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /must use a loopback development URL/i);
+});
+
+test('CLI rejects non-HTTP loopback URLs', (t) => {
+  const projectRoot = createTempProject(t);
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      cliPath,
+      '--url', 'file://localhost/site/index.html',
+      '--projectRoot', projectRoot,
+      '--spec-inline', JSON.stringify(validSpec()),
+    ],
+    { encoding: 'utf8' }
+  );
+
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /with HTTP or HTTPS/i);
 });
 
 test('CLI marks verification failed when report output cannot be written', (t) => {
@@ -1231,6 +1510,64 @@ test('transaction verification fails if a locale control leaves loopback', async
   ));
 });
 
+test('navigation actions are rejected before visiting another origin', async () => {
+  const spec = validSpec();
+  spec.components[0].states[0].setup = [{
+    type: 'navigate',
+    url: 'https://preview.example.test/contact',
+  }];
+  const visited = [];
+
+  class Page {
+    constructor() {
+      this.currentUrl = 'http://localhost:4173/';
+    }
+    on() {}
+    async goto(target) {
+      visited.push(target);
+      this.currentUrl = target;
+    }
+    url() { return this.currentUrl; }
+    async waitForTimeout() {}
+    locator() {
+      return {
+        first() { return this; },
+        async count() { return 1; },
+      };
+    }
+    async evaluate(fn, value) {
+      const source = String(fn);
+      if (source.includes('document.documentElement.lang = locale')) {
+        return value;
+      }
+      if (source.includes('lang: document.documentElement.lang')) {
+        return { lang: 'en-US', direction: 'ltr' };
+      }
+    }
+    async close() {}
+  }
+
+  const report = await runRenderedBidirectionalAudit({
+    url: 'http://localhost:4173',
+    spec,
+    chromium: {
+      launch: async () => ({
+        newPage: async () => new Page(),
+        close: async () => {},
+      }),
+    },
+  });
+
+  assert.ok(report.findings.some(
+    (finding) => finding.rule === 'rendered-case-failure' &&
+      /must remain on the required loopback origin/.test(finding.message)
+  ));
+  assert.ok(visited.length > 0);
+  assert.ok(visited.every((target) =>
+    new URL(target).origin === 'http://localhost:4173'
+  ));
+});
+
 test('accepts an intentionally absent restricted target', async () => {
   const spec = validSpec();
   spec.components[0].states[0].targets = [{
@@ -1254,9 +1591,11 @@ test('accepts an intentionally absent restricted target', async () => {
       this.keyboard = { press: async () => {} };
       this.locale = 'en-US';
       this.direction = 'ltr';
+      this.currentUrl = 'http://localhost:4173/';
     }
     on() {}
-    async goto() {}
+    async goto(target) { this.currentUrl = target; }
+    url() { return this.currentUrl; }
     async waitForTimeout() {}
     locator(selector) { return new Locator(this, selector); }
     async evaluate(fn, arg) {
@@ -1332,9 +1671,11 @@ test('reports missing direction submission metadata as blocking', async () => {
       this.keyboard = { press: async () => {} };
       this.locale = 'en-US';
       this.direction = 'ltr';
+      this.currentUrl = 'http://localhost:4173/';
     }
     on() {}
-    async goto() {}
+    async goto(target) { this.currentUrl = target; }
+    url() { return this.currentUrl; }
     async waitForTimeout() {}
     locator() { return new Locator(); }
     async evaluate(fn, arg) {
@@ -1433,9 +1774,11 @@ test('checks every selector match for locales excluded from rendered activation'
     constructor() {
       this.keyboard = { press: async () => {} };
       this.exposed = false;
+      this.currentUrl = 'http://localhost:4173/';
     }
     on() {}
-    async goto() {}
+    async goto(target) { this.currentUrl = target; }
+    url() { return this.currentUrl; }
     async waitForTimeout() {}
     locator(selector) { return new Locator(this, selector); }
     async evaluate(fn) {
@@ -1543,9 +1886,11 @@ test('runtime transitions fail when preservation selectors do not exist', async 
       this.locale = 'en-US';
       this.direction = 'ltr';
       this.keyboard = { press: async () => {} };
+      this.currentUrl = 'http://localhost:4173/';
     }
     on() {}
-    async goto() {}
+    async goto(target) { this.currentUrl = target; }
+    url() { return this.currentUrl; }
     async waitForTimeout() {}
     locator(selector) { return new Locator(this, selector); }
     async evaluate(fn, arg) {

@@ -184,7 +184,7 @@
         "Blocks Phase 7 for rendered errors, triages every review finding with evidence and a proposed outcome, and never offers a deterministic error for maker override",
         "Allows only review-severity usable limitations to be accepted at the final maker gate and records their exact impact, evidence path, and approval time",
         "Consumes per-locale readiness from the localization workflow, keeps only locales with pending findings unavailable, and does not disable an unaffected locale merely because it shares a writing direction",
-        "Reuses a successful add-localization rendered report when its source, resource, dependency, build-configuration, and availability fingerprint remains current",
+        "Reuses a successful add-localization rendered report only when it came from a full standard or extensive run and its source, resource, dependency, build-configuration, and availability fingerprint remains current",
         "Uses bounded concurrent route, viewport, and locale groups and reuses navigation only for states with a verified deterministic reset",
         "Persists only the rendered evidence report and failure or review screenshots, not a second authoritative component manifest",
         "Uses a narrowly scoped bidi-fixed directive only for intentional machine-oriented LTR values, never for localized form UI",

@@ -25,9 +25,9 @@ function whichExists(cmd) {
   }
 }
 
-function whichPath(cmd) {
+function whichPath(cmd, executeFile = execFileSync) {
   try {
-    return execFileSync('which', [cmd], {
+    return executeFile('which', [cmd], {
       encoding: 'utf8',
       shell: false,
     }).trim() || null;
@@ -81,17 +81,19 @@ function detectBrowser() {
   return 'chromium';
 }
 
-function detectBrowserLaunchOptions() {
-  const platform = os.platform();
+function detectBrowserLaunchOptions(options = {}) {
+  const platform = options.platform || os.platform();
+  const commandExists = options.whichExists || whichExists;
+  const commandPath = options.whichPath || whichPath;
   if (platform === 'linux') {
     for (const command of ['google-chrome', 'google-chrome-stable']) {
-      if (whichExists(command)) return { channel: 'chrome' };
+      if (commandExists(command)) return { channel: 'chrome' };
     }
     for (const command of ['microsoft-edge', 'microsoft-edge-stable']) {
-      if (whichExists(command)) return { channel: 'msedge' };
+      if (commandExists(command)) return { channel: 'msedge' };
     }
     for (const command of ['chromium-browser', 'chromium']) {
-      const executablePath = whichPath(command);
+      const executablePath = commandPath(command);
       if (executablePath) return { executablePath };
     }
     return {};
@@ -103,4 +105,5 @@ function detectBrowserLaunchOptions() {
 module.exports = {
   detectBrowser,
   detectBrowserLaunchOptions,
+  whichPath,
 };

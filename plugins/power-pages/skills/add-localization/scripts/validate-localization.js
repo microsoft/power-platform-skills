@@ -17,6 +17,7 @@ const {
   detectLocalization,
   hasLocaleNavigationSignal,
   getLocalizationModeAvailability,
+  isLocaleAvailabilityModulePath,
   protectedTokenSignature,
   resolveProjectRelativePath,
   validateLocalizationManifestShape,
@@ -32,9 +33,11 @@ const {
   partitionDeferredFindings,
 } = require('../../../scripts/lib/bidirectional-finding-disposition');
 const {
+  TRANSACTION_AVAILABILITY_FILE,
   listVerificationTransactionArtifacts,
   readLocalizationVerificationTransaction,
   validateTransactionAgainstManifest,
+  validateVerifiedTransactionForReview,
 } = require('../../../scripts/lib/localization-verification-transaction');
 
 const MAX_REPORTED_RESOURCE_IDS = 20;
@@ -419,7 +422,11 @@ function validateLocalization(projectRoot, options = {}) {
   const transactionArtifacts = listVerificationTransactionArtifacts(projectRoot);
   const earlyTransactionErrors = [...transactionResult.errors];
   for (const artifact of transactionArtifacts) {
-    if (artifact !== '.powerpages-localization-verification.json') {
+    const isExpectedAvailabilitySnapshot =
+      artifact === TRANSACTION_AVAILABILITY_FILE &&
+      transactionResult.transaction;
+    if (artifact !== '.powerpages-localization-verification.json' &&
+        !isExpectedAvailabilitySnapshot) {
       earlyTransactionErrors.push(
         `Localization verification transaction candidate ${artifact} remains ` +
         'in the project.'
@@ -459,13 +466,35 @@ function validateLocalization(projectRoot, options = {}) {
   const allowActiveVerification =
     options.allowActiveVerification === true &&
     transaction?.state === 'in-progress';
+  const allowVerifiedReview =
+    options.allowVerifiedTransactionReview === true &&
+    transaction?.state === 'verified';
+  // Without a transaction-specific option (deploy-site, every other skill's
+  // final integrity gate), any remaining transaction blocks completion. Report
+  // that root cause even when the manifest invariant also fails: a target left
+  // exposed while still pending-remediation breaks the invariant, and the
+  // invariant message alone would hide that the localization review was never
+  // finalized.
+  const blockedByUnfinishedTransaction = Boolean(transaction) &&
+    options.allowActiveVerification !== true &&
+    options.allowTransactionFinalization !== true &&
+    options.allowVerifiedTransactionReview !== true;
+  const unfinishedTransactionError =
+    'Localization verification is still active. Reconcile the target locales ' +
+    'and finalize the transaction before completing or deploying the site.';
   const shapeErrors = validateLocalizationManifestShape(manifest, {
     projectRoot,
-    verificationLocales: allowActiveVerification
+    verificationLocales: allowActiveVerification || allowVerifiedReview
       ? transaction.targetLocales
       : [],
   });
-  if (shapeErrors.length) return [...errors, ...shapeErrors];
+  if (shapeErrors.length) {
+    return [
+      ...errors,
+      ...(blockedByUnfinishedTransaction ? [unfinishedTransactionError] : []),
+      ...shapeErrors,
+    ];
+  }
   if (options.allowActiveVerification === true && !transaction) {
     errors.push(
       'Phase 6 verification requires an active localization verification transaction.'
@@ -476,12 +505,14 @@ function validateLocalization(projectRoot, options = {}) {
       'The localization verification transaction requires remediation before testing.'
     );
   } else if (transaction &&
-      options.allowActiveVerification !== true &&
-      options.allowTransactionFinalization !== true) {
-    errors.push(
-      'Localization verification is still active. Reconcile the target locales ' +
-      'and finalize the transaction before completing or deploying the site.'
-    );
+      options.allowVerifiedTransactionReview === true) {
+    errors.push(...validateVerifiedTransactionForReview(
+      projectRoot,
+      transaction,
+      manifest
+    ));
+  } else if (blockedByUnfinishedTransaction) {
+    errors.push(unfinishedTransactionError);
   }
   if (allowActiveVerification) {
     errors.push(...validateTransactionAgainstManifest(
@@ -956,8 +987,8 @@ function validateLocaleAvailability(
   unavailableLocales,
   errors
 ) {
-  const availabilityPaths = allManagedFiles.filter((relativePath) =>
-    /locale[-_.]?availability/i.test(path.basename(relativePath))
+  const availabilityPaths = allManagedFiles.filter(
+    isLocaleAvailabilityModulePath
   );
   if (availabilityPaths.length !== 1) {
     errors.push(

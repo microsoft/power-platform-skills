@@ -27,9 +27,18 @@ function validateSiteIntegrity(projectRoot, options = {}) {
     };
   }
 
+  // A verified-but-unfinalized localization transaction is acceptable only at
+  // add-localization's own pre-review gate, where the maker has not yet decided
+  // whether the exposed target locales are ready, approved with limitations, or
+  // kept unavailable. Every other caller — deploy-site and the final gate of
+  // every other source-mutating skill — keeps this off, so a remaining
+  // transaction still blocks completion and deployment (fail-closed).
   const localizationErrors = options.skipLocalization === true
     ? []
-    : validateLocalization(projectRoot);
+    : validateLocalization(projectRoot, {
+      allowVerifiedTransactionReview:
+        options.allowVerifiedLocalizationReview === true,
+    });
   const bidiAudit = auditBidirectionalReadiness(projectRoot);
   const manifest = readJson(path.join(projectRoot, MANIFEST_NAME));
   const unavailableLocales = new Set(

@@ -9,6 +9,7 @@ const {
   validateLocalizationManifestShape,
 } = require('./lib/localization-config');
 const {
+  getRequiredLoopbackOrigin,
   runRenderedBidirectionalAudit,
 } = require('./lib/rendered-bidirectional-readiness');
 const {
@@ -20,8 +21,10 @@ const {
   validateReusableVerificationReport,
 } = require('./lib/verification-evidence');
 const {
+  AUDIT_LEASE_CONFLICT_CODE,
   beginLocalizationVerificationAudit,
   endLocalizationVerificationAudit,
+  formatManualAvailabilityRestore,
   markLocalizationVerificationFailed,
   markLocalizationVerificationPassed,
   readLocalizationVerificationTransaction,
@@ -80,7 +83,8 @@ function parseArgs(argv) {
     Number(Boolean(parsed.specInline));
   if (!parsed.projectRoot ||
       (!parsed.reuseReport && !parsed.url) ||
-      (parsed.reuseReport ? specCount !== 0 : specCount !== 1)) {
+      (parsed.reuseReport ? specCount !== 0 : specCount !== 1) ||
+      (parsed.reuseReport && parsed.url)) {
     throw new Error(USAGE);
   }
   return parsed;
@@ -116,6 +120,26 @@ function loadPlaywright(projectRoot) {
   throw new Error('playwright not found. Run: npm install --save-dev playwright');
 }
 
+function isAuditLeaseConflict(error) {
+  return error?.code === AUDIT_LEASE_CONFLICT_CODE;
+}
+
+let manualRestoreReported = false;
+
+// Move the transaction to remediation-required. When the availability module
+// could not be restored automatically, report the one manual step required
+// before --finalize. The error paths can fail the same run twice, so the
+// instruction is written at most once per process.
+function failVerificationTransaction(projectRoot, runId) {
+  const failed = markLocalizationVerificationFailed(projectRoot, runId);
+  const message = formatManualAvailabilityRestore(failed);
+  if (message && !manualRestoreReported) {
+    manualRestoreReported = true;
+    process.stderr.write(`${message}\n`);
+  }
+  return failed;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   recoveryContext.projectRoot = args.projectRoot;
@@ -146,6 +170,7 @@ async function main() {
   const spec = JSON.parse(
     args.specInline ?? fs.readFileSync(args.specPath, 'utf8')
   );
+  getRequiredLoopbackOrigin(args.url);
   const manifestPath = path.join(args.projectRoot, MANIFEST_NAME);
   const transactionResult =
     readLocalizationVerificationTransaction(args.projectRoot);
@@ -181,11 +206,6 @@ async function main() {
       );
       if (transactionErrors.length > 0) {
         throw new Error(transactionErrors.join('\n'));
-      }
-      if (!isLoopbackUrl(args.url)) {
-        throw new Error(
-          'In-progress locale verification must use a loopback development URL.'
-        );
       }
     }
     localizationContext = {
@@ -233,7 +253,7 @@ async function main() {
       spec
     );
     if (transaction && result.summary.errors > 0) {
-      markLocalizationVerificationFailed(args.projectRoot, transaction.runId);
+      failVerificationTransaction(args.projectRoot, transaction.runId);
     }
     const json = `${JSON.stringify(result, null, 2)}\n`;
     if (args.output) {
@@ -250,9 +270,9 @@ async function main() {
     }
     process.exitCode = result.summary.errors > 0 ? 1 : 0;
   } catch (error) {
-    if (transaction) {
+    if (transaction && !isAuditLeaseConflict(error)) {
       try {
-        markLocalizationVerificationFailed(args.projectRoot, transaction.runId);
+        failVerificationTransaction(args.projectRoot, transaction.runId);
       } catch (transactionError) {
         transactionError.message += `\nThe audit also failed: ${error.message}`;
         throw transactionError;
@@ -268,10 +288,8 @@ async function main() {
 
 function isLoopbackUrl(value) {
   try {
-    const hostname = new URL(value).hostname.toLowerCase();
-    return hostname === 'localhost' ||
-      hostname === '127.0.0.1' ||
-      hostname === '[::1]';
+    getRequiredLoopbackOrigin(value);
+    return true;
   } catch {
     return false;
   }
@@ -279,27 +297,31 @@ function isLoopbackUrl(value) {
 
 if (require.main === module) {
   main().catch((error) => {
-    try {
-      const projectRoot = recoveryContext.projectRoot ||
-        findProjectRootArg(process.argv.slice(2));
-      if (!projectRoot) throw new Error('projectRoot is unavailable.');
-      if (recoveryContext.transactionRead) {
-        if (recoveryContext.runId) {
-          markLocalizationVerificationFailed(
-            projectRoot,
-            recoveryContext.runId
-          );
+    // A lease loser never owned the audit, so it must not change the shared
+    // transaction or availability while the lease owner is still running.
+    if (!isAuditLeaseConflict(error)) {
+      try {
+        const projectRoot = recoveryContext.projectRoot ||
+          findProjectRootArg(process.argv.slice(2));
+        if (!projectRoot) throw new Error('projectRoot is unavailable.');
+        if (recoveryContext.transactionRead) {
+          if (recoveryContext.runId) {
+            failVerificationTransaction(
+              projectRoot,
+              recoveryContext.runId
+            );
+          }
+        } else {
+          const { transaction, errors } =
+            readLocalizationVerificationTransaction(projectRoot);
+          if (errors.length === 0 && transaction?.state === 'in-progress') {
+            failVerificationTransaction(projectRoot, transaction.runId);
+          }
         }
-      } else {
-        const { transaction, errors } =
-          readLocalizationVerificationTransaction(projectRoot);
-        if (errors.length === 0 && transaction?.state === 'in-progress') {
-          markLocalizationVerificationFailed(projectRoot, transaction.runId);
-        }
+      } catch {
+        // Preserve the original audit/setup error; the transaction remains as a
+        // deployment blocker if it could not be moved to remediation-required.
       }
-    } catch {
-      // Preserve the original audit/setup error; the transaction remains as a
-      // deployment blocker if it could not be moved to remediation-required.
     }
     process.stderr.write(`${error.message}\n`);
     process.exitCode = 2;

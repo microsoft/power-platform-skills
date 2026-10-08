@@ -292,17 +292,22 @@ node "${PLUGIN_ROOT}/scripts/audit-rendered-bidirectional-readiness.js" \
   --reuse-report "<REPORT_JSON>"
 ```
 
-The command rejects failed or stale evidence. If accessibility remediation or
-any other edit changes a fingerprinted input, rebuild the current
-specification and run affected cases instead of claiming reuse.
+The command rejects failed evidence, incomplete reports, summaries that do not
+match their detailed results and findings, reports from a `targeted` repair
+run, and evidence whose project-input fingerprint is stale. It does not compare
+run specifications: add-localization's `standard` or `extensive` run already
+covers every visible or interactive component under these same rules, so with
+unchanged project inputs it is the run create-site would otherwise repeat. Only
+a targeted run is partial. When reuse is rejected, build the current temporary
+specification, run a fresh audit, and delete the specification afterward.
 
 ## Locale activation and pseudo directions
 
 `activate` is a sequence of supported browser actions. Prefer the site's real
-selector or route behavior. A real locale must not use `set-document`: it must
-activate through the application and provide at least one `expect` assertion
-for localized text or a localized attribute. This prevents changing only
-`html[lang]`/`html[dir]` from being mistaken for working localization.
+selector or route behavior. A real locale must not use `set-document` or
+`set-attribute`: it must activate through the application and provide at least
+one `expect` assertion for localized text or a localized attribute. This
+prevents direct DOM mutation from being mistaken for working localization.
 
 Every transaction target is temporarily available through the normal
 application path and must use its real selector or locale-navigation action:
@@ -359,20 +364,36 @@ from `unavailableLocales`, and blocks completion or deployment. While the
 browser run is active, `.powerpages-localization-verification.json.audit`
 holds an exclusive lease for that transaction. Finalization remains blocked
 until the run records its result and releases the lease. If the process is
-interrupted, `--fail` records `remediation-required` and clears the abandoned
-lease; do not delete either file to bypass recovery.
+interrupted, `--fail` restores target readiness, manifest unavailability, and
+the exact pre-exposure managed availability-module snapshot before recording
+`remediation-required`, then clears the abandoned lease. The snapshot is written
+only to the managed availability module that the manifest names, outside hidden
+directories, and only while its backup still matches the recorded checksum.
+Otherwise `--fail` writes no source file and reports the locales to exclude
+manually; finalization stays blocked until the module excludes them. Do not
+delete the transaction, lease, or availability snapshot to bypass recovery.
+Transaction commands also reclaim a lock whose recorded owner process has
+exited, while preserving locks held by live verification processes.
 
 The audit URL must use `localhost`, `127.0.0.1`, or `[::1]`, and every
 navigation, control action, wait, and redirect must remain on that exact
 origin. A browser, setup, or rendered error changes the transaction to
-`remediation-required`; restore its targets to pending unavailable state
-before another attempt.
+`remediation-required` only after its targets are restored to pending
+unavailable state.
 
 After the maker decision, reconcile the manifest and managed availability
 module, then run `manage-localization-verification.js --finalize`. Successful
 targets are `ready` or `approved-with-limitations` and remain available.
-Failed or deferred targets are `pending-remediation` and unavailable.
-Finalization validates the normal schema-version-1 invariant before removing
+Failed or deferred targets are `pending-remediation` and unavailable. Each
+target of a successful run is decided independently, so one run can enable some
+targets and defer others; a deferred target keeps its undisposed review
+findings as its remediation record.
+For a successful run, finalization also recomputes the project-input fingerprint
+and rejects evidence made stale by source, resource, dependency, or build
+configuration changes. When a target is deferred, returning it to
+`unavailableLocales` and the managed availability module is the expected change,
+so finalization compares a fingerprint recorded without those two availability
+inputs; every other change still makes the evidence stale. Finalization validates the normal schema-version-1 invariant before removing
 the transaction. Before retrying after either a failed run or maker-requested
 revision, mark the old transaction failed, restore its targets to pending
 unavailable state, finalize it, and begin a new transaction.
@@ -408,7 +429,8 @@ Supported actions are:
 - `navigate` with a root-relative or absolute locale-specific URL
 - `wait` with `ms` from 0 through 10000
 - `set-document` with `locale` and `direction`
-- `set-attribute` with `selector`, `name`, and string `value`
+- `set-attribute` with `selector`, `name`, and string `value` for component
+  setup/reset or pseudo-locale simulation, not real-locale activation
 
 The action list deliberately excludes arbitrary JavaScript. Verification input
 must not become a general code-execution channel.

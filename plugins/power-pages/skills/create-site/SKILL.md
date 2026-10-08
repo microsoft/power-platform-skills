@@ -1695,12 +1695,14 @@ node "${PLUGIN_ROOT}/scripts/audit-rendered-bidirectional-readiness.js" \
   --reuse-report "<ADD_LOCALIZATION_REPORT_PATH>"
 ```
 
-This succeeds only while source, resources, dependencies, build configuration,
-and locale availability match the child report. Readiness-only metadata does
-not invalidate it. If reuse succeeds, do not rebuild the specification or
-repeat the matrix. If reuse is stale—such as after accessibility remediation
-changed relevant source—rebuild the component/state/viewport specification
-from the current implementation and run it:
+This succeeds only when the child report came from a complete `standard` or
+`extensive` run that passed, and source, resources, dependencies, build
+configuration, and locale availability still match it. A `targeted` repair
+report is never reused. Readiness-only metadata does not invalidate it. If reuse
+succeeds, do not build a specification or repeat the matrix. If reuse is
+stale—such as after accessibility remediation changed relevant source—build
+the component/state/viewport specification from the current implementation and
+run it:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/audit-rendered-bidirectional-readiness.js" \

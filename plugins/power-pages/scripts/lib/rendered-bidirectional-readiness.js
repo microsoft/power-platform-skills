@@ -48,6 +48,11 @@ const ACTION_TYPES = new Set([
 const STATE_ISOLATION = new Set(['isolated', 'reload', 'resettable']);
 const DEFAULT_MAX_CONCURRENCY = 3;
 const MAX_CONCURRENCY = 8;
+const LOOPBACK_HOSTNAMES = new Set([
+  'localhost',
+  '127.0.0.1',
+  '[::1]',
+]);
 
 function validateRunSpec(spec, localizationContext = null) {
   const errors = [];
@@ -149,6 +154,12 @@ function validateRunSpec(spec, localizationContext = null) {
       }
       if (activation.some((action) => action.type === 'set-document')) {
         errors.push(`${prefix} real locales cannot use set-document.`);
+      }
+      if (activation.some((action) => action.type === 'set-attribute')) {
+        errors.push(
+          `${prefix} real locales cannot use set-attribute to synthesize ` +
+          'locale evidence.'
+        );
       }
       if (!Array.isArray(locale?.expect) || locale.expect.length === 0) {
         errors.push(`${prefix} real locales require localized content expectations.`);
@@ -282,9 +293,19 @@ function validateRunSpec(spec, localizationContext = null) {
     }
     const states = Array.isArray(component?.states) ? component.states : [];
     if (states.length === 0) errors.push(`${prefix}.states must not be empty.`);
+    const stateNames = new Set();
     for (const [stateIndex, state] of states.entries()) {
       const statePrefix = `${prefix}.states[${stateIndex}]`;
-      if (!isNonEmpty(state?.name)) errors.push(`${statePrefix}.name is required.`);
+      if (!isNonEmpty(state?.name)) {
+        errors.push(`${statePrefix}.name is required.`);
+      } else if (stateNames.has(state.name)) {
+        errors.push(
+          `${statePrefix}.name duplicates state name "${state.name}" ` +
+          `within ${prefix}.states.`
+        );
+      } else {
+        stateNames.add(state.name);
+      }
       validateActions(state?.setup, `${statePrefix}.setup`, errors);
       if (state?.isolation !== undefined &&
           !STATE_ISOLATION.has(state.isolation)) {
@@ -703,12 +724,9 @@ function buildVerificationCases(spec, localizationContext = null) {
   );
 }
 
-function buildLocaleSmokeCases(spec, localizationContext = null) {
+function buildLocaleSmokeCases(spec) {
   const profile = resolveVerificationProfile(spec);
   if (!['standard', 'targeted'].includes(profile)) return [];
-  const representatives = new Set(
-    Object.values(resolveRepresentatives(spec, localizationContext))
-  );
   const route = spec.localeSmoke?.route || spec.components[0]?.route;
   const viewportName =
     spec.localeSmoke?.viewport || spec.viewports[0]?.name;
@@ -717,10 +735,7 @@ function buildLocaleSmokeCases(spec, localizationContext = null) {
   );
   const targetCaseIds = new Set(spec.targetCaseIds || []);
   return spec.locales
-    .filter((locale) =>
-      !locale.pseudo &&
-      (profile === 'targeted' || !representatives.has(locale.id))
-    )
+    .filter((locale) => !locale.pseudo)
     .map((locale) => ({
       id: `locale-smoke--${viewportName}--${locale.id}`,
       route,
@@ -786,11 +801,7 @@ async function runRenderedBidirectionalAudit(options) {
     throw error;
   }
   const baseUrl = options.url.replace(/\/$/, '');
-  const requiredOrigin =
-    Array.isArray(options.localizationContext?.verificationLocales) &&
-    options.localizationContext.verificationLocales.length > 0
-      ? new URL(baseUrl).origin
-      : null;
+  const requiredOrigin = getRequiredLoopbackOrigin(baseUrl);
   const browser = await options.chromium.launch({
     ...(options.browserLaunchOptions || {}),
     headless: true,
@@ -801,10 +812,7 @@ async function runRenderedBidirectionalAudit(options) {
     options.spec,
     options.localizationContext
   );
-  const smokeCases = buildLocaleSmokeCases(
-    options.spec,
-    options.localizationContext
-  );
+  const smokeCases = buildLocaleSmokeCases(options.spec);
   const verificationGroups = buildVerificationGroups(
     buildVerificationCases(options.spec, options.localizationContext)
   );
@@ -896,6 +904,15 @@ async function runRenderedBidirectionalAudit(options) {
         options.spec,
         representatives
       ),
+      reviewFindings: findings
+        .filter((finding) => finding.severity === 'review')
+        .map((finding) => ({
+          caseId: finding.caseId,
+          rule: finding.rule,
+          severity: finding.severity,
+          message: finding.message,
+          selector: finding.selector,
+        })),
     },
     summary: summarizeFindings(findings, results),
     findings,
@@ -922,11 +939,7 @@ async function runLocaleSmokeCase(
   page.on('pageerror', (error) => consoleErrors.push(error.message));
 
   try {
-    await page.goto(`${baseUrl}${route}`, {
-      waitUntil: 'networkidle',
-      timeout: 20000,
-    });
-    await assertPageOrigin(page, requiredOrigin);
+    await navigateWithinOrigin(page, route, baseUrl, requiredOrigin);
     await verifyUnavailableLocaleChecks(
       page,
       smokeCase.spec.unavailableLocaleChecks || [],
@@ -1059,11 +1072,12 @@ async function initializeVerificationPage(
   requiredOrigin
 ) {
   const { component, locale } = verificationCase;
-  await page.goto(`${baseUrl}${component.route}`, {
-    waitUntil: 'networkidle',
-    timeout: 20000,
-  });
-  await assertPageOrigin(page, requiredOrigin);
+  await navigateWithinOrigin(
+    page,
+    component.route,
+    baseUrl,
+    requiredOrigin
+  );
   const initializationFindings = [];
   await verifyUnavailableLocaleChecks(
     page,
@@ -1311,11 +1325,12 @@ async function executeActions(page, actions, baseUrl, requiredOrigin = null) {
       continue;
     }
     if (action.type === 'navigate') {
-      const target = /^https?:\/\//i.test(action.url)
-        ? action.url
-        : `${baseUrl}${action.url}`;
-      await page.goto(target, { waitUntil: 'networkidle', timeout: 20000 });
-      await assertPageOrigin(page, requiredOrigin);
+      await navigateWithinOrigin(
+        page,
+        action.url,
+        baseUrl,
+        requiredOrigin
+      );
       continue;
     }
     const locator = page.locator(action.selector).first();
@@ -1366,7 +1381,6 @@ async function assertLocaleEvidence(page, locale, findings, caseId) {
 }
 
 async function assertPageOrigin(page, requiredOrigin) {
-  if (!requiredOrigin) return;
   if (typeof page.url !== 'function') {
     throw new Error('The browser page does not expose its current URL.');
   }
@@ -1379,10 +1393,65 @@ async function assertPageOrigin(page, requiredOrigin) {
   }
   if (currentOrigin !== requiredOrigin) {
     throw new Error(
-      `Locale verification left the required loopback origin ` +
+      `Rendered verification left the required loopback origin ` +
       `${requiredOrigin}: ${currentUrl}`
     );
   }
+}
+
+function getRequiredLoopbackOrigin(value) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(
+      'Rendered verification must use a loopback development URL with HTTP or HTTPS.'
+    );
+  }
+  const protocol = parsed.protocol.toLowerCase();
+  const hostname = parsed.hostname.toLowerCase();
+  if ((protocol !== 'http:' && protocol !== 'https:') ||
+      !LOOPBACK_HOSTNAMES.has(hostname)) {
+    throw new Error(
+      'Rendered verification must use a loopback development URL with HTTP or HTTPS.'
+    );
+  }
+  return parsed.origin;
+}
+
+function resolveSameOriginNavigationUrl(value, baseUrl, requiredOrigin) {
+  let target;
+  try {
+    target = new URL(value, baseUrl);
+  } catch {
+    throw new Error('Rendered verification navigation URL is invalid.');
+  }
+  if ((target.protocol !== 'http:' && target.protocol !== 'https:') ||
+      target.origin !== requiredOrigin) {
+    throw new Error(
+      `Rendered verification navigation must remain on the required ` +
+      `loopback origin ${requiredOrigin}.`
+    );
+  }
+  return target.href;
+}
+
+async function navigateWithinOrigin(
+  page,
+  value,
+  baseUrl,
+  requiredOrigin
+) {
+  const target = resolveSameOriginNavigationUrl(
+    value,
+    baseUrl,
+    requiredOrigin
+  );
+  await page.goto(target, {
+    waitUntil: 'networkidle',
+    timeout: 20000,
+  });
+  await assertPageOrigin(page, requiredOrigin);
 }
 
 async function assertDocumentLocale(page, locale, findings, caseId) {
@@ -1714,11 +1783,12 @@ async function runTransitionCase(
   });
   page.on('pageerror', (error) => consoleErrors.push(error.message));
   try {
-    await page.goto(`${baseUrl}${transition.route}`, {
-      waitUntil: 'networkidle',
-      timeout: 20000,
-    });
-    await assertPageOrigin(page, requiredOrigin);
+    await navigateWithinOrigin(
+      page,
+      transition.route,
+      baseUrl,
+      requiredOrigin
+    );
     await verifyUnavailableLocaleChecks(
       page,
       spec.unavailableLocaleChecks || [],
@@ -2067,6 +2137,8 @@ module.exports = {
   buildLocaleSmokeCases,
   buildVerificationGroups,
   buildVerificationCases,
+  getRequiredLoopbackOrigin,
+  resolveSameOriginNavigationUrl,
   runRenderedBidirectionalAudit,
   runWithConcurrency,
   summarizeFindings,

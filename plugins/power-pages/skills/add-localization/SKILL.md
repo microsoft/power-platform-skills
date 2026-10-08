@@ -778,8 +778,15 @@ introduced regression.
 If `.powerpages-localization-verification.json` already exists, treat it as an
 interrupted run. Invoke `manage-localization-verification.js --fail`, restore
 every recorded target locale to fail-closed `pending-remediation` availability,
-and finalize that transaction before beginning another one. Never delete or
-overwrite the transaction file to bypass recovery.
+and finalize that transaction before beginning another one. The failure command
+restores the manifest and the exact managed availability-module snapshot that
+the transaction captured before exposure. If that snapshot cannot be used
+safely, because its backup is missing or changed or it does not point at the
+module the manifest names, `--fail` still restores the manifest but writes no
+source file and prints the locales to exclude and the module to edit. Exclude
+them there, then finalize; finalization validates that every unavailable locale
+is excluded. Never delete or overwrite the transaction or its availability
+snapshot to bypass recovery.
 
 Run the independent validator:
 
@@ -921,8 +928,10 @@ node "${PLUGIN_ROOT}/scripts/audit-rendered-bidirectional-readiness.js" \
 
 Parse stdout even when the expected blocking exit code is `1`. Exit code `2`
 means the runner or specification failed. Either outcome moves the transaction
-to `remediation-required`; immediately restore each target to
-`unavailableLocales` and the managed availability module before retrying.
+to `remediation-required` and automatically restores each target to
+`unavailableLocales`, `pending-remediation`, and the captured managed
+availability module before retrying. If the snapshot cannot be used safely, the
+command instead reports the locales to exclude manually before finalization.
 Delete the temporary specification after the report is written. A blocking
 error fails the new-locale transaction and restores fail-closed availability;
 after fixing it, begin a new standard transaction because targeted evidence
@@ -966,8 +975,14 @@ After localization implementation, the localization validator, the build, and br
 are complete, run:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>" --allow-verified-localization-review
 ```
+
+This gate runs before the Phase 7 maker decision, so
+`--allow-verified-localization-review` lets it accept a `verified` transaction
+whose evidence is still current while its targets await review. Use the flag
+only here: every other integrity run, including deployment, omits it so any
+remaining transaction blocks completion and deployment until it is finalized.
 
 Fix every blocking error before reviewing or completing the skill. If the
 blocking errors cannot be remediated, emit failure completion with
@@ -1071,8 +1086,10 @@ After the maker's choice, finalize `.powerpages-localization.json`:
   checks that are not limitations are removed from the unresolved finding
   arrays.
 - **Save but keep locale unavailable:** keep the affected locale entries
-  `pending-remediation`, retain the undisposed findings, and keep only those
-  affected locales unavailable.
+  `pending-remediation`, retain the undisposed findings, and return only those
+  affected locales to `unavailableLocales` and the managed availability module.
+  The choice is per locale: in the same finalization, other targets can still
+  be accepted or enabled with documented limitations.
 
 Never add a maker-approved disposition to an error finding. After changing
 status or availability, finalize the transaction:
@@ -1081,11 +1098,22 @@ status or availability, finalize the transaction:
 node "${PLUGIN_ROOT}/scripts/manage-localization-verification.js" \
   --finalize \
   [--manual-review-completed] \
+  [--rendered-review-completed] \
   --projectRoot "<PROJECT_ROOT>"
 ```
 
 Pass `--manual-review-completed` only after the maker chose that standard-path
-option and completed the generated checklist. Extensive runs do not use it.
+option and completed the generated checklist. Pass
+`--rendered-review-completed` when the successful browser report contained
+review findings that the maker inspected and accepted as resolved checks rather
+than retained limitations. A retained limitation instead remains in
+`renderedFindings` with its maker-approved disposition and does not require this
+flag. Extensive runs do not use `--manual-review-completed`, but may require
+`--rendered-review-completed`.
+A target kept unavailable needs no `--fail`, extra flag, or new browser run:
+finalization accepts it when locale availability is the only input that changed
+since the successful audit. Any other source, resource, dependency, or build
+configuration change still requires a new audit.
 Finalization succeeds only when the normal manifest invariant and all
 localization checks pass. Rebuild only when source, resources, dependencies,
 build configuration, or locale availability changed after the successful
