@@ -137,12 +137,14 @@ npm run bundle:ios
 
 Each command produces that platform's native Hermes bundle **and** its customer asset package, writing next to `dist/index.html`:
 
-- **Android:** `dist/index.android.bundle.hbc` (Hermes bytecode) + `dist/powerapps-customer-assets-android/` (`manifest.json` + `assets/<fileHash>.<type>`)
-- **iOS:** `dist/main.jsbundle.hbc` (Hermes bytecode) + `dist/powerapps-customer-assets-ios/` (`manifest.json` + `assets/<fileHash>.<type>`)
+- **Android:** `dist/index.android.bundle.hbc` (Hermes bytecode) + `dist/powerapps-customer-assets-android/` (`manifest.json` + `assets/<fileHash>.<type>`, plus `firebase/google-services.json` when the app configures Firebase)
+- **iOS:** `dist/main.jsbundle.hbc` (Hermes bytecode) + `dist/powerapps-customer-assets-ios/` (`manifest.json` + `assets/<fileHash>.<type>`, plus `firebase/GoogleService-Info.plist` when the app configures Firebase)
 
 Both platforms are required — the verification below fails if either bundle or either manifest is missing.
 
 These sit alongside `index.html` under the same container SAS, so the wrap pipeline fetches them as siblings — no RP or connector change is required.
+
+**Push notifications.** When the app's Expo config names a Firebase client file (`android.googleServicesFile` / `ios.googleServicesFile`), the packaging step publishes that file in the platform's asset package and pins it in `manifest.json` as `pushNotificationsConfig`. The wrap pipeline injects it when push notifications are turned on for that platform. `@microsoft/power-apps-native-host` older than 0.6.0 skips the file, so the verification below stops on it.
 
 **Verify before continuing** — STOP on any failure (never push a web-only build for a native-wrapped app):
 
@@ -155,6 +157,20 @@ done
 # both asset manifests present
 test -f dist/powerapps-customer-assets-android/manifest.json || { echo "MISSING android manifest"; exit 1; }
 test -f dist/powerapps-customer-assets-ios/manifest.json     || { echo "MISSING ios manifest"; exit 1; }
+# every Firebase client file the app configures is packaged for the wrap (push notifications)
+node -e '
+const fs = require("fs");
+const { exp } = require("expo/config").getConfig(process.cwd(), { skipSDKVersionRequirement: true });
+for (const platform of ["android", "ios"]) {
+  const file = exp[platform]?.googleServicesFile;
+  if (!file || !fs.existsSync(file)) continue;
+  const manifest = JSON.parse(fs.readFileSync(`dist/powerapps-customer-assets-${platform}/manifest.json`, "utf8"));
+  if (!manifest.pushNotificationsConfig) {
+    console.error(`${file} was not packaged for ${platform}: update @microsoft/power-apps-native-host to ^0.6.0, then rerun npm run bundle:${platform}`);
+    process.exit(1);
+  }
+  console.log(`✓ ${platform} Firebase client file packaged (${manifest.pushNotificationsConfig.path})`);
+}' || exit 1
 echo "✓ native package + asset manifests present"
 ```
 
