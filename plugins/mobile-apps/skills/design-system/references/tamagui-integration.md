@@ -275,6 +275,7 @@ and custom provider props when applying this change.
 After Tamagui or provider changes:
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npx --no-install tsc --noEmit
 ```
 

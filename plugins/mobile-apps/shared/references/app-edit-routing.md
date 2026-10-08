@@ -6,13 +6,23 @@ This includes future feature skills; it is not an allowlist of current names.
 Adding a wrapper or registering a service is not the same as delivering the
 feature that uses it.
 
+Use [app-working-directory.md](app-working-directory.md) for root binding and
+the canonical [data-source invocation scope](../shared-instructions.md#data-source-invocation-scope)
+for data operations; this reference adds entry choice and feature ownership,
+not another environment resolver or data lifecycle.
+
+Cloud-flow integration remains unsupported. Report
+`BLOCKED: cloud-flow integration is not supported` before offering integration
+or starting a planner; do not broaden the available CLI surface.
+
 ## Direct requests
 
 For an existing mobile app, use a lightweight **entry-choice gate** before loading
 or invoking `/edit-app`. Check only the supplied request/caller context and local
 project markers needed to identify the app. Do not run health/type checks, scan
 all screens/services, discover cloud metadata, start planners, or generate previews
-just to ask this question. This gate precedes operational version/auth checks.
+just to ask this question. This gate precedes operational toolchain/auth checks;
+the standard plugin-update notification still runs first.
 
 Ask one question through the host's question tool: "How far should I take this change?"
 
@@ -52,8 +62,9 @@ memory-bank update. Do not ask the user to run a second command themselves.
 The entry choice approves entering that workflow, not its mutations: preserve
 its impact/plan approval and explicit approval for data-source removals.
 
-If the app exists but its plan is missing, report the missing plan and ask whether
-to restore it or perform an explicitly limited implementation-only operation.
+If full integration was selected but the app's plan is missing, report that
+prerequisite and ask whether to restore it or choose a limited implementation-only
+operation. Implementation-only work does not require a complete app plan.
 Do not re-scaffold over the app or fabricate a complete plan from one request.
 Outside an existing app, retain the skill's project prerequisites and standalone
 planning behavior; brand-only design generation need not create an app.
@@ -69,6 +80,10 @@ together with:
 - `phase`: planning or implementation, or an explicitly delegated design/configuration gate;
 - `approved_scope`: the exact approved plan sections/operations and supplied answers
   for implementation, or the read-only planning task.
+
+Keep the upstream `CODE_APPS_NATIVE_ORCHESTRATING=1` environment flag for
+nested design/browser workflows that require it. It suppresses browser openers;
+it is not a substitute for this scoped `MOBILE_APP_ORCHESTRATING=1` handoff.
 
 Check valid caller context before the entry-choice gate. A current approved
 `/create-mobile-app` or `/edit-app` child call skips the entry question and executes
@@ -103,7 +118,7 @@ mutate during planning.
 | Requirement | Affected plan surfaces |
 |---|---|
 | Device capture, scan, view, or local export | Native Capabilities; Screens when used by UI |
-| Teams/email action, profile lookup, or cloud flow | Connectors and the consuming Screens; no Dataverse Data Model by default |
+| Teams/email action or profile lookup | Connectors and the consuming Screens; no Dataverse Data Model by default |
 | SQL/Excel/SharePoint data | Connectors, including external tables/list schemas, and consuming Screens; not automatically Dataverse |
 | New/changed Dataverse tables, columns, relationships, or retained artifacts | Data Model; Screens when they consume the change |
 | Existing Dataverse schema with missing generated services | Refresh services and Generated Services snapshot; do not invent schema changes |

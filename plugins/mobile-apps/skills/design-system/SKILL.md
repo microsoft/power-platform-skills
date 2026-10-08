@@ -15,6 +15,11 @@ model: opus
 **Entry routing:** use the shared [App feature entry points](../../shared/shared-instructions.md#app-feature-entry-points)
 preflight before the workflow below.
 
+Before reading brand state, bind `working_dir` through
+[app-working-directory.md](../../shared/references/app-working-directory.md).
+Use that root for every shell call and absolute file-tool path, including
+history, rollback, previews, and runtime wiring in the referenced workflows.
+
 Read-only `--history` / `--diff` and standalone brand generation without an app
 remain here.
 
@@ -72,16 +77,16 @@ Detect invocation mode:
 1. Check MOBILE_APP_ORCHESTRATING=1 AND matching explicit caller context
    → Mode A (folded into /create-mobile-app or approved /edit-app work)
 
-2. Check cwd for app.config.js + tamagui.config.ts + package.json with expo deps
+2. Check the resolved working_dir for app.config.js + tamagui.config.ts + package.json with expo deps
    → Mode B (standalone in existing project)
 
 3. Else
    → Mode C (standalone, no project)
-   → Ask: "No native project detected. Write brand/ to current directory? [y/N]"
+   → Ask: "No native project detected. Write brand/ to <working_dir>? [y/N]"
 ```
 
-For Mode A, use the caller's absolute `working_dir`, not the shell cwd.
-For Mode B, resolve `working_dir` from arguments or cwd. For Mode C, confirm with user.
+All modes retain the already resolved `working_dir`; do not resolve another root
+from the launch directory. Mode C still requires user confirmation before writes.
 
 **Write boundary (all paths):** `--plan-only` or a planning-phase handoff returns
 only a proposal; do not write brand artifacts, previews, history, or memory-bank.
@@ -491,6 +496,7 @@ Write to `brand/design-system.html`.
 **Open in browser — standalone runs only:**
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 open "brand/design-system.html" 2>/dev/null \
   || xdg-open "brand/design-system.html" 2>/dev/null \
   || echo "Preview at: file://$(pwd)/brand/design-system.html"

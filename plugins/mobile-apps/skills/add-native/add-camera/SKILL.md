@@ -58,7 +58,7 @@ capture/scanner package.
 ### Step 1 — Verify project
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 test -f app.config.js && test -f power.config.json && test -f package.json || { echo "BLOCKED: working_dir is not an initialized app" >&2; exit 1; }
 ```
 
@@ -85,7 +85,7 @@ capture or scanning. The checker accepts artifact-key JSON, not raw `$ARGUMENTS`
 or a public capability string. Missing/ambiguous intent still returns to the owner.
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node - '<approved-artifact-keys-json>' <<'NODE'
 const p = require('./package.json');
 const modules = {

@@ -198,7 +198,7 @@ test('direct Dataverse requests cannot replay an unrelated existing plan', () =>
   const dataverse = skill('add-dataverse');
   const plan = section(dataverse, '### Step 2 — Resolve plan', '#### Step 2a');
   const gate = section(plan, '**Resolve the current request', 'Before reading plan content');
-  assert.match(gate, /direct\nimplementation-only invocation must compare its requested/);
+  assert.match(gate, /direct\nstandalone invocation must compare its requested/);
   assert.match(gate, /Present and approve\nthat exact delta/);
   assert.match(gate, /do not apply other pending rows/);
   assert.match(gate, /`NEEDS_CONTEXT` without mutation/);
@@ -322,7 +322,7 @@ test('edit passes a seed allowlist and excludes the approved retirement set', ()
   const execution = section(edit, '### Step 5', '#### Step 5.5');
   assert.match(approval, /Exact sample-data table allowlist and count\/media policy/);
   assert.match(execution, /Distinguish `createdThisEdit` from historical\n\s+manifest `status: new`/);
-  assert.match(execution, /Empty scope means skip/);
+  assert.match(execution, /empty scope means skip seeding/);
   const handoff = execution.slice(execution.indexOf('Invoke skill: /add-sample-data'));
   assert.match(handoff, /MOBILE_APP_ORCHESTRATING=1/);
   assert.match(handoff, /working_dir: <working_dir>/);

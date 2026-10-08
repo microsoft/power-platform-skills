@@ -139,7 +139,13 @@ test('shared root contract distinguishes direct defaults from required child con
   const shared = read(path.join(pluginRoot, 'shared/shared-instructions.md'));
   const binding = '[app-working-directory.md](references/app-working-directory.md)';
   assert.ok(shared.includes(binding));
-  assert.ok(shared.indexOf(binding) < shared.indexOf('Classify the current request'));
+  assert.ok(shared.indexOf(binding) < shared.search(/Classify the current\s+request/));
+  const dataScopeStart = shared.indexOf('## Data-source invocation scope');
+  assert.ok(dataScopeStart > 0, 'Existing data callers keep their canonical scope anchor');
+  const dataScope = shared.slice(dataScopeStart, shared.indexOf('## Version Check', dataScopeStart));
+  assert.ok(dataScope.includes(binding));
+  assert.match(dataScope, /Resolve the current requested operation before discovery or mutation/);
+  assert.match(dataScope, /expanded or conflicting scope returns `NEEDS_CONTEXT`/);
   assert.match(reference, /## 0\. Bind every operation to the app root[\s\S]*\[app-working-directory\.md\]\(app-working-directory\.md\)/);
   assert.match(scope, /Child invocation[\s\S]*owner's absolute\s+`working_dir`/);
   assert.match(scope, /Never fall back to the process cwd/);
@@ -392,17 +398,14 @@ for (const name of ['add-dataverse', 'add-sample-data']) {
       const blocks = shellBlocks(source);
       assert.equal(blocks.length, [...content.matchAll(/^ {0,3}```bash$/gm)].length);
       assertRootBinding(source, appRootLink);
-      for (const block of blocks) {
-        const unguarded = normalize(source).replace(block, block.slice(guard.length + 1));
-        assert.throws(() => assertRootBinding(unguarded, appRootLink));
-      }
+      assertEveryGuardIsRequired(normalize(source), guard);
     });
   }
 }
 
 test('Dataverse nested metadata and generated-file paths stay literal and app-rooted', () => {
   const content = read(path.join(pluginRoot, 'skills/add-dataverse/SKILL.md'));
-  assert.match(content, /--operations "\$\(cat "<working_dir>\/\.tmp\/derived-metadata-operations\.json"\)"/);
+  assert.match(content, /--operations "\$\(cat '<working_dir>\/\.tmp\/derived-metadata-operations\.json'\)"/);
   assert.match(content, /Glob: <working_dir>\/src\/generated\/services\/\*Service\.ts/);
   assert.match(content, /Glob: <working_dir>\/src\/generated\/models\/\*Model\.ts/);
 });
@@ -432,8 +435,7 @@ npm() { record_call npm "$@"; }
 `;
   const prepare = (block, root) => {
     const command = block
-      .replaceAll(/"<working_dir>([^"]*)"/g, (_match, suffix) =>
-        shellQuote(root.replaceAll('\\', '/') + suffix.replaceAll(/<[^>]+>/g, 'fixture')))
+      .replaceAll('<working_dir>', shellLiteralContents(root))
       .replaceAll(/<[^>]+>/g, 'fixture');
     assert.doesNotMatch(command, /<[^>]+>/);
     return `${probes}\nPLUGIN_ROOT=${shellQuote(pluginRoot.replaceAll('\\', '/'))}\n${command}`;
@@ -615,6 +617,31 @@ const previewOpeners = [
   ['skills/preview-screens/SKILL.md', 'preview.html'],
 ];
 
+test('design previews and runtime checks use the approved root in fresh shells', (t) => {
+  const { directory, owner, caller } = fixture(t);
+  const design = read(path.join(pluginRoot, 'skills/design-system/SKILL.md'));
+  assert.match(design, /bind `working_dir` through\s+\[app-working-directory\.md\]/);
+  assert.match(design, /every shell call and absolute file-tool path/);
+  assert.match(design, /Check the resolved working_dir for app.config.js/);
+  for (const file of [
+    'skills/design-system/SKILL.md',
+    'skills/design-system/references/tamagui-integration.md',
+  ]) {
+    const blocks = shellBlocks(read(path.join(pluginRoot, file)));
+    assert.ok(blocks.length > 0);
+    for (const block of blocks) {
+      assert.ok(block.startsWith(`${guard}\n`), file);
+      const probe = `${block.split('\n')[0]}\nnode -p "process.cwd()"`;
+      const result = run(probe, owner, caller);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(fs.realpathSync.native(result.stdout.trim()), fs.realpathSync.native(owner));
+      const missing = run(probe, path.join(directory, 'missing design app'), caller);
+      assert.equal(missing.status, 1);
+      assert.match(missing.stderr, /BLOCKED: cannot enter working_dir/);
+    }
+  }
+});
+
 function captureWindowsOpener(t, file, filename) {
   const { owner, caller } = fixture(t);
   const block = shellBlocks(read(path.join(pluginRoot, file)))
@@ -700,15 +727,13 @@ for (const file of files) {
 
   for (const [eolName, eol] of [['LF', '\n'], ['CRLF', '\r\n']]) {
     test(`${name} binds every shell call and file tool before project access (${eolName})`, () => {
-      assertRootBinding(content.replace(/\n/g, eol));
+      assertRootBinding(content.replace(/\n/g, eol), rootLink);
     });
   }
 
   test(`${name} rejects a deferred root preflight or a missing later cd`, () => {
-    assert.throws(() => assertRootBinding(content.replace(rootLink, '') + `\n${rootLink}`));
-    for (const block of blocks) {
-      assert.throws(() => assertRootBinding(content.replace(block, block.slice(guard.length + 1))));
-    }
+    assert.throws(() => assertRootBinding(content.replace(rootLink, '') + `\n${rootLink}`, rootLink));
+    assertEveryGuardIsRequired(content, guard, 'bash', rootLink);
   });
 
   test(`${name} executes project and package gates against the owner, not the launch directory`, (t) => {

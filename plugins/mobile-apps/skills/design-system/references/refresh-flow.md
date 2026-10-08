@@ -8,6 +8,9 @@ than rerunning intent selection. Return any scope-changing drift resolution to
 the owner. A token refresh still requires the owner's runtime wiring and
 affected-screen verification; a gallery is not proof of app integration.
 
+All `brand/` paths below belong to the already resolved `working_dir`. Use
+absolute file-tool paths and the shared app-root guard for any shell call.
+
 ## Snapshot contract
 
 Use one history contract for refresh, reskin, `--add-dark-mode`, changing or

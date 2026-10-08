@@ -30,7 +30,7 @@ Hard rules:
 ## 1. Verify app and package
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 test -f app.config.js && test -f power.config.json && test -f package.json && test -d src || { echo "BLOCKED: working_dir is not an initialized app" >&2; exit 1; }
 node -e "const p=require('./package.json'); const m='@microsoft/power-apps-native-bglocation'; if (!p.dependencies?.[m]) { console.error('MISSING: ' + m); process.exit(1); } console.log('OK: geolocation package present');"
 ```
@@ -48,7 +48,7 @@ msdyn_locationrecords
 Do not ask the user for a table name and do not invent a custom table. `msdyn_locationrecords` must already exist before the control can be used.
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 ENV_JSON=$(node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e "console.log(require('./power.config.json').environmentId)")")
 ENV_URL=$(node -e "const j=JSON.parse(process.argv[1]); process.stdout.write(j.environmentUrl || '')" "$ENV_JSON")
 
@@ -65,7 +65,7 @@ Required result:
 When the table exists, verify every mapped column exists:
 
 ```bash
-cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "$ENV_URL" GET \
   "EntityDefinitions(LogicalName='<logicalName>')/Attributes?\$select=LogicalName,AttributeType"
 ```

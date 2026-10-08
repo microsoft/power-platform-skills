@@ -15,8 +15,9 @@ For native or data-source feature work, bind the invocation through
 [app-working-directory.md](references/app-working-directory.md) before reading
 even the minimal local app markers. A child's launch directory is not its app root.
 
-Classify the current request from supplied intent, caller context, and minimal
-local app markers before version/auth checks, metadata discovery, or planners:
+The standard plugin-update notification remains first. Classify the current
+request from supplied intent, caller context, and minimal local app markers
+before operational toolchain/auth checks, metadata discovery, or planners:
 
 - Native capability, connector/data-source, data-model, or design feature work:
   read and execute [app-edit-routing.md](references/app-edit-routing.md).
@@ -30,8 +31,35 @@ local app markers before version/auth checks, metadata discovery, or planners:
   publishing, telemetry, sample seeding, offline administration) keep their own
   scoped approvals; they do not authorize an unrelated feature integration.
 
+For data work, continue with the canonical invocation scope below after the
+entry choice or approved-child routing. Native and design workflows retain
+their own operation-specific gates.
+
+---
+
+## Data-source invocation scope
+
+Before data-source work, bind the invocation through
+[app-working-directory.md](references/app-working-directory.md) before reading
+even the minimal local app markers. A child's launch directory is not its app root.
+
+Resolve the current requested operation before discovery or mutation: schema
+change/new binding, retained-source refresh, retirement, or sample seeding.
+An existing plan or inventory is context, not permission to replay every row.
+Standalone implementation-only calls keep the data workflow's own approval and
+validation gates; the full-integration entry choice delegates to `/edit-app`.
+
+For every data child handoff, including routers and retries, pass
+`MOBILE_APP_ORCHESTRATING=1`, the owning `orchestrator`, absolute `working_dir`,
+current `phase`, and exact `approved_scope` with supplied answers. The marker is
+invocation-scoped: do not persist it, rely on a prior shell export, or infer
+approval from a flag alone. Approved children reuse that same current scope and
+return to their owner; expanded or conflicting scope returns `NEEDS_CONTEXT`.
+Older callers without a complete approved handoff must establish current scope
+through the leaf's approval gate rather than silently applying the saved plan.
+
 `--plan-only` or a planning-phase handoff never authorizes mutating leaves,
-connection creation, generated services, native wrappers, brand tokens, or
+connection creation, generated services, seeding, schema writes, native wrappers, brand tokens, or
 dependency installation. Return the proposal before implementation; only a
 workflow's explicit plan-document approval may save planning documents.
 Propagate the mode and current scoped context through routers; missing or

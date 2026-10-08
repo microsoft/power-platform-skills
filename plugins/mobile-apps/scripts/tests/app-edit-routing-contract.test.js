@@ -112,7 +112,8 @@ test('the entry choice precedes costly work and requires explicit integration co
   const direct = section(routing, '## Direct requests', '## Orchestrated calls');
   assert.match(direct, /before loading\nor invoking `\/edit-app`/);
   assert.match(direct, /Do not run health\/type checks, scan\nall screens\/services/);
-  assert.match(direct, /precedes operational version\/auth checks/);
+  assert.match(direct, /precedes operational toolchain\/auth checks/);
+  assert.match(direct, /standard plugin-update notification still runs first/);
   for (const choice of ['Implementation only', 'Full app integration', 'Cancel']) {
     assert.ok(direct.includes(`| ${choice} |`));
   }
@@ -307,7 +308,7 @@ test('connector aliases and operations preserve dedicated routing and dependency
   assert.match(connector, /actions\/functions follow the discovery-only branch/);
   assert.doesNotMatch(connector, /npx expo install <missing-package>/);
   assert.match(connector, /Do not install\nnative packages absent from the template/);
-  assert.match(connector, /implementation-only removal must stop if it would leave broken consumers/);
+  assert.match(connector, /Standalone removal must stop if\s+it would leave broken consumers/);
 });
 
 test('Dataverse discovery executes before connector setup and ends the leaf', () => {
@@ -321,34 +322,32 @@ test('Dataverse discovery executes before connector setup and ends the leaf', ()
   assert.doesNotMatch(setup, /find-dataverse-api/);
 });
 
-test('connector discovery examples use the installed CLI without changing generation forms', () => {
+test('connector discovery examples use the canonical local CLI resolver', () => {
   const connector = skill('add-connector');
-  for (const verb of ['list-flows', 'list-datasets', 'list-tables', 'list-sqlStoredProcedures']) {
-    assert.match(connector, new RegExp(`^npx --no-install power-apps ${verb}\\b`, 'm'));
-    assert.doesNotMatch(connector, new RegExp(`^npx power-apps ${verb}\\b`, 'm'));
+  for (const verb of ['list-datasets', 'list-tables', 'list-procedures']) {
+    assert.match(connector, new RegExp(`^\\$PA connection ${verb}\\b`, 'm'));
   }
+  assert.doesNotMatch(connector, /^npx (?:--no-install )?power-apps /m);
 });
 
 for (const [label, discoveryVerb, addCommand, approval, proposalOnly] of [
-  ['flow', 'list-flows', 'npx power-apps add-flow',
-    /Resolve the exact flow ID and approve its app binding, or reuse matching current\s+owner approval/, /Proposal-only calls return here without adding the flow/],
-  ['table', 'list-datasets', 'npx power-apps add-data-source --api-id <apiId> --connection-id <connectionId> --dataset',
+  ['table', 'list-datasets', '$PA app add data-source --connector <apiId> --connection-id <connectionId> --dataset',
     /Approve\s+the exact selected bindings before generation, or reuse matching current owner\s+approval/, /proposal-only discovery returns without adding sources/],
-  ['procedure', 'list-sqlStoredProcedures', 'npx power-apps add-data-source --api-id shared_sql',
+  ['procedure', 'list-procedures', '$PA app add data-source --connector shared_sql',
     /Approve the exact procedure binding before generation if it was not already in\s+the current approved scope/, /proposal-only discovery returns without adding it/],
 ]) {
   test(`connector ${label} discovery returns through approval before a separate guarded mutation`, () => {
     const connector = skill('add-connector');
     const blocks = [...connector.matchAll(/^```bash\n([\s\S]*?)\n```/gm)];
-    const discovery = blocks.find((block) => block[1].includes(`npx --no-install power-apps ${discoveryVerb}`));
+    const discovery = blocks.find((block) => block[1].includes(`$PA connection ${discoveryVerb}`));
     const addition = blocks.find((block) => block[1].includes(addCommand));
     assert.ok(discovery, `${label}: documented discovery block`);
     assert.ok(addition, `${label}: documented registration block`);
     assert.ok(addition.index > discovery.index, 'Discovery and mutation must be separate, ordered calls');
-    const guard = 'cd -- "<working_dir>" || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }';
+    const guard = "cd -- '<working_dir>' || { echo \"BLOCKED: cannot enter working_dir\" >&2; exit 1; }";
     assert.ok(discovery[1].startsWith(`${guard}\n`));
     assert.ok(addition[1].startsWith(`${guard}\n`));
-    assert.doesNotMatch(discovery[1], /^npx (?:--no-install )?power-apps (?:add-flow|add-data-source)\b/m);
+    assert.doesNotMatch(discovery[1], /^\$PA app add\b/m);
     const gate = connector.slice(discovery.index + discovery[0].length, addition.index);
     assert.match(gate, approval);
     assert.match(gate, proposalOnly);
@@ -368,7 +367,7 @@ test('SharePoint proposal and binding approvals precede implementation', () => {
   assert.ok(binding.indexOf('obtain explicit approval') < binding.indexOf('```bash'));
   const add = section(sharepoint, '### Step 9:', '### Step 10:');
   assert.match(add, /Confirm approval covers this environment, connection\s+ID\/reference, site, and list\/library before registration/);
-  assert.match(add, /Obtain approval for\s+newly resolved bindings; return a changed child scope to its owner/);
+  assert.match(add, /approve any newly resolved binding; return a changed child scope to its\s+owner/);
   assert.match(add, /A picker\s+selection alone is not execution approval/);
   assert.ok(add.indexOf('Confirm approval') < add.indexOf('```bash'));
 });
@@ -407,7 +406,7 @@ test('every explicit create/edit child context includes its working directory', 
     assert.ok(contexts.length > 0, `${name} handoff coverage`);
     for (const [, context, args] of contexts) {
       assert.match(context, /working_dir: <working_dir>/, name);
-      assert.match(args, /--working-dir "?<working_dir>"?/, name);
+      assert.match(args, /--working-dir ['"]?<working_dir>['"]?/, name);
     }
   }
 });
@@ -447,11 +446,11 @@ test('configuration-only workflows retain their own approvals and return to thei
 });
 
 test('data-source removal is an explicit app-only retirement, not server deletion', () => {
-  assert.match(removal, /does not authorize deleting the server table, its columns\/records/);
+  assert.match(removal, /does not authorize deleting the server table,\s+its columns\/records/);
   assert.match(removal, /A missing row in a planner's output is a candidate, not consent/);
   assert.match(removal, /lookup\/identity reads, and offline requirements/);
   assert.match(removal, /Dynamic or ambiguous usage is a blocker/);
-  assert.match(removal, /Never mutate\nconfiguration\/generated files during planning or `--plan-only`/);
+  assert.match(removal, /Never mutate\s+configuration\/generated files during\s+planning or `--plan-only`/);
 });
 
 test('retired consumers are updated before the edit unregisters their sources', () => {
@@ -585,16 +584,14 @@ test('README explains data-source commands without internal execution mechanics'
   assert.doesNotMatch(examples, /compact live-metadata|working_dir|PowerShell|Bash|schema map|allowlist|offline-profile-delta/);
 });
 
-test('all mobile instruction files use the mobile-specific orchestration marker', () => {
-  function inspect(directory) {
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      const file = path.join(directory, entry.name);
-      if (entry.isDirectory()) inspect(file);
-      else if (entry.name.endsWith('.md')) {
-        assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /CODE_APPS_NATIVE_ORCHESTRATING/, file);
-      }
-    }
-  }
-  inspect(path.join(pluginRoot, 'skills'));
-  inspect(path.join(pluginRoot, 'shared'));
+test('scoped feature context preserves the separate upstream browser suppression flag', () => {
+  assert.match(routing, /MOBILE_APP_ORCHESTRATING=1/);
+  assert.match(routing, /CODE_APPS_NATIVE_ORCHESTRATING=1/);
+  assert.match(routing, /suppresses browser openers/);
+  const creation = section(create, '### Step 6.75', '#### Branch A');
+  assert.match(creation, /Environment:\s+CODE_APPS_NATIVE_ORCHESTRATING=1/);
+  assert.match(creation, /Context:\s+MOBILE_APP_ORCHESTRATING=1/);
+  assert.match(edit, /CODE_APPS_NATIVE_ORCHESTRATING=1[\s\S]*suppress intermediate browser tabs/);
+  assert.match(skill('design-system'), /CODE_APPS_NATIVE_ORCHESTRATING=1/);
+  assert.match(read('skills/design-system/references/vibe/style-picker.md'), /CODE_APPS_NATIVE_ORCHESTRATING=1/);
 });

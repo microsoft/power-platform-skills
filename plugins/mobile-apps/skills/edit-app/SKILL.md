@@ -244,7 +244,7 @@ Scenario-specific questions to ask only when the answer is not already obvious:
 | Dataverse create form | Which Dataverse table? Existing table or new table? Which fields are required/editable? Where should the form launch from? What happens after save (back, detail, add another)? Are there lookup/file/image fields? |
 | Barcode/QR scan search | Where should scanning live (new scanner screen, existing search screen action, form field)? What does the scanned value represent (record ID, serial number, asset tag, SKU, custom field)? Which table/service/field should it search? What happens on no match or multiple matches? |
 | New requirement + screen | What user workflow is being added? Who uses it? What data/native/connectors does it need? Where does it sit in navigation? What is success/failure behavior? |
-| New data source | What job does the data source support? Is it structured business data (Dataverse), SharePoint list/library, cloud flow/action, or another connector? Which screen(s), if any, should use it now? |
+| New data source | What job does the data source support? Is it structured business data (Dataverse), SharePoint list/library, a connector action, or another connector? Which screen(s), if any, should use it now? |
 | Remove/replace a table or integration | Remove it only from this app, or is server deletion separately intended? Which remaining screens, lookup/identity helpers, native sync, or offline behavior still require it? Preserve server data by default. |
 | Native capability without a workflow | What should the capability do, where should users invoke it, and should the result stay local or be retained in an existing data source? |
 | Preview only | Preview all screens or only changed/key screens? Should Visual Companion auto-open behavior be honored? |
@@ -271,7 +271,7 @@ Use this scenario coverage matrix for common follow-ups. The goal is one user pr
 | Add a full calendar, agenda, or scheduling view | Screens → JavaScript Dependencies | Add exact `react-native-calendars` version to the approved table, then `npm install --save-exact` before builders | Build the calendar screen with the approved pattern; no `/add-native` or Android/iOS rebuild |
 | Add a new requirement with a new screen | Usually Screens plus whichever of Data Model, Connector, Native, Design the requirement implies | Decompose into one coherent feature; apply data/connector/native/design first, then screens | Generate/refresh service snapshot, layouts, skeletons/shared code, then build affected screens |
 | Add a new data source but no screen | Connector/Data Source; sometimes Data Model | `/add-datasource` when ambiguous; `/add-sharepoint`, `/add-connector`, or `/add-dataverse` when clear | Refresh generated services and memory bank; no screen rebuild unless the user asked for UI |
-| Add Teams/email action, profile lookup, or cloud flow | Connectors; Screens when consumed | `/add-connector` after approval | Wire the action/read and its loading/error/success behavior; no Dataverse schema by default |
+| Add Teams/email action or profile lookup | Connectors; Screens when consumed | `/add-connector` after approval | Wire the action/read and its loading/error/success behavior; no Dataverse schema by default |
 | Add SQL/Excel/SharePoint data | Connectors, including external table/list schema; Screens when consumed | Matching connector leaf after approval | Do not add a Dataverse model just because the connector supplies tabular data |
 | Add a new table/entity but no screen | Data Model | `mobile-app:data-model-architect` -> `/add-dataverse --skip-planning` | Refresh generated services; optionally seed sample data; no preview unless UI changed |
 | Stop using a table/connector/flow or replace its data source | Data Model/Connectors and affected Screens | Approved retirement via the matching leaf after consumer updates in Step 6 | CLI removes the app registration and regenerates services/config; Step 6.5 verifies remaining sources and refreshes the schema map |
@@ -571,7 +571,7 @@ answers, and return to the approval gate if an unresolved choice changes scope.
    not the entire project manifest. Distinguish `createdThisEdit` from historical
    manifest `status: new`; existing/reused parent tables need explicit inclusion.
    Validate the approved names against verified output and the retirement set.
-   Empty scope means skip. Missing/unverified/retiring targets return to the owner
+   An empty scope means skip seeding. Missing/unverified/retiring targets return to the owner
    for correction, not a fallback to project-wide seeding. Pass the handoff below.
    If insertion fails, record the partial result and continue only if the app
    handles empty states; never report complete seed coverage.
@@ -579,7 +579,9 @@ answers, and return to the approval gate if an unresolved choice changes scope.
 4. **Pure-JavaScript Dependencies** — execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) for new or changed rows in the approved `## Screens → ### JavaScript Dependencies` table. Approval is consent for those exact packages and versions. Install and validate before screen work; if final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and stop with the exact failed criterion.
 5. **Native Capabilities** — read and execute `/add-native <capability>` for every new capability. Do not install missing native packages or fake wrappers. If a capability is unsupported by the current template, stop before rebuilding screens that import it, record the block, and tell the user what upstream template support is missing.
 6. **Design** — read and execute the approved `/design-system` operation (refresh,
-   reskin, theme, or rollback). Apply its Tamagui integration reference to changed
+   reskin, theme, or rollback). Include `CODE_APPS_NATIVE_ORCHESTRATING=1` in
+   the child environment to suppress intermediate browser tabs, alongside the
+   scoped `MOBILE_APP_ORCHESTRATING=1` context above. Apply its Tamagui integration reference to changed
    tokens/themes and provider wiring before verification; a brand artifact alone
    does not prove runtime integration. Token-only changes usually do not require
    screen TSX rewrites; component/density/negative-rule changes may. Rebuild
@@ -606,14 +608,15 @@ Context:
   orchestrator: edit-app
   working_dir: <working_dir>
   phase: implementation
+  offline_reconciliation_owner: edit-app
   planning_snapshot: <SNAPSHOT_PATH>
   architect_evidence: <ARCHITECT_EVIDENCE_PATH>
   schema_contract: <working_dir>/.tmp/dataverse-schema-contract.json
   approved_scope: <accepted delta and dependencies, contract_sha256, plan_sha256>
 
 Arguments:
-  --working-dir "<working_dir>"
-  --plan-section "<working_dir>/native-app-plan.md#data-model"
+  --working-dir '<working_dir>'
+  --plan-section '<working_dir>/native-app-plan.md#data-model'
   --skip-planning
 ```
 
@@ -631,7 +634,7 @@ Context:
   retiring_tables: <approved retirement list, or empty>
 
 Arguments:
-  --working-dir "<working_dir>"
+  --working-dir '<working_dir>'
   --tables "<approved-seed-table-logical-names>"
   --exclude-tables "<retiring-table-logical-names-or-empty>"
 ```
@@ -664,7 +667,7 @@ Do not ask the user to run these follow-up skills manually. This skill is the or
 
 #### Step 5.6 — Offline profile reconciliation
 
-If Step 5 created or extended Dataverse tables, an existing Mobile Offline Profile may now be missing those tables/columns (new tables never sync to devices; new columns arrive blank). Step 5's `/add-dataverse --skip-planning` suppresses that skill's own Step 8.5 reconciliation, so this orchestrator owns the check. Skip when no Data Model mutation occurred in this edit.
+If Step 5 created or extended Dataverse tables, an existing Mobile Offline Profile may now be missing those tables/columns (new tables never sync to devices; new columns arrive blank). Step 5's complete scoped `/add-dataverse --skip-planning` handoff names `offline_reconciliation_owner: edit-app`, so this orchestrator owns the check instead of the leaf's Step 8.5. The flag alone is not enough. Skip when no Data Model mutation occurred in this edit.
 
 For mixed addition/removal edits, intersect any returned additions with the
 approved retained/added Dataverse set before offering/applying profile changes.

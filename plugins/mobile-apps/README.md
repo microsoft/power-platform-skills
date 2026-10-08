@@ -246,19 +246,22 @@ Choose implementation-only in that question, or use `--implementation-only` (for
 `/add-native secure-store --implementation-only`) or explicitly request only a
 wrapper/service registration. The skill keeps applicable plan entries current,
 but leaves screens unchanged and reports that integration was not performed.
-Creation/edit orchestrators pass `MOBILE_APP_ORCHESTRATING=1` with explicit scoped
-context to child skills, which skip this extra question. The entry choice runs
-before costly app scans or planners and does not replace mutation/removal approval.
-Users do not need to set an environment variable.
+When the change is already part of an approved creation/edit workflow, the
+extra entry question is skipped. This choice runs before costly app scans or
+planners and does not replace mutation/removal approval.
+
+### Data-source planning, refresh, and retirement
 
 Use `/setup-datamodel` or `/add-dataverse` to review and approve a data change.
 Add `--plan-only` to preview it without changing the app or its data.
 
-For retained-source repairs, the same data leaves accept skill-only
-`--refresh --data-source-name "<registered-name>"`. They validate the existing
-binding and refresh generated output without adding a source or connection.
-`/setup-datamodel --plan-only` returns a proposal without saving or applying an
-execution plan.
+For existing sources, use the dedicated refresh/removal operation:
+
+```text
+> /add-dataverse --refresh --data-source-name <registered-name>
+> /add-connector --refresh --data-source-name <registered-name>
+> /add-sharepoint --remove --data-source-name <registered-name>
+```
 
 Refresh updates an existing source without adding it again. Removal stops if
 app code still uses the source and never deletes server tables, records, lists,

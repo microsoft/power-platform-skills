@@ -255,6 +255,7 @@ test('Step 2b verifies approval before fresh bounded reconciliation, not whole-p
   assert.match(entry, /normalized contract's non-deferred\n`serviceRequired` declarations/);
   assert.match(entry, /broader existing-app service\ninventory as retained context, not a registration or mutation work list/);
   const binding = section(dataverse, '#### Step 2b', '### Step 2.5');
+  assert.match(binding, /Enter only for a shared compact-planning handoff, not an approved legacy child/);
   inOrder(binding, 'Require all fields and real implementation approval', 'Before Step 3', 'compare SHA-256', 'verify the selected target identity', 'decision validators', 'After success', 'proceed to\nStep 3');
   assert.match(binding, /partial, missing, changed, or mismatched context returns `NEEDS_CONTEXT`/);
   assert.match(binding, /never a fallback to whole-plan replay or fresh approval inference/);
@@ -272,6 +273,22 @@ test('Step 2b verifies approval before fresh bounded reconciliation, not whole-p
   assert.match(planning, /missing\/out-of-scope binding returns\nto the owner/);
 });
 
+test('legacy child handoffs require current approval and cannot bypass invalid compact artifacts', () => {
+  const legacy = section(dataverse, 'Older callers', 'For the shared scoped path');
+  assert.match(legacy, /Do not assume compact\s+evidence or complete approval from the caller's name/);
+  assert.match(legacy, /Without a complete approved\s+handoff, resolve the current requested delta/);
+  assert.match(legacy, /Step 2\.7 approval path before execution/);
+  assert.match(legacy, /missing or conflicting child root still returns `NEEDS_CONTEXT`/);
+  assert.match(legacy, /Never silently replay the saved plan or treat `--skip-planning`\s+as consent/);
+  assert.match(legacy, /An approved legacy child without compact-planning artifacts keeps the supported\nMarkdown\/live-reconciliation path/);
+  assert.match(legacy, /current request, absolute\nroot, implementation phase, and exact approved delta are all established/);
+  assert.match(legacy, /Never use this legacy path to bypass a partial or invalid compact-planning\nhandoff/);
+  assert.match(legacy, /Only the current approved\ndelta and its necessary dependencies enter live schema reconciliation/);
+  assert.match(legacy, /complete approved legacy handoff, proceed to Step 3 after this initialization/);
+  assert.match(legacy, /do not repeat proposal Steps 2\.5–2\.7 or require new compact artifacts/);
+  assert.match(legacy, /A planning-phase caller still returns without implementation/);
+});
+
 test('creation retains its complete receipt-owned fast path and fails closed on partial artifacts', () => {
   const flags = ['schema-contract', 'approval-receipt', 'execution-reconciliation', 'operation-manifest', 'publish-checkpoint'];
   const handoff = section(create, 'Invoke skill: /add-dataverse', '\n```');
@@ -286,6 +303,8 @@ test('creation retains its complete receipt-owned fast path and fails closed on 
   assert.match(fast, /partially supplied handoff[\s\S]*must fail closed/);
   assert.match(fast, /Never jump to\nStep 4 without Step 2 initialization/);
   assert.match(fast, /Do not reconstruct tables[\s\S]*from Markdown on this path/);
+  assert.match(fast, /Supplied execution\nartifacts never override `--plan-only` or a planning-phase caller/);
+  assert.match(fast, /return the proposal without entering Step 3/);
   assert.match(section(create, '### Step 8 — Apply', 'Invoke skill: /add-dataverse'), /Step 8 cannot create or refresh this receipt/);
 });
 
