@@ -43,7 +43,10 @@ test('plugin CI is path-filtered, read-only and runs the local build and test en
   const workflow = (await fs.readFile(path.join(workspace, workflowFile), 'utf8')).replace(/\r\n/g, '\n');
   // Match the complete trigger block, not a stray path in a comment or another event.
   const triggers = /^on:\n([\s\S]*?)(?=^\S)/m.exec(workflow)?.[1].trimEnd();
-  const paths = ['plugins/process-intelligence/**', 'LICENSE', workflowFile];
+  const paths = ['plugins/process-intelligence/**', 'LICENSE', workflowFile,
+    'marketplace.json', '.claude-plugin/marketplace.json', 'README.md',
+    '.github/ISSUE_TEMPLATE/bug_report.yml', '.github/ISSUE_TEMPLATE/feature_request.yml',
+    'shared/telemetry/README.md'];
   assert.equal(triggers, ['pull_request', 'push'].flatMap(event => [
     `    ${event}:`, '        branches:', '            - main', '        paths:',
     ...paths.map(value => `            - "${value}"`)

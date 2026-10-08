@@ -94,7 +94,7 @@
       "format": "esm"
     },
     "src/process.mjs": {
-      "bytes": 9611,
+      "bytes": 9637,
       "imports": [
         {
           "path": "node:child_process",
@@ -5349,7 +5349,7 @@
           "bytesInOutput": 3716
         },
         "src/process.mjs": {
-          "bytesInOutput": 8496
+          "bytesInOutput": 8440
         },
         "src/authentication.mjs": {
           "bytesInOutput": 13586
@@ -5736,7 +5736,7 @@
           "bytesInOutput": 7845
         }
       },
-      "bytes": 1261519
+      "bytes": 1261463
     }
   }
 }

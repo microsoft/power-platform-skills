@@ -99,7 +99,7 @@ do not hand-format the bundle.
 
 Run `npm ci`, `npm run build` and `npm test` from this directory in a repository checkout.
 The plugin's path-filtered CI runs the same build and tests on Windows, Linux and macOS with
-Node.js 22/24. Keep its workflow scoped to this plugin, its own file and required build inputs.
+Node.js 22/24. Keep its workflow scoped to this plugin, its own file and required build/test inputs.
 CI must reject changes to either generated artifact after building. Keep source checkout bytes
 stable with the plugin's `.gitattributes` and preserve byte-exact artifact comparisons.
 Cover every first-party input listed in the esbuild metafile, including imported JSON.

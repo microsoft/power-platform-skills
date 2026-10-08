@@ -7840,7 +7840,7 @@ async function terminate(child) {
     });
     killer.once("exit", (code) => {
       clearTimeout(timer);
-      if (code !== 0 && child.exitCode === null && child.signalCode === null) {
+      if (code !== 0) {
         reject(
           processError("Could not terminate the owned process tree.", "PROCESS_CLEANUP_FAILED")
         );

@@ -8,6 +8,12 @@ on:
             - "plugins/process-intelligence/**"
             - "LICENSE"
             - ".github/workflows/process-intelligence-script-tests.yml"
+            - "marketplace.json"
+            - ".claude-plugin/marketplace.json"
+            - "README.md"
+            - ".github/ISSUE_TEMPLATE/bug_report.yml"
+            - ".github/ISSUE_TEMPLATE/feature_request.yml"
+            - "shared/telemetry/README.md"
     push:
         branches:
             - main
@@ -15,6 +21,12 @@ on:
             - "plugins/process-intelligence/**"
             - "LICENSE"
             - ".github/workflows/process-intelligence-script-tests.yml"
+            - "marketplace.json"
+            - ".claude-plugin/marketplace.json"
+            - "README.md"
+            - ".github/ISSUE_TEMPLATE/bug_report.yml"
+            - ".github/ISSUE_TEMPLATE/feature_request.yml"
+            - "shared/telemetry/README.md"
 
 permissions:
     contents: read

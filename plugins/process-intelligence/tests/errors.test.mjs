@@ -43,7 +43,8 @@ test('process, state, endpoint and claims failures expose stable safe categories
   await assert.rejects(new StateStore(root).load('missing'), code('PROFILE_MISSING'));
   await assert.rejects(new AzureCliProcess({ executable: path.join(root, 'missing') }).run(['version']), code('AZ_CLI_NOT_FOUND'));
   await assert.rejects(runProcess(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { timeout: 100 }), code('CLI_TIMEOUT'));
-  await assert.rejects(runProcess(process.execPath, ['-e', "console.log('x'.repeat(10000))"], { outputLimit: 10 }), code('CLI_OUTPUT_LIMIT'));
+  // Keep the fixture alive so this asserts overflow after successful cleanup, not a taskkill exit race.
+  await assert.rejects(runProcess(process.execPath, ['-e', "console.log('x'.repeat(10000));setInterval(()=>{},1000)"], { outputLimit: 10 }), code('CLI_OUTPUT_LIMIT'));
   const endpoint = 'https://fixture.example/mcp';
   await assert.rejects(authenticatedFetch(endpoint, async () => 'synthetic',
     async () => new Response(null, { status: 401,

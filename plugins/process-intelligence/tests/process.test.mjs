@@ -75,6 +75,109 @@ test('Unix executable-bit failure is actionable', { skip: process.platform === '
   await assert.rejects(new AzureCliProcess({ executable: az }).run(['version']), /Azure CLI executable/);
 });
 
+function windowsCleanupFixture(t) {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  const systemRoot = process.env.SystemRoot;
+  Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+  process.env.SystemRoot = 'C:\\Windows';
+  t.after(() => {
+    Object.defineProperty(process, 'platform', platform);
+    if (systemRoot === undefined) delete process.env.SystemRoot;
+    else process.env.SystemRoot = systemRoot;
+  });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const child = Object.assign(new EventEmitter(), {
+    pid: 12345, stdout: new PassThrough(), stderr: new PassThrough(),
+    exitCode: null, signalCode: null
+  });
+  const killer = Object.assign(new EventEmitter(), { kill: t.mock.fn(() => true) });
+  let calls = 0;
+  const spawn = t.mock.method(childProcess, 'spawn', (executable, args, options) => {
+    calls++;
+    if (calls === 1) {
+      assert.equal(options.detached, false);
+      return child;
+    }
+    assert.equal(calls, 2, 'cleanup must not launch another killer');
+    assert.equal(executable, 'C:\\Windows\\System32\\taskkill.exe');
+    assert.deepEqual(args, ['/PID', String(child.pid), '/T', '/F']);
+    assert.equal(options.shell, false);
+    assert.equal(options.stdio, 'ignore');
+    return killer;
+  });
+  t.mock.method(process, 'kill', () => assert.fail('controlled Windows tests must not signal real PIDs'));
+  syncBuiltinESMExports();
+  t.after(() => {
+    child.stdout.destroy(); child.stderr.destroy();
+    spawn.mock.restore(); syncBuiltinESMExports();
+  });
+  return { child, killer, spawn };
+}
+
+for (const reason of ['timeout', 'cancellation', 'stdout', 'stderr']) {
+  for (const code of [0, 1, null]) {
+    for (const launcher of ['exited', 'signal-closed']) {
+      test(`Windows cleanup handles taskkill ${code} after ${launcher} launcher during ${reason}`, async t => {
+        const { child, killer, spawn } = windowsCleanupFixture(t);
+        const controller = new AbortController();
+        let settled = false;
+        const pending = runProcess(process.execPath, [], {
+          signal: controller.signal, timeout: 10, outputLimit: 1
+        }).then(value => { settled = true; return value; }, error => { settled = true; return error; });
+        if (reason === 'timeout') t.mock.timers.tick(10);
+        else if (reason === 'cancellation') controller.abort();
+        else child[reason].write('overflow');
+        assert.equal(spawn.mock.callCount(), 2);
+
+        child.exitCode = launcher === 'exited' ? 0 : null;
+        child.signalCode = launcher === 'signal-closed' ? 'SIGTERM' : null;
+        child.emit('exit', child.exitCode, child.signalCode);
+        if (launcher === 'signal-closed') child.emit('close', child.exitCode, child.signalCode);
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(settled, false, 'launcher exit or close cannot complete taskkill cleanup');
+        killer.emit('exit', code, code === null ? 'SIGTERM' : null);
+        if (launcher === 'exited') child.emit('close', child.exitCode, child.signalCode);
+        const error = await pending;
+        if (code !== 0) assert.equal(error.errorCode, 'PROCESS_CLEANUP_FAILED');
+        else if (reason === 'cancellation') assert.equal(error, controller.signal.reason);
+        else assert.equal(error.errorCode, reason === 'timeout' ? 'CLI_TIMEOUT' : 'CLI_OUTPUT_LIMIT');
+        t.mock.timers.tick(5001);
+        assert.equal(killer.kill.mock.callCount(), 0, 'the cleanup deadline must be cleared on exit');
+        assert.equal(spawn.mock.callCount(), 2);
+      });
+    }
+  }
+}
+
+for (const failure of ['nonzero', 'null', 'spawn', 'deadline']) {
+  test(`Windows cleanup reports ${failure} failure when the launcher never closes`, async t => {
+    const { child, killer, spawn } = windowsCleanupFixture(t);
+    let settled = false;
+    const pending = runProcess(process.execPath, [], { outputLimit: 1 })
+      .then(value => { settled = true; return value; }, error => { settled = true; return error; });
+    child.stdout.write('overflow');
+    if (failure === 'deadline') {
+      t.mock.timers.tick(4999);
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(settled, false);
+      t.mock.timers.tick(1);
+    } else if (failure === 'spawn') {
+      killer.emit('error', Object.assign(new Error('synthetic unavailable utility'), { code: 'ENOENT' }));
+    } else {
+      killer.emit('exit', failure === 'nonzero' ? 1 : null);
+    }
+    const error = await pending;
+    assert.equal(error.errorCode, 'PROCESS_CLEANUP_FAILED');
+    assert.equal(error.message, failure === 'deadline' ? 'Owned process cleanup timed out.' :
+      failure === 'spawn' ? 'Could not start owned process cleanup.' : 'Could not terminate the owned process tree.');
+    assert.equal(child.exitCode, null);
+    assert.equal(child.signalCode, null);
+    t.mock.timers.tick(5001);
+    assert.equal(killer.kill.mock.callCount(), failure === 'deadline' ? 1 : 0);
+    assert.equal(spawn.mock.callCount(), 2);
+  });
+}
+
 function posixCleanupFixture(t, kill, platformName = 'linux') {
   const platform = Object.getOwnPropertyDescriptor(process, 'platform');
   Object.defineProperty(process, 'platform', { ...platform, value: platformName });

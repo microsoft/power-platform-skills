@@ -68,9 +68,11 @@ npm test
 
 The same commands work on macOS/Linux. The plugin's path-filtered
 `process-intelligence-script-tests` CI workflow runs them on Windows, Linux and macOS with
-Node.js 22 and 24. It runs for plugin changes, its own workflow and the root `LICENSE` embedded
-by the build; repository-wide metadata checks remain separate. CI has read-only repository
-permissions and needs no secrets, Azure login or live service access.
+Node.js 22 and 24. It runs for plugin changes, its own workflow, the root `LICENSE` embedded
+by the build, and repository inputs asserted by tests: both marketplaces, root `README.md`,
+bug/feature issue templates and `shared/telemetry/README.md`. Repository-wide metadata checks
+remain separate. CI has read-only repository permissions and needs no secrets, Azure login or
+live service access.
 After building, CI runs `git diff --exit-code -- server/mcp.mjs server/bundle-meta.json`;
 either changed artifact fails the job before tests can mask a stale shipped runtime.
 The plugin's `.gitattributes` keeps source byte counts stable and compares generated artifacts
@@ -108,6 +110,8 @@ descriptor does not reliably produce native Windows EOF before exit.
 Native test diagnostics retain startup/overflow/cleanup/close timings and a 4-second benchmark
 indicator. The benchmark is not a functional SLA: invocation and Windows cleanup have separate
 deadlines. Exceeding it remains visible as unresolved latency; it is not claimed fixed.
+Windows cleanup requires `taskkill` to exit with code zero, even if the launcher has already
+exited. A nonzero or missing exit code reports `PROCESS_CLEANUP_FAILED`.
 POSIX cleanup sends SIGKILL once to the owned group, then waits up to five seconds for the group
 to disappear. A surviving group or failed liveness check reports `PROCESS_CLEANUP_FAILED`;
 the caller must not treat the launcher's exit alone as completed cleanup.

@@ -100,7 +100,8 @@ async function terminate(child) {
     });
     killer.once('exit', code => {
       clearTimeout(timer);
-      if (code !== 0 && child.exitCode === null && child.signalCode === null) {
+      // Launcher exit does not confirm that taskkill terminated its descendants.
+      if (code !== 0) {
         reject(
           processError('Could not terminate the owned process tree.', 'PROCESS_CLEANUP_FAILED')
         );
