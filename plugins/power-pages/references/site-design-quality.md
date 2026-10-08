@@ -2,6 +2,26 @@
 
 Read and apply this shared visual-quality guidance when establishing a new site's identity or changing an existing visual treatment. It describes the outcome, not a framework, asset-import procedure, or preview workflow. Use the calling skill's platform adapter for authoring, approvals, asset delivery, and verification.
 
+## Experience brief and first impression
+
+For a new site or an approved redesign, derive one concise experience brief before choosing layout or tokens. Reuse supplied intent, approved brand material, and the existing site; ask only for missing business facts or material scope decisions. For narrow existing-site edits, reuse the established direction rather than requiring a new brief or redesign.
+
+| Field | Decision |
+|---|---|
+| Audience and job | Who arrives and what they need to accomplish. |
+| Primary and secondary action | The main task, its consistent label, and a quieter alternative when useful. |
+| Principal doubt | What could stop that visitor from acting. |
+| Proof strategy | Honest evidence or a real working capability that answers the doubt, placed where it matters. |
+| Design thesis | One or two sentences connecting mood, visual metaphor, typography, color roles, geometry, imagery, and motion to this organization. |
+| First-screen concept | A focal point, useful headline/context, and clear action; choose a hero or task-first welcome appropriate to the page. |
+| Signature moment | One memorable detail that demonstrates value. It can be static or a polished native interaction; it does not authorize new functionality, fabricated data, or extra animation. |
+
+The first impression is the initial viewport before scrolling. It should make the purpose, audience, trust basis, and next action clear without competing focal points. Aim for an intentional, effortless, organization-specific result, not decoration. Task pages, forms, and lists need clear task hierarchy, not an oversized marketing hero on every page.
+
+Use [page blueprints](page-blueprints.md) for role-appropriate first screens, narrative beats, section rhythm, copy, and honest proof. Map these concepts through the platform adapter, not literal framework markup. The **point of doubt** is where a visitor hesitates; place reassurance there. A **template look** is interchangeable composition, copy, or decoration that says nothing about this organization.
+
+Keep this brief in the calling workflow's existing approved plan and carry it through authoring handoffs. Do not restart discovery, ask for every design choice, or run a full critique at each component. For classic work, use the [classic critique adapter](../skills/style-site/references/design-critique.md) to interpret the shared categories without loading the SPA capture/fix loop. Code sites retain their existing design references and completion contract; classic exceptions do not change those rules.
+
 ## Direction and safe brand reuse
 
 - Start with the audience, visitor journey, primary action, and approved aesthetic/mood. Carry one coherent direction through typography, palette, imagery, shapes, spacing, and interaction states; avoid unrelated effects chosen merely to look elaborate.
@@ -57,7 +77,7 @@ Inspect effective child foregrounds, inline declarations, inherited values, and 
 - For a new-site visual treatment, include purposeful real photographs or illustrations that communicate the offering, people, place, product, or process. Plan a relevant hero image/illustration and supporting imagery where it explains content. Logos, icons, decorative patterns, and gradient blobs alone do not satisfy content imagery.
 - Honor an explicit request for a bare baseline or a user decision to decline images. Do not force existing-site narrow edits to acquire photographs. Otherwise, unavailable source material is a dependency to resolve, not permission to silently omit meaningful imagery.
 - Reuse suitable approved assets first. If no suitable approved photo is available, an original safe SVG illustration that explains the subject is a legitimate alternative; arbitrary decoration is not. Do not copy an illustration or manufacture misleading photographic evidence.
-- Honor the platform workflow's delivery policy. Site creation uses approved direct HTTPS image URLs rather than new image Web Files; an illustration must already have an approved hosted URL on that route. Do not publish a new asset, invent its URL, or fall back to file import implicitly.
+- Honor the platform workflow's delivery policy. Classic site creation uses approved direct HTTPS image URLs rather than new image Web Files; an illustration must already have an approved hosted URL on that route. Do not publish a new asset, invent its URL, or fall back to file import implicitly.
 - Choose the subject and visual role before the source. Coordinate lighting, color temperature, style, and visual density across hero and supporting images. Specify aspect ratio, crop, focal point, and desktop/mobile treatment; avoid cutting off key people, products, or diagram labels.
 - Reserve quiet space for text or place it beside the image. When text overlaps imagery, design the backing/overlay and all text/action states for readability over the actual crop, not an assumed average color. A crop change must not expose text to a newly unreadable area.
 - Use actual approved assets with verified provenance, not placeholder data, placeholder-image services, guessed photo IDs, or unresolved image slots. Follow the existing asset workflow for source selection, legal/privacy review, user approval, safe preparation, and delivery; this reference does not replace or relax those checks.
@@ -72,3 +92,5 @@ Inspect effective child foregrounds, inline declarations, inherited values, and 
 ## Verification boundary
 
 Inspect content, source, responsive rules, asset choices, resolved color pairs, and affected states using the calling skill's available evidence. Report which checks actually ran. Source inspection and color math are not a complete accessibility audit or proof of runtime rendering, font loading, image crop, or editor round trips. The platform adapter governs whether live verification is available or remains pending; this shared reference adds no dev-server, browser, or live-preview prerequisite.
+
+Label source-only conclusions as provisional and unavailable observations as **not observed**, never passes or failures inferred from missing evidence. A plan/status HTML document or structural wireframe is not a rendered site. A live URL shows deployed content, not unpublished local edits. A separately requested visual critique may inspect an authorized running URL; it neither deploys local changes nor authorizes its recommended fixes.

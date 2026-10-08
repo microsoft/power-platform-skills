@@ -120,6 +120,11 @@ For an explicit `creationIntent: "new-site"` handoff, include `newSiteDesign` in
 schema-version-1 plan. Omit it for ordinary existing-site edits; old plans remain valid.
 Read `${PLUGIN_ROOT}/references/site-design-quality.md` and choose actual design decisions,
 not placeholders or a fixed theme copied into every site.
+Include its experience brief in the existing `summary` and `newSiteDesign.composition` text:
+audience/job, actions, principal doubt and honest proof, design thesis, first-screen concept,
+signature moment, and page narrative. Put per-page section decisions in approved operation inputs.
+This adds no required schema fields: existing schema-1 plans and approved receipts remain valid,
+and the current plan hash, HTML presentation, and `designContext` carry the decisions unchanged.
 
 ```json
 {

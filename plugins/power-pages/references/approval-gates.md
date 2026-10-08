@@ -469,16 +469,17 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-### 6.13 `create-site` (12 calls)
+### 6.13 `create-site` (13 gates)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
 | `create-site:0.site-type` | gate | plan | 0 | Ambiguous request — choose generated SPA or platform-provisioned declarative site | nothing |
 | `create-site:1.purpose` | gate | plan | 1 | Site purpose unclear — multi-question prompt (site name, framework, purpose, audience, location) | nothing |
-| `create-site:3.requirements` | gate | plan | 3 | *"Which features? / Aesthetic / Mood"* — three sub-prompts sharing this gate; shape the rendered Phase 4 plan | nothing |
+| `create-site:3.requirements` | gate | plan | 3 | *"Which features? / Aesthetic / Mood / Brand"* — shared code-site planning prompt, with a brand URL/colors/logo follow-up only when missing; shapes the rendered Phase 4 plan | nothing |
 | `create-site:4.7.plan-approval` | gate | plan | 4.7 | HTML plan rendered — *"Approve and start building / I'd like to make changes"* | nothing |
+| `create-site:5.7.critique-blocked` | gate | progress | 5.7 | A critical design gate still fails after three critique rounds - *"Keep fixing / Continue and record it as a known issue / Stop here"* | nothing |
 | `create-site:7.review` | gate | plan | 7 | Live site ready — *"Would you like any changes?"* | nothing |
-| `create-site:8.deploy` | gate | plan | 8 | *"Deploy now (Recommended) / Skip for now"* — invokes `/deploy-site` on Yes | nothing |
+| `create-site:8.deploy` | gate | plan | 8 | *"Deploy now (Recommended) / Skip for now"* — invokes `/deploy-site` on Yes; remaining `SAMPLE CONTENT` is listed and counted first, with Skip recommended | nothing |
 | `create-site:declarative-1-select-model` | gate | plan | Declarative 1 | Declarative model unspecified — select Enhanced or Standard with no default | nothing |
 | `create-site:declarative-1-confirm-environment` | gate | consent | Declarative 1 | Confirm the exact Dataverse environment before declarative planning or provisioning | nothing |
 | `create-site:declarative-1-confirm-capability` | gate | progress | Declarative 1 | Administrator confirms **Switch to enhanced data model** is enabled for Enhanced or disabled for Standard because no public read API exists | nothing |
@@ -751,6 +752,19 @@ General CSS declarations/raw stylesheets use pinned bundled structural parsing, 
 | `style-site:6.reapprove` | gate | progress | 6 | **Regenerate and review / Keep current local state and stop** — fires **per occurrence** of input/selection/target drift or partial-write failure. Return through preparation/diff review and `style-site:5.approve` for the new hash; this answer does not authorize a changed patch. | local-style-state |
 
 On the first pass, cancellation before application leaves at most inspection/proposal/review artifacts outside the site tree. After an application or partial failure, preserve and report exact current local state plus receipt/recovery evidence; never reset or silently roll back concurrent edits. After verified local or explicitly requested instructions-only completion, report without another confirmation and record normal `StyleSite` usage; preserve the supported-directory no-op and separate tracking diffs. Canceled drafts and blocked local work do not count as successful completion. Runtime/Studio visual/editing round trips remain pending; no preview or deployment is initiated. No branch initiates remote authoring or submission actions. Optional approved runtime navigation executes the portal's normal scripts/requests and can retain browser/application-defined state; explain that before inspection. If the host cannot obtain explicit approval, keep a draft and stop.
+
+---
+
+### 6.34 `exceptional-web-design` (2 SPA / 2 classic sub-prompts; routes are exclusive)
+
+Separately requested read-only design review. The existing SPA/unspecified-URL workflow remains unchanged; identified classic sites use `workflows/classic-site.md` instead, not in addition. It runs no project code, changes no site files, and grants no write consent. The prompts only resolve the target and evidence mode; they are not gates. URL navigation still runs normal site scripts/requests. The classic route is not `style-site:2.runtime` structural discovery or permission to deploy.
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| SPA step 1 site prompt | sub-prompt | — | 1 | *"Which site should I review?"* - asked when no URL/folder or code config is found; existing data-gathering behavior. | nothing |
+| SPA step 2 URL prompt | sub-prompt | — | 2 | Folder without a URL - *"I'll paste a URL (Recommended) / Review the code only"*. The user may supply a dev-server URL; the skill starts nothing. | nothing |
+| Classic step 1 target prompt | sub-prompt | — | 1 | Resolves the selected native site/locale only when missing or ambiguous; reuses known `.portalconfig`/`website.yml` identity. | nothing |
+| Classic step 2 evidence prompt | sub-prompt | — | 2 | *"I'll paste a URL / Review the source only"*. Skipped for an already supplied URL or explicit source-only request; no server, authentication, deployment, or Studio action starts. | nothing |
 
 ---
 ### Cross-plugin shared skills — out of catalog scope

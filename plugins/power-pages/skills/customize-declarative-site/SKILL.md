@@ -133,6 +133,15 @@ meaningful hero/supporting imagery. Make context-specific design decisions witho
 every font or color. Preserve platform behavior, native editable wrappers, navigation and
 authentication; preserving those contracts does not require preserving generic template styling.
 Existing-site and narrow edits remain preservation-first unless redesign is requested.
+Use the native content-composition adapter below to select relevant `page-blueprints.md` narrative
+patterns once for a new-site design or approved redesign, without adopting its SPA execution rules.
+Derive the shared experience brief from known intent: audience/job, primary and secondary
+action, principal doubt, honest proof, design thesis, first-screen concept, and signature moment.
+Record the concise purpose in `summary` and the brief/narrative decisions in
+`newSiteDesign.composition`, with implementation decisions in its existing typography, palette,
+spacing, and responsive fields. For an existing-site redesign without `newSiteDesign`, use the
+existing summary and approved operation inputs. Do not add mandatory schema fields, rewrite old
+approved plans, or restart this brief in every child skill.
 Set `newSiteDesign.imageDelivery: "external-url"` for every new-site creation handoff. Add images
 using approved direct HTTPS URLs in native image components; do not download them, create image
 Web Files, or schedule image-import operations. Suitable existing template images may remain.
@@ -140,6 +149,9 @@ Web Files, or schedule image-import operations. Suitable existing template image
 Apply the content reasoning and example page-compositions reference. Inspect similar pages first,
 derive a content outline and supported `section -> columns -> elements` structure, draft safe
 explanatory copy, and identify only organization-specific facts that require confirmation.
+Plan the first screen and narrative beats before styling; choose task-first layouts for forms,
+lists, and self-service pages. Map blueprint ideas to supported native layouts and real available
+capabilities, not invented component types, literal SPA grids, or fabricated live counts.
 
 Apply the visual-asset reference whenever imagery, branding, icons, illustrations, patterns, or
 fonts could materially improve the requested design. Resolve delivery first: new-site image
@@ -353,6 +365,13 @@ Do not invoke a child skill for an empty operation, and do not invoke deployment
    Reuse `style-site`'s local contrast checks and resolve known failures. Report desktop/mobile
    rendering, Studio save/reopen, and unknown image-overlay contrast as pending separate live
    checks; do not start a server or claim local validation proves visual fidelity.
+7. Compare the completed composition with the approved experience brief once, using
+   `${PLUGIN_ROOT}/skills/style-site/references/design-critique.md`'s native interpretation of the
+   shared categories and source-only evidence.
+   Reuse child verification and the approved image-check receipt; do not repeat unchanged network
+   probes, add a screenshot gate, or run a critique per operation. Report observed local gaps and
+   unobserved runtime checks separately. Revisions still require the existing plan/owner approvals;
+   a low or provisional visual score does not authorize direct edits or deployment.
 
 ## Phase 7: Commit, report, and offer deployment
 

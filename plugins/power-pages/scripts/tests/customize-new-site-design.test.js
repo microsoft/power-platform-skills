@@ -204,6 +204,45 @@ test('existing-site schema-1 plans need neither a new design brief nor added ima
   assert.equal(validateCustomizationPlan(plan), plan);
 });
 
+test('experience brief remains visible and hash-bound through checked image publication and native handoffs', async (t) => {
+  const root = temporaryRoot(t);
+  const plan = externalImagePlan();
+  const brief = 'Audience: residents tracking requests. Primary action: Track my request. '
+    + 'Principal doubt: what happens next. Proof: the confirmed request process. '
+    + 'Design thesis: calm civic identity using approved fonts and native task hierarchy. '
+    + 'First screen: task-first search. Signature moment: a truthful static process line. '
+    + 'Narrative: orientation, request steps, reassurance and contact.';
+  plan.newSiteDesign.composition = brief;
+  assert.equal(plan.schemaVersion, 1);
+  assert.equal(validateCustomizationPlan(plan), plan);
+  let probes = 0;
+  const checked = await renderReviewedPlan(plan, path.join(root, 'review.html'), {
+    check: (...args) => {
+      probes += 1;
+      return successfulImageCheck(...args);
+    },
+  });
+  const reviewHtml = fs.readFileSync(checked.output, 'utf8');
+  assert.ok(renderDocument(reviewHtml).get('newSiteDesign').innerHTML.includes(brief));
+  const dataPath = path.join(root, 'approved.json');
+  fs.writeFileSync(dataPath, JSON.stringify(plan), 'utf8');
+  publishApprovedPlan({ projectRoot: root, dataPath, imageChecksPath: checked.imageChecks });
+  const resolved = updateExecution({
+    projectRoot: root, action: 'resolve', operationId: plan.operations[0].id,
+  });
+  assert.equal(resolved.designContext.composition, brief);
+  assert.equal(resolved.designContext.imageDelivery, 'external-url');
+  assert.deepEqual(resolved.resolvedInputs, plan.operations[0].inputs);
+  assert.equal(probes, 1, 'publication and handoff reuse the exact-plan image checks');
+  const hash = planHash(plan);
+  plan.newSiteDesign.composition = 'Unapproved replacement narrative.';
+  assert.notEqual(planHash(plan), hash);
+  fs.writeFileSync(dataPath, JSON.stringify(plan), 'utf8');
+  assert.throws(() => publishApprovedPlan({
+    projectRoot: root, dataPath, imageChecksPath: checked.imageChecks,
+  }), /plan|hash/i, 'a different design brief cannot reuse approval evidence');
+});
+
 test('new-site design rejects incomplete briefs, decorative-only imagery, and early styling', () => {
   const cases = [
     ['null brief', (p) => { p.newSiteDesign = null; }, /newSiteDesign must be an object/],

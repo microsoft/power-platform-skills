@@ -8,9 +8,15 @@
  * Usage (file-based):
  *   node render-createsite-plan.js --output <path> --data <json-file>
  *
+ * Usage (stdin) - use this whenever the data holds user-supplied text, such as the brand URL,
+ * so a quote or `$` in it is never parsed by the shell:
+ *   node render-createsite-plan.js --output <path> --data - <<'PLAN'
+ *   { ...plan JSON... }
+ *   PLAN
+ *
  * Required keys in the data:
  *   SITE_NAME, PLAN_TITLE, FRAMEWORK, AESTHETIC, MOOD, SUMMARY,
- *   TYPOGRAPHY_DATA, PALETTE_DATA, MOTION_DATA, BACKGROUNDS_DATA,
+ *   DESIGN_DIRECTION_DATA, TYPOGRAPHY_DATA, PALETTE_DATA, MOTION_DATA, BACKGROUNDS_DATA,
  *   PAGES_DATA, COMPONENTS_DATA, ROUTES_DATA, REVIEW_DATA, DEPLOYMENT_DATA
  */
 
@@ -23,7 +29,8 @@ const args = parseArgs(process.argv);
 if (!args.output || (!args['data-inline'] && !args.data)) {
   console.error(
     'Usage: node render-createsite-plan.js --output <path> --data-inline \'<json>\'\n' +
-    '       node render-createsite-plan.js --output <path> --data <json-file>'
+    '       node render-createsite-plan.js --output <path> --data <json-file>\n' +
+    '       node render-createsite-plan.js --output <path> --data -   (JSON on stdin)'
   );
   process.exit(1);
 }
@@ -44,6 +51,7 @@ const requiredKeys = [
   'AESTHETIC',
   'MOOD',
   'SUMMARY',
+  'DESIGN_DIRECTION_DATA',
   'TYPOGRAPHY_DATA',
   'PALETTE_DATA',
   'MOTION_DATA',
@@ -68,6 +76,20 @@ if (args['data-inline']) {
     dataObject = JSON.parse(args['data-inline']);
   } catch {
     console.error('Error: --data-inline value is not valid JSON');
+    process.exit(1);
+  }
+  renderTemplate({
+    templatePath,
+    outputPath: path.resolve(args.output),
+    dataObject: withDerivedTemplateData(dataObject),
+    requiredKeys,
+  });
+} else if (args.data === '-') {
+  let dataObject;
+  try {
+    dataObject = JSON.parse(fs.readFileSync(0, 'utf8'));
+  } catch {
+    console.error('Error: the JSON on stdin is not valid');
     process.exit(1);
   }
   renderTemplate({

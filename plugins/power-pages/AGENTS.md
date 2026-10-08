@@ -11,10 +11,23 @@ Read `PLUGIN_DEVELOPMENT_GUIDE.md` for UX and reliability standards when creatin
 
 ## Classic creation and shared design quality
 
-Keep the common visual-quality source in `references/site-design-quality.md`; code-site
-`create-site/references/design-aesthetics.md` and classic `style-site/references/design-quality.md`
-are platform adapters, not copies. Do not import SPA theme replacement, font installation,
-dev-server, or live-preview requirements into classic creation.
+Keep reusable visual principles in `references/site-design-quality.md` and native application in
+`style-site/references/design-quality.md`. The SPA `references/design-aesthetics.md`,
+`references/page-blueprints.md`, `references/design-critique.md` and existing SPA review workflow
+retain their established behavior; classic adoption must not change their fonts, imagery priority,
+plan fields, scores, rendering requirements or completion gates. Do not import their SPA theme
+replacement, font installation, dev-server, or live-preview requirements into classic creation.
+The old `create-site/references/design-aesthetics.md` is a compatibility pointer only.
+Reuse blueprint patterns through the native content-composition adapter and the shared rubric's
+two tables through `style-site/references/design-critique.md`; do not duplicate the tables or load
+the SPA capture/fix instructions for source-only work. Classic read-only critique branches into
+`exceptional-web-design/workflows/classic-site.md` before the unchanged SPA review body.
+Carry the brief in existing
+approved `newSiteDesign.composition`/`designContext` and native operation inputs, not a new mandatory
+schema or a second design workflow. Review once at the final coordinated local verification.
+Classic source-only conclusions remain provisional; status/plan HTML and structural wireframes
+are not runtime evidence. Keep pre-approval image checks and exact-plan `--imageChecks` publication
+unchanged, reusing the receipt for unchanged URLs rather than probing at every owner handoff.
 
 New classic creation recommends Enhanced with Bootstrap 5, with explicit model/admin approval,
 the helper's Bootstrap-filtered template catalog, and downloaded Bootstrap verification using
@@ -91,7 +104,14 @@ Use centralized hook auto-discovery only. The no-args validator uses `runValidat
 - **Dataverse-backed validation** must stay opt-in for local runs only. Do not require live Dataverse connectivity in CI workflows or default test runs; gate it behind explicit local flags such as `--validate-dataverse-relationships`.
 - **Azure CLI `--allow-no-subscriptions`** — this flag is only valid on `az login`. Other `az` subcommands (`az account get-access-token`, `az account show`, etc.) reject it as an unrecognized argument and exit 2, so do NOT add it to anything other than `az login`. When the user is not logged in to the Azure CLI, suggest plain `az login` first; only suggest `az login --allow-no-subscriptions` as a fallback if they don't have any associated Azure subscription, since that variant lets subscription-less accounts sign in and still mint AAD-scoped Dataverse/Power Platform tokens via subsequent `az account get-access-token` calls. Reuse the shared `getAuthToken` helper in `scripts/lib/validation-helpers.js` instead of shelling out to `az` directly.
 - **Reference docs** shared across skills live in `references/` — reference via `${PLUGIN_ROOT}/references/` paths, don't duplicate.
-- **Templates** use `__PLACEHOLDER__` tokens (e.g., `__SITE_NAME__`) replaced during scaffolding. The `gitignore` file is stored without the dot prefix and renamed to `.gitignore` during scaffolding.
+- **Local scaffold templates** use `__PLACEHOLDER__` tokens (e.g., `__SITE_NAME__`) replaced during from-scratch scaffolding. The `gitignore` file is stored without the dot prefix and renamed to `.gitignore` during scaffolding.
+- **Batch browser work into one script call** - every tool call re-sends the whole conversation, and each Playwright MCP `browser_navigate` also returns a full page snapshot, so per-page MCP calls multiply cost and trigger context compactions. `create-site` captures every route at both widths with one `capture-design-review.js` call and opens the screenshots in one turn; prefer that pattern whenever a skill needs the same browser work across several pages. Keep the design review inline rather than in a subagent: a fresh context re-loads every screenshot, which raises cost without improving the review.
+- **Browser review scripts** (`capture-design-review.js`, `axe-audit.js`) share their boundaries through `scripts/lib`, so add new browser work there rather than beside them:
+  - *Input* - URLs and routes arrive only as a JSON request on stdin (`--input -`, sent in a quoted heredoc), never as shell text, and every field is type-checked (`parseRequest`, `normalizeSiteUrl` in `review-navigation.js`).
+  - *Code they run* - Playwright comes only from the pinned `@playwright/mcp` package (`load-playwright.js`, `playwright-mcp-package.js`), resolved by npm in an empty private folder; a project's `node_modules` is never loaded. A third-party script injected into a page is downloaded through `pinned-download.js` and refused unless it matches the SRI hash committed beside its URL (`AXE_SCRIPT`).
+  - *Output* - URLs in results and errors are cut to origin and path (`redactUrl`, `redactUrlsInText`), and screenshots go to a private temp directory (`private-temp-dir.js`).
+  - *Navigation* - `gotoSettled` completes at `load` with a best-effort network-idle wait, because `networkidle` never arrives on sites that long-poll or send frequent beacons.
+- **Playwright screenshots** go to a private per-launch temp directory: `scripts/launch-playwright-mcp.js` passes `--output-dir` (unless `PLAYWRIGHT_MCP_OUTPUT_DIR` is set), falls back to a private `~/.cache/power-pages` directory and otherwise fails closed rather than writing into the project, removes the directory on server exit or a host termination signal, and on each launch sweeps this user's launcher directories untouched for an hour, because hosts such as Copilot CLI SIGKILL the launcher before any in-process cleanup can run. Skills that call `browser_take_screenshot` leave `filename` unset so output never lands in the user's project.
 - **Hooks** are defined centrally in `hooks/hooks.json`, using `PostToolUse` with matcher `Skill` so validation runs when a tracked Power Pages skill completes.
 - **ALM split-decision thresholds** are intentionally tighter than the platform hard caps. `scripts/lib/alm-thresholds.js` recommends a split at 75 MB / 4000 components (vs platform caps of 95 MB / 6000), reserving ~20 MB / ~2000-component growth headroom in each split child. Override per-project via `.alm-config.json` if you have a justified reason to push closer to the caps.
 - **OAuth credential-style site settings** (ConsumerKey / ClientId / ClientSecret / etc.) are NOT excluded from solutions. `setup-solution` Phase 5 prompts per credential to choose between (a) Secret-typed env var (Key Vault per stage), (b) String-typed env var (plain text per stage), or (c) skip. The site-setting record is added to the solution and routed to an env var so secret values never ship in the solution zip. Plans generated before 2026-05-08 use the older `excluded` bucket — setup-solution's preloadedSettings handler treats those as `credentialNeedsDecision` for backward compatibility.
@@ -117,6 +137,8 @@ scripts/
   poll-async-operation.js      ← Polls Dataverse asyncoperations until terminal state (used by export-solution, import-solution)
   encode-solution-file.js      ← Base64-encodes a solution zip for OData request bodies (used by import-solution)
   parse-deployment-errors.js   ← Parses PAC CLI stderr + OData errors into structured findings (used by diagnose-deployment)
+  capture-design-review.js     ← One-call design capture: every route at desktop + mobile, mobile sheets, font/overflow/page-error/sign-in-redirect checks (create-site, exceptional-web-design)
+  axe-audit.js                 ← axe-core WCAG 2.2 AA audit of a dev server or deployed site; downloads axe-core and injects it only when it matches the committed hash (create-site, exceptional-web-design)
 references/                    ← Shared reference docs used by multiple skills
   odata-common.md              ← Auth headers, token refresh, error handling, retry patterns
   dataverse-prerequisites.md   ← PAC CLI check, Azure CLI token, API access verification
@@ -125,16 +147,23 @@ references/                    ← Shared reference docs used by multiple skills
   solution-api-patterns.md     ← OData body templates for publisher/solution CRUD, export/import async actions, manifest format
   deployment-error-catalog.md  ← Known deployment failure patterns with root cause, severity, and fix procedures
   cicd-pipeline-patterns.md    ← PAC CLI SP auth syntax, ADO YAML stage structure, GitHub Actions env job structure
+  site-design-quality.md       ← Common design principles, experience brief, exact contrast and evidence boundaries
+  design-aesthetics.md         ← Design system: experience brief, brand sourcing, tokens, verified Google Fonts, motion, states, aesthetic x mood map
+  page-blueprints.md           ← First screen, hero patterns, page narratives per site type, section rhythm, copy, honest proof
+  design-critique.md           ← Capture, two-pass critique, 10-category rubric, compact scorecard (create-site Phases 5.2/5.7, exceptional-web-design)
 skills/
   create-site/
     SKILL.md                   ← Routes code-site and Standard/Enhanced declarative creation
     workflows/declarative-site.md ← Environment-backed declarative provisioning and download workflow
     assets/{react,vue,angular,astro}/  ← Framework templates with __PLACEHOLDER__ tokens
-    references/design-aesthetics.md  ← Design principles, font/color/motion guidance for inline design step
+    references/design-aesthetics.md  ← Compatibility pointer to the shared principles and code-site adapter
     scripts/list-site-templates.js ← Curated Create Website template metadata and model-toggle disclosure
     scripts/render-declarative-status.js ← Generates the live-refreshing declarative creation page with template previews and current status
     scripts/resolve-declarative-context.js ← Non-secret environment and Dataverse organization resolver
     scripts/validate-site.js   ← Node script validating code sites or downloaded declarative sites
+  exceptional-web-design/
+    SKILL.md                   ← Read-only, platform-aware critique of a classic/code site or authorized URL
+    workflows/classic-site.md  ← Native evidence/route workflow; the SPA review body remains unchanged
   deploy-site/
     SKILL.md                   ← Deployment skill definition
   setup-datamodel/
@@ -224,22 +253,28 @@ User-invocable via `/power-pages:<skill-name>`:
 
 - `create-site`: Routes between two eight-phase workflows. The existing SPA path retains requirements
   discovery, early React/Vue/Angular/Astro scaffolding, component and design planning, implementation
-  with live Playwright preview, validation, review, Git checkpoints, and deployment handoff. The
+  with live Playwright preview, experience brief, narrative blueprints, batched visual critique,
+  validation, review, Git checkpoints, and deployment handoff. The
   declarative path selects Standard or Enhanced, confirms the environment and administrator-verified
   EDM toggle state (disabled for Standard, enabled for Enhanced), selects a supported template
   identifier, provisions through the Power Platform API, verifies the resulting model, downloads
   with the explicit `--modelVersion`, validates identity/assets, and creates a Git baseline. After
   a successful declarative baseline it can optionally hand off to `customize-declarative-site`.
+- `exceptional-web-design`: Read-only critique of classic or code-site source and/or an authorized
+  running URL. Reuses the approved brief, platform adapter, and shared rubric; captures at most
+  eight key pages with one capture/axe call. It executes no project code, performs no fixes,
+  and uses a classic-only workflow for provisional source-only findings, unavailable evidence,
+  sign-in and query-dependent views. The SPA review contract is unchanged. This is separately requested review, not a required
+  classic styling stage or an expansion of `style-site:2.runtime`.
 - `customize-declarative-site`: Declarative-only orchestrator for broad customization of PAC
   downloads created by `create-site` or manually in Design Studio. Keeps one canonical approved
   JSON/HTML plan plus `current-execution.json` under `docs/customize-declarative-site/`, archives
   its predecessor in timestamped history, resolves typed cross-skill output bindings, and resumes
   pending work without mutating the approved plan. It derives safe content and supported
   `section -> columns -> elements` structures, represents card-like layouts with columns rather
-  than an unsupported native card type, and plans visual assets as existing/user-provided Web
-  Files, safe original SVGs, or curated Unsplash photography. New assets are securely staged
-  outside the declarative root, shown in the approved plan, imported through `author-web-file`,
-  and consumed through verified `publicUrl` bindings. It invokes the owning classic authoring
+  than an unsupported native card type. New-site imagery uses approved external HTTPS URLs with
+  pre-approval source checks and exact-plan image-check publication; explicit file delivery outside
+  that route retains secure staging and verified Web File bindings. It invokes the owning classic authoring
   skills, runs
   `style-site` last when requested, verifies the combined local diff, commits coherent changes,
   and optionally hands off to `deploy-site`.

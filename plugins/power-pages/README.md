@@ -43,7 +43,7 @@ This keeps hook behavior in one place and avoids relying on skill-frontmatter ho
 
 ## Skills
 
-The plugin provides 42 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, declarative-site customization, classic-site authoring and styling, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, and platform migrations. Each skill is invoked conversationally — just describe what you want to do.
+The plugin provides 43 skills that cover the full lifecycle of a Power Pages site — scaffolding, deployment, declarative-site customization, classic-site authoring and styling, data modeling, backend integration, authentication, ALM and CI/CD, security review, testing, auditing, and platform migrations. Each skill is invoked conversationally — just describe what you want to do.
 
 The `/practice-site-check` and `/add-button` descriptions below are retained for reference, but these skills are not bundled with the plugin and are excluded from this count.
 
@@ -57,13 +57,15 @@ Creates either a code site from a framework template or a Standard/Enhanced data
 site from a template accepted by the documented Power Platform Create Website API.
 
 - **Code sites:** choose React, Vue, Angular, or Astro; scaffold the complete SPA; apply a custom
-  design with real imagery; build pages, components, and routing; preview live throughout
-  development; validate the result; and commit implementation milestones.
+  design from an experience brief and page narratives; build pages, components, and routing;
+  preview live and run a batched desktop/mobile visual critique; validate the result and commit
+  implementation milestones.
 - **Classic/declarative sites:** recommend Enhanced with Bootstrap 5, confirm the selected model
   and environment toggle with an administrator, and choose a Bootstrap-compatible first-party
   template. Provision through the Power Platform API, verify the resulting model and downloaded
   Bootstrap assets, and create a Git baseline. Continue through `/customize-declarative-site` for
-  cohesive typography, palette, responsive composition, and meaningful images using direct HTTPS
+  a coherent experience brief, first-screen hierarchy, narrative, typography, palette, responsive
+  composition, and meaningful images using direct HTTPS
   URLs without image downloads or Web File creation, or explicitly
   keep the template unchanged. Standard/Bootstrap 3 remains an explicit compatibility option.
   No dev server or live site preview is required; the browser documents show provisioning status
@@ -502,6 +504,21 @@ Styles **classic, server-rendered sites only**, from a local download in **VS Co
 - Uses exact source/context/hash guards on real rendered tags, including input/textarea/SVG and outer local iframe/embedded elements: only class/style attributes change, never embedded contents. Static tags/CSS values may span lines; whitespace/newline matching remains exact. Entity spelling may normalize only in the style attribute; other source stays intact. Declarations retain authored order and shorthand protection. Unknown parser semantics yield warnings, not blanket Power Pages rejection; malformed/injected/executable CSS fails
 - Leaves inspection/proposal/recovery artifacts outside the uploadable site tree; **no upload, publishing, activation, remote writes, or cache clearing**
 - Not for SPA/code sites, PCF/third-party internals, Bootstrap migration, or VS Code for the Web remote saves
+
+#### `/exceptional-web-design`
+
+> "Review the design of https://contoso.powerappsportals.com"
+>
+> "Why does my site look generic? What should I change?"
+
+Reviews the design of an existing classic/traditional or SPA site - an authorized live URL or a local project folder - and tells you what to change, without changing anything.
+With a running URL it captures up to eight key pages at desktop and mobile widths and runs an automated accessibility audit. Classic reviews interpret the shared ten-category rubric through native platform and approved-brand requirements, with source-only or incomplete findings explicitly provisional rather than verified totals out of 40. SPA reviews retain their existing workflow and scoring contract. Pages beyond the selected scope are listed in the report.
+The result is a scorecard plus prioritized recommendations, each naming the page and element, why it matters, and the exact change, with a redesign direction when the site needs more than fixes.
+
+- Reads classic PAC metadata, localized page copy, styles and Liquid/templates, or code-site routes and components. Classic sites need no SPA dev server or deployment for a source-only review
+- Runs nothing from your project and changes nothing in it; screenshots go to a private temporary folder. The plugin's pinned browser package may enter npm's cache, never the project
+- Lists sign-in-protected pages as not reviewed. The classic workflow also explicitly excludes query/fragment-dependent states the capture cannot establish
+- A deployed URL does not prove unpublished local changes. Recommendations retain native scope and fresh approval; no automatic fixes, Studio sync, deployment, or additional mandatory classic review stage
 
 #### `/add-seo`
 
