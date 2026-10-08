@@ -48,7 +48,9 @@ is not a site preview; local verification leaves Studio/runtime rendering pendin
 
 Customization-plan presentation preserves the approved JSON: neutral informational notes,
 structured navigation, distinct labeled Modify/Replace accents, and section/column/element
-wireframes. Hosted asset previews load lazily in the browser with no referrer, source attribution,
+wireframes. Omit the maker-facing technical implementation trace; retain complete execution data
+in the canonical approved JSON and its archived history for tooling and maintainer diagnostics.
+Hosted asset previews load lazily in the browser with no referrer, source attribution,
 and an explicit load-failure fallback/link; rendering HTML does not stage or import images.
 The review CLI checks unique external image URLs with bounded, public-only HTTPS requests
 before generating approval HTML. Keep this in `scripts/lib/declarative-image-verification.js`;

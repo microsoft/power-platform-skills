@@ -35,8 +35,11 @@ The JSON and HTML serve different audiences without becoming separate sources of
   default sections describe visible site outcomes: pages and navigation, content and page
   compositions, assets and reusable components, styling, preservation, verification, and the
   local/live boundary.
-- The HTML may include a collapsed maintainer-only implementation trace, but it must not make
-  operation mechanics the primary plan narrative or introduce data absent from the canonical JSON.
+
+**Maker-usefulness decision:** Omit the inline implementation trace. Its orchestration details
+do not help a maker review visible outcomes or maintain page content. The complete JSON above
+already preserves them for tooling and maintainer diagnostics beyond the temporary session.
+Do not create a duplicate technical report or change the approval/execution contract.
 
 The maker-facing rendering preserves the contract while making it readable:
 
@@ -46,7 +49,7 @@ The maker-facing rendering preserves the contract while making it readable:
   Preserve entry order, labels, routes/target pages, and hierarchy; do not flatten objects into
   strings or invent missing destinations.
 - Use consistent, distinct colors for **Modify** and **Replace** on change-card accents and
-  action badges, including the collapsed trace. Always keep the action text visible.
+  action badges. Always keep the action text visible.
 - Show `inputs.sections` as a labeled wireframe in section, column, and element order. Use the
   five native large-screen column proportions, preserve empty columns and repeated elements,
   and disclose unspecified or inconsistent layouts rather than inventing widths. This is a

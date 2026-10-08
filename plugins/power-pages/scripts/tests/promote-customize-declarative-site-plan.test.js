@@ -6,6 +6,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { renderReviewedPlan } = require('../render-customize-declarative-site-plan');
 const { updateExecution } = require('../update-customize-declarative-site-execution');
+const { hashText, planHash } = require('../lib/customize-declarative-site-plan');
 const { externalImagePlan, successfulImageCheck } = require('./customization-plan-test-helpers');
 
 const scriptPath = path.join(__dirname, '..', 'promote-customize-declarative-site-plan.js');
@@ -33,29 +34,36 @@ function promote(projectRoot, review) {
   );
 }
 
-test('publishes validated JSON, rendered HTML, hashes, and an execution receipt', () => {
+test('published technical JSON, trace-free HTML, hashes and receipt survive review cleanup', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'customization-promote-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const review = writeReview(root, 'review-one');
+  const rendered = await renderReviewedPlan(review.plan, path.join(root, 'review-one', 'plan.html'), {
+    check: successfulImageCheck,
+  });
+  review.imageChecks = rendered.imageChecks;
+  const reviewedHtml = fs.readFileSync(rendered.output, 'utf8');
   const result = promote(root, review);
 
   assert.equal(result.status, 0, result.stderr || result.stdout);
+  fs.rmSync(path.dirname(review.data), { recursive: true, force: true });
   const output = JSON.parse(result.stdout);
   const planRoot = path.join(root, 'docs', 'customize-declarative-site');
   assert.deepEqual(
     JSON.parse(fs.readFileSync(path.join(planRoot, 'current-plan.json'), 'utf8')),
     review.plan
   );
-  assert.match(
-    fs.readFileSync(path.join(planRoot, 'current-plan.html'), 'utf8'),
-    /Contoso Event Portal/
-  );
+  const html = fs.readFileSync(path.join(planRoot, 'current-plan.html'), 'utf8');
+  assert.equal(html, reviewedHtml);
+  assert.match(html, /Contoso Event Portal/);
+  assert.doesNotMatch(html, /Technical implementation trace|technicalDetails|technicalOperations/);
   const execution = JSON.parse(
     fs.readFileSync(path.join(planRoot, 'current-execution.json'), 'utf8')
   );
   assert.equal(execution.runId, output.runId);
   assert.equal(execution.planHash, output.planHash);
-  assert.match(execution.artifactHashes.planSha256, /^[a-f0-9]{64}$/);
-  assert.match(execution.artifactHashes.htmlSha256, /^[a-f0-9]{64}$/);
+  assert.equal(execution.artifactHashes.planSha256, planHash(review.plan));
+  assert.equal(execution.artifactHashes.htmlSha256, hashText(html));
   assert.deepEqual(
     execution.operations.map(({ id, status }) => ({ id, status })),
     [
@@ -65,8 +73,9 @@ test('publishes validated JSON, rendered HTML, hashes, and an execution receipt'
   );
 });
 
-test('archives the previous plan, rendered HTML, execution receipt, and icon', () => {
+test('archives the complete technical plan, HTML, receipt and icon after review cleanup', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'customization-promote-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const first = writeReview(root, 'review-one');
   const second = writeReview(root, 'review-two', (plan) => {
     plan.summary = 'Second approved plan';
@@ -74,16 +83,25 @@ test('archives the previous plan, rendered HTML, execution receipt, and icon', (
   });
 
   assert.equal(promote(root, first).status, 0);
+  const planRoot = path.join(root, 'docs', 'customize-declarative-site');
+  const firstHtml = fs.readFileSync(path.join(planRoot, 'current-plan.html'), 'utf8');
+  const firstExecution = fs.readFileSync(path.join(planRoot, 'current-execution.json'), 'utf8');
+  fs.rmSync(path.dirname(first.data), { recursive: true, force: true });
   const result = promote(root, second);
   assert.equal(result.status, 0, result.stderr || result.stdout);
+  fs.rmSync(path.dirname(second.data), { recursive: true, force: true });
 
-  const planRoot = path.join(root, 'docs', 'customize-declarative-site');
   const historyEntries = fs.readdirSync(path.join(planRoot, 'history'));
   assert.equal(historyEntries.length, 1);
   const archived = path.join(planRoot, 'history', historyEntries[0]);
   for (const file of ['plan.json', 'plan.html', 'execution.json', 'power-pages-icon.png']) {
     assert.equal(fs.existsSync(path.join(archived, file)), true, file);
   }
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(archived, 'plan.json'), 'utf8')), first.plan);
+  assert.equal(fs.readFileSync(path.join(archived, 'plan.html'), 'utf8'), firstHtml);
+  assert.equal(fs.readFileSync(path.join(archived, 'execution.json'), 'utf8'), firstExecution);
+  assert.doesNotMatch(firstHtml, /Technical implementation trace|technicalDetails|technicalOperations/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(planRoot, 'current-plan.json'), 'utf8')), second.plan);
   assert.match(fs.readFileSync(path.join(planRoot, 'current-plan.html'), 'utf8'), /Second approved/);
 });
 
@@ -154,6 +172,7 @@ test('external images require matching pre-approval checks that are reused durin
   const result = promote(root, review);
   assert.equal(result.status, 0, result.stderr);
   const report = JSON.parse(fs.readFileSync(review.imageChecks, 'utf8'));
+  fs.rmSync(path.dirname(review.data), { recursive: true, force: true });
   const execution = updateExecution({ projectRoot: root, action: 'status' });
   assert.deepEqual(execution.imageChecks, report);
   const resolved = updateExecution({ projectRoot: root, action: 'resolve', operationId: review.plan.operations[0].id });

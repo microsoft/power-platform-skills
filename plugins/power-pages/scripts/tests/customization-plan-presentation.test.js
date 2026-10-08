@@ -39,6 +39,19 @@ function externalImagePlan(url = 'https://cdn.example.com/speaker.jpg') {
   return plan;
 }
 
+test('maker-facing sections omit the execution trace without dropping operation data', (t) => {
+  const plan = planFixture();
+  const { html, document } = render(t, plan);
+  assert.doesNotMatch(html, /Technical implementation trace|technicalDetails|technicalOperations|class="trace"/);
+  assert.equal(document.has('technicalDetails'), false);
+  assert.equal(document.has('technicalOperations'), false);
+  assert.deepEqual(JSON.parse(document.get('operationsData').textContent), plan.operations);
+  assert.match(document.get('pageChanges').innerHTML, /Create the Speakers page and navigation link/);
+  assert.match(document.get('assetChanges').innerHTML, /Conference speaker portrait/);
+  assert.match(document.get('checks').innerHTML, /class="card check"/);
+  assert.match(document.get('deployments').innerHTML, /class="card deploy/);
+});
+
 test('important notes retain their contents with neutral surfaces, borders and text', (t) => {
   const plan = planFixture();
   plan.warnings.push({ label: 'Local review', description: 'Runtime verification is still pending.' });
@@ -88,7 +101,7 @@ test('navigation strings, objects, arrays and nested destinations remain readabl
   }
 });
 
-test('Modify and Replace use distinct accessible colors across cards and trace badges', (t) => {
+test('Modify and Replace use distinct accessible colors across change cards and action badges', (t) => {
   const plan = planFixture();
   plan.assets = [];
   plan.operations = ['author-webpage', 'author-webpage-content', 'style-site'].flatMap((skill, index) =>
@@ -104,9 +117,6 @@ test('Modify and Replace use distinct accessible colors across cards and trace b
       assert.match(cards, new RegExp(`class="tag action-badge action-${action}">${action[0].toUpperCase() + action.slice(1)}<`));
     }
   }
-  const trace = document.get('technicalOperations').innerHTML;
-  assert.equal((trace.match(/action-badge action-modify/g) || []).length, 3);
-  assert.equal((trace.match(/action-badge action-replace/g) || []).length, 3);
   const colors = Object.fromEntries(['modify', 'replace'].map((action) => {
     const foreground = html.match(new RegExp(`--${action}:(#[0-9a-f]+)`))[1];
     const background = html.match(new RegExp(`--${action}-soft:(#[0-9a-f]+)`))[1];
