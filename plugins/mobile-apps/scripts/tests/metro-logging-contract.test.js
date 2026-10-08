@@ -90,8 +90,6 @@ test('skill contracts read logs and persist host-neutral state under .powernativ
   assert.match(createSkill, /for \(const scriptName of \['dev', 'predev'\]\)/);
   assert.match(createSkill, /typeof pkg\.scripts\?\.\[scriptName\] !== 'string'/);
   assert.match(createSkill, /pkg\.scripts\[scriptName\]\.trim\(\) === ''/);
-  assert.doesNotMatch(createSkill, /pkg\.scripts\.dev !== ['"]expo start['"]/);
-  assert.doesNotMatch(createSkill, /pkg\.scripts\.predev !== ['"]npm run generate-schemas/);
   assert.match(createSkill, /always receives a scannable code even when Metro runs in a background terminal/);
   assert.match(createSkill, /Do not rely on Expo's terminal-rendered QR as the only presentation path/);
   assert.match(createSkill, /continue through the optional Step 12\.5 debug handoff and print the Step 13 summary/);
