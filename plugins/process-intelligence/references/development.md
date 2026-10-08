@@ -265,6 +265,6 @@ redistributed in the runtime. Node and Azure CLI are external products with thei
 Source builds read the repository's root `LICENSE` for the Microsoft MIT notice.
 Packaging tests verify that full dependency and project license texts are present in the bundle.
 Build also requires byte-identical legacy plugin manifests. Portable metadata/MCP consistency
-is checked by the repository validator and packaging tests, not by rewriting the runtime.
+is checked by `tests/dual-format.test.mjs`, not by rewriting the runtime.
 Installed execution has no dependency
 on the repository root.

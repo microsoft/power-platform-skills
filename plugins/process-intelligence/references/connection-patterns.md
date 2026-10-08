@@ -110,8 +110,9 @@ A same-username OID change cannot be detected from `account show` alone; it is r
 a new token is acquired. Cached credentials still belong to the previously verified principal.
 
 Binding a different OID requires `login --profile work --switch-account true`; tenant/environment changes
-require config, login and restart. Reconfiguration clears account selection and invalidates active
-connections. `logout --profile work` clears only this plugin's account binding, even if az is missing;
+require config, login and explicit `pi_activate_profile` in the same session. Changed configuration clears
+account selection and invalidates active remote connections while keeping local recovery tools available.
+`logout --profile work` clears only this plugin's account binding, even if az is missing;
 it never invokes `az logout`, clears CLI credentials or signs other tools out.
 
 ## Clouds and resources
