@@ -137,8 +137,8 @@ and the current plan hash, HTML presentation, and `designContext` carry the deci
     "typography": "Existing approved serif headings paired with a readable sans-serif body; strong display-to-body scale.",
     "palette": "Warm ivory surfaces, deep navy text, restrained teal actions; check every foreground/surface pair.",
     "spacing": "Consistent 8px rhythm with generous section separation and tighter related content.",
-    "composition": "Asymmetric image-and-copy hero, service overview, editorial supporting image, clear final action.",
-    "responsive": "Stack native columns on narrow screens; preserve image focal points and readable line lengths.",
+    "composition": "Compact branded header with clear primary navigation, asymmetric image-and-copy hero, service overview, editorial supporting image, clear final action.",
+    "responsive": "Retain the native mobile-menu behavior while adapting header spacing; stack native columns and preserve image focal points and readable line lengths.",
     "imagery": "required"
   }
 }
@@ -169,6 +169,25 @@ each operation. The brief is covered by the plan hash. It does not authorize CSS
 `style-site`'s separate exact-diff approval, nor prove beauty, contrast, or Studio/runtime rendering.
 Verify approved image URLs, placement, any reused local assets, and every brief decision in the
 combined local result. The hash binds external URLs, not mutable remote image bytes.
+
+## Header coverage in the existing plan
+
+For new-site design and full-site redesign, record the header treatment in `summary` and, when
+present, `newSiteDesign.composition`/`responsive`. For an existing-site redesign without that
+brief, use the summary and approved operation inputs; do not add a mandatory header field or
+migrate an approved plan.
+
+Map actual header changes to the relevant snippet/template/styling operations. Use a clear
+operation `summary`, exact existing `target`, site-wide `inputs.scope`, and maker-readable
+`inputs.details` alongside the owner's required values. These appear in the current component
+and styling cards without a new technical trace or plan tab. Keep functional contracts in
+`preserve`, real prerequisites in `dependsOn`, and local checks/pending runtime observations in
+`verification`. Final styling must follow all header structural work as well as page work.
+
+For intentional header preservation, state the reason in `preservation` instead of creating a
+dummy operation. Neither choosing a creation template nor omitting header work explains
+preservation. Narrow edits need no unrelated header changes. Apply the existing plan and owner
+approvals, exact hashes and image checks; header planning adds no separate gate or schema.
 
 ## Capability records
 

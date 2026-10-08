@@ -66,6 +66,99 @@ function temporaryRoot(t) {
   return root;
 }
 
+test('header changes are visible, hash-bound and prevent early styling without a new schema', async (t) => {
+  for (const scope of ['new-site', 'existing-site-redesign']) {
+    const root = temporaryRoot(t);
+    const plan = externalImagePlan();
+    const header = {
+      id: 'customize-site-header',
+      skill: 'author-web-template',
+      action: 'modify',
+      summary: 'Align the site header with the editorial page design.',
+      target: {
+        name: 'Header',
+        targetFile: path.join('web-templates', 'header', 'Header.webtemplate.source.html'),
+      },
+      locales: plan.site.languages,
+      inputs: {
+        scope: 'site',
+        details: 'Group primary navigation beside the approved wordmark and retain the native mobile menu.',
+      },
+      dependsOn: [],
+      outputBindings: {},
+      preserve: ['Keep the header binding, navigation, sign-in, languages and dynamic substitution regions.'],
+      expectedOutputs: ['sourcePath'],
+    };
+    plan.summary = 'Design the page composition and a coordinated site header.';
+    plan.newSiteDesign.composition += ' Header: grouped navigation beside the approved wordmark.';
+    if (scope === 'existing-site-redesign') delete plan.newSiteDesign;
+    plan.operations.splice(-1, 0, header);
+    plan.operations.at(-1).dependsOn.push(header.id);
+    assert.equal(plan.schemaVersion, 1);
+    assert.equal(validateCustomizationPlan(plan), plan);
+
+    let probes = 0;
+    const review = await renderReviewedPlan(plan, path.join(root, 'review.html'), {
+      check: (url) => { probes += 1; return successfulImageCheck(url); },
+    });
+    const dataPath = path.join(root, 'approved.json');
+    fs.writeFileSync(dataPath, JSON.stringify(plan), 'utf8');
+    const published = publishApprovedPlan({ projectRoot: root, dataPath, imageChecksPath: review.imageChecks });
+    const document = renderDocument(fs.readFileSync(published.currentHtml, 'utf8'));
+    assert.equal(document.get('summary').textContent, plan.summary);
+    const componentCard = document.get('componentChanges').innerHTML;
+    assert.ok(componentCard.includes(header.summary));
+    assert.ok(componentCard.includes(header.inputs.details));
+    assert.ok(componentCard.includes(header.preserve[0]));
+    assert.match(componentCard, /Page or component[\s\S]*Header/);
+    assert.equal(document.has('technicalOperations'), false);
+
+    const resolved = updateExecution({ projectRoot: root, action: 'resolve', operationId: header.id });
+    assert.deepEqual(resolved.resolvedInputs, header.inputs);
+    assert.deepEqual(resolved.operation.target, header.target);
+    assert.deepEqual(resolved.operation.preserve, header.preserve);
+    if (plan.newSiteDesign) {
+      assert.equal(resolved.designContext.composition, plan.newSiteDesign.composition);
+      assert.ok(document.get('newSiteDesign').innerHTML.includes('Header: grouped navigation'));
+      const earlyStyling = structuredClone(plan);
+      earlyStyling.operations.at(-1).dependsOn = [plan.operations[0].id];
+      assert.throws(() => validateCustomizationPlan(earlyStyling), /depend on all structural/);
+    } else {
+      assert.equal(Object.hasOwn(resolved, 'designContext'), false);
+    }
+    assert.throws(() => updateExecution({
+      projectRoot: root, action: 'resolve', operationId: 'style-new-site',
+    }), /incomplete dependencies:.*customize-site-header/);
+    assert.equal(probes, 1, 'Publication and header handoff reuse the checked image receipt.');
+
+    const changed = structuredClone(plan);
+    changed.operations.find((operation) => operation.id === header.id).inputs.details = 'Unapproved replacement header.';
+    assert.notEqual(planHash(changed), planHash(plan));
+    fs.writeFileSync(dataPath, JSON.stringify(changed), 'utf8');
+    assert.throws(() => publishApprovedPlan({
+      projectRoot: root, dataPath, imageChecksPath: review.imageChecks,
+    }), /stale image checks/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(published.currentJson, 'utf8')), plan);
+  }
+});
+
+test('explicit header preservation is visible without adding a no-op operation', (t) => {
+  const root = temporaryRoot(t);
+  const plan = externalImagePlan();
+  const operationsBefore = plan.operations.map((operation) => operation.id);
+  plan.preservation = 'Preserve the existing branded header because the user explicitly requested it.';
+  plan.newSiteDesign.composition += ' Retain the requested header while designing the page composition.';
+  plan.operations.at(-1).inputs.details = 'Style the approved page composition; leave the header unchanged.';
+  plan.operations.at(-1).preserve.push(plan.preservation);
+  const output = path.join(root, 'preserved-header.html');
+  renderCustomizationPlan(plan, output, { emitStatus: false });
+  const document = renderDocument(fs.readFileSync(output, 'utf8'));
+  assert.equal(document.get('preservation').textContent, plan.preservation);
+  assert.ok(document.get('styleChanges').innerHTML.includes(plan.preservation));
+  assert.deepEqual(plan.operations.map((operation) => operation.id), operationsBefore);
+  assert.ok(plan.operations.every((operation) => operation.skill !== 'author-web-template'));
+});
+
 test('new-site design accepts meaningful imagery and transitive styling dependencies', () => {
   const plan = newSitePlan();
   assert.equal(validateCustomizationPlan(plan), plan);

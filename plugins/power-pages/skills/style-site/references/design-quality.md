@@ -29,6 +29,22 @@ When responsive/state rules need to replace a winning inline property, the inlin
 
 These parts are examples, not a closed list. Use general declarations or a raw responsive stylesheet for the requested design, including font stacks, shadows, layout functions, transitions, transforms, tokens and all gradient kinds. Check logical visual order against DOM/keyboard order. For animations, add `prefers-reduced-motion` alternatives and preserve visibility/function without motion. Namespace new keyframe/font/property/layer names with `pp-`/`--pp-`, or explicitly review shared naming with raw `global: true`. Global themes affect all matching elements in their placement scope and require expanded review. Review font/resource licensing, availability and CSP; external HTTPS references require exact `externalResources`, not automatic fetching.
 
+## Coordinate header styling
+
+For new-site design or full-site redesign, carry the approved header treatment from the plan
+through the same final styling pass as the page content. Resolve the actual header source and
+winning logo/navigation/control rules; do not assume body colors or typography reach them.
+Coordinate header surfaces, link/button states, spacing and responsive rules with the approved
+custom composition. Keep declared preservation preferences, site-wide scope and expanded
+exact-diff review; this is not an extra approval stage.
+
+Return missing snippet, markup or Liquid changes to their native owners before styling.
+Do not duplicate/hide the global header, replace its behavior with CSS, or rebind `website.yml`
+as a styling shortcut. Preserve navigation, authentication, locale, accessibility and caching
+contracts while changing presentation. Narrow edits do not authorize unrelated header styling.
+Verify local source and supplied contrast pairs; mobile-menu interaction and rendered states
+remain pending separately authorized observation.
+
 ## Deliver imagery through the existing asset workflow
 
 Apply the shared hero/supporting-image art direction to new-site visual treatments, while honoring a bare-baseline request or explicit image decline; do not force image acquisition for existing-site narrow edits. Follow [visual asset planning](../../customize-declarative-site/references/visual-asset-planning.md) for provenance, legal/privacy/user approval and the selected delivery mode. During creation, add images using direct approved HTTPS URLs, not image downloads or new Web Files. Existing template images can remain. Local-only or newly generated illustrations need an approved hosted URL for this route; never publish them automatically.

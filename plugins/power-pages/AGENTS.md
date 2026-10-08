@@ -46,6 +46,12 @@ HTML. Review external-host availability, license, privacy and CSP; do not silent
 The plan library validates completeness/dependencies, not visual fidelity. Status/approval HTML
 is not a site preview; local verification leaves Studio/runtime rendering pending.
 
+New classic designs and full-site redesigns explicitly plan header branding, navigation styling
+and responsive treatment in the existing brief and owner operations, or record why the header is
+preserved. Template selection is not a visual constraint or a preservation reason. Coordinate
+snippet/template work before final styling, retain native header behavior and binding safety,
+and keep narrow edits scoped. Do not add a header schema, no-op task, approval gate or SPA change.
+
 Customization-plan presentation preserves the approved JSON: neutral informational notes,
 structured navigation, distinct labeled Modify/Replace accents, and section/column/element
 wireframes. Omit the maker-facing technical implementation trace; retain complete execution data

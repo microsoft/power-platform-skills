@@ -9,6 +9,39 @@ function read(relativePath) {
   return fs.readFileSync(path.join(pluginRoot, relativePath), 'utf8');
 }
 
+test('classic header planning reaches creation, approval and styling without widening narrow edits', () => {
+  const workflow = read(path.join('skills', 'create-site', 'workflows', 'declarative-site.md'));
+  const customization = read(path.join('skills', 'customize-declarative-site', 'SKILL.md'));
+  const composition = read(path.join('skills', 'customize-declarative-site', 'references', 'content-and-page-compositions.md'));
+  const contract = read(path.join('skills', 'customize-declarative-site', 'references', 'customization-plan-contract.md'));
+  const styling = read(path.join('skills', 'style-site', 'references', 'design-quality.md'));
+  const headerSection = composition.match(/## Site header planning\r?\n([\s\S]*?)(?=\r?\n## |$)/);
+  assert.ok(headerSection);
+  const header = headerSection[1];
+  assert.match(workflow, /requirement to include header branding, navigation styling and mobile treatment/);
+  assert.match(customization, /For new-site design and full-site redesign, explicitly plan the site header/);
+  assert.match(customization, /Do not assume\s+that a template named `Header` is the one the site uses/);
+  assert.match(customization, /CSS-only header treatment needs no dummy structural operation/);
+  assert.match(customization, /missing planned header work as incomplete/);
+  assert.match(header, /creation template supplies component\/domain\s+context, not a visual constraint/);
+  assert.match(header, /part of the required custom site composition, not a substitute/);
+  for (const owner of ['author-content-snippet', 'author-web-template', 'style-site']) {
+    assert.ok(header.includes(`\`${owner}\``), owner);
+  }
+  assert.match(header, /new header binding requires explicitly approved global scope/);
+  for (const preserved of ['navigation', 'search', 'language selection', 'sign-in/out',
+    'anonymous/authenticated', 'accessible labels/skip links', 'substitution']) {
+    assert.ok(header.includes(preserved), preserved);
+  }
+  assert.match(header, /Do not duplicate the global header inside page content or hide it with CSS/);
+  assert.match(header, /Narrow existing-site work leaves unrelated header content and appearance unchanged/);
+  assert.match(contract, /do not add a mandatory header field/);
+  assert.match(contract, /header planning adds no separate gate or schema/);
+  assert.match(contract, /instead of creating a\s+dummy operation/);
+  assert.match(styling, /Return missing snippet, markup or Liquid changes to their native owners before styling/);
+  assert.match(styling, /remain pending separately authorized observation/);
+});
+
 test('create-site can hand a Standard or Enhanced baseline to declarative customization', () => {
   const skill = read(path.join('skills', 'create-site', 'SKILL.md'));
   const workflow = read(path.join('skills', 'create-site', 'workflows', 'declarative-site.md'));

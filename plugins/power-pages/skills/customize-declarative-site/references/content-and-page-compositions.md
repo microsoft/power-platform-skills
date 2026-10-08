@@ -59,6 +59,36 @@ and report it before any separately approved deployment.
 Do not ask about UUIDs, metadata filenames, serialization, indentation, escaping, or routine
 accessibility attributes.
 
+## Site header planning
+
+For new-site design or full-site redesign, include a concrete header treatment derived from the
+experience brief: brand name/logo, navigation hierarchy, any requested primary action, spacing,
+typography, surfaces and states, and the narrow-screen menu arrangement. Reuse known decisions
+instead of starting another questionnaire. The creation template supplies component/domain
+context, not a visual constraint; do not retain its default header merely because it was selected.
+This header treatment is part of the required custom site composition, not a substitute for
+designing Home and the primary visitor journey.
+
+Resolve the active header binding and real source/callers before assigning work. Plan localized
+brand text or snippet-backed logo values through `author-content-snippet`, header markup/Liquid
+through `author-web-template`, and visual treatment through the final `style-site` pass. Navigation
+record changes use their verified owner; do not hardcode a replacement menu or invent destinations.
+Use only the owners needed by the approved change. Preserve the existing binding and record IDs
+when modifying the bound source; a new header binding requires explicitly approved global scope.
+
+Preserve required navigation, search, language selection, sign-in/out and anonymous/authenticated
+branches, accessible labels/skip links, native responsive behavior, and narrowly scoped dynamic
+`substitution` regions. These are functional contracts, not a requirement to keep the starter's
+visual layout. Do not duplicate the global header inside page content or hide it with CSS.
+Keep logo delivery and source verification within the existing visual-asset contract.
+
+Make the header outcome visible in the existing plan summary and relevant component/styling
+cards. If the user requests preservation, or an inspected existing header already meets the
+approved direction, record what remains and why in `preservation`; template selection alone
+is not a preservation reason. Do not add a no-op owner task. Unresolved bindings or unavailable
+source are readiness findings with remediation, not a claim that customization succeeded.
+Narrow existing-site work leaves unrelated header content and appearance unchanged.
+
 ## Example page compositions
 
 Compose these patterns from the supported Design Studio layouts and page elements. A “card” here
