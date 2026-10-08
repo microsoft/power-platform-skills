@@ -370,10 +370,10 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
 1. **Query Current Status**
 
    ```powershell
-   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --checkMigrationStatus
+   pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --checkMigrationStatus --verbose
    ```
 
-   > **PAC CLI build note:** Verbose output (`-v` / `--verbose`) behavior varies by PAC build. On many current builds, `pac pages migrate-datamodel --webSiteId <ID> -s -v` returns a tracker summary with `Created On`, `Modified On`, current step, step history, and per-chunk outcomes — that's the payload Phase 3.1 captures into the Transactional References Migration card. On some older builds the flag errored with `An unknown argument --verbose was passed.`; if you hit that, run without `-v` and feed the simpler payload (`status` + `currentStep` only) to `--set-refs-migration`. For elapsed-time / per-step details when verbose isn't supported, query the migration tracker record directly in Dataverse via PAC data tools.
+   > **PAC CLI build note:** Verbose output (`-v` / `--verbose`) is required here when supported because the top-level `Running` status alone cannot distinguish active metadata work from the expected `ConfigurationDataCompleted` handoff. On some older builds the flag errors with `An unknown argument --verbose was passed.`; only then fall back to the non-verbose command. If the fallback reports `Running`, query the migration tracker record directly in Dataverse for `currentStep` before presenting any in-flight choices. Never offer reset based only on the non-verbose `Running` status.
 
 2. **Parse Status**
 
@@ -398,7 +398,11 @@ The skill-level approval prompt that follows (via AskUserQuestion) is for the **
      - **Retry**: Proceed to step 1.5 (full pre-checks still run).
      - **Stop**: Halt. Direct user to verbose status output and Microsoft Learn for diagnostics.
 
-   - **Running**: Migration is in progress. Compute and present elapsed time:
+    - **Running with `currentStep = ConfigurationDataCompleted`**: Configuration metadata finished, but the tracker remains `Running` until the references phase finishes. This is an expected handoff, not evidence that metadata migration is stuck. **Do not show the generic in-flight prompt, do not ask whether to proceed, and do not offer reset.** Proceed through steps 1.5–1.7 to recover the intended mode:
+       - If the confirmed mode is `configurationData`, automatically mark Authoring Track step 2.2 completed and immediately resume at step 2.3. Do not reset or rerun metadata migration.
+       - If the confirmed mode is `all`, the same current step is only an intermediate milestone; resume the step 2.2 polling loop and wait for top-level `Completed`.
+
+    - **Running with any other `currentStep`**: Migration is in progress. Compute and present elapsed time:
 
      > Migration started **`<createdOn → now>`**, last activity **`<modifiedOn → now>`** ago. Current step: **`<currentStep>`**. Migration processes records in batches of 5K — large sites can take hours.
      > Reference: <https://learn.microsoft.com/en-us/power-pages/admin/migrate-enhanced-data-model>
@@ -704,18 +708,34 @@ This phase has **two completely different shapes** depending on the migration tr
 
 2. **Monitor & Poll**
 
-   Poll every 1 minute, up to 30 attempts (30 minutes total). **Use this exact PowerShell loop** — don't improvise a Bash equivalent. Bash subshells can silently fail if `pac` isn't on the Bash `$PATH` (different PATH from PowerShell on many Windows installs), which makes the `until / sleep` pattern spin forever without ever detecting completion.
+    Poll every 1 minute, up to 30 attempts (30 minutes total). **Use this exact PowerShell loop** — don't improvise a Bash equivalent. Bash subshells can silently fail if `pac` isn't on the Bash `$PATH` (different PATH from PowerShell on many Windows installs), which makes the `until / sleep` pattern spin forever without ever detecting completion.
+
+    PAC keeps the top-level tracker `Running` after a metadata-only `configurationData` run because Phase 3 still needs to migrate configuration-data references. For that mode, `Current Step: ConfigurationDataCompleted` is the authoritative completion milestone for **this sub-step**. For `all`, the top-level tracker must reach `Completed`. Always match the labeled fields instead of searching the whole response for `Completed`, because step names and step history also contain that word.
 
    ```powershell
    $webSiteId = "<WEBSITE_ID>"
+    $mode = "<MODE>"
+    $stepOutcome = "TimedOut"
    for ($i = 1; $i -le 30; $i++) {
-     $statusOutput = pac pages migrate-datamodel --webSiteId $webSiteId --checkMigrationStatus 2>&1 | Out-String
-     if ($statusOutput -match "Completed")      { Write-Host "Status: Completed";  break }
-     if ($statusOutput -match "Failed")         { Write-Host "Status: Failed";     break }
-     if ($statusOutput -match "Reverted")       { Write-Host "Status: Reverted";   break }
+       $statusOutput = pac pages migrate-datamodel --webSiteId $webSiteId --checkMigrationStatus --verbose 2>&1 | Out-String
+       $trackerStatus = if ($statusOutput -match '(?im)^Current migration status is\s*:\s*(\w+)\s*$') { $Matches[1] } else { 'Unknown' }
+       $currentStep = if ($statusOutput -match '(?im)^\s*Current Step\s*:\s*(\w+)\s*$') { $Matches[1] } else { 'Unknown' }
+
+       if ($trackerStatus -eq "Failed")   { $stepOutcome = "Failed";   break }
+       if ($trackerStatus -eq "Reverted") { $stepOutcome = "Reverted"; break }
+       if ($mode -eq "configurationData" -and $currentStep -eq "ConfigurationDataCompleted") {
+          $stepOutcome = "ConfigurationDataCompleted"
+          break
+       }
+       if ($mode -eq "all" -and $trackerStatus -eq "Completed") {
+          $stepOutcome = "Completed"
+          break
+       }
      Write-Host "Attempt $i/30 — still running, sleeping 60s..."
      Start-Sleep -Seconds 60
    }
+
+    Write-Host "Step outcome: $stepOutcome"
    ```
 
    Between iterations, update the live report:
@@ -724,11 +744,11 @@ This phase has **two completely different shapes** depending on the migration tr
    node update-state.js --output-dir "<OUTPUT_DIR>" --set-activity "Polling migration status (attempt <N>/30)"
    ```
 
-   - **Completed**: clear activity, proceed to step 2.3.
+   - **`$stepOutcome` is `ConfigurationDataCompleted` or `Completed`**: automatically clear activity, mark step 2.2 completed, and immediately execute step 2.3. **This transition has no approval gate: do not ask the user whether to proceed and do not describe the migration as stuck.**
    - **Still `Running` (loop exited at i=30 without status change)**: this usually just means the migration is still working — large sites process in 5K-record batches and can take a long time. **Recommend the user wait and keep polling** rather than resetting. Re-enter the poll loop and show elapsed time (from the tracker's `Created On` / `Modified On`). Only if it stays `Running` with **no forward progress for an extended period** (`Modified On` not advancing, no newly completed chunks in the verbose output) treat it as genuinely stuck — see **"Unblocking a stuck `Running` tracker"** below.
    - **Failed / Reverted**: surface error, ask user (retry / reset / exit).
 
-   > **Unblocking a stuck `Running` tracker.** Do **not** infer completion from the internal `currentStep` (e.g. `ConfigurationDataCompleted`) while the status still reads `Running` — wait first. If it is genuinely stuck for an extended period:
+   > **Unblocking a stuck `Running` tracker.** A top-level `Running` status with `ConfigurationDataCompleted` is expected after `configurationData`; proceed to customization remediation and Phase 3 rather than resetting it. For `all`, or when the current step has not reached the mode-specific milestone, wait first. If it is genuinely stuck for an extended period:
    > 1. Try the supported reset: `pac pages migrate-datamodel --webSiteId "<WEBSITE_ID>" --resetMigration` (flips the tracker `Running → Failed`).
    > 2. If that doesn't clear it, **ask the customer to reset the field manually in Dataverse**: on the `adx_websitemigrationtracker` record (find it by `adx_websiteid` = WebSiteId), set **`adx_migrationstatus`** to **Failed (`746610003`)** — or **NotStarted (`746610000`)** for a clean slate.
    > 3. Re-run the migrate command and resume polling.
