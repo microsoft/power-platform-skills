@@ -96,9 +96,14 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  * Extracts the Dataverse tenant from the environment's WWW-Authenticate challenge.
  * @returns {Promise<string|null>} Tenant GUID/name, or null if unavailable
  */
-async function getDataverseTenantFromChallenge(resourceUrl) {
-  const normalizedUrl = resourceUrl.replace(/\/+$/, '');
-  const res = await makeRequest({
+async function getDataverseTenantFromChallenge(resourceUrl, options = {}) {
+  let normalizedUrl;
+  try {
+    normalizedUrl = module.exports.validateDataverseEnvironmentUrl(resourceUrl, 'Azure CLI token resolution', options);
+  } catch (err) {
+    return null;
+  }
+  const res = await module.exports.makeRequest({
     url: `${normalizedUrl}/api/data/v9.2/WhoAmI`,
     includeHeaders: true,
     timeout: 10000,
@@ -153,7 +158,10 @@ function getAzAccessToken(resourceUrl, tenantId = null) {
  * @param {string|null} explicitTenantId Resolved environment tenant; skips tenant discovery when valid
  * @returns {Promise<string|null>} Access token, or null if unavailable
  */
-async function getAuthToken(resourceUrl, explicitTenantId = null) {
+async function getAuthToken(resourceUrl, explicitTenantId = null, options = {}) {
+  // Validate origin early before any HTTP probe or Azure CLI invocation
+  module.exports.validateDataverseEnvironmentUrl(resourceUrl, 'Azure CLI token resolution', options);
+
   // Candidates are produced LAZILY, in priority order. This used to be an array
   // literal, and an array literal evaluates every element before `.filter()`
   // runs — so each call paid for the WWW-Authenticate probe AND an
@@ -167,7 +175,7 @@ async function getAuthToken(resourceUrl, explicitTenantId = null) {
     () => explicitTenantId,
     () => process.env.POWER_PLATFORM_TENANT_ID,
     () => process.env.DATAVERSE_TENANT_ID,
-    () => getDataverseTenantFromChallenge(resourceUrl),
+    () => getDataverseTenantFromChallenge(resourceUrl, options),
     () => getAzAccountTenantId(),
   ];
 
@@ -283,6 +291,147 @@ const CLOUD_TO_SITE_DOMAIN = {
   'China': 'powerappsportals.cn',
 };
 
+const DATAVERSE_HOST_PATTERNS = [
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.(?:api\.)?crm\d*\.dynamics\.com$/,
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.(?:api\.)?crm\.microsoftdynamics\.us$/,
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.(?:api\.)?crm\.appsplatform\.us$/,
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.(?:api\.)?crm\.dynamics\.cn$/,
+];
+
+function isDataverseHost(hostname) {
+  return DATAVERSE_HOST_PATTERNS.some((pattern) => pattern.test(hostname));
+}
+
+function parseTrustedMicrosoftUrl(value, {
+  purpose = 'URL',
+  allowPath = true,
+  allowedHost = (hostname) => isDataverseHost(hostname),
+  allowLoopback = false,
+} = {}) {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`${purpose} must be a non-empty string.`);
+  }
+
+  if (/[\u0000-\u001f\u007f\\]/.test(value)) {
+    throw new Error(`${purpose} contains control characters or backslashes.`);
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${purpose} is not a valid URL.`);
+  }
+
+  const isLoopback = allowLoopback === true && (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost');
+  if (!isLoopback && parsed.protocol !== 'https:') {
+    throw new Error(`${purpose} must use HTTPS.`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error(`${purpose} must not contain credentials.`);
+  }
+  if (parsed.hash) {
+    throw new Error(`${purpose} must not contain a fragment.`);
+  }
+
+  const authorityMatch = new RegExp('^https?://([^/?#]*)', 'i').exec(value);
+  if (!authorityMatch) {
+    throw new Error(`${purpose} must use HTTPS.`);
+  }
+  const authority = authorityMatch[1];
+  if (!isLoopback && authority.includes(':')) {
+    throw new Error(`${purpose} must not contain a port.`);
+  }
+  if (!isLoopback && (!/^[A-Za-z0-9.-]+$/.test(authority) || parsed.hostname.includes('xn--'))) {
+    throw new Error(`${purpose} contains unsafe host characters.`);
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (!allowedHost(hostname)) {
+    throw new Error(`${purpose} host "${hostname}" is not an allowed Microsoft Dataverse endpoint.`);
+  }
+  if (!allowPath && (parsed.pathname !== '/' || parsed.search)) {
+    throw new Error(`${purpose} must be an HTTPS origin without a path or query.`);
+  }
+
+  return parsed;
+}
+
+function validateDataverseEnvironmentUrl(value, purpose = 'Dataverse environment URL', options = {}) {
+  const allowLoopback = options.allowLoopback === true;
+  return parseTrustedMicrosoftUrl(value, {
+    purpose,
+    allowPath: false,
+    allowedHost: (hostname) => {
+      if (allowLoopback && (hostname === '127.0.0.1' || hostname === 'localhost')) return true;
+      return isDataverseHost(hostname);
+    },
+    allowLoopback,
+  }).origin;
+}
+
+
+/**
+ * Validates a Dataverse OData API path to prevent path traversal and origin changes.
+ * Resolves the path against the base API URL and ensures it remains within scope.
+ *
+ * @param {string} apiPath - The relative API path (e.g., "accounts?$top=1")
+ * @param {string} trustedEnvUrl - The validated environment URL
+ * @param {Object} [options] - Optional validation options
+ * @returns {string} The fully resolved and validated HTTPS URL
+ */
+function validateDataverseApiPath(apiPath, trustedEnvUrl, options = {}) {
+  if (typeof apiPath !== 'string' || apiPath.trim() === '') {
+    throw new Error('Invalid apiPath: must be a non-empty string.');
+  }
+  if (apiPath.length > 8000) {
+    throw new Error('Invalid apiPath: exceeds maximum length of 8000 characters.');
+  }
+  if (/[\u0000-\u001F\u007F]/.test(apiPath)) {
+    throw new Error('Invalid apiPath: contains control characters.');
+  }
+  if (apiPath.includes('#')) {
+    throw new Error('Invalid apiPath: fragments (#) are not allowed.');
+  }
+
+  // Strip exactly one leading slash for backward compatibility, if present
+  let normalizedPath = apiPath;
+  if (normalizedPath.startsWith('/')) {
+    normalizedPath = normalizedPath.substring(1);
+  }
+
+  const API_BASE_PATH = '/api/data/v9.2/';
+  const baseUrl = new URL(API_BASE_PATH, trustedEnvUrl);
+
+  let targetUrl;
+  try {
+    targetUrl = new URL(normalizedPath, baseUrl);
+  } catch (err) {
+    throw new Error('Invalid apiPath: could not parse URL.');
+  }
+
+  if (targetUrl.origin !== baseUrl.origin) {
+    throw new Error('Invalid apiPath: resolves to a different origin.');
+  }
+  const isLoopback = options.allowLoopback === true && (targetUrl.hostname === '127.0.0.1' || targetUrl.hostname === 'localhost');
+  if (!isLoopback && targetUrl.protocol !== 'https:') {
+    throw new Error('Invalid apiPath: must use HTTPS protocol.');
+  }
+  if (targetUrl.username || targetUrl.password) {
+    throw new Error('Invalid apiPath: credentials in URL are not allowed.');
+  }
+  if (!targetUrl.pathname.startsWith(baseUrl.pathname)) {
+    throw new Error('Invalid apiPath: resolves outside the API base path.');
+  }
+
+  // Defense in depth: reject encoded slashes/backslashes in the pathname portion
+  if (/%2f|%5c/i.test(targetUrl.pathname)) {
+    throw new Error('Invalid apiPath: encoded path separators are not allowed in the path.');
+  }
+
+  return targetUrl.href;
+}
+
 module.exports = {
   approve,
   block,
@@ -299,4 +448,6 @@ module.exports = {
   getEnvironmentId,
   CLOUD_TO_API,
   CLOUD_TO_SITE_DOMAIN,
+  validateDataverseApiPath,
+  validateDataverseEnvironmentUrl,
 };

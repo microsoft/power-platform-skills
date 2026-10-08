@@ -10,6 +10,10 @@ const { spawnSync } = require("node:child_process");
 const PLUGIN_ROOT = path.resolve(__dirname, "..", "..");
 const HOOK = path.join(PLUGIN_ROOT, "hooks", "run-user-prompt-telemetry.js");
 
+function nodeRequireOption(filePath) {
+  return `--require "${filePath.replace(/\\/g, '/').replace(/"/g, '\\"')}"`;
+}
+
 function mkConfigDir() {
   // An isolated config dir. Emission is NOT gated by any telemetry.json here —
   // the per-plugin opt-out is a config.json with telemetry[plugin] = "off"
@@ -225,7 +229,7 @@ test("hook emits and exits 0 when optional detector fails to load", () => {
     fakeProbe: probePath,
     ikeyPath,
     cwd: mkSite({ react: "^19.0.0", "@vitejs/plugin-react": "^4.3.0" }),
-    extraEnv: { NODE_OPTIONS: `--require=${preload}` },
+    extraEnv: { NODE_OPTIONS: nodeRequireOption(preload) },
   });
   assert.equal(status, 0);
   assert.equal(stdout, "");

@@ -7,6 +7,18 @@ const path = require('node:path');
 const test = require('node:test');
 const { promisify } = require('node:util');
 
+// Mock validation helpers to allow loopback in tests before importing dataverse-request
+const helpersPath = require.resolve('../lib/validation-helpers');
+const helpers = require(helpersPath);
+if (helpers.validateDataverseEnvironmentUrl) {
+  const origEnv = helpers.validateDataverseEnvironmentUrl;
+  helpers.validateDataverseEnvironmentUrl = (val, purp) => origEnv(val, purp, { allowLoopback: true });
+}
+if (helpers.validateDataverseApiPath) {
+  const origPath = helpers.validateDataverseApiPath;
+  helpers.validateDataverseApiPath = (apiPath, envUrl) => origPath(apiPath, envUrl, { allowLoopback: true });
+}
+
 const execFileAsync = promisify(execFile);
 const scriptPath = path.resolve(__dirname, '..', 'dataverse-request.js');
 const fakeAzPreload = path.join(__dirname, 'helpers', 'fake-az-preload.js');
@@ -227,10 +239,16 @@ function makeTempDir(t) {
   return tempDir;
 }
 
+function nodeRequireOption(filePath) {
+  // NODE_OPTIONS tokenization treats Windows backslashes as escapes. Forward
+  // slashes remain valid in absolute Windows paths and survive on all runners.
+  return `--require "${filePath.replace(/\\/g, '/').replace(/"/g, '\\"')}"`;
+}
+
 function fakeAzEnv(overrides = {}) {
   return {
     ...process.env,
-    NODE_OPTIONS: `--require=${fakeAzPreload}`,
+    NODE_OPTIONS: nodeRequireOption(fakeAzPreload),
     FAKE_AZ_STATIC_TOKEN: 'test-token',
     ...overrides,
   };
@@ -658,7 +676,8 @@ test('BATCH-METADATA atomically journals each completed manifest operation', asy
     JSON.stringify(operations),
   ];
   const first = await execFileAsync(process.execPath, args, { env: fakeAzEnv() });
-  assert.equal(JSON.parse(first.stdout).status, 200);
+  const firstJson = JSON.parse(first.stdout);
+  assert.equal(firstJson.status, 200, "Expected 200 but got " + firstJson.status + ". Data: " + JSON.stringify(firstJson.data));
   const journal = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
   assert.equal(journal.inFlight, null);
   assert.equal(Object.keys(journal.completed).length, 2);

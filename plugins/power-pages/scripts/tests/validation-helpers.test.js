@@ -314,3 +314,77 @@ test('getEnvironmentUrl falls back to active pac auth list Environment Url when 
   assert.equal(getEnvironmentUrl(), 'https://powerpagesprodev.crm.dynamics.com');
   delete require.cache[require.resolve(helpersPath)];
 });
+
+// --- validateDataverseApiPath: Path traversal and origin enforcement ---
+
+test('validateDataverseApiPath accepts valid Dataverse API paths', () => {
+  const { validateDataverseApiPath } = require(helpersPath);
+  const base = 'https://org.crm.dynamics.com';
+  
+  // plain entity set
+  assert.equal(validateDataverseApiPath('accounts', base), `${base}/api/data/v9.2/accounts`);
+  
+  // key lookup
+  assert.equal(validateDataverseApiPath('accounts(00000000-0000-0000-0000-000000000000)', base), `${base}/api/data/v9.2/accounts(00000000-0000-0000-0000-000000000000)`);
+  
+  // query strings
+  assert.equal(validateDataverseApiPath('accounts?$select=name&$top=5', base), `${base}/api/data/v9.2/accounts?$select=name&$top=5`);
+  
+  // filter with encoded characters and spaces (should encode spaces in result)
+  assert.equal(validateDataverseApiPath('accounts?$filter=name eq \'a%26b\'', base), `${base}/api/data/v9.2/accounts?$filter=name%20eq%20%27a%26b%27`);
+  
+  // $expand, nested navigation path
+  assert.equal(validateDataverseApiPath('contacts(123)/account_primary_contact', base), `${base}/api/data/v9.2/contacts(123)/account_primary_contact`);
+  
+  // metadata
+  assert.equal(validateDataverseApiPath("EntityDefinitions(LogicalName='account')/Attributes", base), `${base}/api/data/v9.2/EntityDefinitions(LogicalName='account')/Attributes`);
+  
+  // $batch
+  assert.equal(validateDataverseApiPath('$batch', base), `${base}/api/data/v9.2/$batch`);
+  
+  // query containing ../ or // inside the QUERY string only
+  assert.equal(validateDataverseApiPath('accounts?$filter=url eq \'https://evil.com/x\'', base), `${base}/api/data/v9.2/accounts?$filter=url%20eq%20%27https://evil.com/x%27`);
+  assert.equal(validateDataverseApiPath('accounts?$filter=path eq \'../admin\'', base), `${base}/api/data/v9.2/accounts?$filter=path%20eq%20%27../admin%27`);
+  
+  // trailing slash and leading-slash behavior
+  assert.equal(validateDataverseApiPath('accounts/', base), `${base}/api/data/v9.2/accounts/`);
+  assert.equal(validateDataverseApiPath('/accounts', base), `${base}/api/data/v9.2/accounts`); // strips one leading slash
+});
+
+test('validateDataverseApiPath rejects path traversal and out-of-scope paths', () => {
+  const { validateDataverseApiPath } = require(helpersPath);
+  const base = 'https://org.crm.dynamics.com';
+  
+  // traversal
+  assert.throws(() => validateDataverseApiPath('../../admin', base), /resolves outside the API base path/);
+  assert.throws(() => validateDataverseApiPath('..\\..\\admin', base), /resolves outside the API base path/);
+  assert.throws(() => validateDataverseApiPath('../v9.1/accounts', base), /resolves outside the API base path/);
+  assert.throws(() => validateDataverseApiPath('v9.2/../../x', base), /resolves outside the API base path/);
+  
+  // encoded traversal
+  assert.throws(() => validateDataverseApiPath('%2e%2e/%2e%2e/admin', base), /resolves outside the API base path/);
+  assert.throws(() => validateDataverseApiPath('..%2fadmin', base), /encoded path separators are not allowed/);
+  assert.throws(() => validateDataverseApiPath('..%5cadmin', base), /encoded path separators are not allowed/);
+  assert.throws(() => validateDataverseApiPath('EntityDefinitions%2f..%2f..%2fadmin', base), /encoded path separators are not allowed/);
+  
+  // origin changes
+  assert.throws(() => validateDataverseApiPath('https://evil.com/x', base), /resolves to a different origin/);
+  assert.throws(() => validateDataverseApiPath('//evil.com/x', base), /resolves outside the API base path/); // Because of leading slash stripping, this becomes /evil.com/x
+  assert.throws(() => validateDataverseApiPath('///evil.com/x', base), /resolves to a different origin/); // /// -> // -> origin change
+  assert.throws(() => validateDataverseApiPath('https://user:pass@evil.com/x', base), /resolves to a different origin/);
+  
+  // fragments
+  assert.throws(() => validateDataverseApiPath('accounts#x', base), /fragments/);
+  
+  // control characters
+  assert.throws(() => validateDataverseApiPath('accounts\t', base), /control characters/);
+  assert.throws(() => validateDataverseApiPath('accounts\r\n', base), /control characters/);
+  
+  // type and limits
+  assert.throws(() => validateDataverseApiPath('', base), /non-empty string/);
+  assert.throws(() => validateDataverseApiPath('   ', base), /non-empty string/);
+  assert.throws(() => validateDataverseApiPath(null, base), /non-empty string/);
+  assert.throws(() => validateDataverseApiPath(undefined, base), /non-empty string/);
+  assert.throws(() => validateDataverseApiPath([], base), /non-empty string/);
+  assert.throws(() => validateDataverseApiPath('a'.repeat(8001), base), /maximum length/);
+});

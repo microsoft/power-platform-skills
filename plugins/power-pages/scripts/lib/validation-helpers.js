@@ -195,6 +195,7 @@ function parseTrustedMicrosoftUrl(value, {
   purpose = 'URL',
   allowPath = true,
   allowedHost = (hostname) => isDataverseHost(hostname) || POWER_PLATFORM_SERVICE_HOSTS.has(hostname),
+  allowLoopback = false,
 } = {}) {
   if (typeof value !== 'string' || value.length === 0) {
     throw new Error(`${purpose} must be a non-empty string.`);
@@ -215,7 +216,8 @@ function parseTrustedMicrosoftUrl(value, {
     throw new Error(`${purpose} is not a valid URL.`);
   }
 
-  if (parsed.protocol !== 'https:') {
+  const isLoopback = allowLoopback === true && (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost');
+  if (!isLoopback && parsed.protocol !== 'https:') {
     throw new Error(`${purpose} must use HTTPS.`);
   }
   if (parsed.username || parsed.password) {
@@ -229,15 +231,15 @@ function parseTrustedMicrosoftUrl(value, {
   // authority as well. Microsoft service endpoints used here never require a
   // caller-selected port. URL schemes are case-insensitive, so capture the raw
   // authority without requiring callers to use lowercase `https://`.
-  const authorityMatch = /^https:\/\/([^/?#]*)/i.exec(value);
+  const authorityMatch = new RegExp('^https?://([^/?#]*)', 'i').exec(value);
   if (!authorityMatch) {
     throw new Error(`${purpose} must use HTTPS.`);
   }
   const authority = authorityMatch[1];
-  if (authority.includes(':')) {
+  if (!isLoopback && authority.includes(':')) {
     throw new Error(`${purpose} must not contain a port.`);
   }
-  if (!/^[A-Za-z0-9.-]+$/.test(authority) || parsed.hostname.includes('xn--')) {
+  if (!isLoopback && (!/^[A-Za-z0-9.-]+$/.test(authority) || parsed.hostname.includes('xn--'))) {
     throw new Error(`${purpose} contains unsafe host characters.`);
   }
 
@@ -252,11 +254,16 @@ function parseTrustedMicrosoftUrl(value, {
   return parsed;
 }
 
-function validateDataverseEnvironmentUrl(value, purpose = 'Dataverse environment URL') {
+function validateDataverseEnvironmentUrl(value, purpose = 'Dataverse environment URL', options = {}) {
+  const allowLoopback = options.allowLoopback === true;
   return parseTrustedMicrosoftUrl(value, {
     purpose,
     allowPath: false,
-    allowedHost: isDataverseHost,
+    allowedHost: (hostname) => (
+      isDataverseHost(hostname)
+      || (allowLoopback && (hostname === '127.0.0.1' || hostname === 'localhost'))
+    ),
+    allowLoopback,
   }).origin;
 }
 
@@ -310,14 +317,14 @@ function validateBapPollingUrl(location, initiatingUrl, purpose = 'BAP Location 
 function runAzureCli(args, deps = {}) {
   const execFile = deps.execFile || execFileSync;
   const platform = deps.platform || process.platform;
-  const options = { encoding: 'utf8', timeout: 15000, shell: false };
+  const execOptions = { encoding: 'utf8', timeout: 15000, shell: false };
   if (platform === 'win32') {
     // Azure CLI is exposed as az.cmd on Windows. Route the fixed argument array
     // through cmd.exe because Node cannot execute .cmd shims directly.
     // See: https://nodejs.org/api/child_process.html#spawning-bat-and-cmd-files-on-windows
-    return execFile('cmd.exe', ['/d', '/s', '/c', 'az.cmd', ...args], options);
+    return execFile('cmd.exe', ['/d', '/s', '/c', 'az.cmd', ...args], execOptions);
   }
-  return execFile('az', args, options);
+  return execFile('az', args, execOptions);
 }
 
 function getAuthToken(resourceUrl, deps = {}) {
@@ -531,6 +538,66 @@ const CLOUD_TO_SITE_DOMAIN = {
   'China': 'powerappsportals.cn',
 };
 
+/**
+ * Validates a Dataverse OData API path to prevent path traversal and origin changes.
+ * Resolves the path against the base API URL and ensures it remains within scope.
+ *
+ * @param {string} apiPath - The relative API path (e.g., "accounts?$top=1")
+ * @param {string} trustedEnvUrl - The validated environment URL
+ * @returns {string} The fully resolved and validated HTTPS URL
+ */
+function validateDataverseApiPath(apiPath, trustedEnvUrl, options = {}) {
+  if (typeof apiPath !== 'string' || apiPath.trim() === '') {
+    throw new Error('Invalid apiPath: must be a non-empty string.');
+  }
+  if (apiPath.length > 8000) {
+    throw new Error('Invalid apiPath: exceeds maximum length of 8000 characters.');
+  }
+  if (/[\u0000-\u001F\u007F]/.test(apiPath)) {
+    throw new Error('Invalid apiPath: contains control characters.');
+  }
+  if (apiPath.includes('#')) {
+    throw new Error('Invalid apiPath: fragments (#) are not allowed.');
+  }
+
+  // Strip exactly one leading slash for backward compatibility, if present
+  let normalizedPath = apiPath;
+  if (normalizedPath.startsWith('/')) {
+    normalizedPath = normalizedPath.substring(1);
+  }
+
+  const API_BASE_PATH = '/api/data/v9.2/';
+  const baseUrl = new URL(API_BASE_PATH, trustedEnvUrl);
+
+  let targetUrl;
+  try {
+    targetUrl = new URL(normalizedPath, baseUrl);
+  } catch (err) {
+    throw new Error('Invalid apiPath: could not parse URL.');
+  }
+
+  if (targetUrl.origin !== baseUrl.origin) {
+    throw new Error('Invalid apiPath: resolves to a different origin.');
+  }
+  const isLoopback = options.allowLoopback === true && (targetUrl.hostname === '127.0.0.1' || targetUrl.hostname === 'localhost');
+  if (!isLoopback && targetUrl.protocol !== 'https:') {
+    throw new Error('Invalid apiPath: must use HTTPS protocol.');
+  }
+  if (targetUrl.username || targetUrl.password) {
+    throw new Error('Invalid apiPath: credentials in URL are not allowed.');
+  }
+  if (!targetUrl.pathname.startsWith(baseUrl.pathname)) {
+    throw new Error('Invalid apiPath: resolves outside the API base path.');
+  }
+
+  // Defense in depth: reject encoded slashes/backslashes in the pathname portion
+  if (/%2f|%5c/i.test(targetUrl.pathname)) {
+    throw new Error('Invalid apiPath: encoded path separators are not allowed in the path.');
+  }
+
+  return targetUrl.href;
+}
+
 module.exports = {
   approve,
   block,
@@ -556,4 +623,5 @@ module.exports = {
   getPacAuthInfo,
   CLOUD_TO_API,
   CLOUD_TO_SITE_DOMAIN,
+  validateDataverseApiPath,
 };

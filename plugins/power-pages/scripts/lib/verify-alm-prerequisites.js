@@ -89,7 +89,7 @@ async function verifyAlmPrerequisites({ envUrl, requireManifest, expectedEnvUrl 
       );
     }
   }
-  resolvedEnvUrl = resolvedEnvUrl.replace(/\/+$/, '');
+  resolvedEnvUrl = helpers.validateDataverseEnvironmentUrl(resolvedEnvUrl);
 
   // Step 1b: Environment-match assertion (opt-in via --expectedEnvUrl). When the
   // env is resolved from the ambient PAC context (no explicit --envUrl), it is NOT

@@ -79,7 +79,7 @@
 
 const fs = require('fs');
 const helpers = require('./validation-helpers');
-const { getAuthToken } = helpers;
+const { getAuthToken, validateDataverseEnvironmentUrl } = helpers;
 const { createStageRun } = require('./create-stage-run');
 const { pollValidationStatus } = require('./poll-validation-status');
 
@@ -295,6 +295,7 @@ async function validateStageRunsBatch({
   refreshToken,
 }) {
   if (!hostEnvUrl) throw new Error('--hostEnvUrl is required');
+  hostEnvUrl = validateDataverseEnvironmentUrl(hostEnvUrl);
   // stageId + sourceDeploymentEnvironmentId only required for the fresh fan-out
   // path; rePoll re-uses stage runs whose stage was already chosen.
   if (!rePoll) {

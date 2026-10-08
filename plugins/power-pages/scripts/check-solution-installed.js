@@ -17,8 +17,8 @@
 // The query itself lives in lib/check-solution-installed.js so it can be unit-
 // tested without spawning a subprocess or making real network calls.
 
-const { getAuthToken, getEnvironmentUrl } = require('./lib/validation-helpers');
-const { checkSolutionInstalled, sanitizeEnvUrl } = require('./lib/check-solution-installed');
+const { getAuthToken, getEnvironmentUrl, validateDataverseEnvironmentUrl } = require('./lib/validation-helpers');
+const { checkSolutionInstalled } = require('./lib/check-solution-installed');
 
 function parseArgs(argv) {
   const args = {};
@@ -43,13 +43,13 @@ async function main() {
     process.exit(1);
   }
 
-  // Sanitize before passing anywhere that interpolates the URL into a shell
-  // command (getAuthToken builds `az account get-access-token --resource
-  // "${envUrl}"`). sanitizeEnvUrl strips everything except scheme+host+port,
-  // so a `--envUrl 'x"; rm -rf ~; echo "'` can't escape the quotes.
+  // Validate the environment URL to prevent the caller from supplying an
+  // arbitrary origin that would receive the acquired Azure CLI bearer token.
+  // This strict validation ensures token acquisition and OData requests only
+  // happen against trusted Dataverse/Power Platform service endpoints.
   let envUrl;
   try {
-    envUrl = sanitizeEnvUrl(rawEnvUrl);
+    envUrl = validateDataverseEnvironmentUrl(rawEnvUrl);
   } catch (err) {
     process.stderr.write(`${err.message}\n`);
     process.exit(1);

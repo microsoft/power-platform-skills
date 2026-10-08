@@ -111,7 +111,7 @@ test('verifyAlmPrerequisites passes the env assertion when origins match (slash/
 
   // Expected URL differs only by case + trailing slash → same origin → no throw.
   const res = await verifyAlmPrerequisites({ expectedEnvUrl: 'https://org-dev.crm.dynamics.com/' });
-  assert.equal(res.envUrl, 'https://Org-Dev.crm.dynamics.com');
+  assert.equal(res.envUrl, 'https://org-dev.crm.dynamics.com');
 });
 
 test('parseArgs captures --expectedEnvUrl', () => {

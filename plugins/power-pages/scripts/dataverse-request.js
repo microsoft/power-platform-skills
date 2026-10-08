@@ -27,6 +27,7 @@ const {
   getAuthToken,
   makeRequest,
   validateDataverseEnvironmentUrl,
+  validateDataverseApiPath,
 } = require('./lib/validation-helpers');
 
 function parseArgs(argv = process.argv.slice(2), deps = {}) {
@@ -71,7 +72,8 @@ async function doRequest(envUrl, method, apiPath, body, token, includeHeaders, r
   // before a bearer token is attached. Validation in main() cannot protect
   // library callers that invoke this helper directly.
   const trustedEnvUrl = validateDataverseEnvironmentUrl(envUrl);
-  const url = `${trustedEnvUrl}/api/data/v9.2/${apiPath}`;
+  // Audit A: resolve then validate destination; blocks path traversal and origin change
+  const url = validateDataverseApiPath(apiPath, trustedEnvUrl);
   const headers = {
     Authorization: `Bearer ${token}`,
     Accept: 'application/json',

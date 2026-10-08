@@ -2,6 +2,19 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
+
+// Mock validation helpers to allow loopback in tests before importing dataverse-request
+const helpersPath = path.resolve(__dirname, '../lib/validation-helpers');
+const helpers = require(helpersPath);
+if (helpers.validateDataverseEnvironmentUrl) {
+  const origEnv = helpers.validateDataverseEnvironmentUrl;
+  helpers.validateDataverseEnvironmentUrl = (val, purp) => origEnv(val, purp, { allowLoopback: true });
+}
+if (helpers.validateDataverseApiPath) {
+  const origPath = helpers.validateDataverseApiPath;
+  helpers.validateDataverseApiPath = (apiPath, envUrl) => origPath(apiPath, envUrl, { allowLoopback: true });
+}
 
 const { parseArgs, doRequest } = require('../dataverse-request');
 

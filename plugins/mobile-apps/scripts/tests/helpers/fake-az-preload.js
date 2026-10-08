@@ -2,6 +2,7 @@
 
 const childProcess = require('node:child_process');
 const fs = require('node:fs');
+const path = require('node:path');
 
 const originalExecFileSync = childProcess.execFileSync;
 
@@ -38,3 +39,18 @@ childProcess.execFileSync = function fakeAzExecFileSync(command, args, options) 
   error.status = 1;
   throw error;
 };
+
+// Inject test-only loopback allowance into the security boundary AFTER mocking execFileSync
+try {
+  const helpersPath = path.join(__dirname, '../../lib/validation-helpers.js');
+  const helpers = require(helpersPath);
+  
+  if (helpers.validateDataverseEnvironmentUrl) {
+    const origEnv = helpers.validateDataverseEnvironmentUrl;
+    helpers.validateDataverseEnvironmentUrl = (val, purp) => origEnv(val, purp, { allowLoopback: true });
+  }
+  if (helpers.validateDataverseApiPath) {
+    const origPath = helpers.validateDataverseApiPath;
+    helpers.validateDataverseApiPath = (apiPath, envUrl) => origPath(apiPath, envUrl, { allowLoopback: true });
+  }
+} catch (e) {}

@@ -1,5 +1,4 @@
 'use strict';
-
 // Minimal HTTP mock for Dataverse OData responses used by integration tests.
 //
 // Built once per test: give it a map of URL-path → response body (or a handler
@@ -14,6 +13,19 @@
 // handling, and token-refresh patterns that injected-mock tests can't surface.
 
 const http = require('http');
+const path = require('node:path');
+
+// Mock validation helpers to allow loopback in tests
+const helpersPath = path.resolve(__dirname, '../../lib/validation-helpers');
+const helpers = require(helpersPath);
+if (helpers.validateDataverseEnvironmentUrl) {
+  const origEnv = helpers.validateDataverseEnvironmentUrl;
+  helpers.validateDataverseEnvironmentUrl = (val, purp) => origEnv(val, purp, { allowLoopback: true });
+}
+if (helpers.validateDataverseApiPath) {
+  const origPath = helpers.validateDataverseApiPath;
+  helpers.validateDataverseApiPath = (apiPath, envUrl) => origPath(apiPath, envUrl, { allowLoopback: true });
+}
 
 function makeLocalRequest({
   url,

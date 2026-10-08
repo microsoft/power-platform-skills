@@ -10,6 +10,10 @@ const { spawnSync } = require("node:child_process");
 const PLUGIN_ROOT = path.resolve(__dirname, "../..");
 const HOOK = path.join(PLUGIN_ROOT, "hooks", "run-skill-pretool-telemetry.js");
 
+function nodeRequireOption(filePath) {
+  return `--require "${filePath.replace(/\\/g, '/').replace(/"/g, '\\"')}"`;
+}
+
 function mkConfigDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "ppskills-ph-"));
 }
@@ -265,7 +269,7 @@ test("pretool hook emits and exits 0 when optional detector fails to load", () =
     configDir,
     ikeyPath,
     fakeProbe: probePath,
-    extraEnv: { NODE_OPTIONS: `--require=${preload}` },
+    extraEnv: { NODE_OPTIONS: nodeRequireOption(preload) },
   });
   assert.equal(status, 0);
   assert.equal(stdout, "");

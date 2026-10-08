@@ -16,11 +16,13 @@
 // ECONNREFUSED instead of touching the network.
 
 const test = require('node:test');
+
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+
 
 const HELPERS = path.join(__dirname, '..', 'lib', 'validation-helpers.js');
 const FAKE_AZ_PRELOAD = path.join(__dirname, 'helpers', 'fake-az-preload.js');
@@ -40,13 +42,19 @@ function makeFakeAzLog(t) {
   return path.join(dir, 'az.log');
 }
 
+function nodeRequireOption(filePath) {
+  // NODE_OPTIONS tokenization treats Windows backslashes as escapes. Forward
+  // slashes remain valid in absolute Windows paths and survive on all runners.
+  return `--require "${filePath.replace(/\\/g, '/').replace(/"/g, '\\"')}"`;
+}
+
 // Runs getAuthToken in a child process so preload/env manipulation cannot leak
 // into the test runner, and returns both the token and the az invocation log.
 function runGetAuthToken(t, env = {}, explicitTenantId = null) {
   const logPath = makeFakeAzLog(t);
   const script = `
     const { getAuthToken } = require(${JSON.stringify(HELPERS)});
-    getAuthToken(${JSON.stringify(UNREACHABLE_ENV_URL)}, ${JSON.stringify(explicitTenantId)})
+    getAuthToken(${JSON.stringify(UNREACHABLE_ENV_URL)}, ${JSON.stringify(explicitTenantId)}, { allowLoopback: true })
       .then((token) => { process.stdout.write(String(token)); })
       .catch((error) => { process.stderr.write(String(error)); process.exit(1); });
   `;
@@ -55,7 +63,7 @@ function runGetAuthToken(t, env = {}, explicitTenantId = null) {
     encoding: 'utf8',
     env: {
       ...process.env,
-      NODE_OPTIONS: `--require=${FAKE_AZ_PRELOAD}`,
+      NODE_OPTIONS: nodeRequireOption(FAKE_AZ_PRELOAD),
       FAKE_AZ_LOG: logPath,
       // Cleared unless a test opts in — the ambient shell may have them set.
       POWER_PLATFORM_TENANT_ID: '',
@@ -140,4 +148,33 @@ test('final fallback mints an unqualified token when no tenant resolves', (t) =>
   assert.match(log, /account show/);
   assert.equal(token, 'token-for:active-account');
   assert.doesNotMatch(log, /--tenant/);
+});
+
+test('preload script loads correctly even if path contains spaces', (t) => {
+  const spaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'space test-'));
+  const preloadCopy = path.join(spaceDir, 'fake-az-preload.js');
+  const preloadContent = fs.readFileSync(FAKE_AZ_PRELOAD, 'utf8')
+    .replace("path.join(__dirname, '../../lib/validation-helpers.js')", JSON.stringify(HELPERS));
+  fs.writeFileSync(preloadCopy, preloadContent);
+  t.after(() => fs.rmSync(spaceDir, { recursive: true, force: true }));
+
+  const logPath = makeFakeAzLog(t);
+  const script = `
+    const { getAuthToken } = require(${JSON.stringify(HELPERS)});
+    getAuthToken(${JSON.stringify(UNREACHABLE_ENV_URL)}, 'space-tenant')
+      .then((token) => { process.stdout.write(String(token)); })
+      .catch((err) => { process.stderr.write(String(err)); process.exit(1); });
+  `;
+
+  const { stdout, stderr, status } = spawnSync(process.execPath, ['-e', script], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      NODE_OPTIONS: nodeRequireOption(preloadCopy),
+      FAKE_AZ_LOG: logPath,
+    },
+  });
+
+  assert.equal(status, 0, 'Process failed with stderr: ' + stderr);
+  assert.equal(stdout, 'token-for:space-tenant');
 });

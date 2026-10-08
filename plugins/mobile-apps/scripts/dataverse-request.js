@@ -54,7 +54,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { getAuthToken, makeRequest } = require('./lib/validation-helpers');
+const { getAuthToken, makeRequest, validateDataverseApiPath, validateDataverseEnvironmentUrl } = require('./lib/validation-helpers');
 
 const READ_REQUEST_TIMEOUT_MS = 30000;
 const MUTATION_REQUEST_TIMEOUT_MS = 120000;
@@ -161,8 +161,9 @@ function parseArgs() {
   };
 }
 
-async function doRequest(envUrl, method, apiPath, body, token, includeHeaders, solution) {
-  const url = `${envUrl}/api/data/v9.2/${apiPath}`;
+async function doRequest(envUrl, method, apiPath, body, token, includeHeaders, solution, options = {}) {
+  const trustedEnvUrl = validateDataverseEnvironmentUrl(envUrl, 'Dataverse environment URL', options);
+  const url = validateDataverseApiPath(apiPath, trustedEnvUrl, options);
   const headers = {
     Authorization: `Bearer ${token}`,
     Accept: 'application/json',
@@ -208,9 +209,21 @@ function createDataverseRequestExecutor({
   getToken = getAuthToken,
   sendRequest = doRequest,
   sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
+  validateEnvUrl = validateDataverseEnvironmentUrl,
+  validateApiPath = validateDataverseApiPath,
+  options = {},
 }) {
   const envUrl = String(environmentUrl || '').replace(/\/+$/, '');
   if (!envUrl) throw new Error('environmentUrl is required');
+
+  // Validate the environment URL origin before any token is acquired.
+  // Without this check, a caller who passes https://attacker.example becomes the
+  // "trusted" base and every request sends the bearer token to that host.
+  try {
+    validateEnvUrl(envUrl, 'Dataverse environment URL', options);
+  } catch (err) {
+    throw new Error(`Invalid environmentUrl: ${err.message}`);
+  }
 
   let token = null;
   let tokenPromise = null;
@@ -219,7 +232,7 @@ function createDataverseRequestExecutor({
   async function ensureToken() {
     if (token) return token;
     if (!tokenPromise) {
-      tokenPromise = Promise.resolve(getToken(envUrl, tenantId));
+      tokenPromise = Promise.resolve(getToken(envUrl, tenantId, options));
     }
     const pendingToken = tokenPromise;
     try {
@@ -238,7 +251,7 @@ function createDataverseRequestExecutor({
       return token;
     }
     if (!refreshPromise) {
-      refreshPromise = Promise.resolve(getToken(envUrl, tenantId))
+      refreshPromise = Promise.resolve(getToken(envUrl, tenantId, options))
         .then((refreshed) => {
           if (refreshed) token = refreshed;
           return refreshed;
@@ -265,7 +278,7 @@ function createDataverseRequestExecutor({
       includeHeaders,
       solution,
       tenantId,
-      async (_environmentUrl, _tenantId, staleToken) => refreshToken(staleToken),
+      async (_environmentUrl, _tenantId, _opts, staleToken) => refreshToken(staleToken),
       sendRequest,
       {
         sleep,
@@ -278,6 +291,7 @@ function createDataverseRequestExecutor({
             }
           }
         },
+        options,
       },
     );
     return {
@@ -1050,6 +1064,7 @@ async function runOneMetadataOperation(
   {
     sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
     onRateLimited = () => {},
+    options = {},
   } = {},
 ) {
   let token = initialToken;
@@ -1059,7 +1074,7 @@ async function runOneMetadataOperation(
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     // Response headers are always needed internally for Retry-After handling.
     // The caller-facing result still honors includeHeaders below.
-    const res = await sendRequest(envUrl, method, apiPath, body, token, true, solution);
+    const res = await sendRequest(envUrl, method, apiPath, body, token, true, solution, options);
     if (res.error) {
       if (isMutationMethod(method)) {
         return {
@@ -1077,7 +1092,7 @@ async function runOneMetadataOperation(
     }
 
     if (res.statusCode === 401 && attempt < maxRetries) {
-      const refreshed = await getToken(envUrl, tenantId, token);
+      const refreshed = await getToken(envUrl, tenantId, options, token);
       if (!refreshed) {
         return { status: 401, error: 'Token refresh failed', token, rateLimited };
       }

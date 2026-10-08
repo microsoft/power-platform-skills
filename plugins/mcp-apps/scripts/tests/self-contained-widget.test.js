@@ -21,6 +21,7 @@ const {
   assertNoExternalResources,
   inlineRuntime,
   prepareDraft,
+  parseArgs,
 } = require('../inline-self-contained-runtime.js');
 
 test('vendored runtime matches provenance and exposes the stable global', () => {
@@ -152,4 +153,10 @@ test('eval suite covers both delivery modes', () => {
   assert.deepEqual([...modes].sort(), ['cdn', 'self-contained']);
   assert.ok(Array.isArray(suite.mode_assertions['self-contained']));
   assert.ok(Array.isArray(suite.mode_assertions.cdn));
+});
+
+test('parseArgs rejects missing path values and option-looking paths', () => {
+  assert.throws(() => parseArgs(['--input']), /requires a path value/);
+  assert.throws(() => parseArgs(['--input', '--prepare']), /requires a path value/);
+  assert.throws(() => parseArgs(['--output']), /requires a path value/);
 });

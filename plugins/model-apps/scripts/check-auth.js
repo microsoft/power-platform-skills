@@ -33,7 +33,7 @@
 // Exit code 0 always (so callers can parse stdout). Use `ok` field to gate.
 
 const { execFileAsync } = require('./lib/process-runner.js');
-const { dataverseRequest, getAuthTokenAsync, parseArgs, validateFlags, tokenFailureKind, tokenFailureMessage } = require('./lib/dataverse-auth');
+const { dataverseRequest, getAuthTokenAsync, parseArgs, validateFlags, tokenFailureKind, tokenFailureMessage, dataverseOrigin } = require('./lib/dataverse-auth');
 const { azTimeoutMs, azTimeoutAdvice, cliFailureKind } = require('./lib/cli-failure.js');
 
 // `pac org who` cold-starts the PAC CLI's .NET runtime (~7 s measured on Windows), and longer on a busy
