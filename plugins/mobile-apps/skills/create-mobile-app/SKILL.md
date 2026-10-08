@@ -1489,9 +1489,11 @@ Substitute the hardcoded template values with wizard answers from Step 2:
 
 Bundle ID and scheme are left as template defaults — they are fixed across all dev builds and patched by the wrap pipeline at release time.
 
-**Fix 1b — Verify captured dev logging path**
+**Fix 1b — Verify template-owned development lifecycle scripts**
 
-Manual `npm run dev` must remain the normal Expo entry point. The template's `metro.config.js` delegates to `createPowerAppsMetroConfig` from `@microsoft/power-apps-native-host/config/metroConfig`; that factory installs sanitized Metro terminal and HTTP bundle-failure logging under `.powernative/metro-logs/`. Manual starts and `/debug-app` use the same log source without a process-owning wrapper. Verify these script entries only; do not add wrapper-specific scripts:
+Manual `npm run dev` remains the development entry point, and npm invokes `predev` before it. The template owns the command bodies for both lifecycle scripts and may change them as the native host evolves. Verify only that both entries exist as non-empty strings; do not compare, rewrite, or otherwise enforce their command bodies.
+
+The template's `metro.config.js` delegates to `createPowerAppsMetroConfig` from `@microsoft/power-apps-native-host/config/metroConfig`; that factory installs sanitized Metro terminal and HTTP bundle-failure logging under `.powernative/metro-logs/`. Manual starts and `/debug-app` use the same log source without a process-owning wrapper.
 
 ```bash
 node - "<working_dir>" <<'NODE'
@@ -1500,11 +1502,10 @@ const path = require('node:path');
 const root = process.argv[2];
 const packagePath = path.join(root, 'package.json');
 const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
-if (!pkg.scripts || pkg.scripts.dev !== 'expo start') {
-  throw new Error('Expected package.json scripts.dev to be "expo start". Do not route dev through a wrapper.');
-}
-if (pkg.scripts.predev !== 'npm run generate-schemas && npm run type-check') {
-  throw new Error('Expected predev to run schema generation followed by type-checking.');
+for (const scriptName of ['dev', 'predev']) {
+  if (typeof pkg.scripts?.[scriptName] !== 'string' || pkg.scripts[scriptName].trim() === '') {
+    throw new Error(`Expected package.json scripts.${scriptName} to be a non-empty command.`);
+  }
 }
 NODE
 ```
@@ -3124,7 +3125,7 @@ Open the final phase (Step 13 marks it done):
 node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id run --status active
 ```
 
-This skill launches the template's canonical `npm run dev` command. Its `predev` lifecycle runs schema generation followed by the final TypeScript gate before Expo starts, and logging is configured in `metro.config.js`.
+This skill launches the template's canonical `npm run dev` command. The template owns the `dev` and `predev` command bodies; this skill relies only on npm's lifecycle ordering and does not require either script to expand to a particular command. Logging is configured in `metro.config.js`.
 
 1. Expo prints the native Metro URL and may also render a QR in its terminal. Capture the URL and generate the QR PNG below so the user always receives a scannable code even when Metro runs in a background terminal or the host does not expose terminal rendering.
 2. Hot-reload works on file edits — no restart needed for screen tweaks.
@@ -3145,7 +3146,7 @@ cd "<working_dir>"
 npm run dev
 ```
 
-`npm run dev` runs `predev` first: `npm run generate-schemas && npm run type-check`. npm does not launch `expo start` when either gate fails. Capture the full failing gate output once, batch-fix by root cause, then rerun `npm run dev`; continue only when `predev` passes and Expo prints its Metro URL.
+`npm run dev` runs the template-owned `predev` script first. If either lifecycle script fails, capture the full output once, batch-fix by root cause, then rerun `npm run dev`; continue only when `predev` passes and the development command prints its Metro URL.
 
 This is a long-running dev server. In hosts that support background terminals, run it as a background/async terminal only for process lifetime; do not persist or depend on the terminal ID. `/debug-app` discovers logs from `.powernative/metro-logs/`, not from terminal output.
 

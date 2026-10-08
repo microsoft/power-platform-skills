@@ -64,8 +64,6 @@ test('template uses the host Metro factory that installs project-local logging',
     'the host package must include the Metro logger introduced in 0.2.26',
   );
   assert.match(gitignore, /^\.powernative\//m);
-  assert.equal(packageJson.scripts.dev, 'expo start');
-  assert.equal(packageJson.scripts.predev, 'npm run generate-schemas && npm run type-check');
   const workflowCoversMobileApps = /plugins\/mobile-apps\/\*\*/.test(workflow);
   assert.ok(workflowCoversMobileApps || /plugins\/mobile-apps\/template\/metro\.config\.js/.test(workflow));
   assert.ok(workflowCoversMobileApps || /plugins\/mobile-apps\/template\/package\.json/.test(workflow));
@@ -87,7 +85,13 @@ test('skill contracts read logs and persist host-neutral state under .powernativ
   assert.match(createSkill, /npm run dev/);
   assert.match(createSkill, /^### Step 12 [^\r\n]*Metro writes project-local logs/m);
   assert.match(createSkill, /createPowerAppsMetroConfig/);
-  assert.match(createSkill, /npm does not launch `expo start` when either gate fails/);
+  assert.match(createSkill, /template owns the `dev` and `predev` command bodies/);
+  assert.match(createSkill, /does not require either script to expand to a particular command/);
+  assert.match(createSkill, /for \(const scriptName of \['dev', 'predev'\]\)/);
+  assert.match(createSkill, /typeof pkg\.scripts\?\.\[scriptName\] !== 'string'/);
+  assert.match(createSkill, /pkg\.scripts\[scriptName\]\.trim\(\) === ''/);
+  assert.doesNotMatch(createSkill, /pkg\.scripts\.dev !== ['"]expo start['"]/);
+  assert.doesNotMatch(createSkill, /pkg\.scripts\.predev !== ['"]npm run generate-schemas/);
   assert.match(createSkill, /always receives a scannable code even when Metro runs in a background terminal/);
   assert.match(createSkill, /Do not rely on Expo's terminal-rendered QR as the only presentation path/);
   assert.match(createSkill, /continue through the optional Step 12\.5 debug handoff and print the Step 13 summary/);
