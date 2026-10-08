@@ -60,7 +60,6 @@ power-platform-skills/
 ├── .claude-plugin/           # Legacy manifest mirrors for existing subscriptions
 │   └── marketplace.json
 ├── plugins/                  # Directory containing individual plugins
-│   ├── process-intelligence/ # Process Mining analytics plugin
 │   └── <plugin-name>/        # Individual plugin (e.g., power-pages)
 │       ├── .plugin/
 │       │   └── plugin.json   # Plugin manifest
