@@ -204,30 +204,45 @@ test('existing-site schema-1 plans need neither a new design brief nor added ima
   assert.equal(validateCustomizationPlan(plan), plan);
 });
 
-test('template-independent native recomposition and explicit preservation survive approval and final styling handoff', async (t) => {
+test('custom Home layout and reusable native source survive approval and final styling handoff', async (t) => {
   const root = temporaryRoot(t);
   const plan = externalImagePlan();
-  plan.summary = 'Use the template for conference domain context, not its visual identity.';
-  plan.preservation = 'Keep required conference content, registration behavior and the user-approved logo.';
-  plan.newSiteDesign.composition = 'Replace the starter arrangement with an editorial speaker introduction '
-    + 'and a compact registration task section; retain the logo at the user-requested size.';
+  plan.site.name = 'Contoso Student Camp';
+  plan.summary = 'Reuse program components inside a custom student-camp Home layout.';
+  plan.preservation = 'Keep program bindings, registration behavior and the user-approved logo.';
+  plan.newSiteDesign.composition = 'Replace the starter Home arrangement with a student-focused introduction, '
+    + 'program discovery and a registration path; retain the logo at the user-requested size.';
+  const reusedSource = ["{% include 'Program List' %}", "{% entityform name: 'Registration' %}",
+    "{{ snippets['Camp/Eligibility'] }}"];
+  plan.assets[0].placements = [{
+    page: 'Home', section: 'Student welcome', usage: 'Responsive editorial image', scope: 'page',
+  }];
   const content = plan.operations[0];
-  content.id = 'recompose-speakers-page';
+  content.id = 'recompose-home';
   content.skill = 'author-webpage-content';
   content.action = 'replace';
-  content.summary = 'Recompose the localized speaker introduction with the approved modern design.';
-  content.target = { path: 'web-pages/speakers/content-pages/Speakers.en-US.webpage.copy.html' };
+  content.summary = 'Replace the starter Home layout, retaining required native program components.';
+  content.target = { path: 'web-pages/home/content-pages/Home.en-US.webpage.copy.html' };
   content.inputs = {
     targetFile: content.target.path, locale: 'en-US', bootstrapMajor: 5, mode: 'replace',
     sections: [{
-      layout: 'one-third-right',
+      name: 'Student welcome', layout: 'one-third-right',
       columns: [
-        { elements: [{ type: 'text', content: 'Meet the conference speakers' }] },
+        { elements: [{ type: 'text', content: 'Find your summer program' }] },
         { elements: [{ type: 'image', source: plan.assets[0].externalUrl, alt: 'Conference speaker.' }] },
       ],
+    }, {
+      name: 'Program discovery', layout: 'one-column',
+      columns: [{ elements: [{ type: 'text', content: 'Explore programs' }] }],
+    }, {
+      name: 'Registration', layout: 'one-column',
+      columns: [{ elements: [{ type: 'text', content: 'Register for a program' }] }],
     }],
+    details: `Place the existing ${reusedSource[0]} after the Program discovery heading. `
+      + `Place ${reusedSource[2]} then ${reusedSource[1]} after the Registration heading. `
+      + 'Retain each verified source block unchanged at its destination; do not add new element types.',
   };
-  content.preserve = ['Required speaker content and registration data bindings.',
+  content.preserve = [...reusedSource, 'Program and registration data bindings.',
     'User-approved logo, native markers, Liquid behavior and en-US locale scope.'];
   content.expectedOutputs = ['localizedTargetFile'];
   plan.operations[1].dependsOn = [content.id];
@@ -241,12 +256,20 @@ test('template-independent native recomposition and explicit preservation surviv
     assert.equal(alternative.preservation, plan.preservation);
   }
   const review = await renderReviewedPlan(plan, path.join(root, 'review.html'), { check: successfulImageCheck });
+  const contentReview = renderDocument(fs.readFileSync(review.output, 'utf8')).get('componentChanges').innerHTML;
+  assert.match(contentReview, /Replace the starter Home layout/);
+  const wireframe = contentReview.slice(contentReview.indexOf('<div class="composition">'));
+  assert.equal((wireframe.match(/class="composition-row"/g) || []).length, 3);
+  const sectionNames = [...wireframe.matchAll(/class="composition-heading"><strong>Section \d+: ([^<]+)<\/strong>/g)]
+    .map((match) => match[1]);
+  assert.deepEqual(sectionNames, ['Student welcome', 'Program discovery', 'Registration']);
   const dataPath = path.join(root, 'approved.json');
   fs.writeFileSync(dataPath, JSON.stringify(plan), 'utf8');
   publishApprovedPlan({ projectRoot: root, dataPath, imageChecksPath: review.imageChecks });
   const resolved = updateExecution({ projectRoot: root, action: 'resolve', operationId: content.id });
   assert.deepEqual(resolved.operation.preserve, content.preserve);
   assert.deepEqual(resolved.resolvedInputs, content.inputs);
+  assert.deepEqual(resolved.operation.preserve.slice(0, 3), reusedSource);
   assert.equal(resolved.designContext.composition, plan.newSiteDesign.composition);
   assert.throws(() => updateExecution({
     projectRoot: root, action: 'resolve', operationId: 'style-new-site',

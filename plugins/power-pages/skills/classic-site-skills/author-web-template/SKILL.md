@@ -131,6 +131,13 @@ Apply these defaults when the user has not specified a minor detail:
 - Keep request-, user-, page-, language-, or time-dependent header/footer output
   inside the narrowest practical `substitution` block.
 
+For an approved new-site layout operation, implement the custom composition in `designContext`
+and the resolved inputs, not the nearest starter template's arrangement. Reuse required native
+forms, lists, snippets and Liquid dependencies within that composition while preserving their
+bindings, editable regions and runtime behavior. A working form does not make its surrounding
+layout immutable. Apply the explicit header/footer source scope when supplied; a custom look
+does not require changing the website binding or dropping authentication/navigation branches.
+
 Do not implicitly create a page template. A web template used as an include,
 base layout, derived layout, header/footer, or reusable source does not need one.
 The `author-page-template` skill owns end-to-end custom page layouts and can

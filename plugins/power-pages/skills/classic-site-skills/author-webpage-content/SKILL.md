@@ -127,8 +127,10 @@ language plan. Normalize it internally according to the composition reference;
 do not require the user to rewrite a complete plan merely to match an example
 format.
 
-An approved new-site handoff may replace or recompose the creation template's sections, columns
-and elements. Follow its resolved composition and `designContext`, not the starter appearance.
+An approved new-site handoff requires custom composition using supported native sections,
+columns and elements, not just text/image substitutions. Follow its resolved composition and
+`designContext`, not the creation template's arrangement. Retain/place required existing components through the
+resolved-source rules in **Whole-page composition**, without inventing new native element types.
 Preserve required content/capabilities and native serialization as described in **Whole-page
 composition**; an unrelated existing-site `append` or `modify` remains a narrow edit.
 

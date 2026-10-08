@@ -213,7 +213,7 @@ test('native authors and final styling carry the approved composition without sa
     assert.match(source, /preservation/);
   }
   assert.match(page, /do not substitute the creation template's layout or branding/);
-  assert.match(content, /may replace or recompose/);
+  assert.match(content, /requires custom composition/);
   assert.match(composition, /required forms\/lists, data bindings, Liquid behavior, native markers and locale scope/);
   assert.match(composition, /never replace it with a\s+static lookalike or silently discard it/);
   assert.match(composition, /does not broaden an unrelated existing-site `append` or `modify`/);
@@ -221,4 +221,62 @@ test('native authors and final styling carry the approved composition without sa
   assert.match(styling, /return missing structural changes to those owners/);
   assert.match(critique, /not resemblance to the selected creation template/);
   assert.match(critique, /Do not turn an existing-site narrow edit into an unsolicited redesign/);
+});
+
+test('new-site plans require custom Home and journey layouts rather than cosmetic template changes', () => {
+  const customization = read(path.join('skills', 'customize-declarative-site', 'SKILL.md'));
+  const planning = read(path.join('skills', 'customize-declarative-site', 'references', 'content-and-page-compositions.md'));
+  const contract = read(path.join('skills', 'customize-declarative-site', 'references', 'customization-plan-contract.md'));
+  const shared = read(path.join('references', 'site-design-quality.md'));
+  assert.match(shared, /custom design and layout are required, not merely permitted/i);
+  assert.match(shared, /forms, lists, content snippets/);
+  assert.match(shared, /template reskin, not the requested custom design/);
+  assert.match(customization, /caller omitted the literal `creationIntent` field/);
+  assert.match(customization, /not a file timestamp or the mere presence of template metadata/);
+  assert.match(planning, /Inventory reusable \*\*components\*\* independently of layout/);
+  assert.match(planning, /Do not use the starter outline as the default outline/);
+  assert.match(planning, /Map that composition to actual native owner operations and exact source targets/);
+  assert.match(planning, /required source\/bindings and explicit user exceptions in `preserve`/);
+  assert.match(planning, /A preserved logo or working registration form does not\s+preserve the whole page/);
+  assert.match(customization, /only copy\/image substitutions, additional pages and styling while leaving\s+the starter Home\/layout intact is incomplete/);
+  assert.match(contract, /Record the proposed Home\/primary-journey sections and component destinations in actual native/);
+  assert.match(contract, /a non-empty brief or a passing validator alone is insufficient/);
+  assert.match(contract, /Do not add dummy structural operations/);
+});
+
+test('component reuse preserves existing source without forcing the surrounding template layout', () => {
+  const composition = read(path.join('skills', 'classic-site-skills', 'author-webpage-content',
+    'references', 'webpage-content-composition.md'));
+  const pageTemplate = read(path.join('skills', 'classic-site-skills', 'author-page-template', 'SKILL.md'));
+  const webTemplate = read(path.join('skills', 'classic-site-skills', 'author-web-template', 'SKILL.md'));
+  const planning = read(path.join('skills', 'customize-declarative-site', 'references', 'content-and-page-compositions.md'));
+  assert.match(planning, /Do not create `type: form`, `type: list` or `type: reuse`/);
+  assert.match(composition, /exact existing source boundary or Liquid\/snippet\s+reference and destination/);
+  assert.match(composition, /dependent scripts, IDs and Liquid scope/);
+  assert.match(composition, /do not regenerate a form\/list\s+as a new element type or wrap it in a text component/);
+  assert.match(composition, /every requested element and reused component appears at its planned destination/);
+  assert.match(pageTemplate, /table compatibility alone does not justify retaining the starter design/);
+  assert.match(pageTemplate, /Carry|carry/);
+  assert.match(pageTemplate, /designContext/);
+  assert.match(webTemplate, /implement the custom composition in `designContext`/);
+  assert.match(webTemplate, /preserving their\s+bindings, editable regions and runtime behavior/);
+  assert.match(webTemplate, /does not require changing the website binding or dropping authentication\/navigation branches/);
+});
+
+test('the existing final review treats an unimplemented custom layout as incomplete without adding gates', () => {
+  const customization = read(path.join('skills', 'customize-declarative-site', 'SKILL.md'));
+  const review = customization.split('## Phase 6:')[1].split('## Phase 7:')[0];
+  const styling = read(path.join('skills', 'style-site', 'references', 'design-quality.md'));
+  const critique = read(path.join('skills', 'style-site', 'references', 'design-critique.md'));
+  assert.match(review, /Trace the planned Home\/primary-journey section structure and reused-component placements/);
+  assert.match(review, /copy\/image swaps or CSS on an unchanged starter layout do not satisfy/);
+  assert.match(review, /Record missing planned composition work as incomplete/);
+  assert.match(review, /changed section count or new class name alone is not evidence/);
+  assert.match(styling, /report the structural dependency as incomplete before styling that surface/);
+  assert.match(critique, /incomplete layout work, not a completed custom design/);
+  assert.match(critique, /Do not infer success from a larger diff, or failure from missing screenshots/);
+  assert.deepEqual([...customization.matchAll(/<!-- gate: ([^ |]+)/g)].map((match) => match[1]),
+    ['customize-declarative-site:4.approve', 'customize-declarative-site:7.deploy']);
+  assert.match(customization, /--imageChecks "<APPROVED_REVIEW_DIR>\/plan.html.image-checks.json"/);
+  assert.match(customization, /exact-diff\/hash approval is a separate binding/);
 });

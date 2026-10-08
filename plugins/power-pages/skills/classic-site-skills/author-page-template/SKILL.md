@@ -107,6 +107,12 @@ from the page-template reference. When that workflow requires new source, invoke
 `author-web-template` with the resolved layout requirements, then re-read its
 resulting metadata and continue the reference workflow.
 
+For an approved new-site handoff, carry `designContext` and the resolved custom composition into
+that source-owner request. Reuse metadata only when its rendering source can deliver the approved
+layout; table compatibility alone does not justify retaining the starter design. Required forms,
+lists and snippets are reusable components, not a reason to copy the surrounding page shell.
+Keep existing identities and safe binding reuse; do not create new records merely for visual novelty.
+
 For a metadata-only request, follow the reference without expanding the
 operation into web-template creation or webpage assignment.
 

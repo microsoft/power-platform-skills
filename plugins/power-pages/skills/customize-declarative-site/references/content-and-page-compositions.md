@@ -38,14 +38,61 @@ resolve safe defaults from the site:
 
 For an explicit new-site design handoff, use the approved `newSiteDesign` and shared
 `${PLUGIN_ROOT}/references/site-design-quality.md` instead of the layout-reuse and styling
-defaults above. The creation template supplies data-model/domain and requirements context only;
-it does not constrain appearance, page composition, layout, branding, or presentation. Retain
+defaults above. The creation template supplies data-model/domain and requirements context and
+reusable native components; it does not constrain appearance, page composition, layout, branding,
+or presentation. Retain
 explicit preservation preferences, required content/capabilities and working data bindings, not
 the starter arrangement by default. Design purposeful imagery, hierarchy and responsive section
 rhythm, freely recomposing supported native sections/columns/elements in the approved scope.
 Native Bootstrap/Studio serialization and platform behavior remain protected. A PAC page-template
 binding is a rendering contract, not the creation template's visual identity: reuse it when
 compatible with the brief, or route an approved layout/binding change to its native owner.
+
+## New-site custom layout planning
+
+Require an original, requirement-led page composition, not a cosmetic refresh of the selected
+creation template. Complete this reasoning within the existing plan preparation, not a new
+approval stage:
+
+1. Inventory reusable **components** independently of layout: required forms, lists, snippets,
+   navigation/authentication behavior and useful content. Resolve each component's source,
+   identity, bindings, callers, locale and any positioning dependency. Preserving a form's
+   behavior does not mean preserving the hero or section arrangement around it.
+2. Design Home and the primary visitor journey from the experience brief before choosing a
+   starter-page pattern. Specify the first-screen hierarchy, section purposes and sequence,
+   supported column composition, image/copy balance, actions, responsive stacking and placements
+   for reused components. Include the shared header/footer treatment where it shapes that
+   experience. Do not use the starter outline as the default outline.
+3. Map that composition to actual native owner operations and exact source targets. Record
+   section/column/element decisions and existing-component destinations in `inputs`, and the
+   required source/bindings and explicit user exceptions in `preserve`. Use
+   `newSiteDesign.composition` for the overall rationale, not as a substitute for those executable
+   details. Resolve all required layout work before the final dependent `style-site` operation.
+4. State what is reused as a component, what surrounding composition changes, and what remains
+   only because the user explicitly requested it. Show these decisions in the existing plan's
+   summaries, inputs and wireframes. A preserved logo or working registration form does not
+   preserve the whole page. Reuse generic native grid primitives without copying the starter
+   page's full composition; do not churn IDs or change sections merely to inflate a diff.
+
+For example, a student-camp site can reuse a verified program list, registration form and
+eligibility snippet while composing a student-focused first screen, an activity-led introduction,
+program discovery and a clear registration path. Their real bindings and required content stay;
+the starter hero, sequence, surrounding layout and decorative treatment are not inherited.
+This is an example of component reuse, not a mandated camp layout or permission to invent programs.
+
+Do not create `type: form`, `type: list` or `type: reuse` as new page-element serializations. A
+reused component is existing verified source or an existing Liquid/snippet reference with an
+explicit destination, handled through the native owner that can safely retain/place it.
+Return unsupported relocation or unknown dependencies for resolution rather than omitting a
+required component, substituting static HTML, or keeping the whole starter layout silently.
+
+In the existing final verification, compare the actual source composition with both the plan
+and downloaded baseline. A rename, copy/image swap or palette change on the same starter
+composition is not a custom-layout result. Missing planned layout work is incomplete, even
+when individual edits validate. Report rendered appearance as unobserved until actually checked;
+no browser, screenshot, diff-size threshold or additional approval gate is introduced.
+
+## Applying page blueprints
 
 Use [page blueprints](../../../references/page-blueprints.md) to select narrative beats and a
 role-appropriate first screen from that same brief. Translate ideas through the native structures
@@ -72,11 +119,10 @@ Compose these patterns from the supported Design Studio layouts and page element
 means a column containing supported elements and later styled as one surface; it is not a native
 `type: card` component.
 
-These examples are non-exhaustive and are not a catalog of allowed page designs. Prefer a
-composition derived from the user's goal and approved brief. Reuse a site-local pattern only
-when it fits that scope and direction. Use any
-valid combination of supported layouts and elements, and combine or adapt the examples below
-when they help.
+These examples are non-exhaustive and are not a catalog of allowed page designs. Derive the
+composition from the user's goal and approved brief. For new-site work, compose the required
+custom layout with these primitives, not the starter page as a whole. For existing-site narrow
+work, reuse suitable site-local patterns within the requested scope.
 
 | Pattern | Composition |
 |---|---|
@@ -93,12 +139,11 @@ Choose structure in this order:
 
 1. derive the first screen and narrative from the approved intent; inspect similar pages for
    required content, data bindings and supported native serialization;
-2. reuse or adapt a suitable existing composition or example, or propose a different supported
-   composition; new-site design does not default to the creation template's arrangement;
+2. for new-site work, author the custom composition with supported native primitives and place
+   reusable components within it; for existing-site narrow work, adapt the suitable local pattern;
 3. map every section to a supported layout;
 4. map each column to ordered supported elements: text, image, button, video, or spacer;
-5. add `style-site` only when the requested result requires presentation not already supplied by
-   the selected local pattern.
+5. for existing-site narrow work, add `style-site` only when the requested presentation needs it.
 
 For new-site designs, include the final coordinated `style-site` treatment from the approved
 brief after every structural operation. Pass the verified Bootstrap major to the page-content

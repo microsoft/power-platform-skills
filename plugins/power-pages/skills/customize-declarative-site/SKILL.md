@@ -107,6 +107,9 @@ Use the smallest route that fully satisfies the request:
 - multiple pages or cross-component dependencies: use the complete orchestration below;
 - explicit new-site design handoff: use the complete orchestration, even for a one-page site,
   so visual direction, image delivery, structure, and final styling remain coordinated;
+- an unambiguous continuation of creating a new site: use that same new-site route even if the
+  caller omitted the literal `creationIntent` field. Establish it from the request/session intent,
+  not a file timestamp or the mere presence of template metadata;
 - SPA/code site: stop and explain that this skill is declarative-only.
 
 Do not generate a broad plan or invoke every owner merely because they are available.
@@ -130,6 +133,8 @@ For a broad or underspecified request, collect:
 For `creationIntent: "new-site"`, the selected creation template is a data/domain and requirements
 reference, not a constraint on appearance, page composition, layout, branding, or presentation.
 Design the complete modern visitor experience from the user's intent, not the starter arrangement.
+Custom design and layout are required. Reuse needed native forms, lists, content snippets and
+their verified bindings as components; do not reuse the template's page composition by default.
 Honor explicit preservation preferences or a choice to keep the template unchanged; otherwise
 do not require separate redesign permission just to depart from it. Reuse the shared quality
 reference to choose a coherent typography system, role-based palette, spacing rhythm, responsive composition, and
@@ -152,7 +157,11 @@ Set `newSiteDesign.imageDelivery: "external-url"` for every new-site creation ha
 using approved direct HTTPS URLs in native image components; do not download them, create image
 Web Files, or schedule image-import operations. Suitable existing template images may remain.
 
-Apply the content reasoning and example page-compositions reference. Inspect similar pages for
+Apply **New-site custom layout planning** in the content-and-page-compositions reference before
+choosing operations: separate the reusable-component inventory from the proposed Home/primary-journey
+composition. Put concrete section and reused-component placements in the existing operation
+inputs, not only a design aspiration in `newSiteDesign.composition`.
+Inspect similar pages for
 requirements, bindings and supported serialization, not a mandatory design to copy;
 derive a content outline and supported `section -> columns -> elements` structure, draft safe
 explanatory copy, and identify only organization-specific facts that require confirmation.
@@ -201,6 +210,11 @@ owning skill supports the requested operation.
 2. Divide the request into the smallest coherent operations owned by:
    `author-web-file`, `author-content-snippet`, `author-web-template`,
    `author-page-template`, `author-webpage`, `author-webpage-content`, and `style-site`.
+   For new-site design, map the proposed layout to actual native composition operations on Home
+   and the primary journey. Include web-template/page-template or shared-shell work when that
+   source owns the layout; reusing a form/list/snippet does not require retaining its whole page.
+   A plan containing only copy/image substitutions, additional pages and styling while leaving
+   the starter Home/layout intact is incomplete unless that scope was explicitly preserved.
 3. Order operations by actual dependencies, not by skill name. Assets/snippets/templates normally
    precede their consumers; webpage metadata must create an exact localized copy file before
    `author-webpage-content` fills it; styling runs after structural authoring.
@@ -377,6 +391,12 @@ Do not invoke a child skill for an empty operation, and do not invoke deployment
 7. Compare the completed composition with the approved experience brief once, using
    `${PLUGIN_ROOT}/skills/style-site/references/design-critique.md`'s native interpretation of the
    shared categories and source-only evidence.
+   Trace the planned Home/primary-journey section structure and reused-component placements to
+   the changed native files, including the source that actually owns the shell. Compare against
+   the downloaded baseline: copy/image swaps or CSS on an unchanged starter layout do not satisfy
+   a custom-layout brief. Record missing planned composition work as incomplete and return it to
+   its native owner through the existing revision/approval flow, not a completed modern design.
+   A changed section count or new class name alone is not evidence of custom composition.
    Reuse child verification and the approved image-check receipt; do not repeat unchanged network
    probes, add a screenshot gate, or run a critique per operation. Report observed local gaps and
    unobserved runtime checks separately. Revisions still require the existing plan/owner approvals;

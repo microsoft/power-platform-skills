@@ -123,9 +123,9 @@ expected value to the caller.
 
 ## Whole-page composition
 
-An approved new-site `replace` may freely recompose supported native sections, columns and
-elements; the creation template's arrangement is not a preservation requirement. Its
-data-model/domain context still informs required content and capabilities. Carry explicit user
+An approved new-site `replace` must implement the resolved custom composition with supported
+native sections, columns and elements; the creation template's arrangement is not a preservation
+requirement. Its data-model/domain context still informs required content and capabilities. Carry explicit user
 preservation preferences and the approved `designContext` through the resolved composition.
 Preserve required forms/lists, data bindings, Liquid behavior, native markers and locale scope,
 not a visual copy of the starter page. If a required component cannot be safely retained or moved
@@ -140,15 +140,24 @@ Use this workflow for `create` and `replace`:
 3. For `replace`, inventory the current top-level sections, Liquid blocks, comments, and
    standalone nodes. Require the preservation contract to account for anything that
    cannot safely be discarded.
-4. Load the section-layout reference and every component-specific reference needed by
+4. For each reused component, resolve its exact existing source boundary or Liquid/snippet
+   reference and destination in the approved composition before rebuilding its surroundings.
+   Keep the existing native block/reference and bindings intact; do not regenerate a form/list
+   as a new element type or wrap it in a text component. Confirm the whole block is safe in its
+   destination, including dependent scripts, IDs and Liquid scope. If not established, stop
+   and return the dependency to the caller/native owner rather than retaining the whole layout
+   or dropping the component. Shared/rendering-template changes belong to `author-web-template`.
+5. Load the section-layout reference and every component-specific reference needed by
    the plan.
-5. Generate each component using its final resolved values.
-6. For each section, start from the selected section layout and place all column
-   elements in document order.
-7. Concatenate completed sections in page order without adding an undocumented outer
+6. Generate new elements using their final resolved values and place verified reused source at
+   its resolved destination, without changing its protected internals.
+7. For each section, start from the selected section layout and place all column
+   elements and retained source blocks in the approved document order.
+8. Concatenate completed sections in page order without adding an undocumented outer
    page wrapper.
-8. Confirm that every requested element appears exactly once.
-9. Write the complete body only after the full composition is internally coherent.
+9. Confirm that every requested element and reused component appears at its planned destination
+   exactly once; reconcile required source/bindings with the original inventory.
+10. Write the complete body only after the full composition is internally coherent.
 
 An empty page is valid only when the resolved plan explicitly requests no body content.
 Do not create decorative, sample, or filler sections to make a page appear complete.

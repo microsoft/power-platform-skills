@@ -143,6 +143,10 @@ For an approved new-site composition, carry the resolved section changes and pre
 requirements unchanged; do not substitute the creation template's layout or branding. Its
 data/domain context informs required content and capabilities, not the page's visual design.
 Use compatible native page-template bindings without treating their current appearance as fixed.
+Compatibility includes the approved custom layout, not only the right table or a working route.
+If the starter rendering source prevents that composition, resolve its native layout owner
+instead of reducing the request to copy/image changes. Reusing a form/list/snippet is component
+reuse, not consent to reuse the surrounding page.
 
 ### Navigation
 

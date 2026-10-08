@@ -129,9 +129,14 @@ not placeholders or a fixed theme copied into every site.
 Include its experience brief in the existing `summary` and `newSiteDesign.composition` text:
 audience/job, actions, principal doubt and honest proof, design thesis, first-screen concept,
 signature moment, and page narrative. Put per-page section decisions in approved operation inputs.
-Distinguish template-derived requirements from the chosen modern presentation. Supported native
-recomposition can replace the starter arrangement; list any specifically retained appearance or
-layout as an explicit preference rather than inferring it from `site.templateName`.
+Require a custom layout and design, not just permission to change the starter arrangement.
+Follow **New-site custom layout planning** in `content-and-page-compositions.md`: distinguish
+template-derived requirements and reusable forms/lists/snippets from the new composition.
+Record the proposed Home/primary-journey sections and component destinations in actual native
+operation `inputs`, with reusable source/bindings in `preserve`, before final styling.
+List any specifically retained appearance or layout as an explicit preference rather than
+inferring it from `site.templateName`. Copy/image substitutions plus CSS on the starter layout
+do not fulfill this brief.
 This adds no required schema fields: existing schema-1 plans and approved receipts remain valid,
 and the current plan hash, HTML presentation, and `designContext` carry the decisions unchanged.
 
@@ -167,6 +172,11 @@ The validator requires:
   explicit choice. Do not use this exception merely because sourcing is unfinished;
 - at least one `style-site` operation, with every styling operation depending directly or
   transitively on all structural operations. This makes styling a final stage in resumable execution.
+
+These are schema/dependency checks, not a determination that a layout is custom. During the
+existing plan review and combined verification, trace the custom composition to native owner
+operations and their changed source; a non-empty brief or a passing validator alone is insufficient.
+Do not add dummy structural operations to satisfy the intent, or rewrite older approved receipts.
 
 The HTML approval document displays this brief, including any imagery opt-out. `--action resolve`
 returns it with `aesthetic` and `mood` as `designContext`, separate from owner-specific

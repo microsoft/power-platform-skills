@@ -33,8 +33,11 @@ Selected classic creation templates supply data-model/domain and requirements co
 constraints on appearance, page composition, layout, branding, or modern presentation. Follow
 the template-role rule in `references/site-design-quality.md` through the new-site handoff,
 native composition and final styling. Preserve required capabilities/content, native integrity
-and explicit user preservation preferences, not the starter arrangement by default. Do not
-broaden unrelated existing-site edits into redesigns.
+and explicit user preservation preferences, not the starter arrangement by default. Custom design
+and layout are required: inventory reusable forms/lists/snippets separately from the new page
+composition, map both into native owner operations, and compare the source result with that plan
+at the existing final review. Copy/image swaps and CSS over the unchanged starter layout are not
+completion. Do not broaden unrelated existing-site edits into redesigns.
 
 New classic creation recommends Enhanced with Bootstrap 5, with explicit model/admin approval,
 the helper's Bootstrap-filtered template catalog, and downloaded Bootstrap verification using

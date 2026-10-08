@@ -5,6 +5,9 @@ model declarative site. The platform creates the baseline from a documented firs
 the skill downloads that baseline rather than generating Power Pages metadata.
 Use the selected template for data-model/domain context and requirements interpretation only,
 not as a constraint on visual design, page composition, layout, branding, or modern presentation.
+Custom design and layout are required on the customization path, not an optional enhancement.
+Reuse needed native forms, lists, content snippets and other components inside that custom
+composition; do not deliver the starter layout with only different content, imagery or colors.
 Then coordinate a polished, image-rich design through the existing customization and styling
 owners, unless the user explicitly chooses to keep the bare template.
 Use approved direct HTTPS image URLs for image additions, not downloaded/imported Web Files.
@@ -401,8 +404,9 @@ On **Customize now**, invoke `/customize-declarative-site` through the `Skill` t
 - `WEBSITE_RECORD_ID`;
 - configured base language;
 - the user's original site intent, when present;
-- the intended modern experience, including freedom to change page composition, layout, branding
-  and presentation through supported native authoring. Record it in the existing `summary` and
+- the requirement for a custom modern page composition, layout, branding and presentation,
+  reusing needed native forms/lists/snippets rather than their surrounding starter layout.
+  Record it in the existing `summary` and
   `newSiteDesign.composition` brief and carry it through `designContext`; do not default to retaining
   the starter arrangement or ask for separate redesign permission merely because it differs;
 - any already established experience brief, brand source, primary action, and narrative intent;
@@ -416,6 +420,11 @@ On **Customize now**, invoke `/customize-declarative-site` through the `Skill` t
 - the requirement for a coordinated design and meaningful images, unless the user explicitly
   declines imagery. The customizer records these decisions in `newSiteDesign`, not an existing-site
   preservation-only plan.
+
+The customization plan must include actual composition work for Home and the primary visitor
+journey, not only extra pages or CSS over the starter. Reuse the existing layout-planning reference
+to resolve component placements and native owner operations before plan approval. Explicitly
+preserved regions remain exceptions within their stated scope; they do not freeze the rest of the site.
 
 The customization skill owns its own plan approval, authoring-skill coordination, local
 verification, commits, and deployment handoff. Do not duplicate those phases here.

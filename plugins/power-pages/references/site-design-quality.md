@@ -28,9 +28,13 @@ Use the selected classic creation template for data-model/domain context and req
 interpretation only, not as a visual specification. Although it provisions the native baseline,
 its appearance, page composition, layout, branding, and presentation do not constrain the new
 site's approved design. Derive the modern experience from the user's purpose and the experience
-brief; reuse template sections, colors, fonts, or images only when they fit that direction or the
-user explicitly asks to preserve them. A template section is not a requirement merely because it
-exists. Honor an explicit preservation preference or **Keep the template unchanged** choice.
+brief. **A custom design and layout are required, not merely permitted.** Reuse required native
+forms, lists, content snippets and other working components as building blocks, not the starter
+page composition around them. Renaming the site, replacing text/images and recoloring the same
+hero, section sequence and page shell is a template reskin, not the requested custom design.
+An individually useful asset or native grid pattern may be reused; that does not justify adopting
+the template's overall arrangement. Honor an explicit preservation preference only for its named
+scope, or **Keep the template unchanged** for the whole baseline.
 
 Visual freedom does not authorize discarding required capabilities or content. Preserve valid
 PAC metadata, record identities and relationships, forms/lists and data bindings, authentication,
@@ -39,6 +43,8 @@ Native owners may recompose sections, columns, and elements within that contract
 template arrangement is not protected. Use the existing approved operations and final styling
 handoff, not a data-model migration, protected-stylesheet replacement, SPA framework, or invented
 native component. This new-site default does not turn an existing-site narrow edit into a redesign.
+Apply [custom layout planning](../skills/customize-declarative-site/references/content-and-page-compositions.md#new-site-custom-layout-planning)
+to separate component reuse from page composition and carry both into the existing approved plan.
 
 ## Direction and safe brand reuse
 

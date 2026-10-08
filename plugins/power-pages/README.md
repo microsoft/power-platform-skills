@@ -71,9 +71,10 @@ site from a template accepted by the documented Power Platform Create Website AP
   No dev server or live site preview is required; the browser documents show provisioning status
   and the approval plan, not the site's final rendering.
   The selected template supplies data-model/domain and requirements context, not constraints on
-  the new site's visual design, page composition, layout or branding. Native authoring can fully
-  customize the modern presentation while preserving required capabilities/content, platform
-  contracts and explicit user preservation preferences.
+  the new site's visual design, page composition, layout or branding. Custom design and layout
+  are required, not just a new palette or replacement content on the starter arrangement.
+  Reuse needed native forms, lists and content snippets within the custom composition, preserving
+  required capabilities/content, platform contracts and explicit user preservation preferences.
 
 #### `/deploy-site`
 
@@ -108,8 +109,9 @@ whether it was provisioned by `/create-site` or created manually in Design Studi
   hosted illustrations using approved direct HTTPS URLs, not new image Web Files; imagery can
   be explicitly declined. Existing template images can be reused, and explicit Web File imports
   remain available for other customization work
-- New-site design is not limited to the template's appearance or arrangement; existing-site
-  narrow edits remain preservation-first unless a redesign is requested
+- New-site plans separate reusable components from custom Home/primary-journey composition,
+  map layout work to native owners, and flag an unchanged starter layout during final verification;
+  existing-site narrow edits remain preservation-first unless a redesign is requested
 - Preserves platform behavior and explicit visual preferences, resolves dependencies before
   consumers run, and applies guarded styling after structural authoring
 - Verifies and commits the combined local result, then optionally hands off to `/deploy-site`

@@ -128,6 +128,51 @@
         "Deployment is offered via AskUserQuestion with 'Deploy now' and 'Skip for now'; 'Deploy now' is recommended unless SAMPLE CONTENT placeholders remain, in which case they are listed first and 'Skip for now' is recommended",
         "Skill usage is recorded via skill tracking reference before deployment prompt"
       ]
+    },
+    {
+      "id": 5,
+      "prompt": "Create a classic Power Pages summer camp site for college students. Use a supported template with the program registration capabilities we need, reuse its working program list, registration form and eligibility content snippet, and give the site a modern student-focused experience.",
+      "expected_output": "After the normal explicit model, environment and provisioning decisions, the new-site customization handoff treats the selected template as domain context and reusable components. It requires a custom Home and primary-journey layout, not a reskin. The approved plan separately identifies the retained native source/bindings and the new first-screen hierarchy, sections, component placements and responsive composition, mapped to native owner operations before final styling. Verification checks implemented composition against the plan and downloaded baseline without claiming rendered proof.",
+      "files": [],
+      "expectations": [
+        "Template selection does not choose the site's visual identity, page outline or section sequence",
+        "The creation handoff includes creationIntent new-site, verified Bootstrap evidence, a custom-layout requirement and the existing newSiteDesign/designContext brief",
+        "The working program list, registration form and eligibility snippet are inventoried as reusable components with actual source, bindings, callers and locale scope, not copied together with the full starter page",
+        "Home and the primary visitor journey receive requirement-led first-screen hierarchy, section composition, actions, responsive behavior and explicit placements for reused components",
+        "Native operation inputs and preservation requirements resolve the actual composition work; a descriptive design brief plus only copy/image swaps, extra pages or CSS is not accepted as complete planning",
+        "Template-owned layout or shell source is assigned to the web-template/page-template owner when needed instead of leaving the old layout in place",
+        "Required native source and bindings remain intact at approved destinations; no invented type: form, type: list or type: reuse serialization, fabricated programs or static substitutes for working forms/lists are introduced",
+        "External-image pre-approval verification and exact-plan --imageChecks publication are retained; styling follows structural operations and keeps exact-diff/hash approval",
+        "The existing final verification compares Home and primary-journey source composition against the approved plan and baseline; the same template layout with new colors, text or images is reported as incomplete custom-layout work",
+        "There is no mandatory browser, dev server, extra approval gate or claim that source verification proves runtime appearance; deployment still needs separate consent"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Continue creating my new classic program-registration site from the baseline we just downloaded. Keep our approved logo and the registration form's fields and behavior, but make the site design and layout custom. Do not provision another site.",
+      "expected_output": "The unambiguous creation continuation routes to new-site customization even without a literal creationIntent argument. Logo and form behavior are scoped preservation requirements; the surrounding Home, journey and shell composition are custom. The plan reuses component source/bindings and resolves actual native layout operations without reprovisioning, changing form fields or freezing the whole page.",
+      "files": [],
+      "expectations": [
+        "The request/session intent establishes new-site customization despite the missing literal creationIntent field; file timestamps or template metadata alone are not used to classify unrelated existing sites",
+        "No provisioning, model migration or duplicate website is attempted",
+        "The existing logo and registration form fields/behavior remain protected, but those exceptions do not preserve the surrounding starter layout",
+        "A custom Home and primary-journey composition is resolved in native owner operation inputs, with required component source and destinations",
+        "Existing metadata and rendering bindings are reused when compatible with the custom layout; table compatibility alone does not justify retaining the starter shell",
+        "Unknown relocation dependencies are reported to the caller/native owner rather than dropping the form, replacing it with static HTML or silently keeping the whole template layout",
+        "Final styling consumes the implemented custom composition; missing layout work is not declared complete merely because all CSS edits validate"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "For the classic site we are creating, keep the Microsoft template unchanged. I only need the provisioned and downloaded baseline for now.",
+      "expected_output": "The explicit bare-baseline preference overrides the custom-layout default. The workflow completes the separately approved provisioning/download/validation steps and leaves the template unchanged, without starting customization or introducing a new-site styling plan.",
+      "files": [],
+      "expectations": [
+        "The explicit Keep the template unchanged choice is honored without treating custom design as a prerequisite to returning the baseline",
+        "No native layout, component, branding, imagery or styling operations run after the baseline is established",
+        "The result is described as an unchanged baseline, not a completed custom design",
+        "The ordinary explicit model, environment and provisioning consent boundaries remain intact"
+      ]
     }
   ]
 }
