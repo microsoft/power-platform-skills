@@ -5,7 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { runAzureCli } = require('./azure-cli');
 
 // Exit 0 = success (allow). Exit 2 = blocking error (stderr is fed back to Claude).
 const approve = () => { process.exit(0); };
@@ -120,12 +120,13 @@ async function getDataverseTenantFromChallenge(resourceUrl) {
 
 function getAzAccountTenantId() {
   try {
-    return execFileSync('az', ['account', 'show', '--query', 'tenantId', '-o', 'tsv'], {
+    return runAzureCli(['account', 'show', '--query', 'tenantId', '-o', 'tsv'], {
       encoding: 'utf8',
       timeout: 10000,
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim() || null;
-  } catch {
+  } catch (error) {
+    if (!Number.isInteger(error.status) || error.status <= 0) throw error;
     return null;
   }
 }
@@ -135,12 +136,13 @@ function getAzAccessToken(resourceUrl, tenantId = null) {
   if (tenantId) args.push('--tenant', tenantId);
   args.push('--resource', resourceUrl, '--query', 'accessToken', '-o', 'tsv');
   try {
-    return execFileSync('az', args, {
+    return runAzureCli(args, {
       encoding: 'utf8',
       timeout: 15000,
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim() || null;
-  } catch {
+  } catch (error) {
+    if (!Number.isInteger(error.status) || error.status <= 0) throw error;
     return null;
   }
 }

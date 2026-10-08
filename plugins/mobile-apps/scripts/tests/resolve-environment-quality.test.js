@@ -19,6 +19,23 @@ const {
 
 const resolverPath = path.resolve(__dirname, '../resolve-environment.js');
 
+test('missing Azure CLI reports a launcher failure instead of suggesting login or a different environment', (t) => {
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'environment-cli-missing-'));
+  t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
+  const env = { ...process.env, PATH: '', POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1' };
+  if (process.platform === 'win32') {
+    for (const key of Object.keys(env)) if (key !== 'PATH' && key.toUpperCase() === 'PATH') delete env[key];
+  }
+  const result = spawnSync(process.execPath, [
+    resolverPath, '11111111-1111-1111-1111-111111111111', '--no-cache', '--require-tenant',
+  ], { cwd: projectRoot, env, encoding: 'utf8', timeout: 5000 });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Azure CLI was not found on PATH/);
+  assert.doesNotMatch(result.stderr, /az login|Verify the environment ID|Provide the Dataverse environment URL/);
+  assert.equal(result.stdout, '');
+  assert.deepEqual(fs.readdirSync(projectRoot), []);
+});
+
 test('no-cache mode permits reads but performs no filesystem writes', (t) => {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'environment-no-cache-'));
   t.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));

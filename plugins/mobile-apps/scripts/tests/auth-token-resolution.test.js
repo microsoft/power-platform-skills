@@ -9,9 +9,9 @@
 // supplied the answer. A data-model run issues dozens of calls, so the waste
 // dominated wall-clock time.
 //
-// These tests exercise the real code path rather than mocking internals: a fake
-// `az` executable is placed first on PATH and logs every invocation, so we can
-// assert exactly which subcommands ran. The resource URL points at 127.0.0.1:1
+// These tests exercise token selection through the shared Azure CLI adapter,
+// logging every invocation so we can assert exactly which subcommands ran.
+// Launcher execution is covered separately. The resource URL points at 127.0.0.1:1
 // so that if the challenge probe IS reached it fails instantly with
 // ECONNREFUSED instead of touching the network.
 
@@ -28,7 +28,7 @@ const FAKE_AZ_PRELOAD = path.join(__dirname, 'helpers', 'fake-az-preload.js');
 // is reached at all) resolves fast and deterministically offline.
 const UNREACHABLE_ENV_URL = 'https://127.0.0.1:1';
 
-// The Node preload intercepts `execFileSync('az', ...)`, writes one line per
+// The Node preload intercepts `runAzureCli(...)`, writes one line per
 // invocation to $FAKE_AZ_LOG, then emulates the two subcommands getAuthToken uses:
 //   az account show --query tenantId -o tsv
 //   az account get-access-token --resource <url> [--tenant <id>] ...

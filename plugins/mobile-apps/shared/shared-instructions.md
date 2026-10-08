@@ -220,7 +220,21 @@ All skills in this plugin assume a **POSIX shell** (bash or zsh). Skills shell o
 
 If a skill detects it's running in a non-POSIX shell (e.g. `cp` errors with "command not found"), STOP and instruct the user to switch to Git Bash or WSL before retrying.
 
-Note on `az`: on Windows where it is installed as a `.cmd` shim and not on the bash PATH, prefix with `pwsh -NoProfile -Command "<command>"`. This works identically from Git Bash and WSL.
+Node helpers use `scripts/lib/azure-cli.js` for Azure CLI execution. On Windows,
+the adapter resolves the installed `az.cmd` and runs the official MSI/ZIP
+distribution's adjacent Python runtime directly, preserving arguments without
+batch-shell interpolation. POSIX and native Windows executables run directly.
+Keep Azure CLI on the agent host's PATH; a working login in a different terminal
+does not prove that the host can find or launch it. WSL uses its Linux Azure CLI
+installation rather than a Windows batch shim.
+
+`AZURE_CLI_NOT_FOUND`, `AZURE_CLI_RUNTIME_MISSING`,
+`AZURE_CLI_UNSUPPORTED_LAUNCHER`, and `AZURE_CLI_LAUNCH_FAILED` are installation
+or process-launch failures, not evidence of a wrong account or missing
+environment. Surface the diagnostic and repair the CLI/PATH before retrying.
+Do not launch login or ask for a different environment to conceal such errors.
+Real CLI authentication failures retain the existing tenant-specific sign-in
+recovery; the adapter neither signs in nor changes the selected tenant.
 
 ---
 
@@ -376,7 +390,9 @@ account. Use `$PA auth switch` or `$PA auth login` only when needed; `$PA auth l
 resort for a corrupt cache or explicitly requested sign-out. After correcting
 auth state, retry the same supported command once before further triage.
 
-`az` calls work in bash on macOS/Linux directly. On Windows, wrap with `pwsh -NoProfile -Command "az …"` for consistency.
+Direct foreground sign-in may use the user's supported terminal. Node helpers
+must use the shared Azure CLI adapter above, not nested PowerShell commands or
+`shell: true`. A Windows launcher error is not a reason to switch tenants.
 
 ---
 
