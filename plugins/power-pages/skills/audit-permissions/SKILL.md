@@ -761,7 +761,7 @@ If validation fails, delete the report you just rendered, fix the named problem 
 
 The validator reports `telemetryStatus` as `recorded_success`, `recorded_failure` (the report is valid but its source data could not be reconciled, so the run was recorded with `failureStage: metrics_validation`), `disabled` (telemetry is hard-disabled for this plugin, so nothing was recorded), `failed`, or `not_requested`. Telemetry is best-effort: none of `recorded_failure`, `disabled`, or `failed` invalidates the report. Do not retry with a reduced payload and do not expose report data in diagnostic output.
 
-Delete the temporary `audit-data.json` and `audit-evidence.json` files after the terminal command returns.
+Delete the temporary `audit-data.json` and `audit-evidence.json` files only after report validation succeeds. The telemetry status does not affect cleanup.
 
 ### 7.5 Open in Browser
 
