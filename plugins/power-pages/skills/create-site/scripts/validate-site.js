@@ -118,16 +118,23 @@ function validateCodeProject(projectRoot) {
 
 function readWebsiteIdentity(websitePath) {
   const raw = fs.readFileSync(websitePath, 'utf8');
-  const match = raw.match(/^\s*id\s*:\s*(.+?)\s*$/im);
-  if (!match) return { raw, id: null };
-  let id = match[1].replace(/\s+#.*$/, '').trim();
-  if (
-    (id.startsWith('"') && id.endsWith('"')) ||
-    (id.startsWith("'") && id.endsWith("'"))
-  ) {
-    id = id.slice(1, -1);
-  }
-  return { raw, id };
+  // PAC exports use either "id: <guid>" or "adx_websiteid: <guid>".
+  // Read only top-level identity keys, never an indented block's sample value;
+  // conflicting aliases must not select whichever website happens to come first.
+  const matches = [...raw.matchAll(/^(?:\uFEFF)?(id|adx_websiteid)[ \t]*:[ \t]*(.*?)[ \t]*$/gim)];
+  const ids = matches.map((match) => {
+    let id = match[2].replace(/\s+#.*$/, '').trim();
+    if (
+      (id.startsWith('"') && id.endsWith('"')) ||
+      (id.startsWith("'") && id.endsWith("'"))
+    ) {
+      id = id.slice(1, -1);
+    }
+    return id;
+  });
+  const duplicateKey = new Set(matches.map((match) => match[1].toLowerCase())).size !== matches.length;
+  const consistent = ids.length > 0 && ids.every((id) => id.toLowerCase() === ids[0].toLowerCase());
+  return { raw, id: !duplicateKey && consistent ? ids[0] : null };
 }
 
 function listDeclarativeAssetFiles(siteDir) {
@@ -174,7 +181,7 @@ function validateDeclarativeProject(
   } else {
     const identity = readWebsiteIdentity(websitePath);
     if (!identity.id || !UUID_REGEX.test(identity.id)) {
-      errors.push(`${displayPrefix}website.yml: missing or invalid id`);
+      errors.push(`${displayPrefix}website.yml: missing, invalid or conflicting id/adx_websiteid`);
     } else if (
       expectedWebsiteRecordId &&
       identity.id.toLowerCase() !== expectedWebsiteRecordId.toLowerCase()

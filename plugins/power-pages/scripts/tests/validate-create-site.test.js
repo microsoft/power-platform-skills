@@ -186,6 +186,45 @@ test('readWebsiteIdentity strips quotes and inline comments', () =>
     assert.equal(readWebsiteIdentity(filePath).id, WEBSITE_ID);
   }));
 
+test('validates PAC adx_websiteid exports without rewriting identity or Bootstrap assets', () =>
+  withTempDir((work) => {
+    for (const nested of [false, true]) {
+      const root = path.join(work, String(nested));
+      const site = bootstrapFixture(root, { nested, version: '3.3.6' });
+      const identityPath = path.join(site, 'website.yml');
+      const original = `adx_name: Starter layout verification\nadx_websiteid: '${WEBSITE_ID}' # PAC identity\n`;
+      fs.writeFileSync(identityPath, original);
+      const result = runCli(root, [
+        '--projectRoot', root, '--websiteRecordId', WEBSITE_ID, '--bootstrapVersion', '3',
+      ]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(readWebsiteIdentity(identityPath).id, WEBSITE_ID);
+      assert.equal(fs.readFileSync(identityPath, 'utf8'), original);
+      assert.match(validateProject(root, {
+        expectedWebsiteRecordId: HOME_ID,
+      }).errors.join('\n'), /does not match created website/);
+      fs.writeFileSync(identityPath, 'adx_websiteid: not-a-guid\n');
+      assert.match(validateProject(root).errors.join('\n'), /invalid or conflicting id\/adx_websiteid/);
+    }
+  }));
+
+test('website identity rejects conflicting aliases, duplicate keys and nested sample values', () =>
+  withTempDir((root) => {
+    const filePath = path.join(root, 'website.yml');
+    for (const raw of [
+      `id: ${WEBSITE_ID}\nadx_websiteid: ${HOME_ID}\n`,
+      `adx_websiteid: ${WEBSITE_ID}\nid: ${HOME_ID}\n`,
+      `id:\nadx_websiteid: ${WEBSITE_ID}\n`,
+      `id: ${WEBSITE_ID}\nid: ${WEBSITE_ID}\n`,
+      `description: |\n  id: ${WEBSITE_ID}\n`,
+    ]) {
+      fs.writeFileSync(filePath, raw);
+      assert.equal(readWebsiteIdentity(filePath).id, null, raw);
+    }
+    fs.writeFileSync(filePath, `\uFEFFid: ${WEBSITE_ID}\r\nadx_websiteid: "${WEBSITE_ID}" # same identity\r\n`);
+    assert.equal(readWebsiteIdentity(filePath).id, WEBSITE_ID);
+  }));
+
 test('preserves the existing code-site validation path', () =>
   withTempDir((root) => {
     fs.mkdirSync(path.join(root, '.git'));

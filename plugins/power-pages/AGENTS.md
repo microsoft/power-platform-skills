@@ -44,6 +44,8 @@ the helper's Bootstrap-filtered template catalog, and downloaded Bootstrap verif
 the shared inspector. Preserve an explicit Standard/Bootstrap 3 compatibility choice. Never add
 an undocumented Create Website property, change environment flags, silently migrate, or recreate
 an accepted site to resolve a mismatch.
+The creation validator accepts PAC `website.yml` identities as either `id` or `adx_websiteid`;
+reject conflicting identities rather than rewriting a downloaded record to pass validation.
 
 The `creationIntent: "new-site"` handoff requires a schema-1 `newSiteDesign` brief and meaningful
 content imagery unless explicitly declined. Existing-site plans remain preservation-first and
