@@ -78,7 +78,7 @@ test('allows permission-heavy Graph pages within a bounded Azure CLI buffer', ()
     });
 
     test('registration discovery preserves launcher errors rather than reporting an account problem', () => {
-      const failure = new AzureCliLaunchError('Azure CLI runtime is missing.', 'AZURE_CLI_RUNTIME_MISSING');
+      const failure = new AzureCliLaunchError('Azure CLI executable is missing.', 'CLI_NOT_FOUND');
       assert.throws(() => runAzJson(['account', 'show'], 30000, () => { throw failure; }),
         (error) => error === failure);
     });

@@ -220,17 +220,18 @@ All skills in this plugin assume a **POSIX shell** (bash or zsh). Skills shell o
 
 If a skill detects it's running in a non-POSIX shell (e.g. `cp` errors with "command not found"), STOP and instruct the user to switch to Git Bash or WSL before retrying.
 
-Node helpers use `scripts/lib/azure-cli.js` for Azure CLI execution. On Windows,
-the adapter resolves the installed `az.cmd` and runs the official MSI/ZIP
-distribution's adjacent Python runtime directly, preserving arguments without
-batch-shell interpolation. POSIX and native Windows executables run directly.
+Node helpers use `scripts/lib/process-runner.js` for external CLI execution;
+`scripts/lib/azure-cli.js` is only the Azure-specific callsite adapter.
+The shared runner resolves absolute executable paths, starts POSIX and native
+Windows executables directly, and launches Windows `.cmd`/`.bat` files through
+an absolute `cmd.exe` with checked, escaped arguments. It does not inspect an
+Azure installation layout or depend on a bundled Python path.
 Keep Azure CLI on the agent host's PATH; a working login in a different terminal
 does not prove that the host can find or launch it. WSL uses its Linux Azure CLI
 installation rather than a Windows batch shim.
 
-`AZURE_CLI_NOT_FOUND`, `AZURE_CLI_RUNTIME_MISSING`,
-`AZURE_CLI_UNSUPPORTED_LAUNCHER`, and `AZURE_CLI_LAUNCH_FAILED` are installation
-or process-launch failures, not evidence of a wrong account or missing
+`CLI_NOT_FOUND`, `CLI_UNSAFE_ARGUMENT`, and `CLI_LAUNCH_FAILED` are installation,
+argument, or process-launch failures, not evidence of a wrong account or missing
 environment. Surface the diagnostic and repair the CLI/PATH before retrying.
 Do not launch login or ask for a different environment to conceal such errors.
 Real CLI authentication failures retain the existing tenant-specific sign-in
@@ -391,7 +392,7 @@ resort for a corrupt cache or explicitly requested sign-out. After correcting
 auth state, retry the same supported command once before further triage.
 
 Direct foreground sign-in may use the user's supported terminal. Node helpers
-must use the shared Azure CLI adapter above, not nested PowerShell commands or
+must use the shared CLI runner above, not nested PowerShell commands or
 `shell: true`. A Windows launcher error is not a reason to switch tenants.
 
 ---

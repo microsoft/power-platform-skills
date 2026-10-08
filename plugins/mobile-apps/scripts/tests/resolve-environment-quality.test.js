@@ -30,7 +30,7 @@ test('missing Azure CLI reports a launcher failure instead of suggesting login o
     resolverPath, '11111111-1111-1111-1111-111111111111', '--no-cache', '--require-tenant',
   ], { cwd: projectRoot, env, encoding: 'utf8', timeout: 5000 });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /Azure CLI was not found on PATH/);
+  assert.match(result.stderr, /CLI az was not found on PATH/);
   assert.doesNotMatch(result.stderr, /az login|Verify the environment ID|Provide the Dataverse environment URL/);
   assert.equal(result.stdout, '');
   assert.deepEqual(fs.readdirSync(projectRoot), []);
