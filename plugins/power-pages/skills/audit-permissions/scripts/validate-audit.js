@@ -3,7 +3,15 @@
 const path = require('path');
 const { approve, runValidation } = require('../../../scripts/lib/validation-helpers');
 const { validateReport } = require('../../../scripts/lib/audit-report-validation');
-const { completeRun } = require('../../../scripts/emit-audit-permissions-telemetry');
+
+// Telemetry is best-effort, so it is loaded only when a completion is actually
+// recorded. A top-level require would make report validation and the
+// PostToolUse(Skill) hook depend on the telemetry module: any load failure
+// (missing file, syntax error, partial install) would crash this script before
+// validateReport runs. Loading here keeps that failure inside the caller's try.
+function completeRun(...args) {
+  return require('../../../scripts/emit-audit-permissions-telemetry').completeRun(...args);
+}
 
 function fail(error) {
   const message = error instanceof Error ? error.message : String(error);

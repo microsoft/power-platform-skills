@@ -309,3 +309,54 @@ test('valid report with unreconcilable source data is recorded as a failed run',
   assert.equal(result.valid, true, 'the report itself remains valid');
   assert.equal(result.telemetryStatus, 'recorded_failure');
 });
+
+test('a telemetry module that cannot load never breaks report validation or the hook', (t) => {
+  const projectRoot = createTempProject(t);
+  // Preload that makes loading the telemetry emitter throw, standing in for any
+  // load failure (missing file, syntax error, partial install).
+  const preload = writeProjectFile(
+    projectRoot,
+    'break-telemetry.js',
+    "const Module = require('module');\n" +
+      'const load = Module._load;\n' +
+      'Module._load = function (request, ...rest) {\n' +
+      "  if (/emit-audit-permissions-telemetry/.test(request)) throw new Error('simulated load failure');\n" +
+      '  return load.call(this, request, ...rest);\n' +
+      '};\n'
+  );
+  const run = (args, input) => spawnSync(process.execPath, ['--require', preload, VALIDATOR_PATH, ...args], {
+    input,
+    encoding: 'utf8',
+    env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: '1' },
+  });
+
+  const findings = validFindings();
+  const scorecard = validScorecard();
+  const reportPath = writeReport(projectRoot, { findings, scorecard });
+
+  // Report-only validation must not even load telemetry.
+  let outcome = run(['--report', reportPath]);
+  assert.equal(outcome.status, 0, outcome.stderr);
+  assert.equal(JSON.parse(outcome.stdout).telemetryStatus, 'not_requested');
+
+  // The PostToolUse(Skill) hook must still approve.
+  outcome = run([], JSON.stringify({ cwd: projectRoot }));
+  assert.equal(outcome.status, 0, outcome.stderr);
+  assert.equal(outcome.stderr, '');
+
+  // When telemetry is requested, the load failure is contained and reported.
+  const dataPath = writeProjectFile(
+    projectRoot,
+    'audit-data.json',
+    JSON.stringify({ FINDINGS_DATA: findings, SCORECARD_DATA: scorecard })
+  );
+  outcome = run([
+    '--report', reportPath,
+    '--data', dataPath,
+    '--auditRunId', '11111111-1111-4111-8111-111111111111',
+  ]);
+  assert.equal(outcome.status, 0, outcome.stderr);
+  const result = JSON.parse(outcome.stdout);
+  assert.equal(result.valid, true, 'the report stays valid when telemetry cannot load');
+  assert.equal(result.telemetryStatus, 'failed');
+});
