@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { sample, bound, claim, assertProfileBytes, removedClouds } from './helpers.mjs';
 import { richTool, richResult, contractTools } from './fake-remote.mjs';
 import { bundleFixture as fixture, pluginRoot as root } from './bundle-fixtures.mjs';
+import { CONNECTION_TOOLS } from '../src/connection-session.mjs';
 
 const resultSchema = z.looseObject({});
 const requestMarker = '11111111-1111-1111-1111-111111111111';
@@ -122,7 +123,7 @@ test('actual isolated bundle rejects malformed stored OID before authentication 
   const file = f.state.file('sample');
   const content = JSON.stringify({ ...await f.state.load('sample'), HomeAccountId: 'not-an-oid' });
   await writeFile(file, content);
-  for (const args of [['diagnostics'], ['diagnostics', '--remote', 'true'], ['login'], ['serve']]) {
+  for (const args of [['diagnostics'], ['diagnostics', '--remote', 'true'], ['login']]) {
     const output = spawnSync(process.execPath, ['--import', preload, entry, ...args, '--profile', 'sample'],
       { env, cwd: f.temp, encoding: 'utf8', timeout: 15000 });
     assert.equal(output.status, 2, output.stderr);
@@ -186,7 +187,7 @@ test('actual bundle warm username drift blocks further MCP traffic without persi
   transport.stderr.on('data', bytes => { stderr += bytes; });
   f.cleanup.push(() => client.close());
   await client.connect(transport);
-  await client.request({ method: 'tools/list' }, resultSchema);
+  await client.request({ method: 'tools/call', params: { name: 'pi_connection_status' } }, resultSchema);
   await assert.rejects(client.request({ method: 'tools/call', params: { name: 'fixture_query' } }, resultSchema),
     error => /account changed/i.test(error.message) && !error.message.includes('switched@example'));
   await client.close();
@@ -232,8 +233,7 @@ test('actual bundle and manifest reject removed clouds before auth, fetch or pro
       [entry, 'diagnostics', '--profile', 'sample'],
       [entry, 'diagnostics', '--profile', 'sample', '--remote', 'true'],
       [entry, 'login', '--profile', 'sample'],
-      [entry, 'logout', '--profile', 'sample'],
-      manifest.args
+      [entry, 'logout', '--profile', 'sample']
     ]) {
       const output = spawnSync(process.execPath, ['--import', preload, ...args],
         { env, cwd: f.temp, encoding: 'utf8', timeout: 15000 });
@@ -262,9 +262,9 @@ test('actual manifest -> isolated bundle -> official SDK HTTP preserves rich dat
   f.cleanup.push(() => client.close());
   await client.connect(transport);
   assert.equal(client.getServerVersion().name, 'local-process-intelligence-bridge');
-  assert.deepEqual(client.getServerCapabilities().tools, {});
+  assert.deepEqual(client.getServerCapabilities().tools, { listChanged: true });
   const first = await client.request({ method: 'tools/list', params: { _meta: { trace: 'fixture' } } }, resultSchema);
-  assert.deepEqual(first.tools, [richTool]); assert.equal(first.nextCursor, 'upstream-cursor');
+  assert.deepEqual(first.tools, [...CONNECTION_TOOLS, richTool]); assert.equal(first.nextCursor, 'upstream-cursor');
   assert.equal((await client.request({ method: 'tools/list', params: { cursor: first.nextCursor } }, resultSchema)).nextCursor, undefined);
   assert.deepEqual(await client.request({ method: 'tools/call', params: { name: 'fixture_query', _meta: { progressToken: 'test-token' } } }, resultSchema), richResult);
   assert.equal(progress[0].params.progressToken, 'test-token');
@@ -326,11 +326,13 @@ test('actual bundle exposes lifecycle/search guidance and forwards other tools u
     }
   }
   const result = await client.request({ method: 'tools/list' }, resultSchema);
-  assert.equal(result.tools.length, 4);
-  assert.match(result.tools[0].description, /Never automatically resubmit/);
-  assert.doesNotMatch(JSON.stringify(result.tools[1]), /functionNames/);
-  assert.deepEqual(result.tools[2], contractTools[2]);
-  assert.deepEqual(result.tools[3], richTool);
+  assert.deepEqual(result.tools.slice(0, 3), CONNECTION_TOOLS);
+  const analytical = result.tools.slice(3);
+  assert.equal(analytical.length, 4);
+  assert.match(analytical[0].description, /Never automatically resubmit/);
+  assert.doesNotMatch(JSON.stringify(analytical[1]), /functionNames/);
+  assert.deepEqual(analytical[2], contractTools[2]);
+  assert.deepEqual(analytical[3], richTool);
   await client.close();
   const report = JSON.parse(await readFile(f.env.FIXTURE_REPORT, 'utf8'));
   assert.equal(report.calls, 6); assert.equal(report.initializes, 1); assert.equal(stderr, '');

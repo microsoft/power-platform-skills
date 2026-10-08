@@ -290,7 +290,7 @@ export function createBridgeServer(bridge, { signal: lifetime } = {}) {
   const server = new Server(
     { name: 'local-process-intelligence-bridge', version: manifest.version },
     {
-      capabilities: { tools: {} },
+      capabilities: { tools: bridge.localLifecycle ? { listChanged: true } : {} },
       instructions:
         'Discover tools at the start of each MCP session. ' +
         'Never invent tool names, schemas or process IDs. ' +
@@ -317,6 +317,7 @@ export function createBridgeServer(bridge, { signal: lifetime } = {}) {
         ? AbortSignal.any([lifetime, extra.signal])
         : (lifetime ?? extra.signal);
     try {
+      await bridge.initialize?.(server.getClientVersion());
       return await bridge.correlation.request(async () => {
         if (!schema.safeParse(request).success || request.params?.task !== undefined) {
           throw new McpError(
@@ -336,6 +337,9 @@ export function createBridgeServer(bridge, { signal: lifetime } = {}) {
     }
   };
   bridge.progress = notification => server.notification(notification);
+  if (bridge.localLifecycle) {
+    bridge.toolsChanged = () => server.sendToolListChanged();
+  }
   return server;
 }
 

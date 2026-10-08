@@ -34,7 +34,7 @@ test('setup guidance requests manual reauthentication without a claims-persisten
     const text = (await readFile(path.join(pluginRoot, file), 'utf8')).replace(/\s+/g, ' ');
     assert.match(text, /Conditional Access.*CAE/, file);
     assert.match(text, /login --profile (?:NAME|work) --sign-in true/, file);
-    assert.match(text, /restart MCP/, file);
+    assert.match(text, /pi_activate_profile/, file);
     assert.match(text, /(?:not|never) (?:store|persist|save)[^.]*claims/i, file);
     assert.match(text, /(?:persists|continues)[^.]*administrator|administrator[^.]*policy/i, file);
     assert.doesNotMatch(text, /2\.80|--claims-challenge|\.challenge\.json|migration|legacy.store/i, file);
@@ -86,7 +86,7 @@ test('local export and removal guidance separates selected files from shared cre
 });
 
 test('runtime has no claims persistence or explicit state permission enforcement', async () => {
-  for (const file of ['src/private-files.mjs', 'src/state.mjs', 'src/authentication.mjs',
+  for (const file of ['src/private-files.mjs', 'src/state.mjs', 'src/connection-session.mjs', 'src/authentication.mjs',
     'src/http-auth.mjs', 'src/process.mjs', 'server/mcp.mjs']) {
     const text = await readFile(path.join(pluginRoot, file), 'utf8');
     assert.doesNotMatch(text,

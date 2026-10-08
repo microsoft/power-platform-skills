@@ -3263,8 +3263,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path5) {
-      let input2 = path5;
+    function removeDotSegments(path6) {
+      let input2 = path6;
       const output2 = [];
       let nextSlash = -1;
       let len = 0;
@@ -3673,8 +3673,8 @@ var require_schemes = __commonJS({
       }
       if (wsComponent.resourceName) {
         const queryIndex = wsComponent.resourceName.indexOf("?");
-        const path5 = queryIndex === -1 ? wsComponent.resourceName : wsComponent.resourceName.slice(0, queryIndex);
-        wsComponent.path = path5 && path5 !== "/" ? path5 : void 0;
+        const path6 = queryIndex === -1 ? wsComponent.resourceName : wsComponent.resourceName.slice(0, queryIndex);
+        wsComponent.path = path6 && path6 !== "/" ? path6 : void 0;
         wsComponent.query = queryIndex === -1 ? void 0 : wsComponent.resourceName.slice(queryIndex + 1);
         wsComponent.resourceName = void 0;
       }
@@ -7310,11 +7310,8 @@ var require_content_type = __commonJS({
 });
 
 // src/entry.mjs
-import path4 from "node:path";
-import { fileURLToPath } from "node:url";
-
-// src/cli.mjs
-import { setTimeout as delay2 } from "node:timers/promises";
+import path5 from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 
 // src/errors.mjs
 var BridgeError = class extends Error {
@@ -7525,7 +7522,7 @@ function resolveConnection(p) {
 import fs2 from "node:fs/promises";
 import path2 from "node:path";
 import os from "node:os";
-import { randomUUID as randomUUID2 } from "node:crypto";
+import { createHash, randomUUID as randomUUID2 } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 // src/private-files.mjs
@@ -7677,10 +7674,50 @@ function defaultStateRoot(platform = process.platform, env = process.env, home =
   return path2.posix.join(base, "ProcessIntelligenceBridgeAzureCli");
 }
 var changed = () => new BridgeError(
-  "Profile/account changed. Restart MCP with the selected profile; the old connection is invalid.",
+  "Profile/account changed. Explicitly call pi_activate_profile with the selected profile; the old connection is invalid.",
   3,
   "PROFILE_CHANGED"
 );
+function preferenceScope(client, installationRoot, env = process.env) {
+  if (!client?.name || typeof client.name !== "string" || client.name.length > 128) {
+    throw new BridgeError("MCP client identity is required to remember a profile.", 3, "STATE_INVALID");
+  }
+  const hostRoot = client.name === "copilot-cli" ? env.COPILOT_HOME || path2.join(os.homedir(), ".copilot") : client.name.startsWith("claude") ? env.CLAUDE_CONFIG_DIR || path2.join(os.homedir(), ".claude") : "";
+  const normalize = (value) => {
+    const absolute = path2.resolve(value);
+    return process.platform === "win32" ? absolute.toLowerCase() : absolute;
+  };
+  return createHash("sha256").update(JSON.stringify([client.name, normalize(installationRoot), hostRoot ? normalize(hostRoot) : ""])).digest("hex");
+}
+var ProfilePreferences = class extends PrivateDirectory {
+  constructor(root, scope) {
+    super(root);
+    if (!/^[a-f0-9]{64}$/.test(scope)) {
+      throw new BridgeError("Invalid profile preference scope.", 3, "STATE_INVALID");
+    }
+    this.file = path2.join(this.root, scope + ".json");
+  }
+  async load() {
+    const value = await readJson(this.file);
+    if (value === null) {
+      return null;
+    }
+    if (Object.keys(value).length !== 1 || !Object.hasOwn(value, "profile")) {
+      throw new BridgeError(
+        "Remembered profile metadata is invalid. Explicitly activate the intended profile again.",
+        3,
+        "STATE_INVALID"
+      );
+    }
+    validateName(value.profile);
+    return value.profile;
+  }
+  async save(name) {
+    validateName(name);
+    await this.prepare();
+    await atomicWrite(this.file, JSON.stringify({ profile: name }));
+  }
+};
 var StateStore = class extends PrivateDirectory {
   constructor(root = defaultStateRoot()) {
     super(root);
@@ -7743,11 +7780,32 @@ var StateStore = class extends PrivateDirectory {
       await fs2.unlink(file2);
     }
   }
-  async save(value, expectedRevision) {
+  async configure(value) {
+    return this.save(value, void 0, { configurationOnly: true });
+  }
+  async save(value, expectedRevision, { configurationOnly = false } = {}) {
     const selected = profile(value);
     return this.withLock(selected.Name, async () => {
       if (expectedRevision !== void 0 && (await this.load(selected.Name)).Revision !== expectedRevision) {
         throw changed();
+      }
+      if (configurationOnly) {
+        try {
+          const current = await readJson(this.file(selected.Name));
+          if (current !== null) {
+            const saved2 = profile(current);
+            if (isDeepStrictEqual(
+              { ...saved2, HomeAccountId: null, Revision: "" },
+              { ...selected, HomeAccountId: null, Revision: "" }
+            )) {
+              return saved2;
+            }
+          }
+        } catch (error62) {
+          if (!["STATE_INVALID", "INVALID_CONFIGURATION"].includes(error62.errorCode)) {
+            throw error62;
+          }
+        }
       }
       const saved = { ...selected, Revision: randomUUID2().replaceAll("-", "") };
       await atomicWrite(this.file(saved.Name), JSON.stringify(saved));
@@ -8143,7 +8201,7 @@ var ProfileTokenProvider = class {
     if (!p.HomeAccountId) {
       throw authError(
         "LOGIN_REQUIRED",
-        "No account is selected. Run login --profile explicitly in a terminal; serve never opens sign-in UI."
+        "No account is selected. Run login --profile explicitly to bind the existing CLI session; serve never opens sign-in UI."
       );
     }
     resolveConnection(p);
@@ -8160,6 +8218,9 @@ async function login(selected, store, identity, { switchAccount = false, signIn 
     const result = await identity.bind(signIn, signal);
     validateIdentity(selected, result, switchAccount || selected.HomeAccountId === null);
     await store.ensureCurrent(selected);
+    if (!signIn && same(selected.HomeAccountId, result.accountId)) {
+      return selected;
+    }
     const saved = await store.save(
       {
         ...selected,
@@ -8193,7 +8254,7 @@ var IdentityClient = class {
       if (!same(account, result.accountId)) {
         throw authError(
           "ACCOUNT_CHANGED",
-          "Azure CLI account changed. Explicitly bind the intended account and restart MCP."
+          "Azure CLI account changed. Explicitly bind the intended account and call pi_activate_profile."
         );
       }
       return result;
@@ -9208,10 +9269,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path5) {
-  if (!path5)
+function getElementAtPath(obj, path6) {
+  if (!path6)
     return obj;
-  return path5.reduce((acc, key) => acc?.[key], obj);
+  return path6.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -9551,11 +9612,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path5, issues) {
+function prefixIssues(path6, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path5);
+    iss.path.unshift(path6);
     return iss;
   });
 }
@@ -10005,16 +10066,16 @@ function flattenError(error62, mapper = (issue2) => issue2.message) {
 }
 function formatError(error62, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError2 = (error63, path5 = []) => {
+  const processError2 = (error63, path6 = []) => {
     for (const issue2 of error63.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError2({ issues }, [...path5, ...issue2.path]));
+        issue2.errors.map((issues) => processError2({ issues }, [...path6, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError2({ issues: issue2.issues }, [...path5, ...issue2.path]);
+        processError2({ issues: issue2.issues }, [...path6, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError2({ issues: issue2.issues }, [...path5, ...issue2.path]);
+        processError2({ issues: issue2.issues }, [...path6, ...issue2.path]);
       } else {
-        const fullpath = [...path5, ...issue2.path];
+        const fullpath = [...path6, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -10053,17 +10114,17 @@ function formatError(error62, mapper = (issue2) => issue2.message) {
 }
 function treeifyError(error62, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError2 = (error63, path5 = []) => {
+  const processError2 = (error63, path6 = []) => {
     var _a3;
     for (const issue2 of error63.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError2({ issues }, [...path5, ...issue2.path]));
+        issue2.errors.map((issues) => processError2({ issues }, [...path6, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError2({ issues: issue2.issues }, [...path5, ...issue2.path]);
+        processError2({ issues: issue2.issues }, [...path6, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError2({ issues: issue2.issues }, [...path5, ...issue2.path]);
+        processError2({ issues: issue2.issues }, [...path6, ...issue2.path]);
       } else {
-        const fullpath = [...path5, ...issue2.path];
+        const fullpath = [...path6, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -10102,8 +10163,8 @@ function treeifyError(error62, mapper = (issue2) => issue2.message) {
 }
 function toDotPath(_path) {
   const segs = [];
-  const path5 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path5) {
+  const path6 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path6) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -13569,15 +13630,15 @@ function bucketFor(state, inst) {
 var handoff;
 var open = [];
 var memo = {
-  alloc(_inst, payload, empty) {
+  alloc(_inst, payload, empty2) {
     const bucket = handoff;
     if (!bucket)
-      return empty;
+      return empty2;
     handoff = void 0;
-    const entry = { value: empty, issues: null };
+    const entry = { value: empty2, issues: null };
     bucket.set(payload.value, entry);
     open.push(entry);
-    return empty;
+    return empty2;
   },
   guard(inst) {
     var _a3;
@@ -27205,13 +27266,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path5 = ref.slice(1).split("/").filter(Boolean);
-  if (path5.length === 0) {
+  const path6 = ref.slice(1).split("/").filter(Boolean);
+  if (path6.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path5[0] === defsKey) {
-    const key = path5[1] === void 0 ? void 0 : decodeJSONPointerSegment(path5[1]);
+  if (path6[0] === defsKey) {
+    const key = path6[1] === void 0 ? void 0 : decodeJSONPointerSegment(path6[1]);
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -33633,7 +33694,7 @@ function authenticatedFetch(endpoint, token, fetchImpl = globalThis.fetch, { cor
         await response.body?.cancel();
         if (challenged) {
           throw new BridgeError(
-            "MCP returned a Conditional Access / Continuous Access Evaluation (CAE) claims challenge. Sign in again with login --profile NAME --sign-in true in a normal terminal, then restart MCP. If the problem persists, ask your administrator to review the policy; this is not evidence of a wrong tenant.",
+            "MCP returned a Conditional Access / Continuous Access Evaluation (CAE) claims challenge. Sign in again with login --profile NAME --sign-in true in a normal terminal, then call pi_activate_profile. If the problem persists, ask your administrator to review the policy; this is not evidence of a wrong tenant.",
             3,
             "CLAIMS_LOGIN_REQUIRED"
           );
@@ -33985,7 +34046,7 @@ function createBridgeServer(bridge, { signal: lifetime } = {}) {
   const server = new Server(
     { name: "local-process-intelligence-bridge", version: package_default.version },
     {
-      capabilities: { tools: {} },
+      capabilities: { tools: bridge.localLifecycle ? { listChanged: true } : {} },
       instructions: "Discover tools at the start of each MCP session. Never invent tool names, schemas or process IDs. Advertised input schemas take precedence over conflicting remote examples; never add undocumented parameters. " + OPERATION_POLICY + " Cancellation stops this request, not necessarily the remote operation; use a discovered cancellation tool only with user approval. Authorization is enforced by the remote service."
     }
   );
@@ -33996,6 +34057,7 @@ function createBridgeServer(bridge, { signal: lifetime } = {}) {
     }
     const signal = lifetime && extra.signal ? AbortSignal.any([lifetime, extra.signal]) : lifetime ?? extra.signal;
     try {
+      await bridge.initialize?.(server.getClientVersion());
       return await bridge.correlation.request(async () => {
         if (!schema.safeParse(request).success || request.params?.task !== void 0) {
           throw new McpError(
@@ -34013,6 +34075,9 @@ function createBridgeServer(bridge, { signal: lifetime } = {}) {
     }
   };
   bridge.progress = (notification) => server.notification(notification);
+  if (bridge.localLifecycle) {
+    bridge.toolsChanged = () => server.sendToolListChanged();
+  }
   return server;
 }
 async function serve(bridge, { signal, stdin = process.stdin, stdout = process.stdout, stderr = process.stderr, onReady } = {}) {
@@ -34260,6 +34325,300 @@ async function resolveEnvironment({ cloud, environmentId }, { cli, fetchImpl = g
   }
 }
 
+// src/connection-session.mjs
+import path4 from "node:path";
+import { fileURLToPath } from "node:url";
+import { setTimeout as delay2 } from "node:timers/promises";
+var CONNECTION_TOOLS = [
+  {
+    name: "pi_connection_status",
+    description: "Report session connection state and safe recovery guidance. Never signs in or binds an account.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
+  },
+  {
+    name: "pi_activate_profile",
+    description: "After explicit user approval for this host and environment, activate a named, configured and bound profile. By default remember it for future sessions of this client/installation. Never signs in or binds an account.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        profile: { type: "string", description: "Explicit configured profile name." },
+        remember: { type: "boolean", default: true }
+      },
+      required: ["profile"],
+      additionalProperties: false
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true }
+  },
+  {
+    name: "pi_deactivate_profile",
+    description: "Disconnect this session and cancel its outstanding requests without logging out of Azure CLI or changing the remembered profile for future sessions. Remote cancellation is not guaranteed.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false }
+  }
+];
+var localNames = new Set(CONNECTION_TOOLS.map((tool) => tool.name));
+var activation = external_exports.strictObject({ profile: external_exports.string(), remember: external_exports.boolean().optional() });
+var empty = external_exports.strictObject({});
+var identityFailures = /* @__PURE__ */ new Set([
+  "PROFILE_CHANGED",
+  "PROFILE_MISSING",
+  "STATE_INVALID",
+  "STATE_ACCESS_DENIED",
+  "ACCOUNT_CHANGED",
+  "TENANT_MISMATCH",
+  "CLOUD_MISMATCH",
+  "TOKEN_INVALID",
+  "TOKEN_EXPIRED",
+  "LOGIN_REQUIRED",
+  "AADSTS_FAILURE",
+  "CLI_AUTHENTICATION_FAILED",
+  "CLAIMS_LOGIN_REQUIRED",
+  "TOOL_NAME_CONFLICT"
+]);
+var unavailable = () => new BridgeError(
+  "No active connection. Complete setup and explicitly call pi_activate_profile.",
+  3,
+  "CONNECTION_INACTIVE"
+);
+var ConnectionSession = class {
+  #activation = new Gate();
+  #shutdown = new AbortController();
+  #initialization;
+  #active;
+  #state = { state: "setup-required", message: "Complete setup, then call pi_activate_profile." };
+  constructor({
+    store = new StateStore(),
+    cli = new AzureCliProcess(),
+    profileName,
+    installationRoot = path4.resolve(path4.dirname(fileURLToPath(import.meta.url)), ".."),
+    env = process.env,
+    correlation = new CorrelationSession(),
+    fetchImpl,
+    reportError = (message) => process.stderr.write(message + "\n")
+  } = {}) {
+    Object.assign(this, { store, cli, profileName, installationRoot, env, correlation, fetchImpl, reportError });
+    this.localLifecycle = true;
+  }
+  initialize(client) {
+    this.#initialization ??= (async () => {
+      try {
+        this.preferences = new ProfilePreferences(
+          path4.join(this.store.root, "clients"),
+          preferenceScope(client, this.installationRoot, this.env)
+        );
+        const name = this.profileName ?? await this.preferences.load();
+        if (name) {
+          await this.#activate(name, false, this.#shutdown.signal, false);
+        }
+      } catch (error62) {
+        this.#failure(error62);
+      }
+    })();
+    return this.#initialization;
+  }
+  #failure(error62, profile2 = this.#state.profile) {
+    this.#state = {
+      state: "recovery-required",
+      ...profile2 ? { profile: profile2 } : {},
+      errorCode: error62.errorCode ?? "CONNECTION_FAILED",
+      message: safeFailure(error62)
+    };
+  }
+  #status() {
+    const state = { ...this.#state };
+    return { content: [{ type: "text", text: JSON.stringify(state) }], structuredContent: state };
+  }
+  async #dispose(context, reason = unavailable()) {
+    context.lifetime.abort(reason);
+    context.identity.dispose();
+    await context.bridge.close();
+  }
+  async #invalidate(context, error62) {
+    if (this.#active !== context) {
+      return;
+    }
+    this.#active = void 0;
+    this.#failure(error62, context.selected.Name);
+    await this.#dispose(context, error62);
+    await this.toolsChanged?.();
+  }
+  #checkNames(page) {
+    if (page.tools.some((tool) => localNames.has(tool.name))) {
+      throw new BridgeError(
+        "Remote tool name conflicts with a local connection tool. Ask the service owner to resolve the conflict.",
+        3,
+        "TOOL_NAME_CONFLICT"
+      );
+    }
+    return page;
+  }
+  async #activate(name, remember, signal, notify = true) {
+    validateName(name);
+    return this.#activation.run(async () => {
+      const requestSignal = AbortSignal.any([this.#shutdown.signal, ...signal ? [signal] : []]);
+      requestSignal.throwIfAborted();
+      const current = this.#active;
+      if (current?.selected.Name === name) {
+        try {
+          await current.tokens.getToken(false, requestSignal);
+          if (remember) {
+            await this.store.withLock(name, async () => {
+              await this.store.ensureCurrent(current.selected);
+              requestSignal.throwIfAborted();
+              await this.preferences.save(name);
+            });
+          }
+          requestSignal.throwIfAborted();
+          return this.#status();
+        } catch (error62) {
+          await this.#invalidate(current, error62);
+          if (error62.errorCode !== "PROFILE_CHANGED") {
+            throw error62;
+          }
+        }
+      }
+      if (current && this.#active === current) {
+        this.#active = void 0;
+        await this.#dispose(current);
+        await this.toolsChanged?.();
+      }
+      this.#state = { state: "activating", profile: name };
+      let candidate;
+      try {
+        const selected = await this.store.load(name);
+        if (!selected.HomeAccountId) {
+          throw new BridgeError(
+            "Run login --profile NAME to bind the existing Azure CLI session, then call pi_activate_profile.",
+            3,
+            "LOGIN_REQUIRED"
+          );
+        }
+        const identity = new IdentityClient(selected, this.cli);
+        const tokens = new ProfileTokenProvider(selected, this.store, identity);
+        const lifetime = new AbortController();
+        const bridge = new RemoteBridge(selected, tokens, {
+          correlation: this.correlation,
+          fetchImpl: this.fetchImpl,
+          checkCurrent: () => this.store.ensureCurrent(selected)
+        });
+        candidate = { selected, identity, tokens, lifetime, bridge };
+        bridge.progress = (notification) => {
+          if (this.#active === candidate && !lifetime.signal.aborted) {
+            return this.progress?.(notification);
+          }
+        };
+        this.#checkNames(await bridge.list({}, requestSignal));
+        await this.store.withLock(name, async () => {
+          await this.store.ensureCurrent(selected);
+          requestSignal.throwIfAborted();
+          if (remember) {
+            await this.preferences.save(name);
+          }
+          requestSignal.throwIfAborted();
+          this.#active = candidate;
+          this.#state = { state: "active", profile: name };
+        });
+        this.#monitor(candidate);
+        if (notify) {
+          await this.toolsChanged?.();
+        }
+        return this.#status();
+      } catch (error62) {
+        if (this.#active === candidate) {
+          this.#active = void 0;
+        }
+        if (candidate) {
+          await this.#dispose(candidate, error62);
+        }
+        this.#failure(error62, name);
+        throw error62;
+      }
+    }, signal);
+  }
+  #monitor(context) {
+    const signal = context.lifetime.signal;
+    void (async () => {
+      try {
+        while (!signal.aborted) {
+          await delay2(250, null, { signal });
+          await this.store.ensureCurrent(context.selected);
+        }
+      } catch (error62) {
+        if (!signal.aborted) {
+          await this.#invalidate(context, error62);
+        }
+      }
+    })().catch((error62) => this.reportError(safeFailure(error62)));
+  }
+  async #request(method, params, signal) {
+    const context = this.#active;
+    if (!context) {
+      throw unavailable();
+    }
+    const requestSignal = AbortSignal.any([
+      context.lifetime.signal,
+      this.#shutdown.signal,
+      ...signal ? [signal] : []
+    ]);
+    try {
+      const result = await context.bridge[method](params, requestSignal);
+      requestSignal.throwIfAborted();
+      await this.store.ensureCurrent(context.selected);
+      requestSignal.throwIfAborted();
+      return method === "list" ? this.#checkNames(result) : result;
+    } catch (error62) {
+      if (identityFailures.has(error62.errorCode)) {
+        await this.#invalidate(context, error62);
+      }
+      throw error62;
+    }
+  }
+  async list(params = {}, signal) {
+    await this.#initialization;
+    if (!this.#active) {
+      return { tools: CONNECTION_TOOLS };
+    }
+    const page = await this.#request("list", params, signal);
+    return params.cursor === void 0 ? { ...page, tools: [...CONNECTION_TOOLS, ...page.tools] } : page;
+  }
+  async call(params, signal) {
+    await this.#initialization;
+    if (localNames.has(params.name)) {
+      const parsed = (params.name === "pi_activate_profile" ? activation : empty).safeParse(params.arguments ?? {});
+      if (!parsed.success) {
+        throw new BridgeError("Invalid local connection tool arguments.", 2, "INVALID_ARGUMENTS");
+      }
+      signal?.throwIfAborted();
+      if (params.name === "pi_activate_profile") {
+        return this.#activate(parsed.data.profile, parsed.data.remember !== false, signal);
+      }
+      if (params.name === "pi_deactivate_profile") {
+        return this.#activation.run(async () => {
+          const current = this.#active;
+          this.#active = void 0;
+          this.#state = { state: "inactive", message: "Explicitly activate a profile to reconnect." };
+          if (current) {
+            await this.#dispose(current);
+            await this.toolsChanged?.();
+          }
+          return this.#status();
+        }, signal);
+      }
+      return this.#status();
+    }
+    return this.#request("call", params, signal);
+  }
+  async close() {
+    this.#shutdown.abort(unavailable());
+    const current = this.#active;
+    this.#active = void 0;
+    if (current) {
+      await this.#dispose(current);
+    }
+  }
+};
+
 // src/cli.mjs
 var invalid2 = (message) => invalid(message, "INVALID_ARGUMENTS");
 var usage = `Process Intelligence Azure CLI bridge (Node.js 22/24). Diagnostics go to stderr; serve reserves stdout for MCP.
@@ -34269,7 +34628,7 @@ config --profile NAME --cloud CLOUD --tenant GUID --environment ENVIRONMENT-ID
 login --profile NAME [--sign-in true] [--switch-account true]
 logout --profile NAME
 diagnostics --profile NAME [--remote true]
-serve --profile NAME
+serve [--profile NAME]
 Cloud values: Public, Gcc, GccHigh, DoD or Mooncake.
 Environment IDs: nonzero GUID, with or without hyphens; optional Default, Legacy or Primary prefix.
 Prefixes are case-insensitive and may have a separating hyphen. IDs are canonicalized before use.
@@ -34328,7 +34687,9 @@ async function execute(args, {
   signal,
   fetchImpl,
   correlation,
-  onReady
+  onReady,
+  installationRoot,
+  env
 } = {}) {
   let identity;
   let bridge;
@@ -34351,6 +34712,23 @@ async function execute(args, {
       );
       return 0;
     }
+    if (command === "serve") {
+      if (options.profile !== void 0) {
+        validateName(options.profile);
+      }
+      bridge = new ConnectionSession({
+        store,
+        cli,
+        profileName: options.profile,
+        fetchImpl,
+        correlation,
+        installationRoot,
+        env,
+        reportError: write
+      });
+      await serve(bridge, { signal, stdin, stdout, stderr, onReady });
+      return signal?.aborted ? 130 : 0;
+    }
     const name = required2(options, "profile");
     validateName(name);
     store ??= new StateStore();
@@ -34362,7 +34740,7 @@ async function execute(args, {
         EnvironmentId: required2(options, "environment"),
         Audience: options.audience
       };
-      await store.save(configured);
+      await store.configure(configured);
       write("Profile configured; no tokens acquired. Run login --profile before connecting.");
       return 0;
     }
@@ -34398,9 +34776,9 @@ async function execute(args, {
       return 0;
     }
     if (command === "login") {
-      if (!terminalAvailable) {
+      if (options["sign-in"] === "true" && !terminalAvailable) {
         throw new BridgeError(
-          "Run login explicitly in a normal user terminal; headless MCP hosts cannot initiate or bind sign-in.",
+          "Run interactive sign-in in a normal user terminal. Noninteractive login can bind an existing Azure CLI session.",
           3,
           "LOGIN_REQUIRED"
         );
@@ -34458,35 +34836,6 @@ async function execute(args, {
       );
       return 0;
     }
-    const lifetime = new AbortController();
-    const stop = () => lifetime.abort(signal.reason);
-    signal?.addEventListener("abort", stop, { once: true });
-    if (signal?.aborted) {
-      stop();
-    }
-    let invalidated = false;
-    const monitor = (async () => {
-      try {
-        while (!lifetime.signal.aborted) {
-          await delay2(250, null, { signal: lifetime.signal });
-          await store.ensureCurrent(selected);
-        }
-      } catch (error62) {
-        if (!lifetime.signal.aborted) {
-          invalidated = true;
-          write(safeFailure(error62));
-          lifetime.abort(error62);
-        }
-      }
-    })();
-    try {
-      await serve(bridge, { signal: lifetime.signal, stdin, stdout, stderr, onReady });
-    } finally {
-      lifetime.abort();
-      await monitor;
-      signal?.removeEventListener("abort", stop);
-    }
-    return signal?.aborted || invalidated ? 130 : 0;
   } catch (error62) {
     write(safeFailure(error62));
     return signal?.aborted || error62?.name === "AbortError" ? 130 : error62 instanceof BridgeError ? error62.exitCode : 4;
@@ -34502,7 +34851,7 @@ async function run(args, options = {}) {
 
 // src/entry.mjs
 function resolvePluginRoot(env = process.env, cwd = process.cwd()) {
-  return path4.resolve(env.PLUGIN_ROOT || env.CLAUDE_PLUGIN_ROOT || cwd);
+  return path5.resolve(env.PLUGIN_ROOT || env.CLAUDE_PLUGIN_ROOT || cwd);
 }
 var launched;
 function launch(args = process.argv.slice(2), dependencies = {}) {
@@ -34525,14 +34874,7 @@ function launch(args = process.argv.slice(2), dependencies = {}) {
         process.exitCode = 1;
         return 1;
       }
-      if (args[0] === "serve" && !args.includes("--profile")) {
-        if (!process.env.PM_BRIDGE_PROFILE) {
-          console.error(
-            "Select an explicit profile: set PM_BRIDGE_PROFILE or pass serve --profile NAME. Run setup first."
-          );
-          process.exitCode = 2;
-          return 2;
-        }
+      if (args[0] === "serve" && !args.includes("--profile") && process.env.PM_BRIDGE_PROFILE) {
         args = [...args, "--profile", process.env.PM_BRIDGE_PROFILE];
       }
       const code = await run(args, { ...dependencies, signal: lifetime.signal });
@@ -34549,7 +34891,7 @@ function launch(args = process.argv.slice(2), dependencies = {}) {
   })();
   return launched;
 }
-if (process.argv[1] && path4.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && path5.resolve(process.argv[1]) === fileURLToPath2(import.meta.url)) {
   await launch();
 }
 export {

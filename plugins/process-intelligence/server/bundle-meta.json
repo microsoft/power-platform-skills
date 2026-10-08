@@ -48,7 +48,7 @@
       "format": "esm"
     },
     "src/state.mjs": {
-      "bytes": 3946,
+      "bytes": 6751,
       "imports": [
         {
           "path": "node:fs/promises",
@@ -130,7 +130,7 @@
       "format": "esm"
     },
     "src/authentication.mjs": {
-      "bytes": 14743,
+      "bytes": 14873,
       "imports": [
         {
           "path": "node:util",
@@ -4787,7 +4787,7 @@
       "format": "esm"
     },
     "src/http-auth.mjs": {
-      "bytes": 5375,
+      "bytes": 5388,
       "imports": [
         {
           "path": "src/errors.mjs",
@@ -4827,7 +4827,7 @@
       }
     },
     "src/bridge.mjs": {
-      "bytes": 12469,
+      "bytes": 12674,
       "imports": [
         {
           "path": "node_modules/zod/index.js",
@@ -4916,14 +4916,70 @@
       ],
       "format": "esm"
     },
-    "src/cli.mjs": {
-      "bytes": 10197,
+    "src/connection-session.mjs": {
+      "bytes": 11456,
       "imports": [
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:url",
+          "kind": "import-statement",
+          "external": true
+        },
         {
           "path": "node:timers/promises",
           "kind": "import-statement",
           "external": true
         },
+        {
+          "path": "node_modules/zod/index.js",
+          "kind": "import-statement",
+          "original": "zod"
+        },
+        {
+          "path": "src/errors.mjs",
+          "kind": "import-statement",
+          "original": "./errors.mjs"
+        },
+        {
+          "path": "src/configuration.mjs",
+          "kind": "import-statement",
+          "original": "./configuration.mjs"
+        },
+        {
+          "path": "src/state.mjs",
+          "kind": "import-statement",
+          "original": "./state.mjs"
+        },
+        {
+          "path": "src/process.mjs",
+          "kind": "import-statement",
+          "original": "./process.mjs"
+        },
+        {
+          "path": "src/authentication.mjs",
+          "kind": "import-statement",
+          "original": "./authentication.mjs"
+        },
+        {
+          "path": "src/correlation.mjs",
+          "kind": "import-statement",
+          "original": "./correlation.mjs"
+        },
+        {
+          "path": "src/bridge.mjs",
+          "kind": "import-statement",
+          "original": "./bridge.mjs"
+        }
+      ],
+      "format": "esm"
+    },
+    "src/cli.mjs": {
+      "bytes": 9787,
+      "imports": [
         {
           "path": "src/errors.mjs",
           "kind": "import-statement",
@@ -4963,12 +5019,17 @@
           "path": "src/environment-resolution.mjs",
           "kind": "import-statement",
           "original": "./environment-resolution.mjs"
+        },
+        {
+          "path": "src/connection-session.mjs",
+          "kind": "import-statement",
+          "original": "./connection-session.mjs"
         }
       ],
       "format": "esm"
     },
     "src/entry.mjs": {
-      "bytes": 1947,
+      "bytes": 1723,
       "imports": [
         {
           "path": "node:path",
@@ -5004,11 +5065,6 @@
         },
         {
           "path": "node:url",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "node:timers/promises",
           "kind": "import-statement",
           "external": true
         },
@@ -5104,6 +5160,21 @@
         },
         {
           "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:url",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:timers/promises",
           "kind": "import-statement",
           "external": true
         }
@@ -5331,10 +5402,7 @@
           "bytesInOutput": 3760
         },
         "src/entry.mjs": {
-          "bytesInOutput": 1783
-        },
-        "src/cli.mjs": {
-          "bytesInOutput": 9384
+          "bytesInOutput": 1578
         },
         "src/errors.mjs": {
           "bytesInOutput": 2146
@@ -5343,7 +5411,7 @@
           "bytesInOutput": 4542
         },
         "src/state.mjs": {
-          "bytesInOutput": 3600
+          "bytesInOutput": 6036
         },
         "src/private-files.mjs": {
           "bytesInOutput": 3716
@@ -5352,7 +5420,7 @@
           "bytesInOutput": 8440
         },
         "src/authentication.mjs": {
-          "bytesInOutput": 13586
+          "bytesInOutput": 13716
         },
         "node_modules/zod/v4/classic/external.js": {
           "bytesInOutput": 7565
@@ -5388,7 +5456,7 @@
           "bytesInOutput": 78389
         },
         "node_modules/zod/v4/core/memoizer.js": {
-          "bytesInOutput": 7522
+          "bytesInOutput": 7526
         },
         "node_modules/zod/v4/locales/index.js": {
           "bytesInOutput": 1593
@@ -5718,7 +5786,7 @@
           "bytesInOutput": 1068
         },
         "src/http-auth.mjs": {
-          "bytesInOutput": 4225
+          "bytesInOutput": 4238
         },
         "src/correlation.mjs": {
           "bytesInOutput": 1229
@@ -5730,13 +5798,19 @@
           "bytesInOutput": 394
         },
         "src/bridge.mjs": {
-          "bytesInOutput": 10790
+          "bytesInOutput": 10995
         },
         "src/environment-resolution.mjs": {
           "bytesInOutput": 7845
+        },
+        "src/connection-session.mjs": {
+          "bytesInOutput": 10553
+        },
+        "src/cli.mjs": {
+          "bytesInOutput": 8946
         }
       },
-      "bytes": 1261463
+      "bytes": 1274176
     }
   }
 }

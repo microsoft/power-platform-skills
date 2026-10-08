@@ -6,8 +6,9 @@ allowed-tools: Read, Bash, AskUserQuestion
 
 # Set up Process Intelligence
 
-Read the bundled [README](../../README.md) first. Resolve the root from `PLUGIN_ROOT`, then
-`CLAUDE_PLUGIN_ROOT`, then the current plugin directory. All scripts are inside this plugin.
+Read the bundled [README](../../README.md) first. Use the absolute installed plugin directory
+containing this skill for shell commands; host-provided `PLUGIN_ROOT`/`CLAUDE_PLUGIN_ROOT` can
+identify it. Do not assume the agent shell starts there. All scripts are inside this plugin.
 
 **GCC, GCC High, DoD and Mooncake are not supported yet.**
 `Public` is the commercial cloud configuration.
@@ -39,7 +40,7 @@ not tenant-admin consent or a plugin-enforced per-request gateway; existing auth
    The bundle is ready to run; source development uses `npm ci` then `npm run build`
    from this directory in a repository checkout, never during MCP launch.
    Profiles use `ProcessIntelligenceBridgeAzureCli` under the platform's per-user data directory.
-2. Have the user verify the intended Azure CLI cloud and organizational account in a normal terminal.
+2. Check the intended Azure CLI cloud and organizational account using supported read-only CLI commands.
    If sign-in is needed, have them run `az login --allow-no-subscriptions` themselves.
    Azure CLI owns shared credentials; login may affect other CLI consumers. The bridge never switches clouds/accounts.
 3. For Public, run `node server/mcp.mjs resolve-environment --cloud Public --environment <environment-id>`.
@@ -51,25 +52,40 @@ not tenant-admin consent or a plugin-enforced per-request gateway; existing auth
    preserve the error and use the manual path with an explicitly confirmed tenant GUID and selected cloud.
    Do not cycle tenants/resources, request extra consent or substitute the active CLI tenant.
    No `select`, custom client-id, browser/redirect flags, secrets or service-principal sessions.
-4. Ask the user to run `node server/mcp.mjs login --profile work` in their terminal to bind that session.
-   This opens no UI. `--sign-in true` explicitly permits Azure CLI browser login; use direct terminal
-   `az login` if device-code interaction is needed. Never collect tokens or raw auth output.
+4. The agent must run `node server/mcp.mjs login --profile work` using the absolute installed bundle
+   path to bind the existing CLI session. This works without a TTY and opens no UI.
+   Only `--sign-in true` requires a normal terminal; use direct terminal `az login` if device-code
+   interaction is needed.
+   Never collect tokens or raw auth output.
 5. Run `diagnostics --profile work` for read-only CLI version/cloud/tenant/user-shape checks.
    Cold local diagnostics cannot verify the saved OID and report `boundAccountVerified: false`.
    Only with target authorization, use `--remote true` for token acquisition and MCP discovery.
    Confirm MCP discovery succeeds, not only token acquisition. No business tools are needed.
-6. Set `PM_BRIDGE_PROFILE=work` and an absolute `PLUGIN_ROOT` in the host environment.
-   Use `copilot --plugin-dir <absolute-plugin-directory> -C "$HOME"` to start outside the plugin
-   directory, avoiding an additional workspace load of its `.mcp.json`; Claude Code has an equivalent local loader.
-   Do not change global registrations.
+6. Call the discovered local `pi_activate_profile` with `{ "profile": "work", "remember": true }`.
+   Confirm `pi_connection_status` is active, rediscover the analytical tools and use their actual
+   schemas. Local activation notifies the host to refresh tools in this same session; do not restart
+   Copilot, edit registrations or ask the user to set environment variables.
+   The explicit choice is remembered for this client/installation, not machine-wide. Fresh server
+   processes reuse it if the binding and Azure CLI session remain valid. Other active sessions keep
+   their own selection. Explicit launch selection wins over the preference.
+
+For repeated setup, check `pi_connection_status` first. If the intended profile is already active
+and the integration instruction still applies, do not redo sign-in or config. Unchanged config and
+silent binding preserve the revision. A stale/missing preference never selects another profile;
+complete the indicated recovery and explicitly activate the intended name.
+Marketplace loading supplies the MCP server before setup. Source development and `--plugin-dir`
+examples are separate in the README; they are not steps for an already installed marketplace plugin.
 
 Serve never opens UI. For a Conditional Access / CAE claims challenge, explain the policy failure
-and ask the user to run `login --profile work --sign-in true` in a normal terminal, then restart MCP.
+and ask the user to run `login --profile work --sign-in true` in a normal terminal, then call
+`pi_activate_profile` in the existing session.
 Do not store, decode or forward claims-challenge payloads. If the problem persists, ask the user's
 administrator to review the policy; normal sign-in may not satisfy policies requiring specific claims.
 Never change the client, resource or tenant as authentication recovery.
 Account changes require explicit `login --profile work --switch-account true`; tenant/environment changes
-require config, login and restart. Logout invalidates only the plugin profile, never `az logout`.
+require config, login and explicit activation. Revision/account changes cancel the stale remote
+context but retain local recovery tools. Never replay interrupted business calls.
+Logout invalidates only the plugin profile, never `az logout`.
 Profiles are plaintext JSON without application-level encryption.
 Account binding persists only the tenant-local OID alongside the tenant; usernames stay in RAM.
 Use a non-personal profile label. Names can still contain identifying information.

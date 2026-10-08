@@ -160,9 +160,12 @@ The SDK forwards dynamic tool definitions, schemas, annotations, content blocks,
 `structuredContent` and `isError`. Remote JSON-RPC errors remain protocol errors.
 The host discovers the environment's current tools at the start of each MCP session through
 `tools/list`. The bridge forwards explicit discovery requests without a catalog cache or
-background refresh. It neither advertises `tools.listChanged` nor handles/forwards backend
-tool-list-change notifications, including after reconnect. Start a new MCP session to discover
-backend additions through the host's normal initialization flow.
+background refresh. The local lifecycle advertises `tools.listChanged` only for explicit
+activation/deactivation and invalidation. It does not handle/forward backend list-change
+notifications, including after reconnect. Local tools remain available before binding and after
+remote failure. Activation validates the selected account and performs discovery before publication;
+local/remote tool-name collisions fail closed. Native Copilot refresh is verified with an isolated
+loopback provider and synthetic MCP data, not live analytical calls.
 Pagination cursors pass through unchanged as opaque backend values; the backend validates them
 and any expiry errors remain protocol errors. There are no bridge-owned catalog generations
 or cursor maps. Operation progress notifications still propagate with the caller's progress token.
@@ -237,9 +240,17 @@ tokens and connect. CLI subprocess output is captured, never forwarded to MCP st
 
 A plain 401 permits a single token reacquisition and retry. A Conditional Access / CAE claims
 challenge on either response stops immediately with a sanitized explanation and asks the user
-to run `login --profile NAME --sign-in true`, then restart MCP. The bridge does not store,
+to run `login --profile NAME --sign-in true`, then explicitly call `pi_activate_profile`. The bridge does not store,
 decode or forward claims-challenge payloads. Normal sign-in may not satisfy a specific claims
 requirement; persistent failures need administrator policy review, not identity/resource changes.
+
+`connection-session.mjs` owns each remote context and its cancellation lifetime. Revision checks
+remain per request and on the 250 ms monitor; invalidation removes remote tools, disposes token/username
+state and preserves the local stdio session. Explicit activation can reload a changed revision, but
+cannot silently rebind an account. Configuration and silent same-account binding are idempotent.
+`clients/<scope-hash>.json` stores only the profile name, scoped to client name, installed path and
+host configuration root. Preference changes affect fresh sessions only. Explicit launch selection
+wins and invalid selection never falls back to another profile.
 
 ## Dependency management and licenses
 

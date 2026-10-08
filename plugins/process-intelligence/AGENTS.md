@@ -45,15 +45,19 @@ credential storage; the bridge has no disk token cache. Keep dependencies locked
   survive token eviction/expiry. Token-free cold diagnostics check cloud/tenant/user shape, not OID.
   `process.mjs`: bounded, cancellable subprocess invocation; native owned-tree cleanup.
   `bridge.mjs`: official SDK low-level forwarding without destructive convenience conversions.
-  The host discovers the current environment's tools at the start of each MCP session.
-  Forward explicit discovery and opaque cursors without a catalog cache or live list-change
-  tracking. Preserve operation progress; do not advertise or forward tool-list-change notifications.
+  `connection-session.mjs`: keep local status/activation/deactivation available before setup.
+  Explicit activation validates a named binding and remembers only its name per client/installation.
+  Capture launch/preference selection once; another session's preference must not retarget it.
+  Invalidation cancels the stale remote context without ending local recovery or replaying calls.
+  Forward explicit discovery and opaque cursors without a catalog cache. Advertise list-change
+  notifications only for local activation/deactivation/invalidation, never backend subscriptions.
+  Preserve operation progress and reject local/remote name collisions.
 - `http-auth.mjs`: the bridge explicitly selects POST-only MCP transport. Suppress only the
   optional GET/SSE probe locally with 405, after endpoint/abort checks and before auth/network.
   Reject GET resumption; retain POST JSON/SSE, real HTTP failures and the authentication boundary.
   Environment-discovery GET requests are separate and must remain unchanged.
   Detect HTTP 401 claims challenges only to explain Conditional Access / CAE and request manual
-  sign-in and MCP restart. Never store, decode, forward or log claims-challenge payloads.
+  sign-in and explicit profile reactivation. Never store, decode, forward or log claims-challenge payloads.
   Do not replay a claims-challenged request; keep the single retry for plain HTTP 401.
 - `correlation.mjs`: random client-session IDs and independent internal logical request owners.
   Background traffic must not borrow another request's internal owner. `http-auth.mjs` sends
@@ -109,6 +113,8 @@ Review dependency licenses when updating the lockfile. The build embeds full not
 for bundled dependencies and the repository's root MIT license in `server/mcp.mjs`;
 keep them with the runtime.
 Keep regular-file, size, symlink/reparse-point and hard-link checks on profile reads.
+Keep noninteractive profile binding available to agent shells; only explicit interactive sign-in
+requires a terminal. Unchanged config/silent binding must not rotate revisions or clear bindings.
 POSIX cleanup must observe owned process-group disappearance within its bounded cleanup deadline,
 not treat signal delivery or the launcher's close event as completed descendant cleanup.
 For skill/reference changes, use `node --test tests/analysis-behavior.test.mjs tests/investigation-behavior.test.mjs tests/packaging.test.mjs`.

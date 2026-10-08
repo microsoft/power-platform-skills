@@ -182,8 +182,8 @@ a person, and a user-chosen profile name can itself contain EUII. Choose non-per
 | `TenantId` | Selected directory GUID; OII, EUPI when linked to a user. | Set/replaced by config; retained by logout. |
 | `EnvironmentId` | Canonical selected environment ID; OII, EUPI when linked to user activity. | Set/replaced by config; retained by logout. |
 | `Audience` | Optional allowlisted resource override, or null for the cloud default; OII. | Set/replaced by config; retained by logout. |
-| `HomeAccountId` | Tenant-local object ID from the token's `oid`, not an MSAL home-account identifier; EUPI. | Bound by successful login; cleared to null by config or logout. |
-| `Revision` | Random local concurrency marker, not a token or credential; OII. | Replaced on every profile save, including config, successful login and logout. |
+| `HomeAccountId` | Tenant-local object ID from the token's `oid`, not an MSAL home-account identifier; EUPI. | Bound by successful login; cleared to null by changed config or logout. |
+| `Revision` | Random local concurrency marker, not a token or credential; OII. | Replaced on profile mutation; unchanged config and same-account silent binding retain it. |
 
 `AccountUsername` is not persisted. CLI usernames and matching token claims are processed
 transiently in RAM for authentication consistency checks (EUII), without a persisted surrogate
@@ -193,12 +193,35 @@ identifying information.
 Configuration has no automatic expiry. Logout keeps the configuration and only clears the account
 binding. Full local removal is described below.
 
+### Remembered selection and session recovery
+
+Successful explicit `pi_activate_profile` remembers only `{ "profile": "work" }` in
+`clients/<scope-hash>.json` under the same per-user state directory. The profile name retains
+its OII/EUII classification. The hash scopes the file by client name, installed plugin path and
+Copilot/Claude configuration root (`COPILOT_HOME`/`CLAUDE_CONFIG_DIR`, or their default home folders).
+It is a path/client scope key, not an Azure account identifier; it never includes Azure CLI usernames
+or token contents and does not duplicate profile/account fields. Client version is excluded.
+The preference has no automatic expiry and contains no credentials.
+
+`serve --profile NAME` wins over `PM_BRIDGE_PROFILE`, then the remembered choice. There is no
+machine-wide last-used/first-found selection. Each server captures its initial selection once;
+changing the preference does not retarget other active sessions. Moving the installation or changing
+client/configuration scope requires another explicit selection.
+Unconfigured, missing, invalid or unbound selections expose `pi_connection_status` and explicit
+activation/deactivation only, without silently switching environments. A valid remembered binding
+can connect on a fresh process without setup; expired/revoked CLI authentication still needs recovery.
+Activation emits a local tool-list-change notification; supporting hosts rediscover the actual catalog.
+`pi_deactivate_profile` disconnects only this session and retains the preference for later sessions.
+Profile/account invalidation cancels stale requests, clears in-memory credentials and retains local
+recovery. Rebind/reconfigure only with explicit authorization, then call `pi_activate_profile`.
+Never replay interrupted business calls or infer that cancellation succeeded remotely.
+
 ### Conditional Access and CAE recovery
 
 An HTTP 401 with `insufficient_claims` or a `claims` parameter is reported as a
 Conditional Access / Continuous Access Evaluation (CAE) claims challenge, not as proof
 of a wrong tenant. Run `login --profile work --sign-in true` in a normal terminal,
-then restart MCP. MCP serving never opens sign-in UI.
+then call `pi_activate_profile` in the existing session. MCP serving never opens sign-in UI.
 
 The bridge does not store, decode or forward claims-challenge payloads, and does not replay
 the challenged request. Normal sign-in may not satisfy policies requiring specific claims;
@@ -208,7 +231,8 @@ for the distinction between ordinary reauthentication and a claims-aware authori
 
 ### Profile writes and token caching
 
-Config, logout and successful login publish profiles atomically under a per-profile mutation lock.
+Changed config, logout and changed/interactive login publish profiles atomically under a per-profile mutation lock.
+Unchanged config retains the binding; silent login for the same principal retains the revision.
 Login checks the profile revision before saving, so it cannot overwrite a newer configuration.
 Profile reads do not create directories or modify data.
 Mutations exclusively create `.node-lock` files. A live owner blocks concurrent writes;
@@ -239,7 +263,7 @@ The customer and host/provider control model routing, conversation storage and p
 retention/deletion through their respective settings, contracts and supported procedures.
 
 1. Identify the exact state directory from the platform table and the exact profile name passed
-   to `--profile` or `PM_BRIDGE_PROFILE`. Names are 1-40 lowercase letters, digits or hyphens,
+   to `--profile`, `PM_BRIDGE_PROFILE` or `pi_activate_profile`. Names are 1-40 lowercase letters, digits or hyphens,
    starting with a letter. For profile `work`, the data file is `work.json` in that directory.
    Do not select similarly named profiles.
 2. Stop only the affected bridge sessions using that profile and finish/stop its config/login/logout
@@ -260,6 +284,12 @@ retention/deletion through their respective settings, contracts and supported pr
 5. Local deletion does not erase backups or exports; manage those copies separately under your
    retention policy. It also does not remove source Process Mining data, shared Azure CLI credentials,
    or data already sent to the host/model/provider, including conversation history.
+
+To forget a client/installation preference, inspect its exact `clients/<scope-hash>.json` locally
+and remove only that confirmed file after stopping the affected session. Do not remove the whole
+`clients` directory or use wildcards. Deleting a profile without its preference leaves an actionable
+missing-profile status; it never picks another profile. Preference removal does not delete profiles,
+Azure CLI credentials or host history. Uninstall does not remove this out-of-package metadata.
 
 For binding-only removal, use `node server/mcp.mjs logout --profile work`: logout keeps the
 configuration and removes the account binding, not the whole profile. If you separately choose

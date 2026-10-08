@@ -32,14 +32,7 @@ export function launch(args = process.argv.slice(2), dependencies = {}) {
         process.exitCode = 1;
         return 1;
       }
-      if (args[0] === 'serve' && !args.includes('--profile')) {
-        if (!process.env.PM_BRIDGE_PROFILE) {
-          console.error(
-            'Select an explicit profile: set PM_BRIDGE_PROFILE or pass serve --profile NAME. Run setup first.'
-          );
-          process.exitCode = 2;
-          return 2;
-        }
+      if (args[0] === 'serve' && !args.includes('--profile') && process.env.PM_BRIDGE_PROFILE) {
         args = [...args, '--profile', process.env.PM_BRIDGE_PROFILE];
       }
       const code = await run(args, { ...dependencies, signal: lifetime.signal });

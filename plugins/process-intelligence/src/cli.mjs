@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import { setTimeout as delay } from 'node:timers/promises';
 import { BridgeError, invalid as invalidConfiguration, safeFailure } from './errors.mjs';
 import { CLIENT_ID, resolveConnection, validateName } from './configuration.mjs';
 import { StateStore } from './state.mjs';
@@ -10,6 +9,7 @@ import { IdentityClient, ProfileTokenProvider, login } from './authentication.mj
 import { RemoteBridge, serve, MCP_TRANSPORT_MODE } from './bridge.mjs';
 import { CorrelationSession } from './correlation.mjs';
 import { resolveEnvironment } from './environment-resolution.mjs';
+import { ConnectionSession } from './connection-session.mjs';
 
 const invalid = message => invalidConfiguration(message, 'INVALID_ARGUMENTS');
 
@@ -20,7 +20,7 @@ config --profile NAME --cloud CLOUD --tenant GUID --environment ENVIRONMENT-ID
 login --profile NAME [--sign-in true] [--switch-account true]
 logout --profile NAME
 diagnostics --profile NAME [--remote true]
-serve --profile NAME
+serve [--profile NAME]
 Cloud values: Public, Gcc, GccHigh, DoD or Mooncake.
 Environment IDs: nonzero GUID, with or without hyphens; optional Default, Legacy or Primary prefix.
 Prefixes are case-insensitive and may have a separating hyphen. IDs are canonicalized before use.
@@ -92,7 +92,9 @@ async function execute(
     signal,
     fetchImpl,
     correlation,
-    onReady
+    onReady,
+    installationRoot,
+    env
   } = {}
 ) {
   let identity;
@@ -120,6 +122,18 @@ async function execute(
       return 0;
     }
 
+    if (command === 'serve') {
+      if (options.profile !== undefined) {
+        validateName(options.profile);
+      }
+      bridge = new ConnectionSession({
+        store, cli, profileName: options.profile, fetchImpl, correlation,
+        installationRoot, env, reportError: write
+      });
+      await serve(bridge, { signal, stdin, stdout, stderr, onReady });
+      return signal?.aborted ? 130 : 0;
+    }
+
     const name = required(options, 'profile');
     validateName(name);
     store ??= new StateStore();
@@ -132,7 +146,7 @@ async function execute(
         EnvironmentId: required(options, 'environment'),
         Audience: options.audience
       };
-      await store.save(configured);
+      await store.configure(configured);
       write('Profile configured; no tokens acquired. Run login --profile before connecting.');
       return 0;
     }
@@ -171,9 +185,9 @@ async function execute(
     }
 
     if (command === 'login') {
-      if (!terminalAvailable) {
+      if (options['sign-in'] === 'true' && !terminalAvailable) {
         throw new BridgeError(
-          'Run login explicitly in a normal user terminal; headless MCP hosts cannot initiate or bind sign-in.',
+          'Run interactive sign-in in a normal user terminal. Noninteractive login can bind an existing Azure CLI session.',
           3,
           'LOGIN_REQUIRED'
         );
@@ -237,37 +251,6 @@ async function execute(
       return 0;
     }
 
-    const lifetime = new AbortController();
-    const stop = () => lifetime.abort(signal.reason);
-    signal?.addEventListener('abort', stop, { once: true });
-    if (signal?.aborted) {
-      stop();
-    }
-
-    let invalidated = false;
-    const monitor = (async () => {
-      try {
-        while (!lifetime.signal.aborted) {
-          await delay(250, null, { signal: lifetime.signal });
-          await store.ensureCurrent(selected);
-        }
-      } catch (error) {
-        if (!lifetime.signal.aborted) {
-          invalidated = true;
-          write(safeFailure(error));
-          lifetime.abort(error);
-        }
-      }
-    })();
-
-    try {
-      await serve(bridge, { signal: lifetime.signal, stdin, stdout, stderr, onReady });
-    } finally {
-      lifetime.abort();
-      await monitor;
-      signal?.removeEventListener('abort', stop);
-    }
-    return signal?.aborted || invalidated ? 130 : 0;
   } catch (error) {
     write(safeFailure(error));
     return signal?.aborted || error?.name === 'AbortError'

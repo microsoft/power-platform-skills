@@ -198,7 +198,7 @@ test('launcher resolves explicit roots in order and never builds', async () => {
   assert.doesNotMatch(source, /native Windows authentication broker/);
 });
 
-test('manifest bootstrap reports missing bundle and profile without starting twice', async () => {
+test('manifest bootstrap reports a missing bundle and permits unconfigured startup until stdin closes', async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'plugin path with spaces '));
   try {
     await mkdir(path.join(temp, 'server'));
@@ -212,8 +212,8 @@ test('manifest bootstrap reports missing bundle and profile without starting twi
     await cp(path.join(root, 'server', 'mcp.mjs'), path.join(temp, 'server', 'mcp.mjs'));
     const startup = spawnSync(process.execPath, config.args,
       { cwd: marketplace, env: { ...env, PLUGIN_ROOT: '', CLAUDE_PLUGIN_ROOT: temp, PATH: '' }, encoding: 'utf8', timeout: 10000 });
-    assert.equal(startup.status, 2); assert.equal(startup.stdout, '');
-    assert.equal(startup.stderr.match(/Select an explicit profile/g)?.length, 1);
+    assert.equal(startup.status, 0, startup.stderr); assert.equal(startup.stdout, '');
+    assert.equal(startup.stderr, '');
   } finally {
     await rm(temp, { recursive: true, force: true });
   }

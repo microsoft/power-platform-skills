@@ -43,7 +43,7 @@ test('cold local diagnostics disclose that bound OID is not verified and never a
   assert.equal(await readFile(f.store.file('sample'), 'utf8'), before);
   assert.doesNotMatch(f.err, /another-user|fixture@example|33333333/);
 });
-for (const args of [['diagnostics'], ['diagnostics', '--remote', 'true'], ['login'], ['serve']])
+for (const args of [['diagnostics'], ['diagnostics', '--remote', 'true'], ['login']])
 test(`malformed stored OID stops ${args.join(' ')} before Azure CLI or HTTP`, async t => {
   const f = await setup(t);
   await f.store.save(bound);
@@ -92,7 +92,7 @@ for (const Cloud of removedClouds) test(`removed cloud ${Cloud} fails before CLI
   }
   const content = JSON.stringify({ ...JSON.parse(original), Cloud });
   await writeFile(file, content);
-  for (const args of [['diagnostics'], ['diagnostics', '--remote', 'true'], ['login'], ['logout'], ['serve']]) {
+  for (const args of [['diagnostics'], ['diagnostics', '--remote', 'true'], ['login'], ['logout']]) {
     // Bound each invocation independently rather than sharing a cumulative timeout.
     assert.equal(await run([...args, '--profile', 'sample'], {
       ...options, signal: AbortSignal.timeout(15000)
@@ -117,16 +117,14 @@ test('strict command options reject old client/browser flags and ambiguous boole
   for (const args of [
     ['config', '--profile', 'sample', '--client-id', 'ignored'], ['login', '--profile', 'sample', '--browser', 'true'],
     ['login', '--profile', 'sample', '--redirect-uri', 'anything'], ['login', '--profile', 'sample', '--sign-in', 'yes'],
-    ['serve'], ['serve', '--profile', '../escape'], ['serve', '--profile', 'sample', '--profile', 'sample'],
+    ['serve', '--profile', '../escape'], ['serve', '--profile', 'sample', '--profile', 'sample'],
     ['logout', '--profile'], ['unknown']
   ]) assert.equal(await run(args, f), 2, args.join(' '));
   assert.equal(f.cli.calls.length, 0); assert.equal(f.out, '');
 });
-test('terminal-only login binds current CLI session and logout changes only plugin profile', async t => {
+test('noninteractive login binds current CLI session and logout changes only plugin profile', async t => {
   const f = await setup(t); await f.store.save(sample);
-  assert.equal(await run(['login', '--profile', 'sample'], { ...f, terminalAvailable: false }), 3);
-  assert.equal(f.cli.calls.length, 0);
-  assert.equal(await run(['login', '--profile', 'sample'], f), 0);
+  assert.equal(await run(['login', '--profile', 'sample'], { ...f, terminalAvailable: false }), 0, f.err);
   assert.equal(f.cli.calls.some(a => a[0] === 'login'), false);
   assertProfileBytes(await readFile(f.store.file('sample'), 'utf8'), bound.HomeAccountId);
   const calls = f.cli.calls.length, old = await f.store.load('sample');
@@ -137,25 +135,32 @@ test('terminal-only login binds current CLI session and logout changes only plug
   assert.deepEqual(await readdir(f.store.root), ['sample.json']);
   assertProfileBytes(await readFile(f.store.file('sample'), 'utf8'), null);
 });
+test('explicit false sign-in permits non-TTY binding but true never opens UI without a terminal', async t => {
+  const f = await setup(t); await f.store.save(sample);
+  assert.equal(await run(['login', '--profile', 'sample', '--sign-in', 'true'],
+    { ...f, terminalAvailable: false }), 3);
+  assert.deepEqual(f.cli.calls, []);
+  assert.equal(await run(['login', '--profile', 'sample', '--sign-in', 'false'],
+    { ...f, terminalAvailable: false }), 0, f.err);
+  assert.equal(f.cli.calls.some(args => args[0] === 'login'), false);
+  assertProfileBytes(await readFile(f.store.file('sample'), 'utf8'), bound.HomeAccountId);
+});
 test('explicit sign-in is the only command that opens UI', async t => {
   const f = await setup(t); await f.store.save(sample);
-  assert.equal(await run(['serve', '--profile', 'sample'], f), 3); assert.equal(f.cli.calls.length, 0);
   assert.equal(await run(['login', '--profile', 'sample', '--sign-in', 'true'], f), 0);
   assert.equal(f.cli.calls.filter(a => a[0] === 'login').length, 1);
 });
-test('serving monitor invalidates old profile and does not silently rebind', async t => {
-  const f = await setup(t), stdin = new PassThrough(); await f.store.save(bound);
+test('serve remains available before setup without a selected profile or Azure CLI calls', async t => {
+  const f = await setup(t), stdin = new PassThrough();
   let ready;
   const started = new Promise(resolve => { ready = resolve; });
-  const running = run(['serve', '--profile', 'sample'], {
+  const running = run(['serve'], {
     ...f, stdin, onReady: ready, signal: AbortSignal.timeout(15000)
   });
-  // Change an active session, not a profile whose startup is still running.
-  // The existing readiness seam avoids a machine-speed race.
   await Promise.race([started, running.then(code => assert.fail(`Serve exited before readiness: ${code}`))]);
-  await f.store.save(sample);
-  assert.equal(await running, 130);
-  assert.match(f.err, /changed/); assert.equal(f.cli.calls.length, 0); assert.equal(f.out, '');
+  stdin.end();
+  assert.equal(await running, 0);
+  assert.equal(f.err, ''); assert.equal(f.cli.calls.length, 0); assert.equal(f.out, '');
 });
 test('help and cancellation use stderr and stable exit codes', async t => {
   const f = await setup(t);

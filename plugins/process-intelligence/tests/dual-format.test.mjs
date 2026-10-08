@@ -11,6 +11,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { z } from 'zod';
 import { bundleFixture, pluginRoot } from './bundle-fixtures.mjs';
 import { richTool, richResult } from './fake-remote.mjs';
+import { CONNECTION_TOOLS } from '../src/connection-session.mjs';
 
 const schema = kind => `https://agent-plugins.org/schemas/1.0.0/${kind}.schema.json`;
 const json = async file => JSON.parse(await readFile(file, 'utf8'));
@@ -73,7 +74,7 @@ test(`${file} launches the same isolated bundle through ${selection} exactly onc
   transport.stderr.on('data', data => { stderr += data; });
   await client.connect(transport);
   assert.equal(client.getServerVersion().name, 'local-process-intelligence-bridge');
-  assert.deepEqual((await client.request({ method: 'tools/list' }, z.looseObject({}))).tools, [richTool]);
+  assert.deepEqual((await client.request({ method: 'tools/list' }, z.looseObject({}))).tools, [...CONNECTION_TOOLS, richTool]);
   assert.deepEqual(await client.request({ method: 'tools/call', params: { name: 'fixture_query' } },
     z.looseObject({})), richResult);
   await client.close();

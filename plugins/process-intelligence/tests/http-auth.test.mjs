@@ -58,7 +58,7 @@ for (const header of [
       assert.equal(error.errorCode, 'CLAIMS_LOGIN_REQUIRED');
       assert.match(error.message, /Conditional Access.*CAE/);
       assert.match(error.message, /login --profile NAME --sign-in true/);
-      assert.match(error.message, /restart MCP/);
+      assert.match(error.message, /pi_activate_profile/);
       assert.doesNotMatch(error.message, /private-|untrusted\.example|acrs|2\.80/);
       return true;
     });

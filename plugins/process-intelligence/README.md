@@ -93,7 +93,8 @@ Install the plugin from the Power Platform Skills marketplace inside Claude Code
 ```
 
 The bundled `server/mcp.mjs` is ready to run; installation does not require a source build.
-Configure and bind a profile as described below before starting the MCP server.
+The MCP server stays available before configuration and exposes local connection tools.
+Use the setup skill in the same host session to configure, bind and activate a profile.
 
 ### Package formats and client compatibility
 
@@ -149,21 +150,26 @@ Nothing here installs software or changes user-wide CLI settings automatically.
 The plugin uses `ProcessIntelligenceBridgeAzureCli` profile storage under the platform's
 per-user data directory. Configure and bind a profile using the steps below.
 
-For a local GitHub Copilot CLI load, after configuring and signing in below:
+For source-development loading in GitHub Copilot CLI:
 
 ```powershell
-$env:PM_BRIDGE_PROFILE = 'work'
-$env:PLUGIN_ROOT = (Get-Location).Path
-copilot --plugin-dir "$env:PLUGIN_ROOT" -C "$HOME"
+$plugin = (Get-Location).Path
+copilot --plugin-dir "$plugin" -C "$HOME"
 ```
 
-On macOS/Linux: `PM_BRIDGE_PROFILE=work PLUGIN_ROOT="$PWD" copilot --plugin-dir "$PWD" -C "$HOME"`.
+On macOS/Linux: `copilot --plugin-dir "$PWD" -C "$HOME"`.
 These examples retain the absolute plugin path but start Copilot outside the plugin directory,
 avoiding an additional workspace load of its `.mcp.json`.
 Claude Code can similarly use `claude --plugin-dir <absolute-plugin-directory>`.
 Local loading is an alternative to marketplace installation; do not load both copies in the same session.
 
 ## Connect
+
+For a marketplace installation, use the setup skill in your existing Copilot session. After the
+privacy/integration confirmation, the agent runs offline configuration and noninteractive profile
+binding from the installed bundle, then calls `pi_activate_profile` with the selected profile name.
+Only interactive Azure CLI sign-in, when required, is a user action in a normal terminal.
+No host restart, manual registration or user-set `PLUGIN_ROOT`/`PM_BRIDGE_PROFILE` is required.
 
 For Public, start with your environment ID. The setup skill resolves the tenant for you rather
 than asking you to find its GUID. First verify that Azure CLI is signed in to the intended
@@ -207,7 +213,7 @@ Alternatively, `login --profile work --sign-in true` explicitly runs tenant-scop
 browser login. This can change the shared Azure CLI session. If device-code interaction is
 needed, run `az login` yourself in a normal terminal instead. Tenants must be explicit GUIDs;
 `--tenant select`, custom client-id, broker/browser and redirect flags are not accepted.
-MCP serving is silent-only: bind the profile before starting the agent.
+MCP serving never signs in or binds accounts. It exposes local recovery tools while unconfigured.
 Remote diagnostics check token acquisition and MCP discovery, without calling business tools.
 Local diagnostics inspect CLI version/cloud/tenant and delegated-user shape without acquiring
 tokens. They cannot verify the saved user OID and report `boundAccountVerified: false`;
@@ -222,9 +228,11 @@ Portable `mcp.json` and legacy `.mcp.json` select the same self-contained Node.j
 The bootstrap resolves `PLUGIN_ROOT`, then `CLAUDE_PLUGIN_ROOT`, then the current directory.
 The bridge uses the official JavaScript MCP SDK to forward the service's current tool definitions
 and results over stdio; it does not maintain a fixed deployed tool catalog.
-The host loads the current environment's tools through `tools/list` at the start of each MCP
-session. Start a new MCP session to discover newly added backend tools. The bridge does not
-monitor catalog changes, send tool-list-change notifications or poll for updates.
+The local tools are `pi_connection_status`, `pi_activate_profile` and `pi_deactivate_profile`.
+Activation validates the current profile/account, connects to the service and emits
+`notifications/tools/list_changed`, making analytical tools available without restarting a
+supporting host. Local activation/deactivation and invalidation are the only list-change events;
+the bridge does not subscribe to backend catalog updates or poll for them.
 Explicit `tools/list` requests still go to the backend; there is no bridge-owned catalog cache.
 It applies [narrow compatibility policies](references/development.md):
 consistent polling guidance and schema-aware formula search. All other tool metadata,
@@ -237,8 +245,20 @@ Unsolicited notifications on a separate GET stream and GET stream resumption are
 Diagnostics report `post-only`; this is not an automatic fallback that ignores real HTTP 404 errors.
 Environment/tenant discovery uses separate HTTP requests and is unaffected.
 
+Successful explicit activation remembers the profile name for the MCP client and plugin installation.
+A fresh host/server process reuses that preference, provided the profile binding and Azure CLI session
+are still usable. `serve --profile NAME` takes precedence over `PM_BRIDGE_PROFILE`, which takes
+precedence over the remembered choice. A missing, invalid or unbound choice leaves local recovery
+available and never selects the first/last other profile. Changes to the preference affect only new
+sessions, not active sessions. Profile/account changes invalidate the old remote context and require
+explicit reactivation. Repeated unchanged config and silent binding are idempotent.
+
+Native Copilot CLI tool refresh is supported; other hosts must support MCP tool-list-change
+notifications for same-session discovery. Azure CLI authentication can expire or be revoked;
+remembering a profile is not a promise of permanent sign-in.
+
 For a plain MCP host, run `node` with the absolute path to `server/mcp.mjs`,
-`serve --profile work`, and set `PLUGIN_ROOT` to this directory. Stdout is protocol-only;
+`serve` (optionally `--profile work`). Stdout is protocol-only;
 diagnostics go to stderr. The process waits for MCP input and does not sign in interactively.
 
 ## Security
@@ -256,11 +276,17 @@ Cold acquisition checks the saved tenant/OID; validated RAM username continuity 
 hits and refreshes. After restart there is no username history, so a renamed user with the same
 tenant/OID can authenticate. A different OID requires explicit account switching.
 Profile changes are written atomically under a per-profile mutation lock.
+Separate `clients/<scope-hash>.json` metadata stores only `{ "profile": "work" }` for the chosen
+client/installation. It shares the profile name's sensitivity and has no automatic expiry.
+The scope includes the client name, absolute installed plugin path and, for Copilot/Claude,
+the host configuration root. Moving the plugin or using a different client requires explicit
+selection again. See the connection guide for preference removal.
 Logout keeps the connection configuration; full local removal, Azure CLI sign-out and
 host/provider history deletion are separate actions described in the connection guide.
 For a Conditional Access / Continuous Access Evaluation (CAE) claims challenge, the bridge
 reports the policy failure and asks the user to run `login --profile NAME --sign-in true` in a
-normal terminal, then restart MCP. It does not store or forward claims-challenge payloads.
+normal terminal, then call `pi_activate_profile` in the existing session. It does not store or
+forward claims-challenge payloads.
 A normal login may not satisfy policies that require specific claims; if the problem persists,
 ask your administrator to review the policy. Switching tenant is not a remedy for such a challenge.
 According to Microsoft's
@@ -294,12 +320,13 @@ only information the user supplies. See [connection patterns](references/connect
 |---|---|
 | Server bundle missing | Run `npm ci` and `npm run build` explicitly from the plugin directory |
 | Node missing or unsupported | Install Node.js 22 or 24 LTS and put `node` on PATH |
-| No profile selected | Set `PM_BRIDGE_PROFILE` or pass `serve --profile NAME` |
+| No profile selected | Use setup and explicitly call `pi_activate_profile`; local status remains available |
 | Azure CLI missing or too old | Install Azure CLI 2.54+ on PATH |
 | Environment discovery unavailable or denied | Check the selected environment and directory-read access, or use an explicitly confirmed tenant with offline `config`; discovery is Public-only |
 | Login required or expired session | Run `az login --tenant <tenant-guid> --allow-no-subscriptions`, then bind with `login --profile NAME` |
 | Wrong cloud/tenant/account | Deliberately select the intended CLI session outside the bridge; do not cycle identities |
-| Conditional Access / CAE claims challenge | Run `login --profile NAME --sign-in true` in a normal terminal, then restart MCP; if it persists, ask your administrator to review the policy |
+| Conditional Access / CAE claims challenge | Run `login --profile NAME --sign-in true` in a normal terminal, then call `pi_activate_profile`; if it persists, ask your administrator to review the policy |
+| Stale profile or remembered selection | Read `pi_connection_status`, repair the selected profile and explicitly reactivate it; no alternative profile is chosen |
 | Browser login times out or needs device code | Run Azure CLI login directly in the terminal; the bridge never prints raw login output |
 | Consent/preauthorization failure | Ask your administrator to check access and consent for the selected tenant and environment |
 | Token acquired but MCP discovery fails | Check the selected audience, access and deployment; do not cycle identities |

@@ -92,7 +92,7 @@ export function authenticatedFetch(
         if (challenged) {
           throw new BridgeError(
             'MCP returned a Conditional Access / Continuous Access Evaluation (CAE) claims challenge. ' +
-              'Sign in again with login --profile NAME --sign-in true in a normal terminal, then restart MCP. ' +
+              'Sign in again with login --profile NAME --sign-in true in a normal terminal, then call pi_activate_profile. ' +
               'If the problem persists, ask your administrator to review the policy; this is not evidence of a wrong tenant.',
             3,
             'CLAIMS_LOGIN_REQUIRED'

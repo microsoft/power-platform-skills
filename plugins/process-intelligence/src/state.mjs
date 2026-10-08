@@ -4,7 +4,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { BridgeError } from './errors.mjs';
 import { profile, validateName } from './configuration.mjs';
@@ -43,10 +43,62 @@ export function defaultStateRoot(
 
 const changed = () =>
   new BridgeError(
-    'Profile/account changed. Restart MCP with the selected profile; the old connection is invalid.',
+    'Profile/account changed. Explicitly call pi_activate_profile with the selected profile; the old connection is invalid.',
     3,
     'PROFILE_CHANGED'
   );
+
+export function preferenceScope(client, installationRoot, env = process.env) {
+  if (!client?.name || typeof client.name !== 'string' || client.name.length > 128) {
+    throw new BridgeError('MCP client identity is required to remember a profile.', 3, 'STATE_INVALID');
+  }
+  const hostRoot = client.name === 'copilot-cli'
+    ? env.COPILOT_HOME || path.join(os.homedir(), '.copilot')
+    : client.name.startsWith('claude')
+      ? env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
+      : '';
+  const normalize = value => {
+    const absolute = path.resolve(value);
+    return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
+  };
+  // Client name (not version) plus installation and host config scope keeps updates
+  // reusable without making another client or installation adopt a last-used profile.
+  return createHash('sha256')
+    .update(JSON.stringify([client.name, normalize(installationRoot), hostRoot ? normalize(hostRoot) : '']))
+    .digest('hex');
+}
+
+export class ProfilePreferences extends PrivateDirectory {
+  constructor(root, scope) {
+    super(root);
+    if (!/^[a-f0-9]{64}$/.test(scope)) {
+      throw new BridgeError('Invalid profile preference scope.', 3, 'STATE_INVALID');
+    }
+    this.file = path.join(this.root, scope + '.json');
+  }
+
+  async load() {
+    const value = await readJson(this.file);
+    if (value === null) {
+      return null;
+    }
+    if (Object.keys(value).length !== 1 || !Object.hasOwn(value, 'profile')) {
+      throw new BridgeError(
+        'Remembered profile metadata is invalid. Explicitly activate the intended profile again.',
+        3,
+        'STATE_INVALID'
+      );
+    }
+    validateName(value.profile);
+    return value.profile;
+  }
+
+  async save(name) {
+    validateName(name);
+    await this.prepare();
+    await atomicWrite(this.file, JSON.stringify({ profile: name }));
+  }
+}
 
 export class StateStore extends PrivateDirectory {
   constructor(root = defaultStateRoot()) {
@@ -117,7 +169,11 @@ export class StateStore extends PrivateDirectory {
     }
   }
 
-  async save(value, expectedRevision) {
+  async configure(value) {
+    return this.save(value, undefined, { configurationOnly: true });
+  }
+
+  async save(value, expectedRevision, { configurationOnly = false } = {}) {
     const selected = profile(value);
     return this.withLock(selected.Name, async () => {
       if (
@@ -125,6 +181,26 @@ export class StateStore extends PrivateDirectory {
         (await this.load(selected.Name)).Revision !== expectedRevision
       ) {
         throw changed();
+      }
+      if (configurationOnly) {
+        try {
+          const current = await readJson(this.file(selected.Name));
+          if (current !== null) {
+            const saved = profile(current);
+            if (isDeepStrictEqual(
+              { ...saved, HomeAccountId: null, Revision: '' },
+              { ...selected, HomeAccountId: null, Revision: '' }
+            )) {
+              return saved;
+            }
+          }
+        } catch (error) {
+          // Explicit config repairs invalid data as before; only a valid unchanged
+          // profile retains its binding. Access/link failures must still stop it.
+          if (!['STATE_INVALID', 'INVALID_CONFIGURATION'].includes(error.errorCode)) {
+            throw error;
+          }
+        }
       }
       const saved = { ...selected, Revision: randomUUID().replaceAll('-', '') };
       await atomicWrite(this.file(saved.Name), JSON.stringify(saved));

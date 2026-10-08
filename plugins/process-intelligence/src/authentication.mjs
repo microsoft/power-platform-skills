@@ -149,7 +149,7 @@ export class ProfileTokenProvider {
     if (!p.HomeAccountId) {
       throw authError(
         'LOGIN_REQUIRED',
-        'No account is selected. Run login --profile explicitly in a terminal; serve never opens sign-in UI.'
+        'No account is selected. Run login --profile explicitly to bind the existing CLI session; serve never opens sign-in UI.'
       );
     }
     resolveConnection(p);
@@ -173,6 +173,9 @@ export async function login(
     const result = await identity.bind(signIn, signal);
     validateIdentity(selected, result, switchAccount || selected.HomeAccountId === null);
     await store.ensureCurrent(selected);
+    if (!signIn && same(selected.HomeAccountId, result.accountId)) {
+      return selected;
+    }
     const saved = await store.save(
       {
         ...selected,
@@ -210,7 +213,7 @@ export class IdentityClient {
       if (!same(account, result.accountId)) {
         throw authError(
           'ACCOUNT_CHANGED',
-          'Azure CLI account changed. Explicitly bind the intended account and restart MCP.'
+          'Azure CLI account changed. Explicitly bind the intended account and call pi_activate_profile.'
         );
       }
       return result;
