@@ -175,10 +175,14 @@ function validateAsset(asset, plan, operationsById) {
   }
 
   if (asset.source.type === 'unsplash') {
+    // Direct CDN discovery does not require a photo-page fetch or photographer
+    // lookup. Validate supplied metadata, but retain the file-import contract.
     const sourceKeys = ['sourcePage', 'photographer', 'license'];
     if (!external) sourceKeys.push('downloadUrl');
     for (const key of sourceKeys) {
-      assertString(asset.source[key], `asset ${asset.id}.source.${key}`);
+      if (!external || key === 'license' || key in asset.source) {
+        assertString(asset.source[key], `asset ${asset.id}.source.${key}`);
+      }
     }
     if (external && 'downloadUrl' in asset.source && asset.source.downloadUrl !== asset.externalUrl) {
       throw new Error(`asset ${asset.id} Unsplash downloadUrl must match externalUrl when supplied`);
@@ -186,17 +190,19 @@ function validateAsset(asset, plan, operationsById) {
     let sourcePage;
     let downloadUrl;
     try {
-      sourcePage = new URL(asset.source.sourcePage);
+      if ('sourcePage' in asset.source) sourcePage = new URL(asset.source.sourcePage);
       downloadUrl = new URL(external ? asset.externalUrl : asset.source.downloadUrl);
     } catch {
       throw new Error(`asset ${asset.id} Unsplash URLs must be valid absolute URLs`);
     }
     if (
-      sourcePage.protocol !== 'https:' ||
-      sourcePage.username ||
-      sourcePage.password ||
-      sourcePage.port ||
-      !['unsplash.com', 'www.unsplash.com'].includes(sourcePage.hostname.toLowerCase()) ||
+      (sourcePage && (
+        sourcePage.protocol !== 'https:' ||
+        sourcePage.username ||
+        sourcePage.password ||
+        sourcePage.port ||
+        !['unsplash.com', 'www.unsplash.com'].includes(sourcePage.hostname.toLowerCase())
+      )) ||
       downloadUrl.protocol !== 'https:' ||
       downloadUrl.username ||
       downloadUrl.password ||
@@ -204,7 +210,7 @@ function validateAsset(asset, plan, operationsById) {
       downloadUrl.hostname.toLowerCase() !== 'images.unsplash.com'
     ) {
       throw new Error(
-        `asset ${asset.id} Unsplash sourcePage and downloadUrl must use approved Unsplash HTTPS hosts without credentials or custom ports`
+        `asset ${asset.id} Unsplash URLs must use approved Unsplash HTTPS hosts without credentials or custom ports`
       );
     }
   }

@@ -54,7 +54,7 @@ that were not performed.
 
 The generated plan lazily displays approved hosted images in the browser with localized preview
 alt text, the planned aspect ratio, and a no-referrer policy. Retain clickable image/source links,
-attribution, license, and hosting caveats alongside the preview. If an image cannot load, show an
+known attribution, license, and hosting caveats alongside the preview. If an image cannot load, show an
 explicit unavailable state with an image-source link, not a broken-image box or endless loading
 message. Pure HTML serialization and publication do not fetch images; the pre-approval check
 reads them in memory without staging files or importing Web Files.
@@ -149,21 +149,36 @@ presentation attributes for simple geometry. Do not weaken those checks to accom
 
 ### Unsplash photography
 
-Use `WebSearch` to find a specific Unsplash photo whose subject, composition, lighting, color
-temperature, orientation, and available text space fit the page. Record both:
+Follow the same **WebSearch-to-CDN** sourcing approach as SPA creation:
 
-- the human-readable `https://unsplash.com/...` photo page;
-- the direct `https://images.unsplash.com/...` image URL with explicit sizing/crop parameters and
-  a supported format such as `fm=jpg`.
+1. Use `WebSearch` for the specific subject the section needs. Choose photography whose
+   composition, lighting, color temperature, orientation, and available text space fit the page.
+2. Use a direct `https://images.unsplash.com/photo-...` URL found through the search, with explicit
+   sizing/crop parameters such as `w=1600&h=900&fit=crop&fm=jpg` (`w=800` for cards, `w=1600` for
+   heroes). Preserve the discovered CDN path. Do not derive it from a photo-page slug or a
+   search-result identifier, guess IDs, or copy documentation placeholders.
+3. Keep one art direction across the chosen photos, with consistent crops and localized alt text.
+   Record the exact sized/cropped URL as `externalUrl`, `source.type: "unsplash"`, the
+   `source.license` basis, and `preparation: { "status": "remote" }`.
 
-Extract the actual CDN resource URL from that photo's source evidence. Do not build
-`photo-<id>` from the photo-page slug or a search-result identifier, and do not copy documentation
-placeholders. Preserve the real path and verify the final sizing/crop URL, not only the photo page.
+For external delivery, **do not require a photo-page fetch, scraping, API credentials, or a
+photographer lookup**. Retain `source.sourcePage` and `source.photographer` when reliably known
+from search results or supplied evidence; otherwise omit them rather than inventing attribution
+or a photo-page/CDN pairing. Supplied metadata must still be valid.
 
-For URL-based creation, use the sized/cropped direct image URL as `externalUrl`; retain the
-photo page, photographer and license in `source`. Do not download it to a file; the renderer's
-bounded in-memory verification is the only preparation needed. For an explicitly selected
-Web File delivery outside that creation path, stage the selected image:
+An anti-bot challenge or unavailable `unsplash.com` photo/search page is not evidence that
+`images.unsplash.com` is unavailable. Do not bypass the challenge or repeatedly retry it;
+continue with a direct CDN URL found through WebSearch. If none is found, search for another
+suitable Unsplash photo or request an approved hosted URL. Continue content/layout planning
+while resolving imagery, but do not request approval with unresolved images.
+
+Keep the existing pre-approval image checks: verify the **final direct image URL**, not the photo
+page. A failed CDN image check still blocks approval HTML; successful checks remain bound to
+the exact plan and published through `--imageChecks`. Do not download it to a file; the renderer's
+bounded in-memory verification is the only preparation needed for external delivery.
+
+For an explicitly selected Web File delivery outside that creation path, retain the required
+photo page, photographer, license and `source.downloadUrl`, then stage the selected image:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/prepare-declarative-asset.js" \
@@ -173,7 +188,7 @@ node "${PLUGIN_ROOT}/scripts/prepare-declarative-asset.js" \
   --fileName "<SAFE_FILENAME_WITH_EXTENSION>"
 ```
 
-Unsplash's published license permits downloading, copying, modifying, distributing, and
+[Unsplash's published license](https://unsplash.com/license) permits downloading, copying, modifying, distributing, and
 commercial use without required attribution. The license does not grant separate rights for
 recognizable people, trademarks, artwork, or protected property visible in a photograph. Avoid
 those subjects when the planned use could imply endorsement or require additional rights; retain

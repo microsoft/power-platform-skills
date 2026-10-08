@@ -200,9 +200,11 @@ owning skill supports the requested operation.
    inputs, with no Web File output binding. Review hosting/hotlink permission, privacy and known
    CSP `img-src` restrictions; report unknown runtime behavior honestly, and never change CSP
    implicitly. Do not call the staging helper for these images.
-   Copy the actual image resource URL from the chosen source; never derive an Unsplash CDN
-   path from a photo-page slug or search-result ID. The review renderer verifies final external
-   URLs before producing approval artifacts.
+   For Unsplash, follow the visual-asset reference's WebSearch-to-CDN flow, as in SPA creation.
+   Use a discovered direct image URL without requiring a photo-page fetch or photographer
+   lookup; retain those details when known, never invent them. Do not derive a CDN path from a
+   photo-page slug or search-result ID. A blocked photo page does not establish a CDN failure.
+   The review renderer still verifies final external URLs before producing approval artifacts.
    Only assets intentionally delivered as new Web Files are prepared through
    `scripts/prepare-declarative-asset.js`. Keep approved bytes in the project-local ignored asset
    cache and record the returned hash, MIME type, dimensions, filename, and cache path. Do not

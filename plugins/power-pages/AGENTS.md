@@ -55,6 +55,11 @@ Web File imports or fake output bindings. Reuse template images only when they f
 file delivery outside that route still reuses `prepare-declarative-asset.js` and `author-web-file`.
 Keep final `style-site` guards and the plan's visual context hash-bound and visible in approval
 HTML. Review external-host availability, license, privacy and CSP; do not silently relax policies.
+Align external Unsplash sourcing with SPA's WebSearch-to-CDN flow: no mandatory photo-page fetch
+or photographer lookup. Retain photo-page/photographer metadata when reliably known; require the
+license basis, valid direct URL and unchanged pre-approval `--imageChecks` evidence. Do not
+mistake a source-page bot challenge for a CDN failure or invent missing attribution. Explicit
+Web File imports retain their existing source metadata and staging requirements.
 The plan library validates completeness/dependencies, not visual fidelity. Status/approval HTML
 is not a site preview; local verification leaves Studio/runtime rendering pending.
 

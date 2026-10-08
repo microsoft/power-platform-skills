@@ -384,7 +384,7 @@ const assetCard=asset=>{
   const prep=asset.preparation||{};
   const alt=Object.entries((asset.accessibility&&asset.accessibility.altByLocale)||{}).map(([locale,value])=>`${locale}: ${value||"Decorative image"}`).join(" · ");
   const details=[
-    ["Source",source.type==="unsplash"?`Unsplash · ${source.photographer}`:words(source.type)],
+    ["Source",source.type==="unsplash"?["Unsplash",source.photographer].filter(Boolean).join(" · "):words(source.type)],
     ["Delivery",asset.delivery==="external-url"?"Direct external HTTPS URL (not imported)":"Local Power Pages Web File"],
     ["Image URL",asset.externalUrl||source.downloadUrl],
     ["Source page",source.sourcePage],

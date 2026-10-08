@@ -218,8 +218,6 @@ with the actual discovered image and provenance:
   "purpose": "Establish a calm, credible first impression for prospective clients.",
   "source": {
     "type": "unsplash",
-    "sourcePage": "https://unsplash.com/photos/<photo>",
-    "photographer": "<photographer>",
     "license": "Unsplash License"
   },
   "delivery": "external-url",
@@ -265,9 +263,15 @@ Rules:
   is needed. Availability, actual image content, hotlink permission, privacy and CSP are reviewed
   separately; schema validation neither fetches nor certifies the remote resource. The
   pre-approval image check supplies the separate HTTP/content evidence.
-- Unsplash external delivery uses `externalUrl` on `images.unsplash.com` plus its Unsplash photo
-  page, photographer and license. Legacy `source.downloadUrl`, if supplied too, must match
-  `externalUrl` exactly. Web File imports retain the required `source.downloadUrl`.
+- Unsplash external delivery uses a direct `externalUrl` on `images.unsplash.com` discovered
+  through WebSearch and a required license basis. `source.sourcePage` and `source.photographer`
+  are optional: retain them when reliably known, otherwise omit them without inventing values.
+  No photo-page fetch or photographer lookup is required. Supplied fields must be non-empty
+  strings, and a supplied photo page must use an approved Unsplash HTTPS host without credentials
+  or custom ports. Legacy `source.downloadUrl`, if supplied too, must match `externalUrl` exactly.
+  Web File imports retain required `sourcePage`, `photographer`, `license` and `downloadUrl`.
+  This sourcing rule does not relax the final direct-image check or exact-plan `--imageChecks`
+  publication requirement.
 - For `web-file` delivery, `existing-site` sources use `preparation.status: "existing"` and new
   sources use `staged`.
 - Agent-authored assets are safe original SVGs, not raster images.
@@ -282,7 +286,6 @@ Rules:
 - Every configured site locale has an alternative-text entry. Informative images require
   non-empty text; decorative assets use an empty value.
 - Do not include binary bytes, data URIs, tokens, private URLs, or unresolved source choices.
-- Unsplash assets retain their photo page, direct image URL, photographer, and license basis.
 - Logos and favicons with site-wide placements must identify their exact approved caller in the
   corresponding operation.
 

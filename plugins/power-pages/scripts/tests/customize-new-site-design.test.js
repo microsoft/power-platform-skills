@@ -88,6 +88,41 @@ test('new creation uses Unsplash or supplied CDN URLs without staging or Web Fil
   }
 });
 
+test('external Unsplash discovery needs no photo page or photographer but retains known metadata', () => {
+  for (const omitted of [[], ['sourcePage'], ['photographer'], ['sourcePage', 'photographer']]) {
+    const plan = externalImagePlan();
+    for (const key of omitted) delete plan.assets[0].source[key];
+    const before = JSON.stringify(plan);
+    assert.equal(validateCustomizationPlan(plan), plan);
+    assert.equal(JSON.stringify(plan), before);
+    delete plan.newSiteDesign;
+    assert.equal(validateCustomizationPlan(plan), plan, 'External delivery also works for existing-site plans.');
+  }
+});
+
+test('optional Unsplash metadata is validated when supplied and file imports keep required provenance', () => {
+  for (const key of ['sourcePage', 'photographer']) {
+    for (const value of ['', ' ', null, 42]) {
+      const plan = externalImagePlan();
+      plan.assets[0].source[key] = value;
+      assert.throws(() => validateCustomizationPlan(plan), new RegExp(`source\\.${key}`));
+    }
+  }
+  for (const sourcePage of [
+    'not-a-url', 'http://unsplash.com/photos/example', 'https://unsplash.com.example.test/photos/example',
+    'https://user@unsplash.com/photos/example', 'https://unsplash.com:8443/photos/example',
+  ]) {
+    const plan = externalImagePlan();
+    plan.assets[0].source.sourcePage = sourcePage;
+    assert.throws(() => validateCustomizationPlan(plan), /Unsplash URLs/);
+  }
+  for (const key of ['sourcePage', 'photographer', 'license', 'downloadUrl']) {
+    const plan = newSitePlan();
+    delete plan.assets[0].source[key];
+    assert.throws(() => validateCustomizationPlan(plan), new RegExp(`source\\.${key}`));
+  }
+});
+
 test('URL image delivery rejects unsafe addresses and mixed or unresolved asset contracts', () => {
   const cases = [
     ...[
@@ -165,12 +200,20 @@ test('external image review escapes untrusted URLs in preview and source-link at
 test('URL-based creation renders exact delivery details and resolves image inputs without an import', async (t) => {
   const root = temporaryRoot(t);
   const plan = externalImagePlan();
+  delete plan.assets[0].source.sourcePage;
+  delete plan.assets[0].source.photographer;
   const originalHash = planHash(plan);
   setImageUrl(plan, `${plan.assets[0].externalUrl}&h=800`);
   assert.notEqual(planHash(plan), originalHash);
   const dataPath = path.join(root, 'url-plan.json');
   fs.writeFileSync(dataPath, JSON.stringify(plan), 'utf8');
-  const review = await renderReviewedPlan(plan, path.join(root, 'review.html'), { check: successfulImageCheck });
+  assert.throws(() => publishApprovedPlan({ projectRoot: root, dataPath }), /require --imageChecks/);
+  const checkedUrls = [];
+  const review = await renderReviewedPlan(plan, path.join(root, 'review.html'), { check: (url) => {
+    checkedUrls.push(url);
+    return successfulImageCheck(url);
+  } });
+  assert.deepEqual(checkedUrls, [plan.assets[0].externalUrl]);
   publishApprovedPlan({ projectRoot: root, dataPath, imageChecksPath: review.imageChecks });
   const htmlPath = path.join(root, 'docs', 'customize-declarative-site', 'current-plan.html');
   const document = renderDocument(fs.readFileSync(htmlPath, 'utf8'));
@@ -180,6 +223,9 @@ test('URL-based creation renders exact delivery details and resolves image input
   assert.match(assetCard, /Power Pages permissions do not protect this URL/);
   assert.match(assetCard, /<img\b[^>]*alt="Conference speaker presenting to an audience"/);
   assert.match(assetCard, /Open image source/);
+  assert.match(assetCard, /<div class="detail-value">Unsplash<\/div>/);
+  assert.match(assetCard, /Unsplash License/);
+  assert.doesNotMatch(assetCard, /undefined|Example Photographer|Source page/);
   assert.doesNotMatch(assetCard, /Prepared file/);
   assert.match(document.get('newSiteDesign').innerHTML, /no image downloads or Web File imports/);
   const resolved = updateExecution({
@@ -189,9 +235,12 @@ test('URL-based creation renders exact delivery details and resolves image input
   assert.equal(resolved.designContext.imageDelivery, 'external-url');
   assert.deepEqual(resolved.operation.dependsOn, []);
   const receipt = updateExecution({ projectRoot: root, action: 'status' });
+  assert.equal(receipt.imageChecks.planHash, planHash(plan));
+  assert.equal(receipt.imageChecks.images[0].url, plan.assets[0].externalUrl);
   assert.deepEqual(receipt.operations.map((operation) => operation.id), ['create-speakers-page', 'style-new-site']);
   assert.equal(fs.existsSync(path.join(root, '.powerpages-customization')), false);
   assert.equal(fs.existsSync(path.join(root, 'web-files')), false);
+  assert.deepEqual(checkedUrls, [plan.assets[0].externalUrl], 'Publication and resolution reuse the image checks.');
 });
 
 test('existing-site schema-1 plans need neither a new design brief nor added images', () => {

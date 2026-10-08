@@ -66,7 +66,25 @@ test('customize-declarative-site coordinates owning skills without authoring rec
   assert.match(contract, /data-model-neutral/);
   assert.match(contract, /Schema version 1 plans must include `assets`/);
   assert.match(contract, /"assets": \[\]/);
-  assert.match(contract, /Unsplash assets retain their photo page/);
+  assert.match(contract, /Web File imports retain required `sourcePage`, `photographer`, `license` and `downloadUrl`/);
+});
+
+test('classic Unsplash sourcing follows SPA discovery without a photo-page or attribution gate', () => {
+  const skill = read(path.join('skills', 'customize-declarative-site', 'SKILL.md'));
+  const assets = read(path.join('skills', 'customize-declarative-site', 'references', 'visual-asset-planning.md'));
+  const contract = read(path.join('skills', 'customize-declarative-site', 'references', 'customization-plan-contract.md'));
+  assert.match(skill, /WebSearch-to-CDN flow, as in SPA creation/);
+  assert.match(skill, /without requiring a photo-page fetch or photographer\s+lookup/);
+  assert.match(skill, /renderer still verifies final external URLs before producing approval artifacts/);
+  assert.match(assets, /same \*\*WebSearch-to-CDN\*\* sourcing approach as SPA creation/);
+  assert.match(assets, /do not require a photo-page fetch, scraping, API credentials, or a\s+photographer lookup/);
+  assert.match(assets, /otherwise omit them rather than inventing attribution/);
+  assert.match(assets, /anti-bot challenge[\s\S]*is not evidence that\s+`images\.unsplash\.com` is unavailable/);
+  assert.match(assets, /Do not bypass the challenge/);
+  assert.match(assets, /failed CDN image check still blocks approval HTML/);
+  assert.match(contract, /`source\.sourcePage` and `source\.photographer`\s+are optional/);
+  assert.match(contract, /does not relax the final direct-image check or exact-plan `--imageChecks`/);
+  assert.doesNotMatch(assets, /Record both:|Extract the actual CDN resource URL from that photo's source evidence/);
 });
 
 test('deploy-site keeps code and declarative upload commands isolated', () => {
