@@ -545,14 +545,15 @@ This plugin sends usage telemetry by default to help Microsoft improve it.
 Events include skill name, plugin/PAC/agent versions, OS/Node versions, session and correlation IDs, and, when PAC is signed in, the Dataverse organization GUID and Entra tenant GUID.
 When PAC exposes the signed-in user's Entra object ID, Power Pages stores it under `eventInfo.aadObjectId`; otherwise that field is omitted.
 When you are working in a Power Pages code site, the site's SPA framework (`react`, `vue`, `angular`, or `astro`) is recorded under `eventInfo.framework`; that field is omitted otherwise. It names the scaffold only, never your site or its location.
-When `audit-permissions` runs, lifecycle events record a random per-run ID,
-success or failure, elapsed duration, and aggregate report metrics under
-`eventInfo.auditPermissions`. A successful run means the final HTML report was
-generated and passed semantic validation. The aggregate metrics contain only
-fixed major/minor counts, category scores, dimension counts, and root-cause
-counts. They never include site, environment, tenant, user, table, role,
-permission, path, finding text, or report content. These identity-free lifecycle
-events use the configured default telemetry region.
+The generic skill invocation event records when `audit-permissions` starts. Its
+completion event records a random per-run ID, success or failure, elapsed
+duration, and aggregate report metrics under `eventInfo.auditPermissions`. A
+successful run means the final HTML report was generated and passed semantic
+validation. The aggregate metrics contain only fixed major/minor counts,
+category scores, dimension counts, and root-cause counts. They never include
+site, environment, tenant, user, table, role, permission, path, finding text, or
+report content. This identity-free completion event uses the configured default
+telemetry region.
 Events do not include file paths, prompts, tool inputs, site names, Dataverse URLs, credentials, usernames, or hostnames.
 
 **Turn it on or off (per-user, applies to every project):**

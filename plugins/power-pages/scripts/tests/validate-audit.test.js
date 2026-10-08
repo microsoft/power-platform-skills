@@ -15,6 +15,12 @@ const VALIDATOR_PATH = path.join(
   'scripts',
   'validate-audit.js'
 );
+const ENABLED_TEST_TELEMETRY = {
+  disabled: false,
+  event_stream_name: 'PagesAIPluginEvent',
+  instrumentationKey: 'test-key',
+  collector_url: 'https://example.invalid/OneCollector/1.0/',
+};
 const TELEMETRY_SCRIPT_PATH = path.join(
   __dirname,
   '..',
@@ -209,13 +215,15 @@ test('validated report and source data record successful lifecycle completion to
   const ikeyPath = writeProjectFile(
     projectRoot,
     '.telemetry-test/ikey.json',
-    JSON.stringify({ disabled: true, event_stream_name: 'PagesAIPluginEvent' })
+    JSON.stringify(ENABLED_TEST_TELEMETRY)
   );
   const env = {
     ...process.env,
     PATH: '',
     POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
     POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath,
+    // Enabled config so run state is created, but opted out so nothing is POSTed.
+    POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: '1',
   };
   const started = spawnSync(process.execPath, [TELEMETRY_SCRIPT_PATH, '--action', 'start'], {
     encoding: 'utf8',
@@ -263,13 +271,15 @@ test('valid report with unreconcilable source data is recorded as a failed run',
   const ikeyPath = writeProjectFile(
     projectRoot,
     '.telemetry-test/ikey.json',
-    JSON.stringify({ disabled: true, event_stream_name: 'PagesAIPluginEvent' })
+    JSON.stringify(ENABLED_TEST_TELEMETRY)
   );
   const env = {
     ...process.env,
     PATH: '',
     POWER_PLATFORM_SKILLS_CONFIG_DIR: configDir,
     POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath,
+    // Enabled config so run state is created, but opted out so nothing is POSTed.
+    POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: '1',
   };
   const started = spawnSync(process.execPath, [TELEMETRY_SCRIPT_PATH, '--action', 'start'], {
     encoding: 'utf8',

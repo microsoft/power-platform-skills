@@ -41,17 +41,17 @@ The skill has two parts:
 
 **Important:** Do NOT ask the user questions during analysis. Autonomously gather all data, then present findings.
 
-## Audit lifecycle telemetry
+## Audit completion telemetry
 
-At the very start of Step 1, before site verification, run:
+At the very start of Step 1, before site verification, initialize local run state:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/emit-audit-permissions-telemetry.js" --action start
 ```
 
-Parse the JSON stdout and retain its `auditRunId` as `<AUDIT_RUN_ID>` for this invocation. Treat it as an opaque random token. Never derive it from, or replace it with, a site, environment, tenant, user, path, or report value.
+Parse the JSON stdout and retain its `auditRunId` as `<AUDIT_RUN_ID>` for this invocation. The command does not emit a telemetry event; the existing generic skill invocation event is the start signal. The local run state provides the opaque random ID and start time needed for completion telemetry. Never derive the ID from, or replace it with, a site, environment, tenant, user, path, or report value.
 
-Telemetry is best-effort and must never block the audit. If the start command fails or returns no `auditRunId`, continue the audit without lifecycle telemetry. Do not invent an id and do not search local state for the latest run.
+Telemetry is best-effort and must never block the audit. If the initialization command fails or returns no `auditRunId`, continue the audit without completion telemetry. Do not invent an id and do not search local state for the latest run.
 
 On every controlled terminal failure after a run id was returned, close the run before stopping:
 
@@ -108,7 +108,7 @@ Use `Glob` to find:
 If no `.powerpages-site` folder exists, stop and tell the user to deploy first using `/deploy-site`.
 If no table permissions exist, note this as a critical finding (the site may have no data access configured) and continue the audit — there may still be code references that need permissions.
 
-Before stopping because `.powerpages-site` is absent, close lifecycle telemetry with `failureStage: site_verification` as described above.
+Before stopping because `.powerpages-site` is absent, close completion telemetry with `failureStage: site_verification` as described above.
 
 ---
 
@@ -753,13 +753,13 @@ node "${PLUGIN_ROOT}/skills/audit-permissions/scripts/validate-audit.js" \
   --auditRunId "<AUDIT_RUN_ID>"
 ```
 
-When lifecycle start returned no run id, omit `--data` and `--auditRunId`; report validation must still run.
+When local run initialization returned no run id, omit `--data` and `--auditRunId`; report validation must still run.
 
 Do not present or copy a report until validation succeeds. The validator reads `FINDINGS_DATA`, `INVENTORY_DATA`, and `SCORECARD_DATA` from the report and checks unique issue ids whose prefix matches the dimension, major/minor severities, non-empty `title`/`reasoning`/`fix`, a valid `rootCause` and `rootCauseReason` on every major finding (and none on minor findings), that the inventory is an array, the three category scores recomputed from the findings, that `SUMMARY` states the verdict matching the major count (and neither verdict phrase on a partial audit), and leftover placeholders. When the run id and data path are supplied, the same deterministic command revalidates the source data, derives the closed aggregate metrics, and records successful completion and elapsed duration.
 
 If validation fails, delete the report you just rendered, fix the named problem in the data file, render again to the same path, and rerun the validator. Do not repeat evidence gathering to fix a validation error.
 
-The validator reports `telemetryStatus` as `recorded_success`, `recorded_failure` (the report is valid but its source data could not be reconciled, so the run was recorded with `failureStage: metrics_validation`), `failed`, or `not_requested`. Telemetry is best-effort: neither `recorded_failure` nor `failed` invalidates the report. Do not retry with a reduced payload and do not expose report data in diagnostic output.
+The validator reports `telemetryStatus` as `recorded_success`, `recorded_failure` (the report is valid but its source data could not be reconciled, so the run was recorded with `failureStage: metrics_validation`), `disabled` (telemetry is hard-disabled for this plugin, so nothing was recorded), `failed`, or `not_requested`. Telemetry is best-effort: none of `recorded_failure`, `disabled`, or `failed` invalidates the report. Do not retry with a reduced payload and do not expose report data in diagnostic output.
 
 Delete the temporary `audit-data.json` and `audit-evidence.json` files after the terminal command returns.
 

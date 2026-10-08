@@ -175,7 +175,7 @@ test("derives a closed aggregate metric shape without private report values", ()
   );
 });
 
-test("emits correlated start and successful completion with measured duration", (t) => {
+test("initializes run state and emits successful completion with measured duration", (t) => {
   const { dir, env } = makeTempDir(t);
   const { dataPath, reportPath } = writeAuditArtifacts(dir);
   const emitted = [];
@@ -183,7 +183,6 @@ test("emits correlated start and successful completion with measured duration", 
 
   const started = beginRun({
     env,
-    emit,
     randomUUID: uuidSequence(RUN_ID, SESSION_ID),
     monotonicNow: () => 1_000_000_000n,
     wallClockNow: () => 1_000,
@@ -202,20 +201,14 @@ test("emits correlated start and successful completion with measured duration", 
   assert.equal(completed.outcome, "success");
   assert.equal(completed.reportGenerated, true);
   assert.equal(completed.durationMs, 2500);
-  assert.equal(emitted.length, 2);
+  assert.equal(emitted.length, 1);
 
-  const start = emitted[0];
-  const terminal = emitted[1];
-  assert.equal(start.event.data.eventName, "audit_permissions_run_started");
+  const terminal = emitted[0];
   assert.equal(terminal.event.data.eventName, "audit_permissions_run_completed");
-  assert.equal(start.event.data.eventInfo.auditPermissions.auditRunId, RUN_ID);
   assert.equal(terminal.event.data.eventInfo.auditPermissions.auditRunId, RUN_ID);
-  assert.notEqual(start.event.data.correlationId, terminal.event.data.correlationId);
   assert.equal(terminal.event.data.outcome, "success");
   assert.equal(terminal.event.data.durationMs, 2500);
-  assert.equal(start.options.cloud, "");
   assert.equal(terminal.options.cloud, "");
-  assert.equal("routingOrgId" in start.options, false);
   assert.equal("routingOrgId" in terminal.options, false);
 
   const serialized = JSON.stringify(emitted.map(({ event }) => event));
@@ -230,7 +223,6 @@ test("emits a closed failure payload and rejects a duplicate completion", (t) =>
   const emit = (event) => emitted.push(event);
   beginRun({
     env,
-    emit,
     randomUUID: uuidSequence(RUN_ID, SESSION_ID),
     monotonicNow: () => 5_000_000_000n,
   });
@@ -249,7 +241,7 @@ test("emits a closed failure payload and rejects a duplicate completion", (t) =>
     outcome: "failure",
     reportGenerated: false,
   });
-  const payload = emitted[1].data.eventInfo.auditPermissions;
+  const payload = emitted[0].data.eventInfo.auditPermissions;
   assert.deepEqual(payload, {
     schemaVersion: 1,
     auditRunId: RUN_ID,
@@ -279,7 +271,6 @@ test("converts invalid success metrics into a fixed metrics-validation failure",
   const emitted = [];
   beginRun({
     env,
-    emit: (event) => emitted.push(event),
     randomUUID: uuidSequence(RUN_ID, SESSION_ID),
     monotonicNow: () => 10_000_000_000n,
   });
@@ -296,10 +287,10 @@ test("converts invalid success metrics into a fixed metrics-validation failure",
   assert.equal(completed.outcome, "failure");
   assert.equal(completed.reportGenerated, false);
   assert.equal(
-    emitted[1].data.eventInfo.auditPermissions.failureStage,
+    emitted[0].data.eventInfo.auditPermissions.failureStage,
     "metrics_validation"
   );
-  assert.equal(emitted[1].data.eventInfo.auditPermissions.scores, undefined);
+  assert.equal(emitted[0].data.eventInfo.auditPermissions.scores, undefined);
 });
 
 test("an invalid completion does not consume the run, so a corrected retry still records it", (t) => {
@@ -308,7 +299,6 @@ test("an invalid completion does not consume the run, so a corrected retry still
   const emit = (event) => emitted.push(event);
   beginRun({
     env,
-    emit,
     randomUUID: uuidSequence(RUN_ID, SESSION_ID),
     monotonicNow: () => 1_000_000_000n,
   });
@@ -335,7 +325,7 @@ test("an invalid completion does not consume the run, so a corrected retry still
     ),
     /invalid_duration/
   );
-  assert.equal(emitted.length, 1, "rejected completions must not emit");
+  assert.equal(emitted.length, 0, "run initialization and rejected completions must not emit");
 
   const completed = completeRun(
     { runId: RUN_ID, outcome: "failure", failureStage: "audit_checks" },
@@ -343,11 +333,60 @@ test("an invalid completion does not consume the run, so a corrected retry still
   );
   assert.equal(completed.outcome, "failure");
   assert.equal(completed.durationMs, 1000);
-  assert.equal(emitted.length, 2);
-  assert.equal(emitted[1].data.eventInfo.auditPermissions.failureStage, "audit_checks");
+  assert.equal(emitted.length, 1);
+  assert.equal(emitted[0].data.eventInfo.auditPermissions.failureStage, "audit_checks");
 });
 
-test("environment opt-out keeps the lifecycle event local and suppresses transmission", (t) => {
+function auditRunsDir(configDir) {
+  return path.join(configDir, "telemetry", "power-pages", "audit-runs");
+}
+
+for (const [label, ikeyContent] of [
+  ["disabled: true", JSON.stringify({ disabled: true, event_stream_name: "PagesAIPluginEvent" })],
+  ["an unreadable ikey.json", "{ not json"],
+]) {
+  test(`kill switch (${label}) writes no run state and returns no run id`, (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "audit-killswitch-"));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const ikeyPath = path.join(dir, "ikey.json");
+    fs.writeFileSync(ikeyPath, ikeyContent, "utf8");
+    const result = spawnSync(process.execPath, [SCRIPT_PATH, "--action", "start"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: "",
+        POWER_PLATFORM_SKILLS_CONFIG_DIR: dir,
+        POWER_PLATFORM_SKILLS_IKEY_JSON: ikeyPath,
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { status: "disabled" });
+    assert.equal(fs.existsSync(path.join(dir, "telemetry")), false, "no telemetry files may be written");
+  });
+}
+
+test("kill switch flipped mid-run discards state without a marker or event", (t) => {
+  const { dir, env } = makeTempDir(t);
+  const emitted = [];
+  const emit = (event) => emitted.push(event);
+  beginRun({
+    env,
+    randomUUID: uuidSequence(RUN_ID, SESSION_ID),
+    monotonicNow: () => 1_000_000_000n,
+  });
+  assert.ok(fs.existsSync(path.join(auditRunsDir(dir), `${RUN_ID}.json`)));
+
+  fs.writeFileSync(env.POWER_PLATFORM_SKILLS_IKEY_JSON, JSON.stringify({ disabled: true }), "utf8");
+  const result = completeRun(
+    { runId: RUN_ID, outcome: "failure", failureStage: "audit_checks" },
+    { env, emit, monotonicNow: () => 2_000_000_000n }
+  );
+  assert.deepEqual(result, { auditRunId: RUN_ID, disabled: true });
+  assert.equal(emitted.length, 0);
+  assert.deepEqual(fs.readdirSync(auditRunsDir(dir)), [], "state removed and no completion marker written");
+});
+
+test("start emits nothing and opt-out keeps completion local", (t) => {
   const { dir, env } = makeTempDir(t);
   const probePath = path.join(dir, "probe.json");
   const result = spawnSync(process.execPath, [SCRIPT_PATH, "--action", "start"], {
@@ -364,11 +403,35 @@ test("environment opt-out keeps the lifecycle event local and suppresses transmi
   const start = JSON.parse(result.stdout);
   assert.equal(start.status, "started");
   assert.match(start.auditRunId, /^[0-9a-f-]{36}$/i);
+  assert.equal(latestMirror(dir), null, "run initialization must not emit telemetry");
+  assert.equal(fs.existsSync(probePath), false);
+
+  const completionResult = spawnSync(process.execPath, [
+    SCRIPT_PATH,
+    "--action",
+    "complete",
+    "--runId",
+    start.auditRunId,
+    "--outcome",
+    "failure",
+    "--failureStage",
+    "audit_checks",
+  ], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ...env,
+      PATH: "",
+      POWER_PLATFORM_SKILLS_FAKE_HTTPS: probePath,
+      POWER_PLATFORM_SKILLS_TELEMETRY_POWER_PAGES_OPTOUT: "1",
+    },
+  });
+  assert.equal(completionResult.status, 0, completionResult.stderr);
 
   const mirror = waitForMirror(dir);
   assert.ok(mirror, "opted-out lifecycle event should remain in the local mirror");
   const record = JSON.parse(fs.readFileSync(mirror, "utf8").trim());
-  assert.equal(record.data.eventName, "audit_permissions_run_started");
+  assert.equal(record.data.eventName, "audit_permissions_run_completed");
   assert.equal(record.data.eventInfo.auditPermissions.auditRunId, start.auditRunId);
   assert.equal(fs.existsSync(probePath), false, "opt-out must suppress the collector POST");
 });

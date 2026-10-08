@@ -55,6 +55,9 @@ const ROOT_CAUSES = Object.freeze([
   "webapi-settings",
 ]);
 
+const SCORING_STATUSES = Object.freeze(["complete", "partial"]);
+const VERDICTS = Object.freeze(["safe_to_go", "needs_revision", "not_scored"]);
+
 const ROOT_CAUSE_KEYS = Object.freeze({
   permissions: "permissions",
   mixed: "mixed",
@@ -298,10 +301,10 @@ function validateAuditMetrics(metrics) {
   ];
   assertExactKeys(metrics, expectedKeys, "Audit metrics");
   if (metrics.schemaVersion !== 1) throw new Error("Audit metrics schemaVersion must be 1.");
-  if (!["complete", "partial"].includes(metrics.scoringStatus)) {
+  if (!SCORING_STATUSES.includes(metrics.scoringStatus)) {
     throw new Error("Audit metrics scoringStatus is invalid.");
   }
-  if (!["safe_to_go", "needs_revision", "not_scored"].includes(metrics.verdict)) {
+  if (!VERDICTS.includes(metrics.verdict)) {
     throw new Error("Audit metrics verdict is invalid.");
   }
   for (const key of ["majorIssueCount", "minorIssueCount", "totalIssueCount"]) {
@@ -369,6 +372,8 @@ module.exports = {
   PREFIXES,
   ROOT_CAUSES,
   ROOT_CAUSE_KEYS,
+  SCORING_STATUSES,
+  VERDICTS,
   countIssues,
   deriveAuditMetrics,
   scoreFromIssues,

@@ -37,7 +37,9 @@ if (explicitReport) {
           data: path.resolve(dataPath),
           report: reportPath,
         });
-        telemetryStatus = completion.outcome === 'success' ? 'recorded_success' : 'recorded_failure';
+        telemetryStatus = completion.disabled
+          ? 'disabled'
+          : completion.outcome === 'success' ? 'recorded_success' : 'recorded_failure';
       } catch {
         // A validated report remains successful even if optional telemetry fails.
         telemetryStatus = 'failed';
