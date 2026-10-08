@@ -75,13 +75,40 @@ function copyMissingTemplateFiles(sourcePath, clonedPath, fsImpl = fs) {
       }
 
       if (sourceStat.isDirectory()) {
-        if (fsImpl.existsSync(clonedEntryPath)) {
-          const clonedStat = fsImpl.lstatSync(clonedEntryPath);
-          if (clonedStat.isSymbolicLink() || !clonedStat.isDirectory()) {
-            throw new Error(`Clone path conflicts with template directory: ${relativePath}`);
+        const MAX_DIR_CREATION_ATTEMPTS = 3;
+        let created = false;
+        let lastError = null;
+        for (let attempt = 1; attempt <= MAX_DIR_CREATION_ATTEMPTS; attempt++) {
+          try {
+            // Use an atomic mkdir rather than a separate existence check to avoid a TOCTOU race.
+            fsImpl.mkdirSync(clonedEntryPath, { recursive: false });
+            created = true;
+            break;
+          } catch (err) {
+            lastError = err;
+            if (err.code !== 'EEXIST' && err.code !== 'ENOTDIR' && err.code !== 'ENOENT') throw err;
+            try {
+              const clonedStat = fsImpl.lstatSync(clonedEntryPath);
+              if (clonedStat.isSymbolicLink() || !clonedStat.isDirectory()) {
+                throw new Error(`Clone path conflicts with template directory: ${relativePath}`);
+              }
+              created = true;
+              break;
+            } catch (lstatErr) {
+              if (lstatErr.code === 'ENOENT') {
+                // The conflicting path vanished before we could stat it. Retry.
+                lastError = lstatErr;
+                continue;
+              }
+              if (lstatErr.code === 'ENOTDIR') {
+                throw new Error(`Clone path conflicts with template directory: ${relativePath}`);
+              }
+              throw lstatErr;
+            }
           }
-        } else {
-          fsImpl.mkdirSync(clonedEntryPath, { recursive: true });
+        }
+        if (!created) {
+          throw new Error(`Failed to create directory after ${MAX_DIR_CREATION_ATTEMPTS} attempts: ${relativePath} (last error: ${lastError.code})`);
         }
         queue.push(relativePath);
         continue;

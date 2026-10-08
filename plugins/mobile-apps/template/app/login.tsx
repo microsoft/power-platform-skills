@@ -7,6 +7,7 @@ import {
 } from 'tamagui';
 import { Ionicons } from '@expo/vector-icons';
 import { Redirect } from 'expo-router';
+import { Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '@microsoft/power-apps-native-host';
 // @ts-ignore - power.config.json is auto-generated at build time
@@ -75,6 +76,17 @@ export default function LoginScreen() {
           pressStyle={{ opacity: 0.85 }}
         >
           {isLoading ? 'Signing in...' : !isAuthReady ? 'Loading...' : 'Sign in with Microsoft'}
+        </Button>
+
+        <Button
+          chromeless
+          color="$accentDeep"
+          iconAfter={<Ionicons name="open-outline" size={16} color={theme.accentDeep.val} />}
+          accessibilityRole="link"
+          accessibilityLabel="Open Microsoft Privacy Statement"
+          onPress={() => void Linking.openURL('https://go.microsoft.com/fwlink/?LinkId=521839')}
+        >
+          Microsoft Privacy Statement
         </Button>
       </YStack>
     </SafeAreaView>

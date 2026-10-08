@@ -7,13 +7,17 @@
 const { odataLit } = require('./odata.js');
 const { matchContainer, isEngineOwnedSection, isEngineHostSection, claimedByAuthoredName } = require('./form-container-match.js');
 const { authoredSectionNames, authoredTabNames } = require('./app-spec.js');
-const { decodeXmlEntities } = require('./sitemap-pages.js');
+const { sitemapEntityTables } = require('./app-spec.js');
+// XML_TAG / XML_ATTR are the one tag and attribute grammar for FormXML and SiteMap XML; they live with
+// liveNavEntries in sitemap-pages.js so the form-identity scan and the navigation reader cannot drift.
+const { decodeXmlEntities, liveNavEntries, XML_TAG, XML_ATTR } = require('./sitemap-pages.js');
 const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf } = require('./app-spec.js');
+const { sameRelationship, describeRelationship } = require('./relationship-metadata.js');
 const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef, dashboardsInSolution, findDashboardsByName, findPinnedDashboard } = require('./sdk-build.js');
 const { DASHBOARD_LAUNCHER_URL, isDashboardLauncherUrl, subAreaTargetKey, specSubAreaTargetKey, specSubAreas, chromeByTargetKey, keepsLiveValue } = require('./sitemap-merge.js');
 // Recorded on an icon check the build's keep rule satisfies (keepsLiveValue, sitemap-merge.js).
 const KEPT_BY_DESIGNER = 'kept as the environment has it: changed in the designer since the spec\u2019s baseline, which the spec still matches';
-const { extractNavTargets } = require('./pageref-resolver.js');
+const { extractNavTargets, strayPageRefs, describePageRefLocations } = require('./pageref-resolver.js');
 const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
 const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges.js');
 const { resolveSurfaces } = require('./surface-resolver.js');
@@ -31,6 +35,7 @@ const { isMainForm, selectDefaultForm, plannedMainFormSequence, displayCondition
 // block below). They exist so tests can drive the absent path without paying real backoff; the
 // defaults are what the CLIs use.
 async function verifySpec(spec, read, opts = {}) {
+  if (read && typeof read.beginVerificationPass === 'function') read.beginVerificationPass();
   const checks = [];
   const add = (kind, name, present, detail) => checks.push({ kind, name, present: !!present, detail: detail || '' });
   // Artifacts the BUILD reported as impossible on this environment, keyed `entity|name`. Supplied by
@@ -278,6 +283,31 @@ async function verifySpec(spec, read, opts = {}) {
     }
     add('dashboard', d.name, problems.length === 0, problems.join('; '));
   }
+  // One published systemform row feeds the default flag, the layout proof and the stored order.
+  // formRow selects all of them. Memoized for THIS verify only: the reader is reused, and a later
+  // verify must observe a row that changed in between (a recorded FormXML can be rewritten).
+  const publishedFormP = new Map();
+  const useCombinedFormRead = typeof read.formRow === 'function';
+  const publishedForm = (entity, formId) => {
+    const key = String(formId || '').toLowerCase();
+    if (!publishedFormP.has(key)) publishedFormP.set(key, Promise.resolve().then(() => read.formRow(entity, formId)));
+    return publishedFormP.get(key);
+  };
+  const readDefaultState = async (entity, formId) => {
+    if (useCombinedFormRead) {
+      const row = await publishedForm(entity, formId);
+      return row ? { isDefault: row.isDefault === true } : null;
+    }
+    return read.formDefaultState(entity, formId);
+  };
+  const readFormXml = async (entity, formId) => {
+    if (useCombinedFormRead) {
+      const row = await publishedForm(entity, formId);
+      return (row && row.formxml) || null;
+    }
+    return read.formTopology(entity, formId);
+  };
+  const canReadDefault = useCombinedFormRead || typeof read.formDefaultState === 'function';
   const resolvedMainFormsByEntity = new Map();
   for (const f of spec.forms || []) {
     const name = f.name || `${f.entity} form`;
@@ -296,10 +326,10 @@ async function verifySpec(spec, read, opts = {}) {
       if (!resolvedMainFormsByEntity.has(entityLogical)) resolvedMainFormsByEntity.set(entityLogical, []);
       resolvedMainFormsByEntity.get(entityLogical).push({ form: f, name, id });
     }
-    if (id && selectedDefaultForms.get(entityLogical) === f && typeof read.formDefaultState === 'function') {
+    if (id && selectedDefaultForms.get(entityLogical) === f && canReadDefault) {
       let state = null;
       let readError = null;
-      try { state = await read.formDefaultState(entityLogical, id); } catch (e) { readError = (e && e.message) || String(e); }
+      try { state = await readDefaultState(entityLogical, id); } catch (e) { readError = (e && e.message) || String(e); }
       // Default-form promotion is a stored systemform flag, not a property of the App Spec or the
       // build result. A form can exist with the right name/type while still not being the table's
       // default, so this proves the platform row the model-driven runtime uses.
@@ -311,14 +341,14 @@ async function verifySpec(spec, read, opts = {}) {
           : `expected this Main form to be the table default, but deployed systemform.isdefault is ${state && state.isDefault === false ? 'false' : 'unreadable'}`);
     }
   }
-  if (typeof read.formDefaultState === 'function') {
+  if (canReadDefault) {
     for (const [entityLogical, selected] of selectedDefaultForms) {
       const selectedName = selected.name || `${selected.entity} form`;
       for (const sibling of resolvedMainFormsByEntity.get(entityLogical) || []) {
         if (sibling.form === selected) continue;
         let state = null;
         let readError = null;
-        try { state = await read.formDefaultState(entityLogical, sibling.id); } catch (e) { readError = (e && e.message) || String(e); }
+        try { state = await readDefaultState(entityLogical, sibling.id); } catch (e) { readError = (e && e.message) || String(e); }
         const present = !!(state && state.isDefault !== true && !readError);
         add('form-default-unique', `${entityLogical}.${sibling.name}`, present, present ? '' :
           readError
@@ -341,7 +371,7 @@ async function verifySpec(spec, read, opts = {}) {
   //                      reported as not verifiable here, never as a pass.
   // Neither sees a user's remembered form (the one they last switched to), which opens first for them
   // while they may open it; it is per user and not configuration (references/app-spec-schema.md).
-  if (typeof read.formTopology === 'function') {
+  if (useCombinedFormRead || typeof read.formTopology === 'function') {
     for (const [entityLogical, declared] of declaredMainFormsByEntity) {
       if (!plannedMainFormSequence(spec, entityLogical)) continue;
       const resolved = resolvedMainFormsByEntity.get(entityLogical) || [];
@@ -353,7 +383,7 @@ async function verifySpec(spec, read, opts = {}) {
       let readError = null;
       for (const f of declared) {
         try {
-          current.set(f, displayConditionsOrder(await read.formTopology(entityLogical, idOf.get(f))).order);
+          current.set(f, displayConditionsOrder(await readFormXml(entityLogical, idOf.get(f))).order);
         } catch (e) {
           readError = `'${nameOf.get(f)}': ${(e && e.message) || e}`;
           break;
@@ -398,25 +428,66 @@ async function verifySpec(spec, read, opts = {}) {
     }
   }
 
-  // Relationships (existence) — currently a build can declare a relationship that silently fails to
-  // materialize and still pass verify (relationships weren't checked at all). Best-effort: only when the
-  // reader can list a child entity's relationship schema names (`entityRelationships`). Match the same
-  // schema name the build/teardown compute (relationshipSchemaName / manyToManySchemaName), so an
-  // explicit schemaName or an auto-prefixed system-table relationship is compared correctly.
+  // Relationships. A name on the child is not proof: a 1:N and an N:N between the same pair derive
+  // the same schema name, and the second create used to be skipped. Match the endpoints the build
+  // sends. Plain-string rows (older test doubles) stay name-only. A read failure stays an empty
+  // list, which fails closed, same as before.
   if (typeof read.entityRelationships === 'function') {
     const prefix = spec.solution && spec.solution.publisherPrefix;
-    const relCache = new Map(); // childLogical -> Set(schemaName lower) — one metadata read per child
+    const relCache = new Map();
     for (const r of spec.relationships || []) {
-      const schema = String(r.type === 'ManyToMany' ? manyToManySchemaName(r, prefix) : relationshipSchemaName(r, prefix)).toLowerCase();
-      // A 1:N relationship lives on the referencing (child) entity; an N:N is symmetric — check entity1.
+      if (!r || (r.type !== 'OneToMany' && r.type !== 'ManyToMany')) continue;
+      const rawSchema = r.type === 'ManyToMany' ? manyToManySchemaName(r, prefix) : relationshipSchemaName(r, prefix);
+      const schema = String(rawSchema).toLowerCase();
+      // A 1:N lives on the referencing (child) entity; an N:N is symmetric — check entity1.
       const child = String((r.type === 'ManyToMany' ? (r.entity1 || r.entity2) : r.referencing) || '').toLowerCase();
       if (!child) continue;
       if (!relCache.has(child)) {
-        let names = [];
-        try { names = (await read.entityRelationships(child)) || []; } catch { names = []; }
-        relCache.set(child, new Set(names.map((n) => String(n).toLowerCase())));
+        let rows = [];
+        try { rows = (await read.entityRelationships(child)) || []; } catch { rows = []; }
+        relCache.set(child, rows);
       }
-      add('relationship', schema, relCache.get(child).has(schema));
+      const rows = relCache.get(child);
+      const nameOnly = rows.length > 0 && rows.every((row) => typeof row === 'string');
+      if (nameOnly) {
+        add('relationship', schema, rows.some((n) => String(n).toLowerCase() === schema));
+        continue;
+      }
+      const declared = Object.assign({}, r, { schemaName: rawSchema });
+      const detailed = rows.filter((row) => row && typeof row === 'object');
+      const named = (row) => String(row.schemaName || row.SchemaName || '').toLowerCase() === schema;
+      if (detailed.some((row) => named(row) && sameRelationship(declared, row))) {
+        add('relationship', schema, true);
+        continue;
+      }
+      const nameHit = detailed.find(named);
+      if (nameHit) {
+        add('relationship', schema, false, `exists as ${describeRelationship(nameHit)}`);
+        continue;
+      }
+      // The typed collection on this side cannot see a holder of the other type (a 1:N is not in
+      // the parent's ManyToMany list). Ask the shared exact-name lookup so the failure names it.
+      if (typeof read.relationshipHolder === 'function') {
+        let holder = null;
+        try {
+          const candidates = r.type === 'ManyToMany' ? [r.entity1, r.entity2] : [r.referenced, r.referencing];
+          holder = await read.relationshipHolder(rawSchema, candidates);
+        } catch (e) {
+          add('relationship', schema, false, `could not read the relationship that holds '${schema}' (${(e && e.message) || e})`);
+          continue;
+        }
+        if (holder && holder.found === true) {
+          if (sameRelationship(declared, holder.holder)) { add('relationship', schema, true); continue; }
+          const declaredKind = r.type === 'ManyToMany' ? 'N:N' : '1:N';
+          add('relationship', schema, false, `${schema} exists as ${describeRelationship(holder.holder)}, not as the declared ${declaredKind}`);
+          continue;
+        }
+        if (holder && holder.found === null) {
+          add('relationship', schema, false, `could not read the relationship that holds '${schema}'${holder.status ? ` (HTTP ${holder.status})` : ''}`);
+          continue;
+        }
+      }
+      add('relationship', schema, false);
     }
   }
 
@@ -438,7 +509,7 @@ async function verifySpec(spec, read, opts = {}) {
   // applies to a MISSING READER CAPABILITY too: gating the whole oracle on
   // `typeof read.formTopology === 'function'` let a reader without it skip every layout check, so an
   // explicit form passed verify on identity and default checks alone with no layout proof at all.
-  const canReadTopology = typeof read.formTopology === 'function';
+  const canReadTopology = useCombinedFormRead || typeof read.formTopology === 'function';
   {
     for (const f of spec.forms || []) {
       const explicit = Array.isArray(f.tabs) && f.tabs.length > 0;
@@ -457,8 +528,7 @@ async function verifySpec(spec, read, opts = {}) {
       if (flagsAny) {
         try { autoFlagged = autoLayoutFieldFlags(spec, f); } catch (e) { autoCompileError = (e && e.message) || String(e); }
       }
-      if (!explicit && !autoFlagged.length && !autoCompileError) continue;
-      const kind = explicit ? 'form-topology' : 'form-field-state';
+      const kind = explicit ? 'form-topology' : autoFlagged.length || autoCompileError ? 'form-field-state' : 'form-identities';
       if (autoCompileError) {
         // Only an unvalidated spec reaches this (validation requires every table's primary column), but a
         // layout the compiler cannot read cannot say which fields the build places — so nothing is proven.
@@ -490,12 +560,18 @@ async function verifySpec(spec, read, opts = {}) {
 
       let xml = null;
       let readError = null;
-      try { xml = await read.formTopology(entity, id); } catch (e) { readError = (e && e.message) || String(e); }
+      try { xml = await readFormXml(entity, id); } catch (e) { readError = (e && e.message) || String(e); }
       if (!xml) {
         add(kind, `${entity}.${name}`, false,
           `could not read the deployed form layout${readError ? `: ${readError}` : ''} — the layout is unverified, not proven correct`);
         continue;
       }
+
+      // A duplicated cell/control ID can bind two otherwise valid rows to one UI identity. Check
+      // the whole form, including header/footer and unbound controls, even for an unshaped auto form.
+      const identityProblems = formIdentityProblems(xml);
+      add('form-identities', `${entity}.${name}`, identityProblems.length === 0, identityProblems.join('; '));
+      if (!explicit && !autoFlagged.length) continue;
 
       const deployed = parseFormTopology(xml);
       const problems = [];
@@ -955,28 +1031,26 @@ async function verifySpec(spec, read, opts = {}) {
   // check above passes, because the table EXISTS and the sitemap DOES name it. Verify reported PASS
   // on exactly that app, which is what made the divergence invisible.
   //
-  // Scoped to SITEMAP-VISIBLE entities on purpose. A spec entity with no subarea is a legitimate
-  // data-model-only/supporting table that the build does not pin, so requiring it would fail every
-  // app that declares one.
+  // Navigation tables and explicit app.tables are membership instructions. A data-model-only entity
+  // with neither is not: requiring every entities[] entry would incorrectly pin supporting tables.
   //
   // Optional capability: verify-spec is also driven by minimal readers, and an optional reader must
   // never become a TypeError for them (same rule as `columnVisualization`).
-  if (typeof read.appEntityComponents === 'function') {
-    const sitemapEntities = [];
-    for (const a of (spec.appShell && spec.appShell.areas) || []) {
-      for (const g of a.groups || []) {
-        for (const sa of g.subAreas || []) {
-          const logical = sa && sa.entity ? String(sa.entity).toLowerCase() : null;
-          if (logical && !sitemapEntities.includes(logical)) sitemapEntities.push(logical);
-        }
-      }
-    }
+  const hiddenTables = Array.isArray(spec.app && spec.app.tables) ? spec.app.tables : [];
+  if (typeof read.appEntityComponents === 'function' || hiddenTables.length) {
+    const sitemapEntities = [...new Set([...sitemapEntityTables(spec), ...hiddenTables.map((name) => String(name).toLowerCase())])];
     if (sitemapEntities.length) {
-      const res = await read.appEntityComponents(sitemapEntities);
+      let res;
+      try {
+        res = typeof read.appEntityComponents === 'function' ? await read.appEntityComponents(sitemapEntities)
+          : { ok: false, reason: 'app table membership reader is unavailable' };
+      } catch (error) {
+        res = { ok: false, reason: (error && error.message) || String(error) };
+      }
       if (!res || res.ok !== true) {
         // Fail closed. "We could not look" must never read as "the app is fine" — that is the exact
         // shape of the bug this check exists to catch.
-        add('app-table-component', 'app tables', false, `could not be read: ${(res && res.reason) || 'unknown'}`);
+        add('app-table-component', 'app tables', false, `could not be read: ${(res && res.reason) || 'unknown'} — unverified, not proven correct`);
       } else {
         // Case-insensitive: Dataverse does not guarantee the casing of a resolved logical name.
         const present = new Set((res.present || []).map((n) => String(n).toLowerCase()));
@@ -990,6 +1064,36 @@ async function verifySpec(spec, read, opts = {}) {
             'the app module contains component(s) pointing at the `entity` metadata table rather than a real table — remove them.');
         }
       }
+    }
+  }
+
+  const mainForms = spec.app && spec.app.mainForms;
+  if (mainForms && Object.keys(mainForms).length) {
+    let membership;
+    try {
+      membership = typeof read.appMainForms === 'function'
+        ? await read.appMainForms(appUniqueName(spec), mainForms)
+        : { kind: 'inconclusive', reason: 'app Main-form membership reader is unavailable' };
+    } catch (error) {
+      membership = { kind: 'inconclusive', reason: (error && error.message) || String(error) };
+    }
+    for (const rawTable of Object.keys(mainForms)) {
+      const table = rawTable.toLowerCase();
+      const result = membership && membership.kind === 'read' && Array.isArray(membership.tables)
+        && membership.tables.find((entry) => entry && String(entry.table).toLowerCase() === table);
+      if (!result || !Array.isArray(result.extras) || !Array.isArray(result.missing)) {
+        add('app-main-forms', table, false,
+          `Main-form membership could not be read: ${(membership && membership.reason) || `no complete result for '${table}'`} — unverified, not proven correct`);
+        continue;
+      }
+      const names = (ids) => ids.map((id) => `'${(membership.formNames && membership.formNames[id]) || id}'`).join(', ');
+      const problems = [];
+      if (result.missing.length) problems.push(`Main form(s) ${names(result.missing)} are missing; re-run the build`);
+      if (result.extras.length) {
+        problems.push(`Main form(s) ${names(result.extras)} are outside the list; an existing app keeps forms it already offered — `
+          + `remove them in Maker (app designer -> ${table} -> Forms) or list them`);
+      }
+      add('app-main-forms', table, problems.length === 0, problems.join('; '));
     }
   }
 
@@ -1066,10 +1170,13 @@ async function verifySpec(spec, read, opts = {}) {
           // THE SINGLE STRUCTURAL ORACLE: parse the deployed page's real navigateTo call sites.
           // A decoy id in a comment, a stale GUID, or a dynamic pageId all FAIL (C1).
           const targets = extractNavTargets(code);
-          // No residual/malformed PAGEREF_ in deployed code means the resolve+upload step ran on this page.
-          add('page-no-pageref', p.name, !targets.some((t) => t.kind === 'pageref' || t.kind === 'pageref-malformed'));
-          // Every declared nav edge must resolve to the ACTUAL target's deployed id at a REAL call site.
-          const navLiteralIds = new Set(targets.filter((t) => t.kind === 'literal').map((t) => String(t.pageId).toLowerCase()));
+          // No residual/malformed PAGEREF_ in deployed code means the resolve+upload step ran on this page. A token that no call accounts for
+          // is read as well (strayPageRefs): the lexer can hide a call — and so its token — behind a misread, which the targets alone miss.
+          const strays = strayPageRefs(code);
+          add('page-no-pageref', p.name, !targets.some((t) => t.kind === 'pageref' || t.kind === 'pageref-malformed') && strays.length === 0, strays.length ? describePageRefLocations(strays) : '');
+          // Every declared nav edge must resolve to the ACTUAL target's deployed id at a REAL call site. A literal at or after a place the
+          // lexer reads by guess is not one: it may be text read as code (see the trust frontier in pageref-resolver.js).
+          const navLiteralIds = new Set(targets.filter((t) => t.kind === 'literal' && !t.afterFrontier).map((t) => String(t.pageId).toLowerCase()));
           for (const edge of nav) {
             // Target id via the same resolution order (spec pageId > manifest) for nav targets.
             const targetPage = (spec.pages || []).find((pp) => (pp.key || pp.name) === edge.targetKey);
@@ -1673,6 +1780,49 @@ function autoLayoutFieldFlags(spec, formSpec) {
   return out;
 }
 
+// Repeated field bindings are valid (body/header), but duplicated cell/control identities are not.
+// Collect definitions across the whole form, not only the sections an explicit layout declares.
+function formIdentityProblems(xml) {
+  const markup = String(xml || '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '')
+    .replace(/<\?[\s\S]*?\?>/g, '');
+  // Reuse the quote-aware XML token patterns used by the sitemap oracle. A literal <control> in
+  // a comment/CDATA is not a definition, and raw '>' inside a quoted attribute is not a tag end.
+  const tags = [...markup.matchAll(XML_TAG)];
+  if (tags.length !== (markup.match(/</g) || []).length) return ['could not parse the deployed FormXML to verify identities'];
+  const open = [];
+  const seen = { cell: new Set(), control: new Set() };
+  const problems = [];
+  let roots = 0;
+  for (const [, closing, name, body, selfClosing] of tags) {
+    if (closing) {
+      if (open[open.length - 1] !== name) return ['could not parse the deployed FormXML to verify identities'];
+      open.pop();
+      continue;
+    }
+    const kind = name.toLowerCase();
+    if (!open.length && kind === 'form') roots += 1;
+    if (open.length && open[0].toLowerCase() === 'form' && (kind === 'cell' || kind === 'control')) {
+      for (const match of body.matchAll(XML_ATTR)) {
+        if (match[1].toLowerCase() !== 'id') continue;
+        const id = decodeXmlEntities(match[2] !== undefined ? match[2] : match[3]).trim();
+        if (!id) continue;
+        // Cell IDs and GUID-shaped control IDs may arrive as "{ABC...}" or "abc...". Non-GUID
+        // control names remain exact strings; the two ID namespaces are independent.
+        const unwrapped = id.startsWith('{') && id.endsWith('}') ? id.slice(1, -1) : id;
+        const key = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(unwrapped)
+          ? unwrapped.toLowerCase() : id;
+        if (seen[kind].has(key)) problems.push(`duplicate ${kind} id '${id}' in the deployed form`);
+        seen[kind].add(key);
+      }
+    }
+    if (!selfClosing) open.push(name);
+  }
+  if (open.length || roots !== 1) return ['could not parse one deployed FormXML root to verify identities'];
+  return problems;
+}
+
 // Parse a deployed form's FormXml into the container tree `--verify` needs to prove a layout.
 //
 // Why this exists: form verification used to prove only that a form row EXISTS with the right
@@ -1851,58 +2001,6 @@ function subareaDashboardHasLauncher(xml, dashId) {
   return dashboardNavEntries(xml, dashId).some((e) => isDashboardLauncherUrl(e.url));
 }
 
-// The live nav entries in sitemap XML, by navigation target (subAreaTargetKey, sitemap-merge.js) — the
-// identity a rebuild matches live entries by — each with its icons and Url. For example
-//   <SubArea Id="ops" Url="/workplace/home_dashboards.aspx" DefaultDashboard="{280948EC-…}" VectorIcon="$webresource:new_ops.svg">
-// becomes 'DashBoard:280948ec-…' → [{ icon: undefined, vectorIcon: '$webresource:new_ops.svg', url: '/workplace/home_dashboards.aspx' }].
-// An entry's type is read the way the vendored SDK reads it — GenPageId, then Entity, then Page, then
-// DefaultDashboard, else it is a URL entry — so the two agree on what an entry targets.
-// Only ELEMENTS count, and only where the vendored SDK models navigation: a `SubArea` element (that exact
-// name — not `SubArea-Archived`, not `SubAreaÜ`) directly under `SiteMap/Area/Group`. A SubArea anywhere
-// else is kept by the SDK as opaque XML and is no nav entry, and a `<SubArea …>` inside a comment, a CDATA
-// section or a processing instruction is text — so those three are removed first, and the remaining tags
-// are walked with an element stack. A name is read whole, whatever its characters (XML names may be
-// Unicode), so every element boundary is on the stack. A value may hold a raw `>`, so a tag is matched
-// quote by quote. Values are fully XML-decoded (`&amp;`, and numeric references such as `&#38;`), in
-// either quote style, before they are compared with the spec's.
-//
-// FAIL-CLOSED: the answer is null — no entries, so verify grants no "kept" exemption and the icon check
-// stands as it would without a baseline — for anything this walk cannot account for completely: a `<`
-// that starts no element tag (which is also how a document type declaration, whose entities could expand
-// into elements, is turned away), or a closing tag that does not close the innermost open element.
-const NAV_PATH = ['SiteMap', 'Area', 'Group'];
-const XML_TAG = /<(\/?)([^\s/>"'=!?]+)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>/g;
-const XML_ATTR = /\s([^\s/>"'=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
-function liveNavEntries(xml) {
-  const markup = String(xml || '')
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '')
-    .replace(/<\?[\s\S]*?\?>/g, '');
-  const tags = [...markup.matchAll(XML_TAG)];
-  // In well-formed XML every remaining `<` starts a tag: text escapes it, and an attribute value cannot hold one.
-  if (tags.length !== (markup.match(/</g) || []).length) return null;
-  const byKey = new Map();
-  const open = [];
-  for (const [, closing, name, body, selfClosing] of tags) {
-    if (closing) {
-      if (open[open.length - 1] !== name) return null;
-      open.pop();
-      continue;
-    }
-    if (name === 'SubArea' && open.length === NAV_PATH.length && NAV_PATH.every((n, i) => open[i] === n)) {
-      const attrs = Object.create(null);
-      for (const m of body.matchAll(XML_ATTR)) attrs[m[1]] = decodeXmlEntities(m[2] !== undefined ? m[2] : m[3]);
-      const type = attrs.GenPageId ? 'GenPage' : attrs.Entity ? 'Entity' : attrs.Page ? 'CustomPage' : attrs.DefaultDashboard ? 'DashBoard' : 'URL';
-      const key = subAreaTargetKey({ type, entity: attrs.Entity, url: attrs.Url, dashboardId: attrs.DefaultDashboard, page: attrs.Page, genPageId: attrs.GenPageId });
-      if (key) {
-        if (!byKey.has(key)) byKey.set(key, []);
-        byKey.get(key).push({ icon: attrs.Icon, vectorIcon: attrs.VectorIcon, url: attrs.Url });
-      }
-    }
-    if (!selfClosing) open.push(name);
-  }
-  return open.length ? null : byKey;
-}
 // True when some sitemap `<SubArea GenPageId="<id>">` in the XML binds this page id. Generative-page
 // subareas store the id in the GenPageId attribute SPECIFICALLY (vendor cds-maker-sdk.cjs:50 parses
 // /GenPageId="([0-9a-fA-F-]{36})"/), so match THAT attribute only — a decoy id elsewhere on the

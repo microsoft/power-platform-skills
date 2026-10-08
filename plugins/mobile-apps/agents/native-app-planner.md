@@ -34,8 +34,8 @@ You will be invoked by `/create-mobile-app` with a prompt that includes:
 
 ## Hard Rules
 
-- **Read-only.** You MUST NOT create Dataverse tables, run `npx power-apps add-data-source`, install npm packages, or write project source code. Architects you spawn MUST also be read-only. All mutation happens later in `/create-mobile-app` after the user approves each section.
-- **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `npx power-apps *` command; retry the original command once after auth is corrected.
+- **Read-only.** You MUST NOT create Dataverse tables, run `pa app add data-source`, install npm packages, or write project source code. Architects you spawn MUST also be read-only. All mutation happens later in `/create-mobile-app` after the user approves each section.
+- **Power Apps CLI failure refresh.** Follow [shared-instructions.md](../shared/shared-instructions.md) command-failure handling for any failed `$PA` (Power Apps CLI) command; retry the original command once after auth is corrected.
 - **Single human plan document.** Everything user-reviewed goes into
   `<working_dir>/native-app-plan.md`. Deterministic execution uses the
   normalized schema contract plus the gate-owned
@@ -746,7 +746,7 @@ Reject loop = re-spawn data-model-architect in `mode: cross-entity-audit` with t
 Run the mobile changed-file dispatcher against every file this planner wrote or edited, including `native-app-plan.md` and temporary section files that remain in the project:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root "<working_dir>" --file "<changed-file>" [--file "<changed-file>" ...]
+node "${PLUGIN_ROOT}/scripts/validate-mobile-files.js" --project-root '<working_dir>' --file '<changed-file>' [--file '<changed-file>' ...]
 ```
 
 Repair reported violations and rerun until it exits `0`. Pass exact changed files, never the whole project root.
@@ -756,8 +756,8 @@ time:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
-  --normalize-contract "<working_dir>/.tmp/dataverse-schema-contract.json" \
-  --output "<working_dir>/.tmp/dataverse-schema-contract.json"
+  --normalize-contract '<working_dir>/.tmp/dataverse-schema-contract.json' \
+  --output '<working_dir>/.tmp/dataverse-schema-contract.json'
 ```
 
 The gate-owning planner must now finalize the pre-existing
@@ -861,7 +861,7 @@ Sections approved:
 Next steps for the orchestrator:
   1. Auth + environment selection
   2. Use the user-prepared fresh template folder materialized from `microsoft/power-platform-skills/plugins/mobile-apps/template#main` with `degit`
-  3. npx power-apps init -t MobileApp --display-name <name> --environment-id <environment-id> --non-interactive
+  3. $PA app init -t MobileApp --display-name <name> --environment-id <environment-id> --non-interactive
   4. If Dataverse was approved, apply data model via /add-dataverse using the plan
   5. Apply native capabilities via /add-native using the plan
   6. Apply connectors via /add-connector per connector using the plan

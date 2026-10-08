@@ -17,7 +17,9 @@ const os = require('node:os');
 const path = require('node:path');
 const fs = require('node:fs');
 
-const { main, notPlainFile } = require('../genpage-upload.js');
+const uploadMod = require('../genpage-upload.js');
+const { notPlainFile } = uploadMod;
+const { pageHash, writeMarker } = require('../lib/genpage-base.js');
 const { buildPacInvocation, makeGenpageCli } = require('../lib/genpage-cli.js');
 
 const dirs = [];
@@ -26,6 +28,43 @@ function tmp() {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'gp589-'));
   dirs.push(d);
   return d;
+}
+
+// What a capturing download writes as page.tsx, and what a dummy `--code-file` is replaced with.
+// Legacy update tests named `c.tsx` / `p.tsx` without a base marker. An update now refuses that
+// (`no-base`) and, on success, would write a marker next to the dummy path in this directory.
+// Those tests still prove their own rule; the replacement only supplies the base they now need.
+const LIVE_PAGE = 'export default function Page() { return null; }\n';
+const DUMMY_CODE = new Set(['p.tsx', 'c.tsx', 'page.tsx', 'CODE.tsx']);
+function maybeBase(argv, deps) {
+  if (!argv || (deps && deps.skipBase)) return argv;
+  const fileIdx = argv.indexOf('--code-file');
+  const pageIdx = argv.indexOf('--page-id');
+  if (fileIdx < 0 || pageIdx < 0) return argv;
+  const current = argv[fileIdx + 1];
+  if (!DUMMY_CODE.has(current)) return argv;
+  const file = path.join(tmp(), 'page.tsx');
+  fs.writeFileSync(file, LIVE_PAGE);
+  const appIdx = argv.indexOf('--app-id');
+  writeMarker(file, {
+    version: 1,
+    pageId: argv[pageIdx + 1],
+    appId: appIdx >= 0 ? argv[appIdx + 1] : 'app',
+    deployedSha256: pageHash(LIVE_PAGE),
+    localSha256: pageHash(LIVE_PAGE),
+    source: 'download',
+  });
+  const next = argv.slice();
+  next[fileIdx + 1] = file;
+  return next;
+}
+function main(argv, deps) {
+  return uploadMod.main(maybeBase(argv, deps), deps);
+}
+function writeLivePage(outputDir, pageId) {
+  const dir = path.join(outputDir, pageId);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'page.tsx'), `\uFEFF${LIVE_PAGE.replace(/\n/g, '\r\n')}`);
 }
 
 // Every hazard the live failure and the issue name, in one string:
@@ -70,6 +109,7 @@ function capturingCli(opts = {}) {
           fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
           const body = JSON.stringify({ dataSources: opts.liveDataSources || ['contoso_ticket'], ...(opts.liveModel !== undefined ? { model: opts.liveModel } : {}) });
           fs.writeFileSync(path.join(outputDir, pid, 'config.json'), Buffer.from('\uFEFF' + body, 'utf8'));
+          fs.writeFileSync(path.join(outputDir, pid, 'page.tsx'), `\uFEFF${LIVE_PAGE.replace(/\n/g, '\r\n')}`);
         }
         return true;
       },
@@ -607,6 +647,7 @@ test('implicit update metadata reaches real wrapper argv', async () => {
           fs.mkdirSync(pageDir, { recursive: true });
           const config = Buffer.from('\uFEFF' + JSON.stringify({ model: ' gpt-4.1 ', dataSources: ['contoso_ticket', 'contoso_asset'] }), 'utf8');
           fs.writeFileSync(path.join(pageDir, 'config.json'), config);
+          fs.writeFileSync(path.join(pageDir, 'page.tsx'), `\uFEFF${fs.readFileSync(codeFile, 'utf8').replace(/\n/g, '\r\n')}`);
           assert.deepStrictEqual([...config.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
           return { status: 0, stdout: 'Downloaded 1 page(s)', stderr: '' };
         }
@@ -621,6 +662,11 @@ test('implicit update metadata reaches real wrapper argv', async () => {
     });
     let result;
     let cleanupAtEmit;
+    writeMarker(codeFile, {
+      version: 1, pageId: id, appId, source: 'download',
+      deployedSha256: pageHash(fs.readFileSync(codeFile, 'utf8')),
+      localSha256: pageHash(fs.readFileSync(codeFile, 'utf8')),
+    });
     await main(['--env', env, '--app-id', appId, '--code-file', codeFile, '--page-id', id,
       '--prompt', 'Fix the sort handler', '--agent-message', 'Preserve page metadata'], {
       makeGenpageCli: factory,
@@ -668,8 +714,8 @@ test('implicit update metadata reaches real wrapper argv', async () => {
       assert.ok(invocation.args[4].includes('--data-sources contoso_ticket,contoso_asset'));
       assert.strictEqual(invocation.options.windowsVerbatimArguments, true);
     }
-    assert.deepStrictEqual([probeDirs.length, uploadDirs.length], [1, 1]);
-    assert.deepStrictEqual(cleanupAtEmit, [false, false], 'both temp directories are gone before the emitter can exit');
+    assert.deepStrictEqual([probeDirs.length, uploadDirs.length], [2, 1], 'the update probes once, then re-reads the stored page to record its hash');
+    assert.deepStrictEqual(cleanupAtEmit, [false, false, false], 'every temp directory is gone before the emitter can exit');
   }
 });
 
@@ -708,6 +754,7 @@ test('REAL wrapper: a target that DOES exist still updates (the guard blocks not
         fs.mkdirSync(path.join(out, id), { recursive: true });
         fs.writeFileSync(path.join(out, id, 'config.json'),
           Buffer.from('\uFEFF' + JSON.stringify({ dataSources: ['contoso_ticket'] }), 'utf8'));
+        writeLivePage(out, id);
         return { status: 0, stdout: 'Downloaded 1 page(s)', stderr: '' };
       }
       return { status: 0, stdout: `Page ID: ${id}`, stderr: '' };
@@ -823,7 +870,11 @@ test('--clear-data-sources really unbinds, and does not depend on reading the ol
     enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
     // The page is read for its MODEL (the update omits --model) — and here that read fails, which must
     // not stop a deliberate unbind: the model is metadata, reported, never a reason to refuse.
-    download: async () => { probed = true; return true; },
+    // page.tsx is present so the failure is the missing config, not an unreadable deployed page.
+    download: async ({ outputDir, pageIds }) => {
+      probed = true;
+      for (const pid of pageIds || []) writeLivePage(outputDir, pid);
+    },
     upload: async (o) => { probed = probed || false; return { pageId: o.pageId, _ds: o.dataSources }; },
   });
   const seen = [];
@@ -839,7 +890,7 @@ test('--clear-data-sources really unbinds, and does not depend on reading the ol
   assert.strictEqual(r.ok, true, `a deliberate unbind must be allowed; got ${JSON.stringify(r.payload)}`);
   assert.strictEqual(seen[0].dataSources, undefined, 'nothing is sent, so pac clears the bindings');
   assert.strictEqual(probed, true, 'the page is read for its model');
-  assert.match(r.payload.warnings[0], /could not read page 9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d's current model \(pac wrote no directory for this page\)/);
+  assert.match(r.payload.warnings[0], /could not read page 9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d's current model/);
   assert.strictEqual(seen[0].model, undefined);
 });
 
@@ -858,11 +909,11 @@ test('an update that omits --model re-sends the page\'s current model; an explic
   // Named bindings do not stop the model being read: the download is then for the model alone.
   const withBindings = capturingCli({ liveModel: 'gpt-4.1' });
   assert.strictEqual((await run(withBindings, ['--data-sources', 'contoso_other'])).ok, true);
-  assert.deepStrictEqual([withBindings.downloads.length, withBindings.calls[0].model, withBindings.calls[0].dataSources], [1, 'gpt-4.1', 'contoso_other']);
+  assert.deepStrictEqual([withBindings.downloads.length, withBindings.calls[0].model, withBindings.calls[0].dataSources], [2, 'gpt-4.1', 'contoso_other']);
 
   const explicit = capturingCli({ liveModel: 'gpt-4.1' });
   assert.strictEqual((await run(explicit, ['--model', 'gpt-5', '--data-sources', 'contoso_other'])).ok, true);
-  assert.deepStrictEqual([explicit.downloads.length, explicit.calls[0].model], [0, 'gpt-5'], 'nothing to read when both are named');
+  assert.deepStrictEqual([explicit.downloads.length, explicit.calls[0].model], [2, 'gpt-5'], 'naming both still probes for divergence and re-reads the stored hash');
 
   // A page with no model has nothing to re-send — and a model that is not a string is reported, not sent.
   const none = capturingCli({});
@@ -1006,7 +1057,9 @@ test('an unreadable current binding list refuses the update rather than unbindin
   const factory = () => ({
     enumerateEnvironment: async () => ({ ok: true, ids: ['9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d'] }),
     enumeratePages: async () => ({ ok: true, pages: [{ pageId: '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d', name: 'Current Page' }] }),
-    download: async () => true, // writes nothing — the config is then missing
+    download: async ({ outputDir, pageIds }) => {
+      for (const pid of pageIds || []) writeLivePage(outputDir, pid);
+    },
     upload: async () => { uploads += 1; return { pageId: 'x' }; },
   });
   const r = await new Promise((resolve) => {
@@ -1048,6 +1101,7 @@ test('a page whose config has no dataSources key updates normally (it simply has
     download: async ({ outputDir, pageIds }) => {
       for (const pid of (pageIds || [])) {
         fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
+        writeLivePage(outputDir, pid);
         fs.writeFileSync(path.join(outputDir, pid, 'config.json'),
           Buffer.from('\uFEFF' + JSON.stringify({ model: 'some-model' }), 'utf8'));
       }
@@ -1076,6 +1130,7 @@ test('a config that is PRESENT but unparseable refuses the update', async () => 
       download: async ({ outputDir, pageIds }) => {
         for (const pid of (pageIds || [])) {
           fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
+          writeLivePage(outputDir, pid);
           fs.writeFileSync(path.join(outputDir, pid, 'config.json'), Buffer.from(body, 'utf8'));
         }
         return true;
@@ -1109,6 +1164,7 @@ test('the current bindings are found even when --page-id casing differs from pac
     download: async ({ outputDir }) => {
       // pac writes the directory in ITS casing, not the caller's.
       fs.mkdirSync(path.join(outputDir, canonical), { recursive: true });
+      writeLivePage(outputDir, canonical);
       fs.writeFileSync(path.join(outputDir, canonical, 'config.json'),
         Buffer.from('\uFEFF' + JSON.stringify({ dataSources: ['contoso_ticket'] }), 'utf8'));
       return true;
@@ -1350,7 +1406,7 @@ test('an update whose page is a member of the supplied app proceeds, case-insens
     enumerateEnvironment: async () => ({ ok: true, ids: [canonical] }),
     enumeratePages: async () => ({ ok: true, pages: [{ pageId: canonical.toUpperCase(), name: 'Current Page' }] }),
     download: async ({ outputDir }) => {
-      fs.mkdirSync(path.join(outputDir, canonical), { recursive: true });
+      writeLivePage(outputDir, canonical);
       fs.writeFileSync(path.join(outputDir, canonical, 'config.json'), JSON.stringify({ dataSources: ['contoso_ticket'] }));
       return true;
     },
@@ -1466,6 +1522,7 @@ test('preserved data-source bindings must be non-empty strings', async () => {
       download: async ({ outputDir, pageIds }) => {
         for (const pid of pageIds) {
           fs.mkdirSync(path.join(outputDir, pid), { recursive: true });
+          writeLivePage(outputDir, pid);
           fs.writeFileSync(path.join(outputDir, pid, 'config.json'), JSON.stringify({ dataSources }));
         }
         return true;
@@ -1482,4 +1539,350 @@ test('preserved data-source bindings must be non-empty strings', async () => {
     assert.match(r.payload.error, /cannot read the current data-source bindings/);
     assert.strictEqual(uploads, 0, `must not upload ${JSON.stringify(dataSources)}`);
   }
+});
+
+// #673 — an update must not replace a deployed page that drifted from the base marker. A create
+// records the uploaded file's hash. A readback that hashes equal (BOM / final CRLF) confirms it;
+// a readback that differs is not the trusted base, or the next update would treat that rewrite as ours.
+const { readMarker, markerPath, deployedCopyPath } = require('../lib/genpage-base.js');
+
+const DIV_PAGE = '9f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d';
+const DIV_APP = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+const DIV_TEXT = 'export const n = 1;\n';
+
+function divCode(text = DIV_TEXT) {
+  const d = tmp();
+  const file = path.join(d, 'page.tsx');
+  fs.writeFileSync(file, text);
+  return file;
+}
+function seedBase(file, { pageId = DIV_PAGE, appId = DIV_APP, deployed = DIV_TEXT, local = DIV_TEXT, source = 'download' } = {}) {
+  writeMarker(file, {
+    version: 1, pageId, appId, source,
+    deployedSha256: pageHash(deployed),
+    localSha256: pageHash(local),
+  });
+}
+function writeProbe(outputDir, pageId, { page = DIV_TEXT, config = { dataSources: ['contoso_ticket'], model: 'gpt-4.1' } } = {}) {
+  const dir = path.join(outputDir, pageId);
+  fs.mkdirSync(dir, { recursive: true });
+  if (page != null) fs.writeFileSync(path.join(dir, 'page.tsx'), `\uFEFF${String(page).replace(/\n/g, '\r\n')}`);
+  if (config != null) fs.writeFileSync(path.join(dir, 'config.json'), Buffer.from(`\uFEFF${JSON.stringify(config)}`, 'utf8'));
+}
+function divFactory(opts = {}) {
+  const calls = [];
+  const probes = [];
+  return {
+    calls,
+    probes,
+    factory: () => ({
+      upload: async (o) => { calls.push(o); return { pageId: o.pageId || opts.createdId || '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8' }; },
+      enumerateEnvironment: async () => ({ ok: true, ids: [DIV_PAGE, opts.createdId].filter(Boolean) }),
+      enumeratePages: async () => ({ ok: true, pages: [{ pageId: DIV_PAGE, name: 'Current Page' }] }),
+      pageName: async () => opts.liveName || 'Current Page',
+      download: opts.download || (async ({ outputDir, pageIds }) => {
+        probes.push(outputDir);
+        for (const pid of pageIds || []) writeProbe(outputDir, pid, opts);
+      }),
+    }),
+  };
+}
+function divRun(argv, cli, extra) {
+  return new Promise((resolve, reject) => {
+    main(argv, { makeGenpageCli: cli.factory, emit: (ok, payload) => resolve({ ok, payload }), ...extra }).catch(reject);
+  });
+}
+
+test('an update with a matching base marker uploads, and records the observed deployed hash', async () => {
+  const file = divCode();
+  seedBase(file);
+  const cli = divFactory();
+  const r = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--page-id', DIV_PAGE, '--prompt', 'p'], cli);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(cli.calls.length, 1);
+  assert.strictEqual(r.payload.overwroteDeployed, undefined);
+  const marker = readMarker(file);
+  assert.strictEqual(marker.source, 'upload');
+  assert.strictEqual(marker.deployedSha256, pageHash(DIV_TEXT));
+  assert.strictEqual(marker.localSha256, pageHash(DIV_TEXT));
+  assert.strictEqual(marker.pageId, DIV_PAGE);
+  assert.strictEqual(marker.appId, DIV_APP);
+});
+
+test('an update with no marker, or a marker for another page, is refused no-base and does not upload', async () => {
+  const file = divCode();
+  const cli = divFactory();
+  const absent = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--page-id', DIV_PAGE, '--prompt', 'p'], cli);
+  assert.strictEqual(absent.ok, false);
+  assert.strictEqual(absent.payload.code, 'no-base');
+  assert.match(absent.payload.error, /overwrite-deployed/);
+  assert.strictEqual(cli.calls.length, 0);
+
+  seedBase(file, { pageId: 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb' });
+  const other = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--page-id', DIV_PAGE, '--prompt', 'p'], divFactory());
+  assert.strictEqual(other.payload.code, 'no-base');
+  assert.strictEqual(other.ok, false);
+});
+
+test('a deployed page that drifted is refused, with a copy and a line summary, and is not uploaded', async () => {
+  const file = divCode();
+  seedBase(file);
+  const deployed = 'export const n = 2;\n';
+  const cli = divFactory({ page: deployed });
+  const r = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--page-id', DIV_PAGE, '--prompt', 'p'], cli);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.payload.code, 'deployed-changed');
+  assert.strictEqual(cli.calls.length, 0);
+  assert.ok(r.payload.lines.added + r.payload.lines.removed > 0);
+  assert.strictEqual(r.payload.deployedCopy, deployedCopyPath(file));
+  assert.match(fs.readFileSync(r.payload.deployedCopy, 'utf8'), /export const n = 2/);
+});
+
+test('--overwrite-deployed uploads and says so; =false does not authorize an overwrite', async () => {
+  const file = divCode();
+  const changed = divFactory({ page: 'export const n = 9;\n' });
+  const r = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--page-id', DIV_PAGE, '--prompt', 'p', '--overwrite-deployed'], changed);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(r.payload.overwroteDeployed, true);
+  assert.strictEqual(changed.calls.length, 1);
+
+  const fresh = divCode();
+  const refused = divFactory({ page: 'export const n = 9;\n' });
+  const no = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', fresh,
+    '--page-id', DIV_PAGE, '--prompt', 'p', '--overwrite-deployed=false'], refused);
+  assert.strictEqual(no.ok, false);
+  assert.strictEqual(no.payload.code, 'no-base');
+  assert.strictEqual(refused.calls.length, 0);
+});
+
+test('a create trusts a readback only when it hashes equal, so a rewrite is unverified and the fix-up refuses', async () => {
+  const fileSame = divCode('export const A = 1;\n');
+  const fileRewritten = divCode('export const B = 1;\n');
+  const idSame = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+  const idRewritten = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb';
+  const stored = {
+    [idSame]: 'export const A = 1;\n',
+    [idRewritten]: 'export const B = 1;\n// stored\n',
+  };
+  let created = idSame;
+  const calls = [];
+  const factory = () => ({
+    upload: async (o) => { calls.push({ ...o }); return { pageId: o.pageId || created }; },
+    enumerateEnvironment: async () => ({ ok: true, ids: [idSame, idRewritten] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: idSame }, { pageId: idRewritten }] }),
+    pageName: async () => 'Page',
+    download: async ({ outputDir, pageIds }) => {
+      for (const pid of pageIds) writeProbe(outputDir, pid, { page: stored[pid] });
+    },
+  });
+  const create = (file) => divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--name', 'N', '--prompt', 'p'], { factory });
+  created = idSame;
+  const same = await create(fileSame);
+  assert.strictEqual(same.ok, true, JSON.stringify(same.payload));
+  assert.strictEqual(readMarker(fileSame).source, 'upload');
+  assert.strictEqual(readMarker(fileSame).deployedSha256, pageHash('export const A = 1;\n'));
+  assert.strictEqual(same.payload.warnings, undefined, 'BOM and a final CRLF are not a rewrite');
+
+  created = idRewritten;
+  const rewritten = await create(fileRewritten);
+  assert.strictEqual(rewritten.ok, true, JSON.stringify(rewritten.payload));
+  assert.strictEqual(readMarker(fileRewritten).source, 'upload-unverified');
+  assert.strictEqual(readMarker(fileRewritten).deployedSha256, pageHash('export const B = 1;\n'));
+  assert.notStrictEqual(readMarker(fileRewritten).deployedSha256, pageHash(stored[idRewritten]));
+  assert.match(rewritten.payload.warnings.join('\n'), /differs from what was just uploaded \(1 lines added, 0 removed\)/);
+  assert.match(rewritten.payload.warnings.join('\n'), /genpage-base\.js check/);
+  assert.match(rewritten.payload.warnings.join('\n'), /deployed-changed/);
+
+  const before = calls.length;
+  const fixSame = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', fileSame,
+    '--page-id', idSame, '--prompt', 'resolve PAGEREF'], { factory });
+  assert.strictEqual(fixSame.ok, true, `a verified readback must not false-positive the fix-up: ${JSON.stringify(fixSame.payload)}`);
+  assert.strictEqual(calls.length, before + 1);
+
+  const fixRewritten = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', fileRewritten,
+    '--page-id', idRewritten, '--prompt', 'resolve PAGEREF'], { factory });
+  assert.strictEqual(fixRewritten.ok, false);
+  assert.strictEqual(fixRewritten.payload.code, 'deployed-changed');
+  assert.strictEqual(calls.length, before + 1, 'an unverified rewrite must not be uploaded as if it were our base');
+});
+
+test('a save that lands between upload and readback is not trusted, and the next update is refused deployed-changed', async () => {
+  const file = divCode('export const n = 1;\n');
+  const id = 'cccccccc-3333-4333-8333-cccccccccccc';
+  const other = 'export const other = 1;\n';
+  const calls = [];
+  const factory = () => ({
+    upload: async (o) => { calls.push({ ...o }); return { pageId: o.pageId || id }; },
+    enumerateEnvironment: async () => ({ ok: true, ids: [id] }),
+    enumeratePages: async () => ({ ok: true, pages: [{ pageId: id }] }),
+    pageName: async () => 'Page',
+    download: async ({ outputDir, pageIds }) => {
+      for (const pid of pageIds) writeProbe(outputDir, pid, { page: other });
+    },
+  });
+  const created = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--name', 'N', '--prompt', 'p'], { factory });
+  assert.strictEqual(created.ok, true, JSON.stringify(created.payload));
+  assert.ok(created.payload.pageId);
+  assert.ok(Array.isArray(created.payload.warnings), 'a differing readback must warn, not become the trusted hash');
+  assert.match(created.payload.warnings.join('\n'), /differs from what was just uploaded \(1 lines added, 1 removed\)/);
+  assert.match(created.payload.warnings.join('\n'), /another save landed right after/);
+  const marker = readMarker(file);
+  assert.strictEqual(marker.source, 'upload-unverified');
+  assert.strictEqual(marker.deployedSha256, pageHash('export const n = 1;\n'));
+  assert.notStrictEqual(marker.deployedSha256, pageHash(other));
+
+  const next = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--page-id', id, '--prompt', 'p'], { factory });
+  assert.strictEqual(next.ok, false);
+  assert.strictEqual(next.payload.code, 'deployed-changed');
+  assert.strictEqual(calls.length, 1, 'the next update must refuse before PAC writes');
+});
+
+test('a failure anywhere in base recording never turns a completed upload into a failure', async () => {
+  const file = divCode('export const recorded = 1;\n');
+  const real = require('../lib/genpage-base.js');
+  const r = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--name', 'N', '--prompt', 'p'], divFactory(), {
+    base: { ...real, pageHash() { throw new Error('hash failure'); } },
+  });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.ok(r.payload.pageId, 'the page this run created must still be reported');
+  assert.match((r.payload.warnings || []).join('\n'), /could not record a base marker \(hash failure\)/);
+});
+
+test('a temp-dir failure after a successful create still returns the page id', async () => {
+  const file = divCode('export const fresh = 1;\n');
+  const cli = divFactory();
+  const r = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--name', 'N', '--prompt', 'p'], cli, {
+    mkdtempSync() {
+      const e = new Error('ENOSPC: no space left on device');
+      e.code = 'ENOSPC';
+      throw e;
+    },
+  });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.ok(r.payload.pageId, 'a create that already succeeded must still report its page id');
+  assert.match((r.payload.warnings || []).join('\n'), /unverified/);
+  assert.strictEqual(readMarker(file).source, 'upload-unverified');
+  assert.strictEqual(readMarker(file).deployedSha256, pageHash('export const fresh = 1;\n'));
+});
+
+test('a marker write failure warns and deletes a stale marker; a missing download is unverified on create and unreadable on update', async () => {
+  const file = divCode();
+  seedBase(file, { source: 'download' });
+  const real = require('../lib/genpage-base.js');
+  const cli = divFactory();
+  const failed = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--page-id', DIV_PAGE, '--prompt', 'p'], cli, {
+    base: { ...real, writeMarker() { throw new Error('disk full'); } },
+  });
+  assert.strictEqual(failed.ok, true, JSON.stringify(failed.payload));
+  assert.match(failed.payload.warnings.join('\n'), /base marker/);
+  assert.strictEqual(fs.existsSync(markerPath(file)), false, 'a failed write must not leave the previous marker');
+
+  const created = divCode('export const fresh = 1;\n');
+  const noDownload = divFactory({ download: undefined });
+  noDownload.factory = () => {
+    const f = divFactory().factory();
+    delete f.download;
+    return f;
+  };
+  const create = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', created,
+    '--name', 'N', '--prompt', 'p'], noDownload);
+  assert.strictEqual(create.ok, true, JSON.stringify(create.payload));
+  assert.match(create.payload.warnings.join('\n'), /unverified/);
+  assert.strictEqual(readMarker(created).source, 'upload-unverified');
+  assert.strictEqual(readMarker(created).deployedSha256, pageHash('export const fresh = 1;\n'));
+
+  const update = divFactory();
+  update.factory = () => {
+    const f = divFactory().factory();
+    delete f.download;
+    f.upload = async () => { throw new Error('must not upload'); };
+    return f;
+  };
+  const unread = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--page-id', DIV_PAGE, '--prompt', 'p', '--data-sources', 'contoso_ticket', '--model', 'gpt-4.1'], update);
+  assert.strictEqual(unread.ok, false);
+  assert.strictEqual(unread.payload.code, 'deployed-unreadable');
+});
+
+test('a divergence refusal is emitted only after the probe directory is gone', async () => {
+  const file = divCode();
+  let probe;
+  let existedAtEmit = 'not-called';
+  const cli = divFactory({
+    download: async ({ outputDir, pageIds }) => {
+      probe = outputDir;
+      for (const pid of pageIds) writeProbe(outputDir, pid);
+    },
+  });
+  const r = await new Promise((resolve, reject) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+      '--page-id', DIV_PAGE, '--prompt', 'p'], {
+      makeGenpageCli: cli.factory,
+      emit: (ok, payload) => {
+        existedAtEmit = probe ? fs.existsSync(probe) : 'no-probe';
+        resolve({ ok, payload });
+      },
+    }).catch(reject);
+  });
+  assert.strictEqual(r.payload.code, 'no-base');
+  assert.strictEqual(existedAtEmit, false, 'emitResult calls process.exit, so cleanup after emit would leak the probe');
+});
+
+test('an update reads the page name and the deployed page together, and a guard failure still wins', async () => {
+  const file = divCode();
+  seedBase(file);
+  const started = [];
+  const release = new Map();
+  const held = (name, value) => new Promise((resolve) => {
+    started.push(name);
+    release.set(name, () => resolve(value));
+  });
+  const base = divFactory().factory();
+  const factory = () => ({
+    ...base,
+    pageName: () => held('pageName', 'Current Page'),
+    // Only the pre-upload probe is held. The post-upload re-read must not wait on the same gate,
+    // or the success emit never runs and the overlap is never observable.
+    download: ({ outputDir, pageIds }) => {
+      const write = () => { for (const pid of pageIds) writeProbe(outputDir, pid); };
+      if (started.includes('download')) { write(); return; }
+      return held('download').then(write);
+    },
+  });
+  const done = divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--page-id', DIV_PAGE, '--prompt', 'p'], { factory });
+  const deadline = Date.now() + 2000;
+  while (started.length < 2 && Date.now() < deadline) await new Promise((r) => setImmediate(r));
+  assert.deepStrictEqual([...started].sort(), ['download', 'pageName'], 'name read and probe download must overlap');
+  release.get('pageName')();
+  release.get('download')();
+  const r = await done;
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+
+  let downloaded = false;
+  let named = false;
+  const guarded = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file,
+    '--page-id', DIV_PAGE, '--prompt', 'p'], {
+    factory: () => ({
+      enumerateEnvironment: async () => ({ ok: false, error: 'EXISTENCE-DOWN' }),
+      enumeratePages: async () => ({ ok: true, pages: [{ pageId: DIV_PAGE }] }),
+      download: async () => { downloaded = true; },
+      pageName: async () => { named = true; return 'N'; },
+      upload: async () => { throw new Error('must not upload'); },
+    }),
+  });
+  assert.match(guarded.payload.error, /EXISTENCE-DOWN/);
+  assert.strictEqual(downloaded, false);
+  assert.strictEqual(named, false);
 });

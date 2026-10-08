@@ -39,6 +39,10 @@ test('missing args exits 1 with usage', () => {
 
 const { loadCli } = require('./helpers/cli-harness.js');
 
+// Dataverse returns a connectionreferenceid as a GUID; it is the id sent to AddSolutionComponent.
+const CR1 = '44444444-4444-4444-8444-444444444444';
+const CR9 = '55555555-5555-4555-8555-555555555555';
+
 function defaultLookup(requestPath) {
   if (requestPath.includes("EntityDefinitions(LogicalName='uxagentproject')")) {
     return { status: 200, data: { ObjectTypeCode: 10372 } };
@@ -46,7 +50,7 @@ function defaultLookup(requestPath) {
   if (requestPath.includes("EntityDefinitions(LogicalName='connectionreference')")) {
     return { status: 200, data: { ObjectTypeCode: 10158 } };
   }
-  return { status: 200, data: { value: [{ connectionreferenceid: 'cr-1' }] } };
+  return { status: 200, data: { value: [{ connectionreferenceid: CR1 }] } };
 }
 
 function harness({ argv, refLookup = defaultLookup }) {
@@ -93,7 +97,7 @@ test('packages appmodule, each page, and each connection reference with the righ
   // The connection reference resolves by logical name, then is added as 10158 WITHOUT required
   // components (371 is msdyn_Connector and fails with a MetadataCache error).
   assert.deepEqual([adds[3].body.ComponentId, adds[3].body.ComponentType, adds[3].body.AddRequiredComponents],
-    ['cr-1', 10158, false]);
+    [CR1, 10158, false]);
   assert.equal(emitted[0].ok, true);
   assert.deepEqual(emitted[0].payload.added.map((a) => a.type),
     ['appmodule', 'uxagentproject', 'uxagentproject', 'connectionreference']);
@@ -109,7 +113,7 @@ test('discovers environment-specific component types for GenPages and connection
       if (requestPath.includes("EntityDefinitions(LogicalName='connectionreference')")) {
         return { status: 200, data: { ObjectTypeCode: 10162 } };
       }
-      return { status: 200, data: { value: [{ connectionreferenceid: 'cr-1' }] } };
+      return { status: 200, data: { value: [{ connectionreferenceid: CR1 }] } };
     },
   });
 
@@ -171,6 +175,58 @@ test('all requested connection references are validated before adding the app or
   );
 });
 
+// The looked-up id is the ComponentId of the connection reference's AddSolutionComponent, and it comes from
+// a response — so, like the ids on the command line, it must be a GUID before anything is written. A
+// response whose id is `not-a-guid` (a damaged or mocked reply, say) used to go on to add the app, the
+// pages, and then fail at the reference, leaving the solution half-packaged.
+const MALFORMED_REFERENCE_IDS = ['not-a-guid', `{${CR1}}`, `${CR1}\nBAD`, `${CR1}-0`, ' ', 42, { id: CR1 }];
+
+function connectionReferenceLookup(idFor) {
+  return (requestPath) => {
+    if (requestPath.includes("EntityDefinitions(LogicalName='uxagentproject')")) return { status: 200, data: { ObjectTypeCode: 10372 } };
+    if (requestPath.includes("EntityDefinitions(LogicalName='connectionreference')")) return { status: 200, data: { ObjectTypeCode: 10158 } };
+    return { status: 200, data: { value: [{ connectionreferenceid: idFor(requestPath) }] } };
+  };
+}
+
+test('a connection reference whose looked-up id is not a GUID refuses the run with zero writes', async () => {
+  for (const id of MALFORMED_REFERENCE_IDS) {
+    const { cli, calls, emitted } = harness({
+      argv: [ENV, 'sol', APP, '--page-ids', `${P1},${P2}`, '--connection-refs', 'new_sp'],
+      refLookup: connectionReferenceLookup(() => id),
+    });
+    await cli.main();
+    const shown = JSON.stringify(id);
+    assert.equal(emitted.length, 1, shown);
+    assert.equal(emitted[0].ok, false, shown);
+    assert.match(String(emitted[0].payload.message), /new_sp.*not a GUID/, shown);
+    assert.deepEqual(calls.filter((c) => c.method !== 'GET'), [], `${shown}: no app, page or reference POST`);
+  }
+});
+
+test('a malformed id on a later connection reference still leaves the solution untouched', async () => {
+  const { cli, calls, emitted } = harness({
+    argv: [ENV, 'sol', APP, '--page-ids', P1, '--connection-refs', 'new_first,new_second'],
+    refLookup: connectionReferenceLookup((p) => (p.includes("'new_second'") ? 'not-a-guid' : CR1)),
+  });
+  await cli.main();
+  assert.equal(emitted[0].ok, false);
+  assert.match(String(emitted[0].payload.message), /new_second.*not a GUID/);
+  assert.deepEqual(calls.filter((c) => c.method !== 'GET'), [], 'the valid first reference is not added either');
+});
+
+test('control: upper- and lower-case GUID reference ids are packaged verbatim', async () => {
+  const upper = CR1.toUpperCase();
+  const { cli, calls, emitted } = harness({
+    argv: [ENV, 'sol', APP, '--connection-refs', 'new_first,new_second'],
+    refLookup: connectionReferenceLookup((p) => (p.includes("'new_second'") ? upper : CR9)),
+  });
+  await cli.main();
+  assert.equal(emitted[0].ok, true);
+  assert.deepEqual(calls.filter((c) => c.path === 'AddSolutionComponent').map((c) => [c.body.ComponentType, c.body.ComponentId]),
+    [[80, APP], [10158, CR9], [10158, upper]]);
+});
+
 test('a connection reference logical name with a quote is OData-escaped, not injected', async () => {
   const seen = [];
   const { cli } = harness({
@@ -180,7 +236,7 @@ test('a connection reference logical name with a quote is OData-escaped, not inj
         return { status: 200, data: { ObjectTypeCode: 10158 } };
       }
       seen.push(p);
-      return { status: 200, data: { value: [{ connectionreferenceid: 'cr-9' }] } };
+      return { status: 200, data: { value: [{ connectionreferenceid: CR9 }] } };
     },
   });
   await cli.main();
@@ -251,7 +307,7 @@ test('a page id or connection reference given twice is added once', async () => 
   const { cli, calls, emitted } = harness({ argv: [ENV, 'sol', APP, '--page-ids', `${P1},${P1.toUpperCase()},${P2}`, '--connection-refs', 'new_sp,NEW_SP'] });
   await cli.main();
   const adds = calls.filter((c) => c.path === 'AddSolutionComponent').map((c) => [c.body.ComponentType, c.body.ComponentId]);
-  assert.deepEqual(adds, [[80, APP], [10372, P1], [10372, P2], [10158, 'cr-1']]);
+  assert.deepEqual(adds, [[80, APP], [10372, P1], [10372, P2], [10158, CR1]]);
   assert.equal(calls.filter((c) => c.method === 'GET' && /connectionreferences\?/.test(c.path)).length, 1, 'one lookup per reference');
   assert.equal(emitted[0].ok, true);
 });

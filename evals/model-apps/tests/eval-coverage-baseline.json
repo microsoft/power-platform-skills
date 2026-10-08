@@ -11,42 +11,8 @@
     "eval null is a common assertion. reason is the SKIP reason the check gives."
   ],
   "genpage": {
-    "uncaptured": [
-      {
-        "eval": 3,
-        "reason": "Edit flow: needs a /genpage run that edits a page already deployed in an app."
-      },
-      {
-        "eval": 6,
-        "reason": "Mock-data analytics dashboard: no run captured yet."
-      },
-      {
-        "eval": 8,
-        "reason": "Needs a run in an environment with no model-driven app, so /genpage creates one."
-      },
-      {
-        "eval": 9,
-        "reason": "New tables with related sample data: no run captured yet."
-      },
-      {
-        "eval": 12,
-        "reason": "Plan revision: needs a run where the user asks for a change at plan approval."
-      },
-      {
-        "eval": 14,
-        "reason": "Filename collision: needs a run whose first plan gives two pages the same file name."
-      },
-      {
-        "eval": 16,
-        "reason": "Minimal existing-table page: no run captured yet."
-      }
-    ],
+    "uncaptured": [],
     "unscored": [
-      {
-        "eval": 2,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): Data source question is skipped or answered 'mock data' — no entity detection needed"
-      },
       {
         "eval": 2,
         "status": "deferred",
@@ -55,77 +21,12 @@
       {
         "eval": 3,
         "status": "deferred",
-        "text": "Edit Phase 1a: Apps are presented to the user via AskUserQuestion using the actual Display Name and app-id GUID from pac model list output"
-      },
-      {
-        "eval": 3,
-        "status": "deferred",
-        "text": "Edit Phase 1b: After app selection, pac model genpage list --app-id <selected> is run to discover pages — orchestrator does NOT guess or invent page names"
-      },
-      {
-        "eval": 3,
-        "status": "deferred",
-        "text": "Edit Phase 1b: Pages are presented to the user via AskUserQuestion using the actual page names and page-id GUIDs from pac model genpage list output"
-      },
-      {
-        "eval": 3,
-        "status": "deferred",
         "text": "Edit Phase 1b: If the app has zero genpages, the user is told there are no pages to edit and the flow stops"
-      },
-      {
-        "eval": 3,
-        "status": "deferred",
-        "text": "Edit Phase 1c: Selection is restated to the user before proceeding to download"
-      },
-      {
-        "eval": 3,
-        "status": "deferred",
-        "text": "Edit Phase 3: config.json is read; since dataSources contains 'contact', RuntimeTypes.ts is generated"
-      },
-      {
-        "eval": 3,
-        "status": "deferred",
-        "text": "Edit Phase 4: edit-planner reads page.tsx, config.json, and prompt.txt from the <page-id>/ folder"
-      },
-      {
-        "eval": 3,
-        "status": "deferred",
-        "text": "Edit Phase 4: genpage-edit-plan.md is written to the working directory root (not inside <page-id>/)"
-      },
-      {
-        "eval": 3,
-        "status": "deferred",
-        "text": "Edit Phase 5: Orchestrator reads genpage-edit-plan.md, rules.md, RuntimeTypes.ts, and page.tsx"
-      },
-      {
-        "eval": 3,
-        "status": "deferred",
-        "text": "Edit Phase 5: Search implementation uses Fluent UI V9 SearchBox or Input; sort uses column header handlers"
       },
       {
         "eval": 3,
         "status": "manual",
         "text": "Edit Phase 5: Existing functionality is preserved per the edit plan's Preservation Constraints"
-      },
-      {
-        "eval": 4,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): pac model list-tables --search 'incident,contact' is run; both entities confirmed as existing"
-      },
-      {
-        "eval": 4,
-        "status": "deferred",
-        "text": "Phase 2: Entity-builder is SKIPPED"
-      },
-      {
-        "eval": 4,
-        "status": "deferred",
-        "text": "Phase 4: pac model genpage generate-types --data-sources 'incident,contact' is run"
-      },
-      {
-        "eval": 4,
-        "status": "deferred",
-        "text": "Phase 5 (Page Builder): Wizard sample (2-wizard-multi-step.tsx) is read"
       },
       {
         "eval": 4,
@@ -138,164 +39,14 @@
         "text": "Phase 5 (Page Builder): Step 3 (review) shows a summary of entered data before submission"
       },
       {
-        "eval": 4,
-        "status": "deferred",
-        "text": "Phase 6: Upload includes --data-sources 'incident,contact'"
-      },
-      {
-        "eval": 5,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): task entity confirmed as existing; plan describes kanban with 3 columns mapped to task statecode/statuscode values"
-      },
-      {
-        "eval": 5,
-        "status": "deferred",
-        "text": "Phase 4: RuntimeTypes.ts is read — status field enum values are identified for column mapping"
-      },
-      {
-        "eval": 7,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): pac model list-tables --search confirms cr_candidate and cr_jobrequisition do NOT exist (exact logical-name match, not fuzzy)"
-      },
-      {
-        "eval": 7,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): Plan includes entity definitions with columns, types, and a lookup relationship (cr_candidate → cr_jobrequisition)"
-      },
-      {
-        "eval": 7,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): Because entities will be created, the planner asks the solution selection question via AskUserQuestion and records the choice in ## Environment as 'Solution: <uniqueName>' and 'Publisher Prefix: <prefix>'"
-      },
-      {
-        "eval": 7,
-        "status": "deferred",
-        "text": "Phase 2b (Entity Builder): Reads Solution + Publisher Prefix from the plan's ## Environment"
-      },
-      {
-        "eval": 7,
-        "status": "deferred",
-        "text": "Phase 2b (Entity Builder): cr_jobrequisition (independent) is provisioned before cr_candidate (has lookup) to satisfy dependency ordering"
-      },
-      {
-        "eval": 7,
-        "status": "deferred",
-        "text": "Phase 2b (Entity Builder): provision-entities.js handles entity creation and column definitions atomically with internal propagation management"
-      },
-      {
-        "eval": 7,
-        "status": "deferred",
-        "text": "Phase 2b (Entity Builder): Lookup relationship (cr_candidate → cr_jobrequisition) is provisioned via input JSON; provision-entities.js handles propagation internally"
-      },
-      {
-        "eval": 7,
-        "status": "deferred",
-        "text": "Phase 2b (Entity Builder): User is asked about sample data via AskUserQuestion"
-      },
-      {
-        "eval": 7,
-        "status": "deferred",
-        "text": "Phase 2b (Entity Builder): Sample data is provisioned via provision-entities.js input JSON; parent references use $parent/match convention for dependency resolution"
-      },
-      {
-        "eval": 7,
-        "status": "deferred",
-        "text": "Phase 2b (Entity Builder): Actual logical names are reported back (may be normalized by Dataverse); a transaction log at <working-dir>/genpage-entity-creation-log.md captures each successful operation"
-      },
-      {
-        "eval": 7,
-        "status": "deferred",
-        "text": "Phase 4: pac model genpage generate-types is run with the created entity names"
-      },
-      {
-        "eval": 7,
-        "status": "deferred",
-        "text": "Phase 6: Upload includes --data-sources with both created entity names"
-      },
-      {
-        "eval": 8,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): pac model list returns zero apps"
-      },
-      {
-        "eval": 8,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): User is asked via AskUserQuestion whether to create a new app or cancel"
-      },
-      {
-        "eval": 8,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): Plan records 'create new app' decision"
-      },
-      {
-        "eval": 8,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): Because a new app will be created, the planner asks the solution selection question and records the choice in ## Environment"
-      },
-      {
-        "eval": 8,
-        "status": "deferred",
-        "text": "Phase 3: The new app-id returned from pac model create is stored for Phase 6"
-      },
-      {
-        "eval": 8,
-        "status": "deferred",
-        "text": "Phase 6: Upload uses the newly created app-id"
-      },
-      {
-        "eval": 9,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): cr_project and cr_milestone confirmed as NOT existing"
-      },
-      {
-        "eval": 9,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): Plan includes a lookup relationship (cr_milestone → cr_project)"
-      },
-      {
-        "eval": 9,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): Solution selection question is asked because new entities will be created"
-      },
-      {
-        "eval": 9,
-        "status": "deferred",
-        "text": "Phase 2b (Entity Builder): cr_project and cr_milestone entities are provisioned with lookup relationship (cr_milestone → cr_project) via provision-entities.js; dependency ordering is handled automatically"
-      },
-      {
-        "eval": 9,
-        "status": "deferred",
-        "text": "Phase 2b (Entity Builder): Sample data is created because the user explicitly requested it in the prompt"
-      },
-      {
         "eval": 9,
         "status": "manual",
         "text": "Phase 2b (Entity Builder): Sample data is provisioned via provision-entities.js; realistic values (not lorem ipsum)"
       },
       {
-        "eval": 9,
-        "status": "deferred",
-        "text": "Phase 2b (Entity Builder): Sample records respect relationships (milestones reference projects via $parent/match convention)"
-      },
-      {
-        "eval": 9,
-        "status": "deferred",
-        "text": "Phase 6: Deployment includes --data-sources with both entity names"
-      },
-      {
         "eval": 10,
         "status": "deferred",
         "text": "Phase 1 (Planner): cr_widget is identified as NOT existing (exact logical-name match, not fuzzy)"
-      },
-      {
-        "eval": 10,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): Plan records cr_widget under Entity Creation Required"
-      },
-      {
-        "eval": 10,
-        "status": "deferred",
-        "text": "Phase 2a: Orchestrator runs scripts/check-auth.js BEFORE invoking entity-builder; parses the returned JSON"
       },
       {
         "eval": 10,
@@ -308,101 +59,6 @@
         "text": "Phase 2a: If ok:true but identitiesMatch:false, orchestrator proceeds but surfaces a one-line warning"
       },
       {
-        "eval": 11,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): Plan includes 3 pages in the Pages table with distinct file names and purposes"
-      },
-      {
-        "eval": 11,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): Per-Page Specifications section has an entry for each of the 3 pages"
-      },
-      {
-        "eval": 11,
-        "status": "deferred",
-        "text": "Phase 5a: Orchestrator validates the plan — at least one page, unique filenames, each page has a matching Per-Page Specifications subsection"
-      },
-      {
-        "eval": 11,
-        "status": "deferred",
-        "text": "Phase 4: pac model genpage generate-types is run ONCE with --data-sources 'contact,appointment'; a single RuntimeTypes.ts is generated"
-      },
-      {
-        "eval": 11,
-        "status": "deferred",
-        "text": "Phase 5c: Each builder receives a distinct target filename — no two builders target the same file"
-      },
-      {
-        "eval": 11,
-        "status": "deferred",
-        "text": "Phase 5c: Each builder reads the same genpage-plan.md but extracts only its own page specification"
-      },
-      {
-        "eval": 11,
-        "status": "deferred",
-        "text": "Phase 5c: Each builder reads the same RuntimeTypes.ts for column verification"
-      },
-      {
-        "eval": 11,
-        "status": "deferred",
-        "text": "Phase 5c: Cross-page navigation (e.g., candidate list → candidate detail) uses quoted `\"PAGEREF_<filename>\"` placeholders, never invented GUIDs"
-      },
-      {
-        "eval": 11,
-        "status": "deferred",
-        "text": "Phase 6: All 3 pages are deployed via separate pac model genpage upload commands, each with the correct --code-file"
-      },
-      {
-        "eval": 11,
-        "status": "deferred",
-        "text": "Phase 6.5: If any .tsx contains PAGEREF_ tokens, orchestrator builds a filename→page-id map sorted by length desc, replaces quoted `\"PAGEREF_<name>\"` tokens with the matching GUID (word-boundary safe), and re-uploads only affected files with the full update flag set"
-      },
-      {
-        "eval": 11,
-        "status": "deferred",
-        "text": "Phase 6.5: Re-upload uses a DELTA --prompt (e.g. 'Resolve cross-page navigation placeholders to real page GUIDs') — NOT a copy of the original page description from Phase 6"
-      },
-      {
-        "eval": 11,
-        "status": "deferred",
-        "text": "Phase 6.5: Unresolved PAGEREF tokens (typos, missing siblings) cause an explicit error to the user — never silently shipped"
-      },
-      {
-        "eval": 11,
-        "status": "deferred",
-        "text": "Phase 8: Summary table lists all 3 pages with their files, entities, and deployment status"
-      },
-      {
-        "eval": 12,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): Initial plan is presented via EnterPlanMode"
-      },
-      {
-        "eval": 12,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): User requests a revision (ExitPlanMode with changes-requested response)"
-      },
-      {
-        "eval": 12,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): Planner revises the plan based on user feedback and re-enters plan mode"
-      },
-      {
-        "eval": 12,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): Revised plan reflects the user's requested changes (search box added)"
-      },
-      {
-        "eval": 12,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): User approves the revised plan on the second presentation"
-      },
-      {
-        "eval": 12,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): genpage-plan.md reflects the approved (revised) version, not the initial version"
-      },
-      {
         "eval": 12,
         "status": "manual",
         "text": "Phase 5 (Page Builder): Generated code implements the revised plan (includes BOTH filter toolbar AND search box)"
@@ -410,152 +66,12 @@
       {
         "eval": 13,
         "status": "deferred",
-        "text": "Phase 1 (Planner): pac model list-languages output includes Arabic (1025) and French (1036) in addition to English"
-      },
-      {
-        "eval": 13,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): Plan includes a Localization section listing detected languages"
-      },
-      {
-        "eval": 13,
-        "status": "deferred",
         "text": "Phase 5 (Page Builder): Generated .tsx fetches usersettings via dataApi.retrieveRow and uses formatDate/formatNumber/formatCurrency helpers"
-      },
-      {
-        "eval": 13,
-        "status": "deferred",
-        "text": "Phase 5 (Page Builder): Generated .tsx does NOT hardcode currency symbols or date formats"
-      },
-      {
-        "eval": 14,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): Plan initially contains a Pages table with 2 pages"
-      },
-      {
-        "eval": 14,
-        "status": "deferred",
-        "text": "Phase 5a: Orchestrator reads the Pages table and detects duplicate filenames"
-      },
-      {
-        "eval": 14,
-        "status": "deferred",
-        "text": "Phase 5a: Orchestrator rewrites genpage-plan.md with unique filenames (e.g., account-list.tsx, account-edit.tsx) before dispatching builders"
-      },
-      {
-        "eval": 14,
-        "status": "deferred",
-        "text": "Phase 5b: Two page-builders are invoked in parallel with distinct target filenames"
-      },
-      {
-        "eval": 14,
-        "status": "deferred",
-        "text": "Phase 5b: No builder overwrites another builder's output (both .tsx files exist after Phase 5)"
-      },
-      {
-        "eval": 14,
-        "status": "deferred",
-        "text": "Phase 6: Both pages are deployed with their distinct filenames"
-      },
-      {
-        "eval": 15,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): cr_ticket is identified as NOT existing"
-      },
-      {
-        "eval": 15,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): Plan includes choice column definitions for priority and status under Choice Columns, with numeric option values starting at 100000000"
-      },
-      {
-        "eval": 15,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): Plan includes a datetime column for due date"
-      },
-      {
-        "eval": 15,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): Solution selection question is asked (because new entity will be created) and recorded in ## Environment"
-      },
-      {
-        "eval": 15,
-        "status": "deferred",
-        "text": "Phase 2a: scripts/check-auth.js returns ok:true before entity-builder is invoked"
       },
       {
         "eval": 15,
         "status": "deferred",
         "text": "Phase 2b (Entity Builder): cr_ticket is provisioned with choice columns via provision-entities.js input JSON; picklist options include {value,label} pairs"
-      },
-      {
-        "eval": 15,
-        "status": "deferred",
-        "text": "Phase 2b (Entity Builder): Priority picklist has 4 options starting at 100000000 (Low=100000000, Medium=100000001, High=100000002, Critical=100000003)"
-      },
-      {
-        "eval": 15,
-        "status": "deferred",
-        "text": "Phase 2b (Entity Builder): Status picklist has 4 options starting at 100000000"
-      },
-      {
-        "eval": 15,
-        "status": "deferred",
-        "text": "Phase 2b (Entity Builder): Solution is specified via provision-entities.js input JSON; verified through ## Environment → Solution: declaration"
-      },
-      {
-        "eval": 15,
-        "status": "deferred",
-        "text": "Phase 2b (Entity Builder): Transaction log (genpage-entity-creation-log.md) records each create with its returned metadataId"
-      },
-      {
-        "eval": 15,
-        "status": "deferred",
-        "text": "Phase 4: pac model genpage generate-types picks up the enum registrations"
-      },
-      {
-        "eval": 16,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): genpage-plan.md is written and conforms to references/plan-schema.md"
-      },
-      {
-        "eval": 16,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): genpage-plan.md contains ALL required sections with exact headings: # Genpage Plan, ## User Requirements, ## Working Directory, ## Plugin Root, ## Environment, ## Pages, ## Entity Creation Required, ## Existing Entities, ## Design Preferences, ## Relevant Samples, ## Per-Page Specifications"
-      },
-      {
-        "eval": 16,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): ## Pages table has at least one row with columns Page, File, Purpose, Entities"
-      },
-      {
-        "eval": 16,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): ## Per-Page Specifications has one ### <Page Name> subsection for each row in ## Pages"
-      },
-      {
-        "eval": 16,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): File names in ## Pages are unique"
-      },
-      {
-        "eval": 16,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): Because the account entity exists, ## Entity Creation Required contains the literal string 'No entity creation required — all entities already exist.'"
-      },
-      {
-        "eval": 16,
-        "status": "deferred",
-        "text": "Phase 1 (Planner): ## Existing Entities contains the entity logical name used for RuntimeTypes generation (account)"
-      },
-      {
-        "eval": 19,
-        "status": "deferred",
-        "text": "Edit Phase 1b: After app selection, pac model genpage list --app-id <selected> is run to discover pages — orchestrator does NOT guess or invent page names"
-      },
-      {
-        "eval": 19,
-        "status": "deferred",
-        "text": "Edit Phase 4: genpage-edit-plan.md is written to the working directory root (not inside <page-id>/)"
       }
     ],
     "neverGraded": [
@@ -618,6 +134,12 @@
         "eval": 15,
         "text": "Phase 5 (Page Builder): Generated .tsx uses the choice enum names from RuntimeTypes.ts (not magic numbers)",
         "reason": "choice enum verification requires RuntimeTypes.ts fixture"
+      },
+      {
+        "runner": "layer-2",
+        "eval": 6,
+        "text": "Phase 5 (Page Builder): Generated code has no unnecessary complexity matching the 'clean and minimal' request",
+        "reason": "subjective; defer to Layer 3 UX rubric"
       }
     ]
   },

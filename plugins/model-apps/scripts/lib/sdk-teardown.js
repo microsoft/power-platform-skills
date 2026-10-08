@@ -8,8 +8,8 @@
 //
 // Order (each the mirror of the build's create order — dependents before their dependencies):
 //   1. app          — the app module (references the sitemap + dashboard/form/view/chart components)
-//   1a. pages        — generative pages (uxagentproject + files) this build AUTHORED, per the page
-//                      manifest. The SDK's deleteAppCascade no longer removes them: a
+//   1a. pages        — manifest-listed generative pages proven by this app's sitemap or exact
+//                      stored spec page names, read before app removal. The SDK leaves them alone: a
 //                      page is REFERENCED by an app, not owned by one — another app's sitemap, or a
 //                      form's UxAgentControl `RefId` in formxml, can point at the same row — so the
 //                      SDK reports them and the owner decides. Runs AFTER the app so the app's own
@@ -60,6 +60,9 @@ const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor, SDK_ROLE
 const { selectSummaryTables } = require('./ai-candidates.js');
 const { specOptsIntoAi } = require('./ai-app-settings.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
+const { fetchSitemap, navigationProof } = require('./sitemap-pages.js');
+const { unescapePacName } = require('./genpage-cli.js');
+const { readPageOwnership, recordPageTeardown, completePageDeletions } = require('./page-ownership-records.js');
 
 // OData v4 string-literal escaping lives in ./odata.js. `odataStr` is kept as a backward-compatible
 // alias because it is part of this module's exported (and unit-tested) surface.
@@ -219,7 +222,7 @@ const KIND_HANDLERS = {
     // returned void). It deliberately does NOT delete the app's generative pages — a `uxagentproject`
     // is referenced by an app, not owned by one, so it reports them in `retained` and the owner
     // decides. The `genpage` step that follows is that decision: it deletes the pages
-    // THIS build authored, per the page manifest, skipping any another app still references.
+    // proven for THIS app before its sitemap was removed, skipping any another app still references.
     //
     // The app record itself is gone once this resolves, but a cleanup step can still fail — which the
     // old void contract swallowed, silently leaving orphaned rows while teardown reported a clean
@@ -263,22 +266,15 @@ const KIND_HANDLERS = {
       }
     },
   },
-  // Generative pages the build authored. The SDK's `deleteAppCascade` deliberately does NOT delete
-  // these: a `uxagentproject` is REFERENCED by an app, not owned by one, so the SDK
-  // reports them in `retained` and leaves the decision to the caller. WE are the caller that CREATED
-  // them, and the page manifest is the durable record of exactly which pages this build authored —
-  // so teardown deletes those, and only those.
-  //
-  // Safety is delegated to DATAVERSE, not inferred from a scan. Verified against a live environment:
+  // The manifest discovers page candidates; it does not prove they belong to this app.
+  // Resolve them while this app's sitemap exists, requiring membership or a corroborated local
+  // creation receipt. A local pre-delete record carries that verified set through retries.
+  // Dataverse's dependency check is an additional safeguard:
   // saving an app that surfaces a page creates a real solution dependency, and DELETE on that page
   // returns 400 "component cannot be deleted because it is referenced by N other components" —
   // whether or not the app is published. The dependency clears only when the referencing sitemap is
   // removed AND published, or when the app+sitemap are deleted outright (which is what the step
   // before this one just did).
-  //
-  // So the delete IS the check. Attempting it and reading the platform's answer beats a pre-flight
-  // scan: it is authoritative (the platform's own dependency graph, not our model of it), and it has
-  // no TOCTOU window — a pre-check can go stale between the check and the delete, this cannot.
   //
   // KNOWN GAP, measured rather than assumed: that graph covers SITEMAP references only. A page
   // embedded in a FORM through the `MscrmControls.UxAgentControl` PCF is NOT tracked — a form was
@@ -286,14 +282,17 @@ const KIND_HANDLERS = {
   // dependents and deleted with a 204. The form's own required-components list names the PCF
   // (component type 66) and never the page, because `RefId` is an opaque
   // `static="true" type="SingleLine.Text"` value the platform cannot know is a reference.
-  // We accept that gap here because this step only ever deletes pages THIS build authored and is
-  // tearing down the app that owns them; it is not closable by asking the platform, and a formxml
-  // scan is the only thing that would close it.
+  // A formxml scan would be needed to detect those references; this step keeps the ownership
+  // gate independent of whether the platform reports dependencies.
   genpage: {
     // A page another app still references is a SKIP, not a failure — see isDependencyBlocked.
     tolerateDependencyBlock: true,
     async resolve(sdk, target) {
-      if (typeof sdk.queryRecords !== 'function') return [];
+      const ownership = readPageOwnership(target.workspaceDir, target.appUnique, target.env);
+      if (typeof sdk.queryRecords !== 'function') {
+        if (ownership.created.length || ownership.teardown.length) throw new Error('cannot read pages while local ownership records remain');
+        return [];
+      }
       // The manifest lives in a web resource this same teardown deletes later (web-resources phase),
       // so it is still readable here. runTeardown keeps it when this step fails, so a re-run can read
       // it again.
@@ -304,7 +303,10 @@ const KIND_HANDLERS = {
           filter: `name eq '${odataStr(target.manifestName)}'`,
           top: 1,
         });
-        if (rows && rows[0] && rows[0].content) manifest = parseManifestBase64(rows[0].content);
+        if (rows && rows[0]) {
+          manifest = parseManifestBase64(rows[0].content);
+          if (!manifest) throw new Error('the stored manifest is unreadable');
+        }
       } catch (err) {
         // A failed read deletes nothing — a page we cannot prove we authored is never deleted — but it
         // is a FAILED step, not "no pages". Read as an empty resolution, the step reported clean, the
@@ -316,28 +318,85 @@ const KIND_HANDLERS = {
         e.failClosed = true;
         throw e;
       }
-      const authored = [];
+      const candidateMap = new Map();
       for (const p of (manifest && manifest.pages) || []) {
         if (p && typeof p.pageId === 'string' && FORM_GUID_RE.test(p.pageId)) {
-          authored.push({ id: p.pageId, name: p.name || p.key || p.pageId });
+          candidateMap.set(p.pageId.toLowerCase(), { id: p.pageId, key: p.key, name: p.name || p.key || p.pageId });
         }
       }
-      if (!authored.length) return [];
+      // A create can precede remote manifest persistence, and a teardown can outlive app deletion.
+      // Local records keep those ids discoverable without trusting an edited remote manifest.
+      for (const r of [...ownership.created, ...ownership.teardown]) {
+        if (!candidateMap.has(r.pageId)) candidateMap.set(r.pageId, { id: r.pageId, key: r.key, name: r.name });
+      }
+      const candidates = [...candidateMap.values()];
+      if (!candidates.length) return [];
 
       // Only pages that still exist (a re-run, or a maker deleting one by hand, is not a failure).
       let rows;
       try {
-        const filter = authored.map((a) => `uxagentprojectid eq ${String(a.id).toLowerCase()}`).join(' or ');
-        rows = await sdk.queryRecords('uxagentproject', { select: ['uxagentprojectid'], filter });
+        const filter = candidates.map((a) => `uxagentprojectid eq ${String(a.id).toLowerCase()}`).join(' or ');
+        // uxagentprojects rows: { "uxagentprojectid": "<id>", "name": "Overview" }.
+        // Read the row name, not the editable name carried by the manifest.
+        rows = await sdk.queryRecords('uxagentproject', { select: ['uxagentprojectid', 'name'], filter, paginate: true });
+        if (!Array.isArray(rows) || rows.some((r) => !r || typeof r.uxagentprojectid !== 'string' || !FORM_GUID_RE.test(r.uxagentprojectid))) {
+          throw new Error('stored page id results are unreadable');
+        }
       } catch (err) {
         // Same as the manifest read above: not being able to look deletes nothing and fails the step,
         // so the manifest naming these pages survives for a re-run.
-        const e = new Error(`could not check which of the ${authored.length} page(s) in '${target.manifestName}' still exist (${errMsg(err)}) — no page is deleted; re-run the teardown`);
+        const e = new Error(`could not check which of the ${candidates.length} page(s) in '${target.manifestName}' still exist (${errMsg(err)}) — no page is deleted; re-run the teardown. Candidates: ${candidates.map((p) => `${p.id} ${JSON.stringify(p.name)} (stored name unreadable)`).join('; ')}`);
         e.failClosed = true;
+        e.candidates = candidates;
         throw e;
       }
-      const live = new Set((rows || []).map((r) => String(r.uxagentprojectid).toLowerCase()));
-      return authored.filter((a) => live.has(String(a.id).toLowerCase()));
+      const byId = new Map(rows.map((r) => [r.uxagentprojectid.toLowerCase(), r]));
+      const present = candidates.filter((p) => byId.has(p.id.toLowerCase()));
+      const absent = candidates.filter((p) => !byId.has(p.id.toLowerCase())).map((p) => ({ ...p, absent: true }));
+      if (!present.length) return { items: [], kept: [], candidates: absent };
+      const published = target.appUnique ? await fetchSitemap(sdk, target.appUnique) : { ok: false, reason: 'app identity unavailable' };
+      // Proof is this app's navigation in either layer: a page saved into the app designer's navigation is
+      // this app's before it is published, and a download writes it from that layer (navigationProof). The
+      // current layer is read only when the published one leaves a present page unproven. Unlike the build,
+      // teardown may take the saved layer as proof: a DELETE of a page another app's saved navigation still
+      // references is refused by the platform (see isDependencyBlocked), and that refusal is a skip here.
+      const membership = await navigationProof(sdk, target.appUnique, published, present.map((p) => p.id));
+      const savedNavUnread = !!(membership.currentNavigation && !membership.currentNavigation.ok);
+      const unreadDraft = savedNavUnread
+        ? ` (the app's saved but unpublished navigation could not be read: ${membership.currentNavigation.reason})`
+        : '';
+      // Confirmed app absence permits only local proof, never a name-only substitute for navigation.
+      const sitemapReadable = membership.ok || membership.reason === 'app-not-found';
+      const placed = new Set(membership.ok ? membership.ids : []);
+      const specNames = new Map((target.pageEntries || []).map((p) => [p.key, p.name]));
+      const pending = new Set(ownership.teardown.map((p) => p.pageId));
+      const items = [];
+      const kept = [];
+      const errors = [];
+      for (const p of present) {
+        const row = byId.get(p.id.toLowerCase());
+        const nameReadable = typeof row.name === 'string' && row.name.length > 0;
+        const item = { id: p.id, key: p.key, name: nameReadable ? unescapePacName(row.name) : '[stored name unreadable]' };
+        const receipt = ownership.created.find((r) => r.key === p.key && r.pageId === p.id.toLowerCase());
+        const expectedName = specNames.get(p.key) || (receipt && receipt.name);
+        if (!sitemapReadable) {
+          kept.push({ ...item, reason: `app sitemap unreadable (${membership.reason}${membership.detail ? `: ${membership.detail}` : ''})` });
+        } else if (!nameReadable) {
+          kept.push({ ...item, reason: 'stored page name is unreadable' });
+          errors.push(`page ${p.id}: stored page name is unreadable`);
+        } else if (placed.has(p.id.toLowerCase()) || pending.has(p.id.toLowerCase()) || (receipt && expectedName === item.name)) {
+          items.push(item);
+        } else {
+          kept.push({ ...item, reason: `not proven to belong to this app: no navigation membership or corroborated local creation receipt${unreadDraft}; inspect this id and remove it manually only if it is yours` });
+          // Unproven only because the saved navigation could not be read: it may be this app's page, and
+          // deleting the app now would remove both the navigation that can prove it and the manifest that
+          // lists it. That is unreadable proof, so the app is left intact for a re-run (runTeardown stops
+          // before app deletion on a readError), as an unreadable published sitemap already is.
+          if (savedNavUnread) errors.push(`page ${p.id}: cannot be proven or ruled out while the app's saved but unpublished navigation is unreadable (${membership.currentNavigation.reason})`);
+        }
+      }
+      if (!sitemapReadable) errors.push(`app sitemap unreadable (${membership.reason}${membership.detail ? `: ${membership.detail}` : ''})`);
+      return { items, kept, candidates: [...items, ...kept, ...absent], ...(errors.length ? { readError: errors.join('; ') } : {}) };
     },
     // Delete ONLY the project row. Its `uxagentprojectfile` children go with it: the
     // uxagentproject_uxagentprojectfile_uxagentprojectid relationship is CascadeConfiguration
@@ -930,7 +989,7 @@ function planTeardown(spec) {
     steps.push({ kind: 'app', phase: 'app', label: `app module "${spec.app.name}"`, target: { uniqueName: appUniqueName(spec) } });
     // Generative pages, AFTER the app. The SDK no longer deletes them — a page is
     // referenced by an app, not owned by one, so the SDK reports them and the owner decides. We are
-    // the owner: the page manifest records exactly which pages this build authored. Ordered after the
+    // the caller: only candidates proven by this app's sitemap or local records are deleted. Ordered after the
     // app so the app's own sitemap reference is already gone and any dependency the platform still
     // reports belongs to a GENUINE other consumer. Emitted for every app-bearing spec (not gated on
     // spec.pages) so a spec that dropped its pages still cleans up what it previously created;
@@ -938,8 +997,13 @@ function planTeardown(spec) {
     steps.push({
       kind: 'genpage',
       phase: 'pages',
-      label: 'generative pages authored by this app',
-      target: { manifestName: manifestResourceName(appUniqueName(spec)) },
+      label: 'generative pages proven for this app',
+      target: {
+        manifestName: manifestResourceName(appUniqueName(spec)),
+        appUnique: appUniqueName(spec),
+        pageNames: (spec.pages || []).map((p) => p.name).filter((name) => typeof name === 'string' && name),
+        pageEntries: (spec.pages || []).map((p) => ({ key: p.key || p.name, name: p.name })),
+      },
     });
   }
   // Persona security roles were once deleted right here, immediately after the app. They are now
@@ -1255,7 +1319,7 @@ async function deleteStep(sdk, handler, items) {
   return { deletedIds, skippedIds: skipped.map((s) => s.id), skipped };
 }
 
-// Execute a teardown. Dry-run (default) emits the plan (no I/O) and returns { ok, dryRun, plan }.
+// Execute a teardown. Dry-run discovers page candidates when an SDK reader is supplied, without writes.
 // Apply resolves each step's live id(s) and deletes them, emitting per-step status. Best-effort:
 // a failed step is recorded and teardown CONTINUES (halting mid-way would strand orphans), then
 // ok=false with an `errors[]` is returned. deps: { sdk (MakerSdk client), emit(event) }.
@@ -1265,18 +1329,70 @@ async function runTeardown(spec, opts = {}, deps = {}) {
   const apply = opts.apply === true;
   const plan = planTeardown(spec);
   const total = plan.length;
+  const pageResolutions = new Map();
+  // App deletion also removes its sitemap. Freeze candidate ids, stored names and membership
+  // before that mutation, so the later page step cannot mistake a missing sitemap for proof.
+  if (sdk) {
+    for (const step of plan.filter((p) => p.kind === 'genpage')) {
+      try {
+        pageResolutions.set(step, { resolved: await KIND_HANDLERS.genpage.resolve(sdk, { ...step.target, workspaceDir: opts.workspaceDir, env: opts.env }) });
+      } catch (error) {
+        pageResolutions.set(step, { error });
+      }
+    }
+  }
 
   if (!apply) {
-    plan.forEach((p, i) => emit({ phase: p.phase, status: 'skip', label: p.label, n: i + 1, total }));
-    return { ok: true, dryRun: true, plan: plan.map((p) => p.label) };
+    const labels = [];
+    const errors = [];
+    plan.forEach((p, i) => {
+      const prepared = pageResolutions.get(p);
+      const resolved = prepared && prepared.resolved;
+      const candidates = (resolved && resolved.candidates) || (prepared && prepared.error && prepared.error.candidates) || [];
+      const readError = prepared && (prepared.error ? errMsg(prepared.error) : resolved && resolved.readError);
+      if (readError) errors.push({ step: p.label, message: readError });
+      const lines = candidates.length
+        ? candidates.map((item) => `${p.label}: ${item.id} ${JSON.stringify(item.name)} (${readError ? `kept — page proof unreadable: ${readError}` : item.absent ? 'not found — manifest name only' : item.reason ? `kept — ${item.reason}` : 'would delete'})`)
+        : [readError ? `${p.label} (page discovery failed: ${readError})` : p.label];
+      for (const label of lines) {
+        labels.push(label);
+        emit({ phase: p.phase, status: 'skip', label, n: i + 1, total });
+      }
+    });
+    return { ok: errors.length === 0, dryRun: true, plan: labels, ...(errors.length ? { errors } : {}) };
   }
   if (!sdk || typeof sdk.resolveArtifact !== 'function') {
     throw new Error('runTeardown requires deps.sdk when apply is true');
   }
 
   const result = { ok: true, dryRun: false, deleted: {}, skipped: [], errors: [] };
-  // The page manifest is the only record of which generative pages this app authored (see the genpage
-  // handler), and it is deleted in the web-resources phase, well after the pages step. When that step
+  // Resolve and durably record the ownership set BEFORE deleting its navigation proof. If either
+  // discovery or persistence fails, leave the app intact so a page-less retry can prove its pages.
+  for (const step of plan.filter((p) => p.kind === 'genpage')) {
+    const prepared = pageResolutions.get(step);
+    try {
+      if (prepared && prepared.error) throw prepared.error;
+      const resolved = prepared && prepared.resolved;
+      if (resolved && resolved.readError) {
+        const candidates = (resolved.candidates || []).map((p) => `${p.id} ${JSON.stringify(p.name)} (kept)`).join('; ');
+        throw new Error(`${resolved.readError}; ${candidates}`);
+      }
+      const items = Array.isArray(resolved) ? resolved : (resolved && resolved.items) || [];
+      if (items.length) recordPageTeardown(opts.workspaceDir, step.target.appUnique, items, opts.env);
+    } catch (e) {
+      result.ok = false;
+      result.errors.push({ step: step.label, message: errMsg(e) });
+      emit({ phase: step.phase, status: 'error', label: step.label, n: plan.indexOf(step) + 1, total, detail: errMsg(e) });
+      for (const p of plan) {
+        const label = `${p.label} (not attempted - page ownership could not be preserved before app deletion)`;
+        result.skipped.push(label);
+        emit({ phase: p.phase, status: 'skip', skip: 'not-attempted', label, n: plan.indexOf(p) + 1, total });
+      }
+      return result;
+    }
+  }
+  // The page manifest is the candidate inventory (see the genpage handler), and it is deleted in
+  // the web-resources phase, well after the pages step. When that step
   // failed, deleting the manifest anyway left a re-run nothing to find the pages by: it resolved none,
   // reported success, released the workspace's teardown record, and the pages stayed behind for good.
   // So the manifest is kept until a run gets through the pages step. Matched by name, so a declared web
@@ -1288,7 +1404,7 @@ async function runTeardown(spec, opts = {}, deps = {}) {
     const myN = (n += 1);
     emit({ phase: step.phase, status: 'start', label: step.label, n: myN, total });
     if (step.kind === 'webResource' && pagesFailed && pageManifests.has(String(step.target.name).toLowerCase())) {
-      const why = `${step.label} (kept — the generative pages step failed, and a re-run needs this manifest to find the pages this app authored; it is deleted once that step succeeds)`;
+      const why = `${step.label} (kept — the generative pages step failed, and a re-run needs this manifest to find remaining page candidates; it is deleted once that step succeeds)`;
       result.skipped.push(why);
       emit({ phase: step.phase, status: 'skip', skip: 'kept', label: why, n: myN, total });
       continue;
@@ -1310,7 +1426,9 @@ async function runTeardown(spec, opts = {}, deps = {}) {
     try {
       let resolved;
       try {
-        resolved = await handler.resolve(sdk, step.target);
+        const prepared = pageResolutions.get(step);
+        if (prepared && prepared.error) throw prepared.error;
+        resolved = prepared ? prepared.resolved : await handler.resolve(sdk, step.target);
       } catch (resolveErr) {
         // Resolving forms/charts/views filters by an entity's typecode; if that entity was never
         // created (partial build) or is already gone, Dataverse answers 400 "entity ... not found
@@ -1323,8 +1441,19 @@ async function runTeardown(spec, opts = {}, deps = {}) {
       // intentionally NOT torn down (e.g. a reused/system table the build did not create). The
       // reason is surfaced so a destructive run is auditable rather than silently omitting it.
       const items = Array.isArray(resolved) ? resolved : (resolved.items || []);
-      const skipReason = Array.isArray(resolved) ? null : resolved.skipReason;
+      const kept = Array.isArray(resolved) ? [] : (resolved.kept || []);
+      const keptLabels = kept.map((item) => `${item.id} ${JSON.stringify(item.name)} (kept — ${item.reason})`);
+      result.skipped.push(...keptLabels);
+      if (!Array.isArray(resolved) && resolved.readError) throw new Error(`${resolved.readError}; ${keptLabels.join('; ')}`);
+      const skipReason = Array.isArray(resolved) ? null : (resolved.skipReason || (keptLabels.length ? keptLabels.join('; ') : null));
+      if (step.kind === 'genpage' && !Array.isArray(resolved)) {
+        completePageDeletions(opts.workspaceDir, step.target.appUnique, (resolved.candidates || []).filter((p) => p.absent).map((p) => p.id), opts.env);
+      }
       if (!items.length) {
+        if (step.kind === 'genpage') {
+          const pending = readPageOwnership(opts.workspaceDir, step.target.appUnique, opts.env).teardown;
+          if (pending.length) throw new Error(`proven pages remain undeleted: ${pending.map((p) => p.pageId).join(', ')}; keeping the manifest and solution`);
+        }
         result.skipped.push(skipReason ? `${step.label} (${skipReason})` : step.label);
         // `skip` says WHICH kind of skip this is, for the summary: nothing there to delete, or a step
         // that found the artifact and deliberately left it (every `skipReason` is a keep-on-purpose).
@@ -1333,12 +1462,18 @@ async function runTeardown(spec, opts = {}, deps = {}) {
       }
       const { deletedIds, skipped } = await deleteStep(sdk, handler, items);
       (result.deleted[step.kind] = result.deleted[step.kind] || []).push(...deletedIds);
+      if (step.kind === 'genpage') {
+        completePageDeletions(opts.workspaceDir, step.target.appUnique, deletedIds, opts.env);
+        const pending = readPageOwnership(opts.workspaceDir, step.target.appUnique, opts.env).teardown;
+        if (pending.length) throw new Error(`proven pages remain undeleted: ${pending.map((p) => p.pageId).join(', ')}; keeping the manifest and solution`);
+      }
       // Report each skip reason in its own words. "undeletable" tells an operator there is nothing
       // to do; "still referenced" tells them another consumer holds it — a different situation with
       // a different (possibly no) follow-up.
       const referenced = skipped.filter((s) => s.reason === 'referenced').length;
       const undeletable = skipped.filter((s) => s.reason === 'undeletable').length;
       const parts = [];
+      if (keptLabels.length) parts.push(`${keptLabels.length} kept: ${keptLabels.join('; ')}`);
       if (undeletable) parts.push(`${undeletable} undeletable`);
       if (referenced) parts.push(`${referenced} still referenced`);
       if (parts.length) {

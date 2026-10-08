@@ -313,13 +313,16 @@ On `yes` (or no answer), try OS-appropriate openers in sequence and fall back to
 it interrupts the user rather than showing them something new.
 
 ```bash
-open "<working_dir>/_design_vibe.html" 2>/dev/null \
-  || xdg-open "<working_dir>/_design_vibe.html" 2>/dev/null \
-  || powershell.exe -NoProfile -Command "Start-Process '<working_dir>\_design_vibe.html'" 2>/dev/null \
-  || echo "Could not auto-open. Please open this URL: file://<working_dir>/_design_vibe.html"
+open '<working_dir>/_design_vibe.html' 2>/dev/null \
+  || xdg-open '<working_dir>/_design_vibe.html' 2>/dev/null \
+  || MOBILE_APP_PREVIEW_PATH='<working_dir>/_design_vibe.html' \
+     powershell.exe -NoProfile -Command 'Start-Process -FilePath $env:MOBILE_APP_PREVIEW_PATH' 2>/dev/null \
+  || printf '%s\n' 'Could not auto-open. Please open this URL: file://<working_dir>/_design_vibe.html'
 ```
 
-Do not block on whether the browser opened — the link is printed.
+Do not block on whether the browser opened — the link is printed. The Windows
+path is passed as data, never interpolated into PowerShell source. If all
+openers fail, report the manual link instead of claiming the browser opened.
 
 ## Step 5 — Ask the user which direction
 

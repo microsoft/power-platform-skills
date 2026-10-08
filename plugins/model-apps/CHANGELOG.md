@@ -5,7 +5,145 @@ All notable changes to the **model-apps** plugin.
 Entries are deliberately short: what changed and why it matters to you. The reasoning,
 evidence and trade-offs behind a change live in its PR, in `docs/`, or in the linked issue.
 
-## [Unreleased] — 2.12.0
+## [Unreleased] — 2.13.0
+
+An app's hidden tables and its list of Main forms now survive a download and rebuild, and
+relationships that share a name are caught. A generative page edited in the maker portal is no longer
+overwritten silently, and page cleanup removes only pages this workspace can prove it created. Spec
+sources and output files stay inside the folders you name, and a few transient platform responses
+are now retried without risking a duplicate. A generative page's navigation tokens are rewritten only
+where the build reads its code for certain.
+
+### Added
+
+- **`app.tables`** — tables that belong to the app outside its navigation (AB#6603388). A download
+  writes them, so a rebuild keeps them. A build adds them as app components, and `--verify` checks
+  the published app. A hidden table owned by another solution is listed here only, never in
+  `entities[]`.
+- **`app.mainForms`** — for each navigation table, the Main forms the app offers, by name. The build
+  resolves each name before any app write, and refuses one that is ambiguous, inactive or missing. The
+  platform only adds forms to an app, so an existing app keeps a form it already offered: the build
+  warns, and `--verify` names the form and the Maker step that removes it. A download writes the list
+  when the app offers only some of a table's forms.
+- A download that writes either field sets `minimumPluginVersion` to 2.13.0, and lint warns when a
+  spec uses one without that floor.
+
+### Changed
+
+- **A generative page update checks the deployed page first** ([#673]). An upload records a base
+  marker beside the code file (hashes and ids only). An update stops when there is no base, when the
+  deployed page changed since the base (it writes a copy and a line summary), or when the deployed
+  page cannot be read. Pass `--overwrite-deployed` only after choosing to replace the maker's changes;
+  `/genpage` asks first and stops when nobody can answer.
+- **Page cleanup acts only on pages this app can prove are its own**: a local receipt written when
+  the build created the page, or the app's navigation, published or saved. A page that only the stored
+  page manifest lists is kept and reported; when the proof cannot be read, the app is left intact for a
+  re-run. `--clear-workspace` refuses while a receipt remains. A rebuild updates a page only when the
+  app's published navigation or a receipt proves it; a page only in the saved navigation asks you to
+  publish the app first.
+- **An uncertain page create stops.** When a create fails or reports no page id but a new page
+  appeared, the build lists each candidate's name and creation time instead of adopting one. A create
+  that left no page is retried as before.
+- **A business rule or AI model that only shares a name is reported, not deleted.** Cleanup removes
+  only the records this build created.
+- **Edit plans treat earlier prompts as data.** The edit planner no longer copies them into the plan,
+  and the written plan must carry the same ordered change list the user approved.
+- **Navigation tokens are rewritten only where the build reads the code for certain.** A `PAGEREF_`
+  token is allowed only as the double-quoted `pageId` of a `navigateTo` call whose options object is
+  written inline, optionally followed by `as const`, `as Name` or `satisfies Name`. A token anywhere
+  else — a comment included — halts the build with the rule quoted. Where code before a call can be
+  read two ways (a `/` or `<` that may begin a regular expression, a JSX element or a type), calls after
+  it are not rewritten: the build halts naming the line, the reason and what to change. A page that
+  still holds a token after resolution is refused before anything is uploaded.
+- **Download writes a `PAGEREF_` token back only where a rebuild accepts it.** Otherwise the page
+  keeps its ids, and the download warns, naming each line.
+- **Build and download skip an unused identity read** after a successful sign-in check: one cold
+  Azure CLI start less per run.
+
+### Fixed
+
+- **Relationships that share a schema name are caught.** A 1:N and an N:N between the same two tables
+  derived the same name, so the N:N was skipped as if it existed and `--verify` passed. Validation now
+  asks for an explicit `schemaName`. The build reuses an existing name only for the same type, ends and
+  lookup, and `--verify` checks a relationship's type and ends. A download keeps a deployed name that
+  differs from the default.
+- **A field placed with `fieldOptions.after` no longer overflows its row.** A row that would be too
+  wide moves its trailing cells to rows directly below, and a row an earlier release left overfull is
+  repaired once. A new field lands at its listed position. All moves of one placement are written in
+  one update, so a failure leaves the old layout, never half of the new one. `--verify` fails a form
+  that repeats a cell or control id.
+- **A view rejected for a lookup the build just created is retried.** Right after a relationship is
+  created, a view that uses its lookup can be refused for a column the server cannot see yet. The build
+  now retries that, but only for columns it creates; an undeclared column still stops at once.
+- **A parallel phase that fails waits for its other writes** before it reports. The retry used to run
+  while a write was still pending, created the same view again, and then stopped on the duplicate.
+- **A response cut off mid-way is never re-sent as a create.** It used to leave the request waiting
+  forever, or be retried; a create in that state is now reported as possibly applied rather than sent
+  again and duplicated.
+- **Output files stay in the folders you name.** Download, build, verify and the spec document refuse
+  a link or junction at an output name and write through a temporary file and a rename.
+- **Spec sources stay in the app folder.** A web resource's `contentPath` and a page's code file must
+  be a regular file inside the app folder; a link that leads out is refused before anything is written.
+  A `contentPath` behind inline content is not read, so it is not checked, and teardown accepts an
+  older spec's path.
+- **An app missing from its solution is re-added.** A build that stopped after creating its app left
+  the app outside its solution, and a re-run did not add it back. The app now joins its solution right
+  after it is created, and every rebuild re-adds it.
+- **A navigation literal inside an expression is no longer rewritten.** A `pageId` such as
+  `"PAGEREF_detail".slice(8)` halts as malformed instead of having its literal replaced, which changed
+  what the expression computes.
+- **A string continued with a backslash at a CRLF line end** is read as one string, so a valid page is
+  no longer refused.
+- **A `PAGEREF_` token inside a regular expression, a string or a comment is no longer rewritten in
+  rare shapes the check used to misread.** These are:
+  - an element right after a `/`;
+  - an element whose text opens with a parenthesis and whose attribute value ends in a backslash;
+  - an element written as an attribute value (`x=<B/>`);
+  - a self-closing tag with white space between its `/` and `>` (`<B / >`);
+  - a closing tag that holds a comment with a `>` in it;
+  - a regular expression whose flags spell a keyword (`/x/in`);
+  - an `if` or `while` whose keyword is separated from its `(` by U+0085 or U+200B, which TypeScript
+    treats as white space;
+  - a generic generator function, `function* <T>(…)`;
+  - a generic call signature with no return type (`interface I { <T>(x) }`);
+  - a generic call signature followed by a member name quoted right after `public`, `private` or
+    `protected` (`public'…'`), or by a regular expression right after `implements`;
+  - a generic call signature whose parameter list holds a default value, a computed name, a decorator,
+    an import type, an accessor's body or a type parameter's constraint (`<T>(a = /[)]/)`), or a
+    template nested in another or holding JSX;
+  - a type parameter whose constraint is a regular expression (`<T extends /…/>`), which begins like
+    the self-closing tag `<T extends />`;
+  - a `#!` line at the start of the page.
+
+  Such a page now halts, naming the line. So does an attribute value written after white space that
+  follows its `=` and holds a backslash, which TypeScript and other compilers end in different places;
+  an element whose first attribute is named `extends` and closes at once (`<T extends />`); and JSX
+  text that opens with a parenthesis and holds an `=`, a `[` or an `@` (or, rarely, a type keyword
+  such as `import`) followed by a `/`, a `<` or a back-tick before its `)`
+  (`<p>(a = b/c)</p>`), which a call signature's parameter list can share; write such text inside an
+  expression container (`<p>{"(a = b/c)"}</p>`) to keep the page building.
+- **A navigation call after a generic generator function (`function* <T>(…)`) is now found.** The build
+  refused such a page with a navigation parity mismatch.
+- **Connector discovery refuses output it cannot read.** Text on stderr after a successful exit, a
+  line before the table header other than PAC's sign-in banner, a header that is not a known column
+  set, a lone carriage return, or a row whose id is not a connection id no longer reads as an empty
+  or extra connection.
+- **Packaging checks a connection reference's id before any write.** A `connectionreferenceid` that is
+  not a GUID is refused before anything is added to the solution.
+- **Nested navigation calls are read in linear time.** 512 nested calls took 0.55 s to check and now
+  take 5 ms; 8,192 nested malformed values took 143 s and now take about 0.1 s.
+- Samples 9 and 10 use the double-quoted `PAGEREF_` form the build accepts.
+
+[#673]: https://github.com/microsoft/power-platform-skills/issues/673
+
+## [2.12.1]
+
+- **Usage telemetry is on.** The plugin sends a `skill_started` event when a skill starts, routed to
+  the collector for your cloud; an unrecognised cloud sends nothing. Org and tenant ids are sent, never
+  the user's id. Turn it off with `/model-apps:telemetry off`, or set
+  `POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT=1` for automation.
+
+## [2.12.0]
 
 Fixes from a retest of 2.11.0: an existing form converges to its layout's order and `--verify` checks
 more of it, a generative page keeps its name and model on update, and several readers refuse output

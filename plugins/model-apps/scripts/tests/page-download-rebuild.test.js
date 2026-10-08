@@ -10,6 +10,7 @@ const { makeGenpageCli } = require('../lib/genpage-cli.js');
 const { buildManifest } = require('../lib/page-manifest.js');
 const { validateAppSpec } = require('../lib/app-spec.js');
 const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
+const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
 
 const ENV = 'https://contoso.crm.dynamics.com';
 const APP_ID = 'aaaaaaaa-0000-4000-8000-000000000001';
@@ -46,7 +47,7 @@ test('download-hydrate-rebuild preserves page identity name model and bindings',
           { type: 'Entity', entity: 'contoso_item' },
         ] }] }] },
       };
-      const sitemapXml = `<SiteMap><Area><Group><SubArea GenPageId="${OVERVIEW_ID}" Title="Overview navigation"/><SubArea GenPageId="${DETAIL_ID}" Title="Detail navigation"/></Group></Area></SiteMap>`;
+      const sitemapXml = `<SiteMap><Area><Group><SubArea GenPageId="${OVERVIEW_ID}" Title="Overview navigation"/><SubArea GenPageId="${DETAIL_ID}" Title="Detail navigation"/><SubArea Entity="contoso_item"/></Group></Area></SiteMap>`;
       const manifest = buildManifest({ pages: [
         { key: 'overview', name: 'Old overview name', navigatesTo: [{ targetKey: 'detail' }] },
         { key: 'detail', name: 'Old detail name' },
@@ -123,7 +124,10 @@ test('download-hydrate-rebuild preserves page identity name model and bindings',
         let downloaded;
         process.stderr.write = (chunk) => { warnings.push(String(chunk)); return true; };
         try {
-          downloaded = await runDownload({ sdk, genpageCli: cli, outDir: appDir, appId: APP_ID, appUnique: APP_UNIQUE });
+          downloaded = await runDownload({
+            sdk: currentReadSdk(sdk, { appId: APP_ID, layerId: APP_UNIQUE_ID, sitemapXml }),
+            genpageCli: cli, outDir: appDir, appId: APP_ID, appUnique: APP_UNIQUE,
+          });
         } finally { process.stderr.write = write; }
         assert.ok(downloaded.ok, JSON.stringify(downloaded));
         // Persisted JSON drops transient diagnostics, just as the download CLI's app-spec.json does.

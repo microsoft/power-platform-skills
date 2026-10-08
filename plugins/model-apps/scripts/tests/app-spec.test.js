@@ -743,7 +743,9 @@ test('#544 a row that is its own parent is rejected as a cycle', () => {
 
 test('#544 TWO relationships for one pair make a $parent ambiguous unless it names the lookup', () => {
   const s = selfRefDesk();
-  s.relationships.push({ type: 'OneToMany', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_GroupAncestorId', displayName: 'Group Ancestor' } });
+  // A second 1:N on the same pair derives the same schema name. The ambiguity under test is the
+  // $parent bind, so this one carries an explicit name — otherwise the collision gate rejects it first.
+  s.relationships.push({ type: 'OneToMany', schemaName: 'new_org_group_ancestor', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_GroupAncestorId', displayName: 'Group Ancestor' } });
   const ambiguous = validateAppSpec(s);
   assert.strictEqual(ambiguous.ok, false);
   assert.ok(ambiguous.errors.some((e) => /ambiguous/.test(e) && /new_ParentOrgId/.test(e) && /new_GroupAncestorId/.test(e)), JSON.stringify(ambiguous.errors));

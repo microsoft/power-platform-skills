@@ -8,10 +8,12 @@ const { runDownload } = require('../download-model-app.js');
 const { migrateAppSpec, validateAppSpec } = require('../lib/app-spec.js');
 const { runSdkBuild, appUniqueName } = require('../lib/sdk-build.js');
 const { planTeardown } = require('../lib/sdk-teardown.js');
-const { teardownModelApp } = require('../teardown-model-app.js');
+const { teardownModelApp: engineTeardownModelApp } = require('../teardown-model-app.js');
+const teardownModelApp = (spec, opts, deps) => engineTeardownModelApp(spec, { env: ENV, ...opts }, deps);
 const snapshot = require('../lib/apply-snapshot.js');
 const snapshotStore = require('../lib/apply-snapshot-store.js');
 const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
+const { currentReadSdk } = require('./helpers/app-membership-sdk.js');
 
 const ENV = 'https://contoso.crm.dynamics.com';
 const APP_ID = '11111111-0000-4000-8000-000000000001';
@@ -125,7 +127,8 @@ function recordingLifecycleSdk({ systemOnly = false } = {}) {
       if (!app) return [];
       const entries = app.siteMap.areas.flatMap((a) => a.groups.flatMap((g) => g.subAreas || []));
       return [{ sitemapid: app.sitemapId, sitemapxml: `<SiteMap><Area><Group>${entries.map((s) =>
-        s.genPageId ? `<SubArea GenPageId="${s.genPageId}"/>` : s.entity ? `<SubArea Entity="${s.entity}"/>` : '').join('')}</Group></Area></SiteMap>` }];
+        s.genPageId ? `<SubArea GenPageId="${s.genPageId}"/>` : s.entity ? `<SubArea Entity="${s.entity}"/>`
+          : s.url ? `<SubArea Url="${s.url}"/>` : '').join('')}</Group></Area></SiteMap>` }];
     }
     if (set === 'solutioncomponent') {
       if (!filter.startsWith('objectid eq ')) return [];
@@ -141,7 +144,9 @@ function recordingLifecycleSdk({ systemOnly = false } = {}) {
       const name = (filter.match(/name eq '([^']+)'/) || [])[1];
       return state.resources.has(name) ? [state.resources.get(name)] : [];
     }
-    if (set === 'uxagentproject') return [...state.pages].filter((id) => filter.includes(`uxagentprojectid eq ${id}`)).map((uxagentprojectid) => ({ uxagentprojectid }));
+    if (set === 'uxagentproject') return [...state.pages].filter((id) => filter.includes(`uxagentprojectid eq ${id}`)).map((uxagentprojectid) => ({
+      uxagentprojectid, name: uxagentprojectid === OVERVIEW_ID ? 'Overview' : 'Detail',
+    }));
     return [];
   };
   sdk.createWebResource = async (o) => {
@@ -179,7 +184,7 @@ function recordingLifecycleSdk({ systemOnly = false } = {}) {
     state.beforeDelete();
     assert.strictEqual(set, 'uxagentproject', 'project files must never be deleted separately');
     if (state.failure === 'page') throw new Error('offline page delete failed');
-    if (id === DETAIL_ID) throw new Error('The component cannot be deleted because it is referenced by 1 other components.');
+    if (id === DETAIL_ID && !state.sharedReferenceRemoved) throw new Error('The component cannot be deleted because it is referenced by 1 other components.');
     state.pages.delete(id);
   };
   sdk.deleteTable = async (logical) => { state.beforeDelete(); state.tables.delete(logical); };
@@ -231,7 +236,11 @@ test('downloaded ownership survives rebuild and teardown planning', async () => 
     const fixture = recordingLifecycleSdk({ systemOnly });
     // runDownload invokes the real hydrateSpec. Serialize and migrate that output exactly as a
     // subsequent build loads it, so ownership cannot be rescued by a separately hand-authored spec.
-    const downloaded = await runDownload({ sdk: fixture.sdk, genpageCli: fixture.genpageCli, outDir, appId: APP_ID, appUnique: APP_UNIQUE });
+    const sitemap = await fixture.sdk.queryRecords('sitemap', { filter: `sitemapid eq ${SITEMAP_ID}`, top: 1 });
+    const downloaded = await runDownload({
+      sdk: currentReadSdk(fixture.sdk, { appId: APP_ID, layerId: APP_LOOKUP, sitemapXml: sitemap[0].sitemapxml }),
+      genpageCli: fixture.genpageCli, outDir, appId: APP_ID, appUnique: APP_UNIQUE,
+    });
     assert.strictEqual(downloaded.ok, true, JSON.stringify(downloaded));
     assert.deepStrictEqual(downloaded.relationshipsSkipped, []);
     const specFile = path.join(outDir, 'app-spec.json');
@@ -292,7 +301,10 @@ test('downloaded ownership survives rebuild and teardown planning', async () => 
     const dry = await teardownModelApp(spec, { apply: false, workspaceDir }, { sdk });
     assert.strictEqual(dry.ok, true);
     assert.strictEqual(dry.dryRun, true);
-    assert.deepStrictEqual(calls, [], 'dry-run makes no SDK calls');
+    assert.ok(calls.length > 0 && calls.every((c) => c.method === 'queryRecords'), 'dry-run only discovers page candidates');
+    assert.ok(dry.plan.some((line) => line.includes(OVERVIEW_ID) && line.includes('Overview')));
+    assert.ok(dry.plan.some((line) => line.includes(DETAIL_ID) && line.includes('Detail')));
+    calls.length = 0;
     const refused = await teardownModelApp(spec, { apply: true, workspaceDir }, { sdk });
     assert.strictEqual(refused.ok, false);
     assert.match(refused.errors.join(' '), /requires --allow-destructive/);
@@ -311,21 +323,28 @@ test('downloaded ownership survives rebuild and teardown planning', async () => 
 
     const events = [];
     const clean = await teardownModelApp(spec, { apply: true, allowDestructive: true, workspaceDir }, { sdk, emit: (e) => events.push(e) });
-    assert.strictEqual(clean.ok, true, JSON.stringify(clean.errors));
+    assert.strictEqual(clean.ok, false, 'a proven page still referenced elsewhere keeps teardown incomplete');
     assert.deepStrictEqual(clean.deleted.app, [APP_ID]);
     assert.deepStrictEqual(clean.deleted.genpage, [OVERVIEW_ID]);
-    assert.ok(clean.skipped.some((s) => /still referenced/.test(s)), 'platform-held shared page is reported as retained, not deleted');
+    assert.ok(clean.errors.some((e) => /proven pages remain undeleted/.test(e.message)), 'platform-held proven page is reported, never hidden as a clean teardown');
     assert.ok(clean.skipped.some((s) => /table contoso_task.*existing: true/.test(s)));
     assert.ok(clean.skipped.some((s) => /relationship contoso_project_task.*existing: true/.test(s)));
     const deletes = calls.filter((c) => c.method.startsWith('delete'));
-    assert.deepStrictEqual(deletes.map((c) => c.method), ['deleteAppCascade', 'deleteRecord', 'deleteRecord', 'deleteWebResource', 'deleteWebResource', 'deleteSolution']);
+    assert.deepStrictEqual(deletes.map((c) => c.method), ['deleteAppCascade', 'deleteRecord', 'deleteRecord', 'deleteWebResource']);
     assert.deepStrictEqual(deletes[0].args, [APP_ID, APP_LOOKUP], 'atomic delete uses the resolved app and its unique lookup');
     assert.deepStrictEqual(deletes.filter((c) => c.method === 'deleteRecord').map((c) => c.args), [['uxagentproject', OVERVIEW_ID], ['uxagentproject', DETAIL_ID]]);
     assert.deepStrictEqual(events.filter((e) => e.status === 'start').map((e) => e.label), plan.map((s) => s.label), 'execution preserves the dependency-safe plan order');
     assertReusedRetained(fixture);
     assert.strictEqual(state.resources.has(OWNED_ICON), false, 'owned-icon positive control is deleted');
-    assert.strictEqual(state.solutions.has('ContosoOwnership'), false, 'real solution positive control is deleted last');
-    assert.strictEqual(snapshotStore.readSnapshot(workspaceDir), null, 'clean teardown removes the baseline');
+    assert.strictEqual(state.solutions.has('ContosoOwnership'), true, 'proven outstanding pages keep the solution');
+    assert.ok(snapshot.isTombstoned(snapshotStore.readSnapshot(workspaceDir)));
+    assert.ok(state.resources.has(MANIFEST));
+    assert.ok(state.pages.has(DETAIL_ID), 'the shared-page protection remains effective');
+    state.sharedReferenceRemoved = true;
+    const finished = await teardownModelApp(spec, { apply: true, allowDestructive: true, workspaceDir }, { sdk });
+    assert.strictEqual(finished.ok, true, JSON.stringify(finished.errors));
+    assert.strictEqual(state.solutions.has('ContosoOwnership'), false);
+    assert.strictEqual(snapshotStore.readSnapshot(workspaceDir), null, 'a genuinely complete retry removes the baseline');
     assert.strictEqual(fs.existsSync(snapshotStore.leasePath(workspaceDir)), false);
 
     for (const failure of ['app', 'page']) {
@@ -355,6 +374,8 @@ test('downloaded ownership survives rebuild and teardown planning', async () => 
         assert.ok(failedFixture.state.pages.has(OVERVIEW_ID));
       }
       failedFixture.state.failure = null;
+      assert.ok(failedFixture.state.pages.has(DETAIL_ID), 'a blocked shared page survives until the other reference is removed');
+      failedFixture.state.sharedReferenceRemoved = true;
       failedFixture.state.beforeDelete = () => {
         const current = snapshotStore.readSnapshot(failedFixture.workspaceDir);
         assert.ok(snapshot.isTombstoned(current));
@@ -363,7 +384,7 @@ test('downloaded ownership survives rebuild and teardown planning', async () => 
       const retry = await teardownModelApp(failedFixture.spec, { apply: true, allowDestructive: true, workspaceDir: failedFixture.workspaceDir }, { sdk: failedFixture.sdk });
       assert.strictEqual(retry.ok, true, JSON.stringify(retry.errors));
       assert.strictEqual(failedFixture.state.pages.has(OVERVIEW_ID), false, `${failure} failure: the retry deletes the authored page`);
-      assert.ok(failedFixture.state.pages.has(DETAIL_ID), 'the page another app still references is left to it');
+      assert.ok(!failedFixture.state.pages.has(DETAIL_ID), 'only after removing the other reference can the proven page be deleted');
       assert.ok(failedFixture.state.pages.has(FOREIGN_PAGE_ID), 'a page outside the manifest is never touched');
       assert.strictEqual(failedFixture.state.resources.has(MANIFEST), false, 'the manifest goes once its pages are handled');
       assert.strictEqual(failedFixture.state.solutions.has('ContosoOwnership'), false, 'and the solution last');
@@ -371,6 +392,7 @@ test('downloaded ownership survives rebuild and teardown planning', async () => 
     }
 
     const systemFixture = await prepare(true);
+    systemFixture.state.sharedReferenceRemoved = true;
     assert.strictEqual(systemFixture.spec.solution.uniqueName, 'Default', 'download excludes every built-in solution instead of claiming ownership');
     for (const uniqueName of ['Default', 'Active', 'Basic']) {
       systemFixture.calls.length = 0;

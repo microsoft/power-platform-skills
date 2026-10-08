@@ -70,7 +70,8 @@ function fakeMainDeps({ outDir, makeDownloadSdkImpl, runDownloadImpl, emitResult
     argv: ['--env', ENV, '--app', APP_UNIQUE, '--out', outDir],
     stderr: stderr || { write: () => {} },
     emitResult: (ok, payload) => emitResults.push({ ok, payload }),
-    preflightAuth: async () => ({ ok: true }),
+    // The download only uses the verdict, so it must not pay the success-path `az account show`.
+    preflightAuth: async (url, opts) => { assert.strictEqual(opts && opts.identityOnSuccess, false); return { ok: true }; },
     makeGenpageCli: () => ({ unused: true }),
     makeDownloadSdk: makeDownloadSdkImpl || (async () => ({ sdk, cleanup: () => {} })),
     runDownload: runDownloadImpl || (async ({ sdk: gotSdk, outDir: gotOutDir, appId, appUnique }) => {
@@ -321,6 +322,29 @@ test('CLI keeps existing messages for inconclusive auth, display-name resolution
   assert.deepStrictEqual(defaulted.emitResults[0].payload.directEntryDefaulted, ['overview']);
   assert.deepStrictEqual(defaulted.emitResults[0].payload.notRoundTripped, { views: ['Active Tickets'] });
   assert.deepStrictEqual(defaulted.emitResults[0].payload.solutionCandidates, { recovered: true });
+});
+
+// The result names the page ids a download left in the page source only when it left some, like every other optional field of the result: an empty list is no
+// finding, so it adds no field. `runDownload` leaves the field out when there is nothing to report, but another producer, or a test double, may hand back an
+// empty list as easily as none — and a check on whether the list is THERE reports an empty one as a finding.
+test('the download result carries navIdsLeft only when ids are left: none, or an empty list, adds no field', async () => {
+  const left = [{ page: 'Overview', key: 'detail', id: APP_ID, line: 3, column: 5, why: 'quote' }];
+  for (const [what, extra, expected] of [
+    ['no list', {}, null],
+    ['an empty list', { navIdsLeft: [] }, null],
+    ['one id', { navIdsLeft: left }, left],
+  ]) {
+    const emitResults = [];
+    await main(fakeMainDeps({
+      outDir: tmp('download-navids-left-'),
+      emitResults,
+      runDownloadImpl: async () => ({ ok: true, spec: minimalSpec(), pages: [], entities: [], webResources: [], droppedSubareas: 0, droppedSubareaDetails: [], dashboardWarnings: [], ...extra }),
+    }));
+    assert.strictEqual(emitResults.length, 1, what);
+    assert.strictEqual(emitResults[0].ok, true, what);
+    assert.strictEqual('navIdsLeft' in emitResults[0].payload, expected !== null, `${what}: the field is there only when ids are left`);
+    if (expected) assert.deepStrictEqual(emitResults[0].payload.navIdsLeft, expected, what);
+  }
 });
 
 test('baseline write remains best-effort when the folder workspace path cannot be a directory', async () => {

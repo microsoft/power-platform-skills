@@ -158,7 +158,7 @@ File column pattern: save or update the parent row first, then upload the PNG by
 ### 6. Type-check
 
 ```bash
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
 Fix any TypeScript errors before rebuilding.

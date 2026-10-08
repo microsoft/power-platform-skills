@@ -111,6 +111,39 @@ connector wiring.
 	npm run dev
 	```
 
+	### Multi-tenant support
+
+	To let users choose among environments in multiple Microsoft Entra tenants,
+	set the app registration's supported account type to accounts in any
+	organizational directory and add the following fields under
+	`expo.extra.powerappsNative` in `app.json`:
+
+	```json
+	{
+	  "tenantMode": "multi",
+	  "appDisplayName": "My App",
+	  "appName": "MyApp",
+	  "tenantPolicy": "organizations"
+	}
+	```
+
+	Use `{ "allowedTenantIds": ["<tenant-guid>"] }` for `tenantPolicy` to
+	restrict access to specific tenants. The native host supplies the sign-in,
+	environment discovery, and environment-selection screens.
+
+	### Dev tunneling
+
+	When a device cannot reach the workstation over the local network, start an
+	authenticated Microsoft Dev Tunnel:
+
+	```bash
+	az login
+	npm run dev -- --tunnel
+	```
+
+	Pass `--tunnel-tenant <tenant-id>` to select an Entra tenant. The command
+	creates no anonymous access rule and deletes the tunnel when Metro exits.
+
 
 6. Preview the app by scanning the QR code with the Power Apps Mobile Preview app
 
@@ -195,7 +228,7 @@ when the app uses Dataverse only.
 
 To publish as a Code App, run `npm run bundle:web`, set `appType` to `CodeApp`
 and `buildPath` to `dist-web` in `power.config.json`, then run
-`npx power-apps push`. Ensure Code App and the Mobile App have different app id by removing the appId field before pushing the app
+`npx --no-install pa app push`. Ensure Code App and the Mobile App have different app id by removing the appId field before pushing the app
 
 To publish to Power Pages, run `npm run bundle:web -- powerpages`, then use the Power Pages
 skills to upload the generated `dist-web` directory.

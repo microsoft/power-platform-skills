@@ -71,6 +71,20 @@ test('rejects an invalid spec before any build', async () => {
   assert.strictEqual(calls.length, 0, 'no SDK writes on a bad spec');
 });
 
+// The web-resources phase reads contentPath files after the solution and tables are written, so a
+// missing source must be caught here, with the page sources, before the first SDK call.
+test('a web resource whose contentPath file is missing halts before any SDK call', async (t) => {
+  const { sdk, calls } = mockSdk();
+  const appDir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'contoso-wr-source-'));
+  t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
+  const spec = jclone(desk);
+  spec.webResources = [...(spec.webResources || []), { name: 'new_missing.js', displayName: 'Missing', type: 'js', contentPath: 'scripts/missing.js' }];
+  const r = await buildModelApp(spec, { apply: true, env: 'https://x', appDir }, { sdk });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /^webResource 'new_missing\.js': contentPath 'scripts\/missing\.js' does not exist or is not a file/.test(e)), JSON.stringify(r.errors));
+  assert.strictEqual(calls.length, 0, 'no SDK writes before the source check');
+});
+
 test('dry-run returns the plan and never touches the SDK', async () => {
   const { sdk, calls } = mockSdk();
   const r = await buildModelApp(desk, { apply: false, env: 'https://x' }, { sdk });
@@ -292,6 +306,94 @@ test('isTransientHalt classifies lock/timeout/429/503 as transient, others not',
   // dashboard left outside the app's solution would be silently reused by the retry.
   assert.ok(!isTransientHalt({ message: 'x', cause: { transient: false, statusCode: 429, message: 'CustomizationLockException … try again later' } }));
   assert.ok(!isTransientHalt({ transient: false, cause: { statusCode: 503 } }));
+});
+
+// Live-captured shape, renamed onto the support-desk sample: a view pushed moments after the build created the
+// relationship whose lookup the view names. `new_CustomerId` is declared with mixed case; Dataverse reports the
+// logical (lower-case) name.
+const LAG_MESSAGE = "HTTP 400 from https://contoso.crm.dynamics.com/api/data/v9.0/savedqueries?$select=savedqueryid: The column, fetchxml, has invalid fetch.  Error : 'new_ticket' entity doesn't contain attribute with Name = 'new_customerid' and NameMapping = 'Logical' (look up";
+
+test('isTransientHalt: a missing-attribute fetch error is transient only for a column the spec creates', () => {
+  const spec = desk;
+  const err = (message) => ({ message, cause: { statusCode: 400 } });
+  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE), { spec }), true, 'a relationship lookup the spec declares (case differs)');
+  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE)), false, 'without the spec nothing proves the column is ours');
+  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("'new_customerid'", "'new_typo'")), { spec }), false, 'an undeclared column is an authoring error');
+  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("'new_ticket'", "'new_comment'")), { spec }), false, 'declared on another table only');
+  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("'new_customerid'", "'new_priority'")), { spec }), true, 'a declared column');
+  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("'new_customerid'", "'new_name'")), { spec }), true, 'the primary name column');
+  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("doesn't", 'doesn\u2019t')), { spec }), true, 'a typographic apostrophe');
+  assert.strictEqual(isTransientHalt({ message: 'view "Tickets" failed', cause: { statusCode: 400, message: LAG_MESSAGE } }, { spec }), true, 'the Dataverse text in the cause');
+  assert.strictEqual(isTransientHalt({ transient: false, message: LAG_MESSAGE }, { spec }), false, 'an explicit non-transient still wins');
+  assert.strictEqual(isTransientHalt(err('The column, fetchxml, has invalid fetch.'), { spec }), false, 'another fetch error');
+});
+
+test('isTransientHalt: only attributes the build materializes ride the lag retry', () => {
+  const err = (message) => ({ message, cause: { statusCode: 400 } });
+  const lag = (table, column) => err(LAG_MESSAGE.replace("'new_ticket'", `'${table}'`).replace("'new_customerid'", `'${column}'`));
+  const spec = {
+    entities: [
+      { schemaName: 'new_asset', existing: true, primaryAttribute: { schemaName: 'new_title' },
+        columns: [{ schemaName: 'new_OwnerRef', type: 'Lookup' }, { schemaName: 'new_points', type: 'Integer' }] },
+      { schemaName: 'new_site', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
+    ],
+    relationships: [],
+  };
+  // Provisioning skips a standalone Lookup entry (a lookup is the side effect of a relationship), so a view
+  // naming one is an authoring error, not lag. `existing: true` marks ownership, not presence: a downloaded
+  // spec rebuilt into another environment still creates that table WITH its primary column.
+  assert.strictEqual(isTransientHalt(lag('new_asset', 'new_ownerref'), { spec }), false, 'a Lookup entry in columns[]');
+  assert.strictEqual(isTransientHalt(lag('new_asset', 'new_title'), { spec }), true, 'the primary attribute of a table marked existing');
+  assert.strictEqual(isTransientHalt(lag('new_asset', 'new_points'), { spec }), true, 'a scalar column the build adds to an existing table');
+  assert.strictEqual(isTransientHalt(lag('new_site', 'new_name'), { spec }), true, 'the primary attribute created with a new table');
+});
+
+test('transient auto-retry: a view rejected for a lookup the build just created is retried, then succeeds', async () => {
+  const { sdk, calls } = mockSdk();
+  let failed = 0;
+  const push = sdk.pushArtifact;
+  sdk.pushArtifact = async (type, ...rest) => {
+    if (type === 'view' && failed === 0) { failed += 1; const e = new Error(LAG_MESSAGE); e.statusCode = 400; throw e; }
+    return push(type, ...rest);
+  };
+  const events = [];
+  const journal = { path: 'x', record: (e) => events.push(e), close: () => {} };
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, journal });
+  assert.strictEqual(failed, 1, 'the view push failed once');
+  assert.strictEqual(r.ok, true, 'the retry completed the build');
+  assert.ok(events.some((e) => e.status === 'retry'), 'the retry was journaled');
+  assert.ok(calls.some((c) => c[0] === 'createSolution'), 'the build ran');
+});
+
+test('transient auto-retry: a view rejected for a column the spec never declared halts at once', async () => {
+  const { sdk } = mockSdk();
+  const push = sdk.pushArtifact;
+  sdk.pushArtifact = async (type, ...rest) => {
+    if (type === 'view') { const e = new Error(LAG_MESSAGE.replace("'new_customerid'", "'new_typo'")); e.statusCode = 400; throw e; }
+    return push(type, ...rest);
+  };
+  const events = [];
+  const journal = { path: 'x', record: (e) => events.push(e), close: () => {} };
+  await assert.rejects(buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, journal }));
+  assert.ok(!events.some((e) => e.status === 'retry'), 'no retry for a column nobody declared');
+});
+
+test('transient auto-retry: a declared column that never appears exhausts the retries and surfaces the original error', async () => {
+  // The lag clause must not loop: maxRetries (3 on --apply) bounds it to four attempts, and the halt that ends the
+  // run still carries Dataverse's own words so the operator can see which column never became visible.
+  const { sdk } = mockSdk();
+  const push = sdk.pushArtifact;
+  sdk.pushArtifact = async (type, ...rest) => {
+    if (type === 'view') { const e = new Error(LAG_MESSAGE); e.statusCode = 400; throw e; }
+    return push(type, ...rest);
+  };
+  const events = [];
+  const journal = { path: 'x', record: (e) => events.push(e), close: () => {} };
+  await assert.rejects(
+    buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, journal }),
+    (err) => /entity doesn't contain attribute with Name = 'new_customerid'/.test(String((err && err.message) || '') + String((err && err.cause && err.cause.message) || '')),
+  );
+  assert.strictEqual(events.filter((e) => e.status === 'retry').length, 3, 'three retries, then the halt');
 });
 
 test('transient auto-retry: a transient halt is retried and then succeeds', async () => {
@@ -2112,6 +2214,10 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
       const row = state.resources.get(name);
       return row ? [row] : [];
     }
+    if (set === 'uxagentproject') {
+      return [...state.pages.values()].filter((p) => filter.includes(`uxagentprojectid eq ${p.pageId.toLowerCase()}`))
+        .map((p) => ({ uxagentprojectid: p.pageId, name: p.name }));
+    }
     if (set === 'publisher') return [{ publisherid: 'publisher-1' }];
     return [];
   };
@@ -2167,7 +2273,12 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
     const authCli = loadCli(path.join(scriptsDir, 'lib', 'dataverse-auth.js'));
     const auth = {
       ...authCli.exports,
-      preflightAuth: async (url) => { assert.strictEqual(url, env); return { ok: true }; },
+      preflightAuth: async (url, opts) => {
+        assert.strictEqual(url, env);
+        // The build only uses the verdict, so it must not pay the success-path `az account show`.
+        assert.strictEqual(opts && opts.identityOnSuccess, false);
+        return { ok: true };
+      },
       readOrgLanguageCode: async (url) => { assert.strictEqual(url, env); return 1033; },
       dataverseRequest: async (...args) => {
         assert.deepStrictEqual(args, [env, 'GET', 'WhoAmI']);

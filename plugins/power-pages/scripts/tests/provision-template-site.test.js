@@ -1089,3 +1089,207 @@ test('runNpm invokes the Windows npm.cmd shim through cmd.exe without a command 
   assert.equal(calls[0][2].cwd, '/tmp/site');
   assert.equal(calls[0][2].shell, false);
 });
+
+test('copyMissingTemplateFiles resolves check-then-act TOCTOU when another process creates the directory', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  const cloned = path.join(dir, 'cloned');
+  fs.mkdirSync(path.join(source, 'nested'), { recursive: true });
+  fs.mkdirSync(cloned, { recursive: true });
+
+  const customFs = {
+    ...fs,
+    mkdirSync(targetPath, options) {
+      // Simulate another process creating the directory immediately before this call.
+      fs.mkdirSync(targetPath, options);
+      // The original non-recursive mkdir now receives EEXIST, as it would in the race.
+      return fs.mkdirSync(targetPath, options);
+    }
+  };
+
+  const restored = copyMissingTemplateFiles(source, cloned, customFs);
+  assert.deepEqual(restored, []);
+  assert.equal(fs.existsSync(path.join(cloned, 'nested')), true);
+});
+
+test('copyMissingTemplateFiles rejects when a file exists where a directory is expected', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  const cloned = path.join(dir, 'cloned');
+  fs.mkdirSync(path.join(source, 'conflict-dir'), { recursive: true });
+  fs.mkdirSync(cloned, { recursive: true });
+  fs.writeFileSync(path.join(cloned, 'conflict-dir'), 'this is a file');
+
+  assert.throws(
+    () => copyMissingTemplateFiles(source, cloned, fs),
+    /Clone path conflicts with template directory: conflict-dir/
+  );
+});
+
+
+test('copyMissingTemplateFiles maps ENOTDIR to conflict error during race condition', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  const cloned = path.join(dir, 'cloned');
+  fs.mkdirSync(path.join(source, 'nested'), { recursive: true });
+  fs.mkdirSync(cloned, { recursive: true });
+
+  const customFs = {
+    ...fs,
+    mkdirSync(targetPath, options) {
+      if (targetPath.includes('cloned') && targetPath.endsWith('nested')) {
+        const err = new Error('ENOTDIR');
+        err.code = 'ENOTDIR';
+        throw err;
+      }
+      return fs.mkdirSync(targetPath, options);
+    },
+    lstatSync(targetPath) {
+      if (targetPath.includes('cloned') && targetPath.endsWith('nested')) {
+        const err = new Error('ENOTDIR');
+        err.code = 'ENOTDIR';
+        throw err;
+      }
+      return fs.lstatSync(targetPath);
+    }
+  };
+
+  assert.throws(
+    () => copyMissingTemplateFiles(source, cloned, customFs),
+    /Clone path conflicts with template directory: nested/
+  );
+});
+
+test('copyMissingTemplateFiles rejects when a symlink exists where a directory is expected', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('Symlinks require privileges on Windows');
+    return;
+  }
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = require('path').join(dir, 'source');
+  const cloned = require('path').join(dir, 'cloned');
+  fs.mkdirSync(require('path').join(source, 'conflict-dir'), { recursive: true });
+  fs.mkdirSync(cloned, { recursive: true });
+  fs.symlinkSync(require('path').join(cloned, 'dummy'), require('path').join(cloned, 'conflict-dir'));
+
+  assert.throws(
+    () => copyMissingTemplateFiles(source, cloned, fs),
+    /Clone path conflicts with template directory: conflict-dir/
+  );
+});
+
+test('copyMissingTemplateFiles rejects when a symlink to an existing directory exists where a directory is expected', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('Symlinks require privileges on Windows');
+    return;
+  }
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = require('path').join(dir, 'source');
+  const cloned = require('path').join(dir, 'cloned');
+  fs.mkdirSync(require('path').join(source, 'conflict-dir'), { recursive: true });
+  fs.mkdirSync(cloned, { recursive: true });
+  
+  const targetDir = require('path').join(dir, 'target');
+  fs.mkdirSync(targetDir, { recursive: true });
+  
+  fs.symlinkSync(targetDir, require('path').join(cloned, 'conflict-dir'));
+
+  assert.throws(
+    () => copyMissingTemplateFiles(source, cloned, fs),
+    /Clone path conflicts with template directory: conflict-dir/
+  );
+});
+
+test('copyMissingTemplateFiles retries when lstat throws ENOENT and succeeds on retry', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = require('path').join(dir, 'source');
+  const cloned = require('path').join(dir, 'cloned');
+  fs.mkdirSync(require('path').join(source, 'retry-dir'), { recursive: true });
+  fs.mkdirSync(cloned, { recursive: true });
+
+  let attempts = 0;
+  const customFs = {
+    ...fs,
+    mkdirSync(targetPath, options) {
+      attempts++;
+      if (attempts === 1) {
+        const err = new Error('EEXIST');
+        err.code = 'EEXIST';
+        throw err;
+      }
+      return fs.mkdirSync(targetPath, options);
+    },
+    lstatSync(targetPath) {
+      if (attempts === 1 && targetPath.includes('cloned')) {
+        const err = new Error('ENOENT');
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return fs.lstatSync(targetPath);
+    }
+  };
+
+  const restored = copyMissingTemplateFiles(source, cloned, customFs);
+  assert.deepEqual(restored, []);
+  assert.equal(attempts, 2);
+});
+
+test('copyMissingTemplateFiles throws after exhausted retries for ENOENT', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = require('path').join(dir, 'source');
+  const cloned = require('path').join(dir, 'cloned');
+  fs.mkdirSync(require('path').join(source, 'fail-dir'), { recursive: true });
+  fs.mkdirSync(cloned, { recursive: true });
+
+  const customFs = {
+    ...fs,
+    mkdirSync(targetPath, options) {
+      const err = new Error('EEXIST');
+      err.code = 'EEXIST';
+      throw err;
+    },
+    lstatSync(targetPath) {
+      if (targetPath.includes('cloned')) {
+        const err = new Error('ENOENT');
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return fs.lstatSync(targetPath);
+    }
+  };
+
+  assert.throws(
+    () => copyMissingTemplateFiles(source, cloned, customFs),
+    /Failed to create directory after 3 attempts: fail-dir \(last error: ENOENT\)/
+  );
+});
+
+test('copyMissingTemplateFiles propagates EACCES unchanged', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = require('path').join(dir, 'source');
+  const cloned = require('path').join(dir, 'cloned');
+  fs.mkdirSync(require('path').join(source, 'err-dir'), { recursive: true });
+  fs.mkdirSync(cloned, { recursive: true });
+
+  const customFs = {
+    ...fs,
+    mkdirSync(targetPath, options) {
+      const err = new Error('EACCES');
+      err.code = 'EACCES';
+      throw err;
+    }
+  };
+
+  assert.throws(
+    () => copyMissingTemplateFiles(source, cloned, customFs),
+    { code: 'EACCES' }
+  );
+});

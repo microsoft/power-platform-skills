@@ -1,0 +1,8 @@
+{"type":"session.tools_updated","data":{"model":"claude-sonnet-5.5"}}
+{"type":"user.message","data":{"content":"Build me a model-driven app to manage equipment rentals."}}
+{"type":"assistant.turn_start","data":{"turnId":"0"}}
+{"type":"assistant.tool_call_delta","data":{"toolCallId":"toolu_02","toolName":"skill","inputDelta":"{\"skill\": \"app-"}}
+{"type":"assistant.message","data":{"messageId":"m1","content":"","toolRequests":[{"toolCallId":"toolu_02","name":"skill","arguments":{"skill":"app-builder"}}]}}
+{"type":"tool.execution_start","data":{"toolCallId":"toolu_02","toolName":"skill","arguments":{"skill":"app-builder"}}}
+{"type":"tool.execution_complete","data":{"toolCallId":"toolu_02","success":true}}
+{"type":"result","exitCode":0,"usage":{"premiumRequests":1}}

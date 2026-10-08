@@ -1,7 +1,7 @@
 {
   "contractVersion": 2,
   "provenance": "synthetic",
-  "description": "Constructed before/after TSX and upload evidence, not an agent capture. Covers effective optional-call targets, last-write overrides, escaped keys, inert comments/data and Unicode comment terminators.",
+  "description": "Constructed before/after TSX and upload evidence, not an agent capture. Covers effective optional-call targets, last-write overrides, escaped keys, inert comments/data and Unicode comment terminators. Like a page the build accepts, it holds no PAGEREF_ token except as a navigation pageId: its comments say what a call looks like (text that must not be read as a target), with no token in them.",
   "contracts": ["plugins/model-apps/skills/genpage/SKILL.md Phase 6.5: Navigation Fix-Up", "plugins/model-apps/references/rules.md Generative Page Navigation"],
   "toolResults": "tool-results.json",
   "artifacts": ["before/overview.tsx", "before/pet.tsx", "before/pet-gallery.tsx", "prompt.txt", "agent-message.txt", "fixup-prompt.txt", "fixup-message.txt", "names/overview.txt", "names/pet.txt", "names/pet-gallery.txt"],

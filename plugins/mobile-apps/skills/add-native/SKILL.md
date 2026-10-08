@@ -382,7 +382,7 @@ export async function setSecret(key: string, value: string): Promise<SecureResul
 > "→ Running tsc to verify wrapper compiles (~10–20 seconds)."
 
 ```bash
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
 Fix any wrapper-side errors. Do not run platform-specific native build commands during normal `/add-native` use because the module is already part of the current template binary. When a template/base maintainer first adds `expo-haptics` or changes its version, that release must rebuild the Android and iOS base binaries so Expo autolinking includes the module.

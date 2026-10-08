@@ -64,6 +64,14 @@ async function resolveConnectionReferences(envUrl, refs) {
     ensureOk(lookup, `Lookup connection reference ${logicalName}`);
     const id = lookup.data?.value?.[0]?.connectionreferenceid;
     if (!id) throw new Error(`Connection reference '${logicalName}' not found in env`);
+    // The id becomes the ComponentId of a write, so it is held to the same GUID rule as the ids on the
+    // command line — and, like them, before anything is written: a bad reply refused here leaves the
+    // solution untouched, where one refused at its own AddSolutionComponent would follow the app and pages.
+    // A damaged or unexpected reply can carry a number, an object or a braced/padded string, so the type
+    // is checked too, not only the pattern.
+    if (typeof id !== 'string' || !FORM_GUID_RE.test(id)) {
+      throw new Error(`Connection reference '${logicalName}' has a connectionreferenceid that is not a GUID (${JSON.stringify(id).slice(0, 80)}).`);
+    }
     resolved.push({ logicalName, id });
   }
   return resolved;

@@ -18,6 +18,13 @@ Read `PLUGIN_DEVELOPMENT_GUIDE.md` for UX and reliability standards when creatin
 - **Azure CLI `--allow-no-subscriptions`** — this flag is only valid on `az login`. Other `az` subcommands (`az account get-access-token`, `az account show`, etc.) reject it as an unrecognized argument and exit 2, so do NOT add it to anything other than `az login`. When the user is not logged in to the Azure CLI, suggest plain `az login` first; only suggest `az login --allow-no-subscriptions` as a fallback if they don't have any associated Azure subscription, since that variant lets subscription-less accounts sign in and still mint AAD-scoped Dataverse/Power Platform tokens via subsequent `az account get-access-token` calls. Reuse the shared `getAuthToken` helper in `scripts/lib/validation-helpers.js` instead of shelling out to `az` directly.
 - **Reference docs** shared across skills live in `references/` — reference via `${PLUGIN_ROOT}/references/` paths, don't duplicate.
 - **Local scaffold templates** use `__PLACEHOLDER__` tokens (e.g., `__SITE_NAME__`) replaced during from-scratch scaffolding. The `gitignore` file is stored without the dot prefix and renamed to `.gitignore` during scaffolding.
+- **Batch browser work into one script call** - every tool call re-sends the whole conversation, and each Playwright MCP `browser_navigate` also returns a full page snapshot, so per-page MCP calls multiply cost and trigger context compactions. `create-site` captures every route at both widths with one `capture-design-review.js` call and opens the screenshots in one turn; prefer that pattern whenever a skill needs the same browser work across several pages. Keep the design review inline rather than in a subagent: a fresh context re-loads every screenshot, which raises cost without improving the review.
+- **Browser review scripts** (`capture-design-review.js`, `axe-audit.js`) share their boundaries through `scripts/lib`, so add new browser work there rather than beside them:
+  - *Input* - URLs and routes arrive only as a JSON request on stdin (`--input -`, sent in a quoted heredoc), never as shell text, and every field is type-checked (`parseRequest`, `normalizeSiteUrl` in `review-navigation.js`).
+  - *Code they run* - Playwright comes only from the pinned `@playwright/mcp` package (`load-playwright.js`, `playwright-mcp-package.js`), resolved by npm in an empty private folder; a project's `node_modules` is never loaded. A third-party script injected into a page is downloaded through `pinned-download.js` and refused unless it matches the SRI hash committed beside its URL (`AXE_SCRIPT`).
+  - *Output* - URLs in results and errors are cut to origin and path (`redactUrl`, `redactUrlsInText`), and screenshots go to a private temp directory (`private-temp-dir.js`).
+  - *Navigation* - `gotoSettled` completes at `load` with a best-effort network-idle wait, because `networkidle` never arrives on sites that long-poll or send frequent beacons.
+- **Playwright screenshots** go to a private per-launch temp directory: `scripts/launch-playwright-mcp.js` passes `--output-dir` (unless `PLAYWRIGHT_MCP_OUTPUT_DIR` is set), falls back to a private `~/.cache/power-pages` directory and otherwise fails closed rather than writing into the project, removes the directory on server exit or a host termination signal, and on each launch sweeps this user's launcher directories untouched for an hour, because hosts such as Copilot CLI SIGKILL the launcher before any in-process cleanup can run. Skills that call `browser_take_screenshot` leave `filename` unset so output never lands in the user's project.
 - **Hooks** are defined centrally in `hooks/hooks.json`, using `PostToolUse` with matcher `Skill` so validation runs when a tracked Power Pages skill completes.
 - **ALM split-decision thresholds** are intentionally tighter than the platform hard caps. `scripts/lib/alm-thresholds.js` recommends a split at 75 MB / 4000 components (vs platform caps of 95 MB / 6000), reserving ~20 MB / ~2000-component growth headroom in each split child. Override per-project via `.alm-config.json` if you have a justified reason to push closer to the caps.
 - **OAuth credential-style site settings** (ConsumerKey / ClientId / ClientSecret / etc.) are NOT excluded from solutions. `setup-solution` Phase 5 prompts per credential to choose between (a) Secret-typed env var (Key Vault per stage), (b) String-typed env var (plain text per stage), or (c) skip. The site-setting record is added to the solution and routed to an env var so secret values never ship in the solution zip. Plans generated before 2026-05-08 use the older `excluded` bucket — setup-solution's preloadedSettings handler treats those as `credentialNeedsDecision` for backward compatibility.
@@ -43,6 +50,8 @@ scripts/
   poll-async-operation.js      ← Polls Dataverse asyncoperations until terminal state (used by export-solution, import-solution)
   encode-solution-file.js      ← Base64-encodes a solution zip for OData request bodies (used by import-solution)
   parse-deployment-errors.js   ← Parses PAC CLI stderr + OData errors into structured findings (used by diagnose-deployment)
+  capture-design-review.js     ← One-call design capture: every route at desktop + mobile, mobile sheets, font/overflow/page-error/sign-in-redirect checks (create-site, exceptional-web-design)
+  axe-audit.js                 ← axe-core WCAG 2.2 AA audit of a dev server or deployed site; downloads axe-core and injects it only when it matches the committed hash (create-site, exceptional-web-design)
 references/                    ← Shared reference docs used by multiple skills
   odata-common.md              ← Auth headers, token refresh, error handling, retry patterns
   dataverse-prerequisites.md   ← PAC CLI check, Azure CLI token, API access verification
@@ -51,12 +60,16 @@ references/                    ← Shared reference docs used by multiple skills
   solution-api-patterns.md     ← OData body templates for publisher/solution CRUD, export/import async actions, manifest format
   deployment-error-catalog.md  ← Known deployment failure patterns with root cause, severity, and fix procedures
   cicd-pipeline-patterns.md    ← PAC CLI SP auth syntax, ADO YAML stage structure, GitHub Actions env job structure
+  design-aesthetics.md         ← Design system: experience brief, brand sourcing, tokens, verified Google Fonts, motion, states, aesthetic x mood map
+  page-blueprints.md           ← First screen, hero patterns, page narratives per site type, section rhythm, copy, honest proof
+  design-critique.md           ← Capture, two-pass critique, 10-category rubric, compact scorecard (create-site Phases 5.2/5.7, exceptional-web-design)
 skills/
   create-site/
     SKILL.md                   ← Skill definition with frontmatter (model, allowed-tools)
     assets/{react,vue,angular,astro}/  ← Framework templates with __PLACEHOLDER__ tokens
-    references/design-aesthetics.md  ← Design principles, font/color/motion guidance for inline design step
     scripts/validate-site.js   ← Node script validating generated sites
+  exceptional-web-design/
+    SKILL.md                   ← Read-only design review of an existing site (URL or folder) against the shared design references
   deploy-site/
     SKILL.md                   ← Deployment skill definition
   setup-datamodel/
@@ -144,7 +157,8 @@ Auto-triggered by the main conversation when relevant:
 
 User-invocable via `/power-pages:<skill-name>`:
 
-- `create-site`: 6-step workflow — gather requirements (including design direction), plan (with explicit scaffold prerequisites), scaffold from template, build pages/components/routing with design applied from the start using `skills/create-site/references/design-aesthetics.md` and live Playwright preview, review, deploy
+- `create-site`: 6-step workflow - gather requirements (including aesthetic, mood, and brand source), plan (an experience brief plus per-page narrative beats, rendered with a Design direction section), scaffold from template, build pages/components/routing with design applied from the start using `references/design-aesthetics.md` and `page-blueprints.md` and live Playwright preview, run the screenshot-based design critique in `design-critique.md`, review, deploy
+- `exceptional-web-design`: 7-step **read-only** workflow - identify the site (URL or project folder), get a URL where a folder's site runs (deployed, or a dev server the user starts) or review code only, read the three shared design references, capture up to eight key pages and run the accessibility audit with one `capture-design-review.js --axe` call (pages left out are reported), infer the experience brief and score the `design-critique.md` rubric, remove the screenshots, then report a scorecard and prioritized recommendations. It never runs anything in the user's folder - the folder is only read - has no Write/Edit tools, and skips skill-usage tracking, which writes into the project.
 - `deploy-site`: 6-step workflow — verify PAC CLI, authenticate, confirm environment, upload via `pac pages upload-code-site`, verify deployment (confirm `.powerpages-site` folder, commit, offer activation), handle blocked JS attachments
 - `setup-datamodel`: 7-step workflow — verify prerequisites, invoke data-model-architect agent, review proposal, pre-creation checks, create tables & columns via OData API, create relationships, publish & verify. Writes `.datamodel-manifest.json` for hook validation.
 - `add-sample-data`: 6-step workflow — verify prerequisites, discover tables (from `.datamodel-manifest.json` or OData API), select tables & configure record count, generate & review sample data plan, insert records via OData API with relationship handling, verify & summarize.

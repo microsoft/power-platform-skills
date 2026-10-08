@@ -1,0 +1,1 @@
+Build a contacts directory page that lists my contacts in a grid with full name, company, job title, email and business phone. Clicking a contact's name should open the contact record.

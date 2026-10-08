@@ -1,0 +1,1 @@
+Created an Accounts list page and an Edit Account page that navigate to each other.

@@ -51,7 +51,7 @@ This gate is intentionally simple: `/create-mobile-app` creates a new app from a
 `tsc` is a **phase gate**, not a reflex after every tiny edit. The app may not advance past a gate until TypeScript is clean.
 
 **Required gates:**
-- **Scaffold gate:** Step 6.6 after existing-template preparation, `npx power-apps init`, and dependency verification.
+- **Scaffold gate:** Step 6.6 after existing-template preparation, `pa app init`, and dependency verification.
 - **Dataverse/generated-services gate:** immediately after Step 8 returns and generated services/models are refreshed.
 - **Navigation/skeleton gate:** after Step 10b layouts and Step 10.8 shared code/skeletons are written, before Step 11 builders launch.
 - **Screen-wave gate:** after each Step 11 screen-builder wave returns, before launching the next wave.
@@ -85,7 +85,7 @@ so a teammate opening the repo months later can see the environment, the approve
 and the screen plan without re-reading a transcript.
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" <command>
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' <command>
 ```
 
 | Command | Use |
@@ -116,12 +116,12 @@ the pattern each one follows:
 ```bash
 DOCS="${PLUGIN_ROOT}/scripts/app-docs.js"
 # 1. propose - the tab shows "Proposed - review this, then answer the prompt in your terminal"
-node "$DOCS" --working-dir "<working_dir>" set --section dataModel --json-file <tmp>/data-model.json --state proposed
-node "$DOCS" --working-dir "<working_dir>" step --id data-model --status active --note "Gate 2 — awaiting your approval"
+node "$DOCS" --working-dir '<working_dir>' set --section dataModel --json-file <tmp>/data-model.json --state proposed
+node "$DOCS" --working-dir '<working_dir>' step --id data-model --status active --note "Gate 2 — awaiting your approval"
 # 2. point the user at that tab, then ask the gate question
 # 3. on approval
-node "$DOCS" --working-dir "<working_dir>" set --section dataModel --json-file <tmp>/data-model.json --state approved
-node "$DOCS" --working-dir "<working_dir>" step --id data-model --status done --note "Gate 2 — approved"
+node "$DOCS" --working-dir '<working_dir>' set --section dataModel --json-file <tmp>/data-model.json --state approved
+node "$DOCS" --working-dir '<working_dir>' step --id data-model --status done --note "Gate 2 — approved"
 ```
 
 Pass a fresh `--note` when you close a gate. A note belongs to the status it was written with, so
@@ -190,10 +190,10 @@ If `$ARGUMENTS` includes a `--working-dir` (or the user names an existing direct
   **Reopen the build plan on resume.** A resume skips Step 2b, where the plan is created and
   opened, so open `<working_dir>/docs/create-app-plan.html` in the browser yourself when it exists.
   If the earlier run stopped on a failure, the plan still says so and has stopped reloading. Run
-  `node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" show`, and if it reports a `failedPhase`, reopen that phase before continuing:
+  `node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' show`, and if it reports a `failedPhase`, reopen that phase before continuing:
 
   ```bash
-  node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id <failedPhase> --status active
+  node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id <failedPhase> --status active
   ```
 - **Bank absent** → fresh project. Continue to Step 1.
 - **Bank present but corrupted** (missing required headings) → surface the parse error, ask the user whether to overwrite (lose history) or fix manually before proceeding.
@@ -207,7 +207,9 @@ After the resume check, run the **fresh-template gate** from the section above. 
 - If required template files are missing, STOP and tell the user to materialize `microsoft/power-platform-skills/plugins/mobile-apps/template#main` into the working directory with `degit` and run `npm install`.
 - If `node_modules/expo` is missing, STOP and tell the user to run `npm install` in that template folder before rerunning this skill.
 
-**Do not silently copy a bundled template over the user's folder.** A fresh `plugins/mobile-apps/template` template may contain placeholder `power.config.json` with an empty `environmentId`; Step 5 removes that placeholder immediately before Step 6 runs `npx power-apps init`.
+**Do not silently copy a bundled template over the user's folder.** A fresh `plugins/mobile-apps/template` template may contain placeholder `power.config.json` with an empty `environmentId`; Step 5 removes that placeholder immediately before Step 6 runs `pa app init`.
+
+**Resolve the Power Apps CLI** (fresh run or resume) before any CLI command — see [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md). Run every command as `$PA …` (`npx --no-install pa …`), never a bare `pa`; on `power-apps`-only projects, translate per its mapping tables. If `PA_KIND=none`, STOP and ask the user to run `npm install` in the template folder. Record the result in the memory bank's `CLI Binary` row once the bank exists (Step 6.7).
 
 ### Step 1 — Prerequisites
 
@@ -215,14 +217,14 @@ After the resume check, run the **fresh-template gate** from the section above. 
 
 Run all checks first — no point gathering requirements if the toolchain isn't ready.
 
-**Important: npm auth and Power Platform app auth are separate.** The account used for `npm install` can be different from the account used by `npx power-apps`:
+**Important: npm auth and Power Platform app auth are separate.** The account used for `npm install` can be different from the account used by the Power Apps CLI (`$PA`):
 
 | What | Uses | Typical account |
 |---|---|---|
 | `npm install` private feed access | npm/Azure Artifacts auth configured outside this skill | Account with feed Reader access |
-| `npx power-apps init`, Dataverse, deploy | `npx power-apps` browser auth + `az login --tenant <env-tenant>` for Dataverse helper scripts | Power Platform environment account, often a test-tenant/admin account |
+| `pa app init`, Dataverse, deploy | Power Apps CLI browser auth + `az login --tenant <env-tenant>` for Dataverse helper scripts | Power Platform environment account, often a test-tenant/admin account |
 
-Renewing npm feed auth does not sign the user into `npx power-apps`. If the Power Apps CLI prompts for browser auth later, that is expected and unrelated to the npm/ADO feed token.
+Renewing npm feed auth does not sign the user into the Power Apps CLI. If the Power Apps CLI prompts for browser auth later, that is expected and unrelated to the npm/ADO feed token.
 
 Then run the checks:
 
@@ -233,7 +235,7 @@ az account show --query "user.name" -o tsv          # Azure CLI logged in (neede
 git --version                                       # optional
 ```
 
-**Do NOT probe Xcode, Java, Android Studio, or CocoaPods here.** This plugin's flow is plan → scaffold → code → local Expo dev server. Build + deploy (`npm run build` / `npx power-apps push`) is a separate user-driven step via the `/deploy` skill. Local native compile is the user's choice and lives outside this skill (run the platform-specific native command directly when needed). See [`shared/version-check.md`](${PLUGIN_ROOT}/shared/version-check.md) — only the **Always required** tier matters here.
+**Do NOT probe Xcode, Java, Android Studio, or CocoaPods here.** This plugin's flow is plan → scaffold → code → local Expo dev server. Build + deploy (`npm run build` / `pa app push`) is a separate user-driven step via the `/deploy` skill. Local native compile is the user's choice and lives outside this skill (run the platform-specific native command directly when needed). See [`shared/version-check.md`](${PLUGIN_ROOT}/shared/version-check.md) — only the **Always required** tier matters here.
 
 | Missing | Action |
 |---|---|
@@ -244,15 +246,15 @@ Template-only rule: this skill no longer provisions npm feed tokens, PAT fallbac
 
 Capture target Power Platform environment for the remaining flow.
 
-**Source of truth for env selection: the generated `power.config.json` first, explicit environment ID second.** In the normal template-folder flow, `npx power-apps init` runs first and writes the selected environment ID into `power.config.json`; read that ID and pass it to `scripts/resolve-environment.js` to resolve the Dataverse URL and tenant. If `power.config.json` is missing or has an empty placeholder `environmentId`, ask for an environment ID. A Dataverse URL is useful as a resolver fallback for existing apps, but it is not enough for `npx power-apps init` because init needs `--environment-id`.
+**Source of truth for env selection: the generated `power.config.json` first, explicit environment ID second.** In the normal template-folder flow, `pa app init` runs first and writes the selected environment ID into `power.config.json`; read that ID and pass it to `scripts/resolve-environment.js` to resolve the Dataverse URL and tenant. If `power.config.json` is missing or has an empty placeholder `environmentId`, ask for an environment ID. A Dataverse URL is useful as a resolver fallback for existing apps, but it is not enough for `pa app init` because init needs `--environment-id`.
 
 | Step | Source | When user is asked |
 |---|---|---|
-| 0. `power.config.json` has `environmentId` | `scripts/resolve-environment.js <environment-id>` | Never — automatic after `npx power-apps init` |
+| 0. `power.config.json` has `environmentId` | `scripts/resolve-environment.js <environment-id>` | Never — automatic after `pa app init` |
 | 1. User supplies env ID | `scripts/resolve-environment.js <environment-id>` | Ask only if `power.config.json` is missing/empty or user wants a different env |
 | 2. User wants a different account | Follow shared-instructions standalone CLI auth handling | Only if resolution/token acquisition fails or user asks |
 | 3. User wants different env | Ask for another env ID and re-run resolver | Only if user selects "use a different environment" at Step 2 |
-| 4. `npx power-apps init -t MobileApp --display-name "$DISPLAY_NAME" --environment-id $ACTIVE_ENV_ID --non-interactive` | Persists choice into `power.config.json` | Only when this skill owns the initial init path |
+| 4. `$PA app init -t MobileApp --display-name "$DISPLAY_NAME" --environment-id $ACTIVE_ENV_ID --non-interactive` | Persists choice into `power.config.json` | Only when this skill owns the initial init path |
 
 ```bash
 TARGET_ENV="<environment-id-or-empty>"
@@ -272,11 +274,11 @@ echo "✓ Target env URL: $ACTIVE_ENV_URL"
 echo "✓ Target tenant: ${ACTIVE_TENANT_ID:-unknown}"
 ```
 
-**Orchestrator handling for `exit 2`:** ask the user for their environment ID directly, then re-run the capture block above. Do not run `npx power-apps init` here; Step 6 owns initialization after the user confirms the target environment.
+**Orchestrator handling for `exit 2`:** ask the user for their environment ID directly, then re-run the capture block above. Do not run `pa app init` here; Step 6 owns initialization after the user confirms the target environment.
 
-Stash `$ACTIVE_ENV_ID`, `$ACTIVE_ENV_NAME`, `$ACTIVE_ENV_URL`, and `$ACTIVE_TENANT_ID` for Step 2 (env confirmation), Step 6 (`npx power-apps init`), and Step 7 (`auth.config.json` tenant/environment cache). If parsing fails, ask for an environment ID again.
+Stash `$ACTIVE_ENV_ID`, `$ACTIVE_ENV_NAME`, `$ACTIVE_ENV_URL`, and `$ACTIVE_TENANT_ID` for Step 2 (env confirmation), Step 6 (`pa app init`), and Step 7 (`auth.config.json` tenant/environment cache). If parsing fails, ask for an environment ID again.
 
-If `resolve-environment.js` cannot get tokens, run `az login --tenant <env-tenant>` in the foreground. If `npx power-apps init` later uses the wrong account, follow shared-instructions standalone CLI auth handling and retry once.
+If `resolve-environment.js` cannot get tokens, run `az login --tenant <env-tenant>` in the foreground. If `pa app init` later uses the wrong account, follow shared-instructions standalone CLI auth handling and retry once.
 
 ### Step 1.7 — Detect publisher prefix
 
@@ -314,7 +316,7 @@ A second solution name can be passed as a second argument if the env uses a diff
 | `{"prefix": "cr8142a", ...}` | `$DETECTED_PUBLISHER_PREFIX = "cr8142a"` | Pass to planner prompt as a fact: *"Publisher prefix (detected from env): `cr8142a_`"* |
 | `{"prefix": null, ...}` | `$DETECTED_PUBLISHER_PREFIX = ""` (empty) | Pass to planner as: *"Publisher prefix: NOT DETECTED — use placeholder `cr_` and warn the user that Dataverse will normalize the actual prefix at create time."* |
 
-Do NOT block on null detection — the user can still proceed; the Power Apps CLI normalizes prefixes when `npx power-apps add-data-source` runs. The detection step is purely to make the plan output accurate.
+Do NOT block on null detection — the user can still proceed; the Power Apps CLI normalizes prefixes when `pa app add data-source` runs. The detection step is purely to make the plan output accurate.
 
 If the script exits non-zero (rare — should always exit 0 with `prefix: null`), treat it as the null case and continue.
 
@@ -347,7 +349,7 @@ downstream planning must retain platform-specific behavior for each.
 **App-name collision pre-flight.** Once `<displayName>` is fixed, check the chosen env for a name collision:
 
 ```bash
-npx power-apps list-codeapps --environment-id "$ACTIVE_ENV_ID" --json 2>/dev/null | grep -F "<displayName>" >/dev/null && \
+$PA app list --environment-id "$ACTIVE_ENV_ID" --json 2>/dev/null | grep -F "<displayName>" >/dev/null && \
   echo "COLLISION" || echo "OK"
 ```
 
@@ -355,11 +357,11 @@ If `COLLISION`, ask the user via `AskUserQuestion`:
 > "An app named `<displayName>` already exists in `<ACTIVE_ENV_NAME>`. Choose:
 >  1. Pick a different name (recommended)
 >  2. Delete the existing app in Maker portal — DESTRUCTIVE, asks confirmation outside this skill
->  3. Continue anyway (bg `npx power-apps init` will fail; you'll have to rename later — NOT recommended)"
+>  3. Continue anyway (bg `pa app init` will fail; you'll have to rename later — NOT recommended)"
 
 Re-prompt for name if (1). If (2), send the user to Maker portal to delete the existing app, then re-run the collision check. Only proceed once collision is resolved.
 
-If `npx power-apps list-codeapps` is unavailable in the installed CLI version, skip the pre-flight silently and continue.
+If `pa app list` is unavailable in the installed CLI version, skip the pre-flight silently and continue.
 
 Don't enter plan mode here — that's the planner agent's job in Step 3.
 
@@ -377,8 +379,8 @@ a `"`, a backtick or `$(…)` in it would break out of a shell argument before N
 
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" init --json-file <tmp>/plan-init.json
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id requirements --status active --note "Waiting for your answers to the setup questions"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' init --json-file <tmp>/plan-init.json
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id requirements --status active --note "Waiting for your answers to the setup questions"
 ```
 
 The note is what raises the waiting-for-input banner on the plan, so the user can tell from the page
@@ -506,13 +508,13 @@ and none of it may go through the shell:
 ```
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" set --section requirements --json-file <tmp>/requirements.json
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id requirements --status active --note "Brief confirmed"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' set --section requirements --json-file <tmp>/requirements.json
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id requirements --status active --note "Brief confirmed"
 ```
 
 ### Step 2c — Plan preview (rough, always shown)
 
-> **Goal:** Give the user a cheap exit before any mutation happens. This is the **last point** before the run touches the app itself — no `npx power-apps init`, no Dataverse writes, no agent tokens spent on planning. The one thing already written is the build plan under `docs/`, which Step 2b created so the user has something to read while answering; an abort here leaves that folder and nothing else. After Step 3 starts, every abort gets more expensive (half-written `native-app-plan.md`, partial `_screens_section.md`, architect tokens already burnt).
+> **Goal:** Give the user a cheap exit before any mutation happens. This is the **last point** before the run touches the app itself — no `pa app init`, no Dataverse writes, no agent tokens spent on planning. The one thing already written is the build plan under `docs/`, which Step 2b created so the user has something to read while answering; an abort here leaves that folder and nothing else. After Step 3 starts, every abort gets more expensive (half-written `native-app-plan.md`, partial `_screens_section.md`, architect tokens already burnt).
 
 **Always runs. There is no `--no-preview` flag in v0** — we need calibration data (~10+ runs with recorded estimate-vs-actual) before we can trust the rough estimates enough to let users skip them. Once the data shows estimates are reliably within ±50%, evaluate adding a skip flag for repeat-user workflows.
 
@@ -576,9 +578,9 @@ Proceed, edit brief, or abort? [proceed/edit/abort]
 Raise the wait before showing the estimate, and close the phase once the user approves:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id requirements --status active --note "Waiting for you to approve the plan preview"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id requirements --status active --note "Waiting for you to approve the plan preview"
 # ... after they approve ...
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id requirements --status done
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id requirements --status done
 ```
 
 > "Brief locked in. Planning surfaces up to 4 approval prompts (data platform + native capabilities + connectors → data model when Dataverse is selected → screen graph → screen specs). Data-model readiness is quality-first, with a 10–15 minute target:
@@ -618,7 +620,7 @@ between gates the agents work for minutes, and the plan must not tell the user t
 on them while it is not.
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id architecture --status active --note "Planning the architecture"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id architecture --status active --note "Planning the architecture"
 ```
 
 **Raise every gate in the plan as you present it, and take it down as soon as it is answered** -
@@ -635,11 +637,11 @@ browser, and its banner is how they can tell the run is waiting on them rather t
 ```bash
 DOCS="${PLUGIN_ROOT}/scripts/app-docs.js"
 # Just before presenting gate <N>:
-node "$DOCS" --working-dir "<working_dir>" set --section <section> --json-file <tmp>/<section>.json --state proposed
-node "$DOCS" --working-dir "<working_dir>" step --id <id> --status active --note "Gate <N> — awaiting your approval"
+node "$DOCS" --working-dir '<working_dir>' set --section <section> --json-file <tmp>/<section>.json --state proposed
+node "$DOCS" --working-dir '<working_dir>' step --id <id> --status active --note "Gate <N> — awaiting your approval"
 # As soon as the user approves it:
-node "$DOCS" --working-dir "<working_dir>" set --section <section> --json-file <tmp>/<section>.json --state approved
-node "$DOCS" --working-dir "<working_dir>" step --id <next id> --status active --note "<note from the table>"
+node "$DOCS" --working-dir '<working_dir>' set --section <section> --json-file <tmp>/<section>.json --state approved
+node "$DOCS" --working-dir '<working_dir>' step --id <next id> --status active --note "<note from the table>"
 ```
 
 Flip each section to `approved` when its gate is answered, not later in the Step 3.9 batch. A
@@ -687,6 +689,17 @@ call `detect-publisher-prefix.js`.
 
 ### Foreground Dataverse planning snapshot and evidence
 
+This read-only helper recipe is also used by
+[scoped Dataverse change planning](../../shared/references/dataverse-change-planning.md).
+Those callers supply their own request scope and approvals; they do not run
+the create wizard or dispatch its native-app planner.
+
+Apply [app-working-directory.md](../../shared/references/app-working-directory.md)
+before this recipe. Each shell block below and in Dataverse planning recovery
+re-enters the owner's absolute root. Re-supply the selected identity and artifact
+paths on every call; fresh-shell retries re-execute the complete guarded
+attempt block, including its variable assignments and function definition.
+
 Planning stays read-only. The resolver's `--no-cache` mode may read existing
 identity metadata, but must not persist the environment cache, auth settings,
 or telemetry cluster, and must not replay pending telemetry. Normal resolution
@@ -706,6 +719,7 @@ Branch on the Gate 1-approved
   nested planner or architect rediscover the tenant.
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ACTIVE_ENV_ID" --no-cache --require-tenant
 ```
 
@@ -753,10 +767,11 @@ Detailed advisory discovery is quality-bounded:
   expansion, at most once per newly selected logical name.
 
 ```bash
-SNAPSHOT_PATH="<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json"
-CONCEPTS_PATH="<working_dir>/.tmp/dataverse-concepts.json"
-ARCHITECT_EVIDENCE_PATH="<working_dir>/.tmp/dataverse-architect-evidence.json"
-INVENTORY_CACHE_PATH="<working_dir>/.tmp/dataverse-inventory-cache.json"
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+SNAPSHOT_PATH='<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json'
+CONCEPTS_PATH='<working_dir>/.tmp/dataverse-concepts.json'
+ARCHITECT_EVIDENCE_PATH='<working_dir>/.tmp/dataverse-architect-evidence.json'
+INVENTORY_CACHE_PATH='<working_dir>/.tmp/dataverse-inventory-cache.json'
 
 run_dataverse_planning_attempt() {
 if ! node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
@@ -861,6 +876,8 @@ pair activates the architect's `snapshot-only` path: no Bash discovery and no
 live Dataverse calls inside the agent. For `connector-only`, pass the mode
 explicitly and state that both paths are not supplied; never provide placeholder
 file paths.
+
+#### Planner completion dispatch
 
 **Hard rule — planner writes are restricted during Step 3.** The planner (and any sub-agents it spawns) is permitted to write to **only**:
 
@@ -1082,6 +1099,8 @@ non-Dataverse context, capped at 2 retries; `BLOCKED:` reports the blocker. Unkn
 lines are malformed. Recoverable artifact/input failures return to their
 owning phase for repair; they never authorize skipping an applicable gate.
 
+#### Dataverse planning recovery
+
 The structured Dataverse signals below use monotonic name tracking or
 deterministic revision instead of the generic retry cap. In `required` only,
 initialize two in-memory sets from the current validated snapshot before
@@ -1131,6 +1150,7 @@ Compute `NEW_DETAIL_NAMES = requested names - DETAIL_ATTEMPTED_NAMES`.
   and a new app-owned table.
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --env-url "$ACTIVE_ENV_URL" \
   --tenant-id "$ACTIVE_TENANT_ID" \
@@ -1179,6 +1199,7 @@ snapshot. Compute
   this same set-difference rule automatically.
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/create-dataverse-snapshot.js" \
   --env-url "$ACTIVE_ENV_URL" \
   --tenant-id "$ACTIVE_TENANT_ID" \
@@ -1261,7 +1282,7 @@ user-facing design decision without another planning question.
 4. Persist the answer:
 
    ```bash
-   echo "<chosen-industry-slug>" > "<working_dir>/.industry-confirmed"
+   echo "<chosen-industry-slug>" > '<working_dir>/.industry-confirmed'
    ```
 
    For option (e), let the user free-text a description; map it to the closest slug (or `productivity` as final fallback) and store that.
@@ -1365,13 +1386,13 @@ document explaining what was agreed:
 
 ```bash
 DOCS="${PLUGIN_ROOT}/scripts/app-docs.js"
-node "$DOCS" --working-dir "<working_dir>" set --section architecture --json-file <tmp>/architecture.json --state approved
-node "$DOCS" --working-dir "<working_dir>" step --id architecture --status done --note "Gate 1 — approved"
-node "$DOCS" --working-dir "<working_dir>" set --section trust --json-file <tmp>/trust.json --state proposed
-node "$DOCS" --working-dir "<working_dir>" set --section dataModel --json-file <tmp>/data-model.json --state approved
-node "$DOCS" --working-dir "<working_dir>" step --id data-model --status done --note "Gate 2 — <n> tables approved"
-node "$DOCS" --working-dir "<working_dir>" set --section screens --json-file <tmp>/screens.json --state approved
-node "$DOCS" --working-dir "<working_dir>" step --id screen-plan --status done --note "Gates 3-4 — <n> screens approved"
+node "$DOCS" --working-dir '<working_dir>' set --section architecture --json-file <tmp>/architecture.json --state approved
+node "$DOCS" --working-dir '<working_dir>' step --id architecture --status done --note "Gate 1 — approved"
+node "$DOCS" --working-dir '<working_dir>' set --section trust --json-file <tmp>/trust.json --state proposed
+node "$DOCS" --working-dir '<working_dir>' set --section dataModel --json-file <tmp>/data-model.json --state approved
+node "$DOCS" --working-dir '<working_dir>' step --id data-model --status done --note "Gate 2 — <n> tables approved"
+node "$DOCS" --working-dir '<working_dir>' set --section screens --json-file <tmp>/screens.json --state approved
+node "$DOCS" --working-dir '<working_dir>' step --id screen-plan --status done --note "Gates 3-4 — <n> screens approved"
 ```
 
 **Write a first-pass trust report here.** Gate 1 settles the device capabilities and connectors,
@@ -1390,8 +1411,8 @@ the ER diagram, the column tables, and the new/reused/extended colours are all d
 pending, or the plan never reaches 100%:
 
 ```bash
-node "$DOCS" --working-dir "<working_dir>" step --id data-model --status skipped
-node "$DOCS" --working-dir "<working_dir>" step --id dataverse --status skipped
+node "$DOCS" --working-dir '<working_dir>' step --id data-model --status skipped
+node "$DOCS" --working-dir '<working_dir>' step --id dataverse --status skipped
 ```
 
 ### Step 4 — Auth & environment selection
@@ -1411,7 +1432,7 @@ If the resolved environment doesn't match what the planner used in Step 3, ask t
 Open the scaffold phase:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id scaffold --status active
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id scaffold --status active
 ```
 
 This step is template-only and foreground-only. Do not clone/copy templates, do not run background scaffold jobs, and do not use any legacy fallback path.
@@ -1496,7 +1517,7 @@ Manual `npm run dev` remains the development entry point, and npm invokes `prede
 The template's `metro.config.js` delegates to `createPowerAppsMetroConfig` from `@microsoft/power-apps-native-host/config/metroConfig`; that factory installs sanitized Metro terminal and HTTP bundle-failure logging under `.powernative/metro-logs/`. Manual starts and `/debug-app` use the same log source without a process-owning wrapper.
 
 ```bash
-node - "<working_dir>" <<'NODE'
+node - '<working_dir>' <<'NODE'
 const fs = require('node:fs');
 const path = require('node:path');
 const root = process.argv[2];
@@ -1540,9 +1561,15 @@ template or repair the precise stale import before continuing.
 
 **Fix 6 — Schema generation boundary**
 
-`app/_layout.tsx` imports `schemaMap` from `src/generated/connectorSchemas.ts`, which is generated by `npm run generate-schemas` (the `generate-connector-schemas` binary from the `@microsoft/power-apps-cli` devDep). Do not generate an empty schema map during initial scaffold: the template's `@ts-ignore` boundary lets `tsc` validate the scaffold without that artifact, and schema generation is more useful after a data source exists or immediately before dev/build entry points.
+`app/_layout.tsx` imports `schemaMap` from `src/generated/connectorSchemas.ts`, which
+is generated by the template's `npm run generate-schemas` script. This builds the
+runtime schema map; Power Apps CLI add/refresh/remove commands own source
+registrations and generated models/services. Do not generate an empty schema map
+during initial scaffold: the template's `@ts-ignore` boundary lets `tsc` validate
+the scaffold without that artifact, and schema generation is more useful after a
+data source exists or immediately before dev/build entry points.
 
-Do NOT hand-write a stub `connectorSchemas.ts` — the generated output has a specific shape that downstream code depends on; a placeholder will break `npx power-apps push`.
+Do NOT hand-write a stub `connectorSchemas.ts` — the generated output has a specific shape that downstream code depends on; a placeholder will break `pa app push`.
 
 **Why `tsc` already passes post-clone (current template, PR #30):** the template's `app/_layout.tsx` and `src/playerConfig.ts` carry `// @ts-ignore` comments above the `power.config.json` and `connectorSchemas` imports specifically so the project type-checks before `power.config.json` and `connectorSchemas.ts` exist. **Never strip these `@ts-ignore` lines** — Fix 8 below preserves them when patching `app/_layout.tsx` to thread the project's `tamaguiConfig` into `PowerAppsProvider`, and any future `Edit` to either file MUST keep them. Removing them resurfaces a `tsc` failure against missing generated files.
 
@@ -1571,7 +1598,7 @@ not wrap `<Slot />` with `SafeAreaView`; each rendered route owns its content
 edges to avoid double insets.
 
 Key points:
-- **Do NOT remove the two `// @ts-ignore` lines.** They keep `tsc` green pre-`npx power-apps init`.
+- **Do NOT remove the two `// @ts-ignore` lines.** They keep `tsc` green pre-`pa app init`.
 - **Do NOT add an outer `<TamaguiProvider>`** — `PowerAppsProvider` composes it internally.
 - **`SafeAreaProvider` wraps the tree** so child screens can call `useSafeAreaInsets()` without a context error. Each route must use `SafeAreaView` or explicit insets for its own visible edges.
 - `tamaguiConfig` is imported from `'../tamagui.config'` (the `default export` of `tamagui.config.ts` at project root).
@@ -1599,11 +1626,11 @@ Do not run `npm install` inside Step 5 — in template-only mode dependencies mu
 **Telemetry checkpoint: `initialize_power_apps_project`**
 
 **Print before starting:**
-> "→ [Step 6/13] Running `npx power-apps init -t MobileApp` to write power.config.json for environment <env-id>. ~15–30 seconds."
+> "→ [Step 6/13] Running `pa app init -t MobileApp` to write power.config.json for environment <env-id>. ~15–30 seconds."
 
 ```bash
 cd <working_dir>
-npx power-apps init -t MobileApp --display-name "<displayName>" --environment-id "<environment-id>" --non-interactive
+$PA app init -t MobileApp --display-name "<displayName>" --environment-id "<environment-id>" --non-interactive
 ```
 
 Substitute the approved Step 2 display name and Step 4 environment ID using
@@ -1622,7 +1649,7 @@ do not add this CLI-generated file to Step 5's manual validation targets or hand
 This step verifies dependencies only. The user must have run `npm install` before invoking the skill.
 
 ```bash
-[ -d "<working_dir>/node_modules/expo" ] && echo "✓ node_modules present" || echo "✗ missing — run npm install in the template folder and rerun"
+[ -d '<working_dir>/node_modules/expo' ] && echo "✓ node_modules present" || echo "✗ missing — run npm install in the template folder and rerun"
 ```
 
 If `node_modules/expo` is missing, STOP. Tell the user to run `npm install` in the template folder. Do not provision ADO tokens or run `npm install` from this skill.
@@ -1647,7 +1674,7 @@ it reports an unsupported layout.
 With `node_modules/` populated, run the scaffold TypeScript gate. Do **not** run `npm run generate-schemas` here just to produce an empty `connectorSchemas.ts`; the template is intentionally type-checkable before that file exists, and the script is already run after data-source changes and again before Step 12 starts the dev server.
 
 ```bash
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
 `tsc` must pass here. If it doesn't, the post-clone surgery in Step 5 (Fixes 1–7) is incomplete — do not proceed to data sources or screen builders. Re-read the Step 5 fixes against the current working dir contents and reapply any missed edit.
@@ -1657,13 +1684,13 @@ This is the **Scaffold gate** from the TypeScript Gate Policy. If it fails, capt
 A clean scaffold gate is what completes the scaffold phase:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id scaffold --status done
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id scaffold --status done
 ```
 
 ### Step 6.7 — Seed the memory bank
 
 ```bash
-cp "${PLUGIN_ROOT}/shared/memory-bank.md" "<working_dir>/memory-bank.md"
+cp "${PLUGIN_ROOT}/shared/memory-bank.md" '<working_dir>/memory-bank.md'
 ```
 
 Fill in the Project facts and Power Platform context sections from Steps 2 and 4. From here on, every step appends to the relevant section of `<working_dir>/memory-bank.md` immediately after success — not at the end. This is what enables Step 0's resume on a future run.
@@ -1693,7 +1720,7 @@ visual_companion: <yes|no>   # default from Step 2b; applied at Step 6.75 and la
 it open, because this branch never reaches the `done` call below:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id design --status skipped
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id design --status skipped
 ```
 
 Marking it `active` here instead would leave it active through auth and most of Step 8, until
@@ -1705,7 +1732,7 @@ opening the next phase auto-closed it as `done` — reporting a design system th
 asks for brand inputs, a cost choice and a style pick, so the phase opens as waiting:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id design --status active --note "Waiting for your brand and design choices"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id design --status active --note "Waiting for your brand and design choices"
 ```
 
 ```
@@ -1728,7 +1755,7 @@ As soon as `/design-system` returns, replace the note — the user has answered 
 working again:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id design --status active --note "Applying your design system"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id design --status active --note "Applying your design system"
 ```
 
 Handle the return per the status protocol (AGENTS.md rule #10):
@@ -1778,7 +1805,7 @@ ownership contract during this phase.
 of TSX exists. Those same per-screen blocks become the carousel:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" phone --stage screens --screens-file <tmp>/screens-preview.json
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' phone --stage screens --screens-file <tmp>/screens-preview.json
 ```
 
 `screens-preview.json` is `[{ "name": "Today's route", "html": "<the screen's markup>" }, …]`, in
@@ -1811,8 +1838,8 @@ goes to a file rather than through the shell:
 
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" set --section design --json-file <tmp>/design.json
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id design --status done
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' set --section design --json-file <tmp>/design.json
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id design --status done
 ```
 
 Only `#rrggbb` literals render as swatches; any other value is shown as text rather than
@@ -1827,7 +1854,7 @@ own the plan showed nothing in progress here at all: the design phase closes bef
 Dataverse phase does not open until Step 8.
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id auth --status active --note "Waiting for your Entra ID app registration"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id auth --status active --note "Waiting for your Entra ID app registration"
 ```
 
 **Print before starting:**
@@ -2028,8 +2055,8 @@ Do NOT touch `src/playerConfig.ts` — auth identifiers live in `auth.config.jso
 Close the auth phase once the client ID is written and the config is in place:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" set --section auth --json-file <tmp>/auth.json
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id auth --status done
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' set --section auth --json-file <tmp>/auth.json
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id auth --status done
 ```
 
 `auth.json` is `{"status":"<Configured — how sign-in was set up|Deferred — why>"}`. It goes to a
@@ -2050,7 +2077,7 @@ Otherwise open the Dataverse phase now. Creating tables is one of the longest wa
 with no phase open the plan reads "Waiting to start" through all of it:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id dataverse --status active
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id dataverse --status active
 ```
 
 **Print before starting:**
@@ -2077,23 +2104,23 @@ resolved context and these structured artifacts, never values inferred from
 free-form Markdown:
 
 ```bash
-SCHEMA_CONTRACT="<working_dir>/.tmp/dataverse-schema-contract.json"
-APPROVAL_RECEIPT="<working_dir>/.tmp/mobile-plan-status.json"
-FOREGROUND_PLANNING_SNAPSHOT="<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json"
-RECONCILIATION_SCOPE="<working_dir>/.tmp/dataverse-reconciliation-scope.json"
-EXECUTION_RECONCILIATION="<working_dir>/.tmp/dataverse-execution-reconciliation.json"
-OPERATION_MANIFEST="<working_dir>/.tmp/dataverse-operation-manifest.json"
-PUBLISH_CHECKPOINT="<working_dir>/.tmp/dataverse-publish-pending.json"
+SCHEMA_CONTRACT='<working_dir>/.tmp/dataverse-schema-contract.json'
+APPROVAL_RECEIPT='<working_dir>/.tmp/mobile-plan-status.json'
+FOREGROUND_PLANNING_SNAPSHOT='<working_dir>/.tmp/dataverse-foreground-planning-snapshot.json'
+RECONCILIATION_SCOPE='<working_dir>/.tmp/dataverse-reconciliation-scope.json'
+EXECUTION_RECONCILIATION='<working_dir>/.tmp/dataverse-execution-reconciliation.json'
+OPERATION_MANIFEST='<working_dir>/.tmp/dataverse-operation-manifest.json'
+PUBLISH_CHECKPOINT='<working_dir>/.tmp/dataverse-publish-pending.json'
 ACTIVE_SOLUTION_UNIQUE_NAME="Default"
 
 test -f "$SCHEMA_CONTRACT" -a -f "$APPROVAL_RECEIPT" \
   -a -f "$FOREGROUND_PLANNING_SNAPSHOT" \
-  -a -f "<working_dir>/native-app-plan.md"
+  -a -f '<working_dir>/native-app-plan.md'
 
 node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --bind-plan "$SCHEMA_CONTRACT" \
   --approval-receipt "$APPROVAL_RECEIPT" \
-  --plan "<working_dir>/native-app-plan.md" \
+  --plan '<working_dir>/native-app-plan.md' \
   --output "$SCHEMA_CONTRACT"
 
 node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
@@ -2116,7 +2143,7 @@ node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --contract "$SCHEMA_CONTRACT" \
   --approval-receipt "$APPROVAL_RECEIPT" \
   --reconciliation "$EXECUTION_RECONCILIATION" \
-  --plan "<working_dir>/native-app-plan.md" \
+  --plan '<working_dir>/native-app-plan.md' \
   --output "$OPERATION_MANIFEST" \
   --environment-id "$ACTIVE_ENV_ID" \
   --env-url "$ACTIVE_ENV_URL" \
@@ -2138,7 +2165,7 @@ node "${PLUGIN_ROOT}/scripts/build-dataverse-operation-manifest.js" \
   --contract "$SCHEMA_CONTRACT" \
   --approval-receipt "$APPROVAL_RECEIPT" \
   --reconciliation "$EXECUTION_RECONCILIATION" \
-  --plan "<working_dir>/native-app-plan.md" \
+  --plan '<working_dir>/native-app-plan.md' \
   --environment-id "$ACTIVE_ENV_ID" \
   --env-url "$ACTIVE_ENV_URL" \
   --tenant-id "$ACTIVE_TENANT_ID" \
@@ -2153,6 +2180,13 @@ artifact paths:
 
 ```
 Invoke skill: /add-dataverse
+
+Context:
+  MOBILE_APP_ORCHESTRATING=1
+  orchestrator: create-mobile-app
+  working_dir: <working_dir>
+  phase: implementation
+  approved_scope: <approved Data Model and bound operation-manifest artifacts>
 
 Arguments:
   --working-dir <working_dir>
@@ -2173,8 +2207,8 @@ The publish checkpoint is retained across schema/PublishXml failure and
 deleted only after successful publish, so a rerun retries pending publication
 even when schema writes are already idempotent.
 It creates Tier 0 → N tables, applies extensions, runs
-`npx power-apps add-data-source --api-id dataverse --org-url <envUrl>
---resource-name <name>` per service-required table from the app root,
+`pa app add data-source --connector dataverse --org-url <envUrl>
+--table <name>` per service-required table from the app root,
 type-checks, and returns. Real matched A/B runs are still required to quantify
 the end-to-end time saved; do not present local manifest timing as a guaranteed
 1–3 minute Dataverse result.
@@ -2183,17 +2217,17 @@ After `/add-dataverse` returns, run the **Dataverse/generated-services gate**:
 
 ```bash
 npm run generate-schemas
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
 If this fails, do not continue to native capabilities, connectors, navigation, or screens. Capture the full error list once, batch-fix generated-service/model or alias-map issues, then rerun the gate. If the failure is a hidden Dataverse collision already recovered via an alias (for example `aircraft` → `aircraftv2`), make sure the alias is reflected in `native-app-plan.md`, `memory-bank.md`, and the Generated Services snapshot before rerunning.
 
-### Step 8.5 — Seed sample data (auto)
+### Step 8.5 — Seed sample data (approved scope)
 
 Before sample data or offline setup, require the materialized table inventory
 from `/add-dataverse` Step 6d, including verified reused tables. Compare its
 coverage with the validated operation manifest's `service.requiredTables` and
-run `verify-dataverse-services.js --project-root "<working_dir>" --manifest "$OPERATION_MANIFEST"`.
+run `verify-dataverse-services.js --project-root '<working_dir>' --manifest "$OPERATION_MANIFEST"`.
 Zero schema writes is a valid reuse-only result, not failed materialization.
 If an older run produced an empty or partial table inventory, recover through
 `/add-dataverse` Steps 6c–6d using the approved service list and verified live
@@ -2206,18 +2240,38 @@ produce a usable .datamodel-manifest.json` with the remaining verification
 failure. Do not seed or offer offline setup from unverified table names.
 
 **Print before starting:**
-> "→ [Step 8.5/13] Checking existing record counts and seeding sample data into tables with fewer than 5 records."
+> "→ [Step 8.5/13] Confirming seed scope, then checking record counts for approved tables."
 
-Invoke `/add-sample-data` after Step 8. This step is **not optional** — every fresh-scaffolded app must have data to render on first launch:
+Run this phase after Step 8 for Dataverse apps. Derive the seed candidate list
+from the approved service requirements and verified materialized inventory,
+excluding standard system tables by default. Include reused custom tables when
+the approved app needs sample data from them. Do not infer insertion permission
+from `status: new`, record counts, or manifest presence. If the initial approval
+did not cover the exact seed set and count/media policy, obtain that approval
+before invoking; an empty or declined scope skips seeding without cloud writes.
 
 ```
 Invoke skill: /add-sample-data
 
+Context:
+  MOBILE_APP_ORCHESTRATING=1
+  orchestrator: create-mobile-app
+  working_dir: <working_dir>
+  phase: implementation
+  approved_scope: <approved seed tables and count/media policy>
+  retiring_tables: <empty for fresh creation>
+
 Arguments:
-  --working-dir <working_dir>
+  --working-dir '<working_dir>'
+  --tables "<approved-seed-table-logical-names>"
 ```
 
-`/add-sample-data` reads `.datamodel-manifest.json`, queries the current record count for each table, skips any table that already has ≥5 records, and seeds the rest with contextually appropriate rows in dependency-tier order. Inserted GUIDs are tracked in `memory-bank.md` for idempotent re-runs.
+`/add-sample-data` validates this explicit allowlist against
+`.datamodel-manifest.json` before per-table discovery, then checks row counts
+only for approved targets. It skips tables with enough rows and seeds the
+eligible targets in dependency order. Inserted GUIDs are tracked in
+`memory-bank.md` for idempotent re-runs. Missing parents cannot widen the seed
+scope without returning to the owner for approval.
 
 If the seeding step fails (network drop, permission error, etc.), surface the
 failure but continue to the offline-profile phase — the app is still usable,
@@ -2249,7 +2303,7 @@ Otherwise ask one neutral foreground question. Say so in the plan first, and rep
 once the user answers:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id dataverse --status active --note "Waiting for your offline support choice"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id dataverse --status active --note "Waiting for your offline support choice"
 ```
 
 
@@ -2268,6 +2322,12 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --i
 >   `status: not-applicable`, then continue to Step 9
 
 If the user selects Yes, invoke `/setup-offline-profile` from the project root.
+Pass `--working-dir '<working_dir>'` and invocation context
+`MOBILE_APP_ORCHESTRATING=1`, `orchestrator: create-mobile-app`, the same absolute
+`working_dir`, `phase: implementation`, and the selected environment ID/URL/tenant.
+This choice approves entering the offline wizard, not its prerequisite or
+profile mutations; the wizard retains its own gates and forwards their exact
+approved scope to its helpers.
 It consumes the materialized manifest, owns its own profile approval flow, and
 writes `offline-profile.json`. Surface concerns and stop on a substantive
 failure. Do not reopen data-model or screen approvals after this choice.
@@ -2275,7 +2335,7 @@ failure. Do not reopen data-model or screen approvals after this choice.
 Tables and generated services now exist, so the Dataverse phase is complete:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id dataverse --status done
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id dataverse --status done
 ```
 
 ### Step 9 — Apply native capabilities
@@ -2285,7 +2345,7 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --i
 Open the capabilities phase; Step 10 closes it after connectors are added:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id capabilities --status active
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id capabilities --status active
 ```
 
 **Print before starting:**
@@ -2327,12 +2387,12 @@ Read the `## Design` section from `native-app-plan.md` and follow the execution 
 | `brand/tokens.ts` exists | **Highest priority.** Apply [`../design-system/references/tamagui-integration.md`](../design-system/references/tamagui-integration.md) in brand-import mode, export the resolved app light/dark themes, then wire matching `ThemeTokens` into `app/_layout.tsx`. |
 | `## Design` says `required` | Apply the same reference using the approved `## Design` section. Builds custom token system + aliases. |
 | `## Design` says `add-aliases` | Verify `tamagui.config.ts` uses `createPowerAppsTamaguiConfig`; the host already provides the semantic aliases. |
-| Custom font only | `npx expo install expo-font` + `useFonts()` in `_layout.tsx`; preserve the host config factory. |
+| Custom font only | `npx --no-install expo install expo-font` + `useFonts()` in `_layout.tsx`; preserve the host config factory. |
 
 **No unchecked path.** Screen-builders require `$surface0`–`$surface3` and
 `$accent*` aliases. On the default path, verify the host factory rather than
 rewriting the config. Pass the complete `## Design` section verbatim — not a
-summary. Re-run `npx tsc --noEmit` after Tamagui config changes.
+summary. Re-run `npx --no-install tsc --noEmit` after Tamagui config changes.
 
 **Brand-token wiring** — when `brand/tokens.ts` exists, the Tamagui integration
 exports `appLightTheme` and `appDarkTheme`. Map those resolved semantic values
@@ -2403,6 +2463,11 @@ Read the `## Connectors` section from `native-app-plan.md`. If it says "None", s
 
 For each row in the table, route to the correct skill based on the API name:
 
+Pass `MOBILE_APP_ORCHESTRATING=1`, `orchestrator: create-mobile-app`,
+`phase: implementation`, `working_dir`, and `approved_scope` containing the
+connector row and supplied operation/dataset/table/connection choices to each
+invocation. A dedicated skill inherits this context when the generic skill routes.
+
 | API name | Invoke |
 |---|---|
 | `sharepointonline` | `/add-sharepoint --working-dir <working_dir>` |
@@ -2410,12 +2475,12 @@ For each row in the table, route to the correct skill based on the API name:
 
 Run sequentially — each generates files under `src/generated/`. Parallel writes would race.
 
-**Mutation-heavy steps stay sequential.** Dataverse table creation (Step 8), connector adds (Step 10), and generated-service writes are all sequential by design. The fast path in this skill is **parallel screen generation** (Step 11) plus **fewer prompts** (token cache, sticky policies, auto-proceed) — NOT parallelizing the data-source/service mutations. Do not attempt to parallel-batch `npx power-apps add-data-source` or `/add-connector` invocations; they share `src/generated/` and `power.config.json` and will race or corrupt state.
+**Mutation-heavy steps stay sequential.** Dataverse table creation (Step 8), connector adds (Step 10), and generated-service writes are all sequential by design. The fast path in this skill is **parallel screen generation** (Step 11) plus **fewer prompts** (token cache, sticky policies, auto-proceed) — NOT parallelizing the data-source/service mutations. Do not attempt to parallel-batch `pa app add data-source` or `/add-connector` invocations; they share `src/generated/` and `power.config.json` and will race or corrupt state.
 
 Device capabilities and connectors are both wired, so close the phase:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id capabilities --status done
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id capabilities --status done
 ```
 
 **Finalise the trust report.** Gate 1 wrote a first pass from the approved plan; everything it
@@ -2424,7 +2489,7 @@ what the offline profile syncs. Rewrite it in full and mark it `approved`, so it
 app *does* rather than what was intended. `set` merges, so restate every key you want to change.
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" set --section trust --json-file <tmp>/trust.json --state approved
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' set --section trust --json-file <tmp>/trust.json --state approved
 ```
 
 `trust.json` has four keys:
@@ -2482,7 +2547,7 @@ Open the screens phase here rather than at the first screen wave. Navigation, sh
 first wave are most of what is left of the run, and the plan should say what is being built:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id screens --status active
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id screens --status active
 ```
 
 Read `## Screens → Navigation Pattern` from `native-app-plan.md`.
@@ -2601,7 +2666,7 @@ return (
 );
 ```
 
-Run `npx tsc --noEmit` after the edit. If it fails, check that the `Tabs.Screen name` values exactly match the file names under `app/(app)/` (without `.tsx`).
+Run `npx --no-install tsc --noEmit` after the edit. If it fails, check that the `Tabs.Screen name` values exactly match the file names under `app/(app)/` (without `.tsx`).
 
 **How to build the `<Drawer>` block (Drawer pattern only):**
 
@@ -2642,7 +2707,7 @@ return (
 - `drawerType: 'front'` — standard mobile pattern (drawer slides over content)
 - Icon prop is `drawerIcon` (not `tabBarIcon`)
 
-Run `npx tsc --noEmit` after the edit. If it fails, check that the `Drawer.Screen name` values exactly match the file names under `app/(app)/` (without `.tsx`).
+Run `npx --no-install tsc --noEmit` after the edit. If it fails, check that the `Drawer.Screen name` values exactly match the file names under `app/(app)/` (without `.tsx`).
 
 ### Step 10.7 — Snapshot generated services into the plan
 
@@ -2715,7 +2780,7 @@ Read all per-screen specs in `## Screens → ### Per-Screen Specs`. Identify:
 
 ```bash
 # Example — if plan has "Inspections" entity used on list + detail + home screens:
-cat > "<working_dir>/src/components/InspectionRow.tsx" << 'EOF'
+cat > '<working_dir>/src/components/InspectionRow.tsx' << 'EOF'
 ... generated component ...
 EOF
 ```
@@ -2915,7 +2980,7 @@ This sub-step previously appended `### Standard Imports` + per-screen `#### Reso
 After Step 10b layouts, Step 10.7 service snapshot, and Step 10.8 shared code/skeletons are all written, run the **Navigation/skeleton gate**:
 
 ```bash
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
 If this fails, do not launch Step 11. Capture the full error list once, batch-fix layout names, route paths, skeleton imports, shared component exports, generated service imports, or hook signatures, then rerun the gate. Screen-builders should start only from a clean shell with typed skeletons that compile with `return null`.
@@ -2989,13 +3054,13 @@ After the wave's TypeScript gate passes, and only then, print the next wave star
 After handling every builder status in the wave, run the **Screen-wave gate** before launching the next wave:
 
 ```bash
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
 **Mark screen progress in the plan** once the wave's TypeScript gate is clean:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id screens --status active --note "<n> of <total> screens built"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id screens --status active --note "<n> of <total> screens built"
 ```
 
 The plan's phone is already showing the screen carousel from Step 6.75, so there is nothing to
@@ -3011,7 +3076,7 @@ Common wave-gate repair classes to batch instead of fixing line-by-line:
 - Dataverse create/update payload typing: prefer typed helper wrappers; if generated base types require server-owned fields, isolate any `as any` at the helper boundary, not throughout screen JSX.
 - Stale connector TODOs: remove `TODO(connector-not-yet-added)` when the service exists in the Generated Services snapshot.
 
-**After all waves return and the last wave gate is clean**, run one final `npx tsc --noEmit` before Step 12 to catch cross-screen issues that only appear when all screens exist. If it fails, use the same consolidated batch-repair flow.
+**After all waves return and the last wave gate is clean**, run one final `npx --no-install tsc --noEmit` before Step 12 to catch cross-screen issues that only appear when all screens exist. If it fails, use the same consolidated batch-repair flow.
 
 Then run the canonical route-contract gate from the app root:
 
@@ -3069,7 +3134,7 @@ These validators are invoked explicitly by this mobile workflow. They are not re
 After all validators report no auto-fixable issues, run:
 
 ```bash
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
 If `tsc` fails, use the existing TypeScript batch-repair policy. If stylistic issues remain after 2 retries or are judgement calls, do not keep looping. Record them in `memory-bank.md` and surface them as:
@@ -3086,7 +3151,7 @@ After `tsc` passes, offer a static HTML preview. The dev server starts next (Ste
 Mark the wait, since the run does not continue until the user picks:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id screens --status active --note "Waiting for your preview choice"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id screens --status active --note "Waiting for your preview choice"
 ```
 
 
@@ -3109,7 +3174,7 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --i
 Every screen is built and type-checked, so close the screens phase:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id screens --status done
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id screens --status done
 ```
 
 ### Step 12 — Start dev server (Metro writes project-local logs)
@@ -3122,7 +3187,7 @@ node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --i
 Open the final phase (Step 13 marks it done):
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id run --status active
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id run --status active
 ```
 
 This skill launches the template's canonical `npm run dev` command. The template owns the `dev` and `predev` command bodies; this skill relies only on npm's lifecycle ordering and does not require either script to expand to a particular command. Logging is configured in `metro.config.js`.
@@ -3142,7 +3207,7 @@ The **port** is the log identity: it is what the QR encodes, what the device dia
 **Launch command:**
 
 ```bash
-cd "<working_dir>"
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npm run dev
 ```
 
@@ -3153,7 +3218,7 @@ This is a long-running dev server. In hosts that support background terminals, r
 Read the initial terminal output and locate the generated `.powernative` log directly:
 
 ```bash
-ls -t "<working_dir>/.powernative/metro-logs"/metro-*-pid-*-port-*.log 2>/dev/null | head -1
+ls -t '<working_dir>/.powernative/metro-logs'/metro-*-pid-*-port-*.log 2>/dev/null | head -1
 ```
 
 Branch as follows:
@@ -3167,7 +3232,7 @@ Branch as follows:
 **When Expo prints a Metro URL:** Do not rely on Expo's terminal-rendered QR as the only presentation path.
 
 1. **Generate QR code PNG and present it to the user** (chat-first, deterministic fallback):
-  - Define `METRO_QR="<working_dir>/.expo/metro-qr.png"` and run `npx --yes qrcode -o "$METRO_QR" "<metro-url>"`. If the project's npm config requires auth and the fetch fails with `E401`, retry once with `npm_config_registry=https://registry.npmjs.org/ npm_config_always_auth=false` prefixed.
+  - Define `METRO_QR='<working_dir>/.expo/metro-qr.png'` and run `npx --no-install qrcode -o "$METRO_QR" "<metro-url>"`. The template pins `qrcode` as a devDependency, so this runs the copy from the user's `npm install` and never downloads. If it fails (for example, a project created before the pin), continue without the image — never retry with `--yes`, a bare `npx qrcode`, or a different registry.
   - Verify the PNG with a host-neutral Node check: `node -e "const fs=require('node:fs'); process.exit(fs.existsSync(process.argv[1]) ? 0 : 1)" "$METRO_QR"`. If it fails, print the qrcode error and continue without the image.
   - **Chat-first render (best effort):** read and base64-encode the file with Node (`node -e "process.stdout.write(require('node:fs').readFileSync(process.argv[1]).toString('base64'))" "$METRO_QR"`) and embed in markdown as a data URI (`![QR](data:image/png;base64,<data>)`) so hosts that support inline image markdown show the QR directly in chat.
   - **Guaranteed visible fallback: the build plan, not a new window.** If inline chat image rendering is unavailable, do **not** open the PNG with the host's file-open tool or an OS command. The plan already draws the QR in its phone frame and links the file underneath it for scanning full size, so a window opening on top of a run the user is watching adds nothing. Print the quoted path instead, and point at the plan. Never interpolate an unquoted project path.
@@ -3192,8 +3257,8 @@ Do not persist PIDs, ports, or Metro URLs to the memory bank. They are ephemeral
 **Put the QR in the plan** so the document ends on the thing the user acts on:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" phone --stage qr \
-  --qr-image "<working_dir>/.expo/metro-qr.png" --qr-url "<metro-url>"
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' phone --stage qr \
+  --qr-image '<working_dir>/.expo/metro-qr.png' --qr-url "<metro-url>"
 ```
 
 The PNG is inlined as a data URI, so the plan still shows the code after `.expo/` is cleaned. This
@@ -3214,7 +3279,7 @@ Only invoke `/debug-app` if the user asks for debugging or gives a concrete symp
 When the user is ready to deploy:
 
 ```
-/deploy            # runs npm run build + npx power-apps push
+/deploy            # runs npm run build + pa app push
 ```
 
 ### Step 13 — Summary
@@ -3244,7 +3309,7 @@ Debug logs    : .powernative/metro-logs/
 Close the build plan before printing the summary:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir "<working_dir>" step --id run --status done
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' step --id run --status done
 ```
 
 Point the user at `docs/create-app-plan.html` once — it holds the environment, the approved data
