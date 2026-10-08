@@ -107,7 +107,7 @@ Do NOT attempt to read `app.config.js` from the working directory — scaffoldin
 
 From the planner prompt extract:
 - **Target platforms** — always iOS + Android. The foreground does not ask the user to choose a subset; retain platform-specific fallback behavior for both.
-- **Native capability hints** — words like "scan", "photo", "camera" -> `expo-camera`; "pick file", "upload PDF", "import document", "attach file" -> `expo-document-picker`; "generate PDF", "export report", "print report", "evidence packet" -> `pdf-report` (`expo-print` plus optional `expo-sharing`); "view PDF", "open PDF", "preview PDF" -> `native-pdf-viewer` for HTTPS URLs or local `file://` URIs with `@microsoft/power-apps-native-pdf-viewer` 0.2.9+; "signature", "sign off", "approval", "pen", "ink", "draw" -> `pen-input` with `@microsoft/power-apps-native-pen-input`; "track location", "background location", "GPS tracking", "follow my route", "breadcrumb", "field worker location" -> `geolocation` with `@microsoft/power-apps-native-bglocation` (continuous/background tracking + Dataverse sync); "where am I", "current location", "one-shot location", "tag this with my coordinates" -> one-shot `location` with `expo-location`; "save token", "credentials" -> `expo-secure-store`; "share / send" -> `expo-sharing`; "save file / download" -> `expo-file-system`. **Capability hints that the template does NOT ship** (including PDF viewer, PDF report, sharing, pen, or geolocation packages when absent) are surfaced to the user as transparency notes per Step 3 - never silently promoted into the plan. If the request is generated-report-shaped and the Power Apps PDF viewer package is absent, fall back to `pdf-report` only when `expo-print` is present; otherwise drop the PDF capability.
+- **Native capability hints** — words like "photo", "camera" -> `camera` with `expo-image-picker`; "scan", "barcode", "QR" -> `barcode-scanner` with `expo-camera`; "pick file", "upload PDF", "import document", "attach file" -> `expo-document-picker`; "generate PDF", "export report", "print report", "evidence packet" -> `pdf-report` (`expo-print` plus optional `expo-sharing`); "view PDF", "open PDF", "preview PDF" -> `native-pdf-viewer` for HTTPS URLs or local `file://` URIs with `@microsoft/power-apps-native-pdf-viewer` 0.2.9+; "signature", "sign off", "approval", "pen", "ink", "draw" -> `pen-input` with `@microsoft/power-apps-native-pen-input`; "track location", "background location", "GPS tracking", "follow my route", "breadcrumb", "field worker location" -> `geolocation` with `@microsoft/power-apps-native-bglocation` (continuous/background tracking + Dataverse sync); "where am I", "current location", "one-shot location", "tag this with my coordinates" -> one-shot `location` with `expo-location`; "save token", "credentials" -> `expo-secure-store`; "share / send" -> `expo-sharing`; "save file / download" -> `expo-file-system`. **Capability hints that the template does NOT ship** (including PDF viewer, PDF report, sharing, pen, or geolocation packages when absent) are surfaced to the user as transparency notes per Step 3 - never silently promoted into the plan. If the request is generated-report-shaped and the Power Apps PDF viewer package is absent, fall back to `pdf-report` only when `expo-print` is present; otherwise drop the PDF capability.
 - **Pure-JavaScript dependency hints** — pass any explicit JavaScript-library request, or any feature that may benefit from an established JS-only package instead of custom code, to `screen-planner`. These are app dependencies, not native capabilities. The screen planner reuses suitable installed packages first; otherwise it follows the canonical candidate-selection workflow and records the selected package with an exact version under `## Screens → ### JavaScript Dependencies`.
 - **Industry confirmed** — if the prompt contains a line `Industry confirmed: <slug>`, the orchestrator already ran the industry-confidence check (see Step 3c). Treat that slug as the locked industry for Step 3c — skip detection, skip the confidence check, jump straight to mapping the industry to aesthetic direction / palette / tone.
 
@@ -155,8 +155,9 @@ Map each shipped module to a user-facing capability slug. Use this known mapping
 
 | Capability | Module | Add via |
 |---|---|---|
-| `camera` | `expo-camera` | `/add-native camera` |
+| `camera` | `expo-image-picker` | `/add-native camera` |
 | `image-picker` | `expo-image-picker` | `/add-native image-picker` |
+| `barcode-scanner` | `expo-camera` | `/add-native barcode-scanner` |
 | `document-picker` | `expo-document-picker` | `/add-native document-picker` |
 | `pdf-report` | `expo-print` (+ `expo-sharing` when local share is needed and present) | `/add-native pdf-report` |
 | `native-pdf-viewer` | `@microsoft/power-apps-native-pdf-viewer` | `/add-native pdf-viewer` |
@@ -224,7 +225,7 @@ For each capability the app needs **AND is in the allowlist**:
 | Field | Example |
 |---|---|
 | Capability | `camera` |
-| Expo module | `expo-camera` |
+| Expo module | `expo-image-picker` |
 | Required by workflow | `Capture receipts`, `Update profile photo` |
 | Justification | One-sentence rationale tied to a user need ("Capture receipts attached to expense reports") |
 | Storage/output target | `n/a`, `Dataverse Image`, `Dataverse File`, `child Evidence table`, `connector-owned storage` (connector + operation + destination), `on-device/share-only`, `local file URI`, or `HTTPS URL` |

@@ -167,6 +167,25 @@ test('combined artifact prerequisites require the union and reject invalid scope
   }
 });
 
+test('public and planner capability tables agree with artifact package prerequisites', () => {
+  const publicSkill = fs.readFileSync(path.resolve(__dirname, '../../skills/add-native/SKILL.md'), 'utf8');
+  const planner = fs.readFileSync(path.resolve(__dirname, '../../agents/native-app-planner.md'), 'utf8');
+  for (const [capability, artifact, module] of [
+    ['camera', 'photo', 'expo-image-picker'],
+    ['image-picker', 'gallery', 'expo-image-picker'],
+    ['barcode-scanner', 'scanner', 'expo-camera'],
+  ]) {
+    const row = publicSkill.split('\n').find(line =>
+      line.startsWith(`| \`${capability}\``) && line.includes('| `src/native/'));
+    assert.ok(row, `Missing supported capability: ${capability}`);
+    assert.equal(row.split('|')[2].trim(), `\`${module}\``);
+    assert.ok(planner.includes(`| \`${capability}\` | \`${module}\` | \`/add-native ${capability}\` |`));
+    assert.doesNotThrow(() => checkPackages([artifact], { [module]: 'installed' }));
+    const otherModule = module === 'expo-camera' ? 'expo-image-picker' : 'expo-camera';
+    assert.throws(() => checkPackages([artifact], { [otherModule]: 'installed' }), /exit 1/);
+  }
+});
+
 test('scanner permission failures are handled and rendered, not left as rejected effects', () => {
   const scanner = /```tsx\n(\/\/ src\/native\/barcodeScanner\.tsx[\s\S]*?)\n```/.exec(camera)?.[1];
   assert.ok(scanner);

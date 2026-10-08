@@ -57,7 +57,7 @@ Before adding any native control or wrapper, apply every gate: classify the inte
 |---|---|---|---|
 | Form field bound to a Dataverse File column | Host `<FilePicker>` in screen JSX | `@microsoft/power-apps-native-host` host control | Do not generate document-picker/file-system/sharing wrappers for this field |
 | Form field bound to a Dataverse Image column | Host `<ImagePicker>` in screen JSX | `@microsoft/power-apps-native-host` host control | Do not use camera/image-picker wrappers for normal form-bound image fields |
-| Dedicated photo/gallery/scanner workflow | `/add-native camera`, `image-picker`, or `barcode-scanner` | `expo-camera` and/or `expo-image-picker` present | If packages are absent, stop with missing-package guidance |
+| Dedicated photo/gallery/scanner workflow | `/add-native camera`, `image-picker`, or `barcode-scanner` | `expo-image-picker` for photo/gallery; `expo-camera` for scanner; both for combined requests | If packages are absent, stop with missing-package guidance |
 | Pick/import/upload a user-selected PDF/document | `/add-native document-picker`, or host `<FilePicker>` for Dataverse File fields | `expo-document-picker` present, or host File control | Do not treat this as `pdf-report` or native PDF viewer |
 | Generate/export/print an app-owned report PDF | `/add-native pdf-report` | `expo-print` present | If `expo-print` is absent, do not add PDF report capability |
 | Share a generated local PDF | `pdfReport.ts` share helper | `expo-sharing` present | If `expo-sharing` is absent, do not render sharing UI |
@@ -139,7 +139,7 @@ Apply the Native capability gate above. This table is a known capability-to-pack
 
 | Capability | Module | Wrapper to generate | Notes |
 |---|---|---|---|
-| `camera`, `take-photo`, `photo`, `expo-camera` | `expo-camera` | `src/native/camera.ts` | `/add-native` routes internally to `add-camera` |
+| `camera`, `take-photo`, `photo`, `expo-camera` | `expo-image-picker` | `src/native/camera.ts` | `/add-native` routes internally to `add-camera` for the `photo` artifact; `expo-camera` is a capability alias, not its required package |
 | `image-picker`, `gallery`, `expo-image-picker` | `expo-image-picker` | `src/native/camera.ts` (`pickImage`) | `/add-native` routes internally to `add-camera`; preserve compatible existing re-exports |
 | `barcode-scanner`, `qr-scanner`, `scanner`, `barcode`, `qr` | `expo-camera` | `src/native/barcodeScanner.tsx` | `/add-native` routes internally to `add-camera` |
 | `document-picker` | `expo-document-picker` | `src/native/documentPicker.ts` | Picks/imports user-selected files (PDF, docs, etc.) from the device |

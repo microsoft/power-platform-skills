@@ -74,7 +74,7 @@ associationsCount:     # number of mobileofflineprofileitemassociation rows
 
 | Capability | Module | Wrapper file | When added | Justification |
 |---|---|---|---|---|
-| _e.g. camera_ | _expo-camera_ | _src/native/camera.ts_ | _ISO date_ | _from plan_ |
+| _e.g. camera_ | _expo-image-picker_ | _src/native/camera.ts_ | _ISO date_ | _from plan_ |
 
 ## Connectors
 

@@ -487,7 +487,7 @@ This is the target shape for every spec. ~120 words, ~450 tokens. No inlined cat
 - **Audit:** On zone Save: event 100000001 (Zone Step Completed); payload: zoneIndex, zoneName, completedAt, evidenceCount, defectCount.
 - **Lookup writes:** exact generated-model key, for example `'cr3e9_inspectionid@odata.bind': '/cr3e9_inspections(<id>)'`, on every zone-progress upsert.
 - **Pagination:** `none` (6-row bounded set).
-- **Native capabilities:** `expo-camera`, `expo-image-picker` (capture tiles).
+- **Native capabilities:** `expo-image-picker` (capture tiles).
 - **Navigation:** from inspection detail; pushes to defect form; pops back to inspection summary on last zone Save.
 - **State delta:** empty defects = `"No defects logged"` + add CTA; error = `"Couldn't load this zone, retry"`.
 - **Key user actions:** capture photo, add defect, navigate prev/next, save zone.
@@ -568,7 +568,7 @@ Section format (emit only the subsections owned by the current phase):
 | Inspections list | `/(app)/inspections` | `app/(app)/inspections/index.tsx` | default | List + filter | `cr123_inspectionService.getAll` | — | new |
 | Inspection detail | `/(app)/inspections/[id]` | `app/(app)/inspections/[id]/index.tsx` | default | View + edit one | `getById`, `update` | — | new |
 | New inspection | `/(app)/inspections/new` | `app/(app)/inspections/new.tsx` | modal | Create form, slides up from list | `create` | — | new |
-| Capture photo | `/(app)/inspections/[id]/photo` | `app/(app)/inspections/[id]/photo.tsx` | modal | Take or pick photo | `update` (photo column) | `expo-camera`, `expo-image-picker` | new |
+| Capture photo | `/(app)/inspections/[id]/photo` | `app/(app)/inspections/[id]/photo.tsx` | modal | Take or pick photo | `update` (photo column) | `expo-image-picker` | new |
 | Profile | `/(app)/profile` | `app/(app)/profile.tsx` | default | User info + sign out | `useAuth()` only | — | new |
 
 > **Why the File column matters:** the orchestrator's Step 10b walks this column to (1) compute top-level tab/drawer entries (one per unique `app/(app)/<name>` — folder OR flat file) and (2) emit per-folder `_layout.tsx` files with the right modal options. Each builder reads its own row's File path as `target_file`. Without this column, the orchestrator falls back to flat `app/(app)/<screen-name>.tsx` for every screen — phantom tabs return.
