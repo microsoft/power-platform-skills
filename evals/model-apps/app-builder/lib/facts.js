@@ -10,10 +10,12 @@ function pluginLib(name) { return require(path.join(__dirname, '..', '..', '..',
 // helpers and performs no I/O at require time, so it is safe to load from the offline harness.
 function pluginLib2(name) { return require(path.join(__dirname, '..', '..', '..', '..', 'plugins', 'model-apps', 'scripts', name)); }
 
-const { migrateAppSpec, validateAppSpec, lookupColumnsFor, normalizePageSource, SDK_ROLE_MARKER, FORM_TYPE_CODE } = pluginLib('app-spec.js');
+const { migrateAppSpec, validateAppSpec, lookupColumnsFor, normalizePageSource, SDK_ROLE_MARKER, FORM_TYPE_CODE, formLayoutNames, subgridRelationshipName } = pluginLib('app-spec.js');
 const { lintAppSpec } = pluginLib('spec-lint.js');
 const { planFor, PHASES, appDef, viewDef, chartDef, compileFormIntent, formFieldLogicals, defaultViewColumns, enrichesDefaultViews, subgridLabel, personaRoleSpecFor, businessRuleDef, bpfDef } = pluginLib('sdk-build.js');
 const { subgridSectionIntent, isNonFieldControl } = pluginLib('artifact-intent.js');
+const { SUBGRID_CLASS_ID, splitSubgrids, columnItems } = pluginLib('form-subgrid-placement.js');
+const { TIMELINE_CLASS_ID, wantsTimeline } = pluginLib('form-timeline.js');
 const { decodeXmlEntities } = pluginLib('sitemap-pages.js');
 const { schemaFacts } = pluginLib('schema-facts.js');
 const { verifySpec } = pluginLib('verify-spec.js');
@@ -435,24 +437,44 @@ function appFacts(spec) {
 // and read-only / hidden state. A second derivation here drifted from it — an undeclared width rendered
 // as 100% in every form-column, and no display flag at all. `columns` is emitted as the width RATIO
 // string FormXML actually uses ("11" = two equal columns), not as a count.
+//
+// Two things the compiler does NOT emit are rendered here too, because verify asks the deployed form about them:
+// the Notes timeline in the shape the compiler writes (its fixed control id, the tall cell and the spacer rows
+// under it), and each sub-grid that says where it goes (`tab` / `column` / `after` / `before`), as the section the
+// build gives it, set where the spec places it. Without them a spec using either would fail verify offline on a
+// gap in this fixture, not on a finding about the spec.
 function formXmlForAuthoredLayout(spec, form) {
   const esc = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
   const labels = (text) => `<labels><label description="${esc(text)}" languagecode="1033"/></labels>`;
   const cellXml = (cell) => {
     const control = cell.control || {};
     const classId = control.classId && control.classId !== 'undefined' ? String(control.classId).replace(/[{}]/g, '') : '';
-    return `<cell colspan="${cell.colspan || 1}" rowspan="${cell.rowspan || 1}"${cell.visible === false ? ' visible="false"' : ''}>`
-      + `<control${control.fieldName ? ` datafieldname="${esc(control.fieldName)}"` : ''}${classId ? ` classid="{${esc(classId)}}"` : ''}`
-      + `${control.isReadOnly ? ' disabled="true"' : ''} /></cell>`;
+    const auto = (((cell.bag && cell.bag.a) || []).find((pair) => pair[0] === 'auto') || [])[1];
+    const parameters = Object.entries(control.parameters || {});
+    return `<cell colspan="${cell.colspan || 1}" rowspan="${cell.rowspan || 1}"${cell.visible === false ? ' visible="false"' : ''}${auto === undefined ? '' : ` auto="${esc(auto)}"`}>`
+      + `<control${control.id ? ` id="${esc(control.id)}"` : ''}${control.fieldName ? ` datafieldname="${esc(control.fieldName)}"` : ''}${classId ? ` classid="{${esc(classId)}}"` : ''}`
+      + `${control.isReadOnly ? ' disabled="true"' : ''}`
+      + `${parameters.length ? `><parameters>${parameters.map(([key, value]) => `<${key}>${esc(value)}</${key}>`).join('')}</parameters></control>` : ' />'}</cell>`;
   };
-  const tabsXml = (compileFormIntent(spec, form).tabs || []).map((t) => {
-    const colsXml = (t.columns || []).map((col) => {
-      const secsXml = (col.sections || []).map((sec) => {
-        const width = Math.max(1, Math.min(4, Number(sec.columns) || 1));
-        const rowsXml = (sec.rows || []).map((r) => `<row>${(r.cells || []).map(cellXml).join('')}</row>`).join('');
-        return `<section name="${esc(sec.name)}" columns="${'1'.repeat(width)}" visible="${sec.visible !== false}" showlabel="${sec.showLabel !== false}">`
-          + `${labels(sec.label)}<rows>${rowsXml}</rows></section>`;
-      }).join('');
+  const sectionXml = (sec) => {
+    const width = Math.max(1, Math.min(4, Number(sec.columns) || 1));
+    const rowsXml = (sec.rows || []).map((r) => `<row>${(r.cells || []).map(cellXml).join('')}</row>`).join('');
+    return `<section name="${esc(sec.name)}" columns="${'1'.repeat(width)}" visible="${sec.visible !== false}" showlabel="${sec.showLabel !== false}">`
+      + `${labels(sec.label)}<rows>${rowsXml}</rows></section>`;
+  };
+  const layout = formLayoutNames(form);
+  const { placed } = splitSubgrids(layout, form.subgrids);
+  // A grid whose two tables have no relationship is one the build skips, so the deployed form has no section for it.
+  const gridSectionXml = (sg) => {
+    const relationshipName = subgridRelationshipName(spec, form.entity, sg.childEntity);
+    return relationshipName
+      ? sectionXml(subgridSectionIntent({ subgridClassId: SUBGRID_CLASS_ID, targetEntity: lc(sg.childEntity), relationshipName, viewId: 'v', label: subgridLabel(spec, sg) }))
+      : '';
+  };
+  const tabsXml = (compileFormIntent(spec, form, { notesClassId: TIMELINE_CLASS_ID }).tabs || []).map((t, ti) => {
+    const colsXml = (t.columns || []).map((col, ci) => {
+      const secsXml = columnItems(layout, ti, ci, col.sections, placed)
+        .map((item) => (item.subgrid ? gridSectionXml(item.subgrid) : sectionXml(item.section))).join('');
       return `<column width="${esc(col.width)}"><sections>${secsXml}</sections></column>`;
     }).join('');
     return `<tab name="${esc(t.name)}" expanded="${t.expanded !== false}" visible="${t.visible !== false}">${labels(t.label)}<columns>${colsXml}</columns></tab>`;
@@ -584,7 +606,10 @@ function makeAllPresentReader(spec, formEvidence = null) {
         ? (spec.forms || []).find((f) => isMainForm(f) && lc(f.entity) === lc(entityLogical) && mainFormName(f) === named[1])
         : (spec.forms || []).find((f) => lc(f.entity) === lc(entityLogical) && Array.isArray(f.tabs) && f.tabs.length);
       if (!form) return null;
-      const layout = Array.isArray(form.tabs) && form.tabs.length ? formXmlForAuthoredLayout(spec, form) : '<form><tabs></tabs></form>';
+      // An auto layout declares no tabs, so it has nothing to render — unless the form asks for the Notes timeline
+      // or places a sub-grid, which verify checks on any layout.
+      const rendered = (Array.isArray(form.tabs) && form.tabs.length) || wantsTimeline(spec, form) || splitSubgrids(formLayoutNames(form), form.subgrids).placed.length > 0;
+      const layout = rendered ? formXmlForAuthoredLayout(spec, form) : '<form><tabs></tabs></form>';
       return isMainForm(form) ? withOrder(layout, lc(entityLogical), form) : layout;
     },
     servedMainForms: async (entityLogical) => formEvidence
@@ -610,6 +635,9 @@ function requiredVerifyChecks(spec, reader) {
     dashboard: (spec.dashboards || []).length,
     'form-order': ordered.length,
     'form-topology': (spec.forms || []).filter((f) => Array.isArray(f.tabs) && f.tabs.length).length,
+    'form-timeline': (spec.forms || []).filter((f) => wantsTimeline(spec, f)).length,
+    'form-subgrid': (spec.forms || []).reduce((n, f) => n + splitSubgrids(formLayoutNames(f), f.subgrids).placed
+      .filter((p) => subgridRelationshipName(spec, f.entity, p.sg.childEntity)).length, 0),
     'form-order-served': typeof reader.servedMainForms === 'function' ? ordered.length : 0,
     'business-rule': (spec.businessRules || []).length,
     'business-process-flow': (spec.businessProcessFlows || []).length,

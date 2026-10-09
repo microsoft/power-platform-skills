@@ -94,7 +94,7 @@ apart deliberately.
   authored columns.
 
 ### Forms, views & charts — ✅ verified live
-- Adaptive main forms (auto + explicit tabs/sections), related-record sub-grids (1:N **and** N:N), Notes/timeline section.
+- Adaptive main forms (auto + explicit tabs/sections), related-record sub-grids (1:N **and** N:N, placed with `tab` / `column` / `after` / `before`), Notes/timeline section.
   Explicit edits order tabs and sections, **not existing fields**. New listed fields and relative
   `fieldOptions[x].after` placement are occupancy-safe; a full row may split, and an unsafe move is
   skipped with a warning. Stored overflow repair, idempotent rebuilds and middle insertion are

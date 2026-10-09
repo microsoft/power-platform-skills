@@ -38,6 +38,18 @@ const text = (value, fallback = '') => {
   return s || fallback;
 };
 
+// Where a sub-grid says it goes (`tab` / `column` / `after` / `before`), worded for the plan; empty for a grid
+// that says nothing, which is how every grid read before the keys existed. A value of the wrong type is skipped:
+// reporting it is validateAppSpec's job, not the plan's.
+function gridPlacement(sg) {
+  const parts = [];
+  if (typeof sg.tab === 'string' && sg.tab.trim()) parts.push(`tab ${sg.tab.trim()}`);
+  if (Number.isInteger(sg.column)) parts.push(`column ${sg.column}`);
+  if (typeof sg.after === 'string' && sg.after.trim()) parts.push(`after ${sg.after.trim()}`);
+  if (typeof sg.before === 'string' && sg.before.trim()) parts.push(`before ${sg.before.trim()}`);
+  return parts.join(', ');
+}
+
 function overview(spec) {
   const app = spec.app || {};
   const out = [`# ${text(app.name, 'Model-driven app')} — design`, ''];
@@ -194,7 +206,7 @@ function surfaces(spec) {
   else {
     out.push('| Form | Table | Type | Layout | Sub-grids |', '|---|---|---|---|---|');
     for (const f of forms) {
-      const sg = objs(f.subgrids).map((s) => cell(lc(s.childEntity))).join(', ');
+      const sg = objs(f.subgrids).map((s) => { const where = gridPlacement(s); return `${cell(lc(s.childEntity))}${where ? ` (${cell(where)})` : ''}`; }).join(', ');
       // `formType` is the canonical field (Main / QuickCreate / QuickView), defaulting to Main —
       // NOT `type`. Reading the wrong one rendered every QuickCreate/QuickView form as "main",
       // hiding a real difference in what the form does.

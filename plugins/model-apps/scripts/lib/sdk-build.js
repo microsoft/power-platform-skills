@@ -43,6 +43,8 @@ const {
   choiceValueMap,
   BPF_ROLE_ACCESS,
   dashboardNameKey,
+  formLayoutNames,
+  subgridRelationshipName,
 } = require('./app-spec.js');
 const { PHASES } = require('./stages.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
@@ -82,9 +84,11 @@ const {
   findFieldCellPointer,
   findFieldCellLocation,
   findSectionLocation,
+  findSectionById,
   declaredSectionByField,
   subgridCellIntent,
   subgridSectionIntent,
+  notesSectionIntent,
   quickViewCellIntent,
   formEventsRegionIntent,
   viewColumnsIntent,
@@ -95,6 +99,8 @@ const {
 const { makeGenpageCli, suppliedButBlank, unescapePacName } = require('./genpage-cli.js');
 const { matchContainer, isEngineOwnedSection, isEngineHostSection, holdsControlOf, claimedByAuthoredName, planOrderMoves } = require('./form-container-match.js');
 const { rowOccupancy, fitsGrid, strandedRows } = require('./form-occupancy.js');
+const { TIMELINE_CONTROL_ID, FULL_BUILD, timelineInSection, controlIdTaken, timelineRepairPlan, timelineRefusal } = require('./form-timeline.js');
+const { placementOf, resolvePlacement, columnSequence, neighbourOf, findGridSection: findSubgridSection } = require('./form-subgrid-placement.js');
 const { manifestResourceName, buildManifest, serializeManifest, parseManifestBase64, reconcilePageIds } = require('./page-manifest.js');
 // MEMBERSHIP authority (the app's live sitemap) + the cross-app shared-page scan. fetchSitemap is
 // fail-closed & discriminated (C4); fetchAppsForPages is the only way to prove a generative page is not
@@ -2034,13 +2040,234 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // A sub-grid used to be spliced as a single cell into the first field section's rows, which rendered
   // it half-width inside a 2-column section; giving it a dedicated section makes the related list span
   // the form. `sg.label` is already resolved to the child's display name by the forms phase.
-  const addSubgrids = async (formId, subs) => {
-    for (const sg of subs || []) {
+  //
+  // A grid that declares no placement (`tab` / `column` / `after` / `before`) goes where it always has: the end
+  // of the first tab's first form-column, and is never moved. One that does is put where it says, and a rebuild
+  // CONVERGES it there — see placeGridSection below. `ctx` carries what the topology pass
+  // resolved on an existing explicit layout ({ topology, sectionTargets }); a form this run created, or an auto
+  // layout, has none and resolves the layout's names on the form itself.
+  //
+  // The order the grids are placed in matters. Those that name no anchor (no key, or a tab only) are appended to
+  // the end of their column first, in declared order, as they always were. The anchored ones follow, each put
+  // DIRECTLY beside the nearest token toward its anchor that is on the form already: `after` grids in declared
+  // order, so a grid sharing an anchor with an earlier one lands after it; `before` grids in REVERSE declared
+  // order, so the one declared last sits against the anchor and the earlier ones in front of it.
+  const addSubgrids = async (formId, def, ctx) => {
+    const subs = def.__subgrids || [];
+    // The anchored grids of each layout form-column, in declared order: what a column's sequence is built from.
+    const groups = new Map();
+    for (const sg of subs) {
+      const resolved = sg.placement && sg.placement.resolved;
+      if (!resolved || !resolved.anchor) continue;
+      const key = `${resolved.tabIndex}:${resolved.columnIndex}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push({ key: String(sg.relationshipName).toLowerCase(), [resolved.anchor.side]: resolved.anchor.name });
+    }
+    const sideOf = (sg) => (sg.placement && sg.placement.resolved.anchor ? sg.placement.resolved.anchor.side : null);
+    for (const sg of subs) {
+      if (sideOf(sg)) continue;
+      if (sg.placement) {
+        await placeGridSection(formId, def, sg, groups, ctx);
+        continue;
+      }
       if (hasSubgrid(await provision.getArtifact('form', formId) || {}, sg.relationshipName)) continue;
       const sectionsPtr = firstColumnSectionsPointer(await provision.getArtifact('form', formId) || {});
       if (!sectionsPtr) continue;
       await provision.addElement('form', formId, sectionsPtr, subgridSectionIntent({ subgridClassId: SUBGRID_CLASS_ID, targetEntity: sg.targetEntity, relationshipName: sg.relationshipName, viewId: sg.viewId, label: sg.label }));
     }
+    for (const sg of subs.filter((s) => sideOf(s) === 'after')) await placeGridSection(formId, def, sg, groups, ctx);
+    for (const sg of subs.filter((s) => sideOf(s) === 'before').reverse()) await placeGridSection(formId, def, sg, groups, ctx);
+  };
+
+  // --- sub-grid placement (lib/form-subgrid-placement.js) ------------------------------------------------
+
+  const columnAtPointer = (form, pointer) => {
+    const t = String(pointer || '').split('/').filter(Boolean);
+    if (t.length !== 4) return null;
+    const tab = (form.tabs || [])[Number(t[1])];
+    return (tab && (tab.columns || [])[Number(t[3])]) || null;
+  };
+  const columnPointerOfSection = (pointer) => String(pointer).replace(/\/sections\/\d+$/, '');
+  // `/tabs/<ti>/columns/<ci>` → the two indices, for naming the tab and form-column in a report.
+  const columnIndicesOf = (columnPointer) => {
+    const t = String(columnPointer).split('/').filter(Boolean);
+    return { ti: Number(t[1]), ci: Number(t[3]) };
+  };
+  const tabNameAt = (form, ti) => ((form.tabs || [])[ti] || {}).name || `#${ti + 1}`;
+
+  // The section a form holds a relationship's sub-grid control in, with its pointers (lib/form-subgrid-placement.js
+  // finds it; `engine` says the build owns it). A grid a maker put in a section of their own is found too, but it
+  // is not the build's to move.
+  const findGridSection = (form, relationshipName) => {
+    const hit = findSubgridSection(form.tabs, relationshipName);
+    if (!hit) return null;
+    const columnPointer = `/tabs/${hit.ti}/columns/${hit.ci}`;
+    return Object.assign(hit, { columnPointer, listPointer: `${columnPointer}/sections`, pointer: `${columnPointer}/sections/${hit.si}` });
+  };
+
+  // The recorded section targets address sections by index, so adding a section to a column pushes the ones after
+  // it up and taking one out pulls them down. Corrected here, so the prune and the vacated-section sweep that
+  // run after the sub-grids still resolve every section the topology pass gave them.
+  const shiftSectionTargets = (targets, listPointer, index, delta) => {
+    for (const t of Object.values(targets || {})) {
+      const m = t && /^(.*\/sections)\/(\d+)$/.exec(String(t.pointer || ''));
+      if (!m || m[1] !== listPointer) continue;
+      const at = Number(m[2]);
+      if (delta > 0 ? at >= index : at > index) t.pointer = `${listPointer}/${at + delta}`;
+    }
+  };
+
+  // Where the layout's tab `wantTabIndex` is on the live form: the index the topology pass matched it to on an
+  // explicit layout, else the tab of that name (a form this run created has its tabs where the compiler put them;
+  // an auto layout's only tab is `tab_general`). -1 when it cannot be found.
+  const deployedTabIndex = (form, def, wantTabIndex, ctx) => {
+    if (ctx && ctx.topology) {
+      const matched = ctx.topology.tabIndexOf[wantTabIndex];
+      return Number.isInteger(matched) && (form.tabs || [])[matched] ? matched : -1;
+    }
+    const name = ((def.__subgridLayout || [])[wantTabIndex] || {}).name;
+    return (form.tabs || []).findIndex((t) => String((t && t.name) || '').toLowerCase() === name);
+  };
+
+  // The live section a layout section name stands for: the section the topology pass matched it to — which can
+  // carry another name, matched by label or position — else the section of that name, never an engine host that
+  // shares it. `{ pointer, section }`, or null.
+  const deployedSectionByName = (form, name, ctx) => {
+    const targets = ctx && ctx.sectionTargets;
+    const key = targets ? Object.keys(targets).find((k) => k.toLowerCase() === name) : undefined;
+    if (key !== undefined) {
+      const pointer = resolveSectionPointer(form, targets[key]);
+      const section = pointer && sectionAt(form, pointer);
+      if (section) return { pointer, section };
+    }
+    const loc = findSectionLocation(form, name, (s) => !isEngineHostSection(s));
+    return loc ? { pointer: loc.pointer, section: loc.section } : null;
+  };
+
+  // The form-column a placed grid belongs in on the live form — where its anchor is, or the tab (and column) it
+  // names — or null when the layout name it is placed by cannot be found there.
+  const gridDestination = (form, def, sg, ctx) => {
+    const resolved = sg.placement.resolved;
+    if (resolved.anchor) {
+      const at = deployedSectionByName(form, resolved.anchor.name, ctx);
+      return at ? { columnPointer: columnPointerOfSection(at.pointer), anchored: true } : null;
+    }
+    const ti = deployedTabIndex(form, def, resolved.tabIndex, ctx);
+    if (ti < 0) return null;
+    const ci = resolved.createColumn;
+    if (!((form.tabs[ti].columns || [])[ci])) return null;
+    return { columnPointer: `/tabs/${ti}/columns/${ci}`, tabIndex: ti, anyColumn: resolved.columnIndex === undefined, anchored: false };
+  };
+
+  // The live index, in the column at `columnPointer`, of one token of a column's sequence — a section of the
+  // layout or an engine grid section — or undefined when it is not in that column.
+  const tokenIndexIn = (form, columnPointer, token, ctx) => {
+    if (token.grid !== undefined) {
+      const hit = findGridSection(form, token.grid);
+      return hit && hit.engine && hit.columnPointer === columnPointer ? hit.si : undefined;
+    }
+    const at = deployedSectionByName(form, token.section, ctx);
+    if (!at || columnPointerOfSection(at.pointer) !== columnPointer) return undefined;
+    return Number(at.pointer.slice(at.pointer.lastIndexOf('/') + 1));
+  };
+
+  // The column's sequence of layout sections and anchored grids (columnSequence) for the layout column a placed
+  // grid is anchored in.
+  const gridSequence = (def, resolved, groups) => {
+    const column = ((def.__subgridLayout || [])[resolved.tabIndex] || { columns: [] }).columns[resolved.columnIndex] || { sections: [] };
+    return columnSequence(column.sections, groups.get(`${resolved.tabIndex}:${resolved.columnIndex}`) || []);
+  };
+
+  // Where an ANCHORED grid goes in its column right now: DIRECTLY beside the nearest token of its sequence toward
+  // its anchor that is already in the column (neighbourOf) — right after it for an `after` grid, right before it
+  // for a `before` grid. `gap` is the insertion point in the column as it stands, i.e. the index the grid would
+  // be inserted before. That is where a fresh build puts the grid, so a rebuilt form and a new one agree.
+  const anchoredPosition = (form, columnPointer, seq, gridKey, ctx) => {
+    const near = neighbourOf(seq, gridKey, (token) => tokenIndexIn(form, columnPointer, token, ctx) !== undefined);
+    if (!near) return null;
+    const refIndex = tokenIndexIn(form, columnPointer, near.token, ctx);
+    return { side: near.side, token: near.token, refIndex, gap: near.side === 'after' ? refIndex + 1 : refIndex };
+  };
+
+  // Put ONE placed grid where the spec says: add its section when it has none, and when the build's own section
+  // for it is somewhere else — the end of the first tab, where an earlier build appended it, behind the Notes
+  // section, in another form-column — MOVE that same section: its id, its control, anything a maker set on it
+  // travel with it. An anchored grid ends DIRECTLY beside its anchor (anchoredPosition); a grid that names only a
+  // tab (and column) is put at the end of that column and, once in it, left where it is.
+  //
+  // Only the grid moves. The fewest-moves planner the topology pass orders sections with (planOrderMoves) is NOT
+  // used here because it moves whichever section is cheapest — and where the Notes section sits between the
+  // anchor and a grid an older build appended after it, that is the authored section or the timeline, leaving the
+  // Notes section in the middle of the form. What a placement never does: touch a grid in a section the build did
+  // not create, or move one the spec does not place.
+  const placeGridSection = async (formId, def, sg, groups, ctx) => {
+    const form = await provision.getArtifact('form', formId) || {};
+    const existing = findGridSection(form, sg.relationshipName);
+    const dest = gridDestination(form, def, sg, ctx);
+    const warn = (message) => { if (typeof opts.warn === 'function') opts.warn(message); };
+    const shown = `the sub-grid for '${sg.targetEntity}'`;
+    if (!dest) {
+      // The tab or section the layout names is not on this form — the spec gate cannot see a deployed form. The
+      // grid is still added where it always goes, so it is never lost to an unresolvable placement.
+      const r = sg.placement.resolved;
+      reportLayoutSkip(`form ${def.name}: ${shown} was not placed ${r.anchor ? `${r.anchor.side} section '${r.anchor.name}'` : `in tab '${(def.__subgridLayout[r.tabIndex] || {}).name}'`}`
+        + ' — the deployed form has no such section or tab to place it by'
+        + `${existing ? '; it stays where it is' : ', so it was added at the end of the first tab'}. Adjust the layout in the maker.`);
+      if (existing) return;
+      const sectionsPtr = firstColumnSectionsPointer(form);
+      if (sectionsPtr) await provision.addElement('form', formId, sectionsPtr, subgridSectionIntent({ subgridClassId: SUBGRID_CLASS_ID, targetEntity: sg.targetEntity, relationshipName: sg.relationshipName, viewId: sg.viewId, label: sg.label }));
+      return;
+    }
+    const listPointer = `${dest.columnPointer}/sections`;
+    const sectionCount = ((columnAtPointer(form, dest.columnPointer) || {}).sections || []).length;
+    const resolved = sg.placement.resolved;
+    const seq = dest.anchored ? gridSequence(def, resolved, groups) : null;
+    const gridKey = String(sg.relationshipName).toLowerCase();
+    const position = dest.anchored ? anchoredPosition(form, dest.columnPointer, seq, gridKey, ctx) : null;
+    // The insertion point as the column stands now: beside the neighbour for an anchored grid, the end otherwise.
+    const gap = position ? position.gap : sectionCount;
+    const to = columnIndicesOf(dest.columnPointer);
+    const where = `tab '${tabNameAt(form, to.ti)}' (form-column ${to.ci + 1})`;
+    if (existing) {
+      const name = existing.section.name || `#${existing.si + 1}`;
+      const sameColumn = existing.listPointer === listPointer;
+      // Already where the spec puts it — directly beside its neighbour, or in the tab (and form-column) it names:
+      // nothing to write, and nothing to report either. The report below is advice for a grid that is NOT in place
+      // ("move that section"); one that already is has nothing to move, and a notice that repeats on every rebuild
+      // is one a maker learns to ignore.
+      const inPlace = dest.anchored
+        ? !!position && sameColumn && existing.si === (position.side === 'after' ? position.refIndex + 1 : position.refIndex - 1)
+        : (dest.anyColumn ? existing.ti === dest.tabIndex : existing.columnPointer === dest.columnPointer);
+      if (inPlace) return;
+      if (!existing.engine) {
+        reportLayoutSkip(`form ${def.name}: ${shown} sits in section '${name}', which this build did not create, `
+          + 'so it was left there. Move that section in the maker, or delete it to let the build place a grid of its own.');
+        return;
+      }
+      // moveElement removes the section before it inserts, so within one column an insertion point below the
+      // section's own index is one lower once it has gone.
+      const index = sameColumn && existing.si < gap ? gap - 1 : gap;
+      await provision.moveElement('form', formId, existing.pointer, listPointer, { index });
+      shiftSectionTargets(ctx && ctx.sectionTargets, existing.listPointer, existing.si, -1);
+      shiftSectionTargets(ctx && ctx.sectionTargets, listPointer, index, 1);
+      const from = `from tab '${tabNameAt(form, existing.ti)}' (form-column ${existing.ci + 1}) `;
+      if (position) {
+        const next = position.token.section !== undefined ? `section '${position.token.section}'`
+          : `the sub-grid for '${((def.__subgrids || []).find((s) => String(s.relationshipName).toLowerCase() === position.token.grid) || {}).targetEntity || position.token.grid}'`;
+        warn(`form ${def.name}: moved ${shown} (section '${name}') ${sameColumn ? '' : from}to sit directly ${position.side} ${next}, in ${where}, where subgrids[] places it.`);
+      } else {
+        warn(`form ${def.name}: moved ${shown} (section '${name}') ${from}to ${where}, where subgrids[] places it.`);
+      }
+      return;
+    }
+    const intent = subgridSectionIntent({ subgridClassId: SUBGRID_CLASS_ID, targetEntity: sg.targetEntity, relationshipName: sg.relationshipName, viewId: sg.viewId, label: sg.label });
+    if (!dest.anchored) {
+      // The end of the column: appended, so no recorded section moves.
+      await provision.addElement('form', formId, listPointer, intent);
+      return;
+    }
+    await provision.addElement('form', formId, listPointer, intent, { position: { index: gap } });
+    shiftSectionTargets(ctx && ctx.sectionTargets, listPointer, gap, 1);
   };
 
   // A quick-view's semantic identity is the lookup field it renders through (one quick-view per lookup).
@@ -2190,10 +2417,23 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const departed = new Set();
     const narrowed = [];
     const newFields = new Set();
-    for (const { logical, sectionPointer, cell } of newCells) {
-      appendCellPacked(planned, sectionPointer, cell);
+    for (const queued of newCells) {
+      // The section the cell was queued for, found again as it is now (see queuedSectionPointer). Were it gone the field
+      // goes where a field with no section goes, rather than being lost — or halting the build on a pointer that
+      // addresses nothing.
+      let sectionPointer = queuedSectionPointer(planned, queued);
+      if (!sectionPointer) {
+        const rowsPointer = firstFieldSectionRowsPointer(planned);
+        if (!rowsPointer) {
+          reportLayoutSkip(`form ${def.name}: '${queued.logical}' was not added — the form has no section to put it in.`);
+          continue;
+        }
+        sectionPointer = rowsPointer.slice(0, -'/rows'.length);
+        reportLayoutSkip(`form ${def.name}: '${queued.logical}' was added to the first section of the form — the section the layout names for it was no longer there.`);
+      }
+      appendCellPacked(planned, sectionPointer, queued.cell);
       affected.add(sectionPointer);
-      newFields.add(logical);
+      newFields.add(queued.logical);
     }
     const place = (logical, anchor, before = false) => {
       const move = planFieldAdjacent(planned, logical, anchor, def.name, before);
@@ -2254,7 +2494,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // cannot be interrupted separately. Existing cell/control IDs and opaque state are copied.
     if (affected.size === 1) {
       const [pointer] = affected;
-      await provision.updateElement('form', formId, pointer + '/rows', sectionAt(planned, pointer).rows);
+      const section = sectionAt(planned, pointer);
+      if (section) await provision.updateElement('form', formId, pointer + '/rows', section.rows);
     } else {
       await provision.updateElement('form', formId, '/tabs', planned.tabs);
     }
@@ -2282,6 +2523,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
     if (alreadyPlaced && rowOccupancy(destination.rows)[from.rowIndex].used <= landing.gridWidth) return {};
     const skip = (reason) => ({ warning: `form ${formName}: placement of '${logical}' ${before ? 'before' : 'after'} '${anchor}' `
       + `was skipped - ${reason}. Adjust the layout in the maker.` });
+    // A field is never placed into a section the engine owns — the Notes timeline's rows are spacers its cell
+    // spans, and a sub-grid host holds nothing else. The anchor can only be here because a maker put a field
+    // into the host; positioning another control beside it would put the engine's own section's layout in
+    // the spec's hands.
+    if (!alreadyPlaced && isEngineHostSection(destination)) {
+      return skip('the anchor sits in a section the build owns (the Notes timeline or a sub-grid), which no field is placed into');
+    }
     const fits = (candidate) => [from.sectionPointer, to.sectionPointer].every((pointer) => {
       const section = sectionAt(candidate, pointer);
       return fitsGrid(section.rows || [], Number(section.columns) || 1);
@@ -2601,6 +2849,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
           const local = (global || !authoredWant) ? null : matchContainer((liveSections || {}).sections, wantSection, si,
             { claimed: claimedHere, skip: (s) => isEngineOwnedSection(s) || isEngineHostSection(s) || claimedByAuthoredName(authoredSectionNames)(s), nameSkip: (s) => !candidate(s) });
           if (!global && !local) {
+            // The Notes host carries the control id Dynamics renders a timeline under, so it is not added to a
+            // form that already has a control by that id — a second `notescontrol` would be a duplicate.
+            if (!authoredWant && timelineInSection(wantSection) && timelineCreationBlocked(form, def.name)) continue;
             // An authored section is created where the layout places it: right after the furthest section this
             // column has already matched, the index the move above uses. Appended, it landed after every
             // section still to come — a new one declared mid-column, or a generated one recreated after a
@@ -2629,6 +2880,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
           // `columns` is the key that matters most: it is what makes a section render as two
           // columns rather than one, and it was previously unreachable on an existing form.
           const patch = diffPatch(live, wantSection, ['columns', 'label', 'showLabel', 'visible']);
+          // The engine's own timeline host keeps the width a maker gave the timeline. The spec says nothing about it —
+          // the compiler writes one column — so a maker who widened the timeline (a cell of `colspan` 2 in a
+          // 2-column section, as the platform's Contact form has it) must not have the section narrowed under it: a
+          // cell wider than its section is not a layout, and the re-flow that would clamp it never runs on a host
+          // (repackSectionRows). A host whose cell still fits the one column is narrowed as before.
+          if (!authoredWant && patch.columns !== undefined && !fitsGrid(live.rows || [], Number(patch.columns))) delete patch.columns;
           // NARROWING the grid overflows rows that no cell changed. Three unit-width cells sit
           // legally in a 4-column row and illegally in a 1-column one, so a width change alone can
           // invalidate the layout — and the span-change repack never fires, because no span changed.
@@ -2675,7 +2932,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
         }
       }
     }
-    return sectionTargets;
+    // The deployed index each layout tab was matched to (a hole where one could not be placed), beside the section
+    // targets: a sub-grid placed by `tab` is put in the tab the layout's tab resolved to, which is not its index in
+    // the spec once a maker's own tab sits among them.
+    return { sectionTargets, tabIndexOf };
   };
 
   // Resolve a section target recorded during the topology pass back to a live pointer.
@@ -2707,6 +2967,21 @@ async function runSdkBuildPhases(spec, opts, owed) {
     return (col && (col.sections || [])[Number(t[5])]) || null;
   };
 
+  // Where the section a field being ADDED was queued for is on the form NOW, or null when it is gone.
+  //
+  // A new field is not written when it is queued: it is held until every positioning step is done (see
+  // appendCellPacked), and the sub-grids are placed in between. A grid section added to a column, taken out of it
+  // or moved within it changes the index of every section behind it, so the pointer recorded when the field was
+  // queued can address the grid's section by then — the field lands in the grid — or none at all. The section is
+  // therefore found again by what it is: its id, the one identity a move leaves alone, else (a form whose sections
+  // carry none) its recorded name and place, as every other recorded section is (resolveSectionPointer).
+  const queuedSectionPointer = (form, queued) => {
+    const byId = queued.sectionId ? findSectionById(form, queued.sectionId) : null;
+    if (byId) return byId.pointer;
+    const pointer = resolveSectionPointer(form, { pointer: queued.sectionPointer, name: queued.sectionName });
+    return pointer && sectionAt(form, pointer) ? pointer : null;
+  };
+
   // Reflow an ENTIRE section against a new grid width, using the create path's own packer so both
   // routes produce the same shape. Called when a section NARROWS: no cell changed, but rows that
   // fitted the old width can overrun the new one.
@@ -2719,6 +2994,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const form = await provision.getArtifact('form', formId) || {};
     const section = sectionAt(form, sectionPointer);
     if (!section) return;
+    // An engine host is never re-flowed. The timeline's rows are the empty rows its cell spans — which a
+    // re-flow would delete as "beyond the new count" — and a host holds a single control, so there is
+    // nothing for a narrower grid to re-pack.
+    if (isEngineHostSection(section)) return;
     const liveRows = section.rows || [];
     // A ROWSPAN makes a row's cells positionally meaningful: the cell beneath a vertically spanning
     // one is a SPACER reserving the covered slot, and reading-order flattening moves it beside the
@@ -2977,13 +3256,32 @@ async function runSdkBuildPhases(spec, opts, owed) {
     section.rows = rows;
   };
 
+  // The rows a field with no resolved section falls back to: the form's first section that is not one the
+  // engine owns. A field must never land in the Notes host or a sub-grid host — in the timeline's section it
+  // would sit under its spacer rows, or beside the timeline once a maker widened the grid — so a host that
+  // happens to come first is passed over. Where every section is a host there is nowhere better to put the
+  // field than the old fallback, which is kept so a field is never lost.
+  const firstFieldSectionRowsPointer = (form) => {
+    const tabs = form.tabs || [];
+    for (let ti = 0; ti < tabs.length; ti += 1) {
+      const columns = (tabs[ti] && tabs[ti].columns) || [];
+      for (let ci = 0; ci < columns.length; ci += 1) {
+        const sections = (columns[ci] && columns[ci].sections) || [];
+        for (let si = 0; si < sections.length; si += 1) {
+          if (!isEngineHostSection(sections[si])) return `/tabs/${ti}/columns/${ci}/sections/${si}/rows`;
+        }
+      }
+    }
+    return firstSectionRowsPointer(form);
+  };
+
   const placeFieldInSection = async (formId, logical, wantCell, target, vacated, rawSpan, formName) => {
     let form = await provision.getArtifact('form', formId) || {};
     const targetPointer = resolveSectionPointer(form, target);
     const existing = findFieldCellLocation(form, logical);
 
     if (!existing) {
-      const rowsPtr = targetPointer ? targetPointer + '/rows' : firstSectionRowsPointer(form);
+      const rowsPtr = targetPointer ? targetPointer + '/rows' : firstFieldSectionRowsPointer(form);
       if (!rowsPtr) return;
       const sectionPointer = rowsPtr.slice(0, -'/rows'.length);
       // Span the NEW cell for the section it is landing in, by the same rule as an existing one.
@@ -2996,7 +3294,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
         const span = spanForLiveSection(key, wantCell, rawSpan, liveSection);
         if (span === undefined) delete cell[key]; else cell[key] = span;
       }
-      return { logical, sectionPointer, cell };
+      // The section is queued by what it IS (its id, its name) as well as where it is: the cell is written only
+      // once every positioning step is done, and addSubgrids runs in between and moves sections about (see
+      // queuedSectionPointer).
+      return { logical, sectionPointer, sectionId: liveSection.id, sectionName: liveSection.name, cell };
     }
     // Converge the cell SHAPE even when the cell is already where it belongs. `colspan`/`rowspan`
     // used to be create-only on an existing form: an author who widened a field to `colspan: 2` on a
@@ -3110,6 +3411,104 @@ async function runSdkBuildPhases(spec, opts, owed) {
         + `section '${destination}' the layout moves it to, so it now spans ${landing.colspan}. Declare its colspan to choose the width.`);
     }
   };
+  // A new Notes host carries the control id `notescontrol`, the one Dynamics renders a timeline under (see
+  // lib/form-timeline.js). A form that already has a control by that id — a maker's own timeline, or a host an
+  // older build wrote that was renamed since — must not get a second one: ids are names the platform's
+  // designer and scripts address, so a duplicate is not a harmless extra. Reported on the build result, not
+  // dropped: the spec asked for Notes.
+  const timelineCreationBlocked = (form, formName) => {
+    if (!controlIdTaken(form.tabs, TIMELINE_CONTROL_ID)) return false;
+    reportLayoutSkip(`form ${formName}: no Notes section was added — a control on this form already uses the id '${TIMELINE_CONTROL_ID}', `
+      + 'the only id Dynamics renders a timeline under, so a second one would duplicate it. Keep that control as the form\'s timeline, '
+      + `or remove it in the maker, then run ${FULL_BUILD} to let the build add one.`);
+    return true;
+  };
+
+  // An AUTO layout has no topology pass to add the Notes host, so one the form lacks is added here — unless the form
+  // already has a control by `notescontrol` (timelineCreationBlocked). An explicit layout's pass already created the
+  // host, or declined to. It runs BEFORE the sub-grids, so a host an auto form gains here sits where it does on a
+  // new form: ahead of the grids appended after it.
+  const addTimelineHost = async (formId, def) => {
+    if (!def.__notes || def.__explicitLayout) return;
+    const form = await provision.getArtifact('form', formId) || {};
+    if (findSectionLocation(form, 'section_notes', (s) => !!timelineInSection(s))) return;
+    const sectionsPointer = firstColumnSectionsPointer(form);
+    if (!sectionsPointer || timelineCreationBlocked(form, def.name)) return;
+    await provision.addElement('form', formId, sectionsPointer, notesSectionIntent(NOTES_CLASS_ID));
+    if (typeof opts.warn === 'function') opts.warn(`form ${def.name}: added the Notes section (timeline) the spec asks for.`);
+  };
+
+  // Make the Notes section's timeline the shape Dynamics renders (lib/form-timeline.js): the control id
+  // `notescontrol`, a tall cell with `auto="false"`, and the empty rows that cell spans. An older build wrote
+  // the timeline as a generated-id control in a one-row cell, which is published and never shown (#680) — and
+  // because that host is the engine's own section, a rebuild repairs it in place: same section, same position,
+  // same cell and control identity, in ONE write so an interruption leaves either the old rows or the new.
+  //
+  // Only the engine's own host is touched: the section named `section_notes` that holds the timeline control. A
+  // timeline a maker added elsewhere is never edited. Two shapes are left alone and reported (timelineRefusal):
+  //  · a host that holds more than the timeline — a maker put a field in it, and the spacer rows the span needs
+  //    would have to be inserted between the timeline and that field;
+  //  · a host whose control id cannot be renamed because another control already uses `notescontrol`.
+  // Both would leave a form that renders neither better nor worse than before, so the write is refused whole
+  // rather than half-applied.
+  //
+  // It runs LAST of the passes that place fields — after the prune of a field the layout dropped and the moves that
+  // put a field beside its `fieldOptions` anchor — because it rewrites only this section's rows, and because the
+  // first of the two refusals is about what else the section holds. Run before those, it would refuse an old host
+  // whose stray field the SAME build is about to take out: the maker would be told to delete the section while the
+  // build prunes the field, and the form would stay in the old shape until a second build.
+  //
+  // `--verify` reads the form BEFORE these passes, so it predicts what they take out of the host (notesHostInspector in
+  // verify-spec.js). A change to which fields a pass takes out has to be made there too; the cases in
+  // form-timeline-real-bundle.test.js ("verify before the build and the build itself agree") are what keep the two from drifting.
+  // Each of those passes acts on the FIRST cell it finds of a field, in the order the form is in by then — which the topology
+  // pass has already changed — so verify predicts a field only while the form has one cell of it, and says it cannot tell otherwise.
+  //
+  // A host the maker already sized (a cell spanning more than one row) keeps its span: only a one-row cell is
+  // not a working timeline, and the spec says nothing about how tall the timeline is. Platform forms differ in
+  // height too — a cell of N rows with the N-1 rows under it, N being 5, 20, 23 on different forms — and in
+  // whether the cell carries `auto="false"`, so a cell of ANY height with its rows is in shape and nothing is
+  // written for it; `auto` goes in only with the conversion of an old cell (see timelineRepairPlan).
+  const repairTimelineHost = async (formId, def) => {
+    if (!def.__notes) return;
+    const warn = (message) => { if (typeof opts.warn === 'function') opts.warn(message); };
+    const form = await provision.getArtifact('form', formId) || {};
+    const host = findSectionLocation(form, 'section_notes', (s) => !!timelineInSection(s));
+    if (!host) return;
+    const found = timelineInSection(host.section);
+    const plan = timelineRepairPlan(found);
+    if (!Object.keys(plan).length) return;
+    const refusal = timelineRefusal(form.tabs, found);
+    if (refusal === 'other-controls') {
+      reportLayoutSkip(`form ${def.name}: the Notes section's timeline was left as it is — the section also holds other controls, so the rows `
+        + 'its cell needs cannot be inserted without moving them. Move them out of it, or delete the section, in the maker, '
+        + `then run ${FULL_BUILD} to get a timeline that renders.`);
+      return;
+    }
+    if (refusal === 'id-taken') {
+      reportLayoutSkip(`form ${def.name}: the Notes section's timeline was left as it is — its control id cannot become '${TIMELINE_CONTROL_ID}', `
+        + 'the only id Dynamics renders a timeline under, because another control on the form already uses it. '
+        + `Remove or rename one of the two in the maker, then run ${FULL_BUILD}.`);
+      return;
+    }
+    // getArtifact can hand back the stored tree itself, so the repair is made on a copy.
+    const rows = JSON.parse(JSON.stringify(host.section.rows || []));
+    const cell = rows[found.rowIndex].cells[found.cellIndex];
+    if (plan.id) cell.control.id = plan.id;
+    if (plan.rowspan) cell.rowspan = plan.rowspan;
+    if (plan.auto) {
+      // `auto` is a cell attribute the typed cell does not model: it lives in the bag of own attributes.
+      const pairs = ((cell.bag && cell.bag.a) || []).map((pair) => pair.slice());
+      const at = pairs.findIndex((pair) => pair[0] === 'auto');
+      if (at >= 0) pairs[at][1] = plan.auto; else pairs.push(['auto', plan.auto]);
+      cell.bag = Object.assign({ c: [] }, cell.bag, { a: pairs });
+    }
+    for (let i = 0; i < (plan.addRows || 0); i += 1) rows.push({ cells: [] });
+    await provision.updateElement('form', formId, host.rowsPointer, rows);
+    warn(`form ${def.name}: repaired the Notes section's timeline in place to the shape Dynamics renders — control id '${TIMELINE_CONTROL_ID}', `
+      + `a ${cell.rowspan}-row cell and ${rows.length - 1 - found.rowIndex} empty row(s) under it.`);
+  };
+
   const reconcileForm = async (formId, def) => {
     await provision.fetchArtifact('form', formId);
     // The def's field cells are already push-ready ({ control: { fieldName, isRequired? } }); index by
@@ -3134,9 +3533,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // "holds no cells" cannot tell a section we just emptied from one a maker created empty and may
     // show/hide from a form script, and deleting the latter is invisible to the destructive preflight.
     const vacatedSections = new Set();
+    // What the topology pass resolved on an explicit layout, for placing sub-grids by it (none on an auto layout).
+    let topology = null;
     if (def.__explicitLayout) {
       declaredSection = declaredSectionByField(def.tabs);
-      sectionTargets = await reconcileFormTopology(formId, def);
+      topology = await reconcileFormTopology(formId, def);
+      sectionTargets = topology.sectionTargets;
     }
     // RAW authored spans, kept off the compiled cells because a cell is pushed verbatim to the SDK.
     // Reconcile re-clamps them against the section it actually writes into: the compiled span is
@@ -3148,7 +3550,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const created = await placeFieldInSection(formId, logical, wantCellByLogical[logical], sectionTargets[declaredSection[logical]], vacatedSections, rawSpans[logical], def.name);
       if (created) newCells.push(created);
     }
-    await addSubgrids(formId, def.__subgrids);
+    // The Notes timeline: added to an auto layout that has none. Before the sub-grids, so a host an auto form gains
+    // here sits where it does on a new form: ahead of the grids appended after it. An older host's repair comes last
+    // (repairTimelineHost), once the prune and the field moves have emptied it of fields.
+    await addTimelineHost(formId, def);
+    await addSubgrids(formId, def, { topology, sectionTargets });
     // Re-assert per-control attributes (read-only / hidden) on fields that were ALREADY on the form.
     // New cells already carry their compiled flags; existing ones need this assertion before the
     // combined layout plan. Without it an author who marks an
@@ -3263,6 +3669,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
         }
       }
     }
+    // The Notes timeline of an older build, repaired in place — LAST of the passes that change a form's fields and
+    // sections, so a host the prune and the field moves have just emptied is the clean host the repair needs.
+    await repairTimelineHost(formId, def);
     requireSuccessfulPush(await provision.pushArtifact('form', formId), `form ${def.name}`, opts.warn);
     reportPartialPush(await provision.publishArtifact('form', formId), `form ${def.name}`, opts.warn);
     await provision.addSolutionComponent({ componentId: formId, componentType: COMPONENT_TYPE.form, solutionUniqueName: sol.uniqueName });
@@ -3594,7 +4003,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       createdFormsThisRun.add(normalizeFormId(id));
       // AB#6736948: on a table whose order the build does not set, the form is created in its place.
       await createInPlace(id, meta && meta.specForm);
-      await addSubgrids(id, def.__subgrids);
+      await addSubgrids(id, def, null);
     } else {
       id = (await provision.createArtifact(type, def)).id;
     }
@@ -3762,6 +4171,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const defs = await Promise.all((spec.forms || []).map(async (f) => {
       const def = compileFormIntent(spec, f, { notesClassId: NOTES_CLASS_ID });
       const subs = [];
+      // The tabs, form-columns and sections this form declares — what a sub-grid's placement is resolved against.
+      const layoutNames = formLayoutNames(f);
       // Gap 7: opt-in auto sub-grids. `forms[].autoSubgrids: true` adds a sub-grid for every child
       // relationship of this form's entity (1:N where it's the parent + N:N) that isn't already
       // declared in subgrids[], so a hub table's form lists its children without hand-authoring each.
@@ -3774,10 +4185,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
       }
       for (const sg of subgridSpecs) {
         // A sub-grid can hang off a 1:N (child has the lookup) or an N:N (intersect) relationship.
-        const oneToMany = relationshipFor(spec, f.entity, sg.childEntity);
-        const nn = oneToMany ? null : manyToManyFor(spec, f.entity, sg.childEntity);
-        if (!oneToMany && !nn) continue;
-        const relationshipName = oneToMany ? relationshipSchemaName(oneToMany, spec.solution && spec.solution.publisherPrefix) : manyToManySchemaName(nn, spec.solution && spec.solution.publisherPrefix);
+        const relationshipName = subgridRelationshipName(spec, f.entity, sg.childEntity);
+        if (!relationshipName) continue;
         const childLogical = sg.childEntity.toLowerCase();
         const viewId = await subgridViewId(provision, result.created.views, spec, sg, childLogical);
         // Every sub-grid needs a concrete view id (the SDK embeds it in the control XML). If the
@@ -3787,9 +4196,19 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // #5: title the sub-grid with the child's display name, not its logical name. Shared pure
         // helper (subgridLabel) so the eval harness grades the same title the engine writes.
         const gridLabel = subgridLabel(spec, sg);
-        subs.push({ targetEntity: childLogical, relationshipName, viewId, label: gridLabel });
+        const entry = { targetEntity: childLogical, relationshipName, viewId, label: gridLabel };
+        // Where the entry places its grid (tab / column / after / before), resolved against the layout this form
+        // declares. A key-less entry carries no `placement` at all, which is what keeps it on the original path.
+        const raw = placementOf(sg);
+        if (raw) {
+          const resolved = resolvePlacement(layoutNames, raw);
+          if (resolved.ok) entry.placement = { raw, resolved };
+          else reportLayoutSkip(`form ${f.name || f.entity}: the placement of the sub-grid for '${childLogical}' was ignored — the layout does not declare what it names, so the grid goes where it always does.`);
+        }
+        subs.push(entry);
       }
       def.__subgrids = subs;
+      def.__subgridLayout = layoutNames;
       return { f, def };
     }));
     const ids = await runner.mapLimit(defs, concurrency, async (d) => {
@@ -3905,7 +4324,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // Quick-view placement: embed a built QuickView form onto a host form via a lookup column,
     // added as a canonical quick-view control cell (semantic identity = the lookup field, so a
     // rebuild doesn't duplicate it). Runs after ALL forms are built so a host can reference a
-    // QuickView form created concurrently. Placed in the host's first section.
+    // QuickView form created concurrently. Placed in the host's first FIELD section: a sub-grid placed ahead of the
+    // form's own sections, or the Notes section, is a section the engine owns and holds nothing else.
     const formIdByEntityName = {};
     // Only QuickView forms are quick-view targets. Keying ALL forms by (entity, name) let a same-named
     // Main form on the SAME entity OVERWRITE the QuickView entry (order-dependent), embedding the wrong
@@ -3926,7 +4346,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           if (!qvFormId) throw new Error(`form "${f.name || f.entity}" quick-view references form '${qv.form}' on '${qv.targetEntity}' which wasn't built — declare it in forms[] with formType: "QuickView", entity "${qv.targetEntity}", and a matching name`);
           const lookup = String(qv.lookup).toLowerCase();
           if (hasQuickView(await provision.getArtifact('form', hostId) || {}, lookup)) continue; // idempotent
-          const rowsPtr = firstSectionRowsPointer(await provision.getArtifact('form', hostId) || {});
+          const rowsPtr = firstFieldSectionRowsPointer(await provision.getArtifact('form', hostId) || {});
           if (!rowsPtr) continue;
           await provision.addElement('form', hostId, rowsPtr, { cells: [quickViewCellIntent({ quickViewClassId: QUICK_VIEW_CLASS_ID, lookupFieldName: lookup, targetEntity: String(qv.targetEntity).toLowerCase(), quickViewFormId: qvFormId, label: qv.label })] });
           changed = true;

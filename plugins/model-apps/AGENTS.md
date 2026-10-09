@@ -154,6 +154,127 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   Existing fields are not list-reordered. Verify checks form-wide cell/control ID uniqueness,
   including auto forms, but not field order or anchor adjacency. See the
   [form-layout contract](references/app-spec-schema.md).
+  **The Notes timeline** (#680, `lib/form-timeline.js` — one definition shared by the compiler, the
+  build's repair and verify) is written in the shape Dynamics renders: the fixed control id
+  `notescontrol` in a 23-row cell with `auto="false"` (its `auto`/spelled-out `showlabel`/`colspan`/
+  `rowspan` ride in the cell's bag), over the 22 empty spacer rows the cell spans. The old shape — a
+  generated control id in a one-row cell — is published and never rendered. What platform forms share is
+  the id, `showlabel="false"` and a cell of N rows followed by N−1 empty rows — N is 5, 20, 23 on different
+  forms, `auto="false"` is on some and not others, `colspan` is 1 or 2 — so the helpers take ANY N of two or
+  more as in shape: 23 and `auto` are what a NEW host is written with, never what an existing one is held to.
+  A rebuild repairs the engine's own host (the `section_notes` section holding the timeline control)
+  **in place** on every layout: one atomic rows write, same section, position and cell identity, and only
+  what is missing — the id, a span of one row, rows under the span (to the span the maker chose; extra rows
+  are never deleted); `auto` is written only with the conversion of an old cell, never alone. The repair
+  (`repairTimelineHost`) runs **last** of the passes that touch a form's fields — after the prune and the
+  `fieldOptions.after` moves — because it rewrites only the host's own rows and refuses a host that holds
+  another control: run first, it would refuse an old host whose stray field the same build then prunes, and
+  the form would stay old until a second build. The topology
+  pass does not narrow that host below its timeline's `colspan` (a widened timeline is the maker's width).
+  It never edits a maker's timeline elsewhere and never writes a second `notescontrol` — a form that
+  already has a control by that id gets no new host (the explicit-layout topology pass and the auto-layout
+  path share `timelineCreationBlocked`), and a host whose id cannot be renamed for that reason, or that
+  still holds another control once the prune and moves are done, is left whole and reported in
+  `skipped.layout`. That is one rule (`timelineRefusal`) applied to two different trees, not one decision
+  that both reach alike: the build judges the form as its field passes have left it, `--verify` the form as
+  published, BEFORE them. So verify predicts what the passes take out of the host (`notesHostInspector`
+  in `verify-spec.js`: a field an explicit layout declares in another section; one a `fieldOptions.after`
+  anchor places beside an anchor that is not in a section the build owns — an anchor that sits in the host
+  but is itself anchored is moved out first, because anchored fields are placed in dependency order, and
+  the field follows it; one an explicit layout with prune on does not list — `formRemovals`, the destructive
+  gate's own function) and hands the rule those cells as `leaving`. What a pass does is predicted only for
+  a field the form has ONE cell of. Each pass acts on a single cell of a field — the first it finds once the
+  topology pass has reordered tabs and sections (`planOrderMoves`), and the prune removes one cell of a
+  field per run — so for a field the form carries twice that a pass would act on (or one anchored, directly
+  or down a chain of anchors, to a field it carries twice with a cell in a section the build owns; the
+  reason names that field, not an anchor of one cell on the way to it) verify cannot know which cell a
+  build acts on. It says so (`unsure`), in every shape of its advice — the taken-id one included, since
+  freeing the id does not decide that cell: no promised repair (a full build repairs the timeline
+  *unless* it leaves the cell, which verify cannot tell), no certain refusal, and no sending the maker off
+  to do what the build may do itself. Only a pruned duplicate becomes predictable by itself (the prune
+  removes one cell per run, so verify is exact once one is left); one a declaration or an anchor places can
+  stay unpredictable build after build, since a build that acts on the cell already in place leaves the
+  others — the maker moves them, as the advice says. A field that no pass touches stays whichever cell is
+  acted on, one cell of it or several, so that is still said plainly. It is a prediction from the spec and the
+  published form, not the build: it also cannot see a removal that was not authorized or that the build
+  holds back, or a `fieldOptions` move skipped for a row-span or an overflowing row. Where it and a build
+  differ the build's report is the authority — the cases in `form-timeline-real-bundle.test.js` run both on
+  each shape, including forms whose published section order is not the build's, so a change to which
+  fields a pass takes out is made in the pass and the prediction together. An `auto` form that asks for
+  Notes and has no host gets one on rebuild (`addTimelineHost`, before the sub-grids: it has no topology
+  pass to add it). Fields never go into an
+  engine host: the no-section fallback skips hosts (`firstFieldSectionRowsPointer` — quick views use it
+  too), a `fieldOptions.after` anchor inside one is refused, and the narrowing re-flow never runs on one (it
+  would delete the spacer rows as "beyond the new count").
+  Verify's `form-timeline` check needs ONE timeline that renders (id `notescontrol`, a cell spanning
+  more than one row) on any form the spec gives Notes — and, for the engine's own host, the N−1 rows under
+  its span, since the build converges them; a maker's timeline is judged by id and span alone. So an
+  old-shape form fails it until rebuilt — and its detail says what a build WILL do about that form
+  (`timelineVerifyProblem`): "run a full build" where the build repairs or adds it, what the maker must do
+  first where it declines (another control holds `notescontrol`; the host holds a control no pass of the
+  build takes out — a maker's own control, or a field no rule of the spec moves or removes, which the maker
+  moves out of the section; on an `auto` layout, which declares no section for a field and prunes none,
+  that is any field already on the form that no `fieldOptions` anchor places). A field the build itself
+  prunes or places elsewhere is not the maker's to move:
+  the advice stays "run a full build" and names what the build takes out first, a removal with the
+  `--allow-destructive` it needs. A field it cannot predict is neither: where a full build would repair the
+  timeline the advice says it does so unless it leaves that field, which verify cannot tell; where the
+  advice is something else first (a control that stays, a taken id) it says verify cannot tell whether the
+  build takes the field out first — and, either way, what to do if the build's report says the timeline
+  was left as it is. Always a
+  FULL build: a `--changed-only` run of an unchanged spec is a no-op ("nothing to apply"), so a form an older
+  version left — which no change to the spec reaches — is never repaired by it.
+  Download does not reconstruct `forms[]` (see `hydrate-spec.js`), so `notes`/`hasNotes` are authored
+  and there is no form read-back to adapt.
+  **Where a sub-grid's section goes** (AB#6651699, `lib/form-subgrid-placement.js` — the pure rules the
+  spec gate, build, verify and wireframe all read): `forms[].subgrids[]` takes `after`/`before` (a
+  section of the declared layout), `tab`, `column`. An `after`/`before` grid sits in its anchor's tab and
+  form-column DIRECTLY beside it (`columnSequence` builds the order — grids that share an anchor keep
+  declared order, each directly beside the one declared before it — and `neighbourOf` names the token a
+  grid must touch); a `tab`(+`column`) grid is a question of MEMBERSHIP, created at the end of that column
+  and, once in it, left wherever it is within it. The names are what `formLayoutNames` (app-spec.js)
+  derives — an auto layout is `tab_general` holding `section_general`, pinned to the compiler by a test —
+  and `subgridPlacementProblems` is the one function behind both the spec gate and the lint (a key a
+  sub-grid entry does not read is only a warning — `subgridUnknownKeys` — because entries written before
+  the placement keys existed may carry extras the build never read). A form holds ONE grid per
+  relationship, so `subgridDuplicateProblems` (gate and lint, one function) refuses a relationship listed
+  twice when an entry places the grid — those keys are new, so no spec that built is turned away — and only
+  warns for a repeat that places nothing (the build has always ignored the extra entry); verify fails the
+  later entry rather than pass it. A grid with
+  NO key takes the original path exactly (end of the first tab's first column, never moved): a test
+  records its writes. The build (`addSubgrids` → `placeGridSection`) runs after the
+  topology pass, using the tab/section matches that pass recorded (`reconcileFormTopology` returns
+  `{ sectionTargets, tabIndexOf }`) — so an anchor matched by label under another name is still the
+  anchor. Grids with no anchor are appended first, in declared order, as they always were; the anchored
+  ones follow — `after` grids in declared order, `before` grids in reverse — each put directly beside the
+  nearest token toward its anchor already on the form (`anchoredPosition`), which is where a NEW form
+  puts it: a new grid is added there in one write, an existing one is MOVED (same section, one
+  `moveElement`, within a column or across form-columns), and one already directly beside it writes
+  nothing. ONLY THE GRID MOVES: `planOrderMoves`, the fewest-moves planner the topology pass uses, is
+  deliberately not used here — it moves whichever section is cheapest, and on the layout every released
+  build left behind (`notes: true` + a grid: the grid BEHIND the Notes section) that is an authored
+  section or the timeline, leaving the Notes section mid-form; a section in between (the Notes section, a
+  maker's own) is simply left behind the grid. Only the engine's own `section_grid_*` host is ever moved;
+  a grid a maker put in a section of their own is reported in `skipped.layout` — unless it is already
+  where the spec puts it, which is neither written nor reported — as is an anchor/tab the
+  deployed form lacks (the grid is then added at the end of the first tab, never lost). Adding or moving
+  a section shifts the indices of the sections behind it, so everything that holds a section across
+  `addSubgrids` is kept by what it is, not where it is: `shiftSectionTargets` corrects the topology pass's
+  recorded targets, and a field being ADDED is queued with its section's id and name
+  (`queuedSectionPointer` finds it again through `findSectionById`, then by name and place) — an index goes
+  stale when a grid section is inserted ahead of it or taken out of the column, and the field would land
+  in the grid's section or halt the forms phase on a pointer that addresses nothing; a section gone
+  altogether sends the field to the first field section, reported. Quick views go to the first FIELD
+  section too, never a grid's. Verify's
+  `form-subgrid` check judges each placed grid
+  against the DEPLOYED form with the same `neighbourOf` — directly beside its neighbour, anything between
+  them named — (`RelationshipName` is element text — `parseFormTopology` reads it), on explicit and auto
+  layouts; a failing detail says to run a full build where the build moves the grid, and what the maker
+  must do where it is in a maker's own section. The wireframe and the offline eval reader read a compiled
+  column by PLACE (`columnItems`; `columnSequence` tokens carry `at`), never by name — a layout may declare
+  a section named `section_notes` too. A grid is as wide as its form-column, so a full-width grid wants a
+  one-column tab (documented,
+  not engineered). Download does not reconstruct `forms[]`, so placement is authored too.
   **Which form a table opens with** (AB#6736948, `lib/form-order.js`) is decided by the table's Main
   Form Set order — each Main form's formxml `<DisplayConditions Order>` — not by `systemform.isdefault`
   (measured: moving the flag reorders nothing, and a table's three new forms, all at the same order,
@@ -926,6 +1047,8 @@ scripts/
     op-diff.js                 ← destructive-op diff + --allow-destructive / --non-interactive gating
     artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)
     form-occupancy.js          ← pure row occupancy (own cells + columns reserved by row-spanning cells above), shared by build and verify
+    form-timeline.js           ← pure: the shape Dynamics renders the Notes timeline in (control id, tall cell, spacer rows), what a deployed one lacks, and how to read it in the SDK tree and in published FormXML (shared by the compiler, the build's repair and verify)
+    form-subgrid-placement.js  ← pure: where a form's sub-grid sections go (`tab`/`column`/`after`/`before`) — resolving a placement against the declared layout, the order of a column's sections and grids, finding a grid's section in either tree shape (shared by the spec gate, build, verify and the wireframe)
     form-order.js              ← the Main Form Set order: which Main form a table opens with, and which forms the build orders (shared by the spec gate, build and verify)
     form-container-match.js    ← how an authored tab/section is matched to a deployed one, and the moves that put them in the layout's order (shared by build and verify)
     ai-app-settings.js         ← single source of truth for the per-app AI feature contract
@@ -1991,6 +2114,41 @@ plugin must NOT precompute classId), sub-grid relationship/target/view serializa
 **merge** (exactly one `<events>` root on a rebuild), field removal, and the **412 → failed
 `PushResult`** signal `requireSuccessfulPush` halts on. The mock-based `sdk-build.test.js` covers the
 engine ORCHESTRATION (call order, idempotency, phase selection); this covers what a mock cannot.
+
+`scripts/tests/form-timeline-real-bundle.test.js` (with `form-timeline.test.js` for the pure helpers) — the
+**Notes timeline shape** against the real bundle: the exact FormXML a new host serializes to (control id
+`notescontrol`, a 23-row `auto="false"` cell, 22 empty rows, no duplicate control id), the engine's own
+create path, the in-place repair of an old-shape host on an explicit and an auto layout (same section,
+position and cell identity; ONE atomic write; a second rebuild mutates nothing), hosts of the heights and
+widths platform forms use (a 5-, 20- or 23-row cell, with or without `auto`, a widened timeline) that a
+rebuild leaves alone and verify accepts, a host that only lacks rows being topped up to its own height, the
+refusals (a maker's own timeline, a taken `notescontrol`, a host with a field added), the **order** of the
+repair (a field the layout dropped, or one a `fieldOptions` anchor moves, leaves the old host first so the
+SAME build repairs it), and what `--verify` reports — with the advice that follows from the reason — before
+the build as well as after it: for each way a field leaves the host or stays in it (including a chain of
+anchors, one anchored to another that is itself moved out, up to three links), the advice has to be what a
+real build then does (`verify before the build and the build itself agree about …`); for a field the form has
+twice (sections the build orders differently from the published form, a pruned field removed one cell per
+run, a chain of anchors that reaches one, a taken `notescontrol` beside one) verify says it cannot tell, and
+what the build then does is pinned both ways. `form-timeline.test.js` pins each rule of
+verify's `notesHostInspector` on its own, one inspector asked about every cell as `--verify` does. It shares
+`tests/helpers/form-store-harness.js` — the SDK over a stub HTTP client that stores one systemform row.
+
+`scripts/tests/form-subgrid-placement-real-bundle.test.js` (with `form-subgrid-placement.test.js` for the pure
+rules, the spec gate and lint parity, verify over hand-built FormXML, the wireframe and the plan) — **sub-grid
+placement** against the real bundle: where a new grid lands (between sections, before/after an anchor, in a tab
+or form-column, on an auto layout), a rebuild moving the grid an older build appended into place (one move OF
+THE GRID, the same section id, a second rebuild writes nothing), **the form the released builds deployed**
+(`notes: true` + a grid behind the Notes section, the old timeline: every placement ends in the order a new
+form gets, the timeline repaired in place, nothing but the grid moving), a section between a grid and its
+anchor left behind the grid, the refusals (a grid in a maker's section — reported only when it is NOT already
+in place — an anchor the deployed form lacks),
+the sweep of an emptied same-named section still resolving after a grid shifted the indices, **fields the
+build adds** landing in their own section whichever way a grid shifts the sections around it (an auto
+form, a section the spec adds, a grid added in front, leaving the column, moving down past it or up from
+behind it — each of which wrote the field into the grid's section or halted the forms phase when the field
+was queued by index — and a section that is gone altogether), and a recorded
+**regression guard** — a spec without placement keys writes exactly what it always did.
 
 `scripts/tests/vendor-sdk-smoke.test.js` — the **behavior/return-shape** `CONTRACT:` tests (drive the
 public `createMakerSdk` factory — the `MakerSdk`/`AppAdapter` classes are no longer bundle exports):

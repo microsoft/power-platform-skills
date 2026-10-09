@@ -74,7 +74,9 @@ function existingTabs(spec) {
       section.id = guid(next++);
       for (const row of section.rows) for (const c of row.cells) {
         c.id = guid(next++);
-        if (c.control) c.control.id = guid(next++);
+        // The timeline keeps the fixed id the platform renders it under: this form is one the engine already
+        // built correctly, which is what "untouched" below is a claim about. (A generated id would be repaired.)
+        if (c.control && c.control.id !== 'notescontrol') c.control.id = guid(next++);
       }
     }
   }

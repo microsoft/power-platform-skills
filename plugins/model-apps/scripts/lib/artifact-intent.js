@@ -13,6 +13,7 @@
 const { entityByLogical } = require('./_graph.js');
 const { lookupColumnsFor, generatedTabName, generatedSectionName, formColumnsOf, authoredSectionNames, authoredTabNames } = require('./app-spec.js');
 const { SDK_COLUMN_TYPE } = require('./entity-provision.js');
+const { timelineCellIntent, timelineRowsIntent, wantsTimeline } = require('./form-timeline.js');
 
 // Arrange field cells into `columns` cells-per-row.
 // Mirrors rowsFromCells in sdk-build.js but lives here so this module is
@@ -251,20 +252,17 @@ function mergeFieldOptions(base, inline, logical) {
 // the GUID lives in the SDK bundle's constants, not in the plugin. Hardcoding it would
 // break when the bundle is re-vendored with a changed GUID.
 // Shape proven by the SDK's form.workflow.test.ts.
+//
+// The cell is the platform's timeline cell — the fixed control id `notescontrol` in a tall cell with
+// `auto="false"` — not just a control in a one-row cell, which Dynamics publishes and never renders (#680).
+// The shape lives in form-timeline.js, shared with the build's repair of an older host and with verify.
 function notesCellIntent(notesClassId) {
-  return {
-    control: {
-      classId: String(notesClassId),
-      fieldName: null,
-      label: 'Notes',
-      showLabel: false,
-      parameters: {}
-    }
-  };
+  return timelineCellIntent(notesClassId);
 }
 
-// The whole Notes SectionIntent — a pre-built section holding only the timeline cell.
-// Appended to the first tab's single FormColumn when the form/entity opts in.
+// The whole Notes SectionIntent — a pre-built section holding the timeline cell and the empty rows that
+// cell spans (the timeline does not render without them). Appended to the first tab's single FormColumn
+// when the form/entity opts in.
 function notesSectionIntent(notesClassId) {
   return {
     name: 'section_notes',
@@ -272,7 +270,7 @@ function notesSectionIntent(notesClassId) {
     visible: true,
     showLabel: true,
     columns: 1,
-    rows: [{ cells: [notesCellIntent(notesClassId)] }]
+    rows: timelineRowsIntent(notesClassId)
   };
 }
 
@@ -672,7 +670,7 @@ function compileFormIntent(spec, formSpec, opts) {
   // Notes section (opt-in: formSpec.notes or entity.hasNotes) — Main forms only.
   // Quick-create / quick-view forms don't host the activity timeline.
   // Appended to the first tab's single FormColumn so it renders below the field sections.
-  const wantNotes = formType === 'Main' && (formSpec.notes === true || (entity && entity.hasNotes === true));
+  const wantNotes = wantsTimeline(spec, formSpec);
   if (wantNotes) {
     // notesClassId is an SDK constant supplied by the engine at call time. If not yet
     // provided, notesCellIntent(undefined) is still emitted (the section must exist in the
@@ -693,6 +691,9 @@ function compileFormIntent(spec, formSpec, opts) {
     description: formSpec.description,
     status: 'Active',
     tabs: tabs,
+    // Whether this form asks for the Notes timeline (see wantsTimeline). The engine's reconcile reads it to
+    // repair an older host in place and to add one to an auto layout, which has no topology pass to do it.
+    __notes: wantNotes,
     // Whether an authored tabs layout was ACTUALLY used, which is NOT the same as `explicit` above.
     // `explicit` is also true for `layout: 'explicit'` with no `tabs`, and in that case the compiler
     // falls through to the AUTO branch — so reporting it as explicit would tell the engine's
@@ -865,14 +866,33 @@ function findFieldCellLocation(formJson, logical) {
 function findSectionLocation(formJson, sectionName, accept) {
   const want = String(sectionName || '').toLowerCase();
   if (!want) return null;
+  return findSectionWhere(formJson, (section) => String(section.name || '').toLowerCase() === want && (!accept || accept(section)));
+}
+
+// A deployed section, located by its `id` across the WHOLE form, or null.
+//
+// The id is the one identity of a section that survives everything the build does to the sections around it. A
+// section's INDEX shifts whenever one is added ahead of it in its column or taken out of it, and its NAME is not
+// reliable: a real section and the emptied copy an older build left share one, and a section a maker made may have
+// none. So a caller that holds a section across such a change — the build keeps a field it is adding until every
+// positioning step is done, and the sub-grids are placed in between — finds it again by this. The SDK mints a GUID
+// for every section it adds and keeps the one a fetched form carries; compared as text, case-insensitively.
+function findSectionById(formJson, id) {
+  const want = String(id == null ? '' : id).toLowerCase();
+  if (!want) return null;
+  return findSectionWhere(formJson, (section) => String(section.id == null ? '' : section.id).toLowerCase() === want);
+}
+
+// The first section, in document order, that `matches`, with where it is: { pointer, rowsPointer, tabIndex,
+// columnIndex, sectionIndex, section } — or null. The one walk behind the by-name and by-id lookups.
+function findSectionWhere(formJson, matches) {
   const tabs = formJson.tabs || [];
   for (let ti = 0; ti < tabs.length; ti++) {
     const cols = tabs[ti].columns || [];
     for (let ci = 0; ci < cols.length; ci++) {
       const sections = cols[ci].sections || [];
       for (let si = 0; si < sections.length; si++) {
-        if (String(sections[si].name || '').toLowerCase() !== want) continue;
-        if (accept && !accept(sections[si])) continue;
+        if (!matches(sections[si])) continue;
         const pointer = '/tabs/' + ti + '/columns/' + ci + '/sections/' + si;
         return { pointer, rowsPointer: pointer + '/rows', tabIndex: ti, columnIndex: ci, sectionIndex: si, section: sections[si] };
       }
@@ -945,6 +965,7 @@ module.exports = {
   findFieldCellPointer,
   findFieldCellLocation,
   findSectionLocation,
+  findSectionById,
   declaredSectionByField,
   equalColumnWidths,
   normalizeFieldEntry,

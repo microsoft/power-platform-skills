@@ -11,7 +11,7 @@ const { sitemapEntityTables } = require('./app-spec.js');
 // XML_TAG / XML_ATTR are the one tag and attribute grammar for FormXML and SiteMap XML; they live with
 // liveNavEntries in sitemap-pages.js so the form-identity scan and the navigation reader cannot drift.
 const { decodeXmlEntities, liveNavEntries, XML_TAG, XML_ATTR } = require('./sitemap-pages.js');
-const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf } = require('./app-spec.js');
+const { normalizePageSource, relationshipSchemaName, manyToManySchemaName, SDK_ROLE_MARKER, canonicalPersonaName, bpfUniqueName, BPF_ROLE_ACCESS, generatedTabName, generatedSectionName, formColumnsOf, formLayoutNames, subgridRelationshipName } = require('./app-spec.js');
 const { sameRelationship, describeRelationship } = require('./relationship-metadata.js');
 const { resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, appUniqueName, businessRuleFilter, bpfFilter, viewDef, dashboardsInSolution, findDashboardsByName, findPinnedDashboard } = require('./sdk-build.js');
 const { DASHBOARD_LAUNCHER_URL, isDashboardLauncherUrl, subAreaTargetKey, specSubAreaTargetKey, specSubAreas, chromeByTargetKey, keepsLiveValue } = require('./sitemap-merge.js');
@@ -23,8 +23,12 @@ const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges
 const { resolveSurfaces } = require('./surface-resolver.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
 const { isVisualizationUnsupported } = require('./entity-provision.js');
-const { sectionGridWidth, mergeFieldOptions, fieldOptionsMap, normalizeFieldEntry, compileFormIntent, isNonFieldControl } = require('./artifact-intent.js');
+const { sectionGridWidth, mergeFieldOptions, fieldOptionsMap, normalizeFieldEntry, compileFormIntent, isNonFieldControl, formFieldLogicals, declaredSectionByField } = require('./artifact-intent.js');
+// The fields an explicit layout prunes, as the destructive gate and the build's prune pass both name them.
+const { formRemovals } = require('./op-diff.js');
 const { rowOccupancy } = require('./form-occupancy.js');
+const { wantsTimeline, timelineVerifyProblem, FULL_BUILD } = require('./form-timeline.js');
+const { placementOf, resolvePlacement, columnSequence, neighbourOf, tokenLabel, findGridSection, AUTO_TAB_NAME } = require('./form-subgrid-placement.js');
 const { isMainForm, selectDefaultForm, plannedMainFormSequence, displayConditionsOrder, compareServedOrder } = require('./form-order.js');
 
 // The PER-APP setting each AI feature writes now lives in ./ai-app-settings.js, together with the
@@ -571,9 +575,33 @@ async function verifySpec(spec, read, opts = {}) {
       // the whole form, including header/footer and unbound controls, even for an unshaped auto form.
       const identityProblems = formIdentityProblems(xml);
       add('form-identities', `${entity}.${name}`, identityProblems.length === 0, identityProblems.join('; '));
+      const deployed = parseFormTopology(xml);
+      // The Notes timeline, on any layout: Dynamics renders it only under the control id `notescontrol` in a
+      // tall cell (lib/form-timeline.js), so a form that carries it in the shape an older build wrote — or not at
+      // all — has not got the timeline the spec asks for, however many other checks pass. The form need only
+      // carry ONE timeline that renders: a maker may have moved it, or added their own, and the build never edits
+      // a timeline it does not own. The engine's own host is judged by its rows as well (the build converges
+      // them, so rows still missing are a fix not applied); a timeline a maker added, by its id and span alone.
+      // What the detail tells the maker to do follows what a build will do about THIS form, which is not always
+      // "build again" (timelineVerifyProblem) — and what it does to the fields in the host first is predicted from the
+      // spec and this published form (notesHostInspector).
+      if (wantsTimeline(spec, f)) {
+        const problem = timelineVerifyProblem(deployed, isEngineHostSection, { inspect: notesHostInspector(spec, f, deployed) });
+        add('form-timeline', `${entity}.${name}`, !problem, problem);
+      }
+      // Sub-grids that declare where they go (`tab` / `column` / `after` / `before`) are checked against the
+      // deployed form on every layout; the others have no place to hold the form to. An explicit layout's tabs
+      // and sections are matched the way the build matched them (further down, where the matches are made); an
+      // auto layout's one tab and section are looked up by the names the compiler gives them.
+      const placedGridChecks = (match) => {
+        for (const c of subgridPlacementChecks(spec, f, deployed, match)) add('form-subgrid', `${entity}.${name}: ${c.name}`, c.ok, c.detail);
+      };
+      if (!explicit) {
+        const autoTab = layoutAutoMatch(deployed);
+        placedGridChecks(autoTab);
+      }
       if (!explicit && !autoFlagged.length) continue;
 
-      const deployed = parseFormTopology(xml);
       const problems = [];
       // A declared flag against the deployed attribute, where an absent attribute is what the form
       // renders without one: shown, expanded, labelled, editable. Reported in the spec's own terms
@@ -654,6 +682,10 @@ async function verifySpec(spec, read, opts = {}) {
       // failed a build that had done exactly what was asked. Live-reproduced.
       const claimedTabs = new Set();
       const tabOrder = [];
+      // Where each authored tab / section was matched on the deployed form — what a sub-grid's placement is
+      // judged against (subgridPlacementChecks), since a matched container keeps its deployed name.
+      const matchedTabs = [];
+      const matchedSections = new Map();
       // The section names the author declared — the same set the build's compiler records — so the
       // label and position passes skip a section another want owns by name, exactly as the build does.
       // Tabs follow the same rule, from the same kind of set.
@@ -670,6 +702,7 @@ async function verifySpec(spec, read, opts = {}) {
         if (!tabHit) { problems.push(`tab '${tabName}' is absent`); return; }
         claimedTabs.add(tabHit.index);
         tabOrder.push({ name: tabName, index: tabHit.index });
+        matchedTabs[ti] = tabHit.index;
         const got = tabHit.item;
         const compiledTab = compiledTabs[ti] || {};
         stateFlag(`tab '${tabName}'`, 'expanded', 'expanded', got.expanded, compiledTab.expanded !== false);
@@ -704,6 +737,7 @@ async function verifySpec(spec, read, opts = {}) {
             }
             claimedSections.add(secHit.index);
             sectionOrder.push({ name: secName, index: secHit.index });
+            matchedSections.set(secName, { ti: tabHit.index, ci, si: secHit.index });
             const compiledSection = (compiledColumn.sections || [])[si] || {};
             stateFlag(`section '${secName}'`, 'visible', 'visible', secHit.item.visible, compiledSection.visible !== false);
             stateFlag(`section '${secName}'`, 'showLabel', 'showlabel', secHit.item.showLabel, compiledSection.showLabel !== false);
@@ -803,6 +837,10 @@ async function verifySpec(spec, read, opts = {}) {
 
       add('form-topology', `${entity}.${name}`, problems.length === 0,
         problems.length ? `deployed layout does not match the authored one — ${problems.slice(0, 6).join('; ')}${problems.length > 6 ? `; +${problems.length - 6} more` : ''}` : '');
+      placedGridChecks({
+        tab: (i) => matchedTabs[i],
+        section: (secName) => matchedSections.get(secName),
+      });
     }
   }
 
@@ -1780,6 +1818,128 @@ function autoLayoutFieldFlags(spec, formSpec) {
   return out;
 }
 
+// What a build does with each OTHER cell of a Notes host before it judges the section — the answer
+// `timelineVerifyProblem` (form-timeline.js) asks for one cell at a time:
+//
+//   (cell) → {}                          not a bound field (a maker's web resource, a quick view, a sub-grid, a spacer): a build
+//                                        never touches it, so it stays
+//            { name }                    a field the build leaves where it is
+//            { name, goes }              a field the build takes out of the host first — `destructive` when it removes it, which
+//                                        takes --allow-destructive
+//            { name, unsure, destructive? }  a field verify cannot tell the build's treatment of; `unsure` says why
+//
+// The build repairs the host LAST (repairTimelineHost) and declines a host that still holds another control, but by then
+// its field passes have run, and they take out of the host the fields the spec says belong elsewhere. `--verify` reads the
+// published form BEFORE any of that, so judging the form as published would send the maker to move by hand a field the
+// build moves or removes itself. A bound field leaves the host by:
+//   · placement  an explicit layout that declares it in another section moves its cell there (placeFieldInSection);
+//   · an anchor  `fieldOptions[field].after` moves it beside the anchor (applyFieldPositions) — on any layout, whatever
+//                `prune` says — unless the anchor is not on the form or sits in a section the build owns, where no field
+//                is placed (planFieldAdjacent). The build places anchored fields in DEPENDENCY order, so an anchor that
+//                sits in the host but has an anchor of its own is moved out first, and the field follows it (canAnchor);
+//   · the prune  an explicit layout with prune on removes a field it does not list. That is `formRemovals`, the function
+//                behind the destructive gate, so the two cannot disagree about which fields go; the removal needs
+//                --allow-destructive.
+//
+// What a pass does is predicted only for a field the published form has ONE cell of. Each of those passes acts on a single cell
+// of a field — the first it finds in the form's order AT THAT MOMENT, and the prune removes one cell of a field per run — and that
+// is not the published order: the topology pass has reordered tabs and sections and moved named sections between tabs by then
+// (planOrderMoves), and a pass can move the very cell a later pass looks for. With two cells in different sections nothing
+// short of replaying the build says which one it acts on, so for a field the form has more than once that a pass WOULD act on
+// verify does not predict either way: it says it cannot tell (`unsure`), rather than promise a repair the build then declines or
+// send the maker to move by hand what the build moves itself. A field that no pass touches stays whichever cell is acted on, so
+// that stays a plain "the build leaves it", one cell of it or several. The same uncertainty reaches a field anchored to an ANCHOR
+// the form has more than once, one of whose cells is in a section the build owns — its own anchor, or the end of a chain of
+// anchors (canAnchor) — and the reason names the field the form has more than once, not an anchor of one cell on the way to it.
+//
+// This is a prediction from the spec and the published form. It cannot see what only happens as the build runs: a removal
+// the maker declines at the preflight, or one the build holds back because the form changed since, or a move it skips
+// because the rows it would split carry a row-span. Where it is wrong the build says so (`skipped.layout`) and the form
+// still fails `--verify` afterwards: the build's own report is the authority, and this spares the maker only the advice
+// that is wrong for the common case.
+//
+// Returns nothing for a layout the compiler cannot read (only a spec that was never validated): nothing can be predicted
+// for it, and `timelineVerifyProblem` then counts every other cell as in the way, as it does for a form it knows nothing about.
+function notesHostInspector(spec, formSpec, deployed) {
+  let def;
+  try { def = compileFormIntent(spec, formSpec); } catch (e) { return undefined; }
+  const want = new Set(formFieldLogicals(def));
+  // An auto layout declares no section for a field and relocates nothing; only an explicit one places.
+  const declaredIn = def.__explicitLayout ? declaredSectionByField(def.tabs) : {};
+  // formRemovals takes a form, and `deployed` is the tabs array verify parsed from its FormXML.
+  const removals = new Set(formRemovals({ tabs: deployed }, def));
+  const anchors = def.__fieldPositions || {};
+  // Every cell that binds a field, per field, in the published form's order, with the section it is in. A quick view carries
+  // its lookup's name in `datafieldname` and is not that field — the build skips it when it looks for a field's cell
+  // (findFieldCellLocation), so it must not count as one here.
+  const cellsOf = new Map();
+  for (const tab of deployed || []) for (const column of (tab && tab.columns) || []) for (const section of (column && column.sections) || []) {
+    for (const row of (section && section.rows) || []) for (const cell of (row && row.cells) || []) {
+      const control = cell && cell.control;
+      if (!control || !control.fieldName || isNonFieldControl(control)) continue;
+      const logical = String(control.fieldName).toLowerCase();
+      if (!cellsOf.has(logical)) cellsOf.set(logical, []);
+      cellsOf.get(logical).push({ section, cell });
+    }
+  }
+  // Whether the build, positioning a field beside `field`, finds it in a section it does not own: `true` — it moves the field
+  // there; `false` — it declines (planFieldAdjacent: the anchor is on the form in a section the build owns, or not on it at
+  // all); `{ chain }` — that depends on which of several cells of a field the build finds first. `chain` runs from `field`
+  // through the anchors it is itself placed after, down to that field: a field placed after one that hangs on such a field is
+  // as uncertain as it is.
+  const canAnchor = (field, seen = new Set()) => {
+    const cells = cellsOf.get(field);
+    // Not on the form: the build adds it, to a section of the form's own, when the layout places it.
+    if (!cells) return want.has(field);
+    if (cells.every((c) => !isEngineHostSection(c.section))) return true;
+    if (cells.length > 1) return { chain: [field] };
+    // One cell, in a section the build owns. It is taken out before anything is positioned beside it when the layout declares
+    // it elsewhere, and when it is anchored itself its own move is made first (dependency order) — a field anchored to it
+    // follows it out. `seen` ends a cycle, which the build refuses to place at all.
+    if (declaredIn[field] !== undefined) return true;
+    const next = anchors[field];
+    if (!next || seen.has(field)) return false;
+    seen.add(field);
+    const below = canAnchor(next, seen);
+    return below && below.chain ? { chain: [field, ...below.chain] } : below;
+  };
+  // Why a field cannot be predicted when its anchors lead to a field the form has more than once, in the chain's own terms: the
+  // anchors on the way have one cell each and are not called otherwise. ['new_other', 'new_area'] reads "its anchor 'new_other'
+  // follows 'new_area', which is on the form more than once"; a chain of one is the anchor itself.
+  const moreThanOnce = (chain) => (chain.length === 1
+    ? `its anchor '${chain[0]}' is on the form more than once`
+    : `its anchor '${chain[0]}' follows ${chain.slice(1).map((f) => `'${f}'`).join(', which follows ')}, which is on the form more than once`);
+  // What the build does with the cell of `logical` it acts on — the same three rules, in the order the passes run them — or
+  // nothing when no pass touches the field.
+  const ruleFor = (logical) => {
+    if (declaredIn[logical] !== undefined) return { goes: `your layout places it in section '${declaredIn[logical]}', so it is moved there` };
+    if (removals.has(logical)) return { goes: 'your layout does not list it, so it is removed', destructive: true };
+    const anchor = anchors[logical];
+    if (!anchor) return undefined;
+    const usable = canAnchor(anchor);
+    if (usable && usable.chain) return { unsure: moreThanOnce(usable.chain) };
+    return usable ? { goes: `fieldOptions places it after '${anchor}', so it is moved there` } : undefined;
+  };
+  return (cell) => {
+    const control = cell && cell.control;
+    if (!control || !control.fieldName || isNonFieldControl(control)) return {};
+    const logical = String(control.fieldName).toLowerCase();
+    const name = `the field '${logical}'`;
+    const cells = cellsOf.get(logical) || [];
+    const mine = cells.find((c) => c.cell === cell);
+    if (!mine) return { name };
+    const rule = ruleFor(logical);
+    if (!rule) {
+      // No pass touches the field, so every cell of it stays. A further cell of it in the same section is named as one, so the
+      // advice never names one field twice.
+      const nth = cells.filter((c) => c.section === mine.section).indexOf(mine);
+      return { name: nth === 0 ? name : `${nth === 1 ? 'a second' : 'another'} cell of ${name}` };
+    }
+    if (cells.length === 1) return Object.assign({ name }, rule);
+    return Object.assign({ name, unsure: 'it is on the form more than once' }, rule.destructive ? { destructive: true } : {});
+  };
+}
+
 // Repeated field bindings are valid (body/header), but duplicated cell/control identities are not.
 // Collect definitions across the whole form, not only the sections an explicit layout declares.
 function formIdentityProblems(xml) {
@@ -1823,6 +1983,124 @@ function formIdentityProblems(xml) {
   return problems;
 }
 
+// How an AUTO layout's compiler-named containers are found on a deployed form: by name, because nothing there is
+// matched by label or position (an explicit layout's matches are made where the layout is walked).
+function layoutAutoMatch(deployed) {
+  const lower = (v) => String(v == null ? '' : v).toLowerCase();
+  return {
+    tab: (i) => {
+      const at = deployed.findIndex((t) => lower(t.name) === AUTO_TAB_NAME);
+      return i === 0 && at >= 0 ? at : undefined;
+    },
+    section: (name) => {
+      for (let ti = 0; ti < deployed.length; ti += 1) {
+        for (let ci = 0; ci < (deployed[ti].columns || []).length; ci += 1) {
+          const sections = deployed[ti].columns[ci].sections || [];
+          for (let si = 0; si < sections.length; si += 1) {
+            if (lower(sections[si].name) === name && !isEngineHostSection(sections[si])) return { ti, ci, si };
+          }
+        }
+      }
+      return undefined;
+    },
+  };
+}
+
+// Whether each sub-grid that declares where it goes (`tab` / `column` / `after` / `before`) is where the spec
+// puts it on the DEPLOYED form: in the form-column of its anchor and DIRECTLY beside it (or beside the grid
+// anchored there ahead of it — see neighbourOf), or in the tab (and column) it names. The build converges these,
+// so a grid still elsewhere means the fix was not applied — the same reason every other placement is verified,
+// and the reason this is judged against what the form really holds rather than against the build's report.
+// `match` says where the layout's tabs and sections are on the deployed form: { tab(specIndex) → deployed index,
+// section(name) → { ti, ci, si } }, each undefined when absent. A grid with no placement is not checked.
+function subgridPlacementChecks(spec, f, deployed, match) {
+  const placed = [];
+  for (const sg of f.subgrids || []) {
+    const raw = placementOf(sg);
+    if (!raw || !sg.childEntity) continue;
+    const rel = subgridRelationshipName(spec, f.entity, sg.childEntity);
+    if (rel) placed.push({ raw, rel, key: rel.toLowerCase(), child: String(sg.childEntity).toLowerCase() });
+  }
+  if (!placed.length) return [];
+  const layout = formLayoutNames(f);
+  // The anchored grids of each layout form-column, in declared order: what the build's sequence is made of.
+  const groups = new Map();
+  const resolvedOf = new Map();
+  for (const p of placed) {
+    const resolved = resolvePlacement(layout, p.raw);
+    resolvedOf.set(p, resolved);
+    if (!resolved.ok || !resolved.anchor) continue;
+    const key = `${resolved.tabIndex}:${resolved.columnIndex}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ key: p.key, [resolved.anchor.side]: resolved.anchor.name });
+  }
+  const tabName = (ti) => String((deployed[ti] || {}).name || `#${ti + 1}`);
+  const out = [];
+  const judged = new Set();
+  for (const p of placed) {
+    const resolved = resolvedOf.get(p);
+    const name = `sub-grid ${p.child}`;
+    const fail = (detail) => out.push({ name, ok: false, detail });
+    // A form holds one grid per relationship, and the spec gate refuses an entry that places a grid a second time. A
+    // spec that reaches verify without the gate must not PASS such an entry: the grid sits where the first one puts it,
+    // so the later entry's placement was never what the build honoured.
+    if (judged.has(p.key)) { fail(`the sub-grid for ${p.rel} is listed more than once, and a form holds one grid per relationship — only the first entry's placement is checked`); continue; }
+    judged.add(p.key);
+    if (!resolved.ok) { fail('its placement does not resolve against the layout this spec declares'); continue; }
+    const at = findGridSection(deployed, p.rel);
+    if (!at) { fail(`the grid for relationship ${p.rel} is not on the deployed form`); continue; }
+    const problems = [];
+    if (resolved.anchor) {
+      const anchor = match.section(resolved.anchor.name);
+      if (!anchor) { fail(`its anchor section '${resolved.anchor.name}' is not on the deployed form, so where the grid sits cannot be proven`); continue; }
+      if (at.ti !== anchor.ti || at.ci !== anchor.ci) {
+        problems.push(`the grid is in tab '${tabName(at.ti)}' form-column ${at.ci + 1}, but the spec places it ${resolved.anchor.side} section '${resolved.anchor.name}', in tab '${tabName(anchor.ti)}' form-column ${anchor.ci + 1}`);
+      } else {
+        const key = `${resolved.tabIndex}:${resolved.columnIndex}`;
+        const seq = columnSequence(layout[resolved.tabIndex].columns[resolved.columnIndex].sections, groups.get(key) || []);
+        // Where a token of the sequence sits on the deployed form-column of the anchor. A grid counts only in the
+        // section the build owns: one a maker put in a section of their own is nothing the build places by.
+        const siOf = (token) => {
+          if (token.section !== undefined) {
+            const hit = match.section(token.section);
+            return hit && hit.ti === anchor.ti && hit.ci === anchor.ci ? hit.si : undefined;
+          }
+          const hit = findGridSection(deployed, token.grid);
+          return hit && hit.engine && hit.ti === anchor.ti && hit.ci === anchor.ci ? hit.si : undefined;
+        };
+        const near = neighbourOf(seq, p.key, (token) => siOf(token) !== undefined);
+        if (!near) { fail(`its anchor section '${resolved.anchor.name}' is not on the deployed form, so where the grid sits cannot be proven`); continue; }
+        const refSi = siOf(near.token);
+        const wantSi = near.side === 'after' ? refSi + 1 : refSi - 1;
+        if (at.si !== wantSi) {
+          const sections = deployed[anchor.ti].columns[anchor.ci].sections || [];
+          const ref = tokenLabel(near.token, (gridKey) => (placed.find((q) => q.key === gridKey) || {}).child);
+          const from = near.side === 'after' ? refSi + 1 : at.si + 1;
+          const between = near.side === 'after' ? sections.slice(refSi + 1, at.si) : sections.slice(at.si + 1, refSi);
+          const names = between.map((s, i) => `'${s.name || `#${from + i + 1}`}'`).join(', ');
+          const wrongSide = near.side === 'after' ? at.si < refSi : at.si > refSi;
+          problems.push(wrongSide
+            ? `the grid is ${near.side === 'after' ? 'above' : 'below'} ${ref} in tab '${tabName(anchor.ti)}' form-column ${anchor.ci + 1}, but the spec places it directly ${near.side} it`
+            : `the grid is not directly ${near.side} ${ref} in tab '${tabName(anchor.ti)}' form-column ${anchor.ci + 1}: ${names} ${between.length === 1 ? 'sits' : 'sit'} between them`);
+        }
+      }
+    } else {
+      const ti = match.tab(resolved.tabIndex);
+      if (ti === undefined) { fail(`tab '${layout[resolved.tabIndex].name}' is not on the deployed form, so where the grid sits cannot be proven`); continue; }
+      if (at.ti !== ti) problems.push(`the grid is in tab '${tabName(at.ti)}', but the spec places it in tab '${tabName(ti)}'`);
+      else if (resolved.columnIndex !== undefined && at.ci !== resolved.columnIndex) problems.push(`the grid is in form-column ${at.ci + 1} of tab '${tabName(ti)}', but the spec places it in form-column ${resolved.columnIndex + 1}`);
+    }
+    // What to do about a grid that is not where the spec puts it depends on whether a build will move it: it moves the
+    // section it owns (a `section_grid_*` host) and leaves a grid a maker put in a section of their own. A full build —
+    // `--changed-only` skips a spec that has not changed, which a form an older build left never reaches the fix by.
+    const advice = at.engine
+      ? `run ${FULL_BUILD} to move it`
+      : 'it sits in a section a build did not create, so a build leaves it there — move that section in the maker, or delete it to let a build place a grid of its own';
+    out.push({ name, ok: problems.length === 0, detail: problems.length ? `deployed where the spec does not place it — ${problems.join('; ')} — ${advice}` : '' });
+  }
+  return out;
+}
+
 // Parse a deployed form's FormXml into the container tree `--verify` needs to prove a layout.
 //
 // Why this exists: form verification used to prove only that a form row EXISTS with the right
@@ -1849,7 +2127,7 @@ function parseFormTopology(xml) {
   let tab = null, column = null, section = null, row = null, cell = null;
   // A <cell> carries its own <labels>, so a cell's label must not be attributed to its section.
   let inCell = false;
-  const re = /<(\/?)(tab|column|section|row|cell|control|label)\b([^>]*?)(\/?)>/gi;
+  const re = /<(\/?)(tab|column|section|row|cell|control|label|relationshipname)\b([^>]*?)(\/?)>/gi;
   const attr = (raw, name) => {
     const m = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i').exec(raw || '');
     return m ? (m[1] != null ? m[1] : m[2]) : undefined;
@@ -1892,8 +2170,10 @@ function parseFormTopology(xml) {
     else if (tag === 'cell') {
       inCell = !selfClosing;
       // A cell with no <control> child stays control-less, which is what keeps a SPACER from
-      // reading as engine-owned.
+      // reading as engine-owned. `auto` is the cell's own attribute (the timeline's cell carries
+      // auto="false"); it is read only so the timeline helpers see the same cell either tree shape gives.
       cell = { colspan: Number(attr(raw, 'colspan')) || 1, rowspan: Number(attr(raw, 'rowspan')) || 1, visible: flag(raw, 'visible') };
+      if (attr(raw, 'auto') !== undefined) cell.auto = attr(raw, 'auto');
       if (row) row.cells.push(cell);
       if (selfClosing) cell = null;
     }
@@ -1916,12 +2196,24 @@ function parseFormTopology(xml) {
       // marks a timeline or sub-grid host a maker added a field to (isEngineHostSection).
       const f = attr(raw, 'datafieldname');
       const classId = attr(raw, 'classid');
+      const controlId = attr(raw, 'id');
       const disabled = flag(raw, 'disabled');
       // A quick view binds a LOOKUP's datafieldname too, but it is not that field: counted as one, it placed
       // the lookup wherever the quick view sat and lent the field its visibility and state. The build skips it
       // the same way (isNonFieldControl) when it picks the cell to place or patch.
       if (f && !isNonFieldControl({ classId })) section.fields.push(String(f).toLowerCase());
-      if (cell) cell.control = Object.assign(f ? { fieldName: String(f).toLowerCase() } : {}, classId ? { classId } : {}, disabled === undefined ? {} : { disabled });
+      // `id` is what tells a timeline Dynamics renders (`notescontrol`) from one it does not (a generated id).
+      if (cell) cell.control = Object.assign(f ? { fieldName: String(f).toLowerCase() } : {}, classId ? { classId } : {}, controlId === undefined ? {} : { id: controlId }, disabled === undefined ? {} : { disabled });
+    }
+    // A sub-grid names the relationship it shows as ELEMENT text, not as an attribute:
+    //   <control id="…" classid="{E7A81278-8635-4D9E-8D4D-59480B391C5B}"><parameters>
+    //     <RelationshipName>new_customer_new_ticket</RelationshipName><TargetEntityType>new_ticket</TargetEntityType>…
+    // It is the only parameter verify reads — it is what says WHICH grid a section holds — so it is read up to the
+    // next tag and kept on the control for findGridSection (lib/form-subgrid-placement.js).
+    else if (tag === 'relationshipname' && !selfClosing && cell && cell.control) {
+      const end = s.indexOf('<', re.lastIndex);
+      const text = (end < 0 ? s.slice(re.lastIndex) : s.slice(re.lastIndex, end)).trim();
+      if (text) cell.control.relationshipName = decodeXmlEntities(text);
     }
   }
   return tabs;
@@ -2024,4 +2316,4 @@ function appShellReferencesPage(spec, key) {
   return false;
 }
 
-module.exports = { verifySpec, hasElement, subareaHasDashboard, subareaDashboardHasLauncher, liveNavEntries, subareaHasGenPage, appShellReferencesPage, layoutColumnNames, parseFetchXml };
+module.exports = { verifySpec, hasElement, subareaHasDashboard, subareaDashboardHasLauncher, liveNavEntries, subareaHasGenPage, appShellReferencesPage, layoutColumnNames, parseFetchXml, notesHostInspector };

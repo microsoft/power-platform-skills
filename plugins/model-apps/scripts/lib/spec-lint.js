@@ -2,7 +2,7 @@
 // Pure App Spec guardrail. Returns { ok, errors, warnings }. errors block the plan
 // gate; warnings teach. Bakes in the modeling lessons hit live — notably the
 // relationship schema-name vs lookup-name collision Dataverse rejects.
-const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens, isPlatformIconRef, labelText, appMembershipWarnings } = require('./app-spec.js');
+const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens, isPlatformIconRef, labelText, appMembershipWarnings, subgridPlacementProblems, subgridDuplicateProblems, subgridUnknownKeys } = require('./app-spec.js');
 const { compileFormIntent, formFieldLogicals, NON_FORM_RENDERABLE_TYPES } = require('./artifact-intent.js');
 const { normalizeSpecShape } = require('./spec-shape.js');
 const { resolveSurfaces, unresolvedSurfaceMessage } = require('./surface-resolver.js');
@@ -265,6 +265,7 @@ function lintAppSpec(spec) {
       }
     }
     for (const sg of f.subgrids || []) {
+      for (const message of subgridUnknownKeys(sg)) W(`Form ${f.entity} ${message}`);
       const has1N = (spec.relationships || []).some(
         (r) => r.type === 'OneToMany' && lc(r.referenced) === lc(f.entity) && lc(r.referencing) === lc(sg.childEntity)
       );
@@ -272,6 +273,16 @@ function lintAppSpec(spec) {
         (r) => r.type === 'ManyToMany' && ((lc(r.entity1) === lc(f.entity) && lc(r.entity2) === lc(sg.childEntity)) || (lc(r.entity1) === lc(sg.childEntity) && lc(r.entity2) === lc(f.entity)))
       );
       if (!has1N && !hasNN) E(`Form ${f.entity} sub-grid for ${sg.childEntity} has no matching OneToMany or ManyToMany relationship`);
+      // Where the grid goes — the SAME judgement validateAppSpec makes, from the one function, so a spec that
+      // lints clean is not refused by the build's gate for a placement the lint never looked at.
+      if (formType === 'Main') for (const message of subgridPlacementProblems(f, sg)) E(`Form ${f.entity} ${message}`);
+    }
+    // A relationship listed more than once — likewise the one judgement of the spec gate: an error when an entry says
+    // where the grid goes, a warning when none does.
+    if (formType === 'Main') {
+      const duplicates = subgridDuplicateProblems(spec, f);
+      for (const message of duplicates.errors) E(`Form ${f.entity} ${message}`);
+      for (const message of duplicates.warnings) W(`Form ${f.entity} ${message}`);
     }
     for (const ev of f.events || []) {
       if (!FORM_EVENTS.has(lc(ev.event))) { E(`Form ${f.entity} has an event with unknown type '${ev.event}' (use onload/onsave/onchange)`); continue; }

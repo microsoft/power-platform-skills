@@ -720,7 +720,8 @@ child view id. Each step emits `[n/total]`.
   **Boolean `defaultValue`**, whole-number **`integerFormat`** (incl. `Duration`), and per-column
   **write permissions** (`isValidForCreate` / `isValidForUpdate` / `isValidForRead` — this is how you
   make a column read-only), all applied on **create and on rebuild**; adaptive
-  main forms with **1:N / N:N sub-grids**; **per-field form control** (`readOnly` / `hidden` /
+  main forms with **1:N / N:N sub-grids** (placed between sections or in a tab / form-column with
+  `tab` / `column` / `after` / `before`, and moved into place on rebuild); **per-field form control** (`readOnly` / `hidden` /
   `after` positioning, plus `prune: false` to edit a subset of a form non-destructively);
   **quick-create / quick-view forms** (`formType`) + **quick-view placement**
   (`forms[].quickViews[]`); **per-form security roles** (`forms[].securityRoles` — name the

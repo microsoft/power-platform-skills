@@ -660,7 +660,7 @@ why they need naming here at all.
   "notes": true,                                   // optional — add a Notes section
   "autoSubgrids": true,                            // optional — a sub-grid for every child relationship
   "deactivateOtherMainForms": true,                // optional — see below (own custom tables only)
-  "subgrids": [ { "childEntity": "new_ticket", "view": "Active Tickets", "label": "Tickets" } ] }
+  "subgrids": [ { "childEntity": "new_ticket", "view": "Active Tickets", "label": "Tickets" } ] }  // + optional tab / column / after / before — see "Where a sub-grid goes"
 
 // explicit layout: author tabs -> sections -> columns(1-4) -> fields
 { "entity": "new_project", "type": "main", "name": "Project",
@@ -720,14 +720,121 @@ why they need naming here at all.
   form is read-only (no sub-grids, no events). Sub-grids/Notes are Main-form only. Every section on a
   `QuickCreate` or `QuickView` form is one column: the platform refuses a wider one, so an authored
   `columns` above 1 is built as 1, and the auto layout stays one column however many fields it holds.
+- **`notes`** *(optional, boolean, Main forms only)* — or **`hasNotes: true`** on the table — adds the Notes
+  section: `section_notes`, labelled "Notes", at the end of the first tab's first form-column, holding the
+  form's **Timeline** control. The timeline is written in the shape Dynamics renders: the fixed control id
+  `notescontrol` in a 23-row cell (`auto="false"`) over the 22 empty rows it spans. A timeline under a
+  generated id in a one-row cell is published but never shown, which is how earlier versions wrote it, so a
+  rebuild **repairs** such a section **in place** — the same section, position and cell — on an `auto` or an
+  explicit layout, and adds the section to an `auto` form that has none.
+  The height is yours to change: a timeline cell of N rows followed by the N−1 rows it spans is the shape
+  every platform form uses (N is 5 on one form and 20 on another; a new host is written at 23), so a Notes
+  section you resized in the maker is already in shape and a rebuild writes nothing — likewise one you
+  widened with the timeline, or one without `auto="false"`, which only some platform timelines carry. A
+  rebuild only adds rows the span is missing, to the span you chose, and never deletes the rows a resize left.
+  It never edits a timeline you added yourself and never writes a second `notescontrol`: where the form
+  already has a control with that id, no Notes section is added; an old section whose id cannot be renamed
+  for the same reason is left as it is; and so is one that still holds a control of yours after the build
+  has pruned the fields your layout dropped and moved the ones your layout declares in another section or a
+  `fieldOptions[].after` places elsewhere (move them out of it, or delete the section, in the maker, then
+  run a full build). Those fields never stand in the way: the repair is the last step, so a stray field the
+  same build removes is gone by then. Each refusal is reported in the build result (`skipped.layout`).
+  `--verify` fails the form (`form-timeline`) until it carries a timeline that renders — under
+  `notescontrol`, in a cell spanning more than one row, and for the Notes section the build owns, with the
+  rows its span needs under it — and says what to do about it: run a full build where the build repairs or
+  adds the timeline, what to change in the maker first where it will not. Verify reads the form as
+  published, before the build's own passes have run, so for the fields in an old Notes section it
+  **predicts** what the build will take out: the fields your layout declares in another section, the ones a
+  `fieldOptions[].after` places beside an anchor in an ordinary section (an anchor that sits in the Notes
+  section but is itself anchored is moved out first, and the field follows it), and — on an explicit layout
+  with `prune` on — the ones it does not list. For those it says to run a full build and names what the
+  build takes out first (a removal needs `--allow-destructive`), and it asks you to move out of the section
+  only a control no rule of your spec moves or removes — a field no rule moves (on an `auto` layout, any
+  field already on the form that no `fieldOptions[].after` places), or a control of your own. A field the
+  form carries **more than once** is not predicted when a rule would act on it, and neither is one anchored
+  — directly or down a chain of anchors — to a field the form carries more than once with a cell in the
+  Notes section or a sub-grid's: a build acts on one cell of a field, and which one depends on how it
+  arranges the sections. For the cell in the Notes section verify says it cannot tell whether the build
+  takes it out — a full build repairs the timeline unless it leaves that cell — and what to do if the
+  build's report says the timeline was left as it is: it neither promises the repair nor sends you to the
+  maker for what the build may do itself, and it says so while another control holds `notescontrol` too.
+  A repeated field that no rule moves is predicted: it stays, and is named. Nor can it see what only
+  happens while the build runs — a removal that was not authorized, a move skipped because the rows it
+  would split carry a row-span — so when the build's own report says the
+  timeline was left as it is, follow the report. Use a **full** build (without `--changed-only`) to pick up
+  an older Notes section: `--changed-only` skips a spec that has not changed, and this fix needs no change
+  to the spec. A download does not reconstruct `forms[]`, so `notes` is authored, not read back.
 - **`quickViews[]`** (on a host form) embed a `QuickView` form via a lookup: `lookup` is the lookup
   column on the host, `targetEntity` the related entity, `form` the **name** of a `QuickView` form
   declared in `forms[]` (lint-enforced). Optional `label`, `section`, `displayAsCard`. The control
-  renders from plain formxml, so it persists on a plain push.
+  renders from plain formxml, so it persists on a plain push. It is added to the host's first
+  **field** section — never a sub-grid's section or the Notes section, which hold nothing else.
 - A sub-grid needs a matching `OneToMany` **or** `ManyToMany` between the form's entity and
   `childEntity` (lint-enforced); the builder resolves the relationship name either way. Each sub-grid
   renders in its **own 1-column, full-width section**; its title defaults to the child entity's
   `pluralName` (then `displayName`), with `subgrids[].label` overriding.
+- **Where a sub-grid goes** *(Main forms only)*. With no placement keys a grid's section is added at the
+  end of the first tab's first form-column and never moved — as before. Four optional keys on a
+  `subgrids[]` entry say where it goes instead:
+
+  | Key | What it names | Effect |
+  |---|---|---|
+  | `after` | a **section** this form's layout declares | the grid's section goes **directly after** it, in that section's tab and form-column — nothing between them (not the Notes section a build appends to the end of the first tab) |
+  | `before` | the same | directly before it. Give one of `after` / `before`, not both |
+  | `tab` | a **tab** this form's layout declares | the grid goes in that tab — at the end of it when the build adds or moves the grid. With `after` / `before` it must be the tab the section is in |
+  | `column` | a form-column of the tab, counting from `0` | the grid goes in that form-column of the tab (the first tab when `tab` is not given). With `after` / `before` it must be the section's form-column |
+
+  Names are the ones the layout declares — `tabs[].name` and `sections[].name`, compared case-insensitively;
+  the name a tab or section gets when it declares none counts too. An `auto` layout has one tab,
+  `tab_general`, holding one section, `section_general`, so it can place a grid before or after that
+  section. Grids that share an anchor stay in the order they are declared. An unknown name, `after` with
+  `before`, a `column` the tab does not have, or a section in another tab or form-column than the one
+  named is an error in both `validateAppSpec` and the lint — each says what the form declares instead.
+  Placement on a form that is not a Main form is refused with the sub-grid itself. A key a sub-grid
+  entry does not read (`afterSection`, `Tab`) is ignored with a warning naming the key it probably meant.
+  A form holds **one grid per relationship**, so list each child table once: a table listed twice with a
+  placement key on either entry is an error (only one entry could say where the grid goes), and listed
+  twice with no placement it is a warning — the build adds one grid and ignores the rest, as it always has.
+
+  ```jsonc
+  // a full-width related-records grid between two sections: Summary, then Tasks, then Resolution
+  { "entity": "new_ticket", "name": "Ticket",
+    "tabs": [ { "name": "tab_main", "label": "General", "sections": [
+      { "name": "sec_summary",    "label": "Summary",    "columns": 2, "fields": ["new_name", "new_priority"] },
+      { "name": "sec_resolution", "label": "Resolution", "columns": 2, "fields": ["new_resolution", "new_closedon"] } ] } ],
+    "subgrids": [ { "childEntity": "new_task", "after": "sec_summary" } ] }
+
+  // a grid in its own tab, and one in the second form-column of a two-column tab
+  { "entity": "new_ticket", "name": "Ticket",
+    "tabs": [ { "name": "tab_main", "label": "General", "columns": [
+                { "width": "60%", "sections": [ { "name": "sec_left",  "label": "Left",  "columns": 1, "fields": ["new_name"] } ] },
+                { "width": "40%", "sections": [ { "name": "sec_right", "label": "Right", "columns": 1, "fields": ["new_priority"] } ] } ] },
+              { "name": "tab_related", "label": "Related", "sections": [ { "name": "sec_history", "label": "History", "columns": 1, "fields": ["new_notes"] } ] } ],
+    "subgrids": [ { "childEntity": "new_task",    "tab": "tab_related" },
+                  { "childEntity": "new_comment", "tab": "tab_main", "column": 1 } ] }
+  ```
+
+  **Width.** A grid's section is one form-column wide and fills the form-column it is in. In a tab with
+  several form-columns it is therefore as wide as its own column; to give a grid the full width of the
+  form, put it in a tab of **one** form-column (a tab with `sections[]` and no `columns[]` is one).
+  `column` has no other effect — the layout stays yours to shape.
+
+  **Rebuilding converges.** A rebuild puts the build's own grid section where the spec places it, and a
+  rebuilt form ends in the order a new one gets. A grid an earlier version appended to the end of the form —
+  behind the Notes section — moves, the same section with its control and anything you set on it, to sit
+  directly after (or before) its section; one already directly beside it
+  writes nothing. **Only the grid moves.** None of your sections, and not the Notes section, is moved to make
+  room, so a section you added between the grid and its section simply ends up behind the grid. With only
+  `tab` (and `column`) a grid already in that tab (and form-column) stays where it is within it. A grid in a
+  section you made yourself is never moved — the build reports it in `skipped.layout` (unless it is
+  already where the spec places it, which needs neither a move nor a report), as it does a name the
+  deployed form no longer has (a grid not yet on the form is then added at the end of the first tab, not
+  lost; one already there stays where it is). `--verify`
+  checks each placed grid (`form-subgrid`): it must be on the form, in the tab and form-column the spec
+  names, and directly beside the section it is placed by (or beside the grid placed there ahead of it) — what
+  sits between them is named. A grid an earlier version left elsewhere needs a **full** build to be moved —
+  `--changed-only` skips a spec that has not changed — and the failing check says so. A download does not
+  reconstruct `forms[]`, so placement is authored, not read back.
 - **`deactivateOtherMainForms`** (optional, default `false`, Main forms only): after promoting this
   form as the entity default, deactivate every OTHER active main form on the entity — i.e. hide the
   blank stock "Information" form so only this form ships active. **Destructive**, so it is OFF by

@@ -439,6 +439,13 @@ is optional — omit it to title the grid with the child entity's `pluralName` (
 supply it to override. To ship only your form and hide the blank stock "Information" form, set
 `"deactivateOtherMainForms": true` on the form (opt-in; only affects tables this build owns).
 
+By default a grid's section goes at the **end** of the form. To put it elsewhere — a full-width
+related-records grid between two sections, say — declare the form's layout (`tabs[].name` /
+`sections[].name`) and name where the grid goes: `"after": "<section>"` or `"before": "<section>"`, or
+`"tab": "<tab>"` (with `"column": <n>` for a form-column of that tab). A grid is as wide as the
+form-column it is in, so for a full-width grid use a tab of one form-column. The wireframe draws a
+placed grid where it will land; see app-spec-schema.md (*Where a sub-grid goes*).
+
 **Choosing auto vs an explicit layout.** `auto` is the right default and already adapts: it puts
 the primary field first and switches to **two columns above six fields** (Quick Create stays one
 column, which Dataverse requires). What it cannot do is *group by task*.

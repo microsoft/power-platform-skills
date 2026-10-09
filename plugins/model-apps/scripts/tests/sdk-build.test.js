@@ -2074,6 +2074,31 @@ test('quick-view placement halts clearly when the referenced form was not built'
   await assert.rejects(runSdkBuild(spec, { sdk, apply: true }), /quick-view references form 'Nope' on 'new_customer' which wasn't built/);
 });
 
+// Quick views went into the first section of the first form-column — which is a sub-grid's section once the grid is
+// placed in front of the form's own. It is the first FIELD section they belong in, as a field with no section of
+// its own is put.
+test('quick-view placement: the quick view goes into the first field section, not a sub-grid section placed ahead of it', async () => {
+  const spec = makeSpec();
+  spec.forms = [
+    { entity: 'new_customer', name: 'Customer', formType: 'Main', layout: 'auto',
+      subgrids: [{ childEntity: 'new_ticket', before: 'section_general' }],
+      quickViews: [{ lookup: 'new_primaryticket', targetEntity: 'new_ticket', form: 'Ticket QV', label: 'Ticket' }] },
+    { entity: 'new_ticket', name: 'Ticket QV', formType: 'QuickView', layout: 'auto' },
+  ];
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(spec, { sdk, apply: true });
+  const QUICKVIEW_CLS = '5C5600E0-1D6E-4205-A272-BE80DA87FD42';
+  const qvCall = find(calls, 'addElement').find((c) => c.args[0] === 'form' && (c.args[3] && c.args[3].cells || [])
+    .some((cell) => cell.control && String(cell.control.classId).replace(/[{}]/g, '').toUpperCase() === QUICKVIEW_CLS));
+  assert.ok(qvCall, 'one quick-view control placed');
+  const host = await sdk.getArtifact('form', qvCall.args[1]);
+  const sections = host.tabs[0].columns[0].sections;
+  assert.deepStrictEqual(sections.map((s) => s.name), ['section_grid_new_customer_new_ticket', 'section_general'], 'the premise: the grid section comes first');
+  assert.strictEqual(qvCall.args[2], '/tabs/0/columns/0/sections/1/rows', 'the quick view is added to the field section');
+  assert.strictEqual(sections[0].rows.length, 1, 'the grid section still holds only its grid');
+  assert.ok(sections[1].rows.some((r) => r.cells.some((c) => c.control && c.control.fieldName === 'new_primaryticket')), 'the quick view sits in section_general');
+});
+
 test('commands: loose buttons + a flyout with children build to the right shape (one loose group)', async () => {
   const spec = makeSpec();
   spec.webResources = [{ name: 'new_ticket.js', type: 'js', content: 'x' }];

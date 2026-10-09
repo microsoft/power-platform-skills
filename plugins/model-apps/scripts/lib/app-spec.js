@@ -5,6 +5,7 @@ const path = require('node:path');
 const { isAppSourcePath } = require('./app-source-path.js');
 const { normalizeSpecShape } = require('./spec-shape.js');
 const { isMainForm, selectDefaultForm, ordersByHand } = require('./form-order.js');
+const { AUTO_TAB_NAME, AUTO_SECTION_NAME, placementOf, resolvePlacement } = require('./form-subgrid-placement.js');
 
 // URL scheme allowlist for spec-supplied URLs that the built app will RENDER (iframe dashboard tiles,
 // sitemap URL subareas). Only http(s) is allowed — a `javascript:`, `data:`, `vbscript:`, or `file:`
@@ -391,6 +392,17 @@ function manyToManySchemaName(rel, publisherPrefix) {
   }
   const [a, b] = [String(rel.entity1 || '').toLowerCase(), String(rel.entity2 || '').toLowerCase()].sort();
   return prefixedRelationshipName(a, b, publisherPrefix);
+}
+
+// The relationship a form's sub-grid for `childEntity` shows — a 1:N where the child holds the lookup, else an N:N
+// — as the schema name the grid control carries (`RelationshipName`), or null when the two tables have none. One
+// definition for the build, which writes the control, and `--verify`, which looks for it by that name.
+function subgridRelationshipName(spec, formEntity, childEntity) {
+  const prefix = spec && spec.solution && spec.solution.publisherPrefix;
+  const oneToMany = relationshipFor(spec, formEntity, childEntity);
+  if (oneToMany) return relationshipSchemaName(oneToMany, prefix);
+  const manyToMany = manyToManyFor(spec, formEntity, childEntity);
+  return manyToMany ? manyToManySchemaName(manyToMany, prefix) : null;
 }
 
 // Effective schema name, or null when the entry cannot name one. An explicit schemaName wins
@@ -1411,6 +1423,126 @@ function authoredTabNames(formSpec) {
   const tabs = formSpec && Array.isArray(formSpec.tabs) ? formSpec.tabs : [];
   tabs.forEach((t, ti) => { if (t && typeof t === 'object') names.add(String(t.name || generatedTabName(ti)).toLowerCase()); });
   return names;
+}
+
+// The tabs, form-columns and sections a form's layout DECLARES, under the names the compiler gives them,
+// lower-cased — the vocabulary `subgrids[].tab/after/before` is written in, and what the build, verify and the
+// wireframe resolve a placement against (lib/form-subgrid-placement.js). Unlike the name sets above it keeps the
+// STRUCTURE, because "right after this section" and "in this tab's second form-column" need to know which
+// column a section is in. An auto layout (no `tabs`) is its one tab, holding one section.
+function formLayoutNames(formSpec) {
+  if (!formSpec || !Array.isArray(formSpec.tabs)) return [{ name: AUTO_TAB_NAME, columns: [{ sections: [AUTO_SECTION_NAME] }] }];
+  return formSpec.tabs.map((t, ti) => ({
+    name: String((t && t.name) || generatedTabName(ti)).toLowerCase(),
+    columns: formColumnsOf(t).map((col, ci) => ({
+      sections: ((col && Array.isArray(col.sections)) ? col.sections : [])
+        .map((s, si) => String((s && s.name) || generatedSectionName(ti, ci, si)).toLowerCase()),
+    })),
+  }));
+}
+
+// The keys a `subgrids[]` entry reads. The build ignores any other, so a mistyped placement key (`After`,
+// `afterSection`) would leave the grid at the end of the form with nothing said — hence a warning. A warning,
+// not an error: entries written before the placement keys existed carry whatever extra keys their authors
+// tried, and the build never read them, so refusing those now would break a spec that built.
+const SUBGRID_KEYS = ['childEntity', 'view', 'label', 'tab', 'column', 'after', 'before'];
+
+// The keys of a `subgrids[]` entry that nothing reads, as messages that start with the entry (the caller adds
+// the form) — with the key it most likely meant when the name differs only in case or by a suffix.
+function subgridUnknownKeys(sg) {
+  if (!sg || typeof sg !== 'object' || Array.isArray(sg)) return [];
+  return Object.keys(sg).filter((k) => !SUBGRID_KEYS.includes(k)).map((k) => {
+    const lower = k.toLowerCase();
+    const meant = SUBGRID_KEYS.find((known) => lower === known.toLowerCase() || (known.length >= 3 && lower.startsWith(known.toLowerCase())));
+    return `subgrid '${sg.childEntity}' has the key '${k}', which nothing reads${meant ? ` — did you mean '${meant}'?` : ''} (the keys are ${SUBGRID_KEYS.join(', ')})`;
+  });
+}
+
+// What is wrong with where a `subgrids[]` entry places its grid, as messages that start with the entry (the
+// caller adds the form). Empty for an entry that places nothing. The spec gate and the standalone lint both ask
+// this one function, so they cannot disagree about what is a valid placement — a placement that validates here
+// is one the build resolves, and one it resolves is one `--verify` can check.
+//
+// Types are checked first and stop the rest: a placement whose values are not names or a whole number cannot be
+// resolved against the layout, and a second message about it would only restate the first.
+function subgridPlacementProblems(formSpec, sg) {
+  const out = [];
+  if (!sg || typeof sg !== 'object' || Array.isArray(sg)) return out;
+  const who = `subgrid '${sg.childEntity}'`;
+  for (const key of ['tab', 'after', 'before']) {
+    if (sg[key] !== undefined && !(typeof sg[key] === 'string' && sg[key].trim() !== '')) {
+      out.push(`${who} has ${key} ${JSON.stringify(sg[key])} — it must be the name of a ${key === 'tab' ? 'tab' : 'section'} on this form, as a non-empty string`);
+    }
+  }
+  if (sg.column !== undefined && (!Number.isInteger(sg.column) || sg.column < 0)) {
+    out.push(`${who} has column ${JSON.stringify(sg.column)} — it must be a whole number from 0, the first form-column of its tab`);
+  }
+  if (out.length) return out;
+  const placement = placementOf(sg);
+  if (!placement) return out;
+  const layout = formLayoutNames(formSpec);
+  const resolved = resolvePlacement(layout, placement);
+  if (resolved.ok) return out;
+  const explicit = Array.isArray(formSpec && formSpec.tabs);
+  const tabs = layout.map((t) => t.name).join(', ');
+  const sections = layout.flatMap((t) => t.columns.flatMap((c) => c.sections)).join(', ');
+  const autoNote = explicit ? '' : ` (an auto layout has the one tab '${AUTO_TAB_NAME}' holding the one section '${AUTO_SECTION_NAME}' — declare tabs[] for more)`;
+  switch (resolved.code) {
+    case 'both':
+      out.push(`${who} sets both 'after' and 'before' — give one: the grid goes right after a section or right before one, not both`);
+      break;
+    case 'tab':
+      out.push(`${who} places the grid in tab '${sg.tab}', which this form does not declare (its tabs: ${tabs})${autoNote}`);
+      break;
+    case 'column':
+      out.push(`${who} places the grid in column ${sg.column} of tab '${layout[resolved.tabIndex].name}', which has ${resolved.columns} form-column(s) — count from 0`);
+      break;
+    case 'anchor':
+      out.push(`${who} places the grid ${resolved.anchor.side} section '${sg[resolved.anchor.side]}', which this form does not declare (its sections: ${sections || 'none'})${autoNote}`);
+      break;
+    case 'anchor-tab':
+      out.push(`${who} places the grid ${resolved.anchor.side} section '${sg[resolved.anchor.side]}', which is in tab '${resolved.actualTab}', not in tab '${sg.tab}' — the grid goes in its anchor's tab, so drop 'tab' or name the right one`);
+      break;
+    case 'anchor-column':
+      out.push(`${who} places the grid ${resolved.anchor.side} section '${sg[resolved.anchor.side]}', which is in form-column ${resolved.actualColumn} of its tab, not ${sg.column} — the grid goes in its anchor's column, so drop 'column' or name the right one`);
+      break;
+    default:
+      break;
+  }
+  return out;
+}
+
+// The entries of a form's `subgrids[]` that name ONE relationship, as { errors, warnings } of messages that start with
+// the entry (the caller adds the form). A form holds one grid per relationship — the build finds a grid by it, and an
+// entry whose grid is already there adds nothing — so of several entries only one can say where the grid goes, and the
+// others' placement could never be honoured, silently: a check looks a grid up by its relationship, so every entry
+// for it would read the same grid and pass or fail together.
+//
+// An ERROR when any of the entries declares where the grid goes. Those keys are new, so no spec that built before can
+// carry one. A repeat that places nothing is a WARNING: specs have always been able to carry it and the build has always
+// ignored the extra entry, so refusing it now would break a spec that built. Entries are grouped by the relationship
+// they resolve to (subgridRelationshipName — what the build writes and verify looks for), so the same table spelled in
+// another case counts, and an entry with no relationship is left to the error it already gets. The gate and the lint
+// both ask this one function.
+function subgridDuplicateProblems(spec, formSpec) {
+  const out = { errors: [], warnings: [] };
+  const groups = new Map();
+  (Array.isArray(formSpec && formSpec.subgrids) ? formSpec.subgrids : []).forEach((sg, index) => {
+    if (!sg || typeof sg !== 'object' || Array.isArray(sg) || typeof sg.childEntity !== 'string') return;
+    const relationship = subgridRelationshipName(spec, formSpec.entity, sg.childEntity);
+    if (!relationship) return;
+    const key = relationship.toLowerCase();
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ index, sg });
+  });
+  for (const entries of groups.values()) {
+    if (entries.length < 2) continue;
+    const which = entries.map((e) => `subgrids[${e.index}]`).join(', ');
+    const said = `subgrids lists the sub-grid for '${entries[0].sg.childEntity}' more than once (${which}) — a form holds one grid per relationship`;
+    if (entries.some((e) => placementOf(e.sg))) out.errors.push(`${said}, so only one entry can say where it goes; keep one`);
+    else out.warnings.push(`${said}, so the build adds one and ignores the rest`);
+  }
+  return out;
 }
 
 // The plugin's own version, read from its manifest, for the `minimumPluginVersion` capability gate.
@@ -2463,6 +2595,7 @@ function validateAppSpec(spec, opts = {}) {
             errors.push(`form ${f.entity}: a subgrid is missing childEntity`);
             continue;
           }
+          for (const message of subgridUnknownKeys(sg)) warnings.push(`form ${f.entity}: ${message}`);
           if (badEntityRef(sg.childEntity, `form ${f.entity}: subgrid childEntity`)) continue;
           if (!entityByLower.has(String(sg.childEntity).toLowerCase())) {
             errors.push(`form ${f.entity}: subgrid references unknown childEntity '${sg.childEntity}'`);
@@ -2473,6 +2606,17 @@ function validateAppSpec(spec, opts = {}) {
               `form ${f.entity}: no OneToMany or ManyToMany relationship between '${f.entity}' and subgrid childEntity '${sg.childEntity}'`
             );
           }
+          // Where the grid goes (tab / column / after / before). A non-Main form already fails for hosting a
+          // grid at all, so its placement is not judged on top of that.
+          if (formType === 'Main') {
+            for (const message of subgridPlacementProblems(f, sg)) errors.push(`form ${f.entity}: ${message}`);
+          }
+        }
+        // …and a relationship listed more than once (an error when an entry places the grid, else a warning).
+        if (formType === 'Main') {
+          const duplicates = subgridDuplicateProblems(spec, f);
+          for (const message of duplicates.errors) errors.push(`form ${f.entity}: ${message}`);
+          for (const message of duplicates.warnings) warnings.push(`form ${f.entity}: ${message}`);
         }
       }
     }
@@ -3939,6 +4083,10 @@ module.exports = {
   formColumnsOf,
   authoredSectionNames,
   authoredTabNames,
+  formLayoutNames,
+  subgridPlacementProblems,
+  subgridDuplicateProblems,
+  subgridUnknownKeys,
   validateAppSpec,
   validateSampleDataRows,
   normalizePageSource,
@@ -4001,6 +4149,7 @@ module.exports = {
   prefixedRelationshipName,
   manyToManyFor,
   manyToManySchemaName,
+  subgridRelationshipName,
   relationshipNameCollisions,
   relationshipCollisionMessage,
   specDeclaresAttribute,
