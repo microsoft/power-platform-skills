@@ -431,8 +431,9 @@ deadlock, concurrent-op guards) are **auto-retried** with backoff on `--apply` (
 retry reuses what's already created). If the build still **halts** (`BuildHalt`) on an
 unrecoverable error, surface it and ask the user how to proceed via `AskUserQuestion` (adjust the
 spec / cancel), then re-run. Everything is scoped to a dedicated unmanaged solution; **`--publish`
-gates the final *bulk* publish** — edit/finalize paths still publish their one targeted artifact so the
-change takes effect (see *Notes & limits*).
+gates the final *bulk* publish**, which also carries the edits made to existing views and forms.
+Without it those edits — and always an existing app's sitemap re-sync — still publish their one
+targeted artifact so the change takes effect (see *Notes & limits*).
 
 **Recovery from a failed or halted build: run the full build again.** The build is idempotent — every
 phase re-uses what's already created and only fills the gaps. SDK metadata is persisted under
@@ -457,6 +458,13 @@ no usable environment, or is not valid JSON, halts too: move it aside (rename it
 hold page-ownership receipts and the baseline) and run again. The same environment under its other host name
 (`<org>.api.crm…` against `<org>.crm…`) also halts: re-run with the host the halt names. The standalone verifier
 never opens that workspace either, so it verifies any environment the app is deployed to.
+
+With `--publish`, the edits a build makes to existing views and forms go live in one publish of their tables, made
+before the build publishes the app, and the final publish covers them again.
+A build that **halts with an error** publishes what it had already saved before it stops (best effort).
+One that is **killed** — Ctrl-C, a crash, a closed terminal — after those edits are saved but before
+that publish cannot, so they stay saved but not live until the next build. Run the same full build
+again: it publishes them without writing them again.
 
 ### Phase 3 — Verify & iterate
 **`--apply --verify` already reconciled the spec against what deployed** (Phase 2) — the build appends a
@@ -676,12 +684,16 @@ child view id. Each step emits `[n/total]`.
   the Web API using an `az`-token HttpClient. No relay, no designer tab.
 - **Dedicated unmanaged solution per app** (review / teardown). **`--publish` gates the final
   *bulk* publish** of the app's entity + app customizations (one `PublishXml` for every entity and the
-  app, which also carries the default-view enrichment's publish, deferred to it). It
+  app). With `--publish` that one publish also carries the default-view enrichment, and the tables touched
+  by the reconcile of an existing form or view, form events and quick-view placement are published
+  together once more, before the app is, so none of them publishes on its own. It
   does **not** suppress the small **targeted** publishes that edit/finalize paths must run so the change
-  takes effect — reconciling an existing form or view, wiring form events, placing quick-views,
-  re-syncing an existing app's sitemap, and finalizing the sitemap after generative pages each publish
-  that one artifact (an unpublished edit to a live artifact is invisible). A fresh build without
-  `--publish` still leaves new tables/columns/relationships staged-but-unpublished in the solution.
+  takes effect: without `--publish`, reconciling an existing form or view, wiring form events and
+  placing quick-views each publish that one artifact, and with or without it, re-syncing an existing
+  app's sitemap and finalizing the sitemap after generative pages publish the app, and repairing a
+  lookup column still labelled with an old default publishes its table (an unpublished edit
+  to a live artifact is invisible). A fresh build without `--publish` still leaves new
+  tables/columns/relationships staged-but-unpublished in the solution.
 - **Idempotent — but not full desired-state convergence.** Existing
   solution/tables/columns/relationships/views/charts/forms/commands/dashboards are detected and
   **reused**, so re-runs and existing-table envs work without collisions. **The caveat for EDITS:** a

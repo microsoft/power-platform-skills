@@ -16,7 +16,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { sha256 } = require('./lib/hash.js');
 const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageCode, specDeclaresAttribute } = require('./lib/app-spec.js');
-const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId, normalizeFormId, settleOwedPublishes } = require('./lib/sdk-build.js');
+const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId, normalizeFormId, settleOwedPublishes, collectOwedPublishes } = require('./lib/sdk-build.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // #455: resolves the authoring LCID over the transport hatch, BEFORE constructing the SDK that
 // bakes it into the App/Form/Dashboard adapters.
@@ -624,9 +624,10 @@ async function buildModelApp(spec, opts, deps) {
   // Injectable apply seam: production defaults to runSdkBuild; tests inject a stub to drive verify
   // without a live SDK.
   const runBuild = deps.runBuild || runSdkBuild;
-  // What failed attempts still owe for the default views they enriched (sdk-build.js, 4b), by artifact.
-  // Every attempt re-runs every phase, but a later one can halt before the enrichment an earlier one did,
-  // so each debt is kept until a publish phase pays it (`owedPaid`), and the final halt settles the rest.
+  // What failed attempts still owe for the views and forms they saved and deferred (sdk-build.js: the default-view
+  // enrichment 4b, the reconcile of existing views and forms), by target. Every attempt re-runs every phase, but a
+  // later one can halt before the step an earlier one owed from, so each debt is kept until a publish phase pays it
+  // (`owedPaid`), and the final halt settles the rest.
   const owedAcrossAttempts = new Map();
   let r;
   for (let attempt = 1; ; attempt++) {
@@ -665,7 +666,7 @@ async function buildModelApp(spec, opts, deps) {
       break;
     } catch (err) {
       if (err && err.owedPaid) owedAcrossAttempts.clear();
-      for (const target of (err && Array.isArray(err.owedPublishes) ? err.owedPublishes : [])) owedAcrossAttempts.set(`${target[0]}:${target[1]}`, target);
+      collectOwedPublishes(owedAcrossAttempts, err && err.owedPublishes);
       if (attempt <= maxRetries && isTransientHalt(err, { spec })) {
         const delay = opts.retryDelayMs != null ? opts.retryDelayMs : backoffMs(attempt);
         if (journal) journal.record({ phase: err && err.phase, status: 'retry', label: `transient error (attempt ${attempt}/${maxRetries}) — retrying in ${delay}ms`, detail: String((err && err.message) || err) });
@@ -677,7 +678,7 @@ async function buildModelApp(spec, opts, deps) {
       // Resume by re-running the same command (idempotent): a partial range (--from and the like) is
       // refused on --apply.
       //
-      // First publish the default views this build's attempts had enriched and no publish phase paid: no
+      // First publish the views and forms this build's attempts had saved and no publish phase paid: no
       // retry follows now (see settleOwedPublishes, sdk-build.js). Best-effort, so the halt below is still
       // what this run reports.
       await settleOwedPublishes(deps.provisionSdk || deps.sdk, [...owedAcrossAttempts.values()], deps.warn);

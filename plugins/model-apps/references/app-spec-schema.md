@@ -1005,7 +1005,9 @@ why they need naming here at all.
   `"enabled": false` really does deploy a disabled handler. `enabled` and `passExecutionContext` must
   be booleans and `parameters` a string; a string `"false"` is rejected rather than coerced, because it
   is truthy in JS and would silently enable a handler you meant to disable.
-  The build fetches the pushed form, injects the handlers, then publishes it.
+  The build fetches the pushed form and injects the handlers; they go live when the form is published
+  (with `--publish`, in the one publish of the tables the build changed, made before it publishes the app; without it,
+  as soon as they are wired).
 
 ### Which form a table opens with — `isDefault` and `entities[].mainFormOrder`
 

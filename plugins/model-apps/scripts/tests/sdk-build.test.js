@@ -94,6 +94,7 @@ function seedForm(id, fields) {
 }
 
 // `existingTables`: { logical: { entitySetName, columns:[logical...], relationships:[schema...] } }
+const MEMBER_SOLUTION_ID = '5011c0de-0000-4000-8000-000000000001'; // a GUID: the membership read interpolates it unquoted
 function mockSdk(opts = {}) {
   const calls = [];
   let idc = 0;
@@ -103,7 +104,11 @@ function mockSdk(opts = {}) {
     queryRecords: async (e, o) => {
       calls.push({ name: 'queryRecords', args: [e, o] });
       const filter = (o && o.filter) || '';
-      if (e === 'solution') return opts.solutionExists ? [{ solutionid: 's' }] : [];
+      if (e === 'solution') return opts.solutionMembers ? [{ solutionid: MEMBER_SOLUTION_ID }] : opts.solutionExists ? [{ solutionid: 's' }] : [];
+      // The components the solution is proven to hold, `[componenttype, objectid]` pairs — the one
+      // read the build makes (solution-membership.js) before it re-adds anything it reuses.
+      // A row may carry a third element, the table's `rootcomponentbehavior` (0 Include Subcomponents).
+      if (e === 'solutioncomponent' && opts.solutionMembers) return opts.solutionMembers.map(([componenttype, objectid, rootcomponentbehavior]) => ({ componenttype, objectid, ...(rootcomponentbehavior === undefined ? {} : { rootcomponentbehavior }) }));
       // Which dashboards the app's solution holds (componenttype 60 = systemform) — the ownership
       // evidence the build uses to pick among several same-named dashboards.
       if (e === 'solutioncomponent' && /componenttype eq 60/.test(filter)) {
@@ -1312,6 +1317,162 @@ test('apply progress total covers the existing-app sitemap finalize on a page-le
     `a step index must never exceed its advertised total: ${terminal.map((e) => `${e.n}/${e.total} ${e.label}`).join(' | ')}`
   );
   assert.equal(terminal.at(-1).n, terminal.at(-1).total, 'the final step index must equal the advertised total');
+});
+
+// Live-measured: once a table's EXISTING form is saved, a PublishXml that names only the app, sent before the table's
+// own publish, leaves the form's label changes unpublished for good (publishReconciledTables in sdk-build.js). With
+// --publish a reconcile defers its table's publish to phase 8, so every table it deferred must be published before the
+// first write that can publish the app: an existing app's sitemap finalize or app-shell publish, and a new app's create
+// push. Order is what these pin; the label loss itself is a platform behaviour no mock reproduces.
+const RECONCILE_PHASES = ['views', 'charts', 'forms', 'app-shell', 'pages', 'publish'];
+function firstAppWrite(calls) {
+  return calls.findIndex((c) => (c.name === 'createArtifact' || c.name === 'pushArtifact' || c.name === 'publishArtifact') && c.args[0] === 'app');
+}
+// The publishes in a slice of the call log, one `type id` per artifact: a per-target publish, or each target of an envelope.
+const publishesIn = (slice) => slice.flatMap((c) => (c.name === 'publishArtifact' ? [`${c.args[0]} ${c.args[1]}`]
+  : c.name === 'publishArtifacts' ? c.args[0].map((t) => `${t.type} ${t.id}`) : []));
+function assertReconciledPublishedBeforeApp(calls) {
+  const boundary = firstAppWrite(calls);
+  assert.ok(boundary > 0, 'the build writes the app');
+  const before = publishesIn(calls.slice(0, boundary));
+  assert.ok(before.includes('form form-existing'), `the reconciled Customer form's table is published before the app: ${before.join(', ') || 'nothing'}`);
+  assert.ok(before.includes('view view-existing'), `the reconciled Active Tickets view's table is published before the app: ${before.join(', ') || 'nothing'}`);
+  const after = publishesIn(calls.slice(boundary));
+  assert.ok(after.includes('form form-existing'), `phase 8 still publishes the table with everything else: ${after.join(', ')}`);
+}
+
+test('with --publish, the tables a rebuild reconciled are published before the sitemap finalize publishes the app', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages });
+  assertReconciledPublishedBeforeApp(calls);
+});
+
+test('with --publish and no pages phase, the tables a rebuild reconciled are published before the app-shell publishes the app', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, publish: true, phases: RECONCILE_PHASES.filter((p) => p !== 'pages') });
+  assertReconciledPublishedBeforeApp(calls);
+});
+
+test('with --publish, the tables a first build reconciled are published before the new app is created, whose push publishes it', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  // The forms and views exist (a spec over tables another build left), the app does not.
+  const find = sdk.findArtifact;
+  sdk.findArtifact = async (kind, identity) => (kind === 'app' ? (calls.push({ name: 'findArtifact', args: [kind, identity] }), null) : find(kind, identity));
+  const list = sdk.listArtifacts;
+  sdk.listArtifacts = async (kind) => (kind === 'app' ? [] : list(kind));
+  await runSdkBuild(makeSpec(), { sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages });
+  assert.ok(calls.some((c) => c.name === 'createArtifact' && c.args[0] === 'app'), 'the app is created');
+  assertReconciledPublishedBeforeApp(calls);
+});
+
+test('without --publish the reconciles publish their own tables as before, and the app step publishes nothing extra', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, publish: false, phases: RECONCILE_PHASES, genpageCli: noPages });
+  const boundary = firstAppWrite(calls);
+  const before = calls.slice(0, boundary).filter((c) => c.name === 'publishArtifact').map((c) => `${c.args[0]} ${c.args[1]}`);
+  assert.deepEqual(before.filter((p) => p === 'form form-existing').length, 1, `the form reconcile's own publish, once: ${before.join(', ')}`);
+  assert.deepEqual(before.filter((p) => p === 'view view-existing').length, 1, `the view reconcile's own publish, once: ${before.join(', ')}`);
+});
+
+// The SDK the build uses, with an envelope publish (`publishArtifacts`) when `envelope` is set: `outcome(type, id)` answers
+// both the envelope's targets and a per-target publish; it defaults to a verified publish.
+function publishingSdk({ envelope = false, outcome } = {}) {
+  const mock = mockSdk({ artifactsExist: true });
+  const { sdk, calls } = mock;
+  const single = sdk.publishArtifact;
+  const answer = (type, id) => (outcome && outcome(type, id)) || { type, id, shipped: true, publish: { kind: 'verified' } };
+  sdk.publishArtifact = async (type, id) => {
+    const own = outcome && outcome(type, id);
+    if (!own) return single(type, id);
+    calls.push({ name: 'publishArtifact', args: [type, id] });
+    return own;
+  };
+  if (envelope) sdk.publishArtifacts = async (targets) => { calls.push({ name: 'publishArtifacts', args: [targets] }); return targets.map(({ type, id }) => answer(type, id)); };
+  return mock;
+}
+const refusedPublish = (type, id) => ({ type, id, shipped: false, publish: { kind: 'failed', error: new Error('PublishXml refused (test)') } });
+
+for (const envelope of [false, true]) {
+  const how = envelope ? 'in one envelope' : 'one table at a time';
+  test(`with --publish, the app step waits until the tables a rebuild reconciled are published (${how})`, async () => {
+    const { sdk, calls } = publishingSdk({ envelope });
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let held = 0;
+    for (const name of ['publishArtifact', 'publishArtifacts']) {
+      const inner = sdk[name];
+      if (typeof inner !== 'function') continue;
+      sdk[name] = async (...args) => {
+        if (release && !(name === 'publishArtifact' && args[0] === 'app')) { held += 1; await gate; }
+        return inner(...args);
+      };
+    }
+    const run = runSdkBuild(makeSpec(), { sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages });
+    for (let i = 0; i < 2000 && held === 0; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(held > 0, 'the reconciled tables are being published');
+    for (let i = 0; i < 200; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(firstAppWrite(calls), -1, 'nothing creates, pushes or publishes the app while that publish is outstanding');
+    const open = release;
+    release = null;
+    open();
+    await run;
+    assertReconciledPublishedBeforeApp(calls);
+  });
+}
+
+test('with --publish, a reconciled table whose early publish is refused stops the build before anything writes the app', async () => {
+  const { sdk, calls } = publishingSdk({ outcome: (type, id) => (type === 'form' ? refusedPublish(type, id) : null) });
+  const warnings = [];
+  const halt = await runSdkBuild(makeSpec(), { sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, warn: (w) => warnings.push(String(w)) }).then(() => null, (e) => e);
+  assert.ok(halt, 'the build halts');
+  assert.equal(halt.code, 'reconciled-publish-failed', halt.message);
+  assert.equal(halt.phase, 'app-shell');
+  assert.match(halt.message, /publish form Customer FAILED before the app was written: PublishXml refused \(test\)/);
+  assert.equal(firstAppWrite(calls), -1, 'the app is neither created, pushed nor published');
+  assert.ok(warnings.some((w) => /publish form Customer FAILED/.test(w)), warnings.join(' | '));
+  assert.ok(Array.isArray(halt.owedPublishes) && halt.owedPublishes.some(([type, id]) => type === 'form' && id === 'form-existing'),
+    'the halt carries the table it owes, for the CLI to publish without the app once no retry follows');
+});
+
+test('with --publish, a reconciled table the envelope and then its own publish both refuse stops the build before the app', async () => {
+  const { sdk, calls } = publishingSdk({ envelope: true, outcome: (type, id) => (type === 'form' ? refusedPublish(type, id) : null) });
+  const halt = await runSdkBuild(makeSpec(), { sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, warn: () => {} }).then(() => null, (e) => e);
+  assert.ok(halt, 'the build halts');
+  assert.equal(halt.code, 'reconciled-publish-failed', halt.message);
+  assert.equal(firstAppWrite(calls), -1);
+  assert.deepEqual(publishesIn(calls).filter((p) => p === 'form form-existing').length, 2, 'the envelope, then the form on its own');
+});
+
+test('with --publish, a reconciled table the envelope refuses but its own publish then takes does not stop the build', async () => {
+  let envelopeSeen = false;
+  const { sdk, calls } = publishingSdk({ envelope: true });
+  const envelope = sdk.publishArtifacts;
+  sdk.publishArtifacts = async (targets) => {
+    const results = await envelope(targets);
+    if (envelopeSeen) return results;
+    envelopeSeen = true;
+    return results.map((r) => (r.type === 'form' ? refusedPublish(r.type, r.id) : r));
+  };
+  await runSdkBuild(makeSpec(), { sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, warn: () => {} });
+  assertReconciledPublishedBeforeApp(calls);
+});
+
+// The runner wraps the halt once more, and the CLI's retry check reads a status only on the halt it is given and on that
+// halt's cause: the refusal's status must reach it, or a throttled publish is never re-run.
+test('with --publish, an early publish refused with a 429 or a 503 halts as transient; a 400, or a refusal marked never-retry, does not', async () => {
+  const { isTransientHalt } = require(path.join(__dirname, '..', 'build-model-app.js'));
+  const haltFor = async (statusCode, extra = {}) => {
+    const error = Object.assign(new Error(`HTTP ${statusCode} from PublishXml (test)`), { statusCode }, extra);
+    const { sdk } = publishingSdk({ outcome: (type, id) => (type === 'form' ? { type, id, shipped: false, publish: { kind: 'failed', error } } : null) });
+    return runSdkBuild(makeSpec(), { sdk, apply: true, publish: true, phases: RECONCILE_PHASES, genpageCli: noPages, warn: () => {} }).then(() => null, (e) => e);
+  };
+  for (const status of [429, 503]) {
+    const halt = await haltFor(status);
+    assert.equal(halt && halt.code, 'reconciled-publish-failed');
+    assert.equal(isTransientHalt(halt), true, `${status}: the build is run again at once`);
+  }
+  assert.equal(isTransientHalt(await haltFor(400)), false, 'a refusal a re-run cannot change is final');
+  assert.equal(isTransientHalt(await haltFor(429, { transient: false })), false, 'an explicit never-retry still wins');
 });
 
 // --- Tier 2.x: SDK fix uptake (AutoNumber primary, N:N sub-grids) + folded build steps ----
@@ -4103,6 +4264,115 @@ test('security phase: a REUSED role is STILL added to the solution (idempotent r
   assert.strictEqual(find(calls, 'addSolutionComponent').filter((c) => c.args[0].componentType === 20).length, 2, 'both reused roles re-ensured in the solution');
 });
 
+// --- rebuild writes: what a rebuild REUSES joins the solution only when the solution is not proven to hold it ------
+//
+// A reused component is re-added on every run so one that missed its add (or came from a build of a different
+// solution) is repaired. One read of the solution's members (solution-membership.js) lets the build skip the adds
+// that are provably unnecessary; anything the read does not prove present is added exactly as before. The wire-level
+// behaviour is pinned against the real bundle in rebuild-writes-real-bundle.test.js — these pin each reuse site.
+
+const addsOf = (calls, type) => find(calls, 'addSolutionComponent').filter((c) => c.args[0].componentType === type).map((c) => c.args[0].componentId);
+
+test('rebuild writes: a reused role the solution already holds is not added again — one it lacks still is', async () => {
+  const { sdk, calls } = mockSdk({ rolesExist: true, solutionMembers: [[20, 'role-Ticket Agent']] });
+  await runSdkBuild(personaSpec(), { sdk, apply: true });
+  assert.deepStrictEqual(addsOf(calls, 20), ['role-Dispatcher']);
+});
+
+test('rebuild writes: a role the SDK just created is always added — it cannot be a member yet', async () => {
+  const { sdk, calls } = mockSdk({ solutionMembers: [[20, 'role-Ticket Agent'], [20, 'role-Dispatcher']] });
+  await runSdkBuild(personaSpec(), { sdk, apply: true });
+  assert.deepStrictEqual(addsOf(calls, 20).sort(), ['role-Dispatcher', 'role-Ticket Agent']);
+  assert.strictEqual(find(calls, 'queryRecords').filter((c) => c.args[0] === 'solutioncomponent').length, 0, 'nothing reused, so nothing read');
+});
+
+test('rebuild writes: a reused view, chart and form the solution already holds are not added again', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, solutionMembers: [[26, 'view-existing'], [59, 'chart-existing'], [60, 'form-existing']] });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'views', 'charts', 'forms'] });
+  assert.deepStrictEqual(find(calls, 'addSolutionComponent'), []);
+  assert.strictEqual(find(calls, 'queryRecords').filter((c) => c.args[0] === 'solutioncomponent').length, 1, 'one membership read for all of them');
+});
+
+test('rebuild writes: a reused view, chart or form the solution lacks is added again, and only that one', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, solutionMembers: [[26, 'view-existing']] });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'views', 'charts', 'forms'] });
+  assert.deepStrictEqual(find(calls, 'addSolutionComponent').map((c) => `${c.args[0].componentType}:${c.args[0].componentId}`).sort(), ['59:chart-existing', '60:form-existing']);
+});
+
+// A table the solution holds with ALL its subcomponents (`rootcomponentbehavior` 0) carries its views, charts and forms,
+// which then have no row of their own. The table row's `objectid` is the table's MetadataId, so the build resolves each
+// table through the raw client (the same read the app's table pins use) before it can match one.
+const TICKET_TABLE = '7a1b1c1d-0000-4000-8000-0000000000a1';
+const CUSTOMER_TABLE = '7a1b1c1d-0000-4000-8000-0000000000a2';
+function withTableMetadata(sdk, { fails = false } = {}) {
+  const urls = [];
+  sdk.dataverse = {
+    get: async (url) => {
+      urls.push(url);
+      if (fails) throw new Error('metadata service unavailable');
+      const logical = /LogicalName='([^']+)'/.exec(url)[1];
+      return { status: 200, body: { LogicalName: logical, MetadataId: logical === 'new_ticket' ? TICKET_TABLE : CUSTOMER_TABLE, EntitySetName: `${logical}s` } };
+    },
+  };
+  return urls;
+}
+
+test('rebuild writes: a reused view, chart and form whose tables the solution holds with all their subcomponents are not added again', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, solutionMembers: [[1, TICKET_TABLE, 0], [1, CUSTOMER_TABLE, 0]] });
+  const urls = withTableMetadata(sdk);
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['views', 'charts', 'forms'] });
+  assert.deepStrictEqual(find(calls, 'addSolutionComponent'), []);
+  assert.deepStrictEqual(urls.filter((u) => /MetadataId/.test(u)).sort(), [
+    "/EntityDefinitions(LogicalName='new_customer')?$select=MetadataId,EntitySetName",
+    "/EntityDefinitions(LogicalName='new_ticket')?$select=MetadataId,EntitySetName",
+  ], 'each table is resolved once, not once per component');
+  assert.strictEqual(find(calls, 'queryRecords').filter((c) => c.args[0] === 'solutioncomponent').length, 1, 'still one membership read');
+});
+
+test('rebuild writes: a table held in part, another table\'s row, or a table that cannot be resolved vouches for nothing', async () => {
+  // The ticket table is held at 2 (shell only) and the customer table at 0: the view and chart (ticket) are added, the form (customer) is not.
+  const mixed = mockSdk({ artifactsExist: true, solutionMembers: [[1, TICKET_TABLE, 2], [1, CUSTOMER_TABLE, 0]] });
+  withTableMetadata(mixed.sdk);
+  await runSdkBuild(makeSpec(), { sdk: mixed.sdk, apply: true, phases: ['views', 'charts', 'forms'] });
+  assert.deepStrictEqual(find(mixed.calls, 'addSolutionComponent').map((c) => `${c.args[0].componentType}:${c.args[0].componentId}`).sort(), ['26:view-existing', '59:chart-existing']);
+
+  // Both tables whole, but their metadata cannot be read: nothing is proven, everything is added, the build still succeeds.
+  const unreadable = mockSdk({ artifactsExist: true, solutionMembers: [[1, TICKET_TABLE, 0], [1, CUSTOMER_TABLE, 0]] });
+  withTableMetadata(unreadable.sdk, { fails: true });
+  const res = await runSdkBuild(makeSpec(), { sdk: unreadable.sdk, apply: true, phases: ['views', 'charts', 'forms'] });
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(find(unreadable.calls, 'addSolutionComponent').length, 3, 'view, chart and form are added as before');
+
+  // No raw client at all (a double without one): the same.
+  const bare = mockSdk({ artifactsExist: true, solutionMembers: [[1, TICKET_TABLE, 0], [1, CUSTOMER_TABLE, 0]] });
+  await runSdkBuild(makeSpec(), { sdk: bare.sdk, apply: true, phases: ['views', 'charts', 'forms'] });
+  assert.strictEqual(find(bare.calls, 'addSolutionComponent').length, 3);
+});
+
+test('rebuild writes: an existing app and its sitemap the solution already holds are not added again', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingWebResource: true, solutionMembers: [[26, 'view-existing'], [59, 'chart-existing'], [60, 'form-existing'], [80, 'app-existing'], [62, 'sm-1']] });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'views', 'charts', 'forms', 'app-shell'] });
+  assert.deepStrictEqual(find(calls, 'addSolutionComponent'), []);
+});
+
+test('rebuild writes: an existing app, or its sitemap, the solution lacks is added again', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, existingWebResource: true, solutionMembers: [[26, 'view-existing'], [59, 'chart-existing'], [60, 'form-existing'], [62, 'sm-1']] });
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'views', 'charts', 'forms', 'app-shell'] });
+  assert.deepStrictEqual(find(calls, 'addSolutionComponent').map((c) => `${c.args[0].componentType}:${c.args[0].componentId}`), ['80:app-existing']);
+  const missingSitemap = mockSdk({ artifactsExist: true, existingWebResource: true, solutionMembers: [[26, 'view-existing'], [59, 'chart-existing'], [60, 'form-existing'], [80, 'app-existing']] });
+  await runSdkBuild(makeSpec(), { sdk: missingSitemap.sdk, apply: true, phases: ['solution', 'data-model', 'views', 'charts', 'forms', 'app-shell'] });
+  assert.deepStrictEqual(find(missingSitemap.calls, 'addSolutionComponent').map((c) => `${c.args[0].componentType}:${c.args[0].componentId}`), ['62:sm-1']);
+});
+
+test('rebuild writes: a membership read that fails leaves every re-assert in place, and the build still succeeds', async () => {
+  const { sdk, calls } = mockSdk({ artifactsExist: true, solutionMembers: [[26, 'view-existing'], [59, 'chart-existing'], [60, 'form-existing']] });
+  const read = sdk.queryRecords;
+  sdk.queryRecords = async (e, o) => { if (e === 'solutioncomponent') throw new Error('membership unreadable'); return read(e, o); };
+  const res = await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'views', 'charts', 'forms'] });
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(find(calls, 'addSolutionComponent').length, 3, 'view, chart and form are added as before');
+});
+
 test('security phase: a duplicate app<->role association (realistic 400 + 0x80060891) is swallowed', async () => {
   const { sdk, calls } = mockSdk({ associateDuplicate: true });
   const r = await runSdkBuild(personaSpec(), { sdk, apply: true }); // must NOT throw
@@ -5300,6 +5570,40 @@ test('pages phase updates the manifest IN PLACE on a rebuild whose page ids chan
     assert.ok(!find(calls, 'createWebResource').some((c) => /_pagemanifest$/.test(c.args[0].name)), 'manifest not re-created on rebuild');
     assert.ok(find(calls, 'updateWebResource').some((c) => c.args[0] === 'wr-manifest'), 'manifest updated in place');
     assert.ok(find(calls, 'addSolutionComponent').some((c) => c.args[0].componentType === 61), 'solution membership re-asserted every run');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('rebuild writes: a rebuild whose manifest the solution already holds updates it in place and does not add it again', async () => {
+  const spec = makeSpec();
+  spec.schemaVersion = 2;
+  spec.pages = [{ key: 'overview', name: 'Overview', source: { kind: 'tsx', codeFile: 'o.tsx' } }, { key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'd.tsx' } }];
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const OV = 'a11c9d20-0000-4000-8000-0000000000a1';
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: OV }] }), 'utf8').toString('base64');
+    const sm = `<SiteMap><Area><Group><SubArea GenPageId="${OV}"/></Group></Area></SiteMap>`;
+    const { sdk, calls } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sm, existingWebResource: true, solutionMembers: [[61, 'wr-manifest']] });
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [OV], pages: [{ pageId: OV, name: 'Overview' }] }), upload: async (o) => ({ pageId: o.pageId || 'a22c9d20-0000-4000-8000-0000000000d2' }) };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    assert.ok(find(calls, 'updateWebResource').some((c) => c.args[0] === 'wr-manifest'), 'the manifest content is still written');
+    assert.deepStrictEqual(addsOf(calls, 61), [], 'it is already a member');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('rebuild writes: a multi-page first build adds the manifest to the solution once, not once per page', async () => {
+  const spec = makeSpec();
+  spec.pages = [{ name: 'Overview', codeFile: 'o.tsx' }, { name: 'Detail', codeFile: 'd.tsx' }];
+  const appDir = stagePages(spec.pages);
+  try {
+    const { sdk, calls } = mockSdk({ existingWebResource: true, solutionMembers: [] });
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), upload: async (o) => ({ pageId: o.name === 'Detail' ? 'gp-d' : 'gp-o' }) };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    assert.strictEqual(find(calls, 'updateWebResource').length, 1, 'the manifest is still persisted after every create');
+    assert.strictEqual(addsOf(calls, 61).length, 1, 'but the add the first persist made is not repeated');
+    // The manifest is the one component a first build asks about — it is persisted through the membership check even
+    // when it was just created — so a build that deploys pages makes the read, once, and still adds what is missing.
+    assert.strictEqual(find(calls, 'queryRecords').filter((c) => c.args[0] === 'solutioncomponent').length, 1, 'one membership read, shared by every persist');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 

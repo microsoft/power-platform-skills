@@ -242,7 +242,8 @@ persistence is therefore **foundational**, and the mechanism is **decided** (not
   dataSources, navigatesTo, pageInput }], design }` — not just id/name, so the round-trip below
   actually restores purpose/navigation/design. It travels inside the solution and survives download.
 - **Lifecycle is explicit.** On first build the manifest web resource is created; its **solution
-  membership is re-asserted every run** (idempotent add, not only on first creation); on rebuild its
+  membership is re-asserted every run** (an idempotent add, not only on first creation — skipped only
+  when the build's one read of the solution proves it is already a member); on rebuild its
   content is **updated in place** via `updateWebResource` (`MakerSdk.ts:529-543`) — the engine today
   reuses an existing web resource *without* updating its content (`sdk-build.js:565-580`), so the
   manifest needs the update path, not plain reuse. `planTeardown` removes it (it currently deletes

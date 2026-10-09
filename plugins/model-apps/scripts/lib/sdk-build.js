@@ -125,6 +125,8 @@ const { buildPromptSpec } = require('./ai-prompt.js');
 const { odataLit } = require('./odata.js');
 const { isRestrictedSolution } = require('./system-solutions.js');
 const { tableRefs, pinAppTables, publishAppComponents, resolveMainForms, appComponentsFor, applyAppMainForms, explainAppPushWarnings } = require('./app-components.js');
+const { hasUnsyncedEdits } = require('./unsynced-edits.js');
+const { createSolutionMembership, ensureSolutionComponent } = require('./solution-membership.js');
 
 // Re-export from entity-provision so the export surface stays unchanged
 const BuildHalt = _BuildHalt;
@@ -1059,8 +1061,11 @@ async function readPageManifest(provision, appUnique) {
 // dedup means a single-page first build issues one create + zero updates, an N-new-page first build one
 // create + (N-1) updates, and a no-op final persist. Stored as type 'js' (webresourcetype 3): there is no
 // 'json' web-resource kind and 'js' round-trips arbitrary text unchanged. Returns { id, content } for the
-// next call. Stable 7-arg signature (Tasks 5 + 8).
-async function persistPageManifest(provision, spec, keyToId, sol, appUnique, existingId, lastContent) {
+// next call. The first seven parameters are the long-standing positional signature; `solutionMembers` is an
+// optional eighth that only spares the add when the solution is proven to hold the manifest already (see
+// solution-membership.js). Every call goes through it, including the one that creates the manifest, which is
+// why a first build that deploys pages makes the membership read.
+async function persistPageManifest(provision, spec, keyToId, sol, appUnique, existingId, lastContent, solutionMembers) {
   const name = manifestResourceName(appUnique);
   const content = serializeManifest(buildManifest(spec, keyToId));
   let id = existingId;
@@ -1068,7 +1073,7 @@ async function persistPageManifest(provision, spec, keyToId, sol, appUnique, exi
     if (id) await provision.updateWebResource(id, { content });
     else { const r = await provision.createWebResource({ name, displayName: `${spec.app.name} Page Manifest`, type: 'js', content }); id = r.id; }
   }
-  if (id) await provision.addSolutionComponent({ componentId: id, componentType: COMPONENT_TYPE.webResource, solutionUniqueName: sol.uniqueName });
+  if (id) await ensureSolutionComponent(provision, solutionMembers, { componentId: id, componentType: COMPONENT_TYPE.webResource, solutionUniqueName: sol.uniqueName });
   return { id, content };
 }
 
@@ -1076,12 +1081,12 @@ async function persistPageManifest(provision, spec, keyToId, sol, appUnique, exi
 // sitemap only in the Default solution, so the app's own solution is incomplete on export. Resolve
 // the sitemap by its unique name (== the app's unique name) and add it. Best-effort + idempotent:
 // a re-add of an already-present component is tolerated so this never fails an otherwise-good build.
-async function ensureSitemapInSolution(provision, sol, appUnique) {
+async function ensureSitemapInSolution(provision, sol, appUnique, solutionMembers) {
   try {
     const rows = await provision.queryRecords('sitemap', { select: ['sitemapid'], filter: `sitemapnameunique eq '${odataLit(appUnique)}'`, top: 1 });
     const sitemapId = rows && rows[0] && rows[0].sitemapid;
     if (!sitemapId) return;
-    await provision.addSolutionComponent({ componentId: sitemapId, componentType: COMPONENT_TYPE.sitemap, solutionUniqueName: sol.uniqueName });
+    await ensureSolutionComponent(provision, solutionMembers, { componentId: sitemapId, componentType: COMPONENT_TYPE.sitemap, solutionUniqueName: sol.uniqueName });
   } catch { /* best-effort — the app + its sitemap already exist; a component-pin hiccup must not fail the build */ }
 }
 
@@ -1986,11 +1991,23 @@ function partialEnrichment(error) {
 // reported and the others are still published, because nothing else will publish them. The publish
 // phase keeps the old behaviour — a thrown publish halts it — so a build reports that as it always did.
 //
-// Returns `{ appPublished }`: whether the app's own publish went through (a failed one, or no app target, is
-// false). The ai-features re-confirmation reads it — an override saved in the app's unpublished layer is in force
-// once the app is published, and the publish phase is what does that.
+// A target is `[type, id]` plus an optional third element that names what the publish is FOR: the app's own
+// label, or — for a table — the names of what its one publish ships. The publish phase fills it with the saved
+// views and forms whose publishes were deferred onto the table (`publishReconciled`), its enriched default views,
+// and the views, forms and charts this run created there and a chart whose description it wrote (`noteSaved`); the
+// owed record a halted build hands to settleOwedPublishes carries only what was deferred. One artifact stands for
+// its whole table in the envelope, so a
+// bare `form <guid>` would name the table's untouched Main form in a "publish … FAILED" or "could not be
+// CONFIRMED" line, and say nothing about the view that is actually not live.
+//
+// Returns `{ appPublished, failed }`. `appPublished`: whether the app's own publish went through (a failed one, or no
+// app target, is false). The ai-features re-confirmation reads it — an override saved in the app's unpublished layer is
+// in force once the app is published, and the publish phase is what does that. `failed`: `{ target, error }` for each
+// TABLE target whose last publish the SDK refused by value (`publish.kind === 'failed'`, after the retry below), so its
+// saved changes are not live. This function only reports one (a warning); publishReconciledTables, which must not let
+// the app be published ahead of such a table, halts on it.
 async function publishTargets(provision, runner, concurrency, entityTargets, appTarget, warn, { keepGoing = false } = {}) {
-  const labelOf = ([type, id]) => (type === 'app' && appTarget ? appTarget[2] : `${type} ${id}`);
+  const labelOf = targetLabel;
   const publishOne = async ([type, id], label) => {
     if (!keepGoing) return reportPartialPush(await provision.publishArtifact(type, id), label, warn);
     try {
@@ -2003,6 +2020,8 @@ async function publishTargets(provision, runner, concurrency, entityTargets, app
   // A publish that was not refused. `unverifiable` still means PublishXml answered 2xx; only the read-back that
   // would confirm it was not possible. An outcome that says nothing about publishing proves nothing.
   const published = (result) => !!(result && result.publish && result.publish.kind && result.publish.kind !== 'failed' && result.publish.kind !== 'notRequested');
+  const refused = (result) => !!(result && result.publish && result.publish.kind === 'failed');
+  const failed = [];
   const all = appTarget ? [...entityTargets, appTarget] : entityTargets;
   const isApp = (target) => !!appTarget && target[0] === 'app' && target[1] === appTarget[1];
   if (all.length > 1 && typeof provision.publishArtifacts === 'function') {
@@ -2013,42 +2032,61 @@ async function publishTargets(provision, runner, concurrency, entityTargets, app
       results = null;
     }
     if (Array.isArray(results) && results.length === all.length) {
-      const failed = [];
+      const retry = [];
       let appResult;
       results.forEach((outcome, i) => {
-        if (outcome && outcome.publish && outcome.publish.kind === 'failed') failed.push(all[i]);
+        if (refused(outcome)) retry.push(all[i]);
         else {
           reportPartialPush(outcome, labelOf(all[i]), warn);
           if (isApp(all[i])) appResult = outcome;
         }
       });
-      for (const target of failed) {
+      for (const target of retry) {
         const retried = await publishOne(target, labelOf(target));
         if (isApp(target)) appResult = retried;
+        else if (refused(retried)) failed.push({ target, error: retried.publish.error });
       }
-      return { appPublished: published(appResult) };
+      return { appPublished: published(appResult), failed };
     }
   }
-  await runner.mapLimit(entityTargets, concurrency, (async (target) => publishOne(target, `${target[0]} ${target[1]}`)));
+  const outcomes = await runner.mapLimit(entityTargets, concurrency, (async (target) => publishOne(target, labelOf(target))));
+  entityTargets.forEach((target, i) => {
+    const outcome = (outcomes || [])[i];
+    if (refused(outcome)) failed.push({ target, error: outcome.publish.error });
+  });
   const appResult = appTarget ? await publishOne(['app', appTarget[1]], appTarget[2]) : undefined;
-  return { appPublished: published(appResult) };
+  return { appPublished: published(appResult), failed };
 }
 
-// The publishes a build still OWED when it stopped: the tables whose default views its deferred
-// enrichment (4b) saved and that no completed publish phase (8) covered. `runSdkBuild` attaches them
+// What a publish target is FOR, in the words a warning or a halt prints: the names the target carries (a table's
+// deferred and saved artifacts, the app's own label), else `type id`.
+function targetLabel([type, id, label]) {
+  return (Array.isArray(label) ? label.join(', ') : label) || `${type} ${id}`;
+}
+
+// The publishes a build still OWED when it stopped: the tables whose saved views and forms — the default
+// views its deferred enrichment (4b) saved, and the existing views and forms its reconcile paths pushed —
+// no completed publish phase (8) covered. `runSdkBuild` attaches them
 // to the halt (`owedPublishes`) instead of publishing them there, because only its caller knows
 // whether the halt is final: the CLI retries a transient one (a 429, a customization lock) at once,
 // the retry saves those views again and owes their publish again, and a publish sent into that
 // throttling would only fail the same way. The CLI keeps what each failed attempt owed, because a later
-// attempt can halt before the enrichment an earlier one did, until a publish phase pays it (`owedPaid`).
+// attempt can halt before the step an earlier one owed from, until a publish phase pays it (`owedPaid`).
 //
-// On a FINAL halt the caller publishes them with this (`owed`: `[type, id]` pairs). Before the publish
-// was batched, the enrichment published each table as it went, so a build that stopped in a later phase
-// left those tables live (live-verified, before and after the batching). Without this they would wait,
-// saved but unpublished, for the full re-run that recovers from the halt — which saves them again and
-// owes their publish again — and nothing makes an operator start one.
+// On a FINAL halt the caller publishes them with this (`owed`: `[type, id, names?]` targets, see
+// publishTargets). Before the publish was batched, the enrichment and every reconcile published each table
+// as it went, so a build that stopped in a later phase left those tables live (live-verified, before and
+// after the batching). Without this they would wait, saved but unpublished, for the full re-run that
+// recovers from the halt — which saves them again and owes their publish again — and nothing makes an
+// operator start one.
 // Best-effort and per target: the halt is what the operator must see, so a failure is a warning, never a
 // throw, and a target that cannot be published does not keep the others back.
+//
+// This runs only for a halt the build THROWS. A process killed outright (Ctrl-C, a crash, a closed
+// terminal) settles nothing: what a reconcile had saved and deferred stays saved but unpublished until the
+// next build, which publishes it (a clean workspace copy is still published, see publishReconciled). No marker
+// outlives the process to say it is owed, and the CLI installs no signal handler that could write one. The
+// default-view enrichment (4b), whose publish was deferred the same way first, has the same exposure.
 async function settleOwedPublishes(provision, owed, warn) {
   const targets = Array.isArray(owed) ? owed.filter((target) => Array.isArray(target) && target[0] && target[1]) : [];
   if (!targets.length || !provision) return;
@@ -2056,16 +2094,33 @@ async function settleOwedPublishes(provision, owed, warn) {
   try {
     await publishTargets(provision, makeRunner({ emit: () => undefined, total: 0 }), 1, targets, null, say, { keepGoing: true });
   } catch (e) {
-    say(`publishing the default views it had already enriched FAILED: ${(e && e.message) || e} — the change is SAVED but the runtime still serves the previously published copy; the build is idempotent, so re-run it once the cause is cleared`);
+    say(`publishing the views and forms it had already saved FAILED: ${(e && e.message) || e} — the change is SAVED but the runtime still serves the previously published copy; the build is idempotent, so re-run it once the cause is cleared`);
   }
 }
 
+// Fold the targets one halted attempt still owes (`err.owedPublishes`) into `byTarget`, keyed by `type:id`, for the
+// CLI to settle once no retry follows. A later attempt can stop before a step an earlier one owed from, so the
+// names an attempt recorded for a target are UNIONED with what the earlier ones recorded — "last attempt wins"
+// would drop the names of whatever only the earlier attempt reached, and a failed settle would name too little.
+function collectOwedPublishes(byTarget, owed) {
+  for (const target of Array.isArray(owed) ? owed : []) {
+    if (!Array.isArray(target)) continue;
+    const key = `${target[0]}:${target[1]}`;
+    const namesOf = (t) => (Array.isArray(t && t[2]) ? t[2] : []);
+    const names = [...new Set([...namesOf(byTarget.get(key)), ...namesOf(target)])];
+    byTarget.set(key, names.length ? [target[0], target[1], names] : target);
+  }
+  return byTarget;
+}
+
 // Every caller enters here; the phases run in runSdkBuildPhases. This wrapper only carries what the
-// deferred default-view enrichment still owes out of a halt: `owedPublishes`, and `owedPaid` when this
-// run's publish phase completed — which pays what an earlier attempt of the same build owed too, since
-// every attempt enriches the same tables (see settleOwedPublishes).
+// deferred publishes (default-view enrichment, reconciled views and forms) still owe out of a halt:
+// `owedPublishes`, and `owedPaid` when this run's publish phase completed — which pays what an earlier
+// attempt of the same build owed too, since every attempt saves the same tables (see settleOwedPublishes).
 async function runSdkBuild(spec, opts = {}) {
-  // tables: entity logical -> [type, id] of a saved default view that owes its publish.
+  // tables: entity logical -> [type, id, names] of a saved view or form that owes its publish, and the names of
+  // what is deferred onto that table: its reconciled views and forms, and its enriched default views
+  // (oweTablePublish).
   const owed = { tables: new Map(), paid: false };
   try {
     return await runSdkBuildPhases(spec, opts, owed);
@@ -2141,6 +2196,116 @@ async function runSdkBuildPhases(spec, opts, owed) {
   };
   let preflightResolved;
   if (has('solution') || has('data-model')) preflightResolved = await preflightViewLabels(spec, provision, sayViewLabel);
+
+  // Solution membership of the components this run REUSES (solution-membership.js): read once, at first use,
+  // and a component the solution is PROVEN to hold is not added again. A component this run creates is added
+  // directly — a component made a moment ago cannot already be a member — with one exception: the page
+  // manifest is persisted after every page create and once more at the end (persistPageManifest), so it always
+  // goes through `ensureSolutionComponent`, and a build that deploys pages makes the read even when it is the
+  // first. That costs a read and never an add: a manifest the solution lacks is still added.
+  //
+  // A reused view, chart or form is also proven by its TABLE: one the build created is held by the solution with
+  // all its subcomponents, which the platform does not list one by one, so these three have no row of their own to
+  // find. The membership asks for the table's MetadataId — the `objectid` of the table's row — only when it needs
+  // it, once per table, through the raw client the build already uses for table metadata (`tableRefs`). A client
+  // without `get`, a table that does not resolve, any failure at all: no proof, and the component is added.
+  const resolveTableId = async (logical) => (await tableRefs(provision.dataverse, [logical])).get(String(logical).toLowerCase()).metadataId;
+  const solutionMembers = createSolutionMembership({ read: provision, solutionUniqueName: sol && sol.uniqueName, componentTypes: Object.values(COMPONENT_TYPE), resolveTableId });
+  const ensureInSolution = (componentId, componentType, table) => ensureSolutionComponent(provision, solutionMembers, { componentId, componentType, solutionUniqueName: sol.uniqueName }, { table });
+
+  // With --publish, phase 8 publishes the table of every view and form the reconcile paths touch (an entity
+  // PublishXml ships every pending customization on that table), so a reconcile's own publish would only
+  // repeat it, one ~2.5 s PublishXml per artifact. It is deferred to phase 8 and recorded as owed — the same
+  // record the default-view enrichment (4b) keeps — so a build that halts first still gets it published by its
+  // caller (settleOwedPublishes); and the owed table is itself a phase 8 target, so deferring cannot leave an
+  // entity out of it.
+  //
+  // One artifact publishes its whole table, so the record keeps the first artifact deferred onto the table as the
+  // target and collects the NAMES of every one (`view Open Tickets`, `form Ticket events`, `default views of
+  // new_ticket`, …): when that publish fails — or cannot be confirmed — the line says which saved changes are not
+  // live, as the per-artifact publish it replaces did, instead of naming whichever form happened to stand for the
+  // table (publishTargets). The reconcile paths and the default-view enrichment (4b) both owe through this, so the
+  // record is the same whichever of them reaches the table first.
+  //
+  // Without --publish nothing runs phase 8, so the reconcile publishes its own artifact so the change takes
+  // effect, as it always did. That includes a reconcile whose push was skipped as unchanged: a clean workspace
+  // copy is the UNPUBLISHED layer, so it cannot show that an earlier run which pushed and then stopped ever
+  // published (hasUnsyncedEdits).
+  const publishInPhase8 = has('publish') && publish;
+  const oweTablePublish = (logical, type, id, name) => {
+    const target = owed.tables.get(logical);
+    if (!target) owed.tables.set(logical, [type, id, [name]]);
+    else if (!(target[2] || []).includes(name)) target[2] = [...(target[2] || []), name];
+  };
+  // The tables a reconcile deferred onto phase 8: publishReconciledTables pays them before the app is published.
+  const reconciledTables = new Set();
+  const publishReconciled = async (type, id, entityLogical, label) => {
+    const logical = String(entityLogical || '').toLowerCase();
+    if (publishInPhase8 && logical) {
+      oweTablePublish(logical, type, id, label);
+      reconciledTables.add(logical);
+      return;
+    }
+    reportPartialPush(await provision.publishArtifact(type, id), label, opts.warn);
+  };
+
+  // ...but not past the app's own publish. Live-measured: when a table's EXISTING form is saved, a PublishXml that
+  // names only the app (`<appmodules>`), sent before the table's own publish, leaves the form's LABEL changes
+  // unpublished for good. The cell and section labels keep their published text through every later publish of
+  // the table, alone or in one envelope with the app; the structure saved with them (a cell's showlabel) does go
+  // live. The unpublished layer still holds the new text, so a re-run finds nothing to push and cannot repair it.
+  // Publishing the table first, or in the same envelope as the app, leaves the labels live. So does a web resource's
+  // or another table's publish in between.
+  //
+  // 2.13.0 published each reconciled view and form right after its push, so its app publishes always came after.
+  // Deferring that publish to phase 8 put the app's own publishes in between: the sitemap finalize on every rebuild of
+  // an existing app, the create of a new app (its push publishes it) and the hidden-table pin after that create. A
+  // form relabel the reconcile makes (a lookup cell that showed its column's logical name, a section the spec
+  // renames) was then saved, reported, and never shown. So the app step publishes these tables, in one envelope,
+  // before it writes the app; a view description the reconcile writes is a label too and goes out with them. Every
+  // reconcile has run by then, and nothing before that step publishes the app: the command and dashboard steps publish
+  // nothing, and the app icon publishes only its web resource. Phase 8 still publishes these tables with everything
+  // else. The default views the enrichment (4b) saved stay owed to phase 8 alone: it re-saves their columns on every
+  // build, never a label, so paying for them here would only add a publish to every first build.
+  const publishReconciledTables = async () => {
+    const targets = [...reconciledTables].map((logical) => owed.tables.get(logical)).filter(Boolean);
+    reconciledTables.clear();
+    if (!targets.length) return;
+    const { failed } = await publishTargets(provision, runner, concurrency, targets, null, opts.warn);
+    if (!failed.length) return;
+    // A table whose publish the SDK refused (by value: it never throws for one) still holds its saved labels
+    // unpublished, and the app's publish below would strand them for good — so the build stops before it writes the
+    // app. Nothing is lost: the halt carries every table this run owes (runSdkBuild), the CLI re-runs a transient
+    // refusal at once, and once no retry follows it publishes them without the app (settleOwedPublishes).
+    const names = failed.map(({ target }) => targetLabel(target)).join('; ');
+    const detail = failed.map(({ error }) => (error && error.message) || 'refused').join('; ');
+    const first = failed[0].error;
+    const halt = new BuildHalt(`publish ${names} FAILED before the app was written: ${detail} — the build stopped there, because the app's publish would leave the labels saved on these tables unpublished for good. The changes are saved; re-run the build once the cause is cleared.`, { phase: 'app-shell', code: 'reconciled-publish-failed', recoverable: true, cause: first });
+    // The runner wraps this halt once more (makeRunner), and the CLI's retry check (isTransientHalt, build-model-app.js)
+    // reads a status only on the halt it is given and on that halt's cause. So the refusal's HTTP status is carried here,
+    // where it can see it — a 429 or a 503 is re-run as it was before this publish moved ahead of the app — and so is an
+    // explicit "never retry".
+    const status = first && (first.statusCode || first.status);
+    if (status) halt.statusCode = status;
+    if (first && first.transient === false) halt.transient = false;
+    throw halt;
+  };
+
+  // The names of what this run CREATED on each table (`view Open Tickets`, `form Ticket`, `chart By Area`), and of a
+  // chart whose description it wrote — labels only. A created artifact is as unpublished as a reconciled one, but a
+  // create defers no publish into `owed.tables` (only the reconcile, event-wiring and quick-view paths and the
+  // default-view enrichment do), so on a first build a table's record held no more than what those left (its default
+  // views, a quick view's placement, a form's event wiring) and a failed publish read as if only those were not live.
+  // These names deliberately stay OUT of `owed.tables`: that record is what a halted build publishes, and a created
+  // artifact in it would make a halt publish tables it has never published. Phase 8 reads them (forTable) to
+  // complete the label of the table's one publish; no request, read or write depends on them.
+  const savedOnTable = new Map();
+  const noteSaved = (entityLogical, name) => {
+    const logical = String(entityLogical || '').toLowerCase();
+    if (!logical) return;
+    if (!savedOnTable.has(logical)) savedOnTable.set(logical, new Set());
+    savedOnTable.get(logical).add(name);
+  };
 
   // 1. Solution (idempotent; header-less provisioning client).
   if (has('solution')) await provisionSolution({ sdk, provision, runner, solution: sol });
@@ -3892,16 +4057,22 @@ async function runSdkBuildPhases(spec, opts, owed) {
     }
     // The Notes timeline of an older build, repaired in place — LAST of the passes that change a form's fields and
     // sections, so a host the prune and the field moves have just emptied is the clean host the repair needs.
+    // It edits the workspace copy only, so the check below sees it: a repaired form is pushed, an unchanged one is not.
     await repairTimelineHost(formId, def);
-    requireSuccessfulPush(await provision.pushArtifact('form', formId), `form ${def.name}`, opts.warn);
-    reportPartialPush(await provision.publishArtifact('form', formId), `form ${def.name}`, opts.warn);
-    await provision.addSolutionComponent({ componentId: formId, componentType: COMPONENT_TYPE.form, solutionUniqueName: sol.uniqueName });
+    // Push only when the copy holds an edit the server has not seen: an unchanged form would be sent back
+    // as the document the server already holds (three version reads, a PATCH and a read-back). A copy an
+    // earlier interrupted run left edited still differs from its snapshot, so it is pushed as before.
+    if (await hasUnsyncedEdits(provision, 'form', formId)) {
+      requireSuccessfulPush(await provision.pushArtifact('form', formId), `form ${def.name}`, opts.warn);
+    }
+    await publishReconciled('form', formId, def.entityLogicalName, `form ${def.name}`);
+    await ensureInSolution(formId, COMPONENT_TYPE.form, def.entityLogicalName);
     return formId;
   };
 
   // Reconcile an EXISTING author view: fetch it, UNION its current columns with the spec's (so a
-  // manual column add in Maker is preserved AND the spec's new lookup columns land), set, push,
-  // publish. Editing a view's column set (e.g. to surface a parent lookup) now takes effect.
+  // manual column add in Maker is preserved AND the spec's new lookup columns land), set, push when that
+  // changed anything, publish. Editing a view's column set (e.g. to surface a parent lookup) now takes effect.
   const reconcileView = async (viewId, def, authoredQuery) => {
     await provision.fetchArtifact('view', viewId);
     const current = await provision.getArtifact('view', viewId) || {};
@@ -3943,9 +4114,15 @@ async function runSdkBuildPhases(spec, opts, owed) {
     if (authoredQuery && typeof opts.warn === 'function') {
       opts.warn(`view '${def.name}' already exists — its columns and description were updated, but authored filters/sort are NOT reapplied to an existing view. Rename the view to author a separate one, or adjust its filters in Maker.`);
     }
-    requireSuccessfulPush(await provision.pushArtifact('view', viewId), `view ${def.name}`, opts.warn);
-    reportPartialPush(await provision.publishArtifact('view', viewId), `view ${def.name}`, opts.warn);
-    await provision.addSolutionComponent({ componentId: viewId, componentType: COMPONENT_TYPE.view, solutionUniqueName: sol.uniqueName });
+    // Push only when the copy holds an edit the server has not seen — a new column or description above, or
+    // one an earlier interrupted run left in the workspace. The columns this build writes are the fetched ones
+    // verbatim plus any the spec adds, so an ordinary rebuild changes nothing and issues no write here; this is
+    // what the description guard above already promises.
+    if (await hasUnsyncedEdits(provision, 'view', viewId)) {
+      requireSuccessfulPush(await provision.pushArtifact('view', viewId), `view ${def.name}`, opts.warn);
+    }
+    await publishReconciled('view', viewId, def.entityLogicalName, `view ${def.name}`);
+    await ensureInSolution(viewId, COMPONENT_TYPE.view, def.entityLogicalName);
     return viewId;
   };
 
@@ -4229,6 +4406,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       id = (await provision.createArtifact(type, def)).id;
     }
     const pushed = requireSuccessfulPush(await provision.pushArtifact(type, id), `${type} ${def.name}`, opts.warn);
+    noteSaved(def.entityLogicalName, `${type} ${def.name}`);
     await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE[type], solutionUniqueName: sol.uniqueName });
     return pushed.id;
   });
@@ -4255,11 +4433,17 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // carries the same record on its error. Without --publish nothing is deferred: the SDK publishes
   // the enrichment itself, as before. What is still owed when a phase halts leaves with the halt
   // (runSdkBuild), and the caller publishes it once no retry follows (settleOwedPublishes).
-  const deferDefaultViewPublish = has('publish') && publish;
+  //
+  // The saved default views are named in the table's owed record, whether the enrichment makes the record or
+  // joins one an authored view's reconcile already made (oweTablePublish): the SDK reports a view as pending only
+  // when its push SAVED, so the name is there whenever the enrichment saved, which the SDK does on every build (an
+  // unchanged rebuild re-sends both generated views with identical content), and a failed publish then says that the
+  // generated Active/Inactive pair is not live either.
+  const deferDefaultViewPublish = publishInPhase8;
   const recordOwed = (logical, record) => {
     for (const pending of (record && record.pendingPublish) || []) {
       const first = (pending.artifacts || [])[0];
-      if (first && first.id && !owed.tables.has(logical)) owed.tables.set(logical, [first.type || 'view', first.id]);
+      if (first && first.id) oweTablePublish(logical, first.type || 'view', first.id, `default views of ${logical}`);
     }
   };
   if (has('views')) {
@@ -4350,6 +4534,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
               // text to be served. Safe to queue only here: the fetch above has put the chart in the
               // workspace, which publishArtifact requires.
               chartsToPublish.set(String(def.entityLogicalName || '').toLowerCase(), existingId);
+              noteSaved(def.entityLogicalName, `chart ${def.name}`);
             }
           } catch (err) {
             // Best-effort — a description is an inspection aid and must not fail a build. But it must
@@ -4370,7 +4555,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // charts by name from `spec.charts` rather than by solution membership.) Previously this
         // branch returned without adding it; the create path below and reconcileView both add theirs.
         try {
-          await provision.addSolutionComponent({ componentId: existingId, componentType: COMPONENT_TYPE.chart, solutionUniqueName: sol.uniqueName });
+          await ensureInSolution(existingId, COMPONENT_TYPE.chart, def.entityLogicalName);
         } catch { /* already a component, or not ours to add — never fail a build over it */ }
         return existingId;
       }
@@ -4380,6 +4565,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         await provision.addSolutionComponent({ componentId: pushed.id, componentType: COMPONENT_TYPE.chart, solutionUniqueName: sol.uniqueName });
         // Created here, so it IS workspace-resident and publishable.
         chartsToPublish.set(String(def.entityLogicalName || '').toLowerCase(), pushed.id);
+        noteSaved(def.entityLogicalName, `chart ${def.name}`);
         return pushed.id;
       });
     });
@@ -4443,7 +4629,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           // handler was appended, so re-runs don't duplicate a handler or a second <events> root).
           if (await wireFormEvents(id, wantedEvents)) {
             requireSuccessfulPush(await provision.pushArtifact('form', id), `form ${d.f.name || d.f.entity} events`, opts.warn);
-            reportPartialPush(await provision.publishArtifact('form', id), `form ${d.f.name || d.f.entity} events`, opts.warn);
+            await publishReconciled('form', id, d.f.entity, `form ${d.f.name || d.f.entity} events`);
           }
         });
       }
@@ -4575,7 +4761,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         }
         if (changed) {
           requireSuccessfulPush(await provision.pushArtifact('form', hostId), `form ${f.name || f.entity} quick-views`, opts.warn);
-          reportPartialPush(await provision.publishArtifact('form', hostId), `form ${f.name || f.entity} quick-views`, opts.warn);
+          await publishReconciled('form', hostId, f.entity, `form ${f.name || f.entity} quick-views`);
         }
       });
     }
@@ -4688,12 +4874,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // where the rule was written but the component add failed — or a rule created by an earlier
         // build of a DIFFERENT solution — is reused forever and never joins this one, leaving it out
         // of export/import with nothing in the output saying so. The SDK treats an already-present
-        // component as success, so re-issuing it every build is safe.
+        // component as success, so re-issuing it every build is safe; the membership read
+        // (solution-membership.js) spares the write when the solution is proven to hold the rule.
         //
         // A failure here warns rather than halts: the rule itself is correct and running, and
         // blocking an otherwise-good build over solution bookkeeping would be the worse outcome.
         try {
-          await provision.addSolutionComponent({ componentId: existingId, componentType: COMPONENT_TYPE.workflow, solutionUniqueName: sol.uniqueName });
+          await ensureInSolution(existingId, COMPONENT_TYPE.workflow);
         } catch (e) {
           if (typeof opts.warn === 'function') {
             opts.warn(`business rule "${rule.name}" on ${rule.entity} exists but could not be added to solution '${sol.uniqueName}' (${e && e.message}). The rule works, but it will not travel on solution export until it is added.`);
@@ -4842,10 +5029,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // add failed (or a flow created by an earlier build of a different solution) would be reused
         // forever and never join this solution — leaving it out of export/import with nothing in the
         // output saying so. The SDK treats an already-present component as success, so this is safe
-        // to re-issue every build; a failure here is a warning, not a halt, because the flow itself
+        // to re-issue every build, and the membership read (solution-membership.js) spares the write when the
+        // solution is proven to hold the flow. A failure here is a warning, not a halt, because the flow itself
         // is correct and blocking the build over solution bookkeeping would be worse than reporting it.
         try {
-          await provision.addSolutionComponent({ componentId: existingId, componentType: COMPONENT_TYPE.workflow, solutionUniqueName: sol.uniqueName });
+          await ensureInSolution(existingId, COMPONENT_TYPE.workflow);
         } catch (e) {
           if (typeof opts.warn === 'function') {
             opts.warn(`business process flow "${flow.name}" on ${flow.entity} exists but could not be added to solution '${sol.uniqueName}' (${e && e.message}). The flow works, but it will not travel on solution export until it is added.`);
@@ -5105,6 +5293,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
     const iconWebResourceId = await ensureAppIcon(spec, result.created, { provision, sol, runner });
     const def = appDef(spec, result.created, { omitUnbuiltPages: true, iconWebResourceId, mainFormsByTable });
     result.created.app = await runner.run('app-shell', `app "${def.name}"`, async () => {
+      // Before anything below publishes the app: see publishReconciledTables.
+      await publishReconciledTables();
       const existingId = await provision.findArtifact('app', { uniqueName: def.uniqueName });
       if (existingId) {
         appWasExisting = true;
@@ -5119,9 +5309,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // Re-assert the app module's own solution membership on every reuse, as the page manifest's is. A
         // create that failed after its push (a pin, its read-back, a publish) left the app outside the
         // solution, and a re-run lands here: without this add, a later green build exported a solution
-        // without its app. Adding a component that is already a member is a no-op. Teardown deletes the
-        // app by its unique name, never by this membership, so the add changes nothing it removes.
-        await provision.addSolutionComponent({ componentId: existingId, componentType: COMPONENT_TYPE.app, solutionUniqueName: sol.uniqueName });
+        // without its app. Adding a component that is already a member is a no-op, so it is skipped when the
+        // solution is proven to hold it (solution-membership.js). Teardown deletes the app by its unique name,
+        // never by this membership, so the add changes nothing it removes.
+        await ensureInSolution(existingId, COMPONENT_TYPE.app);
         // Existing-app app-shell often makes NO SDK push: its sitemap commit is in the pages finalizer.
         // Pin now, independently, and let that normal publish make the proven current layer live.
         await pinTables(existingId, false);
@@ -5183,7 +5374,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
             reportPartialPush(await provision.publishArtifact('app', existingId), `app ${def.name}`, opts.warn);
           }
         }
-        await ensureSitemapInSolution(provision, sol, def.uniqueName);
+        await ensureSitemapInSolution(provision, sol, def.uniqueName, solutionMembers);
         return existingId;
       }
       // Create: the full def (siteMap + explicit components + iconWebResourceId) serializes unchanged
@@ -5389,7 +5580,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
         }
       }
 
-      const persistNow = async () => { const pr = await persistPageManifest(provision, spec, keyToId, sol, appUnique, manifestId, lastManifestContent); manifestId = pr.id; lastManifestContent = pr.content; };
+      const persistNow = async () => { const pr = await persistPageManifest(provision, spec, keyToId, sol, appUnique, manifestId, lastManifestContent, solutionMembers); manifestId = pr.id; lastManifestContent = pr.content; };
       const recordCreate = (p, id) => {
         // No workspace means no durable creation authority. Normal CLI builds always supply one.
         if (!opts.workspaceDir) {
@@ -5972,8 +6163,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // (created, then the add failed, then reused — a `!reused` gate would skip the repair forever).
         // NOT swallowed: a real failure means the exported solution would omit the role and silently break
         // access in the target env, so it fails the phase fail-closed — same as the app/sitemap adds.
+        // A role the SDK just created cannot be a member yet, so only a REUSED one consults the membership read.
         if (sol && sol.uniqueName) {
-          await provision.addSolutionComponent({ componentId: rr.roleId, componentType: COMPONENT_TYPE.role, solutionUniqueName: sol.uniqueName });
+          if (rr.reused) await ensureInSolution(rr.roleId, COMPONENT_TYPE.role);
+          else await provision.addSolutionComponent({ componentId: rr.roleId, componentType: COMPONENT_TYPE.role, solutionUniqueName: sol.uniqueName });
         }
         // Reconcile app availability to match `appAccess`: associate so the app appears for the persona
         // (default), or DISSOCIATE when the persona opted out — otherwise a role flipped true->false would
@@ -6215,11 +6408,20 @@ async function runSdkBuildPhases(spec, opts, owed) {
   }
 
   // 8. Publish (opt-in). Publish ONE artifact per entity (covers that entity's customizations)
-  //    + the app — far fewer PublishXml round-trips than publishing every artifact.
-  if (has('publish') && publish) {
+  //    + the app — far fewer PublishXml round-trips than publishing every artifact. Every reconcile
+  //    publish deferred to this phase (`publishInPhase8`) names its table in `owed.tables`, read below.
+  if (publishInPhase8) {
     await runner.run('publish', 'publish customizations', async () => {
       const seen = new Set();
-      const perEntity = []; // [type, id] — first artifact found per entity
+      const perEntity = []; // [type, id, names?] — first artifact found per entity
+      // The table's target carries the names of what its one publish ships: what was deferred onto it (its reconciled views
+      // and forms, its enriched default views — oweTablePublish), then what this run created or wrote there (savedOnTable,
+      // sorted because artifacts are created concurrently), each name once. A failure of THIS publish then says which saved
+      // changes are not live — a first build's included — instead of naming only the artifact that carries the request.
+      const forTable = (k, [type, id]) => {
+        const names = [...new Set([...((owed.tables.get(k) || [])[2] || []), ...[...(savedOnTable.get(k) || [])].sort()])];
+        return names.length ? [type, id, names] : [type, id];
+      };
       for (const f of spec.forms || []) {
         const k = f.entity.toLowerCase();
         // Prefer the entity's Main form (what `created.forms` holds), but fall back to THIS form's
@@ -6229,9 +6431,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // restriction would silently not take effect. Publishing is per-ENTITY, so any one of its
         // forms covers the rest.
         const id = result.created.forms[k] || result.created.formIds[formIdentityKey(f)];
-        if (id && !seen.has(k)) { seen.add(k); perEntity.push(['form', id]); }
+        if (id && !seen.has(k)) { seen.add(k); perEntity.push(forTable(k, ['form', id])); }
       }
-      for (const v of spec.views || []) { const k = v.entity.toLowerCase(); const vid = result.created.views[`${k}|${v.name}`]; if (vid && !seen.has(k)) { seen.add(k); perEntity.push(['view', vid]); } }
+      for (const v of spec.views || []) { const k = v.entity.toLowerCase(); const vid = result.created.views[`${k}|${v.name}`]; if (vid && !seen.has(k)) { seen.add(k); perEntity.push(forTable(k, ['view', vid])); } }
       // Charts too — but ONLY the ones this run created or fetched. `publishArtifact` requires the
       // artifact to be workspace-resident (readRaw -> readLocal throws ArtifactNotFoundError rather
       // than lazily fetching), and `findArtifact` does not populate the workspace. Deriving the id
@@ -6239,9 +6441,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // existing chart with no description to reconcile, and the throw escapes publishArtifact and
       // halts the phase. `chartsToPublish` is populated at exactly the two points that put a chart in
       // the workspace, and keyed by entity because publishing is per-entity.
-      for (const [k, cid] of chartsToPublish) { if (cid && !seen.has(k)) { seen.add(k); perEntity.push(['chart', cid]); } }
-      // Tables whose enriched default views still owe their publish (4b), when nothing above names them.
-      for (const [k, target] of owed.tables) { if (!seen.has(k)) { seen.add(k); perEntity.push(target); } }
+      for (const [k, cid] of chartsToPublish) { if (cid && !seen.has(k)) { seen.add(k); perEntity.push(forTable(k, ['chart', cid])); } }
+      // Tables whose publish was deferred to this phase — the enriched default views (4b) and the existing
+      // views and forms the reconcile paths touched — when nothing above names them.
+      for (const [k, target] of owed.tables) { if (!seen.has(k)) { seen.add(k); perEntity.push(forTable(k, target)); } }
       const appTarget = result.created.app ? ['app', result.created.app, `app ${(spec.app && spec.app.name) || result.created.app}`] : null;
       const publishedTargets = await publishTargets(provision, runner, concurrency, perEntity, appTarget, opts.warn);
       appPublishedByPublishPhase = publishedTargets.appPublished;
@@ -6392,4 +6595,4 @@ async function runSdkBuildPhases(spec, opts, owed) {
   return result;
 }
 
-module.exports = { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, normalizeFormId, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };
+module.exports = { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, normalizeFormId, planFor, annotateLivePlan, resolvePhases, PHASES, BuildHalt, SDK_COLUMN_TYPE, viewDef, defaultViewColumns, subgridLabel, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, chartDef, dashboardTileOpts, dashboardComponent, compileFormIntent, formFieldLogicals, appDef, appUniqueName, applyAppAiDescription, haltOnUnpublishedAppHeader, pushAppHeader, commandsByEntity, commandDef, businessRuleDef, businessRuleFilter, bpfDef, bpfFilter, webResourceOpts, WEB_RESOURCE_KINDS, FORM_EVENTS, acquireAppPagesLease, personaRoleSpecFor, resolveRoleBusinessUnit, roleBuClause, roleGrantLabel, resolveRoleGrantTarget };

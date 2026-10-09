@@ -60,6 +60,9 @@ const SKILL_SDK_SURFACE = [
   'deleteSolution',
   'deleteTable',
   'deleteWebResource',
+  // A reconcile pushes an artifact only when its workspace copy differs from the last-synced snapshot
+  // (unsynced-edits.js). The check fails open: without this method the engine writes as it always did.
+  'diffArtifact',
   'disassociateRecords',
   'enrichDefaultViews',
   'fetchArtifact',

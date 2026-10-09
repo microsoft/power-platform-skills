@@ -428,14 +428,73 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   exposes no created-model id to this caller, so same-name AI models are reported and kept.
   Emits `[n/total]` events the orchestrator narrates + a `BuildHalt` it gates on. Dry-run by
   default; `--apply` writes, `--sample-data` / `--publish` opt-in (`--publish` gates the final *bulk*
-  publish; edit/finalize paths — reconciling an existing form/view, form events, quick-views,
-  existing-app sitemap, page finalize — still publish their one artifact so the change takes effect).
-  The bulk publish is ONE `PublishXml` envelope (`publishArtifacts`) for every table and the app, and
-  with `--publish` the default-view enrichment defers its own publish to it. A build that halts before
-  it hands what is still owed to the CLI, which keeps each attempt's debt across transient retries until
-  a publish phase pays it, and settles the rest per target once no retry follows (`settleOwedPublishes`)
-  — so a halted build leaves those views live, as it did before the batching. A default-view push
-  refused by a concurrent edit fails the enrichment step, as any refused push does.
+  publish; without it the edit/finalize paths — reconciling an existing form/view, form events,
+  quick-views, existing-app sitemap, page finalize — still publish their one artifact so the change
+  takes effect, and with or without it the lookup-label repair publishes the tables whose columns it
+  relabelled). The bulk publish is ONE `PublishXml` envelope (`publishArtifacts`) for every table and
+  the app, and with `--publish` the default-view enrichment, the reconcile of an existing view or form,
+  form-event wiring and quick-view placement all defer their own publish to it: an entity publish ships
+  every pending customization on that table, so one per artifact only repeated it, at ~2-2.5 s each.
+  The tables the reconcile, form-event and quick-view paths touched are also published together once,
+  in one envelope at the start of the app step, before anything publishes the app
+  (`publishReconciledTables`). Measured live: a `PublishXml` naming only the app, sent after an existing
+  form's save and before its table's publish, leaves the form's label changes unpublished for good, while
+  the structure saved with them goes live. The enrichment's default views (columns only) wait for the
+  bulk publish. A table whose early publish the SDK refuses stops the build before the app is written
+  (`reconciled-publish-failed`), since the app's publish would strand its labels; the halt carries what
+  is owed, so the CLI's retry, or its settle once no retry follows, publishes the table without the app.
+  A deferred publish is recorded as owed, and a build that halts before the publish phase hands what is
+  still owed to the CLI, which keeps each attempt's debt across transient retries until a publish phase
+  pays it, and settles the rest per target once no retry follows (`settleOwedPublishes`) — so a halted
+  build leaves those views and forms live, as it did before the batching. The record also keeps the NAME
+  of every view and form deferred onto a table (`view Open Tickets`, `form Ticket events`; the CLI
+  unions them across attempts), and `default views of <table>` when that table's default-view
+  enrichment saved its generated Active/Inactive pair — whether the enrichment makes the record or joins
+  one an authored view's reconcile already made — because one artifact stands for its whole table in the
+  envelope: when that publish fails or cannot be confirmed, the warning names what is saved but not
+  live, as the per-artifact publish it replaced did, rather than the table's Main form. That warning
+  also names the views, forms and charts the run created on the table (and a chart whose description it
+  wrote), each name once: a first build creates them all and defers no publish for them, so its record
+  would otherwise name only the default views and the line would read as if only the generated pair
+  were not live. Those names are labels only and stay out of the owed record, which is what a halted
+  build publishes, so the warning after a halt names what was deferred. Settling covers
+  a halt the build THROWS. A process killed outright (Ctrl-C, a crash, a closed terminal) settles
+  nothing, so what a reconcile had saved stays saved but unpublished until the next build, which
+  publishes it (a clean workspace copy is still published, below): no marker outlives the process, the
+  default-view enrichment has the same exposure, and the app-builder skill's recovery guidance says to
+  re-run. A default-view push refused by a concurrent edit fails the enrichment step, as any refused
+  push does.
+  **An unchanged rebuild writes almost nothing, and no write is skipped on a guess.** An existing view
+  or form is pushed only when the SDK reports that its workspace copy differs from its last-synced
+  snapshot (`diffArtifact`, `lib/unsynced-edits.js`): an edit this run made, or one an interrupted run
+  left in the workspace — which a plain fetch keeps while the server has not moved, so comparing what
+  this run computed with what it fetched would call it unchanged and never push it. An SDK without the
+  method, or a diff that fails, pushes as before. A clean copy is the UNPUBLISHED layer, so it says
+  nothing about what is published: without `--publish` the reconcile still publishes its artifact even
+  when it skipped the push, since an earlier run may have saved and stopped. The reconcile of a reused
+  component also re-asserts its solution membership, and one read answers all of them
+  (`lib/solution-membership.js`: a single paginated `solutioncomponent` query for the component types
+  the build adds plus the solution's tables, made at first use, so a build that reuses nothing and
+  deploys no pages never makes it). A component the read proves present is not added again — views,
+  forms, charts, business rules, the process flow, the app, its sitemap, the page manifest and persona
+  roles. There are two proofs: a row of the component's own, or, for a view, chart or form ONLY, its
+  table being held by the solution with ALL its subcomponents (`rootcomponentbehavior` 0). A table the
+  build creates is held that way, and the platform does not list such a table's views, forms and
+  charts one by one — an explicit `AddSolutionComponent` for one leaves no row — so a rebuild that
+  looked only for rows sent those adds every time (measured live: 10 of the 19 an unchanged rebuild
+  sent). The table's MetadataId, which is the `objectid` of its row, is read once per table, only for a
+  component without a row and only when the solution holds some table that way, through the raw client
+  the build already uses for table metadata (`tableRefs`). A table held at 1 (its own metadata only) or
+  2 (shell only) proves nothing, and neither does a row with no behavior: those components need rows of
+  their own, and are added without one. Anything the read does not prove (the read or the table lookup
+  failed, the solution is a built-in one) is added exactly as before. A component this run creates is
+  added directly, except the page manifest: it is persisted through the same check after every page
+  create and once more at the end, so a first build that deploys pages makes the read too — and still
+  adds the manifest, which the solution does not hold yet. What an unchanged rebuild still sends: the
+  phase-8 envelope; the SDK's own default-view enrichment (it pushes both generated views of each table
+  it enriches); the default-form promotion of a table the build owns (`isdefault`); the existing app's
+  sitemap push with its component pins and publish; the AI-feature setting writes; and each persona
+  role's privilege replace and app association.
   **The modern ("new look") shell is opt-in via `app.newLook`.** It is a per-app SETTING
   (`NewLookAlwaysOn`, written through the SDK's `saveSettingValue` scoped to app + solution), NOT an
   app-module column — `navigationtype` is Single/Multi *session* and unrelated, which is the reason
@@ -1377,6 +1436,8 @@ scripts/
     feature-flags.js           ← Default-OFF feature flag probe + Custom API script backstop
     sdk-build.js               ← app-builder build engine (idempotent; incl. the pages phase)
     app-components.js          ← shared current/published app layers, component inventory, hidden-table pin/proof, Main-form resolution/membership and push directives
+    solution-membership.js     ← one read of a solution's components (the types the build adds, plus its tables: a table held with all its subcomponents vouches for its views, forms and charts, which have no rows of their own), so a rebuild adds just what the solution is not PROVEN to hold; every doubt reads as "add"
+    unsynced-edits.js          ← the SDK's own dirty tracking (`diffArtifact`) as the one proof that a reconcile has nothing to push; every doubt reads as "push"
     stages.js                  ← stage→phase-range mapping + PHASES/STAGES constants
     op-diff.js                 ← destructive-op diff + --allow-destructive / --non-interactive gating
     artifact-intent.js         ← pure App Spec → canonical SDK intent compiler (new form topology; no SDK calls)
@@ -2641,6 +2702,37 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
   `scripts/tests/sdk-opt-ins.test.js` pins the SDK facts this rests on and that no script passes
   `published: false`.
 
+
+`scripts/tests/rebuild-writes-real-bundle.test.js` — the **unchanged-rebuild write budget**, against the
+real bundle and a stateful fake Dataverse (`tests/helpers/fake-dataverse.js`), so what is asserted is
+what reaches the wire, not which SDK methods a mock saw. Every test name starts `rebuild writes:`. A
+first build followed by a rebuild of the same spec with `--publish` must send only the phase-8
+envelope; every change a reconcile makes (a view column or description, a form field, a form event
+handler) must still be pushed exactly once and end up published; an edit an interrupted run left in the
+workspace must still be pushed; an edit a maker made in Dataverse since the last build (a column
+removed from a view, a description changed, a field removed from a form) must be pushed back — the
+workspace copy is clean but the server has moved — and one made while the workspace also holds an
+interrupted run's edit must halt (`LOCAL_EDITS_WOULD_BE_LOST`) without writing; without `--publish`
+each reconcile must still publish its artifact; a build that halts after a reconcile must hand its
+caller the publish it owes; a phase-8 publish that fails or cannot be confirmed must name the views and
+forms it carried — the enriched default views of a table included — on the publish phase and on the halt
+path alike, and on the publish phase also the views, forms and charts the run created (a first
+build's, a rebuild's additions, a chart whose description it wrote), each once and never as a bare id,
+with the requests it sends unchanged, while a first build that halts owes nothing for what it merely
+created; a build killed between its reconcile and its publish must leave a re-run able to publish
+the edit without writing it again; and the membership read must happen once, follow paging, and fall
+back to adding everything when it fails. A table the solution holds with ALL its subcomponents must
+vouch for its views, forms and charts (which have no rows of their own, so the rebuild adds none of
+them), and nothing else: a table held at 1 or 2, another table's components, a failed table lookup and
+a table the maker has since re-segmented must all still get their adds. The fake models only views,
+charts, forms, solution components and `PublishXml` — it throws, naming the request, on anything else
+— and it answers the way the platform does: table rows carry the `rootcomponentbehavior` and the
+table's MetadataId, the subcomponents of a whole table get no row, and `$select` is honoured.
+`unpublished()` answers "was every saved change published?".
+`rebuild-writes-reuse-sites.test.js` and the `rebuild writes:` tests in `sdk-build.test.js` pin each
+reuse site (rule, flow, role, app, sitemap, page manifest) the same way; `solution-membership.test.js`
+and `unsynced-edits.test.js` pin the two helpers' contracts, every doubt of which reads as "add" and
+"push".
 
 **Live end-to-end (app-builder — writes to a real Dataverse env; optional).** All build/verify/
 teardown scripts are **dry-run by default**; add `--apply` to write.
