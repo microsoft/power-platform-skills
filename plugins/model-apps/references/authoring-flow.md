@@ -516,6 +516,19 @@ table are supported, including current-user (`ownerid` / `eq-userid`) and relati
 dates; a filter **through a related table** is not expressible and must not be
 faked — say so and propose a supported alternative.
 
+A filter on a Choice column may name the option by its label, in any language it has. The build
+resolves the label against the options the environment holds for that column, and stops — before it
+writes anything where the environment already shows the label is wrong, and in any case before any
+view is written — when a label matches no option (the error lists the valid ones), so spell it exactly
+as the column does, or use the option's integer value. (Where your spec numbers the options — inline
+`options[]`, or a global choice you declare — an option a maker renamed in the environment still resolves
+to the number your spec gave it, with a warning, unless the environment shows the options are numbered
+otherwise, as when you added options after the column was built; then it stops.) A spec with a localized
+label is checked only
+in the views phase, after the tables and columns are written, because reading option labels ahead of
+creating a multi-language label can cost it every language but the base one. This covers a column of a
+table you reuse (`account.industrycode`) without declaring it.
+
 Two edit-time limits worth stating up front, because both bite silently:
 an authored view whose name collides with the table's stock default view MERGES
 onto that default (its filters and sort are ignored), and an **existing** view's

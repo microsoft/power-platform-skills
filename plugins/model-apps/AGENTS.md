@@ -550,6 +550,173 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `app-spec.js`; `references/localization.md` is about generated **page** code, a separate concern.
   Guarded by `scripts/tests/lcid-real-bundle.test.js`, which drives the REAL vendored bundle — a mock
   would keep passing against a bundle that ignored the option.
+  **A label-bearing metadata read must not run ahead of a create that may carry a localized label**
+  (AB#6686428). Measured, order-controlled: a broad read that returns labels (`findTables`,
+  `findColumns`, `fetchEntityMetadata`) made right before `createTable` / `createColumn` /
+  `createRelationship` leaves Dataverse with only the base-language label of a multi-language one, with
+  no error. That is why the existence probes are narrow keyed reads without labels, and why a probe that
+  cannot answer halts, or assumes absent, instead of falling back to the broad read when a label is
+  localized (`findExistingTable`, `relationshipExists`). The view-filter **pre-flight**
+  (`preflightViewLabels`, `lib/sdk-build.js`) reads option labels and whole global choices before the
+  first write, and those reads were never measured to be exempt — so a spec that carries ANY localized
+  label (`localizedLabelLcidsInSpec`: a map on a table, primary column, column, inline option, alternate
+  key or lookup; which of them the environment lacks cannot be known without more reads) does not run it.
+  The views phase, which follows every create, makes the check instead, so a label that names no option
+  still stops the build before any view is written; what is lost is only the guarantee that nothing had
+  been written yet. Offline lint and validation, and the dry run (it creates nothing, so no create
+  follows its reads), are unchanged. Lookup labels keep the same discipline: the parent-label read sits
+  right before a single-language create, the relationships whose lookup label is localized are created
+  before any other (`relationshipsInCreateOrder`, `lib/entity-provision.js`) so that none follows such a
+  read whatever order the spec declares them in, and the repair's reads come after every create. Lifting
+  the skip needs a live measurement of these reads ahead of a localized create in a two-language environment.
+  **A lookup column's label defaults to the PARENT table's name** (ADO 6691205). An omitted
+  `relationships[].lookup.displayName` reached the SDK as `lookupDisplayName: undefined`, which the
+  vendored SDK fills with the referenced table's **logical name** (`label(opts.lookupDisplayName ??
+  opts.referencedEntity)`), so the column — and every form cell the SDK derives from it — read
+  `new_project`. One rule, `lookupLabelFor` (`lib/app-spec.js`), now serves the build, the form cell,
+  the previews, `app-spec-doc`, `schema-facts` and the download: the explicit label → the declared
+  parent's `displayName` (string or LCID map, kept as the map) → the display name the **environment**
+  reports for a parent the spec cannot name → a humanized table name. A parent the spec cannot name is a
+  table it does not declare, **or one it declares WITHOUT a `displayName` that the build did not create**
+  — `existing: true`, or found already there by the data-model phase — because the environment's name is
+  then the only one it has (an `existing: true` `incident` is "Case", `systemuser` "User", not a
+  humanized "Incident"/"Systemuser"). `lookupParentNeedsEnvironment` (`lib/app-spec.js`) decides who asks;
+  the read is `readTableLabel` (`lib/lookup-labels.js`), and a label that is only the table's own
+  identifier — what a build writes for a table with no `displayName` — is ignored. A parent that sets a
+  `displayName`, and one the build creates itself without one, are never read. Offline surfaces cannot read
+  the environment, so they show the humanized name wherever the build would read one — the plan adds "or the
+  label from the environment if `<parent>` is already there" for a declared parent with no `displayName`
+  that the build may find already present.
+  The build has no general column-label reconcile, so the **rebuild repair** is its own pass
+  (`reconcileLookupLabelsPass`, `lib/entity-provision.js`; opt-in through `reconcileLookupLabels`, which
+  only `sdk-build.js` sets, because `provision-entities.js` counts its own steps). It acts only when the
+  spec omits the label AND the live label is exactly the old default — for a **column**, the lower-case
+  logical name of the parent (what the SDK labels the column with; `isOldLookupColumnLabel`),
+  **case-sensitive** (a correct "Contact" is not one, so it costs no read and a maker's "Contact" is never
+  overwritten; neither is a column that carries the lookup's own name — no build ever wrote that on a
+  column) — in a single language that is the
+  **build's own** (an old default in another language is left alone, with a warning: the write would add
+  the build's language beside it, leaving two languages of which one is still an identifier, and every
+  later rebuild would skip the column) — and writes **one language** (the authoring LCID) through
+  `updateColumn`'s merge, never a map. It converges to the same label a fresh build writes, the
+  environment's name included. A column's label is part of its table's definition, which Microsoft documents as
+  reaching model-driven apps only once the table is published, so the pass then publishes every table it relabelled,
+  in one `<entities>` PublishXml, with or without `--publish` — in the data-model phase, before anything can publish
+  the app; a failed publish is a warning that names the tables. Nothing else in the build is sure to publish them:
+  its other table publishes follow from what the spec puts on a table (a form, view, chart or icon, or its enriched
+  default views), and a downloaded spec carries no forms, views, charts or table icons and marks every table
+  `existing: true`, whose default views the build leaves alone. No metadata read can confirm that publish: measured
+  live, `RetrieveEntity` returns the new label right after the PUT even with `RetrieveAsIfPublished=false`, so a
+  live check of it has to trace the request. The labels are read **once per child table**
+  (`Attributes?$select=LogicalName,DisplayName&$filter=LogicalName eq '…' or …`, the read the SDK itself makes for
+  column hints), for the lookups the run did not just create, and a failed read is warned about once per table.
+  `lib/lookup-cell-labels.js` applies the same rule to
+  the form cell that stored the old label (the SDK takes a cell's label from the column only when the
+  cell has none), whose old default is the parent's lower-case logical name **or the lookup's own** — what the
+  SDK labels a field with when it cannot resolve the column at push (`isOldLookupFieldLabel`); it is a separate
+  module so `entity-provision.js` and `artifact-intent.js` do not
+  require each other. A cell that still holds the old default follows the column's CURRENT label — the
+  repaired one, or a maker's. A label-bearing metadata read immediately before a labelled create makes Dataverse
+  keep only the base-language label, which is why the existence probe stays narrow for a localized
+  label, the live parent-label read sits right before the plain create only (a localized lookup is created
+  before any relationship that needs one), and repair reads run
+  after every create. Download leaves `lookup.displayName` out when it equals what a rebuild would
+  write **or is the old default** (the parent's logical name): an explicit label is never repaired, so
+  writing the identifier out would carry the defect through download → edit → rebuild, where leaving it
+  out hands it to the repair. Any other label is written as it is. Pinned by
+  `scripts/tests/lookup-label-default.test.js` (its REAL BUNDLE tests drive the `createRelationship`
+  body, the `updateColumn` PUT and a pushed form cell through the vendored bundle) and
+  `scripts/tests/lookup-label-download.test.js`.
+  **Choice labels in view filters resolve against the ENVIRONMENT** (ADO 6691114,
+  `lib/view-filter-labels.js`). The spec alone (`choiceValueMap`, 100000000 + index) is right only for an
+  option set this build created. A view on a table the spec reuses without declaring the column
+  (`{ "schemaName": "account", "existing": true }` filtered on `industrycode`, a LOCAL option set — or a
+  column bound to a system global choice) sent the LABEL as the condition value; lint passed, and Dataverse
+  rejected the saved view MID-BUILD, after the tables and columns were written, leaving a half-built app.
+  A declared global choice that already existed with other values did too (`createGlobalOptionSet` REUSES an
+  existing set unchanged). A column bound to a global choice the spec does NOT declare is a lint ERROR
+  (`spec-lint.js`, "references unknown globalChoice") — the build would create it with no options — so it is
+  not a case the resolver serves, and lint adds no second word about it. (That check is lint's only:
+  `validateAppSpec`, which the build runs, does not repeat it.)
+  `readChoiceAttributes` reads a table's option sets (four narrow cast reads — Picklist,
+  MultiSelectPicklist, State, Status — expanding `OptionSet`, which a global-bound column fills as a local one
+  does) once per reader, and a build has up to two: one for the pre-flight and a fresh one for the views phase
+  (the data model has been written since), so a table is read **at most twice per build** — and not at all for
+  a table no label names — and a label matches in any language, an ambiguous alias refused. It is deliberately not
+  `fetchEntityMetadata`: that costs about eleven requests, WRITES the workspace (a dry run must not) and keeps
+  only the caller's language. The label is judged twice, on purpose:
+  - **Before the build writes anything** (`preflightViewLabels`, `lib/sdk-build.js`, run by any apply that
+    includes `solution` or `data-model` — so the staged flow's data run too — **unless the spec carries a
+    localized label**, see the AB#6686428 note above) through
+    `checkViewFilterLabelsBeforeBuild`. Before the build runs the environment cannot hold what the build is
+    about to create, so each label is judged by whichever side is AUTHORITATIVE and only a DEFINITE answer
+    halts: a column the environment already has (its options are final), or a column the spec declares and the
+    environment lacks (the spec's inline options — or, bound to a declared global choice, the environment's
+    copy when `readGlobalChoiceOptions` finds the set, since it is reused unchanged, else the spec's). A
+    status reason the build inserts, a table it creates, a read that failed or was partial, and a label that
+    the spec's own number stands in for (see the views phase) are NOT problems
+    here — a false halt would stop a good build — and are the views phase's to judge. What the environment
+    already held and resolved is handed on as final — a column's own options, and the values of the
+    existing global choice a column the build creates will be bound to — so a failed read in the views phase
+    cannot make it fall back to the spec's 100000000 + index.
+  - **In the views phase, once the data model exists** (`resolveViewLabelsOrHalt`, a fresh reader): the final
+    answer and the values. For a column bound to a declared global choice whose own options could not be read,
+    the **set itself** is read (`readGlobalChoiceOptions`), because that is what the column is bound to — which
+    is how a spec with a localized label, having no pre-flight to hand a value on, still resolves it. The spec's
+    own options answer only where the environment cannot (table not there yet, failed read), for a declared
+    Choice column — a FALLBACK, right only for an option set this build created, so the build **warns**
+    whenever it uses it. An undeclared column whose table cannot be read is used as written, with a warning.
+    **Where the spec numbers the options** — a column with inline `options[]`, or one bound to a global choice
+    that `globalChoices[]` declares — and the environment has options for the column (or the set) but none
+    labelled as the filter says (a maker renamed "Gold" to "Gold Tier", or a localized option's translation never
+    reached the environment), the spec's own number is used, **with a warning**, when the environment has an
+    option with that number (`specNumberStands`). That is what the build did before labels were resolved against
+    the environment, so halting the apps it built would be a regression — and for a declared global choice a
+    maker's rename would make `build --apply --verify` fail on every run with nobody having touched the spec.
+    That the option on the number is the one the label named is an ASSUMPTION, so the warning says so and says
+    how to take the choice out of the build's hands (use the option's integer value). It is **never made against
+    the environment's own evidence**: the number is refused, and the label is a problem — the build halts, before
+    it writes anything where the pre-flight can see it — when the environment has no option on the spec's number
+    (a set from another publisher's range has none, so it halts too), or when the option on it goes by the name of
+    another option of the spec (in any of its languages), or when the environment carries a label of this spec only
+    on other numbers **and that shows the numbering moved**: the label is the filter's own option's (any alias, in any
+    language), or it sits on a number the spec gives another option — options the author inserted or reordered after
+    the column was built, since a rebuild never changes an existing column's options; a column made elsewhere; a set
+    another app created in another order. A label on a number the spec does not use at all is an option a maker added
+    or re-made (one added in the Default solution takes another publisher's range, one deleted and re-created takes
+    the next free number): every number the spec has is where it was, so it is not held against the spec — a maker who
+    adds an option and renames another does not stop a build the numbers still serve, as they served 2.13.0. That
+    check compares labels without regard to case (a label still **resolves** by its exact text only), since an
+    environment that differs from the spec in case alone must not hide a different numbering. **A refusal says why**:
+    the problem line adds *The spec numbers "Gold" 100000001, but the environment shows another numbering ("Bronze" is
+    numbered 100000003 there, 100000002 in the spec), so that number is not used.* — in the halt, in the dry run's
+    reason, in `--verify`'s detail and in the line for a view that already exists. What the rule cannot see is the
+    residual: where nothing the environment carries contradicts the number — every option renamed, a column made
+    elsewhere in another order with options the spec lacks and the filtered option renamed, or options the author
+    removed from the spec so that later ones now sit past its numbers — the number is the one earlier builds used (so
+    never a different value than 2.13.0 sent), and the warning, which names the option the number landed on, is the
+    only trace; `--verify` passes such a view, as it did under 2.13.0. A label two options share resolves the same
+    way, to the one the spec numbers, when the spec's number is one of them.
+  Both halt with `BuildHalt` code `view-filter-label-unresolved` (phase `preflight` for the pre-flight's halt,
+  `views` for the views phase's, `recoverable: false`,
+  `transient = false`), naming each view, column and the valid labels, and only a view the build would CREATE
+  can halt it: `reconcileView` never reapplies an existing view's filters, so for one the build only says — as a
+  warning — that its filters are left as they are and verify will report the label. The dry run
+  (`annotateLivePlan`) asks the pre-flight's question and reports such a view as `? unknown` — with
+  `wouldHalt` on the plan item, so the summary counts it as "would stop the build" and not as "could not be
+  read", which it was not — and says (as a warning, once) what the apply will say: for a view it leaves as `create`
+  or `reuse` because the spec's number stands in for a renamed option, the assumption it will warn of; for an
+  existing view whose label names no option, which stays `reuse`, that its filters are left as they are and verify
+  will report it; `--verify`
+  expects the resolved value through the reader-gated `choiceAttributes` capability (`verify-model-app.js`),
+  and a label whose option metadata could not be READ is reported as **unresolved**, with the reason, never as
+  a missing filter — unless the deployed view has no condition on that column with that operator at all, which
+  is a missing filter whatever the options are (a deployed value equal to the build's fallback still verifies);
+  and `lint-app-spec` says offline that a label is "checked against the environment at build time" when the
+  spec alone cannot prove it. Sample-data labels still resolve from the spec alone. Pinned by
+  `scripts/tests/view-filter-labels.test.js`, which includes REAL BUNDLE reads of a global-bound column's
+  option set and of a global option set, a build test per gap, tests that no write precedes the
+  pre-flight's halt, and tests that no label-bearing read precedes a create of a localized spec.
   `--verify` (opt-in) auto-runs the read-only reconcile after a successful apply and exits non-zero on a silent partial build (the same
   check `verify-model-app.js` runs standalone). Recovery from a halted build is a full rerun (idempotent).
   **`--changed-only`** (Preview, off by default) is a fail-closed SAFE partial apply: after a FRESH
@@ -813,7 +980,13 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   column passes by design, so a column REMOVED from the spec, which the additive `reconcileView` leaves
   in place, is not flagged), plus **relationship** and **command-bar existence** (previously unchecked).
   Content checks are additive + reader-gated (they only fire when the reader supplies `layoutxml` /
-  `entityRelationships` / `commandBar`), so existence-only callers are unaffected. **Dashboards** are
+  `entityRelationships` / `commandBar`), so existence-only callers are unaffected. A view filter's
+  Choice label is expected as the value the **environment** gives it, which needs the reader's
+  `choiceAttributes` (one memoized read per table per pass); without it the spec-only expectation
+  applies. A label whose option metadata could not be read is reported as **unresolved** with the
+  reason — never as a missing filter, which would call a correct view wrong because a read failed (a
+  deployed value equal to the build's own fallback still verifies) — unless the view has no condition on
+  that column with that operator at all: that filter is missing, and is said to be. **Dashboards** are
   checked too (#586): each declared dashboard must exist. A name can also match another app's
   dashboard, so when it matches several, verify checks the one the app's solution holds — the one the
   build reuses (`dashboardsInSolution`, shared with the build and teardown) — and fails only when the
@@ -1063,6 +1236,8 @@ scripts/
     sdk-teardown.js            ← app-builder teardown engine (planTeardown is pure)
     sdk-http-client.js         ← az-token HttpClient for the vendored SDK
     spec-lint.js / app-spec.js ← App Spec guardrail lint + validation
+    lookup-labels.js           ← a lookup column's default label, environment-facing half: the parent table's label read, the old-default repair's column-label read (one per child table) (the pure rule is `lookupLabelFor`, app-spec.js); `lookup-cell-labels.js` repairs the form cell
+    view-filter-labels.js      ← resolves a view filter's Choice labels against the environment's option metadata; the build's pre-flight (skipped for a spec with a localized label) and views-phase gate, the dry run, verify and lint all use it
     spec-shape.js              ← shared structural normalization for both authoring gates
     surface-resolver.js        ← pure: resolve personas[].jobs[].surfaces[] to the spec artifacts that satisfy them
     role-privileges.js         ← pure: declared persona privileges + subset comparison against a deployed role

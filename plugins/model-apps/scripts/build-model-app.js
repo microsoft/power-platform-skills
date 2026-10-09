@@ -687,12 +687,17 @@ async function buildModelApp(spec, opts, deps) {
   }
   // #559: a dry run's whole purpose is to say what an apply would DO, so summarise the decision
   // rather than only listing the spec back. `unknown` is counted separately and never folded into
-  // either real decision — an unresolved probe is missing information, not a verdict.
+  // either real decision — an unresolved probe is missing information, not a verdict. Within it, an item
+  // the environment ANSWERED and the answer is "this would stop the build" (`wouldHalt`: a view filter
+  // label that names no option) is a verdict too, so it is not counted as unreadable.
   if (r && r.dryRun && Array.isArray(r.planItems)) {
     const n = (s) => r.planItems.filter((p) => p.state === s).length;
     const unprobed = r.planItems.filter((p) => !p.state).length;
+    const wouldHalt = r.planItems.filter((p) => p.state === 'unknown' && p.wouldHalt).length;
+    const unreadable = n('unknown') - wouldHalt;
     const parts = [`${n('create')} to create`, `${n('reuse')} already present`];
-    if (n('unknown')) parts.push(`${n('unknown')} could not be read`);
+    if (unreadable) parts.push(`${unreadable} could not be read`);
+    if (wouldHalt) parts.push(`${wouldHalt} would stop the build`);
     if (unprobed) parts.push(`${unprobed} not probed`);
     log(r.livePlan
       ? `\n▢ dry run — ${parts.join(', ')} (${r.planItems.length} steps). Re-run with --apply to execute.`

@@ -290,7 +290,8 @@ function resolveParentRelationship(spec, parentEntity, childEntity, wanted) {
 // auto-layout and default-view enrichment call this to surface the parent links (otherwise the
 // parent lookup is invisible on the form/grid). N:N relationships use an intersect table and place
 // no lookup column on either side, so they're excluded. Deduped by logical name; declared order
-// preserved. Returns [{ logical, displayName }].
+// preserved. Returns [{ logical, displayName, source, rel }] — `displayName` is the label the column
+// carries (see lookupLabelFor), `source` where it came from, and `rel` the relationship it belongs to.
 function lookupColumnsFor(spec, entityLogical) {
   const child = String(entityLogical || '').toLowerCase();
   const seen = new Set();
@@ -301,9 +302,115 @@ function lookupColumnsFor(spec, entityLogical) {
     const logical = String((r.lookup && r.lookup.schemaName) || '').toLowerCase();
     if (!logical || seen.has(logical)) continue;
     seen.add(logical);
-    out.push({ logical, displayName: labelText((r.lookup && r.lookup.displayName), spec && spec.languageCode) || (r.lookup && r.lookup.schemaName) || logical });
+    const { label, source } = lookupLabelFor(spec, r);
+    out.push({ logical, displayName: labelText(label, spec && spec.languageCode) || (r.lookup && r.lookup.schemaName) || logical, source, rel: r });
   }
   return out;
+}
+
+// --- 1:N lookup column labels (ADO 6691205) ------------------------------------------------------
+//
+// A relationship's lookup column is labelled by `relationships[].lookup.displayName`. When the author
+// omits it the label used to be whatever the SDK fell back to: the build passed `lookupDisplayName:
+// undefined` and the vendored SDK substitutes the REFERENCED table's LOGICAL name —
+//     DisplayName: label(opts.lookupDisplayName ?? opts.referencedEntity, lcid)      // "new_project"
+// — so the column read "new_project" where a maker expects "Project", and so did every form cell: the
+// SDK derives a bound control's label from the column's DisplayName when it pushes. The maker portal
+// does the opposite and labels a new lookup with the related table's display name.
+//
+// ONE rule serves every consumer — the build (what is sent), the form/preview/doc/eval surfaces (what
+// is shown) and the rebuild repair (what an old default becomes) — so none can disagree. In order:
+//   1. an explicit `lookup.displayName`, string or LCID map, kept as written ('explicit');
+//   2. the referenced table's own `displayName` when entities[] declares it, string or LCID map, kept
+//      as the map: the SDK serializes a map into one LocalizedLabel per language ('table');
+//   3. the display name the ENVIRONMENT reports for a parent whose name the spec cannot give: a table
+//      it does not declare — account, contact, systemuser… — or one it declares WITHOUT a displayName
+//      that the build does not create (see lookupParentNeedsEnvironment). Only a caller that read it can
+//      supply `liveReferencedLabel`, so offline surfaces skip this step ('environment');
+//   4. a humanized form of the table's name ("contoso_ProjectPhase" -> "Project Phase"), only when
+//      nothing above applies: an offline surface, a failed environment read, or a declared table that
+//      has no displayName of its own and is created by the build ('derived').
+// A blank explicit label counts as omitted, because every create site already treats it that way
+// (`x.displayName || x.schemaName`), so "" and undefined reach Dataverse identically.
+//
+// `liveReferencedLabel` is ignored when it is only the table's own identifier — its logical name, or its
+// schema name as written (exact, case-sensitive: "Contact" is a name, "contact" is not). That is what a
+// build writes as the label of a table whose spec sets no displayName, so reading it back is no more a
+// name than the humanized fallback is, and using it would reproduce the very label this rule replaces.
+function lookupLabelFor(spec, rel, opts = {}) {
+  const explicit = rel && rel.lookup && rel.lookup.displayName;
+  if (!labelIsMissing(explicit)) return { label: explicit, source: 'explicit' };
+  const wanted = String((rel && rel.referenced) || '').toLowerCase();
+  const parent = ((spec && spec.entities) || []).find((e) => e && String(e.schemaName || '').toLowerCase() === wanted);
+  if (parent && !labelIsMissing(parent.displayName)) return { label: parent.displayName, source: 'table' };
+  const live = opts && opts.liveReferencedLabel;
+  if (typeof live === 'string' && live.trim() && live !== wanted && !(parent && live === parent.schemaName)) return { label: live, source: 'environment' };
+  return { label: humanizeTableName(parent ? parent.schemaName : rel && rel.referenced), source: 'derived' };
+}
+
+// Must a build ask the ENVIRONMENT for this lookup's parent name? (It does the asking — this file does no
+// I/O.) Meaningful only when the lookup sets no label of its own.
+//   * a parent the spec does not declare: always — account, contact, systemuser… have no displayName here;
+//   * a parent the spec declares WITH a displayName: never — the spec names it (lookupLabelFor, step 2);
+//   * a parent declared WITHOUT one: when the build did not create it. `existing: true` says the table
+//     pre-exists (incident is "Case", systemuser is "User", which a humanized "Incident"/"Systemuser" would
+//     contradict), and `reused` — the declared tables, lower-case, that the data-model phase found already
+//     in the environment — covers one that merely was there. `existing` records ownership, not presence,
+//     so a flagged table the build had to create is still labelled by what the build wrote (its schema
+//     name, which lookupLabelFor discards) and falls through to the humanized name.
+// A declared table the build creates with no displayName has nothing worth reading: it is labelled with
+// its own schema name, so the answer would only ever be the identifier.
+function lookupParentNeedsEnvironment(spec, rel, { reused } = {}) {
+  const wanted = String((rel && rel.referenced) || '').toLowerCase();
+  const parent = ((spec && spec.entities) || []).find((e) => e && String(e.schemaName || '').toLowerCase() === wanted);
+  if (!parent) return true;
+  if (!labelIsMissing(parent.displayName)) return false;
+  return parent.existing === true || !!(reused && reused.has(wanted));
+}
+
+// A person's name for a table, from its Dataverse name:
+//   contoso_ProjectPhase -> "Project Phase"      new_project -> "Project"      account -> "Account"
+//   contoso_work_item    -> "Work Item"          contoso_SLA -> "SLA"
+// A Dataverse table name is `<publisher prefix>_<name>`; the prefix is bookkeeping, not part of what a
+// person calls the table, and a name with no underscore (`account`) has none. A cased schema name
+// ("ProjectPhase") splits on its capitals; an all-lowercase logical name has nothing to split on, so
+// "budgetline" stays one word — the reason this is the LAST resort rather than the rule.
+function humanizeTableName(name) {
+  const parts = String(name == null ? '' : name).trim().split('_').filter(Boolean);
+  const words = [];
+  for (const part of parts.length > 1 ? parts.slice(1) : parts) {
+    for (const word of part.replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(' ')) {
+      if (word) words.push(word.charAt(0).toUpperCase() + word.slice(1));
+    }
+  }
+  return words.join(' ');
+}
+
+// The strings a lookup was labelled with when no label was supplied. All of them are identifiers, never
+// something a person writes as a label, which is what lets a rebuild repair them without risking a label a maker
+// chose. Which strings count depends on what carries the label, because each is exactly what some build wrote
+// THERE and nothing else is:
+//   * the COLUMN: the referenced table's LOWER-CASE logical name — what the vendored SDK substitutes for an
+//     omitted `lookupDisplayName` (this plugin hands it `referenced` lower-cased). No build wrote anything else on
+//     a column, so a column labelled with the lookup's own name is somebody's label, and is never repaired;
+//   * the form FIELD: that same name, inherited from the column, or — when the SDK cannot resolve the column at
+//     push — the field's own LOWER-CASE logical name, because its control normalization defaults `label` to
+//     `fieldName`, which is the lower-case logical name, not the schema name the spec spells with capitals.
+//
+// Exactly those strings, not their case variants. A match that ignored case would call a correct "Contact"
+// (the display name of the table `contact`) an old default: every rebuild would read the label and then the
+// table's name to find out it was already right, and a maker's "Contact" on a table the org later renamed
+// would be overwritten. A map is never the default either: the old default was written in one language only,
+// so a label carrying several was touched since.
+const lowerName = (n) => (n == null ? '' : String(n).toLowerCase());
+const isExactlyOneOf = (label, names) => typeof label === 'string' && label !== '' && names.includes(label);
+
+function isOldLookupColumnLabel(rel, label) {
+  return isExactlyOneOf(label, [lowerName(rel && rel.referenced)]);
+}
+
+function isOldLookupFieldLabel(rel, label) {
+  return isExactlyOneOf(label, [lowerName(rel && rel.referenced), lowerName(rel && rel.lookup && rel.lookup.schemaName)]);
 }
 
 // The child relationships to show as sub-grids on `entityLogical`'s (parent) form: every 1:N where
@@ -4139,6 +4246,11 @@ module.exports = {
   relationshipFor,
   resolveParentRelationship,
   lookupColumnsFor,
+  lookupLabelFor,
+  lookupParentNeedsEnvironment,
+  humanizeTableName,
+  isOldLookupColumnLabel,
+  isOldLookupFieldLabel,
   // Exported so every raw-spec form reader — including the offline eval harness — goes through the
   // one helper that understands BOTH tab shapes. A reader that opens `tab.sections` directly silently
   // skips every multi-column tab, which is exactly how a lint rule came to report such a tab as

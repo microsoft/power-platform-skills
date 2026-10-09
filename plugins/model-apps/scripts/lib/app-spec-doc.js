@@ -16,7 +16,7 @@
 // PURE: no I/O. The CLI wrapper (scripts/write-app-spec-doc.js) owns writing the file.
 
 const lc = (s) => String(s || '').toLowerCase();
-const { labelText } = require('./app-spec.js');
+const { labelText, lookupLabelFor } = require('./app-spec.js');
 
 // Every collection read below goes through these. The renderer runs against WORK-IN-PROGRESS specs
 // during authoring — a half-typed `jobs: "x"`, a null entry left by an edit, a `dataSources` written
@@ -161,10 +161,12 @@ function dataModel(spec) {
   }
   const rels = objs(spec.relationships);
   if (rels.length) {
-    out.push('### Relationships', '', '| Kind | From | To | Lookup |', '|---|---|---|---|');
+    // `Label` is what the lookup column (and its form field) is called: the author's lookup.displayName, else
+    // the parent table's name — see lookupLabelFor — so the plan reads "Project", not a logical name.
+    out.push('### Relationships', '', '| Kind | From | To | Lookup | Label |', '|---|---|---|---|---|');
     for (const r of rels) {
-      if (r.type === 'ManyToMany') out.push(`| N:N | ${cell(lc(r.entity1))} | ${cell(lc(r.entity2))} | — |`);
-      else out.push(`| 1:N | ${cell(lc(r.referenced))} | ${cell(lc(r.referencing))} | ${cell(r.lookup && r.lookup.schemaName)} |`);
+      if (r.type === 'ManyToMany') out.push(`| N:N | ${cell(lc(r.entity1))} | ${cell(lc(r.entity2))} | — | — |`);
+      else out.push(`| 1:N | ${cell(lc(r.referenced))} | ${cell(lc(r.referencing))} | ${cell(r.lookup && r.lookup.schemaName)} | ${cell(labelText(lookupLabelFor(spec, r).label, spec && spec.languageCode))} |`);
     }
     out.push('');
   }

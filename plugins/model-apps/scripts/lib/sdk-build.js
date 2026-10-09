@@ -45,6 +45,8 @@ const {
   dashboardNameKey,
   formLayoutNames,
   subgridRelationshipName,
+  lookupLabelFor,
+  lookupParentNeedsEnvironment,
 } = require('./app-spec.js');
 const { PHASES } = require('./stages.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
@@ -75,7 +77,11 @@ const {
   findExistingColumns,
   relationshipExists,
   localizedLabelLcidsInSpec,
+  lookupsWithDefaultLabel,
+  relationshipsInCreateOrder,
 } = require('./entity-provision.js');
+const { repairLookupCellLabels } = require('./lookup-cell-labels.js');
+const { hasLabelUses, makeChoiceReader, makeGlobalChoiceReader, resolveViewFilterLabels, checkViewFilterLabelsBeforeBuild, describeProblem, describeProblems } = require('./view-filter-labels.js');
 // Pure App Spec -> canonical SDK intent compiler (new form topology + generic-surface intents).
 const {
   compileFormIntent,
@@ -411,14 +417,22 @@ function resolvePhases({ only, skip, from, to } = {}) {
 // Resolve a view-filter value: a Choice/MultiChoice label becomes its option int; everything
 // else (raw ints, strings, ISO dates) passes through. No-value operators omit the value entirely.
 //
-// Resolution goes through `choiceValueMap`, the SHARED rule, rather than `options.indexOf(val)`.
+// `resolution` (ADO 6691114, lib/view-filter-labels.js) is what the build resolved against the
+// ENVIRONMENT's option metadata before it wrote any view. It answers first, because the spec can only prove
+// a value for an option set this build created: 100000000 + index is wrong for a global choice that already
+// existed with other values, and the spec says nothing of a column it does not declare. Without one — a
+// caller with no environment to read, `viewDef(spec, v)` in a test — this is the spec-only rule it always was.
+//
+// The spec-only rule goes through `choiceValueMap`, the SHARED rule, rather than `options.indexOf(val)`.
 // Two reasons, and the first is a real defect the naive version had: a LOCALIZED option is an
 // object (`{ "1033": "Open", "3082": "Abierto" }`), so `indexOf("Abierto")` returns -1 and the
 // LABEL was sent as the value of a numeric picklist condition — an invalid or silently ineffective
 // view filter. The second is that `choiceValueMap` also resolves a column bound to a `globalChoice`,
 // which the inline-only lookup never did.
-function resolveFilterValue(spec, entityLogical, attr, val) {
+function resolveFilterValue(spec, entityLogical, attr, val, resolution) {
   if (typeof val !== 'string') return val;
+  const resolved = resolution ? resolution.value(entityLogical, attr, val) : undefined;
+  if (resolved !== undefined) return resolved;
   const e = entityByLogical(spec, entityLogical);
   const c = e && (e.columns || []).find((x) => x.schemaName.toLowerCase() === String(attr).toLowerCase());
   if (!c || (c.type !== 'Choice' && c.type !== 'MultiChoice')) return val;
@@ -491,9 +505,29 @@ function planFor(spec, opts) {
       for (const sr of e.statusReasons || []) items.push({ phase: 'data-model', label: `status reason ${e.schemaName}: ${sr.label}` });
       for (const k of e.alternateKeys || []) items.push({ phase: 'data-model', label: `alt key ${e.schemaName}.${k.schemaName}` });
     }
-    for (const r of spec.relationships || []) {
+    // The relationships in the order the data-model phase creates them (relationshipsInCreateOrder): localized
+    // lookups first. The plan lists what the build does, in the order it does it.
+    for (const r of relationshipsInCreateOrder(spec)) {
       if (r.type === 'OneToMany') items.push({ phase: 'data-model', label: `relationship 1:N ${r.referenced}->${r.referencing}`, key: { kind: 'relationship', entity: r.referenced, name: relationshipSchemaName(r, relPrefix), relType: 'OneToMany', declared: r } });
       else if (r.type === 'ManyToMany') items.push({ phase: 'data-model', label: `relationship N:N ${r.entity1}<->${r.entity2}`, key: { kind: 'relationship', entity: r.entity1, name: manyToManySchemaName(r, relPrefix), relType: 'ManyToMany', declared: r } });
+    }
+    // ADO 6691205: one step per lookup whose label the build owns (the spec sets none). On a rebuild it
+    // repairs a column an older build labelled with its old default; on a fresh build it is a skip. The
+    // predicate is the one the data-model phase emits by, so [n/total] holds.
+    for (const r of lookupsWithDefaultLabel(spec)) {
+      const { label, source } = lookupLabelFor(spec, r);
+      const parent = String(r.referenced).toLowerCase();
+      const humanized = `"${labelText(label, spec && spec.languageCode)}"`;
+      let shown = humanized;
+      if (source === 'derived') {
+        // A parent whose name the spec cannot give (a table it does not declare, or an `existing: true` one it
+        // declares without a displayName) is named by the environment at build time; the spec cannot say how.
+        if (lookupParentNeedsEnvironment(spec, r)) shown = `the display name of ${parent}`;
+        // A declared table with no displayName that is not flagged: the build creates it, or finds it already
+        // there and takes its label from the environment — which the plan cannot know, so it says both.
+        else if (entityByLogical(spec, r.referenced)) shown = `${humanized}, or the label from the environment if ${parent} is already there`;
+      }
+      items.push({ phase: 'data-model', label: `lookup label ${String(r.referencing).toLowerCase()}.${r.lookup.schemaName} (default ${shown})` });
     }
   }
   if (has('sample-data') && opts.sampleData) {
@@ -501,7 +535,7 @@ function planFor(spec, opts) {
   }
   if (has('web-resources')) for (const wr of spec.webResources || []) items.push({ phase: 'web-resources', label: `web resource ${wr.name} (${wr.type || 'js'})` });
   if (has('web-resources')) for (const e of spec.entities || []) if (e.icon || e.vectorIcon) items.push({ phase: 'web-resources', label: `table icon for ${e.schemaName.toLowerCase()}` });
-  if (has('views')) for (const v of spec.views || []) items.push({ phase: 'views', label: `view "${v.name}" for ${v.entity}`, key: { kind: 'view', entity: v.entity, name: v.name } });
+  if (has('views')) for (const v of spec.views || []) items.push({ phase: 'views', label: `view "${v.name}" for ${v.entity}`, key: { kind: 'view', entity: v.entity, name: v.name, declared: v } });
   if (has('views')) for (const e of spec.entities || []) if (enrichesDefaultViews(spec, e)) items.push({ phase: 'views', label: `enrich default views for ${e.schemaName.toLowerCase()}` });
   if (has('charts')) for (const c of spec.charts || []) items.push({ phase: 'charts', label: `chart "${c.name}" (${c.chartType}) for ${c.entity}`, key: { kind: 'chart', entity: c.entity, name: c.name } });
   if (has('forms')) for (const f of spec.forms || []) {
@@ -611,7 +645,7 @@ async function subgridViewId(provision, createdViews, spec, sg, childLogical) {
   return def && def.savedqueryid;
 }
 
-function viewDef(spec, v) {
+function viewDef(spec, v, resolution) {
   const entityLogical = v.entity.toLowerCase();
   const cols = (v.columns && v.columns.length ? v.columns : [primaryNameOf(spec, entityLogical)]).map((name, i) => ({ name: String(name).toLowerCase(), width: 100, order: i }));
   const conditions = [];
@@ -622,17 +656,132 @@ function viewDef(spec, v) {
     const op = f.op || 'eq';
     if (op === 'in' || op === 'not-in') {
       const subOp = op === 'in' ? 'eq' : 'ne';
-      const vals = (f.values || []).map((x) => resolveFilterValue(spec, entityLogical, attr, x));
+      const vals = (f.values || []).map((x) => resolveFilterValue(spec, entityLogical, attr, x, resolution));
       groups.push({ type: op === 'in' ? 'or' : 'and', conditions: vals.map((x) => ({ attribute: attr, operator: subOp, value: String(x) })), groups: [] });
     } else {
       const cond = { attribute: attr, operator: op };
-      if (f.value !== undefined) cond.value = String(resolveFilterValue(spec, entityLogical, attr, f.value));
+      if (f.value !== undefined) cond.value = String(resolveFilterValue(spec, entityLogical, attr, f.value, resolution));
       conditions.push(cond);
     }
   }
   return { name: v.name, description: String(v.description || '').trim(), entityLogicalName: entityLogical, queryType: 0, isDefault: false, columns: cols,
     filters: { type: 'and', conditions, groups },
     sort: (v.sort || []).map((s) => ({ attribute: String(s.attr).toLowerCase(), descending: s.dir === 'desc' })) };
+}
+
+// The raw-client readers every view-label check shares. `read` is null with no client to ask (a test double), and
+// every check then does what it did before there was one.
+function viewLabelReaders(spec, provision) {
+  const client = provision && provision.dataverse;
+  const languageCode = spec && spec.languageCode;
+  return { read: makeChoiceReader({ client, languageCode }), readGlobalChoice: makeGlobalChoiceReader({ client, languageCode }) };
+}
+
+// What the build says of a view that already exists whose spec filters on a label that names no option: `reconcileView`
+// never reapplies an existing view's filters, so nothing stops — but verify reads the spec's label, and will report it.
+// The dry run says the same, so the user hears it before the apply rather than from `--verify`.
+const existingViewLabelNote = (p) => {
+  // `ambiguous` is a label that names several options; anything else is one that names none. The first sentence says which, so the
+  // reason that follows (the numbers the label sits on, or the refusal of the spec's own number) is not left to contradict it.
+  const what = p.reason === 'ambiguous'
+    ? `"${p.label}" names more than one option of ${p.entity}.${p.attr} (${(p.values || []).join(', ')})`
+    : `"${p.label}" is not an option of ${p.entity}.${p.attr}`;
+  return `view "${p.view}" (${p.entity}) already exists, so its filters are left as they are — but ${what}, and verify will report that.${p.refusal ? ` ${p.refusal}` : ''}`;
+};
+
+// Of the view-label `problems`, the ones that may stop the build: those on a view it would CREATE. `reconcileView`
+// never reapplies an existing view's filters, so the label in the spec of a view that is already there changes
+// nothing the build writes (verify still reports it) — that is said once, not raised. The existence lookup is
+// made only once a problem is found, so a build with nothing wrong pays no extra read; when the lookup cannot
+// tell (a table the build has not created yet has no views to find), the view counts as one to create — the
+// fail-closed answer.
+async function blockingViewLabelProblems(problems, { provision, say }) {
+  const existing = new Map();
+  const viewExists = (name, entity) => {
+    const key = `${entity}|${name}`;
+    if (!existing.has(key)) existing.set(key, Promise.resolve().then(() => provision.findArtifact('view', { name, entity })).then((id) => !!id, () => false));
+    return existing.get(key);
+  };
+  const blocking = [];
+  for (const p of problems) {
+    if (await viewExists(p.view, p.entity)) say(existingViewLabelNote(p));
+    else blocking.push(p);
+  }
+  return blocking;
+}
+
+// `beforeAnyWrite`: the pre-flight stops the build before this run has written anything; the views phase, only
+// before it writes a view. The pre-flight is tagged with the phase name the CLI's own pre-flight halts already
+// carry (`preflight`): it is not part of the views phase, which has not started.
+function viewLabelHalt(blocking, { beforeAnyWrite }) {
+  const halt = new BuildHalt(
+    `${blocking.length} view filter value${blocking.length === 1 ? '' : 's'} cannot be resolved to an option of the table. ${beforeAnyWrite ? 'The build stopped before writing anything' : 'No view was written'}:\n${describeProblems(blocking)}`,
+    { phase: beforeAnyWrite ? 'preflight' : 'views', code: 'view-filter-label-unresolved', recoverable: false });
+  // A label the environment shows to be wrong (`unknown`, `ambiguous`) is wrong on a re-run too, so such a halt is never
+  // run again. One that only unanswered option reads left undecided (`unreadable`, each `why` reading e.g. "HTTP 503: …")
+  // may be answered next time, but only when every one of those reads was throttled or unavailable (429, 503): it then
+  // carries that status, which the CLI's retry check (isTransientHalt) reads. Every other halt is marked never-retry,
+  // because the message quotes the user's own filter labels, and a label such as "SQL Timeout" must not read as transient.
+  const statusOf = (p) => { const m = /\bHTTP (\d{3})\b/.exec(String(p.why || '')); return m ? Number(m[1]) : null; };
+  const throttled = blocking.length > 0 && blocking.every((p) => p.reason === 'unreadable' && [429, 503].includes(statusOf(p)));
+  if (throttled) halt.statusCode = statusOf(blocking[0]);
+  else halt.transient = false;
+  return halt;
+}
+
+// The build's pre-flight (ADO 6691114): before the first write of an apply that writes the data model, stop on a
+// view-filter label the environment already shows to be wrong (lib/view-filter-labels.js
+// `checkViewFilterLabelsBeforeBuild`). Without it the first sign was Dataverse rejecting the saved view — after
+// the tables and columns had been written, which left a half-built app for a typo in a filter.
+//
+// Only a DEFINITE answer halts here: a label that depends on something the build is about to create is left
+// to the views phase, which asks again once the data model exists. So is a label the spec's own number stands in
+// for (a maker renamed the option — view-filter-labels.js `specNumberStands`): no problem, and not handed on as
+// final, because the views phase resolves it and WARNS about it, once. Returns what the environment already held
+// and resolved — final, so the views phase takes it as it is (see checkViewFilterLabelsBeforeBuild) — or
+// undefined when nothing was checked.
+//
+// NOT run at all when the spec carries a localized label (AB#6686428). The pre-flight's reads carry labels
+// (every option's, in every language), and the measured hazard — documented on relationshipExists — is that
+// a label-bearing metadata read ahead of a create makes Dataverse keep only the base-language label of a
+// multi-language one, silently. Those reads were never measured to be safe, and a typo in a filter does not
+// justify risking the labels the whole localization feature exists to keep, so a build that may create any
+// localized label (any map on a table, column, option, lookup… — which of them the environment lacks is
+// not knowable without reads) leaves the check to the views phase. That phase runs after every create, so
+// it is still before any view is written; what is lost is only the guarantee that NOTHING was written yet.
+// The dry run is unaffected: it creates nothing, so no create follows its reads.
+async function preflightViewLabels(spec, provision, say) {
+  const labelViews = (spec.views || []).filter((v) => hasLabelUses(spec, v));
+  if (!labelViews.length) return undefined;
+  if (localizedLabelLcidsInSpec(spec).length) return undefined;
+  const { problems, resolved } = await checkViewFilterLabelsBeforeBuild(spec, labelViews, viewLabelReaders(spec, provision));
+  if (problems.length) {
+    const blocking = await blockingViewLabelProblems(problems, { provision, say });
+    if (blocking.length) throw viewLabelHalt(blocking, { beforeAnyWrite: true });
+  }
+  return resolved;
+}
+
+// The views phase's gate (ADO 6691114): the FINAL resolution of every option label a view filters on, against the
+// ENVIRONMENT as the build left it (lib/view-filter-labels.js), halting — before any view is written — on one
+// that names nothing. The alternative is a filter whose value is the label's own text: Dataverse rejects it, or
+// stores it and matches nothing, so a build that "succeeds" would ship it. A fresh reader, not the pre-flight's:
+// the data model has been written since, and what the build created is what this reads. `prior` is what the
+// pre-flight resolved from what already existed — a column, or the global choice a column the build creates is
+// bound to — which the build leaves as it was. A localized spec has no `prior` (its pre-flight is skipped), so a
+// column bound to a global choice whose own options cannot be read is resolved from the set itself.
+//
+// Returns what `viewDef` resolves values with, or null when no view names a label (nothing was read).
+async function resolveViewLabelsOrHalt(spec, provision, say, prior) {
+  const labelViews = (spec.views || []).filter((v) => hasLabelUses(spec, v));
+  if (!labelViews.length) return null;
+  const { read, readGlobalChoice } = viewLabelReaders(spec, provision);
+  const resolution = await resolveViewFilterLabels(spec, labelViews, { read, prior, readGlobalChoice });
+  for (const w of resolution.warnings) say(w);
+  if (!resolution.problems.length) return resolution;
+  const blocking = await blockingViewLabelProblems(resolution.problems, { provision, say });
+  if (!blocking.length) return resolution;
+  throw viewLabelHalt(blocking, { beforeAnyWrite: false });
 }
 
 // Pick a "good" default-view column set: the primary name column plus up to DEFAULT_VIEW_MAX_EXTRA
@@ -1569,6 +1718,43 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
   // `unknown` below.
   const relReader = { dataverse: provision && provision.dataverse };
 
+  // ADO 6691114: a view the build would CREATE writes its filter labels as option values, so say now when
+  // one cannot be resolved — the apply would halt on it. A dry run writes nothing, so it is asked exactly what the
+  // build's pre-flight is asked (lib/view-filter-labels.js `checkViewFilterLabelsBeforeBuild`): only a DEFINITE
+  // answer is reported, and a label that depends on something the build is about to create (a status reason it
+  // inserts, a table it makes) is not. It only HALTS for a view that is `create`: an existing view's filters are
+  // never reapplied, so for one the apply only says (see below). One reader, one read per table. The reader writes
+  // nothing, which is why it is not `fetchEntityMetadata`.
+  const labelReaders = viewLabelReaders(spec, provision);
+  // `wouldHalt` marks the answer as DEFINITE — the environment was asked and the label matches no option — so the
+  // dry run's summary does not count it among the items it "could not read". The mark stays `? unknown`: the
+  // view's state is still not `create`, since the apply would stop before writing it.
+  //
+  // A label the build would bind to the spec's own number instead (a maker renamed the option) leaves the view
+  // `create`, and the build WARNS about it in the views phase. A dry run has no such phase, so it says the same
+  // here, once however many views name the label.
+  //
+  // An EXISTING view is judged too, for what the apply will SAY about it: the views phase resolves every label the
+  // spec filters on, so it gives the same warning whether or not the view is already there, and for a label that
+  // names no option it says the view's filters are left as they are and verify will report it. The view stays
+  // `reuse` — the apply does not stop on it — so only the words differ from a view it would create.
+  const saidViewLabels = new Set();
+  const sayOnce = (message) => {
+    if (saidViewLabels.has(message)) return;
+    saidViewLabels.add(message);
+    if (typeof warn === 'function') warn(message);
+  };
+  const judgeViewLabels = async (item, key) => {
+    if (key.kind !== 'view' || (item.state !== 'create' && item.state !== 'reuse') || !key.declared || !hasLabelUses(spec, key.declared)) return;
+    const { problems, notes } = await checkViewFilterLabelsBeforeBuild(spec, [key.declared], labelReaders);
+    if (item.state === 'create') {
+      if (problems.length) { item.state = 'unknown'; item.stateWhy = problems.map(describeProblem).join(' '); item.wouldHalt = true; }
+    } else {
+      for (const p of problems) sayOnce(existingViewLabelNote(p));
+    }
+    for (const note of notes) sayOnce(note);
+  };
+
   const tableState = async (logical) => {
     if (!tableCache.has(logical)) {
       try {
@@ -1685,7 +1871,7 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
         // A form/view/chart on a table that does not exist yet cannot exist either, and the filter
         // would 400 on the metadata cache — so answer from the table, as the build's own lookup does.
         const t = await tableState(String(k.entity).toLowerCase());
-        if (t.found === false) { item.state = 'create'; continue; }
+        if (t.found === false) { item.state = 'create'; await judgeViewLabels(item, k); continue; }
         // …and if the TABLE probe was inconclusive, nothing about its artifacts is knowable either.
         // Without this the plan contradicts itself in adjacent lines — `? unknown` for the table and
         // a confident `+ create` for every view and form on it — and the apply never gets that far:
@@ -1696,6 +1882,7 @@ async function annotateLivePlan(plan, { spec, provision, warn } = {}) {
         if (t.found === null) { item.state = 'unknown'; item.stateWhy = t.why; continue; }
         const present = await artifactPresent(k.kind, { name: k.name, entityLogicalName: String(k.entity).toLowerCase(), formType: k.formType, formId: k.formId, uniqueName: k.uniqueName });
         item.state = present === null ? 'unknown' : (present ? 'reuse' : 'create');
+        await judgeViewLabels(item, k);
       }
     } catch (err) {
       item.state = 'unknown';
@@ -1914,7 +2101,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       dryRun: true,
       livePlan: canProbe,
       plan: plan.map((p) => (p.state ? `${p.label} [${p.state}]` : p.label)),
-      planItems: plan.map((p) => ({ phase: p.phase, label: p.label, ...(p.state ? { state: p.state } : {}), ...(p.stateWhy ? { stateWhy: p.stateWhy } : {}) })),
+      planItems: plan.map((p) => ({ phase: p.phase, label: p.label, ...(p.state ? { state: p.state } : {}), ...(p.stateWhy ? { stateWhy: p.stateWhy } : {}), ...(p.wouldHalt ? { wouldHalt: true } : {}) })),
     };
   }
 
@@ -1928,15 +2115,29 @@ async function runSdkBuildPhases(spec, opts, owed) {
   const runner = makeRunner({ emit, total: plan.length });
   const sol = spec.solution;
 
+  // ADO 6691114: a view-filter label the environment already shows to be wrong stops the build here, before it
+  // writes anything — in any apply that writes the solution or the data model, whether or not it also builds the
+  // views, so the staged flow's data run fails first too — unless the spec carries a localized label, whose
+  // creation no label-bearing read may precede (preflightViewLabels). The views phase checks again once the data
+  // model exists (the final answer, with the values). A note both of them would make is made once.
+  const warnedViewLabels = new Set();
+  const sayViewLabel = (message) => {
+    if (warnedViewLabels.has(message)) return;
+    warnedViewLabels.add(message);
+    if (typeof opts.warn === 'function') opts.warn(message);
+  };
+  let preflightResolved;
+  if (has('solution') || has('data-model')) preflightResolved = await preflightViewLabels(spec, provision, sayViewLabel);
+
   // 1. Solution (idempotent; header-less provisioning client).
   if (has('solution')) await provisionSolution({ sdk, provision, runner, solution: sol });
 
   // 2. Data model — idempotent. Discover existing tables/columns/relationships via the SDK
   //    (find*/fetch*), then create only what's missing. Captures entitySetName for every
   //    entity (fresh -> createTable result, existing -> findTables hit).
-  let dataModel = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [] };
+  let dataModel = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [], lookupLabels: {} };
   if (has('data-model')) {
-    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, languageCode: opts.languageCode, warn: opts.warn, provisionedLanguages: opts.provisionedLanguages, preResolvedLanguageCode: opts.preResolvedLanguageCode });
+    dataModel = await provisionDataModel({ sdk, provision, runner, spec, apply, languageCode: opts.languageCode, warn: opts.warn, provisionedLanguages: opts.provisionedLanguages, preResolvedLanguageCode: opts.preResolvedLanguageCode, reconcileLookupLabels: true });
     Object.assign(result.created.entities, dataModel.entities);
   }
 
@@ -2391,6 +2592,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
       if (wantHidden) await provision.updateElement('form', formId, loc.cellPointer, { visible: false });
     }
   };
+
+  // ADO 6691205 — repair, on a deployed form, the label an older build gave a lookup cell: only the
+  // old default, and only when the spec sets no lookup.displayName (lib/lookup-cell-labels.js applies the rule).
+  const repairLookupCellLabelsOn = (formId, def) => repairLookupCellLabels({
+    provision, formId, entityLogical: def.entityLogicalName, spec, lookupLabels: dataModel.lookupLabels,
+  });
 
   // Remove the rows a cell's departure left holding nothing: its own row, and the rows its row-span
   // covered. An empty `<row/>` renders as a blank line, and one would accumulate per pruned or
@@ -3565,6 +3772,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
     // `/…/control` with `{ isReadOnly: true }` preserves classId, label and every other adapter-derived
     // value. It does NOT mint ids, which is exactly right here — the cell already has one.
     await applyFieldControlOptions(formId, def, want, wantCellByLogical);
+    await repairLookupCellLabelsOn(formId, def);
     // Reposition any field the spec anchors after another (`fieldOptions[x].after`). Runs AFTER the
     // attribute pass; new cells and all anchored moves then persist together in one artifact edit.
     await applyFieldPositions(formId, def, vacatedSections, newCells);
@@ -4014,7 +4222,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
 
   // 4. Views (independent -> parallel).
   if (has('views')) {
-    const ids = await runner.mapLimit(spec.views || [], concurrency, (v) => buildArtifact('view', viewDef(spec, v), { authoredQuery: !!((v.filters || []).length || (v.sort || []).length) }));
+    const labelResolution = await resolveViewLabelsOrHalt(spec, provision, sayViewLabel, preflightResolved);
+    const ids = await runner.mapLimit(spec.views || [], concurrency, (v) => buildArtifact('view', viewDef(spec, v, labelResolution), { authoredQuery: !!((v.filters || []).length || (v.sort || []).length) }));
     // Key by `entity|name` (matching identityOf.view + the snapshot canonical id). View names are unique
     // only PER ENTITY, so a name-only key lets a same-named view on another entity OVERWRITE this id and
     // cross-wire dashboards / sub-grids / AI-summaries to the wrong entity's view.

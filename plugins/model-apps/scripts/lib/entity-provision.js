@@ -18,7 +18,11 @@ const {
   isLocalizedLabelMap,
   localizedLabelLcids,
   sampleKeyIdentity,
+  lookupLabelFor,
+  lookupParentNeedsEnvironment,
+  isOldLookupColumnLabel,
 } = require('./app-spec.js');
+const { readColumnLabels, makeTableLabelReader, lookupKey } = require('./lookup-labels.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 // OData string-literal escaping for spec-controlled values interpolated into $filter (a solution
 // uniquename / publisher prefix with a `'` would otherwise break the query or inject a clause).
@@ -873,8 +877,11 @@ async function findExistingTable(provision, schemaName, { hasLocalizedLabels = f
   return (hits || []).find((t) => t.logicalName === logical) || null;
 }
 
-async function provisionDataModel({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode, sleep }) {
-  const result = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [] };
+async function provisionDataModel({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode, sleep, reconcileLookupLabels = false }) {
+  // `lookupLabels` records the label each spec lookup column carries once this phase is done
+  // (`<referencing>|<lookup logical>` -> { label }), so a later phase that repairs something derived
+  // from it — an existing form's cell label — repairs it to what the column now says.
+  const result = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [], lookupLabels: {} };
   // The CLI resolves the authoring LCID BEFORE constructing the SDK, because
   // `MakerSdkOptions.languageCode` is a construction-time option (#455) — the App/Form/Dashboard
   // adapters bake it in. Re-resolving here would repeat the org read and the provisioned-languages
@@ -891,6 +898,10 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
 
   const globalChoiceIds = result.globalChoiceIds;
   const statusReasonValues = result.statusReasonValues;
+  // The declared tables (lower-case logical names) this run found already in the environment, as opposed
+  // to the ones it created. A lookup to one that sets no displayName of its own is named by the
+  // environment (lookupParentNeedsEnvironment), which only the table loop below can know.
+  const reusedTables = new Set();
 
   // 2a. Global option sets (shared choices) — built before columns that bind to them. The SDK's
   // createGlobalOptionSet is now IDEMPOTENT: it probes by Name and REUSES an existing set (returning
@@ -919,6 +930,7 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
     let existingColRows = [];
     if (existingTable) {
       runner.skip('data-model', `table ${e.schemaName} (exists — reuse)`);
+      reusedTables.add(logical);
       result.entities[e.schemaName] = { logicalName: logical, entitySetName: existingTable.entitySetName };
       existingColRows = await findExistingColumns(provision, logical, warn);
       existingCols = new Set(existingColRows.map((c) => String(c.logicalName || c.schemaName || '').toLowerCase()));
@@ -1166,16 +1178,32 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
   //     schema name, so a second 1:N on the same pair, or an N:N that derived the 1:N's name, must
   //     halt rather than be reported as already created.
   const publisherPrefix = spec.solution && spec.solution.publisherPrefix;
-  for (const rel of spec.relationships || []) {
-    if (rel.type !== 'OneToMany' && rel.type !== 'ManyToMany') continue;
+  // Reads the display name of a parent table the spec cannot name, once per table (ADO 6691205). Null when
+  // there is no raw client to read with — callers then use the humanized name without pretending to have asked.
+  const readParentLabel = makeTableLabelReader({ provision, languageCode: resolvedLanguageCode, warn });
+  // Lookups this run CREATED, `<referencing>|<lookup logical>`: the rebuild repair below must not touch
+  // (or even read) a column that was just given the right label.
+  const createdLookups = new Set();
+  // In the order relationshipsInCreateOrder gives: every relationship whose lookup label is LOCALIZED before any
+  // other. The parent-label read below carries labels — the read documented on relationshipExists as making
+  // Dataverse keep only the base-language label of a multi-language create that FOLLOWS it. Each read sits right
+  // before its own single-language create, which is the create it can only harm harmlessly; but a localized create
+  // later in this loop would still have a label-bearing read ahead of it. With every localized lookup created first,
+  // nothing localized follows any such read, whichever order the spec declared the relationships in. Order is
+  // otherwise free: a relationship needs only its two tables, which the loops above have already made.
+  for (const rel of relationshipsInCreateOrder(spec)) {
     const schema = rel.type === 'OneToMany' ? relationshipSchemaName(rel, publisherPrefix) : manyToManySchemaName(rel, publisherPrefix);
     const entityLogical = (rel.type === 'OneToMany' ? rel.referenced : rel.entity1).toLowerCase();
     const label = rel.type === 'OneToMany'
       ? `relationship 1:N ${rel.referenced}->${rel.referencing}`
       : `relationship N:N ${rel.entity1}<->${rel.entity2}`;
     const declared = Object.assign({}, rel, { schemaName: rel.schemaName || schema });
+    // What the lookup column will be labelled. Decided BEFORE the existence probe because it decides how
+    // that probe may fall back: a LOCALIZED label — authored, or inherited from a localized parent table —
+    // must never be preceded by the broad metadata read (see relationshipExists).
+    const lookupLabel = rel.type === 'OneToMany' ? lookupLabelFor(spec, rel) : null;
     const exists = await relationshipExists(provision, entityLogical, schema, rel.type, {
-      hasLocalizedLabels: rel.type === 'OneToMany' && localizedLabelLcids(rel.lookup && rel.lookup.displayName).length > 0,
+      hasLocalizedLabels: !!lookupLabel && localizedLabelLcids(lookupLabel.label).length > 0,
       declared,
     });
     if (exists === true) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
@@ -1187,8 +1215,21 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
       halt.transient = false;
       throw halt;
     }
+    // A parent whose name the spec cannot give — a table it does not declare (account, contact,
+    // systemuser…), or one it declares without a displayName that the build did not create (an
+    // `existing: true` incident is "Case", not "Incident") — is asked of the environment rather than
+    // guessed from the table's logical name. The read is made HERE — after the probe, immediately before
+    // the create it feeds, and only when a create is going to happen. It is label-bearing, which is the
+    // read documented on relationshipExists as making Dataverse keep only the base-language label of the
+    // create that follows; that create carries one single-language label, so nothing can be stripped, and
+    // it must stay next to it rather than drift into the middle of a localized one.
+    let createLabel = lookupLabel;
+    if (createLabel && createLabel.source === 'derived' && readParentLabel && lookupParentNeedsEnvironment(spec, rel, { reused: reusedTables })) {
+      const live = await readParentLabel(rel.referenced);
+      if (live) createLabel = lookupLabelFor(spec, rel, { liveReferencedLabel: live });
+    }
     const createOpts = rel.type === 'OneToMany'
-      ? { type: 'OneToMany', schemaName: schema, referencedEntity: rel.referenced.toLowerCase(), referencingEntity: rel.referencing.toLowerCase(), lookupSchemaName: rel.lookup.schemaName, lookupDisplayName: rel.lookup.displayName, languageCode: resolvedLanguageCode }
+      ? { type: 'OneToMany', schemaName: schema, referencedEntity: rel.referenced.toLowerCase(), referencingEntity: rel.referencing.toLowerCase(), lookupSchemaName: rel.lookup.schemaName, lookupDisplayName: createLabel.label, languageCode: resolvedLanguageCode }
       : { type: 'ManyToMany', schemaName: schema, entity1: rel.entity1.toLowerCase(), entity2: rel.entity2.toLowerCase(), intersectEntityName: rel.intersectEntityName, languageCode: resolvedLanguageCode };
     await runner.run('data-model', label, async () => {
       try {
@@ -1196,6 +1237,11 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
         result.relationships.push(rel.type === 'OneToMany'
           ? { schemaName: res.schemaName || schema, metadataId: res.metadataId, kind: '1n', lookupLogicalName: res.lookupLogicalName }
           : { schemaName: res.schemaName || schema, metadataId: res.metadataId, kind: 'nn' });
+        if (rel.type === 'OneToMany') {
+          const key = lookupKey(rel);
+          createdLookups.add(key);
+          result.lookupLabels[key] = { label: labelText(createLabel.label, resolvedLanguageCode) };
+        }
       } catch (err) {
         if (!isAlreadyExists(err)) throw err;
         // skipIf is synchronous, so classify the holder here and rethrow a marked error. The
@@ -1267,8 +1313,169 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
     }, { skipIf: (e) => isAlreadyExists(e) && e.sameRelationshipExists === true });
   }
 
+  // A rebuild repairs a lookup column an older build labelled with its old default (opt-in: only the app
+  // build budgets the steps this emits — see planFor).
+  if (reconcileLookupLabels) {
+    await reconcileLookupLabelsPass({ spec, sdk, provision, runner, warn, languageCode: resolvedLanguageCode, createdLookups, readParentLabel, reusedTables, result });
+  }
 
   return result;
+}
+
+// The lookups whose label the build owns — the spec sets none (ADO 6691205). One predicate shared by
+// the repair pass and planFor, so the steps the pass emits are exactly the steps the plan budgets.
+function lookupsWithDefaultLabel(spec) {
+  return ((spec && spec.relationships) || []).filter((rel) => rel && rel.type === 'OneToMany' && rel.lookup && rel.lookup.schemaName
+    && lookupLabelFor(spec, rel).source !== 'explicit');
+}
+
+// The relationships, in the order the data-model phase creates them: those whose lookup label is LOCALIZED —
+// an LCID map, authored or inherited from a localized parent table — first, every other relationship after
+// them, each group in declared order. A label that needs a read of the parent's name is never localized (it is
+// the environment's one string), so the reads that precede a create all belong to the second group — see the
+// loop in provisionDataModel for why that matters. planFor lists the relationships in this order too, so the
+// plan shows what the build does.
+function relationshipsInCreateOrder(spec) {
+  const relationships = ((spec && spec.relationships) || []).filter((rel) => rel && (rel.type === 'OneToMany' || rel.type === 'ManyToMany'));
+  const localized = (rel) => {
+    const lookupLabel = rel.type === 'OneToMany' ? lookupLabelFor(spec, rel) : null;
+    return !!lookupLabel && localizedLabelLcids(lookupLabel.label).length > 0;
+  };
+  return [...relationships.filter(localized), ...relationships.filter((rel) => !localized(rel))];
+}
+
+// Repair, on a REBUILD, a lookup column an older build labelled with the vendored SDK's default — the
+// referenced table's logical name (ADO 6691205).
+//
+// Only when ALL of these hold, so a label a maker chose is never touched:
+//   * the spec sets no `lookup.displayName` (an explicit label is the author's, and is never reapplied);
+//   * the relationship already existed (a column created this run already has the right label);
+//   * the column carries exactly ONE label — the old default was written in one language, so a second
+//     means somebody edited it since — and that language is the BUILD's own. An old default in another
+//     language is left alone: the write below would add the build's language next to it, leaving two
+//     languages of which one is still an identifier, and every later rebuild would then see "several
+//     languages" and skip the column for good;
+//   * that label is exactly the old default: the lower-case logical name of the referenced table, case-sensitive
+//     (isOldLookupColumnLabel) — the only label a build ever wrote on a COLUMN.
+// The new label is the one a fresh build would write — lookupLabelFor — but written in ONE language
+// (the authoring one) even when the parent's name is localized: this is an UPDATE preceded by a
+// label-bearing read, and a multi-language write there is exactly the shape the documented base-language
+// hazard strips, so it is not risked for a repair. The other languages of a localized parent come with
+// a fresh build or Maker.
+//
+// Exactly one event per lookup the build owns, so the [n/total] the plan promised holds: planFor budgets
+// the same predicate (lookupsWithDefaultLabel). The labels are read once per CHILD TABLE, not once per
+// lookup, and only for the lookups this run did not just create.
+async function reconcileLookupLabelsPass({ spec, sdk, provision, runner, warn, languageCode, createdLookups, readParentLabel, reusedTables, result }) {
+  const client = provision && provision.dataverse;
+  const owned = lookupsWithDefaultLabel(spec);
+  // child -> the lookup columns of it that need reading, so one request answers for all of them.
+  const toRead = new Map();
+  for (const rel of owned) {
+    if (createdLookups.has(lookupKey(rel))) continue;
+    const child = String(rel.referencing).toLowerCase();
+    if (!toRead.has(child)) toRead.set(child, []);
+    toRead.get(child).push(String(rel.lookup.schemaName).toLowerCase());
+  }
+  const reads = new Map();
+  const labelsOfChild = (child) => {
+    if (!reads.has(child)) {
+      reads.set(child, readColumnLabels(client, child, toRead.get(child)).then((got) => {
+        if (got.state === 'error' && typeof warn === 'function') {
+          warn(`could not read the label of lookup(s) ${toRead.get(child).map((c) => `'${child}.${c}'`).join(', ')} (${got.why}), so a label an older build left on them was not checked. Re-run to retry.`);
+        }
+        return got;
+      }));
+    }
+    return reads.get(child);
+  };
+  const buildLanguage = String(languageCode);
+  // The tables whose lookups this pass relabelled, published below in one envelope.
+  const relabelled = new Set();
+
+  for (const rel of owned) {
+    const child = String(rel.referencing).toLowerCase();
+    const lookupLogical = String(rel.lookup.schemaName).toLowerCase();
+    const step = `lookup label ${child}.${rel.lookup.schemaName}`;
+    const key = lookupKey(rel);
+    if (createdLookups.has(key)) { runner.skip('data-model', `${step} (set when the relationship was created)`); continue; }
+    if (!client || typeof client.get !== 'function') { runner.skip('data-model', `${step} (no metadata client — left as it is)`); continue; }
+    const read = await labelsOfChild(child);
+    if (read.state === 'error') { runner.skip('data-model', `${step} (could not be read — left as it is)`); continue; }
+    const labels = read.state === 'ok' ? read.byColumn.get(lookupLogical) : undefined;
+    if (!labels) { runner.skip('data-model', `${step} (column not found — left as it is)`); continue; }
+
+    const languages = Object.keys(labels);
+    const only = languages.length === 1 ? languages[0] : null;
+    const current = only ? labels[only] : undefined;
+    const shown = labelText(labels, languageCode);
+    if (current === undefined || !isOldLookupColumnLabel(rel, current)) {
+      runner.skip('data-model', `${step} (${languages.length > 1 ? 'labelled in several languages' : `labelled "${shown}"`} — left as it is)`);
+      if (shown) result.lookupLabels[key] = { label: shown };
+      continue;
+    }
+    if (only !== buildLanguage) {
+      runner.skip('data-model', `${step} (the old default "${current}" is in language ${only}, not the build's ${buildLanguage} — left as it is)`);
+      if (typeof warn === 'function') {
+        warn(`lookup '${child}.${lookupLogical}' still carries the old default label "${current}" in language ${only}, and this build writes language ${buildLanguage}: relabelling it would leave two languages side by side, one of them still the old default, so it was left as it is. Rename the column in Maker to relabel it: a build changes an existing lookup's label only where it is the old default in the build's own language, and lookup.displayName names only a lookup the build creates.`);
+      }
+      result.lookupLabels[key] = { label: current };
+      continue;
+    }
+    let want = lookupLabelFor(spec, rel);
+    if (want.source === 'derived' && readParentLabel && lookupParentNeedsEnvironment(spec, rel, { reused: reusedTables })) {
+      const parentLabel = await readParentLabel(rel.referenced);
+      if (parentLabel) want = lookupLabelFor(spec, rel, { liveReferencedLabel: parentLabel });
+    }
+    const next = labelText(want.label, languageCode);
+    if (!next || next === current) {
+      runner.skip('data-model', `${step} (already "${current}")`);
+      result.lookupLabels[key] = { label: current };
+      continue;
+    }
+    await runBestEffort(runner, 'data-model', `${step}: "${current}" -> "${next}"`, async () => {
+      await sdk.updateColumn(child, lookupLogical, { displayName: next, languageCode });
+      result.lookupLabels[key] = { label: next };
+      relabelled.add(child);
+    }, warn, `could not relabel lookup '${child}.${lookupLogical}' from its old default "${current}" to "${next}" — the rest of the build continues`);
+  }
+  if (relabelled.size) await publishRelabelledTables(client, [...relabelled], warn);
+}
+
+// A column's label is part of its table's definition, and a table or column definition change reaches model-driven apps
+// only once it is published: "When you update a table or column definition, use the PublishXml Action before the
+// changes you make are applied to the model-driven applications"
+// (https://learn.microsoft.com/power-apps/developer/data-platform/webapi/create-update-entity-definitions-using-web-api#update-table-definitions).
+// No metadata read shows the difference: measured live, RetrieveEntity returns the new label right after the PUT even
+// with RetrieveAsIfPublished=false, so a live check of this publish has to trace the request, not read the label.
+// Nothing else in the build is sure to publish the child table. Its other table publishes follow from what the spec
+// puts on a table — a form, view, chart or icon, or its enriched default views — and a downloaded spec, whose lookups
+// the download leaves without a label precisely so that this pass repairs them, carries no forms, views, charts or
+// table icons and marks every table existing: true, whose default views the build leaves alone. A rebuild of one would
+// save the new label and leave it to whatever publishes that table next, while reporting the repair done; a re-run
+// finds the label already changed. So the pass publishes the tables it relabelled itself, in ONE envelope, at once —
+// with or without --publish, as the reconcile paths publish what they change — and in the data-model phase, before
+// anything publishes the app: a PublishXml naming only the app, sent after a form's label change and before its table's
+// own publish, leaves the form's labels unpublished for good (measured for forms; see publishReconciledTables,
+// sdk-build.js), and a relabelled table is published first here for the same reason.
+// The request:
+//   POST /PublishXml  { ParameterXml: "<importexportxml><entities><entity>contoso_task</entity></entities></importexportxml>" }
+// Best-effort: the labels are saved whatever it answers, so a failure is a warning that says how to show them.
+async function publishRelabelledTables(client, tables, warn) {
+  const notLive = (why) => {
+    if (typeof warn !== 'function') return;
+    const which = tables.length > 1 ? `tables ${tables.join(', ')}` : `table ${tables[0]}`;
+    warn(`the new lookup label(s) on ${which} are saved but not published (${why}), so the app still shows the old ones: publish ${tables.length > 1 ? 'those tables' : 'that table'} in Power Apps`);
+  };
+  if (!client || typeof client.post !== 'function') { notLive('no client to publish with'); return; }
+  try {
+    const response = await client.post('/PublishXml', {
+      ParameterXml: `<importexportxml><entities>${tables.map((t) => `<entity>${t}</entity>`).join('')}</entities></importexportxml>`,
+    });
+    if (!response || response.status < 200 || response.status >= 300) notLive(`PublishXml answered HTTP ${response && response.status}`);
+  } catch (e) {
+    notLive((e && e.message) || String(e));
+  }
 }
 
 // Factory for entity-set resolver: fresh tables cached in `entities` (from data-model
@@ -1531,4 +1738,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, runBestEffort, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists };
+module.exports = { makeRunner, runBestEffort, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists, lookupsWithDefaultLabel, relationshipsInCreateOrder };

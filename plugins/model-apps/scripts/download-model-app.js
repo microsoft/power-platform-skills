@@ -22,7 +22,8 @@ const { parseManifestBase64, manifestResourceName, reconcilePageIds } = require(
 const { reverseResolveNavIdsReport } = require('./lib/pageref-resolver.js');
 const { fetchSitemap, sitemapGenPages, appNavigationMatchesSitemap } = require('./lib/sitemap-pages.js');
 const { isRestrictedSolution } = require('./lib/system-solutions.js');
-const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE, sitemapEntityTables } = require('./lib/app-spec.js');
+const { isPlatformIconRef, webResourceNameFromRef, validateAppSpec, normalizeLanguageCode, isLocalizedLabelMap, ambiguousChoiceAliases, relationshipSchemaName, manyToManySchemaName, dashboardNameKey, PAGE_MODEL_RE, sitemapEntityTables, lookupLabelFor, isOldLookupColumnLabel } = require('./lib/app-spec.js');
+const { labelsByLcid, sameLabel } = require('./lib/lookup-labels.js');
 const { odataGuid } = require('./lib/ai-app-settings.js');
 const { APP_COMPONENT_ENTITY_SOURCES, appComponentEntities, appComponentRows, currentAppLayer, readAppComponentInventory, downloadAppMainForms, setAppMembershipFloor } = require('./lib/app-components.js');
 
@@ -185,13 +186,16 @@ function adoptDeployedName(rel, deployed, auto, publisherPrefix, prefixUnknown, 
   }
 }
 
-async function readRelationships(sdk, logicals, publisherPrefix, warn, { prefixUnknown = false } = {}) {
+async function readRelationships(sdk, logicals, publisherPrefix, warn, { prefixUnknown = false, entities = [] } = {}) {
   const inApp = new Set((logicals || []).map((l) => String(l).toLowerCase()));
   const lc = (s) => String(s || '').toLowerCase();
   const relationships = [];
   const skipped = [];
   const seen = new Set(); // relationship SchemaName (lower) — a 1:N read from both ends, and every N:N, appears twice
   const parentOk = new Map(); // logical -> can a rebuild target be relied on to have this table?
+  // The Dataverse Label of each stock parent, from the SAME read that decides whether it is stock — so
+  // knowing what a rebuild would label a lookup to it costs no request. See `omitsDefaultLabel` below.
+  const stockLabels = new Map(); // logical -> raw DisplayName
   const note = (name, entity, reason) => {
     skipped.push({ name, entity, reason });
     if (typeof warn === 'function') warn(`relationship '${name}' on '${entity}' is not carried into the spec: ${reason}`);
@@ -210,13 +214,37 @@ async function readRelationships(sdk, logicals, publisherPrefix, warn, { prefixU
     if (parentOk.has(key)) return parentOk.get(key);
     let state = 'unknown';
     try {
-      const res = await sdk.dataverse.get(`/${metadataEntityPath(logical)}?$select=IsCustomEntity`);
+      const res = await sdk.dataverse.get(`/${metadataEntityPath(logical)}?$select=IsCustomEntity,DisplayName`);
       if (res && res.status >= 200 && res.status < 300 && res.body) {
         state = res.body.IsCustomEntity === false ? 'rebuildable' : 'custom';
+        if (res.body.DisplayName) stockLabels.set(key, res.body.DisplayName);
       }
     } catch { state = 'unknown'; }
     parentOk.set(key, state);
     return state;
+  };
+
+  // ADO 6691205: may this lookup's label be left out of the downloaded spec? Only when a rebuild writes (or
+  // repairs it to) the same label for a lookup that sets none, so the downloaded spec stays minimal and a
+  // rebuild reproduces the label. A label that differs is carried, as ever, and so is every label when there
+  // is nothing to compare it with (no downloaded tables passed, or a stock parent whose label was not read):
+  // omitting is a claim about what a rebuild writes.
+  //   * a parent IN the app: its downloaded displayName, string or map, compared whole;
+  //   * a STOCK parent: its label in the one language the lookup's label is written in, because that is the
+  //     language a rebuild writes it in;
+  //   * the OLD DEFAULT an earlier build left on the column — the parent's logical name — is omitted too. It is an
+  //     identifier, never a label anyone chose, and an explicit label is never repaired on a
+  //     rebuild: writing it out would carry the defect through download -> edit -> rebuild for good,
+  //     where leaving it out lets the rebuild repair it (the data-model phase's lookup label repair). The
+  //     lookup's own name is NOT one: that is what the SDK left on a form FIELD it could not resolve, and no
+  //     build ever wrote it on a column, so a column carrying it is somebody's label and is carried.
+  const omitsDefaultLabel = (referenced, lookupLabel, rawLookupLabel) => {
+    if (isOldLookupColumnLabel({ referenced }, lookupLabel)) return true;
+    const lookupLanguages = Object.keys(labelsByLcid(rawLookupLabel));
+    const stockRaw = stockLabels.get(lc(referenced));
+    const live = stockRaw && lookupLanguages.length === 1 ? labelsByLcid(stockRaw)[lookupLanguages[0]] : undefined;
+    const would = lookupLabelFor({ entities }, { referenced }, { liveReferencedLabel: live });
+    return (would.source === 'table' || would.source === 'environment') && sameLabel(lookupLabel, would.label);
   };
 
   for (const logical of logicals || []) {
@@ -285,7 +313,7 @@ async function readRelationships(sdk, logicals, publisherPrefix, warn, { prefixU
       const a = lookups.get(attr);
       const lookup = { schemaName: (a && a.SchemaName) || r.ReferencingAttribute };
       const displayName = a && labelFromDataverse(a.DisplayName);
-      if (displayName) lookup.displayName = displayName;
+      if (displayName && !omitsDefaultLabel(referenced, displayName, a.DisplayName)) lookup.displayName = displayName;
       // Keep the deployed name whenever it is not the one this prefix would generate. Omitting a
       // foreign name used to rename it onto the generated default; the rebuild then created under
       // that name, the CREATE failed because the lookup already existed, and the name search found
@@ -2279,7 +2307,7 @@ async function runDownload({ sdk, genpageCli, outDir, appId, appUnique, allowLos
   try {
     const rel = await readRelationships(sdk, allLogicals, solution.publisherPrefix, (m) => {
       process.stderr.write(`WARNING: ${m}\n`);
-    }, { prefixUnknown });
+    }, { prefixUnknown, entities });
     relationships = rel.relationships;
     relationshipsSkipped = rel.skipped;
   } catch (e) {

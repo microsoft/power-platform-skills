@@ -30,6 +30,7 @@ const { rowOccupancy } = require('./form-occupancy.js');
 const { wantsTimeline, timelineVerifyProblem, FULL_BUILD } = require('./form-timeline.js');
 const { placementOf, resolvePlacement, columnSequence, neighbourOf, tokenLabel, findGridSection, AUTO_TAB_NAME } = require('./form-subgrid-placement.js');
 const { isMainForm, selectDefaultForm, plannedMainFormSequence, displayConditionsOrder, compareServedOrder } = require('./form-order.js');
+const { hasLabelUses, resolveViewFilterLabels, memoizeChoiceReader, describeProblem } = require('./view-filter-labels.js');
 
 // The PER-APP setting each AI feature writes now lives in ./ai-app-settings.js, together with the
 // flag-resolution and override-proof helpers the BUILD uses — see that module for why one source of
@@ -126,6 +127,15 @@ async function verifySpec(spec, read, opts = {}) {
   }
 
   // Views / charts / forms — by (entity, name) identity.
+  //
+  // ADO 6691114: a filter's option LABEL is written as the value the ENVIRONMENT holds for it, so the value
+  // verify expects has to come from there too — against the spec's own 100000000+n numbering, a value the
+  // build resolved live (a global choice that already existed, a column of an existing table) would fail
+  // here although it is exactly right. Reader-gated, as the other content checks are: a reader without
+  // `choiceAttributes` keeps the spec-only expectation. One read per table for the whole pass.
+  const readChoices = typeof read.choiceAttributes === 'function'
+    ? memoizeChoiceReader((entity) => read.choiceAttributes(entity, { languageCode: spec.languageCode }))
+    : null;
   for (const v of spec.views || []) {
     const viewName = `${String(v.entity).toLowerCase()}.${v.name}`;
     // Also select layoutxml so a CONTENT check can catch a spec column the view does not carry (an
@@ -152,21 +162,45 @@ async function verifySpec(spec, read, opts = {}) {
       add('view-columns', viewName, missingCols.length === 0, missingCols.length ? `missing column(s): ${missingCols.join(', ')}` : '');
     }
     if (row && Object.prototype.hasOwnProperty.call(row, 'fetchxml')) {
-      const expected = expectedViewFetchParts(spec, v);
+      const labels = readChoices && hasLabelUses(spec, v) ? await resolveViewFilterLabels(spec, [v], { read: readChoices }) : null;
+      // A label no option answers to cannot be proven deployed — and a deployed value equal to the label's own
+      // text is the very defect — so it is reported by name, with the labels that are valid, instead.
+      const unresolved = labels ? labels.problems : [];
+      // A label whose option metadata could not be READ is not resolved either: what the expectation below holds
+      // for it is only the build's fallback (the spec's numbering, or the label as written), which a deployed
+      // value from the environment may rightly differ from. Where a different value is deployed, that is reported
+      // as UNRESOLVED, with the reason — never as a missing filter, which would call a correct view wrong because
+      // a read failed. Where the fallback IS deployed, it was right, and it verifies; and where the view carries
+      // no condition on the attribute at all, the filter is missing, and is reported as missing.
+      // Keyed `<attribute>|<value>` — the identity a deployed condition is compared by.
+      const guesses = new Map((labels ? labels.inconclusive : []).map((p) => [`${p.attr}|${p.assumed}`, p]));
+      const expected = expectedViewFetchParts(spec, v, labels);
       // Dataverse stores savedquery.fetchxml as the authoritative query content for a system view, so
       // the verifier proves the DEPLOYED predicates/orders rather than trusting the build's intended
       // view definition. Subset semantics are deliberate: Dataverse may add platform-owned predicates
       // that the App Spec never authored, and those must not block a good app.
       // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/savedquery
-      if (!row.fetchxml && (expected.conditions.length || expected.orders.length)) {
-        if (expected.conditions.length) add('view-filters', viewName, false, 'could not read deployed savedquery.fetchxml to prove authored filters');
+      if (!row.fetchxml && (expected.conditions.length || expected.orders.length || unresolved.length)) {
+        if (expected.conditions.length || unresolved.length) add('view-filters', viewName, false, [...unresolved.map(describeProblem), ...(expected.conditions.length ? ['could not read deployed savedquery.fetchxml to prove authored filters'] : [])].join(' | '));
         if (expected.orders.length) add('view-sort', viewName, false, 'could not read deployed savedquery.fetchxml to prove authored sort');
         continue;
       }
       const actual = parseFetchXml(row.fetchxml);
-      if (expected.conditions.length) {
-        const missing = expected.conditions.filter((want) => !actual.conditions.some((got) => conditionMatches(want, got)));
-        add('view-filters', viewName, missing.length === 0, missing.length ? `missing filter(s): ${missing.map(formatCondition).join('; ')}` : '');
+      if (expected.conditions.length || unresolved.length) {
+        const absent = expected.conditions.filter((want) => !actual.conditions.some((got) => conditionMatches(want, got)));
+        // An absent condition is only UNRESOLVED where the view carries SOME condition on that attribute with that
+        // operator — a value that may be the one the failed read would have named. A view with no such condition
+        // at all is missing the filter, whatever the options are, and says so.
+        const unresolvable = (c) => guesses.has(`${c.attribute}|${c.value}`)
+          && actual.conditions.some((got) => got.attribute === c.attribute && got.operator === c.operator);
+        const guessed = absent.filter(unresolvable);
+        const missing = absent.filter((c) => !unresolvable(c));
+        const notes = [
+          ...unresolved.map(describeProblem),
+          ...[...new Set(guessed.map((c) => guesses.get(`${c.attribute}|${c.value}`)))].map(describeProblem),
+          ...(missing.length ? [`missing filter(s): ${missing.map(formatCondition).join('; ')}`] : []),
+        ];
+        add('view-filters', viewName, notes.length === 0, notes.join(' | '));
       }
       if (expected.orders.length) {
         // Sort PRECEDENCE is the whole point of a sort, so membership is not enough: a deployed
@@ -1659,8 +1693,8 @@ function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function expectedViewFetchParts(spec, view) {
-  const def = viewDef(spec, view);
+function expectedViewFetchParts(spec, view, resolution) {
+  const def = viewDef(spec, view, resolution);
   const conditions = [];
   const walk = (group) => {
     for (const c of (group && group.conditions) || []) {
@@ -1677,7 +1711,10 @@ function expectedViewFetchParts(spec, view) {
     attribute: String(s.attribute || '').toLowerCase(),
     descending: s.descending === true,
   }));
-  return { conditions: conditions.filter((c) => c.attribute && c.operator), orders };
+  // A label the environment could not resolve stays in `def` as the text it was written with; it is no
+  // expectation of what is deployed, and the caller reports it as a problem of its own.
+  const unresolved = new Set(((resolution && resolution.problems) || []).map((p) => `${p.attr}|${p.label}`));
+  return { conditions: conditions.filter((c) => c.attribute && c.operator && !unresolved.has(`${c.attribute}|${c.value}`)), orders };
 }
 
 function xmlDecode(value) {

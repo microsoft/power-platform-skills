@@ -9,7 +9,7 @@ const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
 const { validateProvisionInput } = require('./lib/provision-input.js');
-const { makeRunner, provisionSolution, provisionDataModel, provisionSampleData } = require('./lib/entity-provision.js');
+const { makeRunner, provisionSolution, provisionDataModel, provisionSampleData, relationshipsInCreateOrder } = require('./lib/entity-provision.js');
 const { quickCreateEnabledFor, normalizeLanguageCode } = require('./lib/app-spec.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, readProvisionedLanguages } = require('./lib/dataverse-auth.js');
@@ -112,7 +112,9 @@ function buildPlan(input, opts) {
     }
   }
   
-  for (const rel of input.relationships || []) {
+  // In the order the apply creates them — a lookup labelled in several languages goes first — so the plan lists
+  // the steps in the order the run takes them (lib/entity-provision.js relationshipsInCreateOrder).
+  for (const rel of relationshipsInCreateOrder(input)) {
     if (rel.type === 'OneToMany') {
       plan.push(`relationship 1:N ${rel.referenced}->${rel.referencing}`);
     } else if (rel.type === 'ManyToMany') {

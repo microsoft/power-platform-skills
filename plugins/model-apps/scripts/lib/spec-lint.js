@@ -8,6 +8,7 @@ const { normalizeSpecShape } = require('./spec-shape.js');
 const { resolveSurfaces, unresolvedSurfaceMessage } = require('./surface-resolver.js');
 const { nearestName } = require('./nearest-name.js');
 const { isAppSourcePath } = require('./app-source-path.js');
+const { labelLintWarnings } = require('./view-filter-labels.js');
 
 const CHOICE_OPTION_WARN = 12;
 const SEQNUM_RE = /\{SEQNUM(:\d+)?\}/i;
@@ -458,6 +459,9 @@ function lintAppSpec(spec) {
         W(`View '${v.name}' has the same name as ${ve.schemaName}'s stock default view — it will MERGE onto that default (columns are unioned and the stock "Created On" is kept, but its filters/sort are ignored). Use a distinct name to author a separate view.`);
       }
     }
+    // ADO 6691114: offline, a label can only be checked against what the spec declares. Say when one will
+    // be checked against the environment at build time instead, so the author is not surprised by the halt.
+    for (const w of labelLintWarnings(spec, v)) W(w);
     for (const f of v.filters || []) {
       if (!f.attr) { E(`View '${v.name}' has a filter without an attr`); continue; }
       const op = f.op || 'eq';

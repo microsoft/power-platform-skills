@@ -551,6 +551,38 @@ list with "reach for it when…" guidance.
   "lookup": { "schemaName": "new_CustomerId", "displayName": "Customer" } }
 ```
 - `referenced` = the "one" (parent); `referencing` = the "many" (child, gets the lookup column).
+- **`lookup.displayName`** labels the lookup column — in the table's column list, in views, and on the
+  form field that carries it. Omit it and the lookup is labelled like the table it points at, as the
+  maker portal does ("Project" for a lookup to `new_project`), in this order:
+  1. the `displayName` you set — a plain string, or a language-code map — which always wins;
+  2. the referenced table's own `displayName` when `entities[]` declares it. A language-code map
+     stays a map, so the column carries one label per language;
+  3. for a parent whose name the spec cannot give — a table it does not declare (`account`, `contact`,
+     `systemuser`…), or one it declares **without** a `displayName` that the build did not create (an
+     `"existing": true` `incident` is "Case", not "Incident"): the display name the environment reports for
+     it, read when the lookup is created;
+  4. a humanized form of the table's name (`contoso_ProjectPhase` → "Project Phase"), only when
+     nothing above applies — an offline surface, a read that failed, or a table the spec declares
+     with no `displayName` and the build creates.
+
+  Offline surfaces (the plan, the previews, `app-spec.md`) never ask the environment, so wherever
+  step 3 applies they show step 4; the column itself is labelled by step 3. Where the build may find a
+  declared parent that has no `displayName` already there, the plan says so ("`Project`, or the label from
+  the environment if `new_project` is already there"). Relationships whose lookup label is a language-code map
+  are created before the others, in the order the plan lists them.
+- **A rebuild repairs only the old default.** Builds used to label an omitted `lookup.displayName`
+  with the parent's *logical name* (`new_project`), and a form field the SDK could not resolve the
+  column for with the lookup's own logical name (`new_projectid`). A rebuild relabels such a lookup column — and
+  the form field the build's auto layout labelled with it — to the default above only when the spec omits
+  `lookup.displayName` **and** the deployed label is exactly the old default (case counts, so a correct
+  "Contact" is never mistaken for one): for the column, the parent's lower-case logical name in a single
+  language, which is the one the build writes; for a form field, that name or the lookup's own lower-case
+  logical name. A column labelled with the lookup's own name was labelled by a person, so it is kept. An old
+  default in
+  another language is left alone, with a warning: a write in the build's language would leave two, one
+  of them still the identifier. A label a maker chose in the designer is never touched, and neither
+  is one the spec sets explicitly. A form field that still holds the old default follows the column's
+  current label, whatever that is.
 - The relationship's schema name defaults to `<referenced>_<referencing>` and **must differ**
   from `lookup.schemaName` (Dataverse rejects a collision — `lintAppSpec` flags this, so
 `scripts/lint-app-spec.js` catches it before you deploy; note the build itself does **not**
@@ -580,7 +612,10 @@ run the lint, so an unlinted spec hits the failure at build time instead).
 
 **What a download reconstructs.** `download-model-app.js` rebuilds `relationships[]` from live
 metadata, keeping the lookup's deployed casing (`new_CustomerId`, not `new_customerid`) and its
-label. It emits an explicit `schemaName` whenever the deployed name is not the one this
+label. The label is left out when it is the default a rebuild would write (the parent
+table's display name) or the old default an earlier build left on it (the parent's logical name, which
+a rebuild repairs — an explicit label is never repaired, so writing the identifier out would keep it for
+good), so a downloaded spec stays minimal; a label that differs is written out as it is. It emits an explicit `schemaName` whenever the deployed name is not the one this
 solution's prefix would generate, including a name that uses another publisher's prefix. Omitting
 that name would make a rebuild into the **same** environment create under a different name and
 fail on the lookup that already exists. A foreign-prefix name is a lint warning: a new environment
@@ -613,7 +648,7 @@ why they need naming here at all.
   // optional rich filters (beyond the default active-records condition):
   "filters": [
     { "attr": "ownerid", "op": "eq-userid" },                       // "my" records — no value
-    { "attr": "new_priority", "op": "not-in", "values": ["Low"] },  // multi-value (Choice labels resolve to ints)
+    { "attr": "new_priority", "op": "not-in", "values": ["Low"] },  // multi-value (Choice labels resolve to option values)
     { "attr": "new_duedate", "op": "this-week" }                    // relative-date — no value
   ] }
 ```
@@ -626,9 +661,83 @@ why they need naming here at all.
 - `activeOnly` (default `true`) adds `statecode eq 0`. `filters[]` add conditions: `op` is any
   FetchXML operator — `eq`/`ne`/`lt`/`le`/`gt`/`ge`/`like`, no-value ops (`eq-userid`, `null`,
   `not-null`, `this-week`/`this-month`/`today`/…), and multi-value `in`/`not-in` (use `values[]`).
-  Choice **labels** in `value`/`values` resolve to option ints. This is what "My Open Orders"
+  Choice **labels** in `value`/`values` resolve to option values, as described next. This is what "My Open Orders"
   (`ownerid eq-userid` + `new_status not-in [Completed, Cancelled]`) and "Completed This Week"
   (`new_status eq Completed` + `modifiedon this-week`) need — no post-build FetchXML patching.
+- **A Choice label in a filter is resolved against the environment, not guessed.** `value` (or `values[]`)
+  of `eq`/`ne`/`neq`/`in`/`not-in`, and of `contain-values`/`not-contain-values` on a multi-select,
+  may name an option by its label — in any language the option has — or by its integer value. Only
+  the environment knows the numbers. A filter on a column of a table you reuse (`account.industrycode`, a
+  local option set — or a column bound to a system global choice) needs no column declared for it: the label
+  is resolved from the environment, where an unresolved label used to reach Dataverse as text and be rejected
+  part-way through the build. A declared global choice that already existed with other values than the spec
+  lists holds the environment's numbers too. (A column bound to a global choice that `globalChoices[]` does
+  not declare is a lint error, and stays one.) So the build reads the column's options from the environment
+  (a table is read at most twice per build — once before anything is written, once in the views phase, see
+  below) and resolves the label there. Only where the environment cannot say — the
+  table is not there yet, or the read failed — does a declared Choice column fall back to the options the spec
+  declares (inline, or a declared `globalChoices[]`, numbered from 100000000), and the build then warns, since
+  that numbering is right only for an option set this build created. (A column bound to a declared global
+  choice is first resolved from the global choice itself, which the build reads by name; the spec's numbering
+  is the last resort.) The rules:
+  - an **integer** — or a comma-separated list of integers, the form a multi-select takes — is an option
+    value and is used as written, with no read;
+  - a label that matches **no option stops the build**, naming the view, the column and the valid labels (the
+    first 25, then a count). It is never sent as a value. Every unresolved label of every view is reported in
+    the one halt. The one exception is a column whose options **your spec numbers** — `options[]` on the
+    column, or a global choice that `globalChoices[]` declares (100000000 + index): where the environment has
+    no option with that label but has an option on the number your spec gives it — a maker renamed "Gold" to
+    "Gold Tier", or a translation never reached the environment — the build uses that number and warns that
+    it is taking that option to be the one you meant. It never does so where the environment shows the
+    numbering is not yours: an option on that number that goes by the name of another option of yours, or a
+    label of your spec that the environment carries only on other numbers *and that shows the numbering moved* —
+    the label is one of the labels of the option you filter on (in any language), or it sits on a number your spec gives
+    another option (you inserted or reordered options after the column was built — a rebuild does not change an
+    existing column's options — or another app created the column or the global choice in another order). A label
+    on a number your spec does not use at all is an option a maker added or re-made elsewhere, and does not count
+    against your numbers. Those, and any label with no option on its number, still stop the build, and the
+    message says why your number was not used (*The spec numbers "Gold" 100000001, but the environment shows
+    another numbering ("Bronze" is numbered 100000003 there, 100000002 in the spec), so that number is not
+    used.*). That check ignores the case of a label; resolving a label still takes its exact text. Where
+    nothing the environment carries contradicts your number — every option renamed, say — the build uses it,
+    as it always did, and the warning is the only trace: use the option's integer value to take the choice out of
+    the build's hands;
+  - a label that names **more than one option** (the same text on two options, in different languages) stops
+    the build too — use the integer of the one you mean — unless the number your spec gives that label is
+    one of those options (a maker added a second option with the same text): the build then uses that one
+    and warns;
+  - on a column the spec does not declare that the environment says is not a Choice column (a text filter),
+    the value is used as written; if the environment cannot be read, the value is used as written with a
+    warning, since it cannot be told apart;
+  - a view that already exists keeps its filters (below), so an unresolvable label on it does not stop
+    the build — `verify-model-app` reports it.
+- **It stops before the build writes anything, where it can.** An apply that writes the solution or the data
+  model first checks every label the environment can already answer, so a typo is reported while nothing has
+  been written — not after the tables and columns have been. That covers a column the environment already has
+  (its options are final: the build leaves an existing column alone), a column the spec declares and the
+  environment lacks (the build creates it from the spec's options — or, bound to a declared global choice
+  that already exists, from the environment's copy of it), and the data stage of a staged build. A label that
+  depends on what the build is about to create — a status reason it inserts, a column of a table it makes —
+  cannot be known yet, so it is checked again in the views phase, once the data model exists, and no view is
+  written on a label that fails there. **A spec with a localized label** (any `displayName`, option or
+  lookup label written as a language-code map) is checked **only** in the views phase: reading option
+  labels ahead of creating a multi-language label can leave Dataverse with only its base-language
+  version, and a typo in a filter is not worth that risk. The check still comes before any view is written;
+  it comes after the tables and columns instead of before them.
+- **The checks around it.** The dry run (build without `--apply`) asks the same question and reports a view
+  the build would create whose label cannot be resolved as `? unknown`, with the reason, and counts it in its
+  summary as one that *would stop the build* rather than one it could not read. It also says, as a warning,
+  what the apply will say: the assumption made for a renamed option, once; and for a view that already exists,
+  which stays `reuse`, that its filters are left as they are and `verify-model-app` will report a label that
+  names no option.
+  `verify-model-app` expects the value the environment gives the label, so a view the build resolved live
+  verifies, and a label that resolves to nothing fails `view-filters` with the valid labels. A label whose
+  options verify could not read is reported as unresolved, with the reason, rather than as a missing filter —
+  unless the view has no condition on that column at all, which is reported as missing.
+  `lint-app-spec`
+  is offline and can only check what the spec declares: it says nothing for a label the spec's own options
+  prove, and warns that the label is *checked against the environment at build time* for a label that is not
+  among the declared options and for a column the spec does not declare.
 - **Default-view enrichment (automatic):** the auto-generated **"Active &lt;Entity&gt;"** and
   **"Inactive &lt;Entity&gt;"** system views ship with only the primary column. The build enriches
   them with the primary column plus up to 6 meaningful declared columns (in declared order, skipping

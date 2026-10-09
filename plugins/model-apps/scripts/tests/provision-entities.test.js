@@ -125,6 +125,54 @@ test('dry-run plan includes non-trivial provision steps and skips non-actions', 
   ]);
 });
 
+test('dry-run plan lists the relationships in the order the apply creates them — a lookup labelled in several languages first', async () => {
+  // The plan used to follow the declared order while the apply creates a lookup with a language-map label before
+  // the others (lib/entity-provision.js relationshipsInCreateOrder), so the two disagreed whenever a spec — which
+  // this entry point accepts as well — gave one of them an LCID map.
+  const bilingual = {
+    solution: { uniqueName: 'Default', publisherPrefix: 'cr' },
+    entities: [
+      { schemaName: 'cr_parent', displayName: 'Parent', primaryAttribute: { schemaName: 'cr_name' }, columns: [] },
+      { schemaName: 'cr_child', displayName: 'Child', primaryAttribute: { schemaName: 'cr_name' }, columns: [] },
+      { schemaName: 'cr_other', displayName: 'Other', primaryAttribute: { schemaName: 'cr_name' }, columns: [] },
+    ],
+    relationships: [
+      { type: 'ManyToMany', schemaName: 'cr_parent_child_nn', entity1: 'cr_parent', entity2: 'cr_child' },
+      { type: 'OneToMany', schemaName: 'cr_parent_children', referenced: 'cr_parent', referencing: 'cr_child', lookup: { schemaName: 'cr_parentid' } },
+      { type: 'OneToMany', schemaName: 'cr_other_children', referenced: 'cr_other', referencing: 'cr_child', lookup: { schemaName: 'cr_otherid', displayName: { 1033: 'Other', 3082: 'Otro' } } },
+    ],
+  };
+  const dry = await provisionEntities(bilingual, { apply: false }, mockDeps());
+  assert.deepStrictEqual(dry.plan.filter((p) => /^relationship /.test(p)), [
+    'relationship 1:N cr_other->cr_child',
+    'relationship N:N cr_parent<->cr_child',
+    'relationship 1:N cr_parent->cr_child',
+  ]);
+
+  const d = mockDeps();
+  const created = [];
+  d.sdk.createRelationship = async (o) => { created.push(o.schemaName); return { schemaName: o.schemaName, metadataId: `rel-${o.schemaName}` }; };
+  const applied = await provisionEntities(bilingual, { apply: true }, { sdk: d.sdk, provision: d.provision, provisionedLanguages: [1033, 3082] });
+  assert.strictEqual(applied.ok, true, JSON.stringify(applied));
+  assert.deepStrictEqual(created, ['cr_other_children', 'cr_parent_child_nn', 'cr_parent_children'], 'the apply creates them in the order the plan lists');
+});
+
+test('a spec with no language-map lookup label keeps the declared order in the plan', async () => {
+  const plain = {
+    solution: { uniqueName: 'Default', publisherPrefix: 'cr' },
+    entities: [
+      { schemaName: 'cr_parent', displayName: 'Parent', primaryAttribute: { schemaName: 'cr_name' }, columns: [] },
+      { schemaName: 'cr_child', displayName: 'Child', primaryAttribute: { schemaName: 'cr_name' }, columns: [] },
+    ],
+    relationships: [
+      { type: 'ManyToMany', schemaName: 'cr_parent_child_nn', entity1: 'cr_parent', entity2: 'cr_child' },
+      { type: 'OneToMany', schemaName: 'cr_parent_children', referenced: 'cr_parent', referencing: 'cr_child', lookup: { schemaName: 'cr_parentid' } },
+    ],
+  };
+  const dry = await provisionEntities(plain, { apply: false }, mockDeps());
+  assert.deepStrictEqual(dry.plan.filter((p) => /^relationship /.test(p)), ['relationship N:N cr_parent<->cr_child', 'relationship 1:N cr_parent->cr_child']);
+});
+
 test('apply surfaces fallback metadata for existing columns and relationships', async () => {
   const existingInput = {
     solution: { uniqueName: 'Default', publisherPrefix: 'cr' },

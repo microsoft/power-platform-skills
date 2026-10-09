@@ -5,7 +5,7 @@
 // interactive authoring turn before approving it. Pure (no I/O); the CLI is preview-form.js.
 const { compileFormIntent } = require('./artifact-intent.js');
 const { entityByLogical } = require('./_graph.js');
-const { labelText, formLayoutNames } = require('./app-spec.js');
+const { labelText, formLayoutNames, lookupColumnsFor } = require('./app-spec.js');
 const { splitSubgrids, columnItems } = require('./form-subgrid-placement.js');
 
 const INNER = 63; // content width inside the box borders
@@ -65,11 +65,15 @@ const BOTTOM = `└${'─'.repeat(INNER + 2)}┘`;
 // Display label for a field logical name. compileFormIntent emits push-ready cells that OMIT the
 // label (the SDK adapter derives it from attribute metadata at push, per T4), so the preview
 // resolves the display name itself from the spec entity (falling back to the logical name).
-function labelFor(entity, fn, lang) {
+//
+// A relationship's lookup is not in entities[].columns, so `lookups` (logical -> label, from
+// lookupColumnsFor — the same rule the build labels the column by) answers for it; without that a
+// lookup field read as its logical name here, which is exactly the label the bug put on the real form.
+function labelFor(entity, fn, lang, lookups) {
   if (!entity) return fn;
   if (entity.primaryAttribute && entity.primaryAttribute.schemaName.toLowerCase() === fn) return labelText(entity.primaryAttribute.displayName, lang) || 'Name';
   const c = (entity.columns || []).find((x) => x.schemaName.toLowerCase() === fn);
-  return (c && (labelText(c.displayName, lang) || c.schemaName)) || fn;
+  return (c && (labelText(c.displayName, lang) || c.schemaName)) || (lookups && lookups.get(fn)) || fn;
 }
 
 // The authored, non-default state of one cell, as the suffix that is appended to its label.
@@ -99,12 +103,12 @@ function stateTag(cell) {
 //
 // When even that is not enough — the tag alone is wider than the column — the ROW renderer stacks
 // the cells at full width instead of calling this with an impossible `avail`.
-function fieldLabel(entity, cell, lang, avail) {
+function fieldLabel(entity, cell, lang, avail, lookups) {
   const fn = cell.control.fieldName;
   const req = cell.control.isRequired ? ' *' : '';
   const widget = WIDGET[fieldType(entity, fn)] || WIDGET.Text;
   const tag = stateTag(cell);
-  const name = cell.control.label || labelFor(entity, fn, lang);
+  const name = cell.control.label || labelFor(entity, fn, lang, lookups);
   const full = `${name}${req}${tag}  ${widget}`;
   if (!tag || !avail || vwidth(full) <= avail) return full;
   const noWidget = `${name}${req}${tag}`;
@@ -115,6 +119,8 @@ function fieldLabel(entity, cell, lang, avail) {
 // Render one form to an ASCII wireframe string.
 function renderFormWireframe(spec, f) {
   const entity = entityByLogical(spec, f.entity || '');
+  // logical -> label for the table's relationship lookups, which are not in entities[].columns.
+  const lookups = new Map(lookupColumnsFor(spec, f.entity || '').map((l) => [l.logical, l.displayName]));
   // compileFormIntent is the single source of form topology (new SDK shape
   // tabs[].columns[].sections[]). notesClassId is irrelevant to the preview (it keys the notes
   // section by name, not classId), so a placeholder is fine.
@@ -186,13 +192,13 @@ function renderFormWireframe(spec, f) {
           const mustStack = cells.length > 1 && cells.some((c) => stateTag(c) && needed(c) > colW);
           if (mustStack) {
             for (const c of cells) {
-              lines.push(row(clip(`  ${fieldLabel(entity, c, spec && spec.languageCode, INNER - 2)}`, INNER)));
+              lines.push(row(clip(`  ${fieldLabel(entity, c, spec && spec.languageCode, INNER - 2, lookups)}`, INNER)));
             }
             continue;
           }
           // `colW - 2` is the room left after the two-space cell indent below, and is what
           // fieldLabel needs in order to protect the state annotation from being clipped.
-          const parts = cells.map((c) => vpad(clip(`  ${fieldLabel(entity, c, spec && spec.languageCode, colW - 2)}`, colW), colW));
+          const parts = cells.map((c) => vpad(clip(`  ${fieldLabel(entity, c, spec && spec.languageCode, colW - 2, lookups)}`, colW), colW));
           lines.push(row(parts.join('')));
         }
       }

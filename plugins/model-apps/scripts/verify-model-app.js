@@ -25,6 +25,7 @@ const { makeGenpageCli } = require('./lib/genpage-cli.js');
 const { assertSafeOutputDir } = require('./lib/safe-fs.js');
 const { depthFromMask } = require('./lib/role-privileges.js');
 const { appEntityComponentsFor, appMainFormsFor, appComponentRows } = require('./lib/app-components.js');
+const { readChoiceAttributes } = require('./lib/view-filter-labels.js');
 
 // An SDK on a THROWAWAY workspace — a temporary folder `dispose()` removes — and never on the app folder's own.
 //
@@ -180,6 +181,12 @@ function readerFor(sdk, appUnique, opts) {
     // 404 the SDK emits on an environment where the preview is not provisioned, which verify-spec
     // interprets (it must stay distinguishable from the legitimate 'None' answer).
     columnVisualization: async (logical, columnLogical) => sdk.getColumnVisualization(String(logical).toLowerCase(), String(columnLogical).toLowerCase()),
+    // choiceAttributes(entity, { languageCode }): the table's choice columns with every option and every
+    // language of its labels — what the build resolves a view filter's option LABEL against, so verify expects
+    // the value the build wrote (lib/view-filter-labels.js). Raw client like the relationship reads below, for
+    // the reason that module gives. It never throws: a read that fails answers { state: 'error' }, which verify
+    // reports as a label it could not resolve.
+    choiceAttributes: (logical, o) => readChoiceAttributes(sdk.dataverse, logical, o || {}),
     queryRecords: (set, o) => sdk.queryRecords(set, o),
     // entityRelationships(childLogical): detailed rows for the relationship check. ManyToOne is
     // the 1:N seen from the child; ManyToMany is read from entity1. A failed read throws so

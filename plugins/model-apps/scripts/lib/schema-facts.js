@@ -6,7 +6,7 @@
 // offline eval harness diffs per build. Pure (no I/O, no SDK): it derives everything deterministically
 // from the App Spec, reusing the SAME naming/value rules the engine uses, so a fact equals what WOULD
 // be provisioned — not a naive spec echo. See docs/app-builder-design.md §13.2, §14.
-const { columnTypeMap, choiceValueMap, relationshipSchemaName, manyToManySchemaName, quickCreateEnabledFor, labelText } = require('./app-spec.js');
+const { columnTypeMap, choiceValueMap, relationshipSchemaName, manyToManySchemaName, quickCreateEnabledFor, labelText, lookupLabelFor } = require('./app-spec.js');
 
 const lc = (s) => String(s || '').toLowerCase();
 const byKey = (k) => (a, b) => (a[k] < b[k] ? -1 : a[k] > b[k] ? 1 : 0);
@@ -70,7 +70,9 @@ function relationshipFacts(spec) {
   for (const r of spec.relationships || []) {
     if (r.type === 'OneToMany') {
       rels.push({ kind: '1:n', schemaName: lc(relationshipSchemaName(r, prefix)), referenced: lc(r.referenced), referencing: lc(r.referencing),
-        lookup: { logicalName: lc(r.lookup && r.lookup.schemaName), displayName: labelText(r.lookup && r.lookup.displayName, spec && spec.languageCode) || '' } });
+        // The label the build WRITES, not the one the author typed: an omitted lookup.displayName defaults
+        // to the parent table's name (lookupLabelFor), so a fact that echoed the spec would be empty.
+        lookup: { logicalName: lc(r.lookup && r.lookup.schemaName), displayName: labelText(lookupLabelFor(spec, r).label, spec && spec.languageCode) || '' } });
     } else if (r.type === 'ManyToMany') {
       const fact = { kind: 'n:n', schemaName: lc(manyToManySchemaName(r, prefix)), entity1: lc(r.entity1), entity2: lc(r.entity2) };
       if (r.intersectEntityName) fact.intersect = lc(r.intersectEntityName);
