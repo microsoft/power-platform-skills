@@ -71,12 +71,44 @@ function labelFor(entity, fn, lang) {
   return (c && (labelText(c.displayName, lang) || c.schemaName)) || fn;
 }
 
-// "Label * [widget]" for one field cell.
-function fieldLabel(entity, cell, lang) {
+// The authored, non-default state of one cell, as the suffix that is appended to its label.
+// `compileFormIntent` writes only the NON-default state (see artifact-intent.js): a hidden cell gets
+// `cell.visible = false` and a read-only one `control.isReadOnly = true`; the visible/editable
+// defaults are never emitted. So presence of the flag is the signal, and `isReadOnly: false` never
+// appears to be mistaken for an authored read-write intent.
+//
+// Shared with the row renderer, which needs the tag's WIDTH to decide whether a row must be stacked
+// — deriving it twice is how the two would drift apart.
+function stateTag(cell) {
+  const state = [];
+  if (cell.visible === false) state.push('hidden');
+  if (cell.control && cell.control.isReadOnly) state.push('read-only');
+  return state.length ? ` (${state.join(', ')})` : '';
+}
+
+// "Label * (state)  [widget]" for one field cell.
+//
+// State is placed BEFORE the widget deliberately, and `avail` (the cell's rendered width) lets this
+// protect the state further. Cells are clipped to the column width and `clip()` truncates the END,
+// so an annotation appended after the widget is exactly what gets cut. Ordering alone is still not
+// enough: with a long display name the annotation itself is what gets cut, producing "(read-o…" — a
+// half-printed state flag, which is the silent-state failure this annotation exists to prevent. A
+// truncated LABEL stays recognisable; a truncated state does not. So the decorative widget hint is
+// surrendered first, the name is truncated after that, and the state is never truncated.
+//
+// When even that is not enough — the tag alone is wider than the column — the ROW renderer stacks
+// the cells at full width instead of calling this with an impossible `avail`.
+function fieldLabel(entity, cell, lang, avail) {
   const fn = cell.control.fieldName;
   const req = cell.control.isRequired ? ' *' : '';
   const widget = WIDGET[fieldType(entity, fn)] || WIDGET.Text;
-  return `${cell.control.label || labelFor(entity, fn, lang)}${req}  ${widget}`;
+  const tag = stateTag(cell);
+  const name = cell.control.label || labelFor(entity, fn, lang);
+  const full = `${name}${req}${tag}  ${widget}`;
+  if (!tag || !avail || vwidth(full) <= avail) return full;
+  const noWidget = `${name}${req}${tag}`;
+  if (vwidth(noWidget) <= avail) return noWidget;
+  return `${clip(name, Math.max(1, avail - vwidth(`${req}${tag}`)))}${req}${tag}`;
 }
 
 // Render one form to an ASCII wireframe string.
@@ -126,7 +158,26 @@ function renderFormWireframe(spec, f) {
           const cells = (r.cells || []).filter((c) => c.control && c.control.fieldName);
           if (!cells.length) continue;
           const colW = Math.floor((INNER - 3) / Math.max(1, cells.length));
-          const parts = cells.map((c) => vpad(clip(`  ${fieldLabel(entity, c, spec && spec.languageCode)}`, colW), colW));
+          // STACK rather than truncate a state tag. Adversarial review caught the width-priority
+          // ordering in fieldLabel() being necessary but not sufficient: once the tag ALONE is wider
+          // than the column, reserving "at least one name character" still leaves the tag itself to
+          // be eaten by clip(). ` (hidden, read-only)` needs 20 columns; a three-column row gives 18
+          // and a four-column row 13, so the approval gate went back to showing `(hidden, read-o…`.
+          //
+          // When that happens the row is rendered one cell per line at full width, which keeps the
+          // state intact at the cost of the side-by-side depiction. The wireframe exists to report
+          // what will deploy, so a less pretty row beats a row that misreports state.
+          const needed = (c) => vwidth(`  ${stateTag(c)}`) + 1; // + 1 char of name
+          const mustStack = cells.length > 1 && cells.some((c) => stateTag(c) && needed(c) > colW);
+          if (mustStack) {
+            for (const c of cells) {
+              lines.push(row(clip(`  ${fieldLabel(entity, c, spec && spec.languageCode, INNER - 2)}`, INNER)));
+            }
+            continue;
+          }
+          // `colW - 2` is the room left after the two-space cell indent below, and is what
+          // fieldLabel needs in order to protect the state annotation from being clipped.
+          const parts = cells.map((c) => vpad(clip(`  ${fieldLabel(entity, c, spec && spec.languageCode, colW - 2)}`, colW), colW));
           lines.push(row(parts.join('')));
         }
       }

@@ -7,6 +7,8 @@ allowed-tools: Read, Bash, Glob, Grep, AskUserQuestion
 model: haiku
 ---
 
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.
+
 **📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read this first.
 
 # Report Issue — mobile-app
@@ -53,7 +55,7 @@ node --version
 npm --version
 node scripts/resolve-environment.js "$(node -e \"console.log(require('./power.config.json').environmentId)\")" 2>/dev/null || true
 az --version 2>/dev/null | head -1
-npx expo --version 2>/dev/null
+npx --no-install expo --version 2>/dev/null
 uname -srm
 ```
 
@@ -98,13 +100,19 @@ echo "ANDROID_HOME=$ANDROID_HOME"
 
 **Telemetry checkpoint: `collect_issue_diagnostics`**
 
-Run `npx expo doctor` and capture the text output verbatim.
+Run `npx --no-install expo doctor` and capture the text output verbatim.
+
+Ask for the affected workflow's Support ID when available. Use the telemetry
+helper's read-only `--report` mode from the affected project to inspect only its
+allowlisted timeline. Include the Support ID and relevant step/error category in
+the issue body, not environment, tenant, or organization IDs. Do not
+upload the telemetry directory or raw timing/authentication files.
 
 If the user pasted an error, capture verbatim. Otherwise look for recent failure signals:
 
 - Last 50 lines of any Metro / Gradle / Xcode log if user mentions a build failure
 - `git status --short` if in a git repo (to show modified files — sanitize for secrets first)
-- Output of `npx tsc --noEmit` if relevant
+- Output of `npx --no-install tsc --noEmit` if relevant
 
 **Do NOT capture:**
 - Contents of `src/playerConfig.ts` (contains tenantId / clientId — sensitive)
@@ -112,6 +120,8 @@ If the user pasted an error, capture verbatim. Otherwise look for recent failure
 - Connection IDs unless the user explicitly opted in (PII / can map to tenant)
 - Anything under `node_modules/`
 - Package source excerpts, patched package contents, or proposed fork code
+- Tenant/environment/organization IDs in a public issue, even though verified
+  IDs can exist in access-controlled telemetry
 
 ### Step 4 — Render issue body
 
@@ -150,11 +160,12 @@ Print this block — user copies into a new issue:
 ### Project context
 
 <if in project>
-- Project: `<name>` v`<version>`
-- Power Platform env: `<env-id>`
+- Mobile project detected: yes
+- Support ID: `<affected workflow run GUID, or unavailable>`
+- Failed step / error category: `<registered step and fixed category, or unknown>`
 - Memory bank present: <yes/no>
 - Plan present: <yes/no>
-- Connectors registered: <list from src/generated/services>
+- Connector count: <count, not generated service or business-table names>
 </if>
 
 <if not in project>

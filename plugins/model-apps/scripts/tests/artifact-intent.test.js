@@ -744,10 +744,16 @@ test('explicit layout: multi-column tabs split width evenly unless authored', ()
   assert.deepStrictEqual(cols.map((c) => c.sections[0].name), ['section_0_0', 'section_0_1_0', 'section_0_2_0']);
 });
 
-test('fieldCellIntent writes a span only ABOVE the adapter default, even when handed the default', () => {
-  // normalizeFieldEntry already folds <=1 to undefined, so this guards the OTHER callers: emitting
-  // colspan="1" on every ordinary cell would overwrite a span widened by hand in the designer.
-  assert.ok(!('colspan' in fieldCellIntent('new_name', { colspan: 1 })), 'colspan 1 is the default and must not be written');
-  assert.ok(!('rowspan' in fieldCellIntent('new_name', { rowspan: 1 })), 'rowspan 1 is the default and must not be written');
+test('fieldCellIntent writes a span the author EXPRESSED, including an explicit 1', () => {
+  // The real asymmetry is OMISSION vs VALUE, not 1 vs >1. An ordinary cell never passes a span at
+  // all, so the "don't overwrite a hand-widened designer span" concern is served by omission — and
+  // it is asserted below. Folding an explicit 1 to undefined additionally made a RESET
+  // unrepresentable: 2 -> 1 compiled to "no colspan" and the deployed cell stayed at 2.
+  assert.strictEqual(fieldCellIntent('new_name', { colspan: 1 }).colspan, 1, 'an explicit 1 is a claim and must be written');
+  assert.strictEqual(fieldCellIntent('new_name', { rowspan: 1 }).rowspan, 1);
   assert.strictEqual(fieldCellIntent('new_name', { colspan: 3 }).colspan, 3);
+  // The concern the old rule was protecting, stated directly: saying NOTHING must write nothing.
+  assert.ok(!('colspan' in fieldCellIntent('new_name', {})), 'omission must not emit a span');
+  assert.ok(!('rowspan' in fieldCellIntent('new_name', {})), 'omission must not emit a span');
+  assert.ok(!('colspan' in fieldCellIntent('new_name', { colspan: undefined })), 'an undefined span is omission');
 });

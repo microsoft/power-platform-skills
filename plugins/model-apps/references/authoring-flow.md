@@ -33,9 +33,8 @@ outcomes — because the eval harness greps the log for these tokens. Concretely
   `AskUserQuestion` is required.
 - The plan-presentation call is recorded as `EnterPlanMode called` followed
   by the user's response (`approved` / `revised`).
-- The PAC CLI version output is recorded explicitly (the assertion checks
-  for `>= 2.7.0`-shaped text — `PAC CLI Version 2.7.x` is the canonical
-  form).
+- The PAC CLI version output is recorded explicitly (the assertion parses the recorded version and
+  requires `> 2.10.0`, e.g. `PAC CLI Version 2.11.0`; an older pac fails).
 
 Decisions and outcomes can be summarized at the end of the section, but they
 do **not** substitute for command-level entries. See an existing fixture
@@ -55,8 +54,8 @@ node --version
 pac help
 ```
 
-`pac help` output includes the version number. Verify the version is **>= 2.7.0**
-(required for `pac model create` support). If the version is older, instruct the
+`pac help` output includes the version number. Verify the version is **> 2.10.0**
+(the plugin's minimum; see the README prerequisites). If the version is older, instruct the
 user to update: `dotnet tool update --global Microsoft.PowerApps.CLI.Tool`.
 
 If either command fails, inform the user and provide installation instructions.
@@ -283,11 +282,19 @@ so you ask once and use the answer twice:
     "jobs": [
       { "name": "Assign incoming work", "description": "Triage new work orders and route them to a technician" },
       { "name": "Watch today's queue",  "description": "See at a glance what is overdue, unassigned, or at risk" }
-    ] }
+    ],
+    "excludes": ["Approving budgets — handled in the Finance app"] }
 ]
 ```
 
 `privileges[]` is **not** filled in yet — entities don't exist until Level (a). Level (c) adds it.
+
+**Capture what the app deliberately leaves out**, too, in `excludes[]`. When the user rules
+something out — "dispatchers don't approve anything", "we won't touch invoicing here" — that is a
+scope decision, and it renders into the design document as **Deliberately out of scope** beside the
+traceability table. Two apps built over the same tables are told apart by what each declines to do,
+and an omission the reviewer was never shown cannot be approved. It is documentary only; nothing is
+applied to Dataverse.
 
 **Carry the jobs forward.** At Level (b), every job must be answerable with "this surface lets them
 do it". Record that link in `jobs[].surfaces[]` (view/form/page names, or a page `key`):
@@ -451,7 +458,8 @@ the layout that lands.
 
 **Show the form wireframe.** After writing the proposed forms to `app-spec.json`, render an
 ASCII wireframe so the user can *see* each form's tabs, sections, fields, the Notes block, and
-sub-grids before approving — then ask for changes:
+sub-grids before approving — then ask for changes. Fields carry their authored state, so a
+`(hidden)` or `(read-only)` annotation in the wireframe is part of what is being approved:
 
 ```bash
 node "${PLUGIN_ROOT}/scripts/preview-form.js" --spec @<working-dir>/app-spec.json [--entity <schemaName>]
@@ -736,6 +744,7 @@ even though the underlying spec stores the schemaName as provided:
 ### App
 - Name: [app name]
 - Description: [description]
+- Routing description: [app.aiDescription — omit the line when the spec does not set one]
 - Action: [Create new | Use existing: <app-id>]
 
 ### Solution
@@ -834,7 +843,7 @@ The spec shape follows `plugins/model-apps/samples/app-spec.support-desk.json`:
 {
   "schemaVersion": 2,
   "solution": { "uniqueName": "...", "displayName": "...", "publisherPrefix": "..." },
-  "app": { "name": "...", "description": "..." },
+  "app": { "name": "...", "description": "...", "aiDescription?": "..." },
   "entities": [ { "schemaName", "displayName", "pluralName", "primaryAttribute", "columns" } ],
   "relationships": [ { "type", "referenced", "referencing", "lookup" } ],
   "forms": [ { "entity", "type", "name", "layout", "subgrids?" } ],

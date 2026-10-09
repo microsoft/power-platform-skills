@@ -156,14 +156,22 @@ test('readerFor base readers normalize exact identities for tables, relationship
     queryRecords: async () => [],
     fetchEntityMetadata: async (logical) => {
       calls.push({ method: 'fetchEntityMetadata', logical });
-      return {
-        Relationships: [
-          { SchemaName: 'new_Parent_Child' },
-          { schemaName: 'new_lower' },
-          { name: 'new_named' },
-          {},
-        ],
-      };
+      return { Relationships: [] };
+    },
+    dataverse: {
+      get: async (p) => {
+        calls.push({ method: 'dataverse.get', path: p });
+        if (p.includes('/ManyToOneRelationships')) {
+          return { status: 200, body: { value: [
+            { SchemaName: 'new_Parent_Child', ReferencedEntity: 'new_parent', ReferencingAttribute: 'new_parentid' },
+            { SchemaName: 'new_lower', ReferencedEntity: 'new_other', ReferencingAttribute: 'new_otherid' },
+          ] } };
+        }
+        if (p.includes('/ManyToManyRelationships')) {
+          return { status: 200, body: { value: [{ SchemaName: 'new_named', Entity1LogicalName: 'new_child', Entity2LogicalName: 'new_tag' }] } };
+        }
+        return { status: 200, body: { value: [] } };
+      },
     },
     resolveArtifact: async (kind, identity) => {
       calls.push({ method: 'resolveArtifact', kind, identity });
@@ -178,11 +186,13 @@ test('readerFor base readers normalize exact identities for tables, relationship
 
   assert.deepStrictEqual(await reader.findTable('NEW_ACCOUNT'), { logicalName: 'NEW_ACCOUNT' });
   assert.deepStrictEqual(await reader.findColumns('new_account'), [{ logicalName: 'new_account_name' }]);
-  assert.deepStrictEqual(await reader.entityRelationships('NEW_CHILD'), ['new_parent_child', 'new_lower', 'new_named']);
+  const relRows = await reader.entityRelationships('NEW_CHILD');
+  assert.deepStrictEqual(relRows.map((r) => r.schemaName), ['new_Parent_Child', 'new_lower', 'new_named']);
+  assert.strictEqual(relRows[0].referencingEntity, 'new_child', 'the queried table is the referencing end of a ManyToOne row');
   assert.strictEqual(await reader.commandBar('NEW_ACCOUNT'), true);
   assert.deepStrictEqual(await reader.retrieveSetting('NLGridSearchSetting'), { value: '2' });
-  assert.ok(calls.some((c) => c.method === 'findTables' && c.logical === 'new_account'));
-  assert.ok(calls.some((c) => c.method === 'fetchEntityMetadata' && c.logical === 'new_child'));
+  assert.ok(calls.some((c) => c.method === 'findTables'));
+  assert.ok(calls.some((c) => c.method === 'dataverse.get' && /ManyToOneRelationships/.test(c.path)));
   assert.ok(calls.some((c) => c.method === 'resolveArtifact' && c.identity.entity === 'new_account'));
   assert.ok(calls.some((c) => c.method === 'retrieveSetting' && c.opts && Object.keys(c.opts).length === 0));
 });
@@ -284,14 +294,31 @@ test('readerFor.appRoleIds fails closed when the association rows cannot be read
   assert.match(res.reason, /403/);
 });
 
-function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResult = { ok: true, checks: [], missing: [] }, sdkThrows = null, invokeAsMain = false }) {
+function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResult = { ok: true, checks: [], missing: [] }, sdkThrows = null, invokeAsMain = false, specObject = null, realGates = false, sdkFactory = null }) {
   const scriptPath = path.join(__dirname, '..', 'verify-model-app.js');
   const source = `${fs.readFileSync(scriptPath, 'utf8')}\nmodule.exports.__mainForTest = main;\n`;
   const events = [];
   const stderr = [];
   const mod = { exports: {} };
+  const made = new Set();
   const fakeFs = {
-    mkdirSync: (dir, opts) => events.push({ type: 'mkdirSync', dir, opts }),
+    mkdirSync: (dir, opts) => { made.add(dir); events.push({ type: 'mkdirSync', dir, opts }); },
+    // The workspace check inspects the final component, then creates a missing directory and
+    // inspects it again. A double that only records mkdir would throw here and hide the call.
+    lstatSync: (dir) => {
+      if (!made.has(dir)) {
+        const err = new Error('ENOENT');
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return { isSymbolicLink: () => false, isDirectory: () => true, isFile: () => false };
+    },
+    readlinkSync: () => {
+      const err = new Error('EINVAL');
+      err.code = 'EINVAL';
+      throw err;
+    },
+    realpathSync: Object.assign((p) => p, { native: (p) => p }),
   };
   const customRequire = (id) => {
     if (id === 'node:fs') return fakeFs;
@@ -302,15 +329,17 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
         validateFlags: validateFlagsFromParsed(() => parseResult.flags),
         readJsonArg: (arg) => {
           events.push({ type: 'readJsonArg', arg });
-          return { app: { name: 'Support Desk' }, solution: { publisherPrefix: 'new' } };
+          return specObject || { app: { name: 'Support Desk' }, solution: { publisherPrefix: 'new' } };
         },
         emitResult: (ok, payload) => events.push({ type: 'emitResult', ok, payload }),
+        // Pure, so the real one — the CLI uses it to identify the environment's baseline.
+        dataverseOrigin: require('../lib/dataverse-auth.js').dataverseOrigin,
       };
     }
     if (id === './lib/sdk-http-client.js') {
       return { createAzHttpClient: (env) => ({ env }) };
     }
-    if (id === './lib/verify-spec.js') {
+    if (!realGates && id === './lib/verify-spec.js') {
       return {
         verifySpec: async (spec, read) => {
           events.push({ type: 'verifySpec', spec, hasReader: typeof read.findTable === 'function' });
@@ -321,7 +350,7 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
     if (id === './lib/sdk-build.js') {
       return { appUniqueName: () => 'new_supportdesk' };
     }
-    if (id === './lib/app-spec.js') {
+    if (!realGates && id === './lib/app-spec.js') {
       return {
         validateAppSpec: () => validateResult,
         migrateAppSpec: (spec) => {
@@ -357,6 +386,7 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
         createMakerSdk: (cfg) => {
           events.push({ type: 'createMakerSdk', cfg });
           if (sdkThrows) throw sdkThrows;
+          if (sdkFactory) return sdkFactory(cfg);
           return {
             initWorkspace: () => events.push({ type: 'initWorkspace' }),
             findTables: async () => [],
@@ -477,6 +507,56 @@ test('verify CLI accepts a positional spec, uses the default workspace, and prin
   assert.strictEqual(emitted.ok, true);
   assert.deepStrictEqual(emitted.payload.missing, []);
   assert.ok(harness.events.some((e) => e.type === 'createMakerSdk' && e.cfg.workspaceStorage.__mockWorkspaceRoot === path.join(__dirname, '..', '..', 'samples', '.maker-workspace')));
+});
+
+test('verify CLI still verifies an older colliding spec and names the holder', async () => {
+  // Dropping relationshipCollisions: 'warn' makes validateAppSpec refuse this spec before any
+  // read. The relationship line is the proof verification actually ran.
+  const specObject = {
+    solution: { uniqueName: 'Contoso', publisherPrefix: 'contoso' },
+    app: { name: 'Projects', uniqueName: 'contoso_projects' },
+    entities: [
+      { schemaName: 'contoso_project', displayName: 'Project', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' } },
+      { schemaName: 'contoso_task', displayName: 'Task', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' } },
+    ],
+    relationships: [
+      { type: 'OneToMany', referenced: 'contoso_project', referencing: 'contoso_task', lookup: { schemaName: 'contoso_ProjectId', displayName: 'Project' } },
+      { type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_task' },
+    ],
+  };
+  const harness = loadVerifyCli({
+    parseResult: { positional: [], flags: { env: 'https://contoso.crm.dynamics.com', spec: '@app-spec.json', workspace: 'D:\\Projects\\_temp\\verify-collision' } },
+    realGates: true,
+    specObject,
+    sdkFactory: () => ({
+      initWorkspace: async () => {},
+      findTables: async () => [{ logicalName: 'contoso_project' }, { logicalName: 'contoso_task' }],
+      findColumns: async () => [{ logicalName: 'contoso_name' }],
+      queryRecords: async () => [],
+      fetchEntityMetadata: async () => ({ Relationships: [] }),
+      resolveArtifact: async () => [],
+      retrieveSetting: async () => null,
+      dataverse: {
+        get: async (p) => {
+          if (String(p).includes('RelationshipType')) {
+            return { status: 200, body: { '@odata.type': '#Microsoft.Dynamics.CRM.OneToManyRelationshipMetadata', SchemaName: 'contoso_project_contoso_task', RelationshipType: 'OneToManyRelationship' } };
+          }
+          if (String(p).includes('OneToManyRelationshipMetadata')) {
+            return { status: 200, body: { SchemaName: 'contoso_project_contoso_task', ReferencedEntity: 'contoso_project', ReferencingEntity: 'contoso_task', ReferencingAttribute: 'contoso_projectid' } };
+          }
+          return { status: 200, body: { value: [] } };
+        },
+      },
+    }),
+  });
+
+  await harness.main();
+  const stderr = harness.stderr.join('');
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+  assert.match(stderr, /WARNING:.*both use the schema name 'contoso_project_contoso_task'/);
+  assert.match(stderr, /exists as 1:N contoso_project -> contoso_task \(lookup contoso_projectid\), not as the declared N:N/);
+  assert.ok(emitted && Array.isArray(emitted.payload.missing), 'a validation refusal returns errors and never a missing list');
+  assert.ok(emitted.payload.missing.some((m) => /not as the declared N:N/.test(m)), JSON.stringify(emitted.payload));
 });
 
 test('verify CLI entrypoint converts SDK startup errors into emitResult failures', async () => {
@@ -737,4 +817,285 @@ test('appEntityComponents(): matches an objectid whose CASING differs from the r
   const r = await readerWith(sdk).appEntityComponents(['new_order']);
   assert.strictEqual(r.ok, true);
   assert.deepStrictEqual(r.present, ['new_order'], 'an upper-cased objectid must still match');
+});
+// The dashboard oracle through the REAL reader seam: `dashboardComponents` is implemented here with
+// the SDK's own deserializer (fetch, then read the artifact), so a stub-only test would prove nothing
+// about the reader verify actually runs with.
+// A dashboard the SDK returns no artifact for, or a component list that is not a list, is not "no tiles": verify
+// reports it unverified. Converting it to an empty list passed the check having read nothing.
+test('readerFor + verifySpec: a dashboard whose artifact cannot be read is unverified, never passed', async () => {
+  for (const [what, art] of [['no artifact', null], ['a malformed component list', { components: { chart: 1 } }]]) {
+    const sdk = {
+      findTables: async () => [],
+      findColumns: async () => [],
+      queryRecords: async (set) => (set === 'systemform' ? [{ formid: 'dash-1', formxml: '<form/>' }] : []),
+      listArtifacts: async () => [],
+      dataverse: { get: async () => ({ status: 200, body: { formxml: '<form/>', '@odata.etag': 'W/"1"' } }) },
+      fetchArtifact: async () => {},
+      getArtifact: async () => art,
+      fetchEntityMetadata: async () => ({ Relationships: [] }),
+      resolveArtifact: async () => [],
+      retrieveSetting: async () => null,
+    };
+    const spec = { solution: { publisherPrefix: 'new' }, app: { name: 'Support Desk', uniqueName: 'new_supportdesk' }, entities: [], appShell: { areas: [] },
+      dashboards: [{ name: 'Ops', tiles: [{ type: 'chart', name: 'By Priority', entity: 'new_ticket', viewId: 'v', visualizationId: 'c' }] }] };
+    const r = await verifySpec(spec, readerFor(sdk, 'new_supportdesk', {}));
+    const chk = r.checks.find((c) => c.kind === 'dashboard');
+    assert.strictEqual(chk.present, false, what);
+    assert.match(chk.detail, new RegExp(`its tiles could not be read \\(the SDK returned ${what}`), what);
+  }
+});
+
+// verify checks what users see: the PUBLISHED dashboard. The SDK's read is the unpublished draft, and verify runs
+// in the build's workspace, whose copy can hold unpushed edits — so a fix saved but not published, or never
+// pushed, passed while users still saw the broken dashboard. Either is now unverified. So is a draft saved and put
+// back while the tiles were read: that leaves the FormXML as it was, but not the draft's token.
+test('readerFor + verifySpec: a dashboard whose draft or workspace copy is not what is published is unverified', async () => {
+  const spec = { solution: { publisherPrefix: 'new' }, app: { name: 'Support Desk', uniqueName: 'new_supportdesk' }, entities: [], appShell: { areas: [] },
+    dashboards: [{ name: 'Ops', tiles: [{ type: 'chart', name: 'By Priority', entity: 'new_ticket', viewId: 'v', visualizationId: 'c' }] }] };
+  const fetches = [];
+  // `later` answers the reads made AFTER the fetch: the dashboard changing while it is being read. `laterVersion` is
+  // the draft's token then: a draft saved and put back leaves the FormXML as it was, but not its token.
+  const sdkWith = ({ draftXml = '<form/>', dirty = false, draftStatus = 200, later = null, version = 'W/"1"', laterVersion = null } = {}) => {
+    let reads = 0;
+    const xml = () => (later && reads > 2 ? later : '<form/>');
+    return {
+    findTables: async () => [],
+    findColumns: async () => [],
+    queryRecords: async (set, o) => {
+      // The published row carries its own token, which a write to the draft does not move.
+      if (set === 'systemform' && o && o.select && o.select.includes('formxml')) { reads += 1; return [{ formid: 'dash-1', formxml: xml(), '@odata.etag': 'W/"9"' }]; }
+      if (set === 'systemform') return [{ formid: 'dash-1', formxml: '<form/>' }];
+      if (set === 'savedqueryvisualization') return [{ primaryentitytypecode: 'new_ticket' }];
+      if (set === 'savedquery') return [{ returnedtypecode: 'new_ticket' }];
+      return [];
+    },
+    listArtifacts: async (type) => (type === 'dashboard' ? [{ type, id: 'dash-1', isDirty: dirty }] : []),
+    dataverse: { get: async (url) => {
+      assert.strictEqual(url, '/systemforms(dash-1)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml');
+      reads += 1;
+      const token = laterVersion && reads > 2 ? laterVersion : version;
+      return { status: draftStatus, body: { formxml: later && reads > 2 ? later : draftXml, ...(token === null ? {} : { '@odata.etag': token }) } };
+    } },
+    fetchArtifact: async (type, id, o) => { fetches.push(o); },
+    getArtifact: async () => ({ components: [{ type: 'chart', name: 'By Priority', parameters: {
+      TargetEntityType: 'new_ticket', ViewId: '{11111111-1111-1111-1111-111111111111}', VisualizationId: '{22222222-2222-2222-2222-222222222222}' } }] }),
+    fetchEntityMetadata: async () => ({ Relationships: [] }),
+    resolveArtifact: async () => [],
+    retrieveSetting: async () => null,
+    };
+  };
+  const check = async (sdk) => (await verifySpec(spec, readerFor(sdk, 'new_supportdesk', {}))).checks.find((c) => c.kind === 'dashboard');
+  for (const [what, opts, detail] of [
+    ['an unpublished draft', { draftXml: '<form><changed/></form>' }, /dashboard dash-1 has changes that are not published — publish it, then verify/],
+    ['a draft that cannot be read', { draftStatus: 503 }, /the draft of dashboard dash-1 could not be read \(HTTP 503\)/],
+    ['a dashboard that changed while it was read', { later: '<form><changed/></form>' }, /dashboard dash-1 changed while it was being read — verify again/],
+    ['a draft saved and put back while it was read', { laterVersion: 'W/"3"' }, /dashboard dash-1 changed while it was being read — verify again/],
+    ['a draft read with no version', { version: null }, /the version of dashboard dash-1 could not be read/],
+  ]) {
+    const chk = await check(sdkWith(opts));
+    assert.strictEqual(chk.present, false, what);
+    assert.match(chk.detail, detail, what);
+  }
+  // CONTROL: published, with nothing pending — the tiles are read and checked.
+  const ok = await check(sdkWith());
+  assert.strictEqual(ok.present, true, ok.detail);
+  // With an isolated reader the tiles come from IT — a throwaway workspace — and never from the build's copy, which
+  // may hold unpushed edits (the main SDK here would answer cross-wired tiles and is never asked), and it is disposed.
+  const main = sdkWith();
+  main.fetchArtifact = async () => { throw new Error('the build workspace must not be read for tiles'); };
+  main.getArtifact = async () => ({ components: [{ type: 'chart', name: 'By Priority', parameters: { TargetEntityType: 'new_customer' } }] });
+  const iso = sdkWith();
+  let disposed = 0;
+  const isolated = await verifySpec(spec, readerFor(main, 'new_supportdesk', { isolatedReader: async () => ({ sdk: iso, dispose: () => { disposed += 1; } }) }));
+  const chk = isolated.checks.find((c) => c.kind === 'dashboard');
+  assert.strictEqual(chk.present, true, chk.detail);
+  assert.strictEqual(disposed, 1, 'the throwaway workspace is disposed after the read');
+});
+
+// A client per isolated read ran `az account get-access-token` once per dashboard. One client serves every read of a
+// run — the run's own when it is given — while each read still gets a fresh SDK in its own throwaway workspace.
+test('isolatedReaderFor shares one HTTP client across reads, each with a fresh SDK', async () => {
+  const { isolatedReaderFor } = require('../verify-model-app.js');
+  const client = { request: async () => { throw new Error('no request is made'); } };
+  let made = 0;
+  const makeClient = () => { made += 1; return client; };
+  const read = isolatedReaderFor('https://contoso.crm.dynamics.com', { makeClient });
+  const a = await read();
+  const b = await read();
+  assert.strictEqual(made, 1, 'one client for the run');
+  assert.notStrictEqual(a.sdk, b.sdk, 'a fresh SDK per read');
+  a.dispose();
+  b.dispose();
+  const own = await isolatedReaderFor('https://contoso.crm.dynamics.com', { httpClient: client, makeClient })();
+  own.dispose();
+  assert.strictEqual(made, 1, 'with the run\u2019s own client, none is made');
+});
+
+test('readerFor + verifySpec: a cross-wired dashboard chart tile fails verify through the real reader seam', async () => {
+  const calls = [];
+  const sdk = {
+    findTables: async () => [],
+    findColumns: async () => [],
+    queryRecords: async (set, opts) => {
+      if (set === 'systemform') return [{ formid: 'dash-1', formxml: '<form/>' }];
+      if (set === 'savedqueryvisualization') return [{ primaryentitytypecode: 'new_customer' }];
+      if (set === 'savedquery') return [{ returnedtypecode: 'new_ticket' }];
+      return [];
+    },
+    listArtifacts: async () => [],
+    dataverse: { get: async () => ({ status: 200, body: { formxml: '<form/>', '@odata.etag': 'W/"1"' } }) },
+    fetchArtifact: async (type, id) => { calls.push(['fetchArtifact', type, id]); },
+    getArtifact: async (type, id) => {
+      calls.push(['getArtifact', type, id]);
+      return { components: [{ type: 'chart', name: 'By Priority', parameters: {
+        TargetEntityType: 'new_ticket', ViewId: '{11111111-1111-1111-1111-111111111111}', VisualizationId: '{22222222-2222-2222-2222-222222222222}' } }] };
+    },
+    fetchEntityMetadata: async () => ({ Relationships: [] }),
+    resolveArtifact: async () => [],
+    retrieveSetting: async () => null,
+  };
+  const spec = { solution: { publisherPrefix: 'new' }, app: { name: 'Support Desk', uniqueName: 'new_supportdesk' }, entities: [], appShell: { areas: [] },
+    dashboards: [{ name: 'Ops', tiles: [{ type: 'chart', name: 'By Priority', entity: 'new_ticket', viewId: 'v', visualizationId: 'c' }] }] };
+  const r = await verifySpec(spec, readerFor(sdk, 'new_supportdesk', {}));
+  const chk = r.checks.find((c) => c.kind === 'dashboard');
+  assert.ok(chk, 'a dashboard check must be produced');
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /shows new_ticket, but its chart belongs to new_customer/);
+  assert.deepStrictEqual(calls, [['fetchArtifact', 'dashboard', 'dash-1'], ['getArtifact', 'dashboard', 'dash-1']], 'the tiles come from the SDK artifact of THAT dashboard');
+});
+
+test('readerFor + verifySpec reads isdefault and formxml once per verify, and re-reads on the next', async () => {
+  const calls = [];
+  const xml = '<form><tabs><tab name="tab_main"><columns><column width="100%"><sections><section name="sec_main"><rows><row><cell><control datafieldname="contoso_name" /></cell></row></rows></section></sections></column></columns></tab></tabs></form>';
+  const sdk = {
+    findTables: async () => [{ logicalName: 'contoso_task' }],
+    findColumns: async () => [{ logicalName: 'contoso_name' }],
+    queryRecords: async (set, opts) => {
+      calls.push({ set, opts });
+      if (set !== 'systemform') return [];
+      if (opts && opts.filter && /name eq/.test(opts.filter)) return [{ formid: 'form-1' }];
+      if (opts && opts.filter && /formid eq form-1/.test(opts.filter)) {
+        return [{ formid: 'form-1', name: 'Main', objecttypecode: 'contoso_task', type: 2, isdefault: true, formxml: xml }];
+      }
+      return [];
+    },
+    dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
+  };
+  const spec = {
+    solution: { uniqueName: 'Contoso', publisherPrefix: 'contoso' },
+    app: { name: 'Projects', uniqueName: 'contoso_projects' },
+    entities: [{ schemaName: 'contoso_task', primaryAttribute: { schemaName: 'contoso_name' }, columns: [] }],
+    views: [], charts: [], appShell: { areas: [] },
+    forms: [{
+      entity: 'contoso_task', name: 'Main', formType: 'Main', isDefault: true,
+      tabs: [{ name: 'tab_main', label: 'Main', columns: [{ width: '100%', sections: [{ name: 'sec_main', label: 'Main', fields: ['contoso_name'] }] }] }],
+    }],
+  };
+  const reader = readerFor(sdk, 'contoso_projects', {});
+  const byId = () => calls.filter((c) => c.set === 'systemform' && c.opts && /formid eq /.test(c.opts.filter || ''));
+  const first = await verifySpec(spec, reader);
+  assert.ok(first.checks.some((c) => c.kind === 'form-default' && c.present), JSON.stringify(first.missing));
+  assert.ok(first.checks.some((c) => c.kind === 'form-topology' && c.present), JSON.stringify(first.missing));
+  assert.strictEqual(byId().length, 1, `default and layout must share one row read: ${JSON.stringify(byId())}`);
+  assert.ok(byId()[0].opts.select.includes('isdefault') && byId()[0].opts.select.includes('formxml'));
+  await verifySpec(spec, reader);
+  assert.strictEqual(byId().length, 2, 'a second verify on the same reader must re-read the row');
+});
+
+test('readerFor memoizes findTables once per verify run', async () => {
+  let calls = 0;
+  const sdk = {
+    findTables: async () => { calls += 1; return [{ logicalName: 'contoso_project' }, { logicalName: 'contoso_task' }, { logicalName: 'account' }]; },
+    findColumns: async () => [],
+    queryRecords: async () => [],
+    dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
+  };
+  const reader = readerFor(sdk, 'contoso_app', {});
+  assert.deepStrictEqual(await reader.findTable('CONTOSO_PROJECT'), { logicalName: 'contoso_project' });
+  assert.deepStrictEqual(await reader.findTable('contoso_task'), { logicalName: 'contoso_task' });
+  assert.strictEqual(await reader.findTable('missing'), null);
+  assert.strictEqual(calls, 1, 'three findTable calls must share one catalog scan');
+});
+
+test('a reused reader sees a table created after the first verify pass', async () => {
+  let tables = [];
+  let scans = 0;
+  const sdk = {
+    findTables: async () => { scans += 1; return tables.slice(); },
+    findColumns: async () => [],
+    queryRecords: async () => [],
+    dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
+  };
+  const spec = {
+    solution: { publisherPrefix: 'contoso' },
+    app: { name: 'Projects', uniqueName: 'contoso_projects' },
+    entities: [{ schemaName: 'contoso_task', primaryAttribute: { schemaName: 'contoso_name' } }],
+    views: [], charts: [], forms: [], appShell: { areas: [] },
+  };
+  const reader = readerFor(sdk, 'contoso_projects', {});
+  const first = await verifySpec(spec, reader);
+  assert.strictEqual(first.checks.find((c) => c.kind === 'entity').present, false);
+  tables = [{ logicalName: 'contoso_task' }];
+  const second = await verifySpec(spec, reader);
+  assert.strictEqual(second.checks.find((c) => c.kind === 'entity').present, true, 'the catalog memo must not outlive one verify pass');
+  assert.ok(scans >= 2);
+});
+
+test('a rejected catalog read does not poison the next verify pass', async () => {
+  let fail = true;
+  const sdk = {
+    findTables: async () => {
+      if (fail) throw new Error('catalog down');
+      return [{ logicalName: 'contoso_task' }];
+    },
+    findColumns: async () => [],
+    queryRecords: async () => [],
+    dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
+  };
+  const spec = {
+    solution: { publisherPrefix: 'contoso' },
+    app: { name: 'Projects', uniqueName: 'contoso_projects' },
+    entities: [{ schemaName: 'contoso_task', primaryAttribute: { schemaName: 'contoso_name' } }],
+    views: [], charts: [], forms: [], appShell: { areas: [] },
+  };
+  const reader = readerFor(sdk, 'contoso_projects', {});
+  await assert.rejects(() => verifySpec(spec, reader), /catalog down/);
+  fail = false;
+  const second = await verifySpec(spec, reader);
+  assert.strictEqual(second.checks.find((c) => c.kind === 'entity').present, true);
+});
+
+test('readerFor + verifySpec names the 1:N that holds an N:N schema name', async () => {
+  const sdk = {
+    findTables: async () => [],
+    findColumns: async () => [],
+    queryRecords: async () => [],
+    fetchEntityMetadata: async () => ({ Relationships: [] }),
+    resolveArtifact: async () => [],
+    retrieveSetting: async () => null,
+    dataverse: {
+      get: async (p) => {
+        if (p.includes('RelationshipType')) {
+          return { status: 200, body: { '@odata.type': '#Microsoft.Dynamics.CRM.OneToManyRelationshipMetadata', SchemaName: 'contoso_project_contoso_task', RelationshipType: 'OneToManyRelationship' } };
+        }
+        if (p.includes('OneToManyRelationshipMetadata')) {
+          return { status: 200, body: { SchemaName: 'contoso_project_contoso_task', ReferencedEntity: 'contoso_project', ReferencingEntity: 'contoso_task', ReferencingAttribute: 'contoso_projectid' } };
+        }
+        return { status: 200, body: { value: [] } };
+      },
+    },
+  };
+  const spec = {
+    solution: { uniqueName: 'Contoso', publisherPrefix: 'contoso' },
+    app: { name: 'Projects', uniqueName: 'contoso_projects' },
+    entities: [{ schemaName: 'contoso_project', primaryAttribute: { schemaName: 'contoso_name' } }],
+    views: [], charts: [], forms: [], appShell: { areas: [] },
+    relationships: [{ type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_task' }],
+  };
+  const r = await verifySpec(spec, readerFor(sdk, 'contoso_projects', {}));
+  const rc = r.checks.find((c) => c.kind === 'relationship');
+  assert.ok(rc, 'the real reader must check the relationship');
+  assert.strictEqual(rc.present, false);
+  assert.match(rc.detail, /exists as 1:N contoso_project -> contoso_task \(lookup contoso_projectid\), not as the declared N:N/);
 });

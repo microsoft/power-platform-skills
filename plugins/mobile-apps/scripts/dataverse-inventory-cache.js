@@ -1,0 +1,180 @@
+#!/usr/bin/env node
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+
+const CACHE_SCHEMA_VERSION = 1;
+const DATAVERSE_API_VERSION = '9.2';
+const DEFAULT_TTL_MS = 5 * 60 * 1000;
+
+function atomicWriteJson(file, value, fileSystem = fs) {
+  const resolved = path.resolve(file);
+  fileSystem.mkdirSync(path.dirname(resolved), { recursive: true });
+  const temporary = `${resolved}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fileSystem.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+    fileSystem.renameSync(temporary, resolved);
+  } finally {
+    if (fileSystem.existsSync(temporary)) fileSystem.rmSync(temporary, { force: true });
+  }
+}
+
+function normalizeUrl(value) {
+  return String(value || '').trim().replace(/\/+$/, '').toLowerCase();
+}
+
+function identity(context) {
+  return {
+    environmentUrl: normalizeUrl(context.environmentUrl),
+    tenantId: String(context.tenantId || '').trim().toLowerCase(),
+    solution: String(context.solution || 'Default').trim(),
+    apiVersion: String(context.apiVersion || DATAVERSE_API_VERSION),
+    inventorySchemaVersion: Number(context.inventorySchemaVersion || 3),
+  };
+}
+
+function sameIdentity(left, right) {
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return leftKeys.length === rightKeys.length
+    && leftKeys.every((key, index) => key === rightKeys[index] && left[key] === right[key]);
+}
+
+function hasValidInventory(inventory) {
+  if (!Array.isArray(inventory)) return false;
+  const names = new Set();
+  const identifier = /^[A-Za-z][A-Za-z0-9_]*$/;
+  return inventory.every((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+    if (['logicalName', 'schemaName', 'entitySetName', 'primaryIdAttribute'].some(
+      (field) => typeof item[field] !== 'string' || !identifier.test(item[field]),
+    )) return false;
+    if (['displayName', 'displayCollectionName', 'description'].some(
+      (field) => typeof item[field] !== 'string',
+    )) return false;
+    if (item.customizable !== true || typeof item.customEntity !== 'boolean'
+      || typeof item.managed !== 'boolean') return false;
+    if (item.ownershipType !== null && typeof item.ownershipType !== 'string') return false;
+    if (item.primaryNameAttribute != null && (typeof item.primaryNameAttribute !== 'string'
+      || !identifier.test(item.primaryNameAttribute))) return false;
+    // Normalized inventory records unavailable capability facts as null, e.g.
+    // { customizable: true, canCreateAttributes: null }, never an omitted flag.
+    if (['hasActivities', 'hasNotes', 'isAvailableOffline', 'changeTrackingEnabled',
+      'canCreateAttributes', 'canBePrimaryEntityInRelationship',
+      'canBeRelatedEntityInRelationship', 'canBeInManyToMany'].some(
+      (field) => item[field] !== null && typeof item[field] !== 'boolean',
+    )) return false;
+    const name = item.logicalName.toLowerCase();
+    if (names.has(name)) return false;
+    names.add(name);
+    return true;
+  });
+}
+
+function readInventoryCache(file, context, {
+  ttlMs = DEFAULT_TTL_MS,
+  nowMs = () => Date.now(),
+  fileSystem = fs,
+} = {}) {
+  if (!Number.isFinite(ttlMs) || ttlMs <= 0) throw new Error('inventory cache TTL must be positive');
+  const resolved = path.resolve(file);
+  if (!fileSystem.existsSync(resolved)) return { hit: false, reason: 'missing', inventory: null };
+  let cache;
+  try {
+    cache = JSON.parse(fileSystem.readFileSync(resolved, 'utf8'));
+  } catch {
+    return { hit: false, reason: 'invalid-json', inventory: null };
+  }
+  if (!cache || typeof cache !== 'object' || Array.isArray(cache)
+    || cache.schemaVersion !== CACHE_SCHEMA_VERSION || !hasValidInventory(cache.inventory)) {
+    return { hit: false, reason: 'invalid-shape', inventory: null };
+  }
+  if (!sameIdentity(cache.identity || {}, identity(context))) {
+    return { hit: false, reason: 'identity-mismatch', inventory: null };
+  }
+  const ageMs = nowMs() - Number(cache.cachedAtMs);
+  if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > ttlMs) {
+    return { hit: false, reason: 'expired', inventory: null, ageMs };
+  }
+  return {
+    hit: true,
+    reason: 'fresh',
+    inventory: cache.inventory,
+    ageMs,
+    cachedAt: cache.cachedAt,
+  };
+}
+
+function writeInventoryCache(file, context, inventory, {
+  nowMs = () => Date.now(),
+  nowIso = () => new Date().toISOString(),
+  fileSystem = fs,
+} = {}) {
+  if (!Array.isArray(inventory)) throw new Error('inventory cache requires an array');
+  const cache = {
+    schemaVersion: CACHE_SCHEMA_VERSION,
+    identity: identity(context),
+    cachedAt: nowIso(),
+    cachedAtMs: nowMs(),
+    inventory,
+  };
+  atomicWriteJson(file, cache, fileSystem);
+  return cache;
+}
+
+function invalidateInventoryCache(file, fileSystem = fs) {
+  const resolved = path.resolve(file);
+  fileSystem.rmSync(resolved, { force: true });
+  return !fileSystem.existsSync(resolved);
+}
+
+function parseArgs(argv) {
+  const args = {};
+  for (let index = 2; index < argv.length; index += 1) {
+    if (argv[index] === '--file') args.file = argv[++index];
+    else if (argv[index] === '--invalidate') args.invalidate = true;
+  }
+  return args;
+}
+
+function main(argv = process.argv, {
+  fileSystem = fs,
+  stdout = process.stdout,
+  stderr = process.stderr,
+} = {}) {
+  const args = parseArgs(argv);
+  if (!args.file || !args.invalidate) {
+    stderr.write(
+      'Usage: node dataverse-inventory-cache.js --file <json> --invalidate\n',
+    );
+    return 2;
+  }
+  try {
+    if (!invalidateInventoryCache(args.file, fileSystem)) {
+      stderr.write(
+        `dataverse-inventory-cache: failed to invalidate ${path.resolve(args.file)}\n`,
+      );
+      return 2;
+    }
+    stdout.write(`${JSON.stringify({ status: 'invalidated', file: path.resolve(args.file) })}\n`);
+    return 0;
+  } catch (error) {
+    stderr.write(`dataverse-inventory-cache: ${error.message}\n`);
+    return 2;
+  }
+}
+
+if (require.main === module) process.exitCode = main();
+
+module.exports = {
+  CACHE_SCHEMA_VERSION,
+  DATAVERSE_API_VERSION,
+  DEFAULT_TTL_MS,
+  identity,
+  invalidateInventoryCache,
+  main,
+  readInventoryCache,
+  sameIdentity,
+  writeInventoryCache,
+};

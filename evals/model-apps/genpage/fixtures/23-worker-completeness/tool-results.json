@@ -1,0 +1,13 @@
+[
+  { "id": "stamp-1", "command": "node scripts\\genpage-worker-output.js --stamp --file page.tsx", "result": { "ok": true, "action": "stamp", "existed": false } },
+  { "id": "write-1", "command": "Write page.tsx", "artifact": "attempts/truncated.txt" },
+  { "id": "gate-1", "command": "node scripts\\genpage-worker-output.js --file page.tsx", "artifact": "attempts/truncated.txt", "result": { "ok": false, "problems": ["unbalanced brackets \u2014 the file looks truncated"] }, "exitCode": 3 },
+  { "id": "stamp-2", "command": "node scripts\\genpage-worker-output.js --stamp --file page.tsx", "result": { "ok": true, "action": "stamp", "existed": true } },
+  { "id": "write-2", "command": "Write page.tsx", "artifact": "page.tsx" },
+  { "id": "gate-2", "command": "node scripts\\genpage-worker-output.js --file page.tsx", "artifact": "page.tsx", "result": { "ok": true, "problems": [] }, "exitCode": 0 },
+  {
+    "id": "upload",
+    "command": "node scripts\\genpage-upload.js --env https://contoso.crm.dynamics.com --app-id 11111111-1111-4111-8111-111111111111 --code-file page.tsx --name-file page-name.txt --prompt-file prompt.txt --agent-message-file agent-message.txt --model gpt-4.1 --add-to-sitemap",
+    "result": { "ok": true, "pageId": "55555555-5555-4555-8555-555555555555", "appId": "11111111-1111-4111-8111-111111111111", "updated": false }
+  }
+]

@@ -2,13 +2,26 @@
 name: design-system
 description: Creates the Tamagui brand system for an Expo/React Native Power Apps mobile app, including design-system.md, tokens.ts, and an HTML gallery.
 user-invocable: true
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task, WebFetch
+allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task, WebFetch, Skill
 model: opus
 ---
+
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.
 
 **Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** — read first.
 
 # Design System
+
+**Entry routing:** use the shared [App feature entry points](../../shared/shared-instructions.md#app-feature-entry-points)
+preflight before the workflow below.
+
+Before reading brand state, bind `working_dir` through
+[app-working-directory.md](../../shared/references/app-working-directory.md).
+Use that root for every shell call and absolute file-tool path, including
+history, rollback, previews, and runtime wiring in the referenced workflows.
+
+Read-only `--history` / `--diff` and standalone brand generation without an app
+remain here.
 
 Source of truth for every screen built in a Power Apps mobile app. Produces three artifacts:
 
@@ -20,7 +33,7 @@ Design-system and Tamagui integration are complementary, not alternatives. `/des
 
 ## When to use
 
-- **Step 6.5** — auto-invoked from `/create-mobile-app` after scaffold + `npx power-apps init`, before screen builders
+- **Step 6.5** — auto-invoked from `/create-mobile-app` after scaffold + `pa app init`, before screen builders
 - **Standalone** — `/design-system` callable any time to create or refresh a brand system
 - **Refresh** — `/design-system --refresh <dimension>` to change one aspect
 - **Reskin** — `/design-system --reskin` for full visual layer swap
@@ -28,7 +41,7 @@ Design-system and Tamagui integration are complementary, not alternatives. `/des
 
 ## When NOT to use
 
-- Screen-level visual tweaks → use `/tweak-screen` (deterministic, 0 tokens)
+- Screen-level visual tweaks → use `/edit-app`
 - Plan-level screen changes → use `/edit-app screens`
 - Data model changes → use `/add-dataverse` or `/setup-datamodel`
 
@@ -61,26 +74,45 @@ Design-system and Tamagui integration are complementary, not alternatives. `/des
 Detect invocation mode:
 
 ```
-1. Check env var CODE_APPS_NATIVE_ORCHESTRATING=1
-   → Mode A (folded into /create-mobile-app Step 6.5)
+1. Check MOBILE_APP_ORCHESTRATING=1 AND matching explicit caller context
+   → Mode A (folded into /create-mobile-app or approved /edit-app work)
 
-2. Check cwd for app.config.js + tamagui.config.ts + package.json with expo deps
+2. Check the resolved working_dir for app.config.js + tamagui.config.ts + package.json with expo deps
    → Mode B (standalone in existing project)
 
 3. Else
    → Mode C (standalone, no project)
-   → Ask: "No native project detected. Write brand/ to current directory? [y/N]"
+   → Ask: "No native project detected. Write brand/ to <working_dir>? [y/N]"
 ```
 
-For Mode A/B, set `working_dir` to cwd. For Mode C, confirm with user.
+All modes retain the already resolved `working_dir`; do not resolve another root
+from the launch directory. Mode C still requires user confirmation before writes.
 
-**Drift detection (Mode B only — existing brand/ present):**
+**Write boundary (all paths):** `--plan-only` or a planning-phase handoff returns
+only a proposal; do not write brand artifacts, previews, history, or memory-bank.
+Detect prior brand state before generating anything: an existing spec, light or
+dark token file, gallery, history, or record of a previously applied design makes
+this a rerun, not first-time generation. A new creation plan alone is not prior
+brand state; first-time drafts generated in this invocation remain drafts during
+edit/regeneration, not pre-existing approved designs. Keep proposed choices and
+memory-bank notes pending until approval. On reruns, do not overwrite live
+artifacts or existing previews during input/style selection; any comparison
+preview must be proposal-only.
+Every generation/reskin rerun uses **Sub-step 3.5** before its first live write,
+even if its cost path or input flag skips other sub-steps. Dedicated refresh,
+dark-mode, and rollback commands retain their own equivalent approval/backup
+flows; do not add a second gate to them.
+
+**Drift detection (Mode A/B — existing brand/ present):**
 
 If `brand/design-system.md` AND `brand/tokens.ts` both exist:
 1. Parse current tokens.ts palette + typography tokens
 2. Parse current design-system.md ## Palette and ## Typography
 3. Compute diff
 4. If divergent → surface drift, ask user to resolve before proceeding (see [refresh-flow.md](./references/refresh-flow.md) § Drift)
+
+Treat that resolution as a proposal until the concrete approval and backup
+boundary (Sub-step 3.5 for generation reruns); do not repair drift during detection.
 
 ---
 
@@ -91,7 +123,10 @@ If `brand/design-system.md` AND `brand/tokens.ts` both exist:
 **Print:**
 > "→ [design-system] Checking for brand inputs…"
 
-**MUST stop and wait for user response.** Do NOT skip this step.
+Reuse brand inputs and decisions in the approved caller scope. Ask only for
+missing inputs; return scope-changing choices to `/edit-app` rather than
+reopening an independent design flow. Fresh creation still owns the interactive
+brand selection below when those choices have not yet been made.
 
 Ask user for optional brand input. See [`references/input-modes.md`](./references/input-modes.md) for full processing details.
 
@@ -132,7 +167,7 @@ If flag was passed on invocation, skip asking — process directly.
 **On skip:** Continue with no brand context.
 
 **Priority order** when multiple inputs given:
-1. `--design-spec` (highest — skips Sub-steps 3 AND 4)
+1. `--design-spec` (highest — skips style/spec generation, not Sub-step 3.5 or confirmation)
 2. `--brand-doc` (locks direction, skips Sub-step 3)
 3. `--from-figma` (locks palette + typography + components)
 4. `--from-code-app` (highest fidelity sibling)
@@ -175,25 +210,32 @@ Show the cost picker, adapting the intro and option set to brand input.
 
 **Note:** Option (c) "Brand preview" only appears when brand input was provided (there's nothing to preview without brand tokens).
 
-Persist choice to `memory-bank.md`: `visual_companion: <yes|no|skip>`
+Keep `visual_companion: <yes|no|skip>` pending; persist it to `memory-bank.md`
+only after the applicable approval.
 
 **Branches:**
-- **(a)** → continue all sub-steps (Sub-steps 3–7) (~3 min)
-- **(b)** → skip Sub-step 3 (style picker), run Sub-steps 4–7 (spec + gallery + confirmation)
-- **(c) Brand preview** → skip Sub-steps 3–6, render key screen mockups (List + Form + Detail) with brand tokens applied, open browser, proceed to Sub-step 7. No extra question about how many screens — always shows 3 key screens.
+- **(a)** → style picker (Sub-step 3), then Sub-step 3.5 before Sub-steps 4–7 (~3 min)
+- **(b)** → skip Sub-step 3 (style picker), run Sub-step 3.5 before Sub-steps 4–7 (spec + gallery + review)
+- **(c) Brand preview** → prepare the brand-token candidate, run Sub-step 3.5 before applying it, then render key screen mockups (List + Form + Detail), open browser on standalone runs only (otherwise print the path), and proceed to Sub-step 7. Skip style picking and full-spec generation, not the write boundary. No extra question about how many screens — always shows 3 key screens.
 - **(c) Apply defaults / (d) — no-brand path** → skip Sub-steps 3, 5. Run these in order:
-  1. **Minimal Sub-step 4** — write `brand/tokens.ts` from the industry's direction preset.
+  1. **Minimal Sub-step 4** — prepare `brand/tokens.ts` from the industry's direction preset, then run Sub-step 3.5 before writing it.
      **Source-of-truth lookup order for the preset bundle:**
     1. If the user passed `--direction <name>` (e.g. `inspection`, `saas`, `product`), load `${PLUGIN_ROOT}/skills/design-system/references/vibe/direction-<name>.md` and use its tokens.
-    2. **Airline / aviation / commercial-flight carve-out (HARD RULE).** If the brief contains any of `airline`, `aviation`, `flight`, `aircraft`, `carrier`, `pilot`, `cabin crew`, `boarding`, `departure`, `tarmac`, `turnaround`, `ground ops`, OR the app name contains those tokens, DO NOT load the `signature` preset (safety-orange would clash with airline brand expectations). Instead **load [`${PLUGIN_ROOT}/skills/design-system/references/vibe/direction-airline.md`](./references/vibe/direction-airline.md)** — deep aviation blue (`#0A4F8F`), white surfaces, hi-vis status pills, hairline borders. Token bundle is the canonical FlightCheck tokens (proven in production). Record in `memory-bank.md` as `direction: airline`.
+    2. **Airline / aviation / commercial-flight carve-out (HARD RULE).** If the brief contains any of `airline`, `aviation`, `flight`, `aircraft`, `carrier`, `pilot`, `cabin crew`, `boarding`, `departure`, `tarmac`, `turnaround`, `ground ops`, OR the app name contains those tokens, DO NOT load the `signature` preset (safety-orange would clash with airline brand expectations). Instead **load [`${PLUGIN_ROOT}/skills/design-system/references/vibe/direction-airline.md`](./references/vibe/direction-airline.md)** — deep aviation blue (`#0A4F8F`), white surfaces, hi-vis status pills, hairline borders. Token bundle is the canonical FlightCheck tokens (proven in production). After approval, record in `memory-bank.md` as `direction: airline`.
     3. **Else (true "all defaults" path) → load [`${PLUGIN_ROOT}/skills/design-system/references/vibe/direction-polished-inspection.md`](./references/vibe/direction-polished-inspection.md) as the canonical `polished-inspection` preset** — white surface, Power-Platform green `#007d48` accent (Power Platform–aligned default), status-stripe cards, soft-tinted status pills, large tap targets. This is the polished MVP default that fits any inspection / field-ops / asset-tracking app (~70% of mobile-app traffic) AND demos cleanly to enterprise stakeholders. The previous `signature` preset (slate dark + safety orange, sourced from `uber-design.md`) is now opt-in via `--direction inspection` for true outdoor-only field apps.
      4. As a last fallback, if the source file is unreadable, use the inspection direction inlined in [`references/design-system-schema.md`](./references/design-system-schema.md).
 
-     Skip the full `brand/design-system.md` write — only `brand/tokens.ts` is needed. Record the chosen source in `memory-bank.md` under `## Design`: `direction: polished-inspection (default — white + Power-Platform green, demo-friendly enterprise polish)` so future runs know what was picked.
-  2. **Mini-preview (Sub-step 6.5 lite)** — render exactly 3 screens (List + Form + Detail archetypes from the plan's `## Screens`; if fewer exist, render whichever do) using the same HTML preview template + Tamagui-to-HTML mapping as `screen-planner`, with `brand/tokens.ts` values substituted. Write to `<working_dir>/_design_preview.html`, open in browser. Print: `"→ Polished-inspection preview ready at file://<working_dir>/_design_preview.html — confirm the look (or re-run /design-system --direction <inspection|saas|product> to switch)."`
+     For first-time defaults, skip the full `brand/design-system.md` write — only `brand/tokens.ts` is needed. If a prior full design exists, do not silently replace its tokens with defaults: Sub-step 3.5 must approve the concrete token delta and corresponding spec-section updates together, or preserve both unchanged. Record the chosen source in `memory-bank.md` only after approval under `## Design`: `direction: polished-inspection (default — white + Power-Platform green, demo-friendly enterprise polish)` so future runs know what was picked.
+  2. **Mini-preview (Sub-step 6.5 lite)** — render exactly 3 screens (List + Form + Detail archetypes from the plan's `## Screens`; if fewer exist, render whichever do) using the same HTML preview template + Tamagui-to-HTML mapping as `screen-planner`, with `brand/tokens.ts` values substituted. Write to `<working_dir>/_plan_preview.html` — the canonical filename. `/create-mobile-app` takes its screen carousel from that file and the build plan links it, so writing anything else leaves both empty on this path. Open it in the browser on standalone runs only; in orchestrator mode print the path, because the build plan already links it. Print: `"→ Polished-inspection preview ready at file://<working_dir>/_plan_preview.html — confirm the look (or re-run /design-system --direction <inspection|saas|product> to switch)."`
   3. **Return DONE** so Step 9b of the orchestrator picks up `brand/tokens.ts` and applies [`references/tamagui-integration.md`](./references/tamagui-integration.md) in brand-import mode.
 
-  **Never return DONE without writing `brand/tokens.ts`.** The label promises "applied defaults"; the implementation must deliver tokens AND a preview, otherwise the user has no way to verify the look short of waiting for full screen-builders + emulator boot. The preview is fast (HTML, no JS execution) and uses the same renderer Sub-step 6.5 uses for paths (a)/(b).
+  **Return DONE only after the approved tokens are available** (written after the boundary, or unchanged existing tokens reused). Cancellation or missing approval never authorizes a write to satisfy this requirement. The label promises "applied defaults"; the implementation must deliver tokens AND a preview, otherwise the user has no way to verify the look short of waiting for full screen-builders + emulator boot. The preview is fast (HTML, no JS execution) and uses the same renderer Sub-step 6.5 uses for paths (a)/(b).
+
+**`--design-spec` passthrough:** Validate and prepare the imported spec and matching
+light tokens without copying into `brand/`. Run Sub-step 3.5, apply only the
+approved replacement (or first-time draft), then continue to Sub-steps 5–7.
+Skipping generation is not permission to bypass approval, backup, or first-time
+confirmation.
 
 **On ANY input failure during Sub-step 1**, after printing "BLOCKED: {{input}} — {{reason}}":
 
@@ -237,7 +279,7 @@ Before processing any external content, apply the sanitization rules from [`refe
 
 Follow the internal style picker in [`references/vibe/style-picker.md`](./references/vibe/style-picker.md):
 - Pass `working_dir`, `target_screen` (first List screen), `default_direction` (from industry)
-- The style picker renders `_design_vibe.html`, opens browser, asks user
+- The style picker renders `_design_vibe.html`, opens browser (standalone runs only — in orchestrator mode print the path instead), asks user
 - Returns: picked direction name + merged bundle dimensions
 
 If brand_notes or --logo palette exist, prepend banner showing inferred recommendation.
@@ -248,6 +290,58 @@ If brand_notes or --logo palette exist, prepend banner showing inferred recommen
 - Retry cap: max 2 regenerates
 
 Store result as `picked_direction` with all resolved dimensions.
+Keep selection/rejection notes pending on reruns rather than letting the folded
+picker persist them before Sub-step 3.5.
+
+---
+
+## Sub-step 3.5 — Approve the concrete delta + verify backup
+
+**Mandatory generation write boundary for reruns:** paths (a), (b), both (c) paths,
+(d), `--design-spec`, reskin, edits, and regeneration. Reuse the approval rule in
+[refresh-flow.md Step 5](./references/refresh-flow.md#step-5--update-the-spec);
+the dedicated refresh flow remains the owner of single-dimension refreshes.
+
+1. Prepare the complete candidate without live writes. Show the concrete
+   before/after delta: palette values, typography, component/density/negative
+   changes, affected spec sections and token files, and any gallery/preview or
+   Design-record updates. Include any dark-file creation, replacement, or
+   removal and the resulting default/custom selection. If dark state is out of
+   scope, preserve its exact contents, presence/absence, and approved selection;
+   default dark never requires creating a dark file. For minimal/brand-preview
+   paths with a prior full spec, include matching spec-section updates rather
+   than leaving the spec and tokens divergent.
+2. Obtain explicit approval of that concrete delta, or reuse the current
+   owner's matching approved scope **without another prompt**. The owner,
+   absolute working directory, implementation phase (or explicitly delegated
+   design gate), and exact proposed changes must match. A cost choice, style
+   pick, input flag, stale Design record, or orchestration marker alone is not
+   approval to replace an existing design. Changed or missing caller scope
+   returns `NEEDS_CONTEXT` to the owner; do not independently widen its approval.
+3. Cancellation, dismissal, silence, or an ambiguous answer means **no live
+   writes**: stop or clarify. Do not create a history snapshot, overwrite spec,
+   tokens, galleries/previews, persist pending memory-bank notes, change the
+   approved dark selection, or report the candidate as applied/locked.
+4. After approval and before the first write or deletion, capture the existing
+   state using the [snapshot contract](./references/refresh-flow.md#snapshot-contract).
+   Include optional `brand/tokens.dark.ts` and explicit absence. Verify every
+   expected backup member; a failed or incomplete backup blocks all live writes.
+   Partial or unknown prior state is not first-time generation: if it cannot be
+   captured safely under that contract, stop and resolve it with the owner rather
+   than inventing an initial snapshot. Retain the pre-write snapshot unchanged.
+5. Apply only the approved candidate via Sub-step 4, the minimal/brand-preview
+   path, or validated spec passthrough, then render/review. If the candidate or
+   current baseline changes after approval, return to this boundary for the new
+   delta and a verified backup before further writes. An unchanged candidate
+   needs no duplicate approval or snapshot.
+
+**First-time generation with no prior brand state:** keep the existing
+generation-then-review flow; there is no pre-edit state to back up. Full designs
+and imported specs stay drafts through Sub-steps 4–5 and become approved only at
+Sub-step 6 (or through an owner's exact approval of the generated candidate).
+Do not create an approved initial snapshot before that confirmation. Minimal
+defaults/brand previews keep their existing lightweight path; they do not
+invent a confirmed full spec or an approved full-design history entry.
 
 ---
 
@@ -258,7 +352,12 @@ Store result as `picked_direction` with all resolved dimensions.
 **Print:**
 > "→ [design-system] Writing brand/design-system.md…"
 
-Generate the full spec deterministically from the locked direction. Follow the schema in [`references/design-system-schema.md`](./references/design-system-schema.md).
+On reruns, write only the candidate approved in Sub-step 3.5, after its verified
+pre-write backup. Do not generate a different design after obtaining approval.
+For first-time generation, write the draft spec deterministically from the
+selected direction. Follow the schema in
+[`references/design-system-schema.md`](./references/design-system-schema.md).
+History completion occurs after confirmation in Sub-step 6, not here.
 
 **Sections (required):**
 
@@ -367,13 +466,6 @@ export const tokens = {
 export type BrandTokens = typeof tokens;
 ```
 
-**Snapshot to history:**
-
-```bash
-mkdir -p brand/.history
-cp brand/design-system.md "brand/.history/$(date -u +%Y-%m-%dT%H-%M-%SZ)-initial.md" 2>/dev/null || true
-```
-
 ---
 
 ## Sub-step 5 — Render brand/design-system.html (paths (a) and (b))
@@ -401,13 +493,20 @@ The HTML gallery includes:
 
 Write to `brand/design-system.html`.
 
-**Open in browser:**
+**Open in browser — standalone runs only:**
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 open "brand/design-system.html" 2>/dev/null \
   || xdg-open "brand/design-system.html" 2>/dev/null \
   || echo "Preview at: file://$(pwd)/brand/design-system.html"
 ```
+
+**Orchestrator mode opens nothing.** When `CODE_APPS_NATIVE_ORCHESTRATING=1`, skip the opener and
+print the path instead. `/create-mobile-app` keeps a build plan open in the user's browser and
+links every file this skill writes, so a tab opening on top of a run they are already watching
+interrupts rather than informs. Run standalone, open as usual — there is no plan page then.
+
 
 ---
 
@@ -417,6 +516,13 @@ open "brand/design-system.html" 2>/dev/null \
 
 **Print:**
 > "→ [design-system] Design system ready for review."
+
+For reruns, this is review of the already approved delta, not the first
+authorization to write. If it matches the approved candidate and no revision is
+requested, continue without another confirmation prompt, including matching
+owner-approved calls. First-time full designs/imports require confirmation of
+the generated candidate unless the owner already approved that exact candidate.
+In either approved case, complete history below before continuing to Sub-step 6.5.
 
 ```
 Summary
@@ -445,17 +551,45 @@ What now?
 If user says "change palette AND typography" → refuse, ask which first.
 
 **On [edit X]:**
-1. Prompt for the specific change
-2. Update ONLY that section of `brand/design-system.md`
-3. Regenerate `brand/tokens.ts` from updated spec
-4. Re-render `brand/design-system.html`
-5. Show summary again
+1. Resolve the specific change as a candidate without live writes.
+2. On reruns or edits to an already confirmed design, return to Sub-step 3.5
+   for concrete-delta approval and a verified backup before updating anything.
+   An earlier approval does not cover changed values or expanded scope.
+3. Apply only that approved section and its corresponding token changes,
+   then re-render and show the summary again. Unconfirmed first-time drafts
+   may be revised before confirmation; do not snapshot them as approved.
 
 **On [confirm]:**
-Continue to Sub-step 6.5.
+Accept the generated candidate, complete history below, then continue to Sub-step 6.5.
 
 **On [regenerate]:**
-Go back to Sub-step 3 (counts against retry cap of 2).
+Go back to Sub-step 3 (counts against retry cap of 2). A new direction invalidates
+the previous candidate approval; reruns must pass Sub-step 3.5 again before any
+replacement. First-time regenerated drafts still wait for confirmation.
+
+**On [skip — use as draft]:**
+Only first-time unconfirmed output can proceed to Sub-step 7 as draft, without
+an approved initial snapshot or a locked-design record. This is not a bypass
+for replacing an existing design; leave the previously approved live state
+unchanged.
+
+**On cancel, dismissal, silence, or ambiguity:**
+Stop or clarify without further writes, history creation, or approval/lock
+updates. Do not treat an unconfirmed first-time draft as an approved design.
+
+**History completion (after confirmation):**
+
+- If a pre-write snapshot was captured, retain it unchanged. Do not create a
+  second post-write `-initial` snapshot on refresh, reskin, or regeneration.
+- Only for first-time generation with no prior brand state, record one complete
+  approved initial snapshot after generation **and explicit confirmation** of
+  that candidate (or the owner's matching exact approval), using the same
+  [snapshot contract](./references/refresh-flow.md#snapshot-contract): spec,
+  light tokens, optional dark-token payload, and explicit presence/approval
+  state. Do not save only the Markdown spec or snapshot an unconfirmed draft.
+- Verify every expected member before reporting success. A failed or incomplete
+  snapshot is a visible failure, not a suppressed copy error or a valid
+  rollback target.
 
 ---
 
@@ -470,7 +604,7 @@ Go back to Sub-step 3 (counts against retry cap of 2).
 
 **Rendering:** Use the same HTML preview template and Tamagui-to-HTML mapping as the screen-planner (`shared/references/tamagui-html-mapping.md`). Replace default token values with the locked `brand/tokens.ts` values (palette, typography, spacing, radius).
 
-**Path (c) "Brand preview":** Skip this question — automatically render key screens (List + Form + Detail) with brand tokens applied. If the plan has fewer than 3 archetypes, render whichever exist. Open browser. Proceed to Sub-step 7.
+**Path (c) "Brand preview":** Skip this question — automatically render key screens (List + Form + Detail) with brand tokens applied. If the plan has fewer than 3 archetypes, render whichever exist. Open the browser on standalone runs only (see below). Proceed to Sub-step 7.
 
 **Paths (a) and (b):** Ask:
 ```
@@ -487,13 +621,23 @@ Re-render screen preview with your brand tokens?
 - **(b)** → re-render List + Form + Detail archetypes only (whichever exist in the plan)
 - **(c)** → skip, proceed to Sub-step 7
 
-Overwrites `_plan_preview.html` with branded versions. Opens browser.
+Overwrites `_plan_preview.html` with branded versions.
+
+**Orchestrator mode opens nothing.** When `CODE_APPS_NATIVE_ORCHESTRATING=1`, skip the opener and
+print the path instead. `/create-mobile-app` keeps a build plan open in the user's browser and
+links every file this skill writes, so a tab opening on top of a run they are already watching
+interrupts rather than informs. Run standalone, open as usual — there is no plan page then.
+
 
 ---
 
 ## Sub-step 7 — Persist + return
 
 **Telemetry checkpoint: `persist_design_system`**
+
+Persist only the applied state and approved notes. For an explicitly accepted
+first-time draft, label the summary/return as draft and omit `design_system_locked`;
+the locked messages below apply only to confirmed designs.
 
 **Print:**
 > "→ [design-system] Done. Design system locked."
@@ -543,9 +687,10 @@ See [`references/refresh-flow.md`](./references/refresh-flow.md) for full detail
 4. Prompt for the specific change to the named dimension
 5. Update ONLY that section (refuse bundled changes)
 6. Regenerate `brand/tokens.ts`
-7. Snapshot to `brand/.history/`
+7. Retain the pre-write snapshot captured before steps 5-6 in `brand/.history/`,
+   including dark-token presence/absence per the shared snapshot contract
 8. Re-render `brand/design-system.html`
-9. Confirmation gate
+9. Review the applied diff (approval must precede steps 5-6)
 10. Append to `## Design history` in memory-bank
 
 **Allowed dimensions:** `palette`, `typography`, `components`, `density`, `negatives`, `motion`
@@ -557,9 +702,9 @@ See [`references/refresh-flow.md`](./references/refresh-flow.md) for full detail
 | `--refresh palette` | ~3k | ~30 sec | no (tokens swap) |
 | `--refresh typography` | ~3k | ~30 sec | no (tokens swap) |
 | `--refresh components` | ~5k | ~45 sec | yes (primitives regenerate) |
-| `--refresh density` | ~3k | ~30 sec | no |
-| `--refresh negatives` | ~2k | ~20 sec | no |
-| `--refresh motion` | ~3k | ~30 sec | no |
+| `--refresh density` | ~3k | ~30 sec | inspect affected layouts |
+| `--refresh negatives` | ~2k | ~20 sec | inspect screens for newly forbidden patterns |
+| `--refresh motion` | ~3k | ~30 sec | inspect consumers |
 | `--reskin` | ~50-80k | ~5-10 min | YES (every screen) |
 | `--add-dark-mode` | ~5-8k | ~1 min | yes (ThemeProvider wired) |
 
@@ -582,16 +727,25 @@ See [`references/refresh-flow.md`](./references/refresh-flow.md) for full detail
 
 3. User approval gate (show derived palette, allow [y/N/edit])
 
-4. Write `brand/tokens.dark.ts`
+   After approval, capture the pre-write [snapshot contract](./references/refresh-flow.md#snapshot-contract),
+   including whether `brand/tokens.dark.ts` exists, before Step 4 writes it.
 
-5. Generate theme infrastructure:
-   - `src/theme/index.ts` — themes registry
-   - `src/theme/ThemeProvider.tsx` — system-follow + manual override
-   - `src/theme/useTheme.ts` — convenience hooks
+4. Write `brand/tokens.dark.ts` using the named `darkTokens` export and complete
+   `color` shape in
+   [Approved dark palette](./references/tamagui-integration.md#approved-dark-palette-conditional).
+   Use the approved dark values, not copies of the light surfaces/text.
 
-6. Patch `app/_layout.tsx` to wrap with ThemeProvider
+5. Return the dark palette and required wiring to the owning create/edit
+   orchestrator. It applies [tamagui-integration.md](./references/tamagui-integration.md)
+   to the existing light/dark themes and `PowerAppsProvider`; do not generate an
+   app-owned theme provider or a second theme registry.
 
-7. Snapshot + history
+6. Let the owner update any approved theme-switching UI and verify it. In
+   implementation-only mode, report the unwired runtime dependency rather than
+   claiming dark mode is active.
+
+7. Retain the pre-write snapshot and record the approved dark palette in design
+   history; do not overwrite the rollback target with the newly generated file.
 
 ---
 
@@ -604,6 +758,8 @@ See [`references/refresh-flow.md`](./references/refresh-flow.md) for full detail
 ```
 
 History stored in `brand/.history/`, capped at 50 entries (oldest auto-pruned).
+Follow the [snapshot contract and rollback flow](./references/refresh-flow.md#snapshot-contract)
+for light/dark artifacts, explicit absence, and restoration of runtime wiring.
 
 ---
 
@@ -612,9 +768,9 @@ History stored in `brand/.history/`, capped at 50 entries (oldest auto-pruned).
 | Consumer | Reads from brand/ | Behavior |
 |---|---|---|
 | `screen-builder` | `brand/design-system.md` (MANDATORY) | Negatives = HARD RULES. Token references required. |
-| Tamagui integration reference | `brand/tokens.ts` | Applied through native-host theme helpers by `/create-mobile-app` Step 9b |
+| Tamagui integration reference | `brand/tokens.ts` and approved dark palette | Applied through native-host theme helpers by `/create-mobile-app` Step 9b or `/edit-app` Step 5 |
 | `preview-screens` | `visual_companion` flag | Renders previews with brand tokens |
-| `/edit-app` | Routes visual changes here | Non-visual schema and screen-plan changes stay in `/edit-app` |
+| `/edit-app` | Routes approved visual changes here | Owns Design plan, runtime wiring, affected screen changes, and final verification |
 | `/deploy` | `brand/` shipped in bundle | No special handling |
 
 ---
@@ -649,6 +805,6 @@ All external inputs MUST follow the policies in [`references/input-modes.md`](./
 ## Notes
 
 - **Read-only with respect to app source code.** This skill writes only to `brand/`, `_design_vibe.html`, `memory-bank.md`, and `_plan_preview.html`. Never touches TSX, services, or generated code.
-- **Re-runnable.** Each run overwrites brand/ files (with snapshot to .history/). Memory bank entries accumulate.
+- **Re-runnable.** Approved reruns replace only the agreed brand/ files after a verified pre-write snapshot. Memory bank entries accumulate only for applied changes.
 - **One-major-change-per-prompt.** Refuse bundled dimension changes. Ask which first.
 - **Retry cap.** Max 2 direction regenerates per session.

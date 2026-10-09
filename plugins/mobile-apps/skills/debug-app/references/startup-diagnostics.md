@@ -31,8 +31,10 @@ approval only for its exact operation. Never launch an indefinite watcher.
 
 ## S1. Inspect without executing app/package code
 
-Capture the original symptom, command, failing stage, and any previous attempted
-repair from the user or calling skill. Available terminal output is useful here
+Capture the original symptom, failing stage, structured `devArgs`, and any
+previous attempted repair from the user or calling skill. `devArgs` may contain
+only the validated tunnel forms documented by `/debug-app`; never parse options
+from symptom text or replay a caller-provided shell string. Available terminal output is useful here
 because `predev` can fail before the logger starts. Never require a terminal ID.
 If no output is available, ask for a small relevant error excerpt; do not request
 the full npm log, `.npmrc`, auth config, or environment-variable dump.
@@ -40,7 +42,7 @@ the full npm log, `.npmrc`, auth config, or environment-variable dump.
 Run the bundled local-only inspector from the selected root:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/inspect-startup.js" --working-dir "<working_dir>"
+node "${PLUGIN_ROOT}/scripts/inspect-startup.js" --working-dir '<working_dir>'
 ```
 
 It reads JSON metadata and resolves host configuration entry points without
@@ -56,7 +58,7 @@ the inspector reports it.
 For a specific failed import, inspect that exact package subpath as well:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/inspect-startup.js" --working-dir "<working_dir>" --entry-point "<failed-package-or-subpath>"
+node "${PLUGIN_ROOT}/scripts/inspect-startup.js" --working-dir '<working_dir>' --entry-point '<failed-package-or-subpath>'
 ```
 
 **Windows / PowerShell:** substitute the resolved plugin root, and pass the native
@@ -173,7 +175,7 @@ approval, record hashes of the manifest and effective lock, then run from that r
 Bash / Git Bash:
 
 ```bash
-cd "<working_dir>" || exit 1
+cd -- '<working_dir>' || exit 1
 npm ci --ignore-scripts --no-audit --no-fund
 ```
 
@@ -208,10 +210,21 @@ Keep installation approval separate from process control. This is the only
 bounded exception to `/debug-app`'s normal no-restart rule; it is not permission
 to kill another app's server, clear caches by default, or bypass `predev`.
 
-- Use the canonical `npm run dev` from the same app root so schema and type-check
-  hooks still execute. Reuse the approved port options; do not assume 8081.
-  In PowerShell use `npm.cmd run dev` after `Set-Location -LiteralPath` succeeds;
-  this runs the same lifecycle without depending on PowerShell script policy.
+- Use the canonical `npm run dev` from the same app root so every
+  template-owned lifecycle hook still executes. With no `devArgs`, run exactly
+  `npm run dev`. With validated `devArgs`, forward them after npm's separator:
+  `npm run dev -- --tunnel`, optionally followed by
+  `--tunnel-tenant <tenant-guid>`. Preserve the selected tunnel mode and tenant
+  across retries; never add, remove, or change them automatically. Tunnel mode
+  remains authenticated, creates no anonymous access rule, and still requires
+  the user's Azure CLI session.
+- In PowerShell use `npm.cmd run dev` with no arguments, or
+  `npm.cmd run dev -- @devArgs` where `devArgs` is the validated array, after
+  `Set-Location -LiteralPath` succeeds. Do not interpolate a command string or
+  depend on PowerShell script policy.
+- Reuse the approved port options and do not assume 8081. A requested tunnel is
+  transport selection, not permission to change the Metro port or kill an
+  existing process.
 - If the agent starts it, use a persistent supported background terminal,
   inspect initial output, and verify the new log PID/port identity through
   Phase 0.0. If the host cannot keep a server alive, ask the user to launch it.

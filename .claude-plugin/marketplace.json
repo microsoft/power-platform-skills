@@ -39,6 +39,18 @@
         {
             "name": "power-automate",
             "source": "./plugins/power-automate"
+        },
+        {
+            "name": "process-intelligence",
+            "source": "./plugins/process-intelligence"
+        },
+        {
+            "name": "dataverse",
+            "source": {
+                "source": "git-subdir",
+                "url": "microsoft/Dataverse-skills",
+                "path": ".github/plugins/dataverse"
+            }
         }
     ]
 }

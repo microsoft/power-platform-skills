@@ -31,9 +31,12 @@ function tempDirectory(name) {
   return directory;
 }
 
-function copyTemplate(relativeDirectory = '') {
+function copyTemplate(sourceRoot = templateRoot, relativeDirectory = '') {
   const projectRoot = path.join(tempDirectory('mobile-template'), relativeDirectory);
-  fs.cpSync(templateRoot, projectRoot, { recursive: true });
+  fs.cpSync(sourceRoot, projectRoot, {
+    recursive: true,
+    filter: (source) => path.basename(source) !== 'node_modules',
+  });
   fs.mkdirSync(path.join(projectRoot, 'node_modules', 'expo'), { recursive: true });
   return projectRoot;
 }
@@ -83,6 +86,18 @@ function assertSnapshotsEqual(left, right) {
   }
 }
 
+test('template test fixtures exclude installed dependencies and local dependency caches', (context) => {
+  const sourceRoot = tempDirectory('mobile-template-source');
+  context.after(() => fs.rmSync(sourceRoot, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(sourceRoot, 'package.json'), '{"name":"fixture"}\n');
+  fs.mkdirSync(path.join(sourceRoot, 'node_modules', '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(sourceRoot, 'node_modules', '.cache', 'local-run.txt'), 'not template source');
+  const projectRoot = copyTemplate(sourceRoot);
+  context.after(() => fs.rmSync(projectRoot, { recursive: true, force: true }));
+  assert.equal(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'), '{"name":"fixture"}\n');
+  assert.deepStrictEqual(fs.readdirSync(path.join(projectRoot, 'node_modules')), ['expo']);
+});
+
 function removeGuidance(projectRoot) {
   for (const relativePath of guidanceFiles) {
     fs.unlinkSync(path.join(projectRoot, relativePath));
@@ -92,7 +107,7 @@ function removeGuidance(projectRoot) {
 const guidanceOptions = { displayName: 'Guidance App', slug: 'guidance-app' };
 
 test('preparation CLI copies POSIX-relative guidance beneath a native root with spaces', () => {
-  const projectRoot = copyTemplate("app's folder [test]");
+  const projectRoot = copyTemplate(templateRoot, "app's folder [test]");
   removeGuidance(projectRoot);
   fs.rmdirSync(path.join(projectRoot, '.github'));
   assert.ok(path.isAbsolute(projectRoot));
@@ -438,7 +453,7 @@ test('scaffold validation uses preparation writes, not later generator output', 
   fs.writeFileSync(configPath, '{"environmentId":"manual-edit"}\n');
   const manualEdit = validate(['power.config.json']);
   assert.strictEqual(manualEdit.status, 2, manualEdit.stderr);
-  assert.match(manualEdit.stderr, /owned by `npx power-apps init`/);
+  assert.match(manualEdit.stderr, /owned by `pa app init`/);
 });
 
 test('preparation round-trips JavaScript line terminators in app display names', () => {

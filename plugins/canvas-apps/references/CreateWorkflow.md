@@ -16,6 +16,8 @@ Read:
 
 Determine:
 
+- An original-request capability inventory, captured clause-by-clause before screen or
+  feature consolidation, with stable mappings to actions, observers, and scenarios
 - Requested capability families from `${PLUGIN_ROOT}/references/BehaviorGuide.md`
 - Every user action, precondition, source-of-truth transition, and visible postcondition
 - Stable IDs, mutable fields, status values, relationships, and persistence semantics
@@ -24,6 +26,9 @@ Determine:
 - Data sources, connectors, collections, or mock data
 - Aesthetic direction with exact RGBA values
 - Target device and users
+
+For any requested time ordering, choose typed Date/Time storage or a validated canonical
+24-hour sort key before presenting the plan. Never sort 12-hour display strings directly.
 
 Use AutoLayout for phone, tablet, multi-device, or unknown targets. ManualLayout is
 acceptable for desktop-only, fixed dashboards.
@@ -58,9 +63,29 @@ Use this format:
 
 List every requested behavior in Functional Scope before decorative or optional screens. Do not present the plan as ready when a named action has only a control and no source transition or visible success state.
 
-Wait for user approval. Revise and re-present if requested.
+When the request explicitly identifies itself as a noninteractive automation run and says
+that a reasonable plan is pre-approved, construct the complete plan internally and continue
+directly to the planner. Do not pause, ask for confirmation, or end the turn after planning.
+
+Otherwise, wait for user approval. Revise and re-present if requested.
 
 ## 4. Invoke the Planner
+
+Before delegation, write `[working directory]/canvas-app-requirements.md` from the approved plan and
+original request using the `Original Requirements Contract` template in
+`${PLUGIN_ROOT}/references/PlanTemplates.md`. This is an orchestrator-owned input: preserve the original
+request clauses before planner reduction, assign stable action/scenario and
+specialized-contract keys, and record the target device. The planner must not edit it.
+
+
+Before delegation, use the top-level skill's MCP connection to call `list_controls`,
+`list_apis`, and `list_data_sources`; call `describe_control` for every control type in
+the approved plan; and call `describe_api` and `get_data_source_schema` only for APIs and
+data sources the plan uses. For Canvas or Code Components, make their `describe_control`
+calls last so the packet contains the freshest Studio snapshot. Preserve the exact
+results as the discovery packet. Do not delegate these calls: task agents do not
+reliably inherit the configured MCP connection.
+
 
 Invoke the `canvas-app-planner` agent with `Task` and:
 
@@ -69,13 +94,22 @@ Mode: CREATE
 Working directory: `[working directory]`
 Plan index: `[working directory]/canvas-app-plan.md`
 Shared plan: `[working directory]/canvas-app-shared.md`
+Plugin root: `${PLUGIN_ROOT}`
 Requirements: [user requirements]
 Approved plan: [full approved plan]
+Original requirements contract: `[working directory]/canvas-app-requirements.md`
 Target users and device: [stated or inferred]
+Discovery packet: [complete results gathered above]
 ```
 
-The planner discovers resources, writes `[working directory]/App.pa.yaml`, the plan index, shared plan,
-and one screen brief per dispatch row. It does not redesign the approved plan.
+The planner uses the discovered resources, writes `[working directory]/App.pa.yaml`, the plan index,
+shared plan, and one screen brief per dispatch row. It does not redesign the approved
+plan.
+
+If it returns `Status: Discovery Packet Blocked`, gather the named missing result in this
+top-level context and re-invoke it with the completed packet. If writing is blocked, apply
+its complete inline artifact payloads verbatim as required by the skill before entering
+Planned Build Handoff.
 
 Wait for the planner to finish, then return to **Planned Build Handoff** in the
 `canvas-app` skill.

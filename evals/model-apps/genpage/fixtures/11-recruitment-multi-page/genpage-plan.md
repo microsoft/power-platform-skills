@@ -43,6 +43,9 @@ contact, appointment
 
 No connector bindings.
 
+## Custom API Bindings
+No custom API bindings.
+
 ## Design Preferences
 
 - Cross-page navigation uses Xrm.Navigation.navigateTo with `pageId: "PAGEREF_<filename>"` placeholders that the orchestrator resolves in Phase 6.5

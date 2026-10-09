@@ -110,6 +110,11 @@ test('startup retries preserve process ownership and require actual device evide
   const retry = section(startup, '## S4.', '## S5.');
   assert.match(retry, /Keep installation approval separate from process control/);
   assert.match(retry, /canonical `npm run dev`/);
+  assert.match(retry, /npm run dev -- --tunnel/);
+  assert.match(retry, /--tunnel-tenant <tenant-guid>/);
+  assert.match(retry, /Preserve the selected tunnel mode and tenant/);
+  assert.match(retry, /npm\.cmd run dev -- @devArgs/);
+  assert.match(retry, /Do not interpolate a command string/);
   assert.match(retry, /never reuse|do not reuse the dead session's cursor/i);
   assert.match(retry, /current native bundle\/log evidence and user confirmation/);
   assert.match(retry, /At most one locked restore[\s\S]*two evidence-driven startup retries/);
@@ -134,12 +139,25 @@ test('create shares one failure workflow and forwards the project, evidence, and
   assert.match(launch, /Do not start a separate repair\/reinstall\/restart loop/);
   assert.match(launch, /Invoke skill: \/debug-app/);
   assert.match(launch, /startup "<original sanitized startup symptom>"/);
-  assert.match(launch, /--working-dir "<working_dir>"/);
-  assert.match(launch, /failed_command: npm run dev/);
+  assert.match(launch, /--working-dir '<working_dir>'/);
+  assert.match(launch, /launch_command: npm run dev/);
+  assert.match(launch, /launch_args: <validated arguments/);
+  assert.match(launch, /Forward launch arguments as structured data/);
   assert.match(launch, /startup_attempts:/);
   assert.match(launch, /return_to_caller: true/);
-  assert.match(launch, /Creation approval is not dependency-restoration or restart\napproval/);
+  assert.match(launch, /Creation approval is not dependency-restoration or restart\s+approval/);
   assert.match(launch, /child returns without the runtime monitor/);
+});
+
+test('startup tunnel options are explicit, validated, and never inferred from symptom text', () => {
+  assert.match(debug, /`--tunnel` \| Startup only/);
+  assert.match(debug, /`--tunnel-tenant <tenant-guid>` \| Startup only/);
+  assert.match(debug, /Validate `--tunnel-tenant` as a GUID and require `--tunnel`/);
+  assert.match(debug, /never derive either option from symptom text/);
+  assert.match(debug, /accept `launch_args` only as an\s+array/);
+  assert.match(debug, /Reject strings, unknown flags, reordered\/missing values/);
+  assert.match(debug, /Do not execute a caller-provided\s+command string/);
+  assert.match(startup, /never parse options\s+from symptom text or replay a caller-provided shell string/);
 });
 
 test('sensitive startup evidence and older-project instruction adoption stay opt-in', () => {

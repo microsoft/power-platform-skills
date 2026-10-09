@@ -137,12 +137,14 @@ import has been Grep-validated against the verified list.
 
 ## Step 2.6 — Runtime-only Griffel validation
 
-`pac model genpage transpile` type-checks the page but does not execute
-`makeStyles`; unsupported Griffel shorthands can therefore compile and then log
-runtime errors in the browser. Before returning, Grep the generated `.tsx` with
-the regex `['"]?borderWidth['"]?\s*:` so unquoted, quoted, and spaced property
-syntax are all caught. Replace every match with the four explicit longhands:
-`borderTopWidth`, `borderRightWidth`, `borderBottomWidth`, and
+`pac model genpage transpile` only transpiles the page: it does not type-check it
+(a type error, or a reference to a column that does not exist, still transpiles
+and writes JavaScript), and it does not execute `makeStyles`. A clean transpile is
+therefore no proof that the page is type-safe, and unsupported Griffel shorthands
+can compile and then log runtime errors in the browser. Before returning, Grep the
+generated `.tsx` with the regex `['"]?borderWidth['"]?\s*:` so unquoted, quoted,
+and spaced property syntax are all caught. Replace every match with the four
+explicit longhands: `borderTopWidth`, `borderRightWidth`, `borderBottomWidth`, and
 `borderLeftWidth`. Do not return a file that still matches the regex.
 
 ## Step 3 — Read References and Samples
@@ -177,10 +179,13 @@ Custom-API-backed and also read:
 ${PLUGIN_ROOT}/references/custom-api.md
 ```
 
-If the `## Custom API Bindings` section is the literal `No custom API bindings.`, is
-empty, is missing entirely, or contains no binding row, the page has **no Custom APIs** —
-do not read custom-api.md and do not emit any `executeAction` / `executeFunction` /
-`listBoundActions` code.
+If the `## Custom API Bindings` section is exactly `No custom API bindings.`, the page has
+**no Custom APIs** — do not read custom-api.md and do not emit any `executeAction` /
+`executeFunction` / `listBoundActions` code. That sentinel is the only way a plan says
+"none". If the section is empty, missing entirely, or neither the sentinel nor a binding
+table, **stop and report it instead of writing the page**: the orchestrator halts on such a
+plan before dispatch, so reaching you means the plan is broken, and treating it as "no
+Custom APIs" would silently drop an approved binding.
 
 Only when your dispatch says **`Telemetry: enabled`** *and* the maker's own request
 asks to measure, track, monitor, or diagnose something do you instrument the page and
@@ -304,6 +309,8 @@ export default GeneratedComponent;
   - TimePicker from `@fluentui/react-timepicker-compat`
 - **Single-file architecture** — all components, utilities, styles in one `.tsx` file
 - **No external libraries** — only React, Fluent UI V9, approved Fluent icons, D3.js for charts
+  (see `references/supported-dependencies.md`; `scripts/lib/supported-dependencies.js`
+  is the source of truth for the generated package names, versions, and feature gates)
 - **makeStyles with tokens** — no inline styles for static values
   ```typescript
   const useStyles = makeStyles({
@@ -357,8 +364,27 @@ export default GeneratedComponent;
   Do NOT invent a fake GUID. Do NOT use `recordId` for a custom identifier. Do NOT use a page's
   **display name** — only the key / file stem above. **Always wrap the placeholder in double
   quotes and place it as the `pageId` value** — the resolver only rewrites a `"PAGEREF_<token>"`
-  at a real `navigateTo` call site; a single-quoted, back-ticked, or concatenated form, or any
-  decoy string elsewhere, is rejected by the pre-deploy scan. Under `/app-builder` every
+  at a real `navigateTo` call site; a single-quoted, back-ticked, concatenated, or
+  expression-tailed (`"PAGEREF_x".slice(8)`) form, or any decoy string elsewhere, is
+  rejected by the pre-deploy scan. A plain cast right after the literal (`"PAGEREF_x" as const`, or
+  `as Name` / `satisfies Name` with `Name` a plain or dotted identifier) is accepted and kept as written; a generic, a union or
+  a string-literal type is not — write the literal alone unless a type needs the cast.
+  **Write the options object inline in the `navigateTo` call.** An object built in a variable and
+  passed by name (`const options = { pageType: "generative", pageId: "PAGEREF_x" }; navigateTo(options)`)
+  is not recognised, so the token in it halts the build as stray. **Write the plain form,
+  `navigateTo({ … })`** — a parenthesised callee, `(navigateTo)({ … })`, is read only at the start of a
+  statement or after `;` `{` `(` `[` `,` `:` a ternary `?`, an operator ending in `=`, `=>`, `&&`, `||` or `??`,
+  and any other spelling (`factory!(navigateTo)({ … })`) halts as stray. A `PAGEREF_` token may appear
+  nowhere but that double-quoted `pageId` literal — **not in a comment of any kind**: a `//` comment, a
+  block comment, a trailing comment (`navigateTo({ … }); // PAGEREF_x`) and a JSX `{/* PAGEREF_x */}` all halt
+  the build, so write a comment without the token. Keep the
+  code before a navigation call unambiguous: the checker has no parser, so where it cannot tell a division from
+  a regex, or a comparison from an element — a `/` or `<` right after a `}` (write `({ … }) / 2`, not
+  `{ … } / 2`), after a `)` whose `(` is far back, after a word that can be a keyword or a name (`of`, `type`,
+  `get`, `as` …), after a `>`, or on a later line than the operand before it (`type Value = number` then a
+  regex line); an identifier written with a `\u` escape — it does not trust a `PAGEREF_` token at or after
+  that spot, or a `navigateTo` call whose object or arguments reach it. Put the operand in parentheses, end the
+  statement with `;`, or write the navigation call above it. Under `/app-builder` every
   `PAGEREF_<key>` must have a matching `navigatesTo` entry in the spec (the build enforces exact
   parity); under `/genpage` every token must match a `File` in the plan's `## Pages` table.
 - **Every linked page must be sitemap-placed.** A page targeted by a `PAGEREF_<key>` nav

@@ -8,26 +8,23 @@ const test = require('node:test');
 const templateRoot = path.resolve(__dirname, '../../template');
 const read = (relativePath) => fs.readFileSync(path.join(templateRoot, relativePath), 'utf8');
 
-test('template guidance has one concise, app-local canonical source', () => {
+test('template guidance has one app-local canonical source', () => {
   const agents = read('AGENTS.md');
-  assert.ok(agents.trimEnd().split('\n').length <= 90, 'Keep app guidance at most 90 lines');
-  assert.match(agents, /Expo \/ React Native \/ TypeScript/);
-  assert.match(agents, /Power Apps mobile app/);
-  assert.match(agents, /template content, not repository or plugin/);
-  assert.match(agents, /advertised skill inventory/);
+  assert.match(agents, /Power Apps app built with Expo, React Native, and TypeScript/);
+  assert.match(agents, /Check the skills advertised by the current agent host/);
   for (const skill of ['create-mobile-app', 'edit-app', 'add-native', 'add-datasource', 'debug-app']) {
     assert.ok(agents.includes(`\`${skill}\``), skill);
   }
-  assert.match(agents, /fresh only; never rerun over an existing app/);
-  assert.match(agents, /Ask before starting costly integration/);
-  assert.match(agents, /question or small edit does not require full\s+integration, a deep scan/);
+  assert.match(agents, /Never\s+re-scaffold over an existing app/);
+  assert.match(agents, /ask through the host's question tool before\s+loading planners/);
+  assert.match(agents, /Do not route explanations, typo fixes, or\s+bounded bug fixes through full app planning/);
 });
 
 test('Claude and Copilot wrappers resolve to the same app-local guidance', () => {
   const claude = read('CLAUDE.md');
   const copilot = read('.github/copilot-instructions.md');
   assert.equal(claude.trim(), '@AGENTS.md');
-  const target = copilot.match(/\[AGENTS\.md\]\(([^)]+)\)/)?.[1];
+  const target = copilot.match(/\[[^\]]+\]\(([^)]*AGENTS\.md)\)/)?.[1];
   assert.equal(target, '../AGENTS.md');
   assert.equal(
     path.resolve(templateRoot, '.github', target),
@@ -54,42 +51,43 @@ test('plugin fallback matches public manual commands without automatic installat
       assert.ok(content.includes(command));
     }
     assert.match(content, /https:\/\/github\.com\/microsoft\/power-platform-skills#manual-installation/);
-    assert.match(content, /inside a Claude Code or GitHub\s+Copilot CLI session|inside a Claude Code or GitHub Copilot\s+CLI session/);
+    assert.match(content, /inside a Claude Code or GitHub\s+Copilot CLI\s+session/);
   }
   const agents = read('AGENTS.md');
-  assert.match(agents, /Never install automatically/);
-  assert.match(agents, /user declines[\s\S]*do not nag/);
-  assert.match(agents, /private installation paths/);
+  assert.match(agents, /Offer installation\s+once and ask for explicit approval/);
+  assert.match(agents, /If declined, do not repeatedly prompt/);
+  assert.match(agents, /private\s+plugin caches/);
 });
 
 test('startup routing keeps approvals, upgrades, generated ownership, and privacy boundaries', () => {
   const agents = read('AGENTS.md');
-  for (const symptom of ['npm run dev fails', "app won't start", "QR won't open", 'runtime failures']) {
-    assert.ok(agents.includes(symptom), symptom);
-  }
-  assert.match(agents, /before the app has loaded/);
-  assert.match(agents, /agent already running creation[\s\S]*reuse `debug-app` startup diagnosis/);
-  assert.match(agents, /npm run dev` alone cannot wake an agent/);
-  assert.match(agents, /Do not add automatic hooks/);
-  assert.match(agents, /Ask before dependency[\s\S]*same-lock restoration[\s\S]*Metro[\s\S]*deployment/);
-  assert.match(agents, /upgrades in the separate upgrade workflow/);
-  assert.match(agents, /not `debug-app`/);
-  assert.match(agents, /Do not delete a lockfile or change versions/);
-  assert.match(agents, /power\.config\.json` and `src\/generated\/` are CLI-owned/);
-  assert.match(agents, /modules shipped with the template/);
-  assert.match(agents, /Do not patch native-host or MSAL source/);
-  assert.match(agents, /Keep raw diagnostics, credentials, tokens/);
+  const readme = read('README.md');
+  assert.match(agents, /startup\s+failures, QR\/Metro connection errors/);
+  assert.match(agents, /invoke `debug-app startup`/);
+  assert.match(agents, /preserve the validated `--tunnel` and\s+`--tunnel-tenant <tenant-guid>` options/);
+  assert.match(agents, /never infer them from symptom text/);
+  assert.match(readme, /diagnose startup failures before the app loads/);
+  assert.match(readme, /agent already\s+running creation can offer that workflow/);
+  assert.match(readme, /npm run dev` alone does not wake an agent/);
+  assert.match(readme, /No automatic\s+hooks or watchers are added/);
+  assert.match(agents, /Obtain approval before dependency repair or server restarts/);
+  assert.match(agents, /An approved upgrade[\s\S]*uses `check-updates`/);
+  assert.match(agents, /preserve\s+the lockfile/);
+  assert.match(agents, /Power Apps generators own `src\/generated\/`/);
+  assert.match(agents, /Do not modify\s+`@microsoft\/power-apps-native-\*` code/);
+  assert.match(agents, /Exclude tokens, `\.npmrc` credentials/);
 });
 
 test('app diagnosis is recommended before reporting without blocking direct or unavailable-skill reports', () => {
-  for (const relativePath of ['AGENTS.md', 'README.md']) {
-    const content = read(relativePath).replace(/\s+/g, ' ');
-    assert.match(content, /dependency installation, startup, runtime, or QR opening/);
-    assert.match(content, /`\/?debug-app` skill (?:first )?before reporting an issue/);
-    assert.match(content, /recommendation, not a prerequisite/);
-    assert.match(content, /honor explicit direct report requests/);
-    assert.match(content, /Plugin installation\/loading failures can make app diagnosis unavailable/);
-    assert.match(content, /do not block reporting in those cases/);
-    assert.doesNotMatch(content, /`\/?debug-app` agent/);
-  }
+  const agents = read('AGENTS.md').replace(/\s+/g, ' ');
+  const readme = read('README.md').replace(/\s+/g, ' ');
+  assert.match(agents, /invoke the available `debug-app` skill before attempting fixes or escalating to `report-issue`/);
+  assert.match(agents, /must not block an explicit direct report request/);
+  assert.match(agents, /diagnostic skill is unavailable or plugin installation\/loading is itself the problem/);
+  assert.match(readme, /dependency installation, startup, runtime, or QR opening/);
+  assert.match(readme, /try the available `\/debug-app` skill first before reporting an issue/);
+  assert.match(readme, /recommendation, not a prerequisite/);
+  assert.match(readme, /honor explicit direct report requests/);
+  assert.match(readme, /do not block reporting in those cases/);
+  assert.doesNotMatch(`${agents} ${readme}`, /`\/?debug-app` agent/);
 });

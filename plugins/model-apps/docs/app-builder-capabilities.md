@@ -22,7 +22,7 @@ apart deliberately.
 - Deterministic, **idempotent** build engine — discovers via the SDK (`findTables`/`findColumns`/`fetchEntityMetadata`) and creates only what's missing; new / existing / mixed envs all work.
 - **All Dataverse access via the vendored headless SDK**; metadata cached under `<app-folder>/.maker-workspace/` for reuse.
 - Phase selection (`--only`/`--skip`/`--from`/`--to`), `[n/total]` narration, `BuildHalt` gate, dry-run by default, `--sample-data` / `--publish` opt-in.
-- Bounded-concurrency for independent ops; one publish round-trip per entity + the app. `az`-token HttpClient with transient (429 / 5xx) retry.
+- Bounded-concurrency for independent ops; one publish round-trip per entity + the app. `az`-token HttpClient with transient (429 / 5xx) retry, honouring `Retry-After` up to 60 s; a record delete, or a change set of conditional deletes (an app and its sitemap), is sent once unless its answer proves it did not run: SQL rolled it back as a deadlock victim (`Sql Number: 1205` — for a change set, on every operation it answers; re-sent up to three times), or the server refused to start it with a 429 (re-sent on the throttle schedule).
 - Guardrail lint (`spec-lint.js`) + hard validator (`app-spec.js`). 🧪 full `node:test` suite + the vendored SDK's Jest suite green (`node scripts/run-tests.js --with-sdk <ppux>`).
 
 ### Data model (Tier 1) — ✅ verified live
@@ -95,6 +95,12 @@ apart deliberately.
 
 ### Forms, views & charts — ✅ verified live
 - Adaptive main forms (auto + explicit tabs/sections), related-record sub-grids (1:N **and** N:N), Notes/timeline section.
+  Explicit edits order tabs and sections, **not existing fields**. New listed fields and relative
+  `fieldOptions[x].after` placement are occupancy-safe; a full row may split, and an unsafe move is
+  skipped with a warning. Stored overflow repair, idempotent rebuilds and middle insertion are
+  **live-verified**. Atomic failure/retry and dependency-ordered anchor chains are covered by
+  offline SDK workspace tests. Verify rejects duplicate cell/control IDs across each form. See the
+  [form-layout contract](../references/app-spec-schema.md) for placement and verification limits.
 - Quick-create + quick-view forms (`forms[].formType`); quick-view **placement** on a host form via a lookup (`forms[].quickViews[]`).
 - **Per-form security roles** (`forms[].securityRoles`) — offer a form to named `personas[]`, or to
   `everyone`, with optional `fallbackForm` and `order`. The roles are **not** a relationship
@@ -109,6 +115,12 @@ apart deliberately.
   (AB#6648526)
 - Form JS event handlers (`onload`/`onsave`/`onchange`) wired via web resources.
 - Views with rich filters (`eq-userid`/`this-week`/`in`/`not-in`/… + Choice-label resolution); default Active/Inactive view **column enrichment** via the SDK's `enrichDefaultViews`.
+- **Editing an existing view is additive.** A rebuild appends spec columns the view lacks and keeps
+  every column already there, so a column a maker added in the designer survives — and a column
+  removed from the spec, or a new order, does not apply. Filters and sort are not re-applied either
+  (the build warns). `--verify` fails on a missing spec column, filter condition or sort key (or
+  authored sort keys out of order), but not on extra deployed ones, so it cannot confirm a removal. Remove or reorder view columns in Maker, or
+  tear down and rebuild.
 - Choice-column charts.
 
 ### Custom grid rendering (preview) — ✅ SDK live-verified, environment-gated
@@ -134,8 +146,19 @@ apart deliberately.
 
 ### App shell & navigation — ✅ verified live
 - App module + sitemap; **multi-area sitemaps** — every `appShell.areas[]` maps to its own `<Area>` (icon + groups + subareas; order follows array order). The app is **self-contained for export/import**: its **sitemap** is added to the solution (componenttype 62), and its **tile icon** is an in-solution web resource — `app.icon` (a declared image web resource) or a generated default SVG — never an arbitrary external/managed icon.
+- **App membership (offline-tested; reference transport measured):** `app.tables` preserves hidden
+  table components independently of navigation; `app.mainForms` selects active Main forms by name.
+  Create is exact for Main membership; updates stop adding excluded forms but never remove existing
+  members. Build and download use the current layer; verify checks the published layer.
+  Download carries both fields with a `2.13.0` capability floor, without adopting schema for
+  hidden stock/unclassified type-1 tables even when an asset references them. Mixed SDK/current
+  navigation and unresolved immutable identity are refused rather than emitted as a rebuildable spec. See
+  [the App Spec contract](../references/app-spec-schema.md) for
+  name rules, runtime-lag limits and loss notes; the SDK serialization is covered by
+  `scripts/tests/app-main-forms-real-bundle.test.js`.
 - Generative pages (**genpage-first**) for overview / dashboard surfaces — uploaded via `pac model genpage upload`; the SDK finalizes the sitemap with `GenPage` subareas.
 - Dashboards (chart / list / iframe / webresource tiles) with **sitemap placement** (auto-pinned as an app component). Tiles render in a **multi-column grid** (2-wide) rather than one stacked full-width column.
+- **Rebuilding an existing app keeps its navigation** (AB#6726727). The build used to hand the SDK a sitemap recomputed from the spec with no trace of the live nodes, so every entry was re-created from scratch — new ids and the designer's defaults for a *new* entry — and a designer-made dashboard entry lost its launcher `Url` and with it the dashboard icon. Each entry the spec keeps is now written onto the live entry it corresponds to (`scripts/lib/sitemap-merge.js`), so everything the spec cannot describe survives, and every dashboard entry carries `Url="/workplace/home_dashboards.aspx"`, as the designer writes it. A title or icon changed in the designer since the spec's baseline (the last apply or download for that environment) is kept and reported; with no baseline the build reports each change it makes to an existing entry. A downloaded dashboard is bound by the id the download recorded, so one renamed in the designer is not recreated under its old name.
 - Modern command-bar buttons — functional **JS on-click** + static hidden/disabled, incl. **flyout / split-button menus**.
 - Web resources (JS / HTML / CSS) shipped + added to the solution; idempotent (reuse by name).
 
@@ -153,11 +176,19 @@ apart deliberately.
   actual setting are *different rows*, and a gate can read off while the feature is switched on at
   environment scope — so it runs in every app on that org. Live-measured: gate `EnableNLGridSearch`
   = `false` while `NLGridSearchSetting` = `2` at environment scope (NL search on), and
-  `NLChartDataVisualizationSetting` = `1` by default (NL charts on). Preflight resolves the
+  `NLChartDataVisualizationSetting` = `1` by default — *Auto*, its platform default. Preflight resolves the
   effective value per feature — app-scope override → environment → default — reports those as
   *in effect via the environment/default setting*, and **suppresses the admin action**, so nobody is
   sent to the admin centre to switch on something already running. A value it cannot read never
-  counts as in effect, so a genuine action is never hidden.
+  counts as in effect, so a genuine action is never hidden. A platform-default value (*Default*, or
+  *Auto* for charts) is reported as the platform's decision, neither on nor off.
+- **Every per-app AI setting is a tri-state, and `1` is not "on"** (AB#6714731). Per the platform's
+  own settings UI, form fill (all four settings), NL grid search and M365 store 0 = *Default*,
+  1 = *Off*, 2 = *On*, and NL charts store 0 = *Off*, 1 = *Auto*, 2 = *On*. Builds used to write `1`
+  for `true` outside the form-fill family — turning NL grid search and M365 **off** and leaving
+  charts on *Auto* — and `--verify` expected the same `1`. The plugin now encodes every flag itself
+  (`true` → `2`; `false` → that setting's *Off*) and verifies against the same table, so the next
+  build of an affected app writes `2`.
 - **Form fill is a real "off", not a naming mix-up** (measured 2026-08-28). Unlike NL search, the
   gate and the per-app setting share one name — `FormFillBarUXEnabled` — confirmed against the
   SDK's own `AI_GATE`/per-app maps, so there is no second setting hiding a different answer. It
@@ -192,9 +223,18 @@ apart deliberately.
 - Additive on rebuild (matched by `entity` + `name`, reused if present, Active/Draft state converged
   in both directions, and re-added to the solution on every run so a failed component add is repaired
   rather than inherited); torn down with the app, deactivate-then-delete, before its table. Deleting
-  an activated flow cascades a **backing-table** drop and regularly runs past the client's 60s HTTP
-  timeout, so teardown polls the row rather than reporting a failure for work the server completed.
+  an activated flow cascades a **backing-table** drop that used to run past the client's 60 s HTTP
+  timeout; writes now wait up to 5 minutes, and teardown still polls the row rather than reporting a
+  failure for work the server completed if even that is exceeded.
   A new `business-process-flows` build phase sits next to `business-rules` (16 now).
+- **Each write in a flow's create is conditioned on the token the previous write returned** (vendored
+  SDK): the create echoes its token, the activation is sent only on it, and a rollback deletes only on
+  a token the create produced — so a concurrent edit is refused, never activated or deleted. This
+  exposed a transport hazard, found live: activating a flow on a table created seconds earlier ran
+  past the old 60 s wait, the activation committed anyway, and the transport's re-send was refused as
+  a version conflict, failing the build. Writes now wait up to 5 minutes and a conditional write that
+  gets no answer is never re-sent (`scripts/lib/sdk-http-client.js`); a fresh build of that app then
+  passed live.
 - **The derived unique name is a TABLE name, and it is guarded on both sides.** Dataverse stores the
   flow as `new_<name lower-cased, non-alphanumerics stripped>` — the derivation ignores the table
   *and* the solution's publisher prefix — and activation creates an org-owned backing table with that
@@ -204,15 +244,19 @@ apart deliberately.
   (by logical name) and **halts** naming whichever owns it, instead of letting the create fail with a
   platform error about a table the author never mentioned. It runs only on the create path, never on
   reuse, and is best-effort — a diagnostic must never be the thing that breaks a build.
-- **v1 is single-entity and linear on purpose.** The SDK also models cross-entity stages, branching,
-  stage actions and security-role grants; the spec gate **rejects** those keys — as an allow-list at
-  flow, stage *and* step level — rather than ignoring them, so a flow never quietly deploys as
-  something other than what was authored. The allow-list shape matters: the SDK's normalizers copy a
-  fixed key set and discard the rest, so a stage `branch` or a step's `fieldLogicalName` (instead of
-  `field`) would otherwise pass validation and deploy bound to nothing. `securityRoles` needs role ids
-  and belongs to the `security` phase (a BPF's grants are privileges on the backing table that
-  activation creates) — tracked in
-  [#513](https://github.com/microsoft/power-platform-skills/issues/513).
+- **v1 is single-entity and linear on purpose.** The SDK also models cross-entity stages, branching
+  and stage actions; the spec gate **rejects** those keys — as an allow-list at flow, stage *and* step
+  level — rather than ignoring them, so a flow never quietly deploys as something other than what was
+  authored. The allow-list shape matters: the SDK's normalizers copy a fixed key set and discard the
+  rest, so a stage `branch` or a step's `fieldLogicalName` (instead of `field`) would otherwise pass
+  validation and deploy bound to nothing.
+- **Who may run a flow** — `securityRoles: { "personas": [...] }` (#513). A flow's grants are
+  `create/read/write/delete` privileges on the backing table that activation creates, so they are
+  applied in the `security` phase once both the flow and the personas' roles exist, against the
+  flow's deployed `uniquename` read back rather than derived. `verify-model-app` proves each persona
+  holds them (`bpf-roles`) and fails closed when the backing table cannot be read. Rejected: an empty
+  `personas` list, the form-only keys `everyone`/`fallbackForm`/`order`, and grants on a Draft flow
+  (there is no backing table until activation).
 - **Live-verified**: build (11 created, verify 8/8), rebuild (flow reused, solution component
   re-added), and teardown (exit 0, with an independent query confirming both the workflow row and its
   activation-created backing table are gone). An invalid spec is refused pre-flight with no writes.
@@ -229,13 +273,14 @@ apart deliberately.
   test here and by a `@jest-environment node` regression upstream.
 
 ### Edit flow (download → edit → rebuild) — ✅ verified live
-- `download-model-app.js` pulls a **deployed app** back into an editable App Spec (+ page code, icons, referenced entities, and the app's **real unmanaged solution** — `recoverAppSolution` enumerates the app's solution memberships and excludes the built-in `Active`/`Default`/`Basic` system solutions, so the spec names the right container for a later clean teardown); edit the spec and re-run the idempotent build — **create and edit share one path** (reuses app/tables, updates pages in place, keeps `GenPage` subareas). The app-shell phase **re-syncs the sitemap + components of any existing app** (fetch → recompute-from-spec → push → publish), so subarea add/rename/reorder edits land for **page-less apps too** — not just generative-page apps — and `--only app-shell` can force the rewrite. **Classic DashBoard subareas are *designed* to round-trip** — the dashboard is reconstructed into `dashboards[]` with **id-passthrough tiles** (each tile carries the deployed view/chart ids), so a rebuild recreates it against the existing views/charts without re-declaring them. **This now works end to end.** It previously did not: the vendored SDK’s `fetchArtifact(‘dashboard’, …)` threw `Cannot read properties of null (reading ‘length’)` while deserializing the `<parameters>` block it had itself serialized, so no tiles were recovered and the subarea was dropped — which failed the whole download unless `--allow-lossy-download` was passed. Root cause upstream: the grammar walk descended into **text** nodes, and the bundled XML parser returns `null` for a text node’s children. Fixed in the SDK and re-vendored; measured across the re-vendor as **0/4 → 4/4** round-trips (list tile, both chart-parameter spellings, and a tile with an empty parameter value), and pinned by `scripts/tests/dashboard-roundtrip.test.js`, which feeds a serialized dashboard straight back in. ([#478](https://github.com/microsoft/power-platform-skills/issues/478)) **Round-trip scope (not yet "complete"):** tables, sitemap/appShell, generative pages, icons, dashboards, and solution round-trip; **forms, views, charts, and commands do NOT yet** — view hydration was tried and reverted (LIVE-verified the deployed savedquery set can't reliably distinguish author views from Dataverse's auto-generated Active/Inactive/QuickFind system views). All survive on the live app (a rebuild preserves them by discovery) but are absent from the downloaded spec, so edit them in Maker or a fresh spec. **Column types round-trip too, including Choice/MultiChoice** — their option sets are read per table, a local set becoming inline `options[]` (localizations preserved) and a shared one a `globalChoice` reference plus a `globalChoices[]` declaration; a column whose option set cannot be read is left untyped *and named*, and the App Spec cannot express option **values**, so a fresh rebuild re-bases them to `100000000 + index`. **`relationships[]` are NOT reconstructed** and their omission is not yet reported ([#567](https://github.com/microsoft/power-platform-skills/issues/567)) — a downloaded spec rebuilt into a fresh environment creates the tables without the lookups between them.
+- `download-model-app.js` pulls a **deployed app** back into an editable App Spec (+ page code, icons, referenced entities, and the app's **real unmanaged solution** — `recoverAppSolution` enumerates the app's solution memberships and excludes the built-in `Active`/`Default`/`Basic` system solutions, so the spec names the right container for a later clean teardown); edit the spec and re-run the idempotent build — **create and edit share one path** (reuses app/tables, updates pages in place, keeps `GenPage` subareas). The app-shell phase **re-syncs the sitemap + components of any existing app** (fetch → recompute-from-spec → push → publish), so subarea add/rename/reorder edits land for **page-less apps too** — not just generative-page apps — and `--only app-shell` can force the rewrite. **Classic DashBoard subareas are *designed* to round-trip** — the dashboard is reconstructed into `dashboards[]` with **id-passthrough tiles** (each tile carries the deployed view/chart ids), so a rebuild recreates it against the existing views/charts without re-declaring them. **This now works end to end.** It previously did not: the vendored SDK’s `fetchArtifact(‘dashboard’, …)` threw `Cannot read properties of null (reading ‘length’)` while deserializing the `<parameters>` block it had itself serialized, so no tiles were recovered and the subarea was dropped — which failed the whole download unless `--allow-lossy-download` was passed. Root cause upstream: the grammar walk descended into **text** nodes, and the bundled XML parser returns `null` for a text node’s children. Fixed in the SDK and re-vendored; measured across the re-vendor as **0/4 → 4/4** round-trips (list tile, both chart-parameter spellings, and a tile with an empty parameter value), and pinned by `scripts/tests/dashboard-roundtrip.test.js`, which feeds a serialized dashboard straight back in. ([#478](https://github.com/microsoft/power-platform-skills/issues/478)) **Round-trip scope (not yet "complete"):** tables, sitemap/appShell, generative pages (code, prompt, data sources and model; a page's connector and Custom API bindings stay on the deployed page but are not carried in the spec, so they survive a same-environment rebuild only), icons, dashboards, and solution round-trip; **forms, views, charts, and commands do NOT yet** — view hydration was tried and reverted (LIVE-verified the deployed savedquery set can't reliably distinguish author views from Dataverse's auto-generated Active/Inactive/QuickFind system views). All survive on the live app (a rebuild preserves them by discovery) but are absent from the downloaded spec, so edit them in Maker or a fresh spec. **Column types round-trip too, including Choice/MultiChoice** — their option sets are read per table, a local set becoming inline `options[]` (localizations preserved) and a shared one a `globalChoice` reference plus a `globalChoices[]` declaration; a column whose option set cannot be read is left untyped *and named*, and the App Spec cannot express option **values**, so a fresh rebuild re-bases them to `100000000 + index`. **`relationships[]` are NOT reconstructed** and their omission is not yet reported ([#567](https://github.com/microsoft/power-platform-skills/issues/567)) — a downloaded spec rebuilt into a fresh environment creates the tables without the lookups between them.
 - Live regression on the edit path found + fixed **4 bugs**, then re-verified clean.
-- `verify-model-app.js` — read-only reconcile of spec vs deployed (exits non-zero on anything missing). Sitemap checks are **element-scoped**: an area/subarea icon is matched on its own `<Area>`/`<SubArea>` element, and a **dashboard subarea** is verified by resolving the dashboard id (systemform type 0, by name) and matching the sitemap's `DefaultDashboard` — so a value reused elsewhere can't produce a false pass. **Multi-area sitemaps** and the dashboard-subarea path were re-verified live (positive + negative).
+- `verify-model-app.js` — read-only reconcile of spec vs deployed (exits non-zero on anything missing). Sitemap checks are **element-scoped**: an area/subarea icon is matched on its own `<Area>`/`<SubArea>` element, and a **dashboard subarea** is verified by resolving the dashboard id (systemform type 0 — by a downloaded spec's pinned `dashboardId` first, else by name) and matching the sitemap's `DefaultDashboard` — so a value reused elsewhere can't produce a false pass — and that entry must carry the dashboard launcher `Url`, without which the app shows a placeholder icon for it. **Multi-area sitemaps** and the dashboard-subarea path were re-verified live (positive + negative).
 
 ### Teardown — ✅ verified live
 - `teardown-model-app.js` deletes exactly what an App Spec declares, in dependency-safe order (app → dashboards → commands → business rules → business process flows → forms → **security roles** → charts → views → relationships → AI row summaries → tables [children-first] → web-resources → global choices → solution). Forms/charts/views/relationships are removed **before** tables (a table delete doesn't reliably cascade cross-references); **web resources are removed AFTER tables** (a table's icon web resource is referenced by the table). A business rule / business process flow is deactivated before it is deleted, because Dataverse refuses to delete an activated process.
 - **Classifier-safe** (every id resolved from a spec-declared name via an exact-match, entity-scoped filter), dry-run by default, best-effort continue, not-found aware, undeletable (system/managed) artifacts recorded as `skipped`. A **restricted system solution** (`Active`/`Default`/`Basic`) is skipped rather than attempted (Dataverse 400s any delete of one), so a downloaded spec that defaulted its solution to `Default` tears down cleanly. An already-gone relationship (Dataverse 400 *"…but 0 were found"*) is tolerated as deleted, like the table not-found case.
+- **An app whose sitemap carries an unpublished edit tears down cleanly.** A sitemap has two tokens: the unpublished-aware read returns a *content* token that runs ahead of the row while an edit is pending, and Dataverse validates `If-Match` against the *row*. The vendored SDK now conditions each delete on the row token from a by-id read. Live-verified on the same pending-edit app: the previous bundle's teardown failed with 412 on the delete `$batch`; this one deleted everything, and an independent query confirmed every row gone.
 
 ### Tooling & internals — ✅ verified live
 - ASCII **form wireframe** preview (`preview-form.js`); phase-grouped build log with per-step status glyphs (`✓`/`⊘`/`✗`) + a closing summary.

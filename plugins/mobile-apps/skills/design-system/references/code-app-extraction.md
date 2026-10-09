@@ -52,7 +52,7 @@ theme.extend.borderRadius → radius policy
 }
 ```
 
-**Dynamic config fallback:** If `tailwind.config.ts` uses runtime functions → try `npx tailwindcss --print-config` (if Node available), else static parse with warning.
+**Dynamic config fallback:** If `tailwind.config.ts` uses runtime functions → try `npx --no-install tailwindcss --print-config` (if Node available), else static parse with warning.
 
 ### Fluent UI
 

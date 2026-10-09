@@ -6,6 +6,8 @@ allowed-tools: Read, Write, Glob, Grep, Bash
 model: sonnet
 ---
 
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.
+
 **Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** — read first.
 
 # Preview Screens
@@ -184,7 +186,7 @@ Print confirmation:
 Read the flag and act:
 
 ```bash
-grep -E "^visual_companion:[[:space:]]*(yes|no)" "<working_dir>/memory-bank.md" 2>/dev/null
+grep -E "^visual_companion:[[:space:]]*(yes|no)" '<working_dir>/memory-bank.md' 2>/dev/null
 ```
 
 | Flag | Action |
@@ -203,13 +205,17 @@ grep -E "^visual_companion:[[:space:]]*(yes|no)" "<working_dir>/memory-bank.md" 
 Then try OS-appropriate openers in sequence and fall back to printing the link if none work:
 
 ```bash
-open "<working_dir>/preview.html" 2>/dev/null \
-  || xdg-open "<working_dir>/preview.html" 2>/dev/null \
-  || powershell.exe -NoProfile -Command "Start-Process '<working_dir>\preview.html'" 2>/dev/null \
-  || echo "Could not auto-open. Open this URL in your browser: file://<working_dir>/preview.html"
+open '<working_dir>/preview.html' 2>/dev/null \
+  || xdg-open '<working_dir>/preview.html' 2>/dev/null \
+  || MOBILE_APP_PREVIEW_PATH='<working_dir>/preview.html' \
+     powershell.exe -NoProfile -Command 'Start-Process -FilePath $env:MOBILE_APP_PREVIEW_PATH' 2>/dev/null \
+  || printf '%s\n' 'Could not auto-open. Open this URL in your browser: file://<working_dir>/preview.html'
 ```
 
-`open` is macOS-only; the chain covers Linux (`xdg-open`) and Windows / WSL (`powershell.exe Start-Process`). On headless / SSH sessions all three fail silently and the user just opens the link they were already given.
+`open` is macOS-only; the chain also tries Linux (`xdg-open`) and Windows
+(`powershell.exe Start-Process`). The Windows path is passed as data, not
+PowerShell source. On headless or unsupported cross-host sessions, report the
+failed launch and manual link instead of claiming the browser opened.
 
 ---
 

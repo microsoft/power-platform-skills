@@ -5,24 +5,26 @@
 // half of that is fixed upstream, but MEASURING it here changed the conclusion about the plugin, so
 // both halves are pinned below and each says which path it speaks for.
 //
-// WHOLE-NODE REPLACE (what `sdk-build.js` does — `updateElement('app', id, '/siteMap', appDef(...).siteMap)`)
-//   `appDef` projects the sitemap fresh from the App Spec, so the node handed to `updateElement` is a
-//   brand-new object tree with no `bag`. Nothing is merged forward, so a dropped `icon` cannot survive
-//   — MEASURED identical on the pre- and post-fix bundles. The plugin never exhibited AB#6688906 here.
+// RE-ATTACHED REWRITE (what `sdk-build.js` does for an existing app since AB#6726727)
+//   `appDef` projects the sitemap fresh from the App Spec, and `adoptLiveSitemap` re-attaches each node
+//   to the live node it corresponds to, keeping that node's `bag` — every attribute and child the App
+//   Spec cannot describe. It used to hand `updateElement` the bag-less tree, which could not carry a
+//   dropped `icon` forward but also rebuilt every live node from scratch: a designer-made dashboard
+//   entry lost its launcher Url and its icon. So the plugin now depends on the SDK's removal rule for
+//   a dropped chrome attribute, exactly like an in-place reconcile — which is what the first test pins.
 //
-// IN-PLACE MUTATE (what the SDK's own reproduction does, and what any future in-place reconcile would)
+// IN-PLACE MUTATE (what the SDK's own reproduction does)
 //   The fetched node keeps its `bag`, so `mergeAttrs` carried the deployed `Icon` forward forever. This
 //   is the real defect, and the fix is what these tests exist to keep.
 //
-// Both are worth pinning. The first documents a load-bearing and non-obvious property of the plugin's
-// path — full replacement — which a change to in-place reconcile would silently reverse, walking the
-// plugin straight into the bug. The second is the only executable check of the fix available here (the
-// SDK's own Jest suite cannot run in this repo: its `canvas` native module is built for the Node-20 ABI).
+// The SDK's own Jest suite cannot run in this repo (its `canvas` native module is built for the
+// Node-20 ABI), so these are the only executable checks of that fix available here.
 const test = require('node:test');
 const assert = require('node:assert');
 const os = require('node:os');
 const path = require('node:path');
 const fs = require('node:fs');
+const { adoptLiveSitemap } = require('../lib/sitemap-merge.js');
 
 const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 
@@ -99,31 +101,37 @@ async function freshSdk() {
 /** The `<SubArea …>` start tag only — an Area-level `Icon` must never satisfy a SubArea assertion. */
 const subAreaTag = (xml) => (/<SubArea\b[^>]*>/.exec(xml) || [''])[0];
 
-test('REAL BUNDLE: the plugin\u2019s whole-/siteMap replace cannot carry a dropped Icon forward', async () => {
+test('REAL BUNDLE: the plugin\u2019s rewrite removes a dropped Icon and keeps the rest of the live node', async () => {
   const { sdk, lastSitemapXml } = await freshSdk();
   const deployed = await sdk.fetchArtifact('app', APP_ID);
   assert.strictEqual(deployed.siteMap.areas[0].groups[0].subAreas[0].icon, 'contoso_legacy.png',
     'precondition: the deployed app really does carry the legacy raster icon');
 
-  // Exactly what `sdk-build.js` does: hand `updateElement` a freshly projected siteMap. `appDef` is a
-  // pure function of the App Spec, so this tree has no `bag` anywhere in it.
-  await sdk.updateElement('app', APP_ID, '/siteMap', {
-    areas: [{ id: 'Area1', title: 'Main', groups: [{ id: 'Group1', title: 'Main', subAreas: [{ id: 'Sub1', type: 'Entity', entity: 'new_torder', title: 'Orders', vectorIcon: VECTOR_REF }] }] }],
-  });
+  // Exactly what `sdk-build.js` does for an existing app: appDef's bag-less tree (its positional ids),
+  // re-attached to the live nodes, then written.
+  const desired = {
+    areas: [{ id: 'area_0', title: 'Main', groups: [{ id: 'group_0_0', title: 'Main', subAreas: [{ id: 'sub_0_0_0', type: 'Entity', entity: 'new_torder', title: 'Orders', vectorIcon: VECTOR_REF }] }] }],
+  };
+  const { siteMap } = adoptLiveSitemap(desired, (await sdk.getArtifact('app', APP_ID)).siteMap);
+  await sdk.updateElement('app', APP_ID, '/siteMap', siteMap);
   await sdk.pushArtifact('app', APP_ID);
 
   const tag = subAreaTag(lastSitemapXml());
   assert.ok(tag, 'a sitemap was serialized and written');
   assert.match(tag, /VectorIcon="\$webresource:contoso_vec\.svg"/);
   // `\sIcon=` cannot match inside `VectorIcon=` — the preceding character is `r`.
-  assert.doesNotMatch(tag, /\sIcon="/, 'the legacy raster icon must not survive the replace');
-
-  // The OTHER half of the same fact, asserted so the mechanism is unambiguous: the deployed bag is
-  // DISCARDED, not merged. That is why no icon can survive — and it is also why maker-authored chrome
-  // the App Spec does not model does not survive a rebuild either. That trade-off is pre-existing and
-  // deliberate (the spec is the source of truth for the sitemap); it is pinned here so a future move
-  // to in-place reconcile is a visible decision rather than an accident.
-  assert.doesNotMatch(tag, /Contoso\.SubRes/, 'the deployed bag is replaced, not merged');
+  assert.doesNotMatch(tag, /\sIcon="/, 'the legacy raster icon the spec dropped must not survive');
+  // The node is the live one, not a replacement: its id and the chrome the App Spec cannot describe
+  // survive (AB#6726727).
+  assert.match(tag, /Id="Sub1"/);
+  assert.match(tag, /ResourceId="Contoso\.SubRes"/);
+  assert.match(tag, /ToolTipResourseId="Contoso\.Tip"/);
+  // Chrome the App Spec DOES model stays the spec's to decide: this spec names no Area icon, so the
+  // deployed one is removed, as it was before (a downloaded spec carries it, so a round trip keeps it).
+  const areaTag = (/<Area\b[^>]*>/.exec(lastSitemapXml()) || [''])[0];
+  assert.match(areaTag, /Id="Area1"/);
+  assert.doesNotMatch(areaTag, /\sIcon="/);
+  assert.match(areaTag, /ResourceId="Contoso\.AreaRes"/, 'while the Area keeps what the spec cannot describe');
 });
 
 test('REAL BUNDLE: an IN-PLACE reconcile drops a removed Icon while keeping the rest of the bag', async () => {

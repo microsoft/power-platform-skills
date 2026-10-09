@@ -1,6 +1,6 @@
 # Power Apps Mobile Extension Plugin
 
-Claude Code / GitHub Copilot plugin for creating **third-party controls for Power Apps Mobile
+GitHub Copilot / Claude Code plugin for creating **third-party controls for Power Apps Mobile
 (PAM)**. It helps design, generate, test, package, and publish a native control using public tooling
 and package registries.
 
@@ -33,7 +33,7 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/power-apps-mobile-ext
 
 ### Option B — marketplace (no clone needed)
 
-Inside a Claude Code or GitHub Copilot CLI session, add the marketplace once and install the
+Inside a GitHub Copilot CLI or Claude Code session, add the marketplace once and install the
 plugin:
 
 ```text

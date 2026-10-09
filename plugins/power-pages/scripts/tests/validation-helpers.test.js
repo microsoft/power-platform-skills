@@ -5,24 +5,16 @@ const childProcess = require('child_process');
 
 const helpersPath = path.join(__dirname, '..', 'lib', 'validation-helpers.js');
 
-test('getAuthToken calls az account get-access-token without --allow-no-subscriptions (only az login accepts that flag)', (t) => {
-  const originalExecFileSync = childProcess.execFileSync;
+test('getAuthToken calls az account get-access-token without --allow-no-subscriptions (only az login accepts that flag)', () => {
   let captured = null;
-
-  childProcess.execFileSync = (file, args, options) => {
-    captured = { file, args, options };
-    const out = 'fake-token-value\n';
-    return options && options.encoding ? out : Buffer.from(out);
-  };
-  delete require.cache[require.resolve(helpersPath)];
-
-  t.after(() => {
-    childProcess.execFileSync = originalExecFileSync;
-    delete require.cache[require.resolve(helpersPath)];
-  });
-
   const { getAuthToken } = require(helpersPath);
-  const token = getAuthToken('https://example.crm.dynamics.com');
+  const token = getAuthToken('https://example.crm.dynamics.com', {
+    platform: 'linux',
+    execFile(file, args, options) {
+      captured = { file, args, options };
+      return 'fake-token-value\n';
+    },
+  });
 
   assert.equal(token, 'fake-token-value');
   assert.equal(captured.file, 'az');
@@ -37,22 +29,42 @@ test('getAuthToken calls az account get-access-token without --allow-no-subscrip
   );
 });
 
-test('getAuthToken rejects POSIX and Windows metacharacter payloads before invoking az', (t) => {
-  const originalExecFileSync = childProcess.execFileSync;
-  let calls = 0;
-  childProcess.execFileSync = () => {
-    calls++;
-    return 'should-not-run';
-  };
-  delete require.cache[require.resolve(helpersPath)];
-  t.after(() => {
-    childProcess.execFileSync = originalExecFileSync;
-    delete require.cache[require.resolve(helpersPath)];
+test('getAuthToken invokes the Azure CLI cmd shim safely on Windows', () => {
+  const { getAuthToken } = require(helpersPath);
+  const calls = [];
+  const token = getAuthToken('https://org.crm.dynamics.com', {
+    platform: 'win32',
+    execFile(file, args, options) {
+      calls.push({ file, args, options });
+      return 'windows-token\n';
+    },
   });
 
+  assert.equal(token, 'windows-token');
+  assert.equal(calls[0].file, 'cmd.exe');
+  assert.deepEqual(calls[0].args, [
+    '/d', '/s', '/c', 'az.cmd',
+    'account', 'get-access-token',
+    '--resource', 'https://org.crm.dynamics.com',
+    '--query', 'accessToken',
+    '-o', 'tsv',
+  ]);
+  assert.equal(calls[0].options.shell, false);
+});
+
+test('getAuthToken rejects POSIX and Windows metacharacter payloads before invoking az', () => {
   const { getAuthToken } = require(helpersPath);
-  assert.equal(getAuthToken('https://org.crm.dynamics.com/;echo-marker'), null);
-  assert.equal(getAuthToken('https://org.crm.dynamics.com/&echo-marker%PATH%'), null);
+  let calls = 0;
+  const deps = {
+    platform: 'linux',
+    execFile() {
+      calls++;
+      return 'should-not-run';
+    },
+  };
+
+  assert.equal(getAuthToken('https://org.crm.dynamics.com/;echo-marker', deps), null);
+  assert.equal(getAuthToken('https://org.crm.dynamics.com/&echo-marker%PATH%', deps), null);
   assert.equal(calls, 0);
 });
 
@@ -261,6 +273,16 @@ test('parseEnvironmentUrl returns null when no URL label is present (and on empt
   assert.equal(parseEnvironmentUrl(null), null);
 });
 
+test('parseActiveAuthListEnvironmentUrl extracts the active auth profile Environment Url', () => {
+  const { parseActiveAuthListEnvironmentUrl } = require(helpersPath);
+  const output = [
+    'Index Active Kind      Name User                  Cloud  Type            Environment      Environment Url',
+    '[1]   *      UNIVERSAL      user@contoso.com      Public OperatingSystem PowerPagesProDev https://powerpagesprodev.crm.dynamics.com/',
+    '[2]          UNIVERSAL      user@contoso.com      Public OperatingSystem OtherEnv https://other.crm.dynamics.com/',
+  ].join('\n');
+  assert.equal(parseActiveAuthListEnvironmentUrl(output), 'https://powerpagesprodev.crm.dynamics.com');
+});
+
 test('getEnvironmentUrl parses the 2.8.x "Org URL:" output via mocked execSync', (t) => {
   const originalExecSync = childProcess.execSync;
   childProcess.execSync = () => '  Org URL:   https://orgABC.crm.dynamics.com/\n';
@@ -269,5 +291,26 @@ test('getEnvironmentUrl parses the 2.8.x "Org URL:" output via mocked execSync',
   delete require.cache[require.resolve(helpersPath)];
   const { getEnvironmentUrl } = require(helpersPath);
   assert.equal(getEnvironmentUrl(), 'https://orgabc.crm.dynamics.com');
+  delete require.cache[require.resolve(helpersPath)];
+});
+
+test('getEnvironmentUrl falls back to active pac auth list Environment Url when pac env who has no URL', (t) => {
+  const originalExecSync = childProcess.execSync;
+  childProcess.execSync = (command) => {
+    if (command === 'pac env who') return 'No organization selected\n';
+    if (command === 'pac auth list') {
+      return [
+        'Index Active Kind      Name User                  Cloud  Type            Environment      Environment Url',
+        '[1]   *      UNIVERSAL      user@contoso.com      Public OperatingSystem PowerPagesProDev https://powerpagesprodev.crm.dynamics.com/',
+      ].join('\n');
+    }
+    throw new Error(`unexpected command: ${command}`);
+  };
+  t.after(() => { childProcess.execSync = originalExecSync; });
+  delete require.cache[require.resolve(helpersPath)];
+
+  const { getEnvironmentUrl } = require(helpersPath);
+
+  assert.equal(getEnvironmentUrl(), 'https://powerpagesprodev.crm.dynamics.com');
   delete require.cache[require.resolve(helpersPath)];
 });

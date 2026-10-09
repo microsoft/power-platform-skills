@@ -71,6 +71,7 @@ test('failed cluster metadata refresh preserves connection details and auth sett
     cwd: root, encoding: 'utf8', timeout: 5000, env: { ...process.env, PATH: '' },
   });
   assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /CLI az was not found on PATH.*Using matching cached environment details/);
   assert.deepEqual(JSON.parse(result.stdout), { ...cached, clusterEnvironment: null, clusterGeoName: null, source: 'cache-refresh' });
   const auth = JSON.parse(fs.readFileSync(path.join(root, 'auth.config.json'), 'utf8'));
   assert.equal(auth.msal.clientId, 'preserve');
@@ -205,10 +206,9 @@ test('resolveClusterEnvironment refreshes legacy metadata, skips saved lookups, 
   const resolverModule = { exports: {} };
   let offline = false;
   const mockedRequire = (name) => {
-    if (name === 'child_process') return { execFileSync(command, args) {
-      cliCalls.push({ command, args });
-      assert.equal(command, 'az');
-      if (offline) throw new Error('offline');
+    if (name === './azure-cli') return { ...requireFromScript(name), runAzureCli(args) {
+      cliCalls.push({ args });
+      if (offline) throw Object.assign(new Error('offline'), { status: 1 });
       return args[1] === 'show' ? environmentId : 'test-token';
     } };
     if (name === 'https') return { request(url, options, callback) {
@@ -290,4 +290,18 @@ test('resolveClusterEnvironment refreshes legacy metadata, skips saved lookups, 
   assert.equal(await resolveClusterEnvironment(root), null);
   assert.equal(requests.length, 2);
   assert.deepEqual(JSON.parse(fs.readFileSync(appPath, 'utf8')), app);
+
+  offline = false;
+  const readOnlyEnvironmentId = '33333333-3333-4333-8333-333333333333';
+  const beforeReadOnly = [appPath, authPath, powerPath].map(filePath => fs.readFileSync(filePath));
+  const readOnlyResult = await resolverModule.exports.resolveEnvironment(
+    readOnlyEnvironmentId, root, false, { noCache: true },
+  );
+  assert.equal(readOnlyResult.source, 'environment-id');
+  assert.equal(readOnlyResult.environmentId, readOnlyEnvironmentId);
+  assert.equal(readOnlyResult.clusterEnvironment, 'Prod');
+  assert.equal(readOnlyResult.clusterGeoName, 'US');
+  assert.equal(requests.length, 3);
+  assert.equal(fs.existsSync(cachePath), false);
+  assert.deepEqual([appPath, authPath, powerPath].map(filePath => fs.readFileSync(filePath)), beforeReadOnly);
 });

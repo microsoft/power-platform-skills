@@ -1,19 +1,19 @@
 # Code Apps Plugin
 
-Copilot plugin for building Power Apps code apps with React and Vite. Works with both Claude Code and GitHub Copilot.
+Copilot plugin for building Power Apps code apps with React and Vite. Works with both GitHub Copilot and Claude Code.
 
 > **Preview:** This plugin is currently in preview and may change before general availability.
 
 ## Prerequisites
 
 - [Node.js v22+](https://nodejs.org/)
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code/getting-started) or [GitHub Copilot](https://github.com/features/copilot)
+- [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/use-copilot-cli) or [Claude Code](https://docs.anthropic.com/en/docs/claude-code/getting-started)
 
 ## Install
 
-The plugin marketplace is hosted in the `plugin` folder of the [microsoft/PowerAppsCodeApps](https://github.com/microsoft/PowerAppsCodeApps) repository.
+The plugin is published in the [microsoft/power-platform-skills](https://github.com/microsoft/power-platform-skills) marketplace.
 
-Open Claude Code or GitHub Copilot in any folder and run the following commands:
+Open GitHub Copilot CLI or Claude Code in any folder and run the following commands:
 
 1. Add the marketplace:
    ```
@@ -22,7 +22,7 @@ Open Claude Code or GitHub Copilot in any folder and run the following commands:
 
 2. Install the plugin:
    ```
-   "/plugin install code-apps@power-platform-skills"
+   /plugin install code-apps-preview@power-platform-skills
    ```
 
 ## Available Commands
@@ -45,11 +45,12 @@ Start with `/create-code-app` — it walks you through everything.
 ## Uninstall
 
 ```
-/plugin uninstall code-apps
+/plugin uninstall code-apps-preview
 ```
 
 ## Documentation
 
 - [Code Apps Overview](https://learn.microsoft.com/en-us/power-apps/developer/code-apps/overview)
 - [Power Apps CLI Reference](https://learn.microsoft.com/en-us/power-platform/developer/cli/reference/code)
+- [GitHub Copilot CLI Plugins](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/plugins-finding-installing)
 - [Claude Code Plugins](https://docs.anthropic.com/en/docs/claude-code/plugins)

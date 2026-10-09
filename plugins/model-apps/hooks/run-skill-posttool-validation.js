@@ -21,6 +21,7 @@ const { spawnSync } = require('child_process');
 const {
   getTrackedSkillFromToolInput,
   getValidatorScript,
+  readUtf8Stream,
 } = require('../scripts/lib/modelapps-hook-utils');
 
 const DEBUG = process.env.DEBUG === '1' || process.env.DEBUG === 'true';
@@ -38,13 +39,7 @@ function debug(msg) {
 
 debug('[model-apps hook] run-skill-posttool-validation.js started\n');
 
-let inputData = '';
-
-process.stdin.on('data', (chunk) => {
-  inputData += chunk;
-});
-
-process.stdin.on('end', () => {
+readUtf8Stream(process.stdin).then((inputData) => {
   debug(`[model-apps hook] stdin closed, received ${inputData.length} bytes\n`);
   try {
     const input = JSON.parse(inputData);
@@ -73,10 +68,17 @@ process.stdin.on('end', () => {
     if (result.stderr) process.stderr.write(result.stderr);
 
     debug(`[model-apps hook] Validator exited with code ${result.status ?? 0}\n`);
-    process.exit(result.status ?? 0);
+    // Set the code rather than calling process.exit(): a write to a pipe is asynchronous on
+    // macOS, and exiting at once drops whatever the 64 KiB pipe buffer has not taken yet, so a
+    // long validator report arrived cut off. Nothing else is pending, so the process ends as
+    // soon as both streams have flushed.
+    process.exitCode = result.status ?? 0;
   } catch (err) {
     // Never block on a hook-side bug — the skill already ran.
     process.stderr.write(`[model-apps hook] Unexpected error: ${err.message}\n`);
     process.exit(0);
   }
+}).catch((err) => {
+  process.stderr.write(`[model-apps hook] Unexpected error: ${err.message}\n`);
+  process.exit(0);
 });

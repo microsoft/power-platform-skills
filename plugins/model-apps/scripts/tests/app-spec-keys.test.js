@@ -2,6 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const { validateAppSpec } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
+const { buildSeedGroup } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
 
 function base() {
   return {
@@ -197,6 +198,28 @@ test('app.newLook must be a boolean', () => {
   assert.strictEqual(validateAppSpec(base(), { profile: 'plan' }).ok, true);
 });
 
+// #583: the routing description. A non-empty string up to the column's 1,048,576-character maximum.
+// Blank is refused rather than written: absent means "leave the deployed value alone", so an empty
+// string is the one value that could blank a description nobody asked to remove.
+test('app.aiDescription is a non-empty string within the column maximum', () => {
+  const withValue = (v) => { const s = base(); s.app.aiDescription = v; return validateAppSpec(s, { profile: 'plan' }); };
+  const ok = withValue('Dispatch work. Prefer My Work for your own assigned items.');
+  assert.strictEqual(ok.ok, true, JSON.stringify(ok.errors));
+  assert.strictEqual(withValue('x'.repeat(1048576)).ok, true, 'exactly the maximum is accepted');
+  for (const [v, re] of [
+    [42, /app.aiDescription must be a string/],
+    ['', /app.aiDescription must not be blank/],
+    ['   ', /app.aiDescription must not be blank/],
+    ['x'.repeat(1048577), /app.aiDescription is 1048577 characters \(max 1048576\)/],
+  ]) {
+    const r = withValue(v);
+    assert.strictEqual(r.ok, false, String(v).slice(0, 20));
+    assert.ok(r.errors.some((e) => re.test(e)), JSON.stringify(r.errors));
+  }
+  assert.strictEqual(validateAppSpec(base(), { profile: 'plan' }).ok, true, 'absent is fine');
+  assert.strictEqual(withValue(null).ok, true, 'null reads as absent, like an omitted key');
+});
+
 // ---------------------------------------------------------------------------------------------
 // #537 — entities[] had no allow-list, so a key with no reader validated clean and was dropped.
 //
@@ -333,6 +356,16 @@ test('#537: exotic values become validation errors, not raw crashes', () => {
   const r2 = validateAppSpec(s2, { profile: 'plan' });
   assert.strictEqual(r2.ok, false);
   assert.ok(r2.errors.some((e) => /could not be inspected/.test(e)), JSON.stringify(r2.errors));
+});
+
+// #631: the appShell key allow-list is guarded the same way — a node whose keys cannot be enumerated
+// is an error naming it, never a crash out of the validator.
+test('#631: an appShell node whose keys cannot be enumerated becomes a validation error, not a crash', () => {
+  const s = base();
+  s.appShell = { areas: [new Proxy({ label: 'Main', groups: [] }, { ownKeys() { throw new Error('trap'); } })] };
+  const r = validateAppSpec(s, { profile: 'plan' });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /could not be inspected: enumerating its keys threw/.test(e)), JSON.stringify(r.errors));
 });
 
 // --- review follow-ups on the #537 entity-key allow-list ----------------------------------------
@@ -587,6 +620,42 @@ test('sampleData: duplicate detection keys values exactly the way the loader doe
     'and so are two identical numbers');
 });
 
+// #586 item 2: the loader looks for duplicates only AFTER resolveSampleRecords has turned every Choice
+// value into its option integer, so a label, its other-language alias and the raw integer are ONE key
+// there. The gate compared the values as authored, passed the spec, and the seed then refused it —
+// after tables, forms and views were already deployed. The gate must see what the loader sees, so this
+// checks the two against each other rather than against a hand-written expectation.
+test('sampleData: duplicate detection compares Choice values as the options they resolve to', () => {
+  const withChoiceKey = (rows) => {
+    const s = base();
+    s.entities[0].columns = [{ schemaName: 'contoso_code', displayName: 'Code', type: 'Choice',
+      options: [{ 1033: 'Open', 1036: 'Ouvert' }, { 1033: 'Closed', 1036: 'Fermé' }] }];
+    s.entities[0].alternateKeys = [{ name: 'k', columns: ['contoso_code'] }];
+    s.sampleData = { contoso_order: rows };
+    return s;
+  };
+  const gateSays = (s) => validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /duplicate contoso_code/.test(e));
+  const loaderSays = (s) => {
+    try { buildSeedGroup({ spec: s, e: s.entities[0], records: s.sampleData.contoso_order, statusReasonValues: {} }); return null; } catch (e) { return e.message; }
+  };
+  const cases = [
+    ['a label and its other-language alias', ['Open', 'Ouvert'], true],
+    ['a label and the raw option integer', ['Open', 100000000], true],
+    ['an alias and the raw option integer', ['Ouvert', 100000000], true],
+    ['two different options, in two languages', ['Open', 'Fermé'], false],
+  ];
+  for (const [what, [first, second], dup] of cases) {
+    const s = withChoiceKey([{ contoso_name: 'A', contoso_code: first }, { contoso_name: 'B', contoso_code: second }]);
+    const loader = loaderSays(s);
+    assert.strictEqual(Boolean(loader), dup, `precondition — the loader ${dup ? 'refuses' : 'accepts'} ${what}: ${loader}`);
+    assert.strictEqual(gateSays(s).length, dup ? 1 : 0, `${what}: the gate must agree with the loader; got ${JSON.stringify(gateSays(s))}`);
+  }
+  // The author wrote neither side as an integer, so the message names what they DID write.
+  const [msg] = gateSays(withChoiceKey([{ contoso_name: 'A', contoso_code: 'Open' }, { contoso_name: 'B', contoso_code: 'Ouvert' }]));
+  assert.match(msg, /'Ouvert'/);
+  assert.match(msg, /same option as 'Open'/);
+});
+
 // A generated fallback name is a REAL identity, not a placeholder: the reconcile matches a deployed
 // container by name. So an unnamed section and an explicit `name: "section_0_0"` are the same
 // container to every rebuild path, while create emits two. MEASURED before this gate: the compiled
@@ -742,4 +811,87 @@ test('form layout: a non-array fields inside columns[] is caught, not thrown on'
   // A string is ITERABLE, so a naive per-entry loop would walk its characters instead of failing.
   const errs = validateAppSpec(s, { profile: 'plan' }).errors;
   assert.ok(errs.some((e) => /fields must be an array/.test(e)), `got ${JSON.stringify(errs)}`);
+});
+
+// --- #584 item 5: the minimumPluginVersion capability gate --------------------------------------
+//
+// ⚠ This gate protects FORWARD only, and the test records that honestly because it is easy to
+// over-claim. MEASURED against the shipped 2.8.0 validator: an unknown top-level key,
+// `schemaVersion: 3` and `schemaVersion: 99` are ALL accepted with ok:true, because it validates
+// none of them. No marker can make an already-released consumer reject a spec. What this buys is a
+// machine-checkable requirement from here on, inherited by every future consumer.
+test('minimumPluginVersion refuses a spec that needs a newer plugin than the one running', () => {
+  const { version } = require('../../.plugin/plugin.json');
+  const bump = (v, by) => { const p = String(v).split('.').map((n) => parseInt(n, 10) || 0); p[0] += by; return p.join('.'); };
+  const spec = (v) => Object.assign(base(), v === undefined ? {} : { minimumPluginVersion: v });
+  const gateErrors = (s) => validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /requires model-apps|minimumPluginVersion/.test(e));
+
+  assert.deepStrictEqual(gateErrors(spec(undefined)), [], 'a spec that declares no requirement is unaffected');
+  assert.deepStrictEqual(gateErrors(spec(version)), [], 'the exact running version satisfies the requirement');
+  assert.deepStrictEqual(gateErrors(spec(bump(version, -1))), [], 'an older requirement is satisfied');
+
+  const tooNew = gateErrors(spec(bump(version, 1)));
+  assert.strictEqual(tooNew.length, 1, `a newer requirement must be refused; got ${JSON.stringify(tooNew)}`);
+  assert.match(tooNew[0], new RegExp(`requires model-apps ${bump(version, 1).replace(/\./g, '\\.')}`), 'the message names the required version');
+  assert.match(tooNew[0], new RegExp(`running plugin is ${String(version).replace(/\./g, '\\.')}`), 'and the version actually running');
+  assert.match(tooNew[0], /upgrade the plugin/, 'and tells the author to upgrade rather than delete the line');
+
+  // Pre-release and build-metadata suffixes compare on the release CORE. A first attempt split on
+  // dots BEFORE stripping the suffix, which turned `2.8.0-beta.1` into
+  // [2,8,0,1] — so the running release compared as OLDER than its own pre-release and refused to
+  // build. A dotted suffix is the case a single-token `-beta` test cannot catch.
+  for (const suffix of ['-beta', '-beta.1', '+build.1', '-rc.2']) {
+    assert.deepStrictEqual(gateErrors(spec(`${version}${suffix}`)), [],
+      `a '${suffix}' requirement is satisfied by the corresponding release — comparing the core is the safe direction`);
+  }
+
+  // A malformed value is rejected on its own terms rather than silently treated as 0.0.0, which
+  // would make every requirement vacuously satisfied.
+  const bad = gateErrors(spec('next'));
+  assert.strictEqual(bad.length, 1);
+  assert.match(bad[0], /dotted version string/);
+  // The grammar is ANCHORED, and the anchoring is the point. The reviewer caught a prefix-only
+  // pattern: `2..9` matched on its leading `2` alone, and compareVersions' `parseInt(n, 10) || 0`
+  // then turned the empty component into 0 and enforced **2.0.9** — a DIFFERENT floor than the
+  // author wrote, with no error at all. The evident intent `2.9` IS refused by this plugin, so the
+  // typo silently inverted the outcome. Trailing junk is the same class (`2.9.0garbage` -> 2.9.0).
+  for (const malformed of ['2..9', '2.9.0garbage', '2.9.0 ', ' 2.9.0', '2.', '.9', '2.9.0-', '1.2.3++x']) {
+    const e = gateErrors(spec(malformed));
+    assert.strictEqual(e.length, 1, `${JSON.stringify(malformed)} must be refused, got ${JSON.stringify(e)}`);
+    assert.match(e[0], /dotted version string/,
+      `${JSON.stringify(malformed)} must be reported as malformed rather than compared as a version`);
+  }
+
+  // …while every shape an author legitimately writes still passes the grammar. A version that is
+  // merely NEWER than this plugin is a different outcome from one that is malformed, so accept
+  // either "no error" or the too-new refusal here — this asserts well-formedness, not the floor.
+  for (const good of ['2', '2.9', '2.9.0', '2.9.0.1', '2.9.0-beta.1', '2.9.0+build.1']) {
+    const e = gateErrors(spec(good));
+    assert.ok(e.length === 0 || /requires model-apps/.test(e[0]),
+      `${JSON.stringify(good)} must be accepted as well-formed, got ${JSON.stringify(e)}`);
+  }
+
+  // FAIL CLOSED when this plugin cannot read its own version. A first attempt downgraded
+  // that to a warning, which let an incompatible install reach the write path with the
+  // requirement neither satisfied nor overridden. Driven by making BOTH manifest reads throw.
+  const fs = require('node:fs');
+  const realRead = fs.readFileSync;
+  delete require.cache[require.resolve('../lib/app-spec.js')];
+  fs.readFileSync = function (p, ...rest) {
+    if (String(p).includes('plugin.json')) { const e = new Error('EACCES'); e.code = 'EACCES'; throw e; }
+    return realRead.call(this, p, ...rest);
+  };
+  try {
+    const isolated = require('../lib/app-spec.js');
+    const r = isolated.validateAppSpec(Object.assign(base(), { minimumPluginVersion: '99.0.0' }), { profile: 'plan' });
+    assert.strictEqual(r.ok, false, 'an unreadable manifest must not satisfy a declared minimum');
+    assert.ok(r.errors.some((e) => /could not be read/.test(e)),
+      `the refusal must say the version was unreadable; got ${JSON.stringify(r.errors)}`);
+    // …and a spec that declares NO minimum is unaffected, so this cannot break an existing spec.
+    assert.strictEqual(isolated.validateAppSpec(base(), { profile: 'plan' }).ok, true,
+      'a spec with no minimumPluginVersion must still validate when the manifest is unreadable');
+  } finally {
+    fs.readFileSync = realRead;
+    delete require.cache[require.resolve('../lib/app-spec.js')];
+  }
 });

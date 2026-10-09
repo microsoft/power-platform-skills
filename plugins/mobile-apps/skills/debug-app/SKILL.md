@@ -6,6 +6,8 @@ allowed-tools: Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion, WebFetch, m
 model: sonnet
 ---
 
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.
+
 **📋 Shared instructions: [shared-instructions.md](${PLUGIN_ROOT}/shared/shared-instructions.md)** — read first.
 
 Startup diagnosis uses the targeted compatibility inspection below instead of
@@ -31,7 +33,7 @@ activate an agent, and this skill installs no background watcher.
 |---|---|
 | `/debug-app` (no args) | **Default — project-log-driven mode.** Run Phase 0, discover valid project-local Metro sessions, select automatically when one is live or ask when several are live, then monitor the selected log. No host terminal ID is required. |
 | `/debug-app "<symptom text>"` | **Symptom-driven mode** (recommended when there's a user-visible problem). Free-text symptom such as `"todos not appearing on home screen"`, `"login button does nothing"`, `"list empty after refresh"`. Run Phase 0 → Phase 0.5 (parse symptom → ask the user to reproduce/navigate → walk the likely data path from terminal traces) → enter monitor loop. Catches silent failures (empty lists, blank screens, swallowed errors) that pure log polling misses. |
-| `/debug-app startup ["<symptom text>"]` | **Startup-only diagnosis.** Inspect install/startup/QR failures, offer bounded approved repair, and verify the original symptom. Return without the runtime monitor; also used by creation-time failure handoffs. |
+| `/debug-app startup ["<symptom text>"] [--tunnel] [--tunnel-tenant <tenant-guid>]` | **Startup-only diagnosis.** Inspect install/startup/QR failures, offer bounded approved repair, and verify the original symptom. Preserve explicitly selected authenticated tunnel options for an approved retry. Return without the runtime monitor; also used by creation-time failure handoffs. |
 | `/debug-app status` | Discover all project-local Metro logs and print each valid session's project, platform, PID, port, start time, and log path. Mark the session referenced by the saved cursor when present, then print fixes and unresolved errors. Do NOT ask for a selection or enter the loop. |
 | `/debug-app stop` | Stop only the foreground debug loop and preserve `.powernative/debug-app/` state. It does not stop Metro; the user owns the `npm run dev` process. |
 | `/debug-app version` | Print the installed `mobile-app` plugin name and version from `${PLUGIN_ROOT}/.plugin/plugin.json`, then exit. |
@@ -48,6 +50,8 @@ Options may follow the default command, a symptom, or `status`:
 | `--cycles <1-50>` | Exit after this many consecutive clean observation intervals. | `3` |
 | `--timeout <duration>` | Maximum wall-clock monitoring time. Accept `30s`–`60m` using `s`, `m`, or `h`. | `5m` |
 | `--no-fix` | Inspect/watch-only: never edit project source/config, inject traces, install, regenerate, start/stop/restart Metro, open the device app, or invoke a mutating handoff. Debug cursor/audit/health state may still advance. | Fix enabled |
+| `--tunnel` | Startup only: preserve `--tunnel` when an approved retry invokes `npm run dev`. Never switch a LAN launch to a tunnel automatically. | Disabled |
+| `--tunnel-tenant <tenant-guid>` | Startup only: preserve the Entra tenant used to authenticate the dev tunnel. Requires `--tunnel`. | Active Azure CLI tenant |
 
 Examples:
 
@@ -58,17 +62,24 @@ Examples:
 /debug-app status --platform android
 /debug-app status --working-dir ../my-mobile-app
 /debug-app startup "npm run dev exits before the QR appears"
+/debug-app startup "tunnel launch fails" --tunnel --tunnel-tenant 11111111-1111-1111-1111-111111111111
 /debug-app "QR won't open the app" --no-fix
 ```
 
 **Argument parsing:**
 
 1. Parse quoted text as one symptom value and parse recognized flags wherever they appear.
-2. The first reserved token (`startup`, `status`, `stop`, `help`, `--help`, `-h`, `version`, `--version`) selects the subcommand. `stop`, help, and version do not accept monitoring options. `status` accepts only `--working-dir`, `--port`, and `--platform`; reject symptoms, `--cycles`, `--timeout`, and `--no-fix` because it does not enter the loop. `startup` accepts one symptom and all options except `--cycles`, because it never enters the runtime monitor.
+2. The first reserved token (`startup`, `status`, `stop`, `help`, `--help`, `-h`, `version`, `--version`) selects the subcommand. `stop`, help, and version do not accept monitoring options. `status` accepts only `--working-dir`, `--port`, and `--platform`; reject symptoms, `--cycles`, `--timeout`, `--no-fix`, and tunnel options because it does not enter the loop. `startup` accepts one symptom and all options except `--cycles`, because it never enters the runtime monitor. Reject `--tunnel` and `--tunnel-tenant` on every other subcommand.
 3. After removing recognized options and their values, any remaining non-reserved text is the symptom and enables symptom mode.
 4. Reject unknown flags, duplicate flags, missing values, invalid numbers, unsupported platforms, or more than one free-text symptom. Print the valid forms and exit without monitoring.
-5. Normalize `platform` to lowercase. Convert `timeout` to `timeoutSeconds`; require `30 <= timeoutSeconds <= 3600`. Resolve `workingDir` from explicit `--working-dir`, or inherit the caller's absolute root; use the current shell directory only for a direct invocation without either. Reject conflicting explicit/inherited roots and do not search parent directories. Require `package.json` at that root; missing `metro.config.js`, configuration, or installed dependencies routes to startup inspection, not runtime monitoring. An unreadable/malformed manifest is a blocked diagnostic, not permission to initialize a new app. Every shell call must explicitly enter the selected absolute `workingDir`; every relative project path and command below runs from that directory.
-6. Initialize:
+5. Normalize `platform` to lowercase. Convert `timeout` to `timeoutSeconds`; require `30 <= timeoutSeconds <= 3600`. Validate `--tunnel-tenant` as a GUID and require `--tunnel`; never derive either option from symptom text. Resolve `workingDir` from explicit `--working-dir`, or inherit the caller's absolute root; use the current shell directory only for a direct invocation without either. Reject conflicting explicit/inherited roots and do not search parent directories. Require `package.json` at that root; missing `metro.config.js`, configuration, or installed dependencies routes to startup inspection, not runtime monitoring. An unreadable/malformed manifest is a blocked diagnostic, not permission to initialize a new app. Every shell call must explicitly enter the selected absolute `workingDir`; every relative project path and command below runs from that directory.
+6. For a creation or other structured handoff, accept `launch_args` only as an
+   array containing `--tunnel`, or `--tunnel`, `--tunnel-tenant`, and one valid
+   tenant GUID. Reject strings, unknown flags, reordered/missing values, and any
+   conflict with explicit startup options. Do not execute a caller-provided
+   command string. Direct invocations derive the same array only from the
+   validated startup flags.
+7. Initialize:
    ```text
    workingDir=<absolute app root>
    portFilter=<number|none>
@@ -76,6 +87,7 @@ Examples:
    targetCleanCycles=<number, default 3>
    timeoutSeconds=<number, default 300>
    noFix=<true|false, default false>
+   devArgs=<[]|["--tunnel"]|["--tunnel","--tunnel-tenant","<tenant-guid>"]>
    monitorStartedAt=<current ISO timestamp>
    ```
 
@@ -193,7 +205,7 @@ Do not resolve the environment or call Dataverse during ordinary bundle, React, 
 Use the validated `<working_dir>` from argument parsing. Enumerate **all** matching logs, newest first:
 
 ```bash
-LOG_DIR="<working_dir>/.powernative/metro-logs"
+LOG_DIR='<working_dir>/.powernative/metro-logs'
 ls -t "$LOG_DIR"/metro-*-pid-*-port-*.log 2>/dev/null
 ```
 
@@ -326,7 +338,7 @@ Run the bundled verifier for every candidate diagnostic before writing:
 ```bash
 printf '%s' "$DIAGNOSTIC_SUMMARY" | node \
    "${PLUGIN_ROOT}/scripts/redact-debug-diagnostic.js" \
-  --working-dir "<working_dir>"
+  --working-dir '<working_dir>'
 ```
 
 Persist only the verifier's stdout. Build `DIAGNOSTIC_SUMMARY` from minimal fields first; do not pass a full Metro window or response body and rely on redaction to make it safe.
@@ -550,7 +562,7 @@ Use the `[TRACE` lines to walk the chain:
    - Confirm field names match what the screen references. `item.title` vs `cr3e9_title` produces blank rows.
 
 5. **`power.config.json`**
-   - Confirm the `datasources` array contains the suspected entity / connector. If absent, `npx power-apps add-data-source` was never run for it.
+   - Confirm the `datasources` array contains the suspected entity / connector. If absent, `pa app add data-source` was never run for it.
 
 6. **Auth state** (`src/playerConfig.ts`, `app.config.js`, `auth.config.json`, `useAuth()` hook)
    - 401 from the service wrapped as `{ error }` — the `[TRACE service-response]` summary surfaces the status without persisting the error object or message.
@@ -562,7 +574,7 @@ Use the `[TRACE` lines to walk the chain:
 |---|---|---|
 | `[TRACE items] 0` or `[]` — no error field | Service returned empty — check filter/query or data not seeded | Fix the query; if no records exist, seed sample data |
 | `[TRACE items] undefined` | Hook never received a response — likely service stub or missing datasource | Route to `/add-connector` or `/add-dataverse` |
-| `[TRACE service-response]` shows an error status/code | Service threw — 401/403 = auth; 404 = wrong resource | Fix auth config or re-run `add-data-source` |
+| `[TRACE service-response]` shows an error status/code | Service threw — 401/403 = auth; 404 = wrong resource | Fix auth config or re-run `pa app add data-source` |
 | `[TRACE render]` N > 0 but list looks empty | Field name mismatch between model and screen | Fix screen field references to match the model |
 | `[TRACE handler-called]` never appears | `onPress` not wired or component not mounted | Read TSX, fix the event binding |
 | No `[TRACE` lines at all | Metro may have cached the old bundle | Ask the user to stop Metro, rerun `npm run dev -- --clear`, then reload the native app |
@@ -899,7 +911,7 @@ Read the relevant source file(s). Identify:
    ```bash
    node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "<environmentId-or-url>"
    ```
-   If resolution fails, run `npx power-apps auth-status --json`. Never switch accounts, log out, or open login from `/debug-app` without user confirmation.
+   If resolution fails, run `$PA auth status --json`. Never switch accounts, log out, or open login from `/debug-app` without user confirmation.
 4. When environment resolution succeeds and live evidence is required, use only read-only `GET` requests through:
    ```bash
    node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET <apiPath> \
@@ -935,7 +947,7 @@ Apply this gate before D3 whenever the failing stack, module, or export involves
 | `app/` screen file, `_layout.tsx`, route segment | Inline edit via `Edit` tool |
 | `src/components/` | Inline edit via `Edit` tool |
 | `src/hooks/`, `src/services/` | Inline edit via `Edit` tool |
-| `src/generated/` | **Do not edit.** Fix the upstream query or schema and run `npm run generate-schemas` |
+| `src/generated/` | **Do not edit.** Hand off service/model repair to the owning data-source skill using CLI refresh; `npm run generate-schemas` only regenerates the runtime connector map. Do not re-add an intentionally retired source. |
 | Dataverse schema (column/table missing) | Run D2's read-only Dataverse diagnostic sequence first. If live metadata/generated artifacts confirm the schema or service is missing, **hand off** to `/add-dataverse`. Do not mutate Dataverse or edit generated files from `/debug-app`. |
 | Auth / MSAL (`AADSTS65001`, `AADSTS50011`) | **Hand-off:** route user to the Power Apps Wrap page via `/set-app-registration-native`. Do not auto-edit registrations. |
 | Connection / connector reference missing | **Hand-off:** route user to `/list-connections` or `/add-connector`. |
@@ -981,7 +993,7 @@ Before applying any recipe, run the first-party native package ownership gate wh
 | Error pattern | Precondition | Action |
 |---|---|---|
 | `SyntaxError: <file>:<line>:<col>` in `app/`, `src/components/`, `src/hooks/`, `src/services/` | The cited line is in editable user code (NOT `src/generated/`, NOT `node_modules/`) | `Read` the file around the cited line (±10 lines), identify the syntactic issue (unclosed JSX tag, missing closing brace/paren, stray comma, missing `from` in import, unterminated string, missing semicolon between statements), apply a single minimal `Edit`. Do NOT reformat surrounding code. |
-| `SyntaxError` in `src/generated/` | Cited file is under `src/generated/` | **Do not edit.** Schema regen produced bad output. Hand-off: tell the user to re-run `npm run generate-schemas`; if the error reproduces, route to `/add-connector` or `/add-dataverse` to re-add the affected datasource. |
+| `SyntaxError` in `src/generated/` | Cited file is under `src/generated/` | **Do not edit.** For `connectorSchemas.ts`, regenerate the runtime map. For services/models, resolve the existing registration and hand off to `/add-connector` or `/add-dataverse` with `--refresh --data-source-name "<registered-name>"`, the absolute app root, and approved scope for targeted CLI refresh and validation. Check the approved plan first: a removed source needs consumer cleanup through `/edit-app`, not re-registration. Missing/ambiguous registrations block refresh; do not fall back to addition. |
 | `Unable to resolve module <name>` from `<importer>` | `<name>` starts with `.` or `..` (relative import) | `Glob` the importer's directory for files matching `<name>` with any extension (`.ts`, `.tsx`, `.js`, `.jsx`, `.json`). If found with a different extension → fix the import to drop the extension OR match the actual one. If found with a typo (Levenshtein ≤ 2) → fix the typo. If not found at all → the file genuinely doesn't exist; surface to user and ask whether to create it or remove the import. |
 | `Unable to resolve module <name>` | `<name>` is a bare package AND not present in `package.json` `dependencies` / `devDependencies` | Follow [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) to classify the published package by contents, not its name. If native-bound and absent from the template, report that a template/runtime update is required. If verified pure JavaScript, ask consent for the exact version, install with `npm install --save-exact`, validate, and retry. Do NOT install without consent. |
 | `Unable to resolve module <name>` | `<name>` IS in `package.json` but the bundle still fails | Run the targeted startup inspection before blaming cache: compare locked/installed versions and resolve the exact entry point. Restore only with approval when installation is broken; unsupported exports or native build mismatches need different remedies. |
@@ -1103,7 +1115,10 @@ Do NOT attempt a third automated fix for the same error. Wait for user guidance.
 - **Startup restoration is not an upgrade.** Only the approved same-lock restore
   and bounded Metro retry in the startup reference are allowed exceptions.
   No blind upgrades, lockfile deletion, Node installation, or host/MSAL patches.
-- **Never modify `src/generated/`** — these files are auto-generated. Fix the upstream query / service / schema instead, then run `npm run generate-schemas`.
+- **Never modify `src/generated/`** — these files are auto-generated. The owning
+  data-source skill uses CLI add/refresh/remove for models/services and config;
+  `npm run generate-schemas` only rebuilds the runtime map afterward. Preserve
+  the approved source inventory; do not resurrect retired sources during repair.
 - **Never patch or fork first-party native packages in a customer project** — for confirmed defects in `@microsoft/power-apps-native-*`, do not edit `node_modules/`, generate `patch-package` artifacts or postinstall rewrites, vendor/copy package source, generate or install a fork, replace the dependency with a git/tarball/local path, or add resolver aliases/shims that shadow the package. Route the sanitized evidence to `/report-issue`.
 - **Dataverse diagnosis is read-only** — `/debug-app` may resolve the configured environment and issue bounded Dataverse `GET` requests through the bundled scripts. It must never perform metadata/data writes, publish, seed records, intentionally trigger throttling, invalidate tokens, switch CLI accounts, or replace generated services with direct HTTP.
 - **Do not ask the user about errors mid-cycle** — investigate autonomously using the tools above. Only surface to the user when:

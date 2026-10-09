@@ -6,7 +6,7 @@ This file provides guidance to AI Agents when working with the **mobile-app** pl
 
 ## What This Plugin Is
 
-A plugin for building and deploying **Power Apps code apps that run as native mobile + web apps** using Expo + React Native + TypeScript. Connects to Power Platform via connectors using the standard `npx power-apps add-data-source` workflow.
+A plugin for building and deploying **Power Apps code apps that run as native mobile + web apps** using Expo + React Native + TypeScript. Connects to Power Platform via connectors using the standard `pa app add data-source` workflow.
 
 The Expo template snapshot is distributed with this plugin under `template/` and published from [`plugins/mobile-apps/template`](https://github.com/microsoft/power-platform-skills/tree/main/plugins/mobile-apps/template). `/create-mobile-app` runs in fresh-template working-directory mode: the user starts in an installed template folder, then the skill validates and prepares it.
 
@@ -38,19 +38,18 @@ The Expo template snapshot ships bundled inside this plugin at `template/`. It i
 |---|---|
 | `app.config.js`: `name`, `slug` | Replace `'Power Apps Standalone App'` / `'powerapps-standalone-app'` with wizard answers |
 | `package.json`: `name` | Replace `'powerapps-standalone-app'` with the app slug |
-| Remove an empty placeholder `power.config.json` | Preserve populated environment configuration; `npx power-apps init` creates a missing file |
+| Remove an empty placeholder `power.config.json` | Preserve populated environment configuration; `pa app init` creates a missing file |
 | Remove legacy example hooks and query-client files | Preserve every artifact under `src/generated/` |
 | `app/_layout.tsx`: add `tamaguiConfig` + `defaultTheme` | Use host light/dark defaults until generated brand themes are explicitly wired |
 | `app.json` + `app/_layout.tsx`: `appConfig` | Pass the complete generated app configuration once so the host can resolve opt-in Application Insights settings inside fixed Dev Player |
 | `tsconfig.json`: verify the host base | Package shims and `@/` aliases remain centralized in the native host |
-| Missing `AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md` | Portable app-local skill guidance; preserve customer files and include only actual copies in `writtenFiles` |
 
 Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `src/playerConfig.ts`, `fingerprint.config.js`, or `native-runtime.json` unless those files exist in the synced main template.
 
 ## Guiding Principles
 
 1. **Connector-first for data** — All Power Platform data access goes through connectors and generated services in `src/generated/`. No direct Graph / Azure REST calls.
-2. **Native code is allowlist-bounded; pure JavaScript is app-scoped.** Expo modules and packages that ship native source, a podspec, codegen configuration, an Expo module/config plugin, or platform projects must already exist in `template/package.json`. The rewrap binary is built from a pre-built base, so adding those packages to an app cannot add their native code. Do not classify a package from its name alone: a `react-native-*` package can still be pure JavaScript. For an explicit library request or an approved use case that benefits from an established library, the planner may select a compatible pure-JavaScript package, pin it in the app's `package.json`, and install it before builders use it; no Android/iOS rebuild is required. Do not bundle optional libraries such as `react-native-calendars` in the base template. Follow [`shared/references/javascript-dependency-planning.md`](shared/references/javascript-dependency-planning.md). `expo-haptics` remains runtime-banned even if it appears in a future template (see [`agents/screen-builder.md`](agents/screen-builder.md) HARD RULE). The native boundary and reconciliation rule are in [`skills/add-native/SKILL.md`](skills/add-native/SKILL.md).
+2. **Native code is allowlist-bounded; pure JavaScript is app-scoped.** Expo modules and packages that ship native source, a podspec, codegen configuration, an Expo module/config plugin, or platform projects must already exist in `template/package.json`. The rewrap binary is built from a pre-built base, so adding those packages to an app cannot add their native code. Do not classify a package from its name alone: a `react-native-*` package can still be pure JavaScript. For an explicit library request or an approved use case that benefits from an established pure-JavaScript package, the planner may select a compatible version, pin it in the app's `package.json`, and install it before builders use it; no Android/iOS rebuild is required. Do not bundle optional libraries such as `react-native-calendars` in the base template. Follow [`shared/references/javascript-dependency-planning.md`](shared/references/javascript-dependency-planning.md). `expo-haptics` is template-shipped: add haptic behavior through `/add-native haptics`, keep native calls in `src/native/haptics.ts`, and pair tactile feedback with visible UI. When a template/base maintainer adds or changes a native dependency version, the Android and iOS base binaries must be rebuilt before release; generated apps based on that rebuilt template do not install or link it again. The native boundary and reconciliation rule are in [`skills/add-native/SKILL.md`](skills/add-native/SKILL.md).
 3. **Fresh-template mode** — `/create-mobile-app` validates and prepares an existing fresh Expo standalone template working directory. Do not silently copy the bundled `template/` snapshot over the user's folder.
 4. **Safety guardrails** — Confirm before deploys, before global installs, before edits outside the project root.
 5. **Memory bank** — Persist `memory-bank.md` in the project root.
@@ -59,7 +58,10 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
    Dataverse modeling; later gates approve the applicable data model and screen
    plan.
 7. **Persisted plan** — Write `native-app-plan.md` (Mermaid ER + per-screen specs + native capabilities matrix) as the source of truth that sub-skills `Read`.
-8. **CLI compatibility** — Use `npx power-apps ...` for code-app lifecycle and data-source commands. Use `scripts/resolve-environment.js` plus `az` tokens for Dataverse environment URL/tenant discovery and Azure/Entra operations. See [`shared/shared-instructions.md`](./shared/shared-instructions.md).
+8. **CLI compatibility** — Resolve the Power Apps CLI per [`shared/cli-binary.md`](./shared/cli-binary.md) and run code-app lifecycle and data-source commands as `$PA …` in the canonical grouped `pa` form — never a bare `pa`, `power-apps`, or `npx pa`. Every other agent-run `npx` (`tsc`, `expo`, `qrcode`, …) also uses `--no-install` against a package the template pins; never `npx --yes` or a bare `npx <pkg>` that can download from the registry. Use `scripts/resolve-environment.js` plus `az` tokens for Dataverse environment URL/tenant discovery and Azure/Entra operations. See [`shared/shared-instructions.md`](./shared/shared-instructions.md).
+   Mobile Node helpers use `scripts/lib/process-runner.js` for external CLI
+   execution. Keep arguments separate from commands and reuse its native/batch
+   handling rather than adding per-tool Windows shims or `shell: true`.
 9. **Agent invocation namespace** — All `Task` invocations of agents in this plugin MUST use the fully-qualified `mobile-app:<agent-name>` form (e.g. `mobile-app:native-app-planner`, `mobile-app:screen-builder`). Bare names like `native-app-planner` return `Agent type 'native-app-planner' not found` because Claude Code namespaces all plugin agents by plugin name.
 10. **Plugin isolation** — `hooks/hooks.json` is limited to fail-open telemetry start hooks. They never validate, mutate, or block tool calls. Do not add write/validation hooks: mutating skills follow the changed-file gate in `shared/shared-instructions.md`, and final-artifact agents invoke `scripts/validate-mobile-files.js` directly.
 11. **Invocation metadata** — Public entry skills use `user-invocable: true` and remain model-invocable. Bundled implementation helpers use both `user-invocable: false` and `disable-model-invocation: true`; their owner reads `SKILL.md` directly. Hidden standalone workflows such as `assign-offline-profile` and `preview-offline-scope` use `user-invocable: false` without disabling model invocation because no owner reads them directly. Agents use `user-invocable: false` without `disable-model-invocation` so qualified `Task` delegation remains available.
@@ -79,30 +81,77 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     - In `/create-mobile-app` only, `NEEDS_CONTEXT: dataverse-planning-mode:<required|connector-only>` from the `gate-only` architecture pass is a phase-completion signal, not a retry. The canonical handler validates the approved architecture before continuing; other phases cannot use it to change the data platform.
     - Special early-return signals (`INDUSTRY_CONFIRM_REQUESTED:`, `DESIGN_VIBE_REQUESTED:`) pre-date this protocol and remain in effect — they are special-cased "ask the user one question and re-spawn me" handoffs, not terminal returns.
     - The canonical orchestrator handler lives in [`skills/create-mobile-app/SKILL.md`](./skills/create-mobile-app/SKILL.md) Step 3.0. Future skills that spawn agents should reference it rather than duplicating the switch.
-13. **Metro lifecycle is project-local** — template `metro.config.js` delegates to `createPowerAppsMetroConfig`, whose host implementation writes sanitized `.powernative/metro-logs/` output during normal `npm run dev`; `/debug-app` locates and tails those files directly, with its cursor, health, and audit state under `.powernative/debug-app/`. Do not restore required `BashOutput`/terminal-ID behavior or host-specific project state directories. Host terminal APIs may be optional conveniences only. Never write unsanitized Metro output to disk. Runtime monitoring requires a live logged PID/port; bounded startup diagnosis may use correlated failed-launch output as historical evidence, never as a live runtime session.
-14. **First-party native package defects are reported, not patched in customer projects** — a `node_modules/@microsoft/power-apps-native-*` frame alone is not proof of package ownership; first rule out invalid app usage against the package's public contract. Once a defect is confirmed inside one of these packages, do not edit `node_modules/`, generate `patch-package` or postinstall rewrites, vendor or fork the package, replace it with a git/tarball/local dependency, or shadow it through resolver aliases. Capture sanitized reproduction evidence and route to `/report-issue`.
-15. **Custom events are Application Insights-specific and opt-in** — Each generated app targets one customer-owned, workspace-based Application Insights resource. `app.json` → `expo.extra.appInsightsConfig` defaults to disabled and stores its connection string, matching the Power Apps canvas-app model. Treat the value as sensitive project configuration: do not print it, write it to `memory-bank.md`, or include it in summaries. Keep `includeUserId` false unless explicitly approved.
-16. **Startup diagnosis precedes runtime monitoring when necessary** —
+13. **Every run documents itself in `docs/`** - [`scripts/app-docs.js`](scripts/app-docs.js) writes `<app>/docs/create-app-plan.html`, a living Fluent-format plan in the same visual language as the Power Pages `/create-site` artifacts (shared encoder ported to [`scripts/lib/render-template.js`](scripts/lib/render-template.js)). It records the environment, the confirmed brief, the Gate 1 architecture, the Gate 2 data model with a colour-coded ER diagram, the screen plan, and the design system, plus per-phase progress. Sections are written **when the decision is made**, so an aborted run still explains itself. The ER, column tables and new/reused/extended colouring are all derived from `dataModel.tables[]`, so populate those structurally rather than only shipping a Mermaid string. It is best-effort and must never gate, retry, or fail a build.
+14. **Metro lifecycle is project-local** — template `metro.config.js` delegates to `createPowerAppsMetroConfig`, whose host implementation writes sanitized `.powernative/metro-logs/` output during normal `npm run dev`; `/debug-app` locates and tails those files directly, with its cursor, health, and audit state under `.powernative/debug-app/`. Do not restore required `BashOutput`/terminal-ID behavior or host-specific project state directories. Host terminal APIs may be optional conveniences only. Never write unsanitized Metro output to disk, and never diagnose a log unless the logged PID/port still look live.
+15. **First-party native package defects are reported, not patched in customer projects** — a `node_modules/@microsoft/power-apps-native-*` frame alone is not proof of package ownership; first rule out invalid app usage against the package's public contract. Once a defect is confirmed inside one of these packages, do not edit `node_modules/`, generate `patch-package` or postinstall rewrites, vendor or fork the package, replace it with a git/tarball/local dependency, or shadow it through resolver aliases. Capture sanitized reproduction evidence and route to `/report-issue`.
+16. **Custom events are Application Insights-specific and opt-in** — Each generated app targets one customer-owned, workspace-based Application Insights resource. `app.json` → `expo.extra.appInsightsConfig` defaults to disabled and stores its connection string, matching the Power Apps canvas-app model. Treat the value as sensitive project configuration: do not print it, write it to `memory-bank.md`, or include it in summaries. Keep `includeUserId` false unless explicitly approved.
+17. **Plugin update notification** — Immediately after the frontmatter of every `user-invocable: true` skill except `/check-updates`, run `node "${PLUGIN_ROOT}/scripts/check-version.js"` and show any output before proceeding. The check is best-effort and must never block the requested workflow. `/check-updates` owns its explicit plugin-version check in Step 1 and must not run a duplicate startup check.
+
+18. **Data-source operations preserve scope and app identity** — Before data
+    work, follow [Data-source invocation scope](shared/shared-instructions.md#data-source-invocation-scope).
+    Standalone workflows approve the current delta; child calls carry the owner,
+    phase, absolute root, and exact approved operations. Neither a flag nor an
+    old plan grants approval. Every shell/file operation uses the same root;
+    follow [app-working-directory.md](shared/references/app-working-directory.md)
+    for Bash and PowerShell guards.
+19. **Data-source retirement is app-local and CLI-owned** — After approved
+    consumer edits, use the supported removal command to update registrations,
+    schemas, and generated models/services, then regenerate the runtime schema
+    map. Never turn a removed plan row into server-table deletion. Follow
+    [`shared/references/data-source-removal.md`](shared/references/data-source-removal.md)
+    for shared-reference safety, inventory/offline reconciliation, and no-op
+    detection; successful exit alone is insufficient.
+20. **Seed scope is not the schema inventory** — Orchestrated `/add-sample-data`
+    calls pass an approved `--tables` allowlist and retiring-table exclusions.
+    Lookup fanout, prototype seeds, media uploads, and retries cannot widen that
+    scope. Preserve transitional manifest entries until verified removal.
+21. **Offline retirement survives addition checks** — Preserve per-table
+    `offlineRetirement` outcomes in leaf results and memory-bank. Addition-only
+    `in-sync` never clears a pending profile decision/migration. App-binding
+    approval is not permission to delete offline profile items or server data.
+22. **Dataverse change planning shares creation's helpers, not its gates** —
+    Setup/edit/standalone proposals use compact hash-bound evidence, required
+    snapshot-only architect context, and decision validation before the owner's existing approval.
+    The same checks apply to diagrams and inline fallbacks. Preapproval
+    environment resolution uses `--no-cache --require-tenant`; never downgrade
+    to the persistent resolver. Follow
+    [scoped Dataverse planning](shared/references/dataverse-change-planning.md).
+    Accepted contract/plan hashes travel in the existing scoped context; do not
+    fabricate the four-approval create-only execution receipt for an edit.
+23. **Feature entry points share one edit owner** — Direct native, connector,
+    data-model, and design requests on existing apps choose implementation-only,
+    full integration, or cancellation before costly work. Approved children
+    reuse their current owner/root/phase/scope and never recurse into another
+    edit. Follow [app-edit-routing.md](shared/references/app-edit-routing.md);
+    the choice enters a workflow, not permission to mutate.
+24. **Shared entry policy is not copied into every skill** — Every new public
+    app workflow starts with a read-first link to `shared/shared-instructions.md`
+    and allows `Read`. The shared preflight classifies feature work before
+    operational commands; leaves only link to it. Invocation discovery tests
+    cover newly added skills automatically. These static checks verify the
+    instruction contract, not model compliance; do not claim smaller-model or
+    host reliability without agent-run evidence.
+25. **Startup diagnosis precedes runtime monitoring when necessary** —
     `/debug-app startup` can inspect a failed install, pre-start command, or QR
     opening without a loaded app. `scripts/inspect-startup.js` is local/read-only
     and never authorizes repair or verifies startup. Clean metadata is not an
     exhaustive diagnosis; unexplained symptoms require scoped investigation of
     the original failure, not a guessed reinstall. The bounded workflow in
     [`skills/debug-app/references/startup-diagnostics.md`](skills/debug-app/references/startup-diagnostics.md)
-    owns explicit same-lock restoration/restart approval and original-symptom
-    verification. Upgrades remain with a separate available upgrade workflow;
-    no lock deletion, automatic dependency updates, or host/MSAL patches.
-    Creation reuses this workflow on an observed startup failure instead of
-    launching another repair loop. Runtime monitoring still requires live logs.
+    owns explicit same-lock restoration and restart approval, preserves the
+    selected `npm run dev` arguments (including authenticated tunnel options),
+    and verifies the original symptom. No lock deletion, automatic dependency
+    updates, or host/MSAL patches are allowed. Creation reuses this workflow on
+    an observed startup failure instead of launching another repair loop.
 
 ## Telemetry
 
 Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-root `shared/telemetry/lib` at `scripts/lib/telemetry/lib`. Edit the shared source first, then refresh this physical copy in the same change; never copy another plugin's `ikey.json` or resolver.
 
-- **Lifecycle:** `UserPromptSubmit` records explicit slash-command starts and `PreToolUse(Skill)` records programmatic Skill-tool starts; both may fire for one visible slash command. `UserPromptSubmit` payloads differ by host — Claude Code passes the raw `/mobile-app:<skill>` text, Copilot CLI pre-expands it to a `<skill-context name="<skill>">` wrapper and emits no Skill pre-tool event — so both shapes must stay recognized or manual runs go uncaptured. Marked workflow boundaries emit explicit checkpoints through `scripts/emit-telemetry-checkpoint.js`; do not broaden hook matchers to observe commands. Every tracked operational skill has checkpoints; the `telemetry` preference skill is intentionally exempt because changing the preference can suppress one side of its own checkpoint lifecycle. Do not infer `skill_completed`, duration, or outcome from hook boundaries.
+- **Lifecycle:** `UserPromptSubmit` and `PreToolUse(Skill)` remain legacy activity observations, not measured workflow starts. Every tracked operational skill follows `shared/shared-instructions.md` to begin and end a schema-v2 skill span and measure registered checkpoints through `scripts/emit-telemetry-checkpoint.js`. Durable span state uses the Mobile Apps-owned `scripts/lib/mobile-lifecycle.js` helper; orchestration remains in the existing checkpoint CLI. Pass explicit run, parent, and span IDs across Skill, Task, subprocess, and resume boundaries. Do not infer completion from hook returns or recover run identity from an unrelated session. The `telemetry` preference skill remains exempt.
 - **Coverage and attribution:** `scripts/lib/mobileapp-hook-utils.js` discovers every user- or model-invocable top-level skill, including `telemetry`. Direct-read helpers with `disable-model-invocation: true` are not independently invoked and are excluded. Bare and `mobile-app:`-qualified names are both attributed; explicitly foreign plugin namespaces are excluded.
 - **Session correlation:** Stable host session ids pass through unchanged. Copilot CLI reports a transient `call_*` id to nested-agent hooks, so `resolveCopilotRootSessionId` in `scripts/lib/mobile-telemetry.js` resolves it to the unique recent UUID session whose local `~/.copilot/session-state/<uuid>/events.jsonl` structurally owns that `agentId`, reading only a bounded tail. Keep host-specific quirks contained in that one function. The verified root is cached as one atomic 30-minute alias file per hashed call id so fresh hook processes reuse it; aliases hold no prompts, cwd, or tool arguments and are never transmitted. Missing, stale, malformed, or ambiguous state fails open to the original id, and Claude Code and Codex ids are not rewritten.
-- **Privacy:** Mobile Apps sends no prompt, tool input, cwd, path, URL, credential, username, hostname, Dataverse org/tenant ID, or Entra object ID. The dynamic `eventInfo` contains only `invocationSource` (`prompt`, `pretool`, or `checkpoint`), a random per-project `appInstanceId` (or `null` outside a prepared project), optional author-defined checkpoint `additionalInfo` validated as `snake_case` with a 64-character limit, and `appInsightsSelection` (`enabled` or `disabled`) from the `/setup-app-insights` skill.
+- **Privacy:** Only the exact field schema enforced by `scripts/lib/mobile-telemetry-dispatcher.js` and disclosed in this plugin's README and telemetry skill is allowed. Verified environment, tenant, and organization IDs support adoption and support correlation; they are organization-identifying metadata. Mobile telemetry must never capture or transmit an Entra user/object ID, Dataverse UserId, username, email, or guessed home-account ID. Never send prompts, arguments, records, file contents, paths, URLs, credentials, names, hostnames, or raw errors. The dispatcher filters top-level and nested values before local logging and transmission; arbitrary `eventInfo` enrichment is forbidden.
 - **Destination and controls:** Mobile-owned `scripts/lib/mobile-telemetry-dispatcher.js` maps shared events to the Power Apps `event` stream configured by `scripts/lib/telemetry/ikey.json`. The repository `disabled` switch is a hard-off; user and CI opt-outs suppress transmission while preserving the local diagnostic mirror.
 - **CI:** Every Mobile Apps test job must set `POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT=1`. The single positive wire test clears that backstop only in its child process and routes the event to `POWER_PLATFORM_SKILLS_FAKE_HTTPS`; all other positive tests remain opted out and exercise the local mirror.
 
@@ -111,12 +160,13 @@ Mobile Apps bundles the canonical stdlib-only telemetry helpers from the repo-ro
 - ✅ Markdown plan with Mermaid (no HTML rendering)
 - ✅ **Architecture-first approval gates** in the planner (data platform + native APIs + connectors → conditional Dataverse model → screen plan)
 - ✅ `/edit-app` skill for post-generation app iteration: updates the approved plan delta, applies Dataverse/native/design/screen mutations, verifies, and refreshes preview output. `--plan-only` is the explicit docs-only escape hatch.
-- ✅ Single `/deploy` skill — `npm run build` + `npx power-apps push`; no local native compile, no OTA in v0
+- ✅ Single `/deploy` skill — `npm run build` + `pa app push`; no local native compile, no OTA in v0
 - ✅ Connection model: per-environment connections, with platform-specific auth (`expo-msal-intune` on native, `expo-auth-session` on web)
-- ✅ Auth: `/create-mobile-app` resolves the tenant from the selected Power Platform environment (`scripts/resolve-environment.js`), writes that tenant to `auth.config.json`, then lets the user paste an app registration client ID, create one from the Power Apps Wrap page and paste it, or skip auth for later. `/set-app-registration-native` is a manual helper for the same Wrap-page + pasted-client-ID flow.
+- ✅ Auth: `/create-mobile-app` resolves the tenant from the selected Power Platform environment (`scripts/resolve-environment.js`), lists every tenant app registration visible to the signed-in Azure CLI user, evaluates the native runtime permission profile as one boolean, shows passing registrations first, and paginates the rest. The baseline requires Dynamics CRM `user_impersonation` and Power Platform API `PowerApps.Apps.Read`; when the approved plan contains non-Dataverse connectors, the checker also requires Azure API Connections `Runtime.All` plus the four Power Platform API connector read/write/user-consent scopes. The list uses self-contained `✓ All required permissions configured` / `✗ Missing required permissions` labels; missing details appear after selection. Discovery is best-effort: any CLI, Graph, tenant, response, or permission-check failure immediately falls back to the original pasted-client-ID flow with status unavailable. `/set-app-registration-native` infers connector use from the persisted plan or nonempty `power.config.json.connectionReferences` and provides the same read-only discovery, verification, ranking, pagination, and fallback behavior. Power Apps Wrap remains the final authority for redirect platforms, packaging permissions, third-party-app allowlisting, and admin consent.
 - ✅ `/add-native` v0 scope: camera, location, push, biometrics, secure-store (already in template)
+- ✅ Build documentation: every run writes `docs/create-app-plan.html` - environment, requirements, architecture, a colour-coded Dataverse ER diagram, screen plan, design system, and live phase progress - in the Power Pages plan format. The page also carries a phone frame that advances from a building state to the generated screens to the device QR code. The folder survives the run so the app carries its own design record.
 - ✅ Cross-host Metro diagnostics: user-owned `npm run dev`, port-probe liveness and stale-PID protection, sanitized project-local logs, a durable debug cursor, and read-only `status` plus foreground-loop `stop` commands
-- ✅ Template is supplied as a fresh `microsoft/power-platform-skills/plugins/mobile-apps/template#main` folder before `/create-mobile-app` runs; users materialize it with `degit`, run `npm install`, then invoke the skill from that folder. The skill validates/prepares the folder and runs `npx power-apps init`.
+- ✅ Template is supplied as a fresh `microsoft/power-platform-skills/plugins/mobile-apps/template#main` folder before `/create-mobile-app` runs; users materialize it with `degit`, run `npm install`, then invoke the skill from that folder. The skill validates/prepares the folder and runs `pa app init`.
 - ✅ `brand/` directory convention: `/design-system` (Step 6.75) writes `brand/design-system.md` (spec), `brand/tokens.ts` (importable Tamagui tokens), and `brand/design-system.html` (visual gallery). Screen-builders MUST read `brand/design-system.md` if present; `## Negatives` = HARD RULES. `/create-mobile-app` Step 9b imports `brand/tokens.ts` via `skills/design-system/references/tamagui-integration.md`. Projects without `brand/` fall back to `## Design Direction` only — no breakage.
 - ✅ Offline profile creation is **configuration-only in v0.1** —
   `/setup-offline-profile` and `/enable-tables-offline` POST

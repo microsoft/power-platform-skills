@@ -20,8 +20,9 @@ const PLACEHOLDER_RE = /__(?:(HTML|ATTR|JSON|RAW)_)?([A-Z][A-Z0-9_]*)__/g;
  * @param {string} [options.dataPath]    - Absolute path to a JSON data file. Ignored if dataObject is provided.
  * @param {Object} [options.dataObject]  - Data object passed directly. If provided, takes precedence over dataPath.
  * @param {string[]} options.requiredKeys - Keys that must be present in the data
+ * @param {boolean} [options.emitStatus=true] - Print JSON status after writing the file
  */
-function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requiredKeys }) {
+function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requiredKeys, emitStatus = true }) {
   // Validate inputs exist
   if (!fs.existsSync(templatePath)) {
     console.error(`Template not found: ${templatePath}`);
@@ -101,7 +102,9 @@ function renderTemplate({ templatePath, outputPath, dataPath, dataObject, requir
     // non-fatal
   }
 
-  console.log(JSON.stringify({ status: 'ok', output: outputPath }));
+  if (emitStatus) {
+    console.log(JSON.stringify({ status: 'ok', output: outputPath }));
+  }
 }
 
 function escapeHtml(value) {
