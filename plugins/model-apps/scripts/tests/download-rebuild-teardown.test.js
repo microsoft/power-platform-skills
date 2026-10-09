@@ -80,6 +80,12 @@ function recordingLifecycleSdk({ systemOnly = false } = {}) {
   ] }), 4);
   resource('contoso_foreign.svg', 11, '<svg/>', 5);
   const appById = (id) => [...state.apps.values()].find((a) => a.id === id);
+  const sitemapXml = (app) => {
+    const entries = app.siteMap.areas.flatMap((a) => a.groups.flatMap((g) => g.subAreas || []));
+    return `<SiteMap><Area><Group>${entries.map((s) =>
+      s.genPageId ? `<SubArea GenPageId="${s.genPageId}"/>` : s.entity ? `<SubArea Entity="${s.entity}"/>`
+        : s.url ? `<SubArea Url="${s.url}"/>` : '').join('')}</Group></Area></SiteMap>`;
+  };
   sdk.initWorkspace = async () => {};
   sdk.listArtifacts = async () => [...state.apps.values()].map((a) => ({ id: a.id, isDirty: false }));
   sdk.findArtifact = async (kind, identity) => kind === 'app' ? state.apps.get(identity.uniqueName)?.id || null : null;
@@ -107,6 +113,15 @@ function recordingLifecycleSdk({ systemOnly = false } = {}) {
     }] : [] } };
     if (url.includes('/LookupAttributeMetadata')) return { status: 200, body: { value: [] } };
     if (/\/(?:Attributes|ManyToManyRelationships)/.test(url)) return { status: 200, body: { value: [] } };
+    // The saved (unpublished) layer of every sitemap, read once for the shared-page scan. This fixture holds no pending edit, so each app's saved navigation is
+    // its published one.
+    if (url.startsWith('/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) {
+      return { status: 200, body: { value: [...state.apps.values()].map((a) => ({ sitemapid: a.sitemapId, sitemapxml: sitemapXml(a), componentstate: 0 })) } };
+    }
+    // The current layer of every app, read once to find the apps that were never published. Every app here is published, so each has its one published row.
+    if (url.startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) {
+      return { status: 200, body: { value: [...state.apps.values()].map((a) => ({ appmoduleid: a.id, appmoduleidunique: a.lookup, uniquename: a.uniquename, componentstate: 0 })) } };
+    }
     assert.ok(state.tables.has(logical), `only declared table metadata may be read: ${url}`);
     return { status: 200, body: { LogicalName: logical, EntitySetName: `${logical}s` } };
   } };
@@ -125,10 +140,7 @@ function recordingLifecycleSdk({ systemOnly = false } = {}) {
     if (set === 'sitemap') {
       const app = [...state.apps.values()].find((a) => filter === `sitemapid eq ${a.sitemapId}` || filter === `sitemapnameunique eq '${a.uniquename}'`);
       if (!app) return [];
-      const entries = app.siteMap.areas.flatMap((a) => a.groups.flatMap((g) => g.subAreas || []));
-      return [{ sitemapid: app.sitemapId, sitemapxml: `<SiteMap><Area><Group>${entries.map((s) =>
-        s.genPageId ? `<SubArea GenPageId="${s.genPageId}"/>` : s.entity ? `<SubArea Entity="${s.entity}"/>`
-          : s.url ? `<SubArea Url="${s.url}"/>` : '').join('')}</Group></Area></SiteMap>` }];
+      return [{ sitemapid: app.sitemapId, sitemapxml: sitemapXml(app) }];
     }
     if (set === 'solutioncomponent') {
       if (!filter.startsWith('objectid eq ')) return [];

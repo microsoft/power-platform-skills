@@ -180,3 +180,202 @@ test('a native executable receives any argument unchanged through the runner', {
   const out = runner.runSync('fakenode', ['-e', 'process.stdout.write(JSON.stringify(process.argv.slice(1)))', ...values], { encoding: 'utf8', timeout: 30000 }, { env });
   assert.deepStrictEqual(JSON.parse(out), values);
 });
+
+// ── killProcessTree ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// A call that ran out of time must end the process it started AND everything under it. On Windows pac is often a `pac.cmd` shim — cmd.exe, which
+// runs pac.exe — and ending the shim alone leaves the stalled pac running. The kill goes through the runner (taskkill resolved to an absolute path,
+// never from the current directory) and never throws: the caller is already handling a failure.
+const fakeChild = (pid) => {
+  const killed = [];
+  return { pid, killed, kill: (signal) => { killed.push(signal); return true; } };
+};
+
+test('killProcessTree ends the Windows tree with taskkill /T /F, and asks the process itself to die as well', () => {
+  const runs = [];
+  const child = fakeChild(4242);
+  runner.killProcessTree(child, { platform: 'win32', run: (name, args, options) => { runs.push({ name, args, options }); return { status: 0 }; } });
+  assert.deepStrictEqual(runs.map((r) => [r.name, r.args]), [['taskkill', ['/pid', '4242', '/T', '/F']]]);
+  assert.strictEqual(runs[0].options.stdio, 'ignore');
+  assert.ok(runs[0].options.timeout > 0, 'taskkill itself is bounded');
+  assert.deepStrictEqual(child.killed, ['SIGKILL'], 'a tree kill that missed the process cannot leave it running');
+});
+
+test('killProcessTree kills a POSIX process and every descendant ps lists under it — and nothing else', () => {
+  //    PID  PPID           (the `=` after each name in `-o pid=,ppid=` leaves no header line)
+  const listing = ['    1     0', '  100     1', ' 4242   100', ' 5000  4242', ' 5001  5000', ' 5002  4242', ' 7000   100', ''].join('\n');
+  const runs = [];
+  const killedPids = [];
+  const child = fakeChild(4242);
+  runner.killProcessTree(child, {
+    platform: 'linux',
+    run: (name, args, options) => { runs.push({ name, args, options }); return { status: 0, stdout: listing }; },
+    kill: (pid, signal) => { killedPids.push([pid, signal]); },
+  });
+  assert.deepStrictEqual(runs.map((r) => [r.name, r.args]), [['ps', ['-A', '-o', 'pid=,ppid=']]]);
+  assert.strictEqual(runs[0].options.encoding, 'utf8');
+  assert.deepStrictEqual(killedPids.map(([pid]) => pid).sort(), [5000, 5001, 5002], 'the grandchild too; not the parent, its sibling or init');
+  assert.ok(killedPids.every(([, signal]) => signal === 'SIGKILL'), 'a stalled process may ignore SIGTERM');
+  assert.deepStrictEqual(child.killed, ['SIGKILL']);
+  // The grandchild goes before the child it hangs from is gone for good: deepest first, so no process is orphaned into init half-killed.
+  assert.ok(killedPids.findIndex(([pid]) => pid === 5001) < killedPids.findIndex(([pid]) => pid === 5000));
+});
+
+test('killProcessTree still ends the process when taskkill or ps fails, throws or is absent, and never throws', () => {
+  for (const [platform, run] of [
+    ['win32', () => ({ status: 128, stdout: '' })],
+    ['win32', () => { throw new Error('spawn taskkill ENOENT'); }],
+    ['win32', () => ({ status: null, error: new Error('timed out') })],
+    ['linux', () => ({ status: 1, stdout: '' })],
+    ['linux', () => { throw new Error('spawn ps ENOENT'); }],
+    ['linux', () => ({ status: 0, stdout: 'not a process listing' })],
+  ]) {
+    const child = fakeChild(4242);
+    const kills = [];
+    assert.doesNotThrow(() => runner.killProcessTree(child, { platform, run, kill: (pid) => kills.push(pid) }));
+    assert.deepStrictEqual(child.killed, ['SIGKILL'], `${platform}: the process itself is killed`);
+    assert.deepStrictEqual(kills, [], `${platform}: nothing else is guessed at`);
+  }
+  // A process that is already gone, or one whose kill throws, is not an error either.
+  const gone = { pid: 4242, kill: () => { throw new Error('ESRCH'); } };
+  assert.doesNotThrow(() => runner.killProcessTree(gone, { platform: 'linux', run: () => ({ status: 0, stdout: '' }), kill: () => { throw new Error('ESRCH'); } }));
+});
+
+// A child that has already exited can no longer be named by its pid: 'exit' comes before 'close' when a process the child started still holds its pipes — the case a call that runs out
+// of time is stopped in — and the number can belong to another process by then, so a tree kill by it could end that one and everything it started. No tool is run against such a child.
+test('killProcessTree does not end a tree by the pid of a child that has already exited — it only asks the child to die', () => {
+  for (const [what, exited] of [['exited with a code', { exitCode: 0 }], ['exited non-zero', { exitCode: 1 }], ['ended by a signal', { exitCode: null, signalCode: 'SIGTERM' }]]) {
+    for (const platform of ['win32', 'linux']) {
+      const child = { ...fakeChild(4242), ...exited };
+      const runs = [];
+      const kills = [];
+      assert.doesNotThrow(() => runner.killProcessTree(child, { platform, run: (...a) => { runs.push(a); return { status: 0, stdout: ' 4243 4242\n' }; }, kill: (pid) => kills.push(pid) }));
+      assert.deepStrictEqual(runs, [], `${what}, ${platform}: no taskkill, no ps`);
+      assert.deepStrictEqual(kills, [], `${what}, ${platform}: no process is signalled by that number`);
+      assert.deepStrictEqual(child.killed, ['SIGKILL'], `${what}, ${platform}: the child is still asked to die`);
+    }
+  }
+  // A child that is running — a ChildProcess reports null for both until it exits — is ended as before.
+  for (const platform of ['win32', 'linux']) {
+    const child = { ...fakeChild(4242), exitCode: null, signalCode: null };
+    const runs = [];
+    runner.killProcessTree(child, { platform, run: (name, ...rest) => { runs.push(name); return { status: 0, stdout: '' }; } });
+    assert.deepStrictEqual(runs, [platform === 'win32' ? 'taskkill' : 'ps'], platform);
+  }
+});
+
+test('killProcessTree leaves a real child that has exited alone, and ends one that is still running', async () => {
+  const { spawn } = require('node:child_process');
+  const exited = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+  await new Promise((resolve) => exited.once('exit', resolve));
+  assert.notStrictEqual(exited.exitCode, null, 'the child has exited');
+  const runs = [];
+  runner.killProcessTree(exited, { run: (...a) => { runs.push(a); return { status: 0, stdout: '' }; }, kill: (pid) => runs.push(['kill', pid]) });
+  assert.deepStrictEqual(runs, [], 'its pid is not used');
+  // One that is running gets the tree kill — through a recording runner, so no real process tree is touched — and is itself killed.
+  const running = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+  try {
+    assert.strictEqual(running.exitCode, null);
+    const started = [];
+    runner.killProcessTree(running, { run: (name, ...rest) => { started.push(name); return { status: 0, stdout: '' }; }, kill: () => {} });
+    assert.strictEqual(started.length, 1, 'the tool was run for the running child');
+    await new Promise((resolve) => running.once('exit', resolve));
+    assert.ok(running.signalCode === 'SIGKILL' || running.exitCode !== null, 'and the child was ended');
+  } finally {
+    try { running.kill('SIGKILL'); } catch { /* already gone */ }
+  }
+});
+
+test('killProcessTree asks only the child to die when it never started (no pid), and runs nothing', () => {
+  for (const pid of [undefined, null, 0, -1, 'x']) {
+    const child = fakeChild(pid);
+    const runs = [];
+    runner.killProcessTree(child, { platform: 'win32', run: (...a) => { runs.push(a); return { status: 0 }; } });
+    assert.deepStrictEqual(runs, [], `pid ${String(pid)}`);
+    assert.deepStrictEqual(child.killed, ['SIGKILL'], `pid ${String(pid)}`);
+  }
+  assert.doesNotThrow(() => runner.killProcessTree(null));
+  assert.doesNotThrow(() => runner.killProcessTree({ pid: 5 }));
+});
+
+// taskkill.exe is in System32. A PATH without that folder (a service, a CI runner, a stripped-down shell) would make the lookup find nothing, and the kill would then end only the
+// shim, leaving the stalled pac running. The one lookup is therefore made with System32 first on PATH — which also means no earlier folder can stand in for taskkill.
+test('killProcessTree looks taskkill up with the System32 folder first on PATH, whatever PATH it is given, and leaves the caller\'s environment alone', () => {
+  const system32 = 'C:\\Windows\\System32';
+  for (const [what, env, first] of [
+    ['a PATH without System32', { PATH: 'C:\\tools;C:\\other', ComSpec: 'C:\\Windows\\System32\\cmd.exe' }, system32],
+    ['a differently cased Path, which Node would also have passed on', { Path: 'C:\\tools', SystemRoot: 'D:\\Win' }, 'D:\\Win\\System32'],
+    ['a ComSpec in another folder', { PATH: 'C:\\tools', ComSpec: 'E:\\Sys\\cmd.exe' }, 'E:\\Sys'],
+    ['no PATH at all', { SystemRoot: 'C:\\Windows' }, system32],
+  ]) {
+    const given = JSON.stringify(env);
+    const seen = [];
+    runner.killProcessTree(fakeChild(4242), { platform: 'win32', env, run: (name, args, options, deps) => { seen.push({ name, deps }); return { status: 0 }; } });
+    assert.strictEqual(seen.length, 1, what);
+    const lookupPath = seen[0].deps.env.PATH;
+    assert.ok(lookupPath === first || lookupPath.startsWith(`${first};`), `${what}: PATH is ${lookupPath}`);
+    assert.strictEqual(Object.keys(seen[0].deps.env).filter((k) => k.toUpperCase() === 'PATH').length, 1, `${what}: one spelling of PATH reaches the lookup`);
+    assert.strictEqual(JSON.stringify(env), given, `${what}: the environment it was given is not modified`);
+  }
+  // The folders the caller had stay on PATH, after System32.
+  const seen = [];
+  runner.killProcessTree(fakeChild(4242), { platform: 'win32', env: { PATH: 'C:\\tools;C:\\other', ComSpec: `${system32}\\cmd.exe` }, run: (n, a, o, deps) => { seen.push(deps.env.PATH); return { status: 0 }; } });
+  assert.deepStrictEqual(seen, [`${system32};C:\\tools;C:\\other`]);
+});
+
+test('killProcessTree finds taskkill in System32 through the runner\'s own lookup even when PATH has no such folder, and hides its window', () => {
+  // The real lookup (invocation), fed what killProcessTree passes it, over a file system where taskkill exists only in System32.
+  const exists = (p) => p === 'C:\\Windows\\System32\\taskkill.exe';
+  const options = [];
+  let resolved = null;
+  runner.killProcessTree(fakeChild(4242), {
+    platform: 'win32',
+    env: { PATH: 'C:\\tools;C:\\other', SystemRoot: 'C:\\Windows' },
+    run: (name, args, opts, deps) => {
+      options.push(opts);
+      resolved = runner.invocation(name, args, { ...deps, platform: 'win32', exists });
+      return { status: 0 };
+    },
+  });
+  assert.ok(resolved, 'taskkill was found');
+  assert.strictEqual(resolved.file, 'C:\\Windows\\System32\\taskkill.exe');
+  assert.deepStrictEqual(resolved.args, ['/pid', '4242', '/T', '/F']);
+  assert.strictEqual(options[0].windowsHide, true, 'no console window opens for the kill');
+  assert.strictEqual(resolved.options.windowsHide, true);
+  // A folder that is earlier on PATH cannot stand in for it.
+  const planted = (p) => p === 'C:\\tools\\taskkill.exe' || p === 'C:\\Windows\\System32\\taskkill.exe';
+  let first = null;
+  runner.killProcessTree(fakeChild(4242), {
+    platform: 'win32',
+    env: { PATH: 'C:\\tools', SystemRoot: 'C:\\Windows' },
+    run: (name, args, opts, deps) => { first = runner.invocation(name, args, { ...deps, platform: 'win32', exists: planted }).file; return { status: 0 }; },
+  });
+  assert.strictEqual(first, 'C:\\Windows\\System32\\taskkill.exe');
+});
+
+test('killProcessTree\'s POSIX path is left as it was: ps with its own arguments and options, no Windows lookup path, no hidden-window flag', () => {
+  const runs = [];
+  runner.killProcessTree(fakeChild(4242), { platform: 'linux', env: { PATH: '/usr/bin' }, run: (...a) => { runs.push(a); return { status: 0, stdout: '' }; } });
+  assert.strictEqual(runs.length, 1);
+  assert.strictEqual(runs[0][0], 'ps');
+  assert.strictEqual(runs[0].length, 3, 'ps is run with its arguments and options only');
+  assert.strictEqual(runs[0][2].windowsHide, undefined);
+});
+
+test('killProcessTree still ends the process, and never throws, when the environment it was given cannot be read', () => {
+  // The PATH for the lookup is worked out inside the guarded block: an environment that makes that throw must cost the tree kill, not the caller's error handling.
+  const child = fakeChild(4242);
+  const runs = [];
+  assert.doesNotThrow(() => runner.killProcessTree(child, { platform: 'win32', env: null, run: (...a) => { runs.push(a); return { status: 0 }; } }));
+  assert.deepStrictEqual(child.killed, ['SIGKILL']);
+  assert.deepStrictEqual(runs, [], 'there was no PATH to look taskkill up with');
+});
+
+test('descendantPids reads a ps listing: every depth, irregular spacing and CRLF, garbage ignored, a cycle cannot hang it', () => {
+  const text = ['  10   1', '\t11\t10', ' 12 11 ', '13   12\r', 'PID PPID', 'x y', '', '  14    99', ' 15   14', ' 20   21', ' 21   20'].join('\r\n');
+  assert.deepStrictEqual(runner.descendantPids(10, text).sort((a, b) => a - b), [11, 12, 13]);
+  assert.deepStrictEqual(runner.descendantPids(14, text), [15]);
+  assert.deepStrictEqual(runner.descendantPids(20, text), [21], 'a pair that name each other as parent ends the walk');
+  assert.deepStrictEqual(runner.descendantPids(999, text), []);
+  assert.deepStrictEqual(runner.descendantPids(10, ''), []);
+  assert.deepStrictEqual(runner.descendantPids(10, undefined), []);
+});

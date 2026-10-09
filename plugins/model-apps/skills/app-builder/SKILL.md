@@ -323,7 +323,34 @@ After plan-mode approval (before the full build):
    rather than omitted — the page-builder treats a missing line as the same fail-closed value, but
    an explicit line is what makes the dispatch contract checkable.
 
-5. **Validate + commit the transition (transactional)** — never flip `source` by hand, and never
+5. **Check styles, then validate + commit the transition (transactional)** — the workers have no
+   shell, so first check every generated page for the Griffel shorthands that `makeStyles` drops at
+   runtime, one command per page (`<file>` is the page's file from step 3):
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file <working-dir>/<file>
+   ```
+   Griffel does not support ten CSS shorthands, and `makeStyles` drops them at runtime: the page
+   type-checks, transpiles and deploys, then renders without the border, color or reset. They are
+   `all`, `borderColor`, `borderStyle`, `borderWidth`, `borderBlock`, `borderBlockStart`,
+   `borderBlockEnd`, `borderInline`, `borderInlineStart` and `borderInlineEnd`. Write longhands
+   instead: `borderColor`, `borderStyle` and `borderWidth` become one longhand per side, `border` +
+   `Top`, `Right`, `Bottom` or `Left` + `Color`, `Style` or `Width` (`borderWidth` →
+   `borderTopWidth`, `borderRightWidth`, `borderBottomWidth`, `borderLeftWidth`); `borderBlock`,
+   `borderInline` and their `Start` and `End` forms become the `Width`, `Style` and `Color` longhands
+   of the sides they name (`borderBlockStart` → `borderBlockStartWidth`, `borderBlockStartStyle`,
+   `borderBlockStartColor`; `borderBlock` → those and the three `borderBlockEnd…` ones); `all` has no
+   longhands, so set the properties you need one by one. Every other shorthand (`padding`, `margin`,
+   `border`, `borderRadius`, `gap`, `outline`) is supported, and an inline `style={{ … }}` is not
+   Griffel at all.
+
+   `check-griffel-styles.js` prints each problem it finds — a key Griffel drops in a `makeStyles`
+   call, at any depth, with its line, column and longhands, or a call it cannot read for certain,
+   with what to change — and exits 3 while any is left: fix what it reports and run it again, and do
+   not transpile or upload the page until it exits 0. It reads the style objects written inline in
+   the call, `makeStyles({ … })`, so write them there; a call whose object is built elsewhere comes
+   back under `notRead`, and that object is yours to check by eye.
+
+   Then validate and commit the transition — never flip `source` by hand, and never
    flip pages one at a time as workers return. Run:
    ```bash
    node "${PLUGIN_ROOT}/scripts/promote-intent-pages.js" \
@@ -494,11 +521,18 @@ node "${PLUGIN_ROOT}/scripts/teardown-model-app.js" \
     the manifest web resource and rebuild from scratch.
   - `pages-removed` — a live page was dropped from the spec. Re-add it, or pass `--allow-destructive`
     to detach it from the nav (the page record stays deployed; rebuild finalizes the sitemap).
-  - `pages-shared-across-apps` — the page appears in another app's sitemap. Detach it in Maker.
-    `--allow-destructive` does **not** bypass this halt.
+  - `pages-shared-across-apps` — the page appears in another app's sitemap, published or only saved (not yet
+    published — an app that was never published counts). Detach it in Maker. `--allow-destructive` does **not** bypass this halt.
   - `pages-shared-check-failed` / `pages-existence-failed` / `pages-sitemap-read-failed` — a
     prerequisite read failed; the build can't proceed safely. Retry on a transient error; check
     permissions on a persistent one.
+  - `pages-griffel-shorthand` — a page's `makeStyles` writes a CSS shorthand Griffel drops at runtime, so the page
+    would deploy without its border, color or reset. The message names the page, each key's line and column, and the
+    longhands to write; fix the page's source and re-run. Nothing was uploaded. It is raised for a page the build would
+    create and for a page whose source changed since the last build; a page you did not touch that already has one is sent
+    again as it is, with a warning (it renders without the key today). Deleting a key keeps the page looking as it does;
+    writing the longhands makes the style start to render. The same halt reports a `makeStyles` call the check cannot read
+    for certain as that — not as CSS Griffel drops — and says what to change in the code.
 - **`--non-interactive`** — suppress interactive prompts (for automation / CI). A non-interactive
   build that encounters an existing app **fails** instead of warning-and-proceeding, unless
   `--allow-destructive` is also set. Does **not** grant destructive authority on its own — only
@@ -578,7 +612,19 @@ Then:
 1. **Always pull fresh at the start of an edit session** — someone may have changed the app in Maker. The
    build reads an etag when it hydrates, so a write against an artifact changed since the pull throws a
    version conflict → **re-pull and retry**, never clobber.
-2. Edit `app-spec.json` (and any page `.tsx`) for the requested change.
+2. Edit `app-spec.json` (and any page `.tsx`) for the requested change. A page you edit by hand is
+   checked like a generated one: run `node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file <page.tsx>`
+   on it before you rebuild (the rule and the ten shorthands are in Phase 1.5, step 5) and fix what it
+   reports. A key the page already had when it was downloaded is reported too: the deployed page renders
+   without it today, so deleting it keeps the page looking as it does, while writing the longhands makes
+   the style start to render — delete it unless the user wants that change. The build runs the same
+   check on every page it uploads that is new or that you changed since the last successful apply of this app, and halts as
+   `pages-griffel-shorthand` — naming the page, each key's line and column, and the longhands — so a page
+   you changed does not reach the app with one. "Changed" is measured against the source that apply recorded for the page in
+   `.maker-workspace/last-applied.json` (a successful full or changed-only apply, or a download, writes it; a failed or partial build records nothing).
+   A page you did not touch is sent again as it is, and a
+   key it already has only draws a warning — and so does a page you changed in a workspace that holds no record of it (a new or moved one, or
+   another environment), where the build cannot tell what was sent: run the checker on that page yourself.
 3. **If the edit ADDS a page** (or resets a page's `source` back to `intent` to regenerate it),
    **re-run Phase 1.5 before Phase 2** — a downloaded spec contains only `kind: "tsx"` pages, so an
    added `intent` page has no code and Phase 2's `deploy` profile rejects it. Phase 1.5 is safe to

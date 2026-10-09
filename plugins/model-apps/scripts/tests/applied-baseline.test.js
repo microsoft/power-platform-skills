@@ -69,3 +69,32 @@ test('a baseline that cannot be written never fails the build', () => {
   assert.strictEqual(persistAppliedBaseline({ ok: true }, ctx({ apply: true }), write), false);
   assert.strictEqual(calls.length, 1);
 });
+
+// A changed-only run that finds nothing to apply sends no page, so it has no source to record: it must not record the files as they are when it ends — a page saved while it ran would be
+// recorded as applied. With the real writer, every page keeps the record the last apply left.
+test('a changed-only run that applied nothing keeps the page records it had, and does not record the files as they are', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { writeBaseline, readBaseline } = require('../lib/deployed-baseline.js');
+  const { sha256 } = require('../lib/hash.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'noop-baseline-'));
+  try {
+    const identity = { environment: 'https://contoso.crm.dynamics.com', appUniqueName: 'new_a' };
+    const pageSpec = { ...spec, solution: { uniqueName: 'S', publisherPrefix: 'new' }, pages: [{ key: 'home', name: 'Home', source: { kind: 'tsx', codeFile: 'home.tsx' } }] };
+    const ws = path.join(dir, '.maker-workspace');
+    fs.writeFileSync(path.join(dir, 'home.tsx'), 'as last applied');
+    writeBaseline(ws, pageSpec, { appDir: dir, ...identity });
+    const previous = readBaseline(ws, identity);
+    // The maker saves the page while the no-op run is in progress; the run then ends and writes its baseline.
+    fs.writeFileSync(path.join(dir, 'home.tsx'), 'saved while the run was in progress');
+    const noop = { ok: true, dryRun: false, noop: true, created: null, changedOnly: { decision: 'noop' } };
+    assert.strictEqual(persistAppliedBaseline(noop, { spec: pageSpec, opts: { apply: true, baselineSpec: previous }, workspaceDir: ws, appDirAbs: dir, baselineIdentity: identity }), true);
+    assert.strictEqual(readBaseline(ws, identity).pages[0].__contentSha, sha256('as last applied'), 'the record is the one the last apply left');
+    // Control: a result that is not a noop and carries no measurement is hashed from the files, as before.
+    assert.strictEqual(persistAppliedBaseline({ ok: true }, { spec: pageSpec, opts: { apply: true, baselineSpec: previous }, workspaceDir: ws, appDirAbs: dir, baselineIdentity: identity }), true);
+    assert.strictEqual(readBaseline(ws, identity).pages[0].__contentSha, sha256('saved while the run was in progress'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

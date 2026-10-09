@@ -1886,3 +1886,251 @@ test('an update reads the page name and the deployed page together, and a guard 
   assert.strictEqual(downloaded, false);
   assert.strictEqual(named, false);
 });
+
+// ── The Griffel check, held where every page upload passes (AB#6691124) ─────────────────────────────────────────────────────────────
+// Griffel drops ten CSS shorthands from a `makeStyles` object at runtime, and nothing on the way to the service notices: pac transpiles without executing makeStyles, so the page
+// deploys and renders without its border, colour or reset. The skills tell the agent to run scripts/check-griffel-styles.js first, but an instruction is not a gate — a /genpage
+// create, an edit-flow update and a browser-verify fix all end in this script, so it refuses such a page itself, with the file, line, column and longhands, before it lists, reads or
+// writes anything.
+const GRIFFEL_IMPORT = "import { makeStyles, tokens } from '@fluentui/react-components';\n";
+const GRIFFEL_BAD = `${GRIFFEL_IMPORT}const useStyles = makeStyles({\n  root: {\n    borderWidth: '1px',\n    padding: '4px',\n  },\n  hover: { ':hover': { borderColor: 'red', borderStyle: 'solid' } },\n});\nexport default function P() { return null; }\n`;
+// What a refusal or a warning says each way out of a dropped key does to the page.
+const BOTH_WAYS_OUT = 'Deleting a key changes nothing on screen, because Griffel never applied it; writing the longhands (for `all`, the properties you want) makes the style start to render, which changes how the page looks.';
+// `needle`'s line and column as an editor counts them: independent of the checker, so the refusal is held to where the key really is.
+const placeOf = (source, needle) => {
+  const at = source.indexOf(needle);
+  const before = source.slice(0, at).split('\n');
+  return `${before.length}:${before[before.length - 1].length + 1}`;
+};
+// A CLI that fails the test on ANY use, and a count of how often one was asked for.
+function untouchableCli() {
+  const made = { n: 0 };
+  return { made, factory: () => { made.n += 1; return new Proxy({}, { get: (_, name) => () => { throw new Error(`the pac wrapper must not be used: ${String(name)}`); } }); } };
+}
+
+test('a create of a page whose makeStyles drops Griffel shorthands is refused with each key\'s line, column, longhands and both ways out, before the CLI is even made', async () => {
+  const file = divCode(GRIFFEL_BAD);
+  const cli = untouchableCli();
+  const r = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file, '--name', 'Overview', '--prompt', 'p', '--agent-message', 'm'], cli);
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.payload.code, 'griffel-shorthand');
+  assert.strictEqual(r.payload.ok, false);
+  assert.strictEqual(cli.made.n, 0, 'nothing is listed, downloaded or uploaded: the check reads the file and nothing else');
+  const error = r.payload.error;
+  assert.ok(error.startsWith(`${file} writes CSS that Griffel drops at runtime, so the page would deploy without it — refusing to upload. `), error);
+  for (const [needle, longhands] of [
+    ['borderWidth', ['borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth']],
+    ['borderColor', ['borderTopColor', 'borderRightColor', 'borderBottomColor', 'borderLeftColor']],
+    ['borderStyle', ['borderTopStyle', 'borderRightStyle', 'borderBottomStyle', 'borderLeftStyle']],
+  ]) {
+    assert.ok(error.includes(`${file}:${placeOf(GRIFFEL_BAD, needle)}: \`${needle}\` is not supported by Griffel`), `${needle}: its place is named in the message`);
+    assert.ok(error.includes(`Write the longhands instead: ${longhands.join(', ')}.`), `${needle}: and what to write`);
+  }
+  assert.ok(error.includes(BOTH_WAYS_OUT), 'and what each way out does: deleting a key keeps the look, the longhands start to render');
+  assert.match(error, new RegExp(`Fix them in the file \\(\`node scripts/check-griffel-styles\\.js --file ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\` lists every one\\), then re-run the upload\\.$`));
+  assert.deepStrictEqual(r.payload.problems.map((p) => [p.code, p.property, p.line, p.column]), [
+    ['unsupported-shorthand', 'borderWidth', 4, 5], ['unsupported-shorthand', 'borderColor', 7, 24], ['unsupported-shorthand', 'borderStyle', 7, 44],
+  ], 'the structured problems ride along, for a caller that reads JSON');
+  assert.deepStrictEqual(r.payload.problems.map((p) => p.within), [['root'], ['hover', ':hover'], ['hover', ':hover']], 'with where each sits: the slot, then the selector');
+  assert.strictEqual(placeOf(GRIFFEL_BAD, 'borderColor'), '7:24');
+  // A single key is "it", not "them".
+  const one = divCode(`${GRIFFEL_IMPORT}const s = makeStyles({ root: { all: 'unset' } });\n`);
+  const single = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', one, '--name', 'N', '--prompt', 'p', '--agent-message', 'm'], untouchableCli());
+  assert.match(single.payload.error, /`all` is not supported by Griffel[\s\S]*Fix it in the file/);
+  assert.doesNotMatch(single.payload.error, /Fix them/);
+});
+
+// An UPDATE is held to what it ADDS. The page is already deployed — possibly with a key Griffel drops that an earlier release let through (its only guard was a grep for `borderWidth`) — and
+// the same bytes sent again ship nothing new, while switching a key to its longhands CHANGES how the page renders. The update downloads the deployed page anyway, for its base check, so
+// the file is compared with it: a key the deployed page already has goes ahead with a warning that says both ways out; only a key it did not have stops the upload.
+const UPDATE_ARGS = (file, extra = []) => ['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file, '--page-id', DIV_PAGE, '--prompt', 'p', ...extra];
+// An UPDATE of the page with `local` as the file and `deployed` as what is deployed (the base marker says the file was downloaded from it, so the base check passes).
+async function griffelUpdate(local, deployed, { extra = [], deployedAs = deployed } = {}) {
+  const file = divCode(local);
+  seedBase(file, { deployed, local: deployed });
+  const cli = divFactory({ page: deployedAs });
+  return { file, cli, r: await divRun(UPDATE_ARGS(file, extra), cli) };
+}
+
+test('an UPDATE of a page that already has the keys — sent as it is, or edited with the keys kept — goes ahead with a warning naming each key and both ways out', async () => {
+  for (const [what, local] of [
+    ['the deployed page, sent again', GRIFFEL_BAD],
+    ['edited, the keys kept', GRIFFEL_BAD.replace("padding: '4px'", "padding: '8px'")],
+    ['the keys a line further down', GRIFFEL_BAD.replace('const useStyles', '// moved\nconst useStyles')],
+  ]) {
+    const { file, cli, r } = await griffelUpdate(local, GRIFFEL_BAD);
+    assert.strictEqual(r.ok, true, `${what}: ${JSON.stringify(r.payload)}`);
+    assert.strictEqual(cli.calls.length, 1, `${what}: the page is uploaded`);
+    const [warning] = r.payload.warnings;
+    assert.ok(warning.startsWith(`${file} updates a page that is already deployed, and the deployed page already had these, set the same, so the upload goes on. It writes CSS that Griffel drops at runtime, so the page renders without it as it does today: `), `${what}: ${warning}`);
+    for (const needle of ['borderWidth', 'borderColor', 'borderStyle']) assert.ok(warning.includes(`${file}:${placeOf(local, needle)}: \`${needle}\` is not supported by Griffel`), `${what}: ${needle}, at its place in the file that is uploaded`);
+    assert.ok(warning.includes(BOTH_WAYS_OUT), `${what}: both ways out`);
+    assert.match(warning, new RegExp(`Edit the file to do either \\(\`node scripts/check-griffel-styles\\.js --file ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\` lists every one\\); an upload that adds anything the check reports, or sets one of these to another value, is refused\\.$`), what);
+  }
+});
+
+test('an UPDATE that ADDS a key the deployed page did not have is refused, naming only the new key — and --overwrite-deployed is no way past it', async () => {
+  const added = GRIFFEL_BAD.replace('});\nexport default', "  card: { borderStyle: 'dashed' },\n});\nexport default");
+  for (const extra of [[], ['--overwrite-deployed']]) {
+    const { file, cli, r } = await griffelUpdate(added, GRIFFEL_BAD, { extra });
+    assert.strictEqual(r.ok, false, JSON.stringify(extra));
+    assert.strictEqual(r.payload.code, 'griffel-shorthand', JSON.stringify(extra));
+    assert.strictEqual(cli.calls.length, 0, `${JSON.stringify(extra)}: nothing is uploaded`);
+    assert.deepStrictEqual(r.payload.problems.map((p) => [p.property, p.within]), [['borderStyle', ['card']]], 'only the key that is new');
+    const error = r.payload.error;
+    assert.ok(error.startsWith(`${file} writes CSS that Griffel drops at runtime, so the page would deploy without it — refusing to upload. `), error);
+    assert.ok(error.includes(`${file}:${placeOf(added, "borderStyle: 'dashed'")}: \`borderStyle\` is not supported by Griffel`), 'the new key, where it is');
+    for (const old of ['borderWidth', 'borderColor']) assert.ok(!error.includes(`${file}:${placeOf(added, old)}:`), `${old} was already deployed, so it is not what stops the upload`);
+    assert.ok(error.includes(BOTH_WAYS_OUT));
+    assert.match(error, /Fix it in the file \(`node scripts\/check-griffel-styles\.js --file [^`]+` lists every one\), then re-run the upload\.$/);
+  }
+});
+
+test('an UPDATE is judged key by key: a renamed slot keeps the keys the deployed page had, and a second key where there was one is new — and is the one that is named', async () => {
+  const deployed = `${GRIFFEL_IMPORT}const s = makeStyles({\n  root: { borderWidth: '1px' },\n});\nexport default function P() { return null; }\n`;
+  // The slot is renamed: the same key, still dropped, still not new.
+  const renamed = await griffelUpdate(deployed.replace('root:', 'container:'), deployed);
+  assert.strictEqual(renamed.r.ok, true, JSON.stringify(renamed.r.payload));
+  // (The read-back after the upload also warns that the deployed page differs from the file, because this fixture's download never changes: it is not about Griffel.)
+  const aboutGriffel = (result) => (result.r.payload.warnings || []).filter((w) => /Griffel/.test(w));
+  assert.strictEqual(aboutGriffel(renamed).length, 1);
+  // A second `borderWidth`, in another slot, is new — wherever it comes in the file.
+  for (const [what, local] of [
+    ['after the old one', deployed.replace("root: { borderWidth: '1px' },", "root: { borderWidth: '1px' },\n  card: { borderWidth: '2px' },")],
+    ['before the old one', deployed.replace("root: { borderWidth: '1px' },", "card: { borderWidth: '2px' },\n  root: { borderWidth: '1px' },")],
+  ]) {
+    const { file, cli, r } = await griffelUpdate(local, deployed);
+    assert.strictEqual(r.ok, false, what);
+    assert.strictEqual(cli.calls.length, 0, what);
+    assert.deepStrictEqual(r.payload.problems.map((p) => [p.property, p.within]), [['borderWidth', ['card']]], `${what}: the new one, not the one that was already there`);
+    assert.ok(r.payload.error.includes(`${file}:${placeOf(local, "borderWidth: '2px'")}: \`borderWidth\``), `${what}: named where it is`);
+    assert.ok(!r.payload.error.includes(`${file}:${placeOf(local, "borderWidth: '1px'")}:`), `${what}: the old one is not named`);
+  }
+  // Fixing the page — the key deleted — is an update like any other.
+  const fixed = await griffelUpdate(deployed.replace("root: { borderWidth: '1px' },", "root: { padding: '1px' },"), deployed);
+  assert.strictEqual(fixed.r.ok, true);
+  assert.deepStrictEqual(aboutGriffel(fixed), [], 'and says nothing about Griffel');
+});
+
+// A key the deployed page already has is not what the check holds back — but a key given ANOTHER value is a change the maker meant to see, and Griffel drops the new value just as it dropped the
+// old one: the upload would ship it as a silent no-op, which is the defect this check exists to stop. The value is compared as written (nothing is evaluated), so a reformat is not a change.
+test('an UPDATE that gives a key the deployed page already had ANOTHER value is refused — the new value would be dropped too — while a reformat of it goes ahead', async () => {
+  const deployed = `${GRIFFEL_IMPORT}const useStyles = makeStyles({\n  row: { ':hover': { borderColor: 'red' } },\n});\nexport default function P() { return null; }\n`;
+  for (const [what, value] of [['a token', 'tokens.colorBrandStroke1'], ['another colour', "'blue'"]]) {
+    for (const extra of [[], ['--overwrite-deployed']]) {
+      const local = deployed.replace("'red'", value);
+      const { file, cli, r } = await griffelUpdate(local, deployed, { extra });
+      const label = `${what} ${JSON.stringify(extra)}`;
+      assert.strictEqual(r.ok, false, label);
+      assert.strictEqual(r.payload.code, 'griffel-shorthand', label);
+      assert.strictEqual(cli.calls.length, 0, `${label}: nothing is uploaded`);
+      assert.deepStrictEqual(r.payload.problems.map((p) => [p.property, p.within, p.value]), [['borderColor', ['row', ':hover'], value.startsWith("'") ? '"blue"' : value]], `${label}: the key that was given a new value`);
+      assert.ok(r.payload.error.includes(`${file}:${placeOf(local, 'borderColor')}: \`borderColor\` is not supported by Griffel`), `${label}: where it is`);
+      assert.ok(r.payload.error.includes(BOTH_WAYS_OUT), label);
+    }
+  }
+  // The same key, set to the same value, written another way: nothing changed, so the page goes ahead with the warning an inherited key gets.
+  for (const [what, text] of [
+    ['other quotes', deployed.replace("'red'", '"red"')],
+    ['other spacing', deployed.replace("{ borderColor: 'red' }", '{\n      borderColor:   \'red\'  ,\n    }')],
+  ]) {
+    const { file, cli, r } = await griffelUpdate(text, deployed);
+    assert.strictEqual(r.ok, true, `${what}: ${JSON.stringify(r.payload)}`);
+    assert.strictEqual(cli.calls.length, 1, what);
+    assert.ok(r.payload.warnings.some((w) => w.startsWith(`${file} updates a page that is already deployed, and the deployed page already had these, set the same, so the upload goes on. `)), what);
+  }
+});
+
+test('when the deployed page cannot be read (--overwrite-deployed) there is nothing to compare with, so the update goes ahead with a warning — as the build does for a page it has no record of', async () => {
+  const file = divCode(GRIFFEL_BAD);
+  const cli = divFactory({ page: null }); // pac wrote no page.tsx
+  const r = await divRun(UPDATE_ARGS(file, ['--overwrite-deployed']), cli);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(cli.calls.length, 1);
+  assert.ok(r.payload.warnings[0].startsWith(`${file} updates a page that is already deployed, and the deployed page could not be read to tell which of these it already had, so the upload goes on. `), r.payload.warnings[0]);
+  assert.ok(r.payload.warnings[0].includes(BOTH_WAYS_OUT));
+  // Without the flag an unreadable deployed page is refused first, as it always was.
+  const refused = await divRun(UPDATE_ARGS(divCode(GRIFFEL_BAD)), divFactory({ page: null }));
+  assert.strictEqual(refused.payload.code, 'deployed-unreadable');
+});
+
+test('a page that is clean — longhands, or the same names in a string, a comment, a template and an inline style — is uploaded as before', async () => {
+  const clean = `${GRIFFEL_IMPORT}// borderWidth: 1 would be dropped in makeStyles, but this is a comment\nconst note = 'borderColor: red';\nconst useStyles = makeStyles({ root: { borderTopWidth: '1px', borderTopStyle: 'solid', padding: '4px', border: '1px solid red' } });\n`
+    + 'export default function P() { return <div style={{ borderWidth: 1, borderColor: "red" }}>{`borderStyle: solid`}</div>; }\n';
+  for (const [what, text] of [['a clean page', clean], ['a page with no makeStyles at all', 'export default function P() { return null; }\n']]) {
+    const file = divCode(text);
+    const cli = capturingCli();
+    const r = await runMain(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file, '--name', 'N', '--prompt', 'p', '--agent-message', 'm'], cli);
+    assert.strictEqual(r.ok, true, `${what}: ${JSON.stringify(r.payload)}`);
+    assert.strictEqual(cli.calls.length, 1, what);
+  }
+  // A file the script cannot read is not this check's to report: the upload — pac, which cannot read it either — reports a missing file as it always did.
+  const missing = capturingCli();
+  const r = await runMain(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', path.join(tmp(), 'absent.tsx'), '--name', 'N', '--prompt', 'p', '--agent-message', 'm'], missing);
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(missing.calls.length, 1, 'the upload is attempted, and left to fail there');
+});
+
+test('a call the checker cannot read for certain is refused too, and one that lies before the lexer\'s first guess is read as usual', async () => {
+  const call = "const useStyles = makeStyles({ root: { borderWidth: 1 } });";
+  const guess = 'const o = {a: 1} / 2; const x = /re/;';
+  const after = divCode(`${GRIFFEL_IMPORT}${guess}\n${call}\nexport default function P() { return null; }\n`);
+  const r = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', after, '--name', 'N', '--prompt', 'p', '--agent-message', 'm'], untouchableCli());
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.payload.code, 'griffel-shorthand');
+  assert.match(r.payload.error, /the makeStyles call here cannot be checked for certain/);
+  assert.deepStrictEqual(r.payload.problems.map((p) => p.code), ['unverifiable-style-call']);
+  // The same page with its call moved above the guess is clean and uploads.
+  const before = divCode(`${GRIFFEL_IMPORT}const useStyles = makeStyles({ root: { borderTopWidth: 1 } });\n${guess}\nexport default function P() { return null; }\n`);
+  const cli = capturingCli();
+  const ok = await runMain(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', before, '--name', 'N', '--prompt', 'p', '--agent-message', 'm'], cli);
+  assert.strictEqual(ok.ok, true, JSON.stringify(ok.payload));
+});
+
+// A call the checker cannot read is not a key Griffel drops: a valid page with `if (s) { } /x/.test(s);` before a clean makeStyles must not be refused as "writes CSS that Griffel drops at
+// runtime", which sends the author looking for CSS that is not there when only rewriting the code gets past it. The refusal says what it is, and what to change; and the command it suggests is a
+// whole one — a path with a space (a Windows profile folder often has one) stays ONE argument in it.
+const GRIFFEL_UNREADABLE = `${GRIFFEL_IMPORT}export function skip(s: string) { if (s) { } /x/.test(s); }\nconst useStyles = makeStyles({ root: { padding: '4px' } });\nexport default function P() { return null; }\n`;
+function spacedFile(text) {
+  const dir = path.join(tmp(), 'Dev User');
+  fs.mkdirSync(dir);
+  const file = path.join(dir, 'page.tsx');
+  fs.writeFileSync(file, text);
+  return file;
+}
+
+test('a call the checker cannot read is refused as one it could not read — not as CSS Griffel drops — and the command it suggests keeps a path with a space as one argument', async () => {
+  const file = spacedFile(GRIFFEL_UNREADABLE);
+  const r = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file, '--name', 'N', '--prompt', 'p', '--agent-message', 'm'], untouchableCli());
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.payload.code, 'griffel-shorthand');
+  const error = r.payload.error;
+  assert.ok(error.startsWith(`${file} has makeStyles calls the Griffel check could not read, so it cannot tell whether the page writes CSS that Griffel drops at runtime — refusing to upload. ${file}:3:19: the makeStyles call here cannot be checked for certain`), error);
+  assert.doesNotMatch(error, /writes CSS that Griffel drops at runtime, so the page would deploy without it/, 'it is not said to write any');
+  assert.match(error, /put an operand in parentheses, \(\{ … \}\) \/ 2 or \(\/re\/\)\.test\(text\), or end the statement with a ";" — or move the makeStyles call above it\./, 'what to change');
+  assert.ok(error.endsWith(`Change the file as that says (\`node scripts/check-griffel-styles.js --file "${file}"\` shows what it cannot read), then re-run the upload.`), error);
+  assert.deepStrictEqual(r.payload.problems.map((p) => p.code), ['unverifiable-style-call']);
+  // A shorthand refusal quotes it as well.
+  const bad = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', spacedFile(GRIFFEL_BAD), '--name', 'N', '--prompt', 'p', '--agent-message', 'm'], untouchableCli());
+  assert.match(bad.payload.error, /\(`node scripts\/check-griffel-styles\.js --file "[^"]*Dev User[^"]*page\.tsx"` lists every one\), then re-run the upload\.$/);
+  // Both in one page: the keys come first, and the call is named as one the check could not read.
+  const both = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', divCode(`${GRIFFEL_IMPORT}const a = makeStyles({ root: { all: 'unset' } });\nexport function skip(s: string) { if (s) { } /x/.test(s); }\nconst b = makeStyles({ root: { padding: 1 } });\n`), '--name', 'N', '--prompt', 'p', '--agent-message', 'm'], untouchableCli());
+  assert.match(both.payload.error, /writes CSS that Griffel drops at runtime, so the page would deploy without it — refusing to upload\. [^ ]+:2:\d+: `all` is not supported[\s\S]*It also has makeStyles calls the check could not read, so it cannot tell whether they hold more: [^ ]+:4:\d+: the makeStyles call here cannot be checked for certain[\s\S]*Fix them in the file/);
+});
+
+test('an UPDATE of an unreadable page that IS the deployed page only warns; one that changed is refused, because what it hides cannot be compared', async () => {
+  const same = await griffelUpdate(GRIFFEL_UNREADABLE, GRIFFEL_UNREADABLE);
+  assert.strictEqual(same.r.ok, true, JSON.stringify(same.r.payload));
+  assert.strictEqual(same.cli.calls.length, 1);
+  assert.ok(same.r.payload.warnings[0].startsWith(`${same.file} updates a page that is already deployed, and the deployed page already had these, set the same, so the upload goes on. It has makeStyles calls the Griffel check could not read, so it cannot tell whether the page writes CSS that Griffel drops at runtime: `), same.r.payload.warnings[0]);
+  assert.doesNotMatch(same.r.payload.warnings[0], /Deleting a key/, 'there is no key to delete');
+  // Re-saved with the other line endings and a BOM — not a difference to pac or to the base marker — it is still the deployed page.
+  const resaved = await griffelUpdate(`\uFEFF${GRIFFEL_UNREADABLE.replace(/\n/g, '\r\n')}`, GRIFFEL_UNREADABLE);
+  assert.strictEqual(resaved.r.ok, true, JSON.stringify(resaved.r.payload));
+  // Edited: the unreadable call cannot be shown to hide nothing new.
+  const edited = await griffelUpdate(`${GRIFFEL_UNREADABLE}// edited\n`, GRIFFEL_UNREADABLE);
+  assert.strictEqual(edited.r.ok, false);
+  assert.strictEqual(edited.r.payload.code, 'griffel-shorthand');
+  assert.ok(edited.r.payload.error.startsWith(`${edited.file} has makeStyles calls the Griffel check could not read`), edited.r.payload.error);
+  assert.strictEqual(edited.cli.calls.length, 0);
+});

@@ -34,6 +34,12 @@ take most of that just to start `az`. A call that runs out of time is reported a
 pre-flight's `az_timeout`), never as a missing or signed-out CLI. To allow longer, set
 `POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS` in milliseconds (1000–900000), for example `120000`.
 
+Each `pac` call for generative pages is time-bounded too: **3 minutes** to list or download pages, **10 minutes** to
+upload one. A call that runs out of time is stopped together with everything it started, and the message says what to
+do; a page create whose outcome is unknown is never sent again. To allow longer, set
+`POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS` in milliseconds (1000–3600000); it applies to every `pac model genpage` call (list,
+download and upload).
+
 ## Feature flags (experimental & in-progress)
 
 Some capabilities ship **OFF by default** while their cross-repo dependencies roll

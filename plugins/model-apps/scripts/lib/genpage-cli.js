@@ -2,7 +2,8 @@
 // Injectable wrapper around `pac model genpage upload/list` — the seam the build's pages phase uses
 // to author/deploy generative pages. Page CONTENT only: uploads run WITHOUT --add-to-sitemap because
 // the SDK owns the sitemap (it writes the GenPage subareas). Real impl spawns pac; tests inject `run`.
-const { invocation, spawnProcess } = require('./process-runner.js');
+const { invocation, spawnProcess, killProcessTree } = require('./process-runner.js');
+const { pacTimeoutMs, pacTimeoutAdvice, pacLongerTimeoutMs, PAC_TIMEOUT_ENV, commandArg } = require('./cli-failure.js');
 const { dataverseRequest } = require('./dataverse-auth.js');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -22,7 +23,26 @@ const cleanPacArgs = (args) => args.map((a) => String(a).replace(/\r\n|[\r\n]/g,
 function buildPacInvocation(args, deps = {}) {
   return invocation('pac', cleanPacArgs(args), deps);
 }
-function runPac(args) {
+const REAL_CLOCK = { setTimeout, clearTimeout };
+
+// An error that must never be answered by trying again. The build re-runs a whole phase when a halt looks transient (isTransientHalt in build-model-app.js), and it decides that from
+// the error's TEXT — which quotes the page's name (user text: "SQL Timeouts", "Concurrent Deletes") and pac's own diagnostic ("… try again later") — so such an error says so with
+// `transient: false`, which that check reads on the error and on its cause. Every error that follows an upload that was SENT, unless what it did is known to be nothing, is one: the
+// re-run would send it again — a second create, with the first one's page, if it landed, left beside the new one outside the app's navigation; or a second update.
+function neverRetriedError(message, options) {
+  return Object.assign(new Error(message, options), { transient: false });
+}
+
+// How many times a READ (a listing, a download) that keeps timing out is made: the first, and one retry. A call that stalls once usually answers the next time,
+// but each try can cost the whole budget (3 min), so a third is not offered however many attempts an ordinary failure gets. An upload is never retried after a
+// timeout: see makeGenpageCli for what each kind of call does with one, and why.
+const TIMED_OUT_ATTEMPTS = 2;
+
+// Runs `pac <args>` and waits at most `timeoutMs` for it. When the time is up the whole process tree is ended (killTree: `pac.cmd` → cmd.exe → pac.exe is
+// three processes on Windows, and ending the shim alone would leave the stalled one running) and the result says so — `status: null, timedOut: true,
+// timeoutMs, command` — which no exit code is, so a caller can tell a stalled call from a failed one. Output printed before the stall is kept.
+// `spawn`, `killTree` and `clock` are seams for the tests; a call with no budget gets the read one, so no pac call is ever unbounded.
+function runPac(args, { timeoutMs = pacTimeoutMs('list'), spawn = spawnProcess, killTree = killProcessTree, clock = REAL_CLOCK } = {}) {
   // Asynchronous, and it NEVER rejects. It was spawnSync, which froze the whole process for the
   // length of every pac call — about five seconds for one `pac model genpage list` — so two
   // independent listings could not overlap even when a caller awaited them together (an update in
@@ -38,22 +58,27 @@ function runPac(args) {
     const out = [];
     const err = [];
     let settled = false;
-    const finish = (status, launchError) => {
+    let timer = null;
+    // Settles ONCE, whichever of the child's 'close', its 'error' and the deadline comes first: a child that is killed at the deadline still closes, and
+    // that close must not resolve the call a second time or turn the timeout into an exit code.
+    const finish = (status, launchError, timedOut = false) => {
       if (settled) return;
       settled = true;
+      if (timer !== null) clock.clearTimeout(timer);
       const stderr = Buffer.concat(err).toString('utf8');
       resolve({
-        status: status == null ? 1 : status,
+        status: timedOut ? null : (status == null ? 1 : status),
         stdout: Buffer.concat(out).toString('utf8'),
         // POSIX reports a missing pac as a spawn 'error' (ENOENT) with nothing on stderr; carry its
         // message so the diagnostic says why instead of "pac exited 1 with no output".
         stderr: stderr || (launchError ? String(launchError.message || launchError) : ''),
+        ...(timedOut ? { timedOut: true, timeoutMs, command: ['pac', ...args.slice(0, 3)].join(' ') } : {}),
       });
     };
     let child;
     try {
       // Resolution and argument checks throw here too, and resolve as a failed result like a launch error.
-      child = spawnProcess('pac', cleanPacArgs(args), { stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawn('pac', cleanPacArgs(args), { stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (e) {
       finish(1, e);
       return;
@@ -68,6 +93,21 @@ function runPac(args) {
     // after its parent exited was captured by spawnSync and 'close', and missed by 'exit').
     child.on('error', (e) => finish(1, e));
     child.on('close', (code) => finish(code));
+    if (timeoutMs > 0) {
+      timer = clock.setTimeout(() => {
+        // End the tree first, so pac is gone before the caller acts on the result — the retry of a read, or the check an upload's message sends the user to, must not race the call it gave up on.
+        try { killTree(child); } catch { /* the call is reported as stalled either way */ }
+        finish(null, null, true);
+        // A process that outlived the kill (or one the kill missed) holds these pipes open, and a pipe nobody has finished reading keeps this process alive
+        // at exit: release them, and the child's own handle, now that the result is out.
+        for (const stream of [child.stdout, child.stderr]) {
+          try { if (stream) stream.destroy(); } catch { /* already closed */ }
+        }
+        if (typeof child.unref === 'function') child.unref();
+      }, timeoutMs);
+      // The child's handle keeps the loop alive while pac runs; the deadline must not be what keeps a process running once it does not.
+      if (timer && typeof timer.unref === 'function') timer.unref();
+    }
   });
 }
 
@@ -241,6 +281,46 @@ function makeGenpageCli(env, deps = {}) {
   const run = deps.run || runPac;
   const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
   const attempts = deps.attempts || 3; // pac genpage upload/list flake intermittently (transient help-dump exits)
+  // The budget of ONE pac call of this kind (lib/cli-failure.js pacTimeoutMs: 3 min to list or download, 10 min to upload, or
+  // POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS), read when the call is made. `run` ends a call that runs out of it and answers `{ status: null, timedOut: true }`.
+  //
+  // What each kind of call does about a timeout follows from what it can have done to the environment before it was stopped. pac's `genpage upload` is a
+  // SEQUENCE (pac 2.12.2): it writes the page's files in one batch, then makes two requests that record the prompt and the agent message in the page's
+  // conversation history, then prints `Page ID: <id>`, then publishes the page and registers its tables. A call that is stopped has therefore done anything from
+  // nothing to all but the last step, and nothing outside says which: a stall with no CPU and no network is most likely a long server call, such as the publish,
+  // with everything before it already written.
+  //   list, download   read only, so a second attempt costs nothing but time: retried ONCE (TIMED_OUT_ATTEMPTS), however many attempts an ordinary failure gets.
+  //   upload, UPDATE   NOT retried, though it names a page that exists. A second send goes to the same page id and is still not harmless. If the first had written
+  //                    the page and stalled in the publish, the second records the prompt and the agent message AGAIN (the two requests carry no client id to
+  //                    dedupe on, and a later download's prompt.txt then holds the duplicate). And it goes out minutes after the caller's own checks —
+  //                    genpage-upload.js compares the page with its base marker once, before it calls upload() — so it can overwrite a change the maker saved in
+  //                    between. The call is reported as timed out and as one that MAY HAVE LANDED, and a re-run goes back through the caller's own guards. What the
+  //                    message sends the reader to look at depends on the caller (upload()'s `caller`): see the timed-out UPDATE branch there.
+  //   upload, CREATE   an UNCERTAIN create, and never run again: it may have created the page, may be creating it, or may never have started. A Page ID pac had
+  //                    already printed names the page it created, whether it then stalled or failed; otherwise the env-wide id diff reports any page that is already
+  //                    visible; and a page that is not visible YET proves nothing, because a second create is exactly how a duplicate is made. Each error that ends
+  //                    such a create carries `transient: false` (neverRetriedError), so the build's own re-run of a halt it takes for transient never sends it again.
+  const processEnv = deps.processEnv || process.env;
+  const budget = (kind) => ({ timeoutMs: pacTimeoutMs(kind, processEnv) });
+  // How a stopped upload is told. pacTimeoutAdvice, which a stopped READ gets, ends in "retry" — not what to say about an upload.
+  const stoppedAfter = (r) => `timed out after ${Math.round((r.timeoutMs || 0) / 1000)} s and was stopped`;
+  // A message's command is one the user pastes, and a path under a Windows profile folder often has a space ("C:\Users\Dev User\..."): keep it ONE argument.
+  const argText = commandArg;
+  const allowLonger = (r) => {
+    const longer = pacLongerTimeoutMs(r.timeoutMs || pacTimeoutMs('upload', processEnv));
+    return longer === null ? '' : ` ${PAC_TIMEOUT_ENV}=${longer} allows a slow upload longer.`;
+  };
+  // The way on from a page that a stopped create left behind. pac makes the page, then publishes it, and only when asked adds it to the app's navigation, so a
+  // create stopped part way leaves a page that EXISTS and is not in the app's navigation. genpage-upload.js refuses to UPDATE such a page (it is not in the app's
+  // navigation, and no base marker records it), the build cannot bind it (an id nothing proves is this app's is `unproven-manifest-id`), and a second create would
+  // make a duplicate. So the page is placed first: `pac model genpage add` attaches an existing page to an app's sitemap without uploading it again, and its
+  // `--page-id` is then a page the app's navigation proves — which the build binds from the App Spec's `pageId`.
+  const finishPage = (id, appId) => `add page ${id} to the app's navigation — in Maker, or with \`pac model genpage add --environment ${env} --app-id ${appId} --page-id ${id} --publish\` — `
+    + `and then re-run the upload as an update with --page-id ${id} (a build: set that page's pageId to ${id} in the App Spec); or delete page ${id} and re-run the create`;
+  // What to do about a create that may have made a page nothing has shown yet — one that stalled, or whose result could not be checked: look for the page before anything is created
+  // again. It is the way on whenever the page's id is not known, because a second create is how a duplicate is made.
+  const lookForThePage = (appId) => `Wait a few minutes, then run \`pac model genpage list --environment ${env} --include-unpublished\`: if a new page with this name appears and it is yours, ${finishPage('<its id>', appId)}; `
+    + 'if none appears, re-run the create.';
   // The DIAGNOSTIC pac actually produced, not merely its last line.
   //
   // MEASURED shape of a real failure (`pac model genpage download` with no --app-id):
@@ -270,6 +350,8 @@ function makeGenpageCli(env, deps = {}) {
   const BANNER_RE = /^(?:Microsoft PowerPlatform CLI|Version:|Online documentation:|Feedback, Suggestions, Issues:|Usage:|Connected as)/i;
   const FLAG_HELP_RE = /^\s+-{1,2}\S/; // an indented "  --flag   description" row from the help dump
   const pacDiagnostic = (r) => {
+    // A call that ran out of time has no exit code and may have printed nothing: say it was stopped, and how to allow it longer.
+    if (r && r.timedOut) return pacTimeoutAdvice(r.command || 'pac', r.timeoutMs || pacTimeoutMs('list', processEnv));
     const raw = `${String(r && r.stderr || '')}\n${String(r && r.stdout || '')}`;
     const lines = raw.split(/\r?\n/).map((l) => l.replace(/\s+$/, '')).filter((l) => l.trim());
     if (!lines.length) return `pac exited ${r && r.status}` + ' with no output';
@@ -306,24 +388,29 @@ function makeGenpageCli(env, deps = {}) {
 
   // List the pages already in the app (parsed from its sitemap by pac). Returns [{ pageId, name }].
   async function listPages(appId) {
-    const r = await run(['model', 'genpage', 'list', '--environment', env, '--app-id', appId]);
+    const r = await run(['model', 'genpage', 'list', '--environment', env, '--app-id', appId], budget('list'));
     return r.status === 0 ? parseList(r.stdout) : [];
   }
 
   // Fail-closed page enumeration (design §9, I2). Retries up to `attempts` times (pac genpage list
-  // flakes with transient help-dump exits on some PAC CLI builds). Returns:
+  // flakes with transient help-dump exits on some PAC CLI builds), but a listing that times out is
+  // tried twice at most. Returns:
   //   { ok: true, pages, empty: true }  — app genuinely has no pages ("Found 0" or no-pages phrase)
   //   { ok: true, pages: [...] }        — COMPLETE listing: count matches, all pages named
   //   { ok: false, pages: [], error }   — persistent non-zero exit OR a persistent zero-exit
   //                                       UNRECOGNIZED/INCOMPLETE output (count mismatch, blank,
-  //                                       help banner, unnamed page) — never masquerade as empty.
+  //                                       help banner, unnamed page) OR a call that kept timing out
+  //                                       — never masquerade as empty.
   // Callers that drive a create decision MUST check ok before trusting pages:[] as "truly empty".
   async function enumeratePages(appId, options = {}) {
     let lastErr = '';
+    let tried = 0;
+    let timedOut = 0;
     for (let i = 0; i < attempts; i += 1) {
       const args = ['model', 'genpage', 'list', '--environment', env, '--app-id', appId];
       if (options && options.includeUnpublished === true) args.push('--include-unpublished');
-      const r = await run(args);
+      const r = await run(args, budget('list'));
+      tried += 1;
       if (r.status === 0) {
         const c = classifyListOutput(r.stdout);
         if (c.kind !== 'unrecognized') return { ok: true, pages: c.pages, empty: c.kind === 'empty' };
@@ -333,9 +420,10 @@ function makeGenpageCli(env, deps = {}) {
       } else {
         lastErr = pacDiagnostic(r);
       }
+      if (r.timedOut && (timedOut += 1) >= TIMED_OUT_ATTEMPTS) break;
       if (i < attempts - 1) await sleep(500 * (i + 1));
     }
-    return { ok: false, pages: [], error: `pac genpage list failed after ${attempts} attempt(s): ${lastErr}` };
+    return { ok: false, pages: [], error: `pac genpage list failed after ${tried} attempt(s): ${lastErr}` };
   }
 
   // Env-WIDE EXISTENCE enumeration (NO --app-id): returns the set of ALL generative-page ids that exist
@@ -347,8 +435,11 @@ function makeGenpageCli(env, deps = {}) {
   // masquerades as an empty environment. `ids` are lower-cased for case-insensitive set membership.
   async function enumerateEnv() {
     let lastErr = '';
+    let tried = 0;
+    let timedOut = 0;
     for (let i = 0; i < attempts; i += 1) {
-      const r = await run(['model', 'genpage', 'list', '--environment', env, '--include-unpublished']);
+      const r = await run(['model', 'genpage', 'list', '--environment', env, '--include-unpublished'], budget('list'));
+      tried += 1;
       if (r.status === 0) {
         const c = classifyListOutput(r.stdout);
         if (c.kind !== 'unrecognized') {
@@ -359,9 +450,10 @@ function makeGenpageCli(env, deps = {}) {
       } else {
         lastErr = pacDiagnostic(r);
       }
+      if (r.timedOut && (timedOut += 1) >= TIMED_OUT_ATTEMPTS) break;
       if (i < attempts - 1) await sleep(500 * (i + 1));
     }
-    return { ok: false, ids: [], error: `pac genpage list (env-wide) failed after ${attempts} attempt(s): ${lastErr}` };
+    return { ok: false, ids: [], error: `pac genpage list (env-wide) failed after ${tried} attempt(s): ${lastErr}` };
   }
 
   async function readPageRow(pageId, select) {
@@ -376,15 +468,18 @@ function makeGenpageCli(env, deps = {}) {
 
   return {
     // Create (no pageId) or update (with pageId) a page's content. Returns { pageId }. Retries transient
-    // pac failures. On an UNCERTAIN CREATE (non-zero, or zero-exit with no Page ID) resolves via a
+    // pac failures — never one that TIMED OUT (the policy at the top of makeGenpageCli). On an UNCERTAIN CREATE (non-zero, or zero-exit with no Page ID) resolves via a
     // STRICT ENV-WIDE before/after id diff: the env-wide id set
     // is snapshotted BEFORE the first CREATE so the diff reveals exactly which id appeared.
+    //   a Page ID pac printed → that page was created, whether the call then stalled or failed: report it and stop (a create is never run again)
     //   newIds.length >= 1 → report stored details and stop; only the user can confirm ownership
-    //   newIds.length === 0 → CREATE did NOT land → safe to retry
+    //   newIds.length === 0 → the failed CREATE did NOT land → safe to retry (not after a timeout: the service may still be creating the page)
     // Names and dates describe candidates, never establish identity. Read failures also stop,
     // with the candidate id retained in the diagnostic. No uncertain result changes the command to UPDATE.
+    // `caller` is 'build' when the App Spec build (lib/sdk-build.js) is the one uploading, and anything else for the standalone upload script: it only changes the advice
+    // given for an UPDATE that timed out (below), never what is sent or when.
     async upload({ appId, pageId, codeFile, compiledCodeFile, name, prompt, agentMessage, dataSources,
-      addToSitemap, model, connectors, actions }) {
+      addToSitemap, model, connectors, actions, caller }) {
       // pac REQUIRES both a prompt and an agent-message for a new page. Resolve the effective text
       // (preserving the historical defaults) ONCE, then hand both to pac BY FILE via --prompt-file /
       // --agent-message-file rather than inline --prompt / --agent-message. A downloaded page prompt is
@@ -439,7 +534,7 @@ function makeGenpageCli(env, deps = {}) {
           // "use --page-id, omit --add-to-sitemap" — enforcing it here keeps every caller honest
           // instead of repeating the rule in prose at each call site.
           if (addToSitemap && !pid) args.push('--add-to-sitemap');
-          return run(args);
+          return run(args, budget('upload'));
         };
         const pid = pageId;
         let lastErr = '';
@@ -447,6 +542,7 @@ function makeGenpageCli(env, deps = {}) {
         // to the exact env state before this operation. Fail-closed: if we can't snapshot, we can't
         // safely attribute a later uncertain result — halt to prevent a blind duplicate.
         let beforeIds = null;
+        const label = name || '(unnamed)';
         for (let i = 0; i < attempts; i += 1) {
           if (!pid && beforeIds === null) {
             const before = await enumerateEnv();
@@ -458,6 +554,30 @@ function makeGenpageCli(env, deps = {}) {
             beforeIds = new Set(before.ids);
           }
           const r = await once(pid);
+          // An UPDATE that timed out is not sent again, and is not told as an ordinary failure: it may have landed (the policy at the top of makeGenpageCli). What
+          // is deployed decides what happens next, so the message sends the reader to look — and which look works depends on who is asking:
+          //   the upload script   compares the page with the base marker it keeps beside the code file, and a re-run goes back through that comparison;
+          //   the build           keeps no base marker, so `genpage-base.js check` could only say "unknown" about what is deployed, and for a navigation page its
+          //                       `--file` would be the staging copy the build deletes when it ends — the advised command would fail on a missing file. It is
+          //                       told to read the deployed page with the download it already uses (the `pac model genpage download` that verify-model-app.js and
+          //                       download-model-app.js run), and that running the build again sends this page once more to the same id, with what that costs.
+          if (r.timedOut && pid) {
+            const next = caller === 'build'
+              ? `First see what is deployed: pac model genpage download --environment ${env} --app-id ${appId} --page-id ${pid} --output-directory <folder>, then read the page.tsx in the folder under <folder> that is named for the page id `
+                + '(pac writes the id in its own letter case, so look for it without regard to case; a page that links to another shows that page\'s id where its source in the app folder has a PAGEREF_ name). '
+                + 'Then run the build again: it sends this page once more, to the same page id, so nothing new is created — but if the stalled send did land, the page\'s history now records its prompt a second time, '
+                + 'and anything saved to the page in Maker since is replaced by the app folder\'s version. Look first if either matters.'
+              : `First see what is deployed: node scripts/genpage-base.js check --env ${env} --app-id ${appId} --page-id ${pid} --file ${argText(codeFile)} ("contentSame": true means the update landed; "deployed": "unchanged" means it did not). `
+                + 'Then re-run the upload: its own checks decide whether it may go ahead.';
+            throw neverRetriedError(
+              `pac genpage upload for '${label}' ${stoppedAfter(r)} — the UPDATE of page ${pid} MAY HAVE LANDED: `
+              + (parsePageId(r.stdout)
+                ? 'pac had printed the Page ID, which it does once the page and its messages are written, so the stall came while it was publishing. '
+                : 'pac writes the page, then records the prompt and the agent message, then publishes, so the stall can have come after any of those with nothing reported. ')
+              + 'It was NOT sent again: a second send can record the prompt twice, and would overwrite a change made to the page since. '
+              + `${next}${allowLonger(r)}`
+            );
+          }
           if (r.status === 0) {
             const id = parsePageId(r.stdout);
             if (id) {
@@ -476,14 +596,30 @@ function makeGenpageCli(env, deps = {}) {
           } else {
             lastErr = pacDiagnostic(r);
           }
-          // Uncertain CREATE: no caller pid and result was non-zero or zero-without-Page-ID.
+          // Uncertain CREATE: no caller pid and result was non-zero, zero-without-Page-ID, or TIMED OUT.
           // The env-wide diff discovers candidates, not ownership. A concurrent create can have
           // the same name and date, so even a single candidate cannot authorize an automatic UPDATE.
           if (!pid) {
+            // A create that printed the Page ID has created that page, whether it then stalled or failed: pac prints the id once the page and its messages are written, before it
+            // publishes and before it adds the page to the app's navigation. Nothing needs listing to know the page exists — and a listing need not show it yet — and running the
+            // create again would make a second one. (A create that printed it and exited 0 has returned above; a malformed id is not one: parsePageId.)
+            const created = parsePageId(r.stdout);
+            if (created) {
+              throw neverRetriedError(
+                r.timedOut
+                  ? `pac genpage upload for '${label}' ${stoppedAfter(r)} after it had CREATED the page as ${created} (pac prints the Page ID once the page is written) — `
+                    + 'it stalled before the page was published, and before it was added to the app\'s navigation if that was asked for. '
+                    + `The create was NOT run again: a second create would make a duplicate page. To finish it, ${finishPage(created, appId)}.${allowLonger(r)}`
+                  : `pac genpage upload for '${label}' failed after it had CREATED the page as ${created} (pac prints the Page ID once the page is written) — `
+                    + `it stopped before the page was published, or before it was added to the app's navigation if that was asked for (${lastErr}). `
+                    + `The create was NOT run again: a second create would make a duplicate page. To finish it, ${finishPage(created, appId)}.`
+              );
+            }
             const after = await enumerateEnv();
             if (!after.ok) {
-              throw new Error(
-                `pac genpage upload for '${name || '(unnamed)'}' had an uncertain result and env enumeration failed — refusing to retry (would risk a duplicate): ${after.error}`
+              throw neverRetriedError(
+                `pac genpage upload for '${name || '(unnamed)'}' ${r.timedOut ? `${stoppedAfter(r)}, and ` : ''}had an uncertain result and env enumeration failed — refusing to retry (would risk a duplicate): ${String(after.error).replace(/[.\s]+$/, '')}. `
+                + `The create may have made a page. ${lookForThePage(appId)}${r.timedOut ? allowLonger(r) : ''}`
               );
             }
             const newIds = after.ids.filter((id) => !beforeIds.has(id));
@@ -504,10 +640,22 @@ function makeGenpageCli(env, deps = {}) {
                   details.push(`${candidate}: stored name [unreadable], createdon [unreadable]; read failed (${(e && e.message) || e})`);
                 }
               }
-              throw new Error(`pac genpage upload for '${name || '(unnamed)'}' had an uncertain create (ambiguous ownership). Candidates: ${details.join('; ')}. Refusing to adopt or update any candidate. If it is yours, re-run the upload as an update with ${newIds.map((id) => `--page-id ${id}`).join(' or ')}; otherwise leave it and re-run the create.`, readFailure ? { cause: readFailure } : undefined);
-            } else {
-              // CREATE did NOT land → safe to retry (pid stays undefined; beforeIds unchanged)
+              // Whatever stopped the create — a stall or a failure — pac makes the page, publishes it, and only when asked adds it to the app's navigation, so a candidate it
+              // left is most likely NOT in the app's navigation: an update of it is refused (not in the app's navigation, no base marker), and `finishPage` is the way on. A
+              // failure after pac printed `Page ID` is the same state as a stall after it: the page is written, and the publish or the placement did not finish.
+              const way = `If one is yours, ${finishPage(newIds.length === 1 ? newIds[0] : '<its id>', appId)}; otherwise leave them and re-run the create.`;
+              throw neverRetriedError(`pac genpage upload for '${name || '(unnamed)'}' ${r.timedOut ? 'timed out and was stopped, and ' : ''}had an uncertain create (ambiguous ownership). Candidates: ${details.join('; ')}. Refusing to adopt or update any candidate. ${way}`, readFailure ? { cause: readFailure } : undefined);
             }
+            // A create that TIMED OUT is never run again, even with nothing in the diff: the request may still be in flight on the service, and the page not
+            // visible YET. Re-running it is how a duplicate is made.
+            if (r.timedOut) {
+              throw neverRetriedError(
+                `pac genpage upload for '${label}' ${stoppedAfter(r)} — an UNCERTAIN create: `
+                + 'no new page is visible in the environment yet, but the service may still be creating it. Refusing to re-run the create (a second create would risk a duplicate page). '
+                + `${lookForThePage(appId)}${allowLonger(r)}`
+              );
+            }
+            // Only a CREATE that failed outright reaches here (a timed-out one has thrown above), and it left nothing behind → did NOT land → safe to retry (pid stays undefined; beforeIds unchanged)
           }
           // A DETERMINISTIC failure will repeat for the same inputs, so retrying it only burns the
           // caller's time and buries the real message under "after 3 attempt(s)". Break out and
@@ -552,7 +700,13 @@ function makeGenpageCli(env, deps = {}) {
     async download({ appId, outputDir, pageIds }) {
       const args = ['model', 'genpage', 'download', '--environment', env, '--app-id', appId, '--output-directory', outputDir];
       if (pageIds && pageIds.length) args.push('--page-id', pageIds.join(','));
-      const r = await run(args);
+      // Read only, so a call that times out is simply made again (once); any other failure is reported at once, as it always was.
+      let r;
+      for (let i = 0; i < TIMED_OUT_ATTEMPTS; i += 1) {
+        r = await run(args, budget('download'));
+        if (!r.timedOut) break;
+        if (i < TIMED_OUT_ATTEMPTS - 1) await sleep(500 * (i + 1));
+      }
       if (r.status !== 0) throw new Error(`pac genpage download failed: ${pacDiagnostic(r)}`);
       return true;
     },

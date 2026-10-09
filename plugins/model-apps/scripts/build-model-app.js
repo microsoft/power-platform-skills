@@ -924,14 +924,19 @@ function assertSnapshotInvalidated(store, workspaceDir) {
 // detect a .tsx / contentPath byte edit, not just a spec-JSON change. It records the content that was
 // actually deployed by THIS apply, stamped with the environment and app it was deployed to, and the
 // dashboard/page ids this apply resolved there (AB#6726727: the sitemap baseline lines entries up by
-// them, and a spec downloaded elsewhere carries another environment's). `write` is a test seam.
+// them, and a spec downloaded elsewhere carries another environment's). A page's hash is the one of the
+// source the pages phase read and sent (`created.pageSourceShas`), not of the file as it is when the build
+// ends: a page saved while the build ran must read as changed next time, and the build's Griffel check
+// judges a page against this record (deployed-baseline.js annotateForBaseline). `write` is a test seam.
 function persistAppliedBaseline(r, { spec, opts, workspaceDir, appDirAbs, baselineIdentity }, write = writeBaseline) {
   const fullPhaseApply = (opts.phases || PHASES).length === PHASES.length;
   const changedOnlyApplied = !!(r && r.changedOnly && (r.changedOnly.decision === 'fast' || r.changedOnly.decision === 'full'));
   const effectiveSuccess = !!(r && r.ok && (!r.verify || r.verify.ok));
   if (!(effectiveSuccess && opts.apply && !r.dryRun && (fullPhaseApply || changedOnlyApplied))) return false;
   try {
-    write(workspaceDir, spec, { appDir: appDirAbs, ...baselineIdentity, created: r.created, previous: opts.baselineSpec });
+    // A changed-only run that found nothing to apply (`noop`, with no `created`) sent nothing, so it has no source to record: every page keeps the record it had.
+    const created = r.created || (r.noop === true ? { pageSourceShas: {} } : r.created);
+    write(workspaceDir, spec, { appDir: appDirAbs, ...baselineIdentity, created, previous: opts.baselineSpec });
     return true;
   } catch {
     return false;

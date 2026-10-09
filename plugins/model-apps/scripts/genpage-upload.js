@@ -32,6 +32,8 @@ const path = require('node:path');
 const os = require('node:os');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
 const { makeGenpageCli, suppliedButBlank, unescapePacName } = require('./lib/genpage-cli.js');
+const { griffelStyleProblems, griffelProblemsNotIn, describeGriffelRefusal, describeGriffelWarning } = require('./lib/griffel-styles.js');
+const { commandArg } = require('./lib/cli-failure.js');
 const genpageBase = require('./lib/genpage-base.js');
 const { writeFileSafe } = require('./lib/safe-fs.js');
 
@@ -107,6 +109,13 @@ function resolveText(flags, inlineFlag, fileFlag, readFile) {
     }
   }
   return { ok: true, value: hasInline ? inline : undefined };
+}
+
+// The Griffel problems of the page file about to be uploaded (lib/griffel-styles.js), or none when it cannot be read: the upload then fails on the missing file, as it always did.
+function pageStyleProblems(codeFile) {
+  let source;
+  try { source = fs.readFileSync(path.resolve(codeFile), 'utf8'); } catch { return []; }
+  return griffelStyleProblems(source).problems;
 }
 
 function bindingRefusal(pageId, why) {
@@ -346,6 +355,24 @@ async function main(argv = process.argv.slice(2), deps = {}) {
     if (linked) return emit(false, { error: `--${flag} ${linked}` });
   }
 
+  // The Griffel check (AB#6691124), where every page upload passes: a /genpage create, an edit-flow update and a browser-verify fix all go through this script, so a page whose
+  // `makeStyles` writes one of the ten shorthands Griffel drops at runtime is refused here whether or not the skill's own gate (scripts/check-griffel-styles.js) was run before
+  // it — pac transpiles without executing makeStyles, and the page would otherwise deploy and render without its border, colour or reset. It is a local read of the very file
+  // pac will upload. A file that cannot be read is left to the upload to report: pac cannot read it either.
+  // A CREATE is refused here, before any listing or download. An UPDATE is held to the check by what it ADDS: the page is already deployed, possibly with a key Griffel drops that an
+  // earlier version of the plugin let through, and the same bytes sent again ship nothing new — so the file is compared with the deployed page, which an update downloads anyway for
+  // its base check, and only a key that page did not have stops the upload (below, once it is read).
+  const styleProblems = pageStyleProblems(flags['code-file']);
+  const griffelWords = { surface: 'upload', subject: flags['code-file'], command: `node scripts/check-griffel-styles.js --file ${commandArg(flags['code-file'])}` };
+  const refuseStyles = (problems) => emit(false, {
+    ok: false,
+    code: 'griffel-shorthand',
+    error: describeGriffelRefusal(problems, flags['code-file'], griffelWords),
+    problems,
+  });
+  if (styleProblems.length && !flags['page-id']) return refuseStyles(styleProblems);
+  let griffelWarnings = [];
+
   const cli = cliFactory(flags.env);
   const base = deps.base || genpageBase;
 
@@ -504,6 +531,24 @@ async function main(argv = process.argv.slice(2), deps = {}) {
           + 'to replace it deliberately, or retry when the page can be downloaded.',
       });
     }
+    // The Griffel check for an UPDATE (see the create check above): what the deployed page already has ships nothing new. A file that IS the deployed page's text (pac's BOM and final
+    // CRLF are not a difference) is a re-send as it is, so none of its problems is new; otherwise a key counts as already there when the deployed page has it (griffelProblemsNotIn).
+    // Only a key, or a call the checker cannot read, that the deployed page did not have stops the upload — and --overwrite-deployed is no way past it: that flag is about edits made
+    // to the deployed page, not about what this file writes. When the deployed page could not be read (possible only under --overwrite-deployed) nothing says which keys it had; the
+    // page exists, and the release before this check updated it as it was, so the update goes on with a warning — as the build does for a page it has no record of.
+    if (styleProblems.length) {
+      if (probe.deployedText === null) {
+        griffelWarnings = [describeGriffelWarning(styleProblems, flags['code-file'], { ...griffelWords, standing: 'undetermined' })];
+      } else {
+        let sameAsDeployed = false;
+        try { sameAsDeployed = base.pageHash(base.readPlainText(path.resolve(flags['code-file']))) === base.pageHash(probe.deployedText); } catch { /* judged by what the file writes, below */ }
+        const { added, inherited } = sameAsDeployed
+          ? { added: [], inherited: styleProblems }
+          : griffelProblemsNotIn(styleProblems, griffelStyleProblems(probe.deployedText).problems);
+        if (added.length) return refuseStyles(added);
+        griffelWarnings = [describeGriffelWarning(inherited, flags['code-file'], { ...griffelWords, standing: 'inherited' })];
+      }
+    }
     if (preserveBindings) {
       let why = null;
       if (probe.configError || !probe.cfg) {
@@ -615,6 +660,7 @@ async function main(argv = process.argv.slice(2), deps = {}) {
     // `pageId` is the one value a caller needs in order to continue (sitemap wiring, a follow-up
     // edit). Echo the identity back rather than making the caller re-parse pac output.
     const warnings = [
+      ...griffelWarnings,
       ...(modelUnread ? [`could not read page ${flags['page-id']}'s current model (${modelUnread}), so this update stored it empty — pass --model to set it`] : []),
       ...(nameUnread ? [`could not read page ${flags['page-id']}'s current name (${nameUnread}), so pac may have renamed it to its navigation title — pass --name-file to set it`] : []),
       ...(nameChanged ? [`page ${flags['page-id']}'s name ${JSON.stringify(nameChanged)} has a double quote (") pac cannot store as it is, so the page now shows \\" there — pass --name-file with typographic quotes (“ ”) or an apostrophe to fix it`] : []),

@@ -103,6 +103,8 @@ const { fetchSitemap, navigationProof, fetchAppsForPages } = require('./sitemap-
 // Structural nav oracle — used in the §9 PAGEREF_ scan/parity/resolve pipeline. `extractNavTargets`
 // classifies every generative navigateTo pageId at a REAL call site (never a decoy string / comment GUID).
 const { extractNavTargets, navReferencedKeys, navMalformedRefs, resolvePageRefs, navTargetParity, strayPageRefs, describePageRefLocations, pageRefAdvice, frontierNote, PAGEREF_RULE } = require('./pageref-resolver.js');
+const { griffelStyleProblems, describeGriffelRefusal, describeGriffelWarning } = require('./griffel-styles.js');
+const { recordedContentSha } = require('./content-hash.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
 const { AI_APP_SETTING, resolveAiFlags, encodeAiFlags, rebucketNonEnablingSkips, rebucketPendingPublish, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride, proofBudget } = require('./ai-app-settings.js');
 const { DASHBOARD_LAUNCHER_URL, adoptLiveSitemap, chromeByTargetKey, describeSitemapNotes } = require('./sitemap-merge.js');
@@ -1911,7 +1913,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
   }
 
   const createdFormsThisRun = new Set();
-  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, bpfRoleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [], layout: [], unauthorizedRemovals: [] } };
+  const result = { ok: true, created: { entities: {}, relationships: {}, records: {}, webResources: {}, views: {}, charts: {}, forms: {}, formIds: {}, businessRules: {}, businessProcessFlows: {}, bpfBackingTables: {}, commands: {}, dashboards: {}, pages: {}, pageDeployedShas: {}, pageSourceShas: {}, ai: { appFeatures: null, summaries: {} }, roles: {}, roleGrants: {}, bpfRoleGrants: {}, app: null }, skipped: { businessRules: [], aiSummaries: [], layout: [], unauthorizedRemovals: [] } };
   // #changed-only (pages-only fast apply): seed the LIVE app id (discovered by unique name upstream) so the
   // pages phase's `pages-requires-app` guard passes WITHOUT running the app-shell phase in this invocation.
   // The full-build path never sets opts.changedOnly, so result.created.app stays null and app-shell
@@ -4619,10 +4621,10 @@ async function runSdkBuildPhases(spec, opts, owed) {
       const live = new Set(enumd.ids.map((id) => String(id).toLowerCase()));
       const declaredKeys = new Set((spec.pages || []).map((p) => p.key || p.name));
       // Ownership proof for an UPDATE is this app's PUBLISHED navigation or a local creation receipt. A page
-      // that is only in the app's saved but unpublished navigation is not bound: the shared-page scan below
-      // reads other apps' published navigation only, so binding it could overwrite a page another app has
-      // also saved into its navigation. Such a page halts as unproven, with advice to publish first
-      // (navigationProof reads the saved layer for that message).
+      // that is only in the app's saved but unpublished navigation is not bound by this build: it halts as
+      // unproven, with advice to publish first (navigationProof reads the saved layer for that message). The
+      // shared-page scan below reads OTHER apps' saved navigation as well as their published navigation, so a
+      // page another app has saved into its navigation is caught there before it is updated.
       const placed = new Set(sitemapIds.map((id) => String(id).toLowerCase()));
       let ownership;
       try { ownership = readPageOwnership(opts.workspaceDir, appUnique, opts.env); } catch (e) {
@@ -4724,7 +4726,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // its content would mutate a page another app uses. GROUNDED (live probe): a genpage has NO
       // appmodulecomponent row, so the ONLY membership signal is the sitemap XML; there is no direct
       // genpage→apps join, so we scan every OTHER app's sitemap (fetchAppsForPages; `excludeAppUnique` self-
-      // skips, so a single-app env reads zero other sitemaps). FAIL-CLOSED: an env-scan failure OR any app
+      // skips, so a single-app env reads zero other sitemaps). BOTH layers count: an app's published sitemap
+      // and its saved (current, unpublished) one — a page another app has saved into its navigation but not
+      // yet published is still that app's, and publishes at any moment. An app that was NEVER published has no
+      // published layer and no row in the published app list, so the scan lists those too (one request; a
+      // single-app env pays that one request and nothing more). The saved layer of all other apps is
+      // one extra request. FAIL-CLOSED: an env-scan failure (the saved read included) OR any app
       // whose sitemap we cannot read HALTs — an unreadable app could be the one that shares the page, so we
       // cannot prove non-sharing. On positive detection (id in ≥1 other app) → HALT (never auto-modify);
       // --allow-destructive does NOT authorize cross-app mutation (this HALT has no escape by design).
@@ -4734,7 +4741,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
         if (!scan.ok) throw new BuildHalt(`could not scan the environment for pages shared across apps (${scan.error}) — refusing to UPDATE a page without verifying it is not shared. Re-run to retry.`, { phase: 'pages', code: 'pages-shared-check-failed', recoverable: true });
         if (scan.unreadable.length) throw new BuildHalt(`cannot verify pages are not shared across apps — ${scan.unreadable.length} app(s) had an unreadable sitemap (${scan.unreadable.join(', ')}); one of them could share a page we are about to UPDATE. Fix or remove the unreadable app(s), then rebuild.`, { phase: 'pages', code: 'pages-shared-check-failed', recoverable: true });
         if (scan.byId.size) {
-          const shared = Array.from(scan.byId, ([id, apps]) => `${id} (also in ${apps.join(', ')})`);
+          // An app that has the page ONLY in its saved navigation is named as such: nothing in its published app shows the page yet.
+          const shared = Array.from(scan.byId, ([id, apps]) => `${id} (also in ${apps.map((app) => (((scan.savedOnly && scan.savedOnly.get(id)) || []).includes(app) ? `${app} [saved, not published]` : app)).join(', ')})`);
           throw new BuildHalt(`generative page(s) shared across apps: ${shared.join('; ')} — refusing to UPDATE a page another app's sitemap references (a rebuild would mutate shared content). Detach it in Maker, or give this app its own page.`, { phase: 'pages', code: 'pages-shared-across-apps', recoverable: false });
         }
       }
@@ -4747,7 +4755,9 @@ async function runSdkBuildPhases(spec, opts, owed) {
           return;
         }
         try { recordPageCreation(opts.workspaceDir, appUnique, p.key || p.name, id, p.name, opts.env); } catch (e) {
-          throw new BuildHalt(`page "${p.name}" was created as ${id}, but its local receipt could not be saved (${e.message}); stopping before manifest or sitemap changes`, { phase: 'pages', code: 'pages-creation-receipt-failed', recoverable: false });
+          // `transient: false`: the page exists and nothing records it, so the build's own re-run of a halt it takes for transient (isTransientHalt, build-model-app.js — which reads this
+          // message, and so the page's name: "SQL Timeouts" would match) would create a second one beside it.
+          throw Object.assign(new BuildHalt(`page "${p.name}" was created as ${id}, but its local receipt could not be saved (${e.message}); stopping before manifest or sitemap changes`, { phase: 'pages', code: 'pages-creation-receipt-failed', recoverable: false }), { transient: false });
         }
       };
 
@@ -4779,9 +4789,45 @@ async function runSdkBuildPhases(spec, opts, owed) {
       //     call sites — a decoy "PAGEREF_" string or a stray GUID in a comment can never pass.
       //     new-Important-1 (OVERRIDE 2): additionally reject `dynamic` (variable/expression) and `literal`
       //     (hardcoded GUID) nav pageIds — a nav target must always be a declared "PAGEREF_<key>" symbol.
+      //     The Griffel check (AB#6691124) rides the same scan: a `makeStyles` key Griffel drops at runtime ships a page
+      //     without its border, colour or reset, and nothing else on the way to the service notices — so a page that would
+      //     ship one is refused here, with the file, line, column and longhands, whoever wrote it and whatever instructions
+      //     they followed (scripts/check-griffel-styles.js is the same check, run earlier for quicker feedback).
+      // Which pages THIS run uploads: the Griffel check is held only against those. A changed-only run uploads its selected keys and
+      // mints an absent navigation target, and nothing else; a page it does not upload is not shipped, so it is not refused for a defect
+      // it is not shipping (the rest of this scan still covers every page, because navigation resolves across all of them).
+      const navTargets = new Set();
+      for (const p of implemented) for (const n of p.navigatesTo || []) navTargets.add(n.targetKey);
+      const selectedKeys = opts.changedOnly && Array.isArray(opts.changedOnly.selectedKeys) ? new Set(opts.changedOnly.selectedKeys) : null;
+      const uploadedThisRun = (p) => !selectedKeys || selectedKeys.has(keyOf(p)) || (navTargets.has(keyOf(p)) && !keyToId.has(keyOf(p)));
+      // …and of those, which would ship something NEW. A full build re-sends every page, and a page deployed by an earlier version of the plugin can already carry a key
+      // Griffel drops (its only guard was a grep for `borderWidth`, so `borderColor` under `:hover` passed). Re-sending the same bytes ships nothing new, and refusing it would stop
+      // a rebuild after a change to a view — over a page nobody touched, with earlier phases already written — whose only way through is to edit the page, and switching to
+      // longhands changes how it renders. So the page's standing decides, without a download per page (the build holds no copy of what is deployed):
+      //   'new'        no deployed page (it is created): held to the check.
+      //   'changed'    the page exists and its source is not the one the last recorded apply sent — last-applied.json (written by every apply and download, for this app in
+      //                this environment only: opts.baselineSpec) records each page's `__contentSha`, the changed-only flow's own measure of "this page changed": held to the check.
+      //   'unchanged'  its source hashes to that record: it ships nothing new, so it is warned about.
+      //   'unrecorded' the page exists, but there is no record for it (a workspace that is new, moved or cleared, or an apply that predates the record): the build cannot tell, and
+      //                warns. This fails OPEN, on purpose — a release that predates this check built such pages (the key silently dropped), and a build that stops them now
+      //                regresses a rebuild it used to complete; the cost is that an edit that ADDS a key to such a page is warned about, not stopped, until a recorded apply exists.
+      const griffelStanding = (p, sourceSha) => {
+        if (!keyToId.has(keyOf(p))) return 'new';
+        const recorded = recordedContentSha(opts.baselineSpec, keyOf(p));
+        if (recorded === null) return 'unrecorded';
+        return recorded === sourceSha ? 'unchanged' : 'changed';
+      };
+      const griffelWarnings = [];
       const sourceByKey = new Map();
+      // The hash of each page's source as this scan READ it — what every check below is made on, and so what the apply may record as the source it sent (`created.pageSourceShas`, below).
+      // The baseline (deployed-baseline.js) used to hash the files again when the build ENDED, so a page saved while the build ran was recorded as applied: the next build then found the
+      // source it was about to send "unchanged" and let a key it never checked through with a warning.
+      const scannedSha = new Map();
       for (const p of implemented) {
-        const code = fs.readFileSync(canonicalPath(p), 'utf8');
+        const bytes = fs.readFileSync(canonicalPath(p));
+        const sourceSha = sha256(bytes);
+        scannedSha.set(keyOf(p), sourceSha);
+        const code = bytes.toString('utf8');
         sourceByKey.set(keyOf(p), code);
         const malformed = navMalformedRefs(code);
         if (malformed.length) throw new BuildHalt(`page "${p.name}" has malformed navigation reference(s): ${malformed.join(', ')} — a cross-page link must be a double-quoted "PAGEREF_<key>" pageId literal, alone or followed only by casts such as \`as const\`; ${PAGEREF_RULE}`, { phase: 'pages', code: 'pages-malformed-navref', recoverable: false });
@@ -4800,10 +4846,28 @@ async function runSdkBuildPhases(spec, opts, owed) {
         // string — a dead link — so it halts here, before any page is created, naming the page and where the token is.
         const stray = strayPageRefs(code);
         if (stray.length) throw new BuildHalt(`page "${p.name}" has PAGEREF_ token(s) that no navigation rewrite will resolve, so they would ship as literal text: ${describePageRefLocations(stray)} — ${pageRefAdvice(stray)}`, { phase: 'pages', code: 'pages-stray-pageref', recoverable: false });
+        // The Griffel check, last, so a page's navigation problems — which a style fix does not touch — are reported first. The file named is the canonical source, as the spec gives it.
+        // A page that is created, or whose source changed since the last recorded apply, is held to it; one that is sent again as it is gets a warning (griffelStanding above).
+        if (uploadedThisRun(p)) {
+          const problems = griffelStyleProblems(code).problems;
+          if (problems.length) {
+            const standing = griffelStanding(p, sourceSha);
+            const words = { surface: 'build', subject: `page "${p.name}"`, command: 'node scripts/check-griffel-styles.js --file <page.tsx>' };
+            const file = normalizePageSource(p).codeFile;
+            if (standing === 'new' || standing === 'changed') {
+              const note = standing === 'changed' ? 'Its source changed since the last build recorded for it, so it is held to the check as a new page is; left as it was, it would only be warned about.' : '';
+              // `transient: false`, as for the receipt halt: this refuses the page's own source, before anything in the pages phase is written, so running the build again cannot change
+              // the answer — but isTransientHalt (build-model-app.js) reads the halt's TEXT, which opens with the page's name, and a page called "SQL Timeout Report" would read as a
+              // transient error: three more runs of every earlier phase, and a log that blames the service.
+              throw Object.assign(new BuildHalt(describeGriffelRefusal(problems, file, { ...words, note }), { phase: 'pages', code: 'pages-griffel-shorthand', recoverable: false }), { transient: false });
+            }
+            griffelWarnings.push(describeGriffelWarning(problems, file, { ...words, standing }));
+          }
+        }
       }
+      // After the whole scan, so a build that halts on a later page says only why it halted. Nothing has been written yet, and the pages that are warned about are sent as they are.
+      if (typeof opts.warn === 'function') for (const warning of griffelWarnings) opts.warn(warning);
 
-      const navTargets = new Set();
-      for (const p of implemented) for (const n of p.navigatesTo || []) navTargets.add(n.targetKey);
       const mintedKeys = new Set();
       const deployment = new Map(); // key -> resolved code (nav sources only)
 
@@ -4816,10 +4880,11 @@ async function runSdkBuildPhases(spec, opts, owed) {
           for (const p of implemented) {
             const key = keyOf(p);
             if (keyToId.has(key) || !navTargets.has(key)) continue; // only ABSENT targets need pre-minting
-            const up = await genpageCli.upload({ appId: result.created.app, codeFile: canonicalPath(p), name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources, model: p.model });
+            const up = await genpageCli.upload({ appId: result.created.app, codeFile: canonicalPath(p), name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources, model: p.model, caller: 'build' });
             recordCreate(p, up.pageId);
             keyToId.set(key, up.pageId);
             result.created.pages[key] = up.pageId;
+            result.created.pageSourceShas[key] = scannedSha.get(key);
             mintedKeys.add(key);
             await persistNow();
           }
@@ -4850,7 +4915,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // re-uploading an UNCHANGED page would clobber an out-of-band Maker edit to it (Sol #1 / data loss).
       // keyToId already holds every existing page's live id (reconciled from the manifest/enumerate), so a
       // changed page that navigates to an unchanged page still resolves its target without re-uploading it.
-      const selectedKeys = opts.changedOnly && Array.isArray(opts.changedOnly.selectedKeys) ? new Set(opts.changedOnly.selectedKeys) : null;
+      // (`selectedKeys` is the one read above, ahead of the scan.)
       for (const p of implemented) {
         const key = keyOf(p);
         if (selectedKeys && !selectedKeys.has(key)) { runner.skip('pages', `page "${p.name}" (unchanged — changed-only)`); continue; }
@@ -4866,7 +4931,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
           const codeFile = isNav ? writeStagingFile(stagingDir, key, deployment.get(key)) : canonicalPath(p);
           // `model` rides along because pac stores whatever `--model` an upload sends: re-uploading without it
           // wiped a deployed page's model id to "". A downloaded spec carries it (pages[].model).
-          const up = await genpageCli.upload({ appId: result.created.app, pageId: requestedId, codeFile, name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources, model: p.model });
+          // `caller: 'build'` only words the advice for an UPDATE that timed out (genpage-cli.js): the build keeps no base marker, and a navigation page's `codeFile` is a staging copy deleted when the build ends.
+          const up = await genpageCli.upload({ appId: result.created.app, pageId: requestedId, codeFile, name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources, model: p.model, caller: 'build' });
           if (!requestedId) recordCreate(p, up.pageId);
           // I7: an UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at
           // a stale target. Case-insensitive (Dataverse may echo a differently-cased GUID).
@@ -4876,6 +4942,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
           keyToId.set(key, up.pageId);
           result.created.pages[key] = up.pageId;
           result.created.pageDeployedShas[key] = sha256(deployedBytes);
+          // The source this send was judged on, which is the one the baseline records for the page (see `scannedSha`).
+          result.created.pageSourceShas[key] = scannedSha.get(key);
           await persistNow(); // manifest carries this id BEFORE the next create (crash-safety, design §9 / C5)
           return up.pageId;
         });

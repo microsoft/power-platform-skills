@@ -2187,6 +2187,10 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
     row.content = Buffer.from(o.content, 'utf8').toString('base64');
   };
   sdk.dataverse = { get: async (url) => {
+    // The shared-page scan lists the apps that were never published: the one app here is published, so it is the only row.
+    if (url.startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) {
+      return { status: 200, body: { value: state.app ? [{ appmoduleid: state.app.id, appmoduleidunique: appUniqueValue, uniquename: spec.app.uniqueName, componentstate: 0 }] : [] } };
+    }
     assert.match(url, /^\/EntityDefinitions\(LogicalName='/);
     return state.table && !url.includes("LogicalName='entity'")
       ? { status: 200, body: { LogicalName: state.table.logicalName, EntitySetName: state.table.entitySetName } }

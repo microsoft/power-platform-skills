@@ -1149,8 +1149,7 @@ custom control), but the spec validator emits a warning.
      whether an id is still live. An unplaced id needs a local creation receipt for this app/key/id
      and a decoded stored name exactly equal to the spec page name; otherwise `unproven-manifest-id` halts,
      never requests a replacement CREATE. The build takes this app's PUBLISHED navigation as proof: a page
-     that is only in its saved but unpublished navigation halts with advice to publish the app first, so
-     other apps' navigation is checked before the page is updated. If it is this app's page, add it to the
+     that is only in its saved but unpublished navigation halts with advice to publish the app first. If it is this app's page, add it to the
      app's navigation in the maker, publish the app and re-run; otherwise remove the stale id from the manifest/spec (or delete the
      page) and re-run. A read failure HALTs (`pages-existence-failed`).
      An uncertain CLI CREATE stops and reports each new candidate's id, stored name and `createdon`.
@@ -1211,10 +1210,19 @@ custom control), but the spec validator emits a warning.
     detected across two keys, or an off-sitemap id lacks a corroborated local creation receipt. Manual resolution required.
   - `pages-manifest-corrupt` — the manifest web resource cannot be parsed (two keys mapping to the
     same id). Fix or delete the manifest and rebuild.
-  - `pages-shared-across-apps` — a page appears in another app's sitemap. Detach it in Maker first.
-    `--allow-destructive` does NOT bypass this halt.
+  - `pages-shared-across-apps` — a page appears in another app's sitemap, published or only saved (not yet
+    published — an app that was never published counts). Detach it in Maker first. `--allow-destructive` does NOT bypass this halt. If another app's
+    saved navigation, or the list of apps that were never published, cannot be read, the build halts as `pages-shared-check-failed` instead of assuming it is clear.
   - `pages-removed` — a page is live in the env but no longer in the spec. Re-add it to the spec, or
     pass `--allow-destructive` to detach it from the nav (`SubArea` removed; page record left deployed).
+  - `pages-griffel-shorthand` — a page that this run uploads has a `makeStyles` key Griffel drops at runtime
+    (`all`, `borderColor`, `borderStyle`, `borderWidth`, `borderBlock*`, `borderInline*`), and is **new** (no deployed page) or
+    **changed** (its source no longer hashes to the `__contentSha` that `last-applied.json` recorded for it at the last apply to this
+    app in this environment — the record a successful full or changed-only apply, or a download, writes; for a page it is the hash of the source the build read and sent, and a failed or partial build records nothing). Raised from the pre-write scan, so nothing is created or updated; the message gives the page, each
+    key's line and column, the longhands, and what each way out does: deleting a key changes nothing on screen (Griffel never
+    applied it), writing the longhands makes the style start to render. A page that already exists and is sent again as recorded —
+    or has no record in this workspace — is sent as it is and the build **warns** with the same detail instead: it ships nothing
+    new. A call the check cannot read is reported as that (with what to change in the code), not as CSS Griffel drops.
 - **Offline evaluation.** The app-builder eval harness (`evals/model-apps/app-builder/`) grades
   page-stage structural facts from the spec offline (navigation graph resolution, intent-vs-tsx
   completeness). See [`evals/model-apps/app-builder/EVAL_GUIDE.md`](../../../evals/model-apps/app-builder/EVAL_GUIDE.md).

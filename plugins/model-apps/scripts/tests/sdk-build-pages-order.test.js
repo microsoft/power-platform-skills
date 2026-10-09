@@ -62,6 +62,8 @@ function harness() {
     removeElement: async () => { await Promise.resolve(); return {}; },
     pushArtifact: async (t, id) => ({ type: t, id, saved: true, shipped: false, publish: { kind: 'notRequested' } }),
     addSolutionComponent: async () => {}, publishArtifact: async (type, id) => ({ type, id, shipped: true, publish: { kind: 'verified' } }),
+    // The shared-page scan's one read of the apps that were never published: the app is the only one, and it is published.
+    dataverse: { get: async (url) => (url.startsWith('/appmodules/') ? { status: 200, body: { value: [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, componentstate: 0 }] } } : { status: 404, body: null }) },
   };
   const genpageCli = {
     uploads: [],

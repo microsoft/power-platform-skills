@@ -17,6 +17,9 @@ const runSdkBuild = (spec, opts = {}) => runSdkBuildWithRealWaits(spec, { proofD
 const APP_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 const SELF_UNIQUE_VALUE = 'c0ffee00-0000-4000-8000-00000000dddd';
 const SELF_SITEMAP_ID = '5111e0f2-0000-4000-8000-0000000000aa';
+// A never-published app (mockSdk opts.draftApps) has a layer key and a sitemap id of its own, both real GUIDs: the layer key goes into a Dataverse filter, so the scan refuses one that is not.
+const draftLayerKey = (j) => `c0ffee00-0000-4000-8000-0000000000d${j}`;
+const draftSitemapId = (j) => `5111e0f2-0000-4000-8000-0000000000d${j}`;
 // A valid, page-less sitemap (passes sitemap-pages.isMalformed) — the default membership for a build that
 // does not seed opts.liveSitemapXml.
 const EMPTY_SITEMAP_XML = '<SiteMap><Area><Group></Group></Area></SiteMap>';
@@ -138,6 +141,13 @@ function mockSdk(opts = {}) {
         if (opts.failSitemap) return []; // membership read failure → sitemap-component-not-found
         const uv = (filter.match(/_appmoduleidunique_value eq (\S+)/) || [])[1];
         if (uv === SELF_UNIQUE_VALUE) return [{ objectid: SELF_SITEMAP_ID, componenttype: 62 }];
+        // A never-published app's sitemap component hangs off the layer key its draft row carries.
+        const dj = (opts.draftApps || []).findIndex((_, j) => draftLayerKey(j) === uv);
+        if (dj >= 0) {
+          // `componentReadFails`: the read itself fails (a 5xx, a timeout), which proves nothing about the app — unlike an answer with no rows.
+          if (opts.draftApps[dj].componentReadFails) throw new Error('component read failed');
+          return opts.draftApps[dj].noSitemapComponent ? [] : [{ objectid: draftSitemapId(dj), componenttype: 62 }];
+        }
         const idx = (opts.otherApps || []).findIndex((_, i) => `uv-${i + 2}` === uv);
         return [{ objectid: `sm-${idx + 2}`, componenttype: 62 }];
       }
@@ -408,6 +418,44 @@ function mockSdk(opts = {}) {
     associateRecords: async (e, id, o) => { calls.push({ name: 'associateRecords', args: [e, id, o] }); if (opts.associateDuplicate) { const err = new Error('HTTP 400 from /appmodules(x)/appmoduleroles_association/$ref: A record with matching key values already exists.'); err.statusCode = 400; err.cause = { error: { code: '0x80060891', message: 'duplicate' } }; throw err; } if (opts.associateFail) { const err = new Error('HTTP 400 from ...: bad request'); err.statusCode = 400; err.cause = { error: { code: '0x80040203', message: 'invalid argument' } }; throw err; } },
     disassociateRecords: async (e, id, rel, targetId) => { calls.push({ name: 'disassociateRecords', args: [e, id, rel, targetId] }); if (opts.dissociateGone) { const err = new Error('HTTP 404 from ...: does not exist'); err.statusCode = 404; throw err; } },
     deleteSecurityRole: async (id) => { calls.push({ name: 'deleteSecurityRole', args: [id] }); },
+  };
+  // The other apps' navigation, read through the SDK's Dataverse client (fetchAppsForPages). Attached for a build that has an app identity to scan from (`selfAppUnique`) or other
+  // apps to find: the scan lists the apps that were never published (one RetrieveUnpublishedMultiple read on the `appmodule` collection) even when there is no other app, as the real
+  // SDK always has a client to read it with. A build without one keeps no client, so the table-reuse and relationship probes — which also look for it — read as they always did.
+  //   apps list      self and every other app have their published row (componentstate 0); `draftApps` ([{ uniquename, savedSitemapXml }]) were NEVER published, so they have
+  //                  no published row and one draft row (componentstate 1) with a layer key of its own. opts.draftAppsError makes this read fail.
+  //   saved sitemaps every sitemap's current layer, in one read; every row carries its sitemap's `sitemapnameunique`, which is its app's unique name (the SDK names an app's sitemap after the
+  //                  app). An app with no `savedSitemapXml` has nothing pending: the one row is its published sitemap; with one, the platform
+  //                  answers with both layers. opts.savedNavigationError makes the read fail as a whole; an app's `savedRows` replaces its rows (e.g. to leave them out). A draft app's
+  //                  one row is its saved sitemap; it may set `noSitemapComponent` (its layer has no sitemap component to find), `componentReadFails` (the read of its components fails) or
+  //                  `sitemapName` (the unique name its sitemap carries, when it is not the app's own).
+  if (opts.selfAppUnique !== undefined || (opts.otherApps || []).length || (opts.draftApps || []).length) sdk.dataverse = {
+    get: async (url) => {
+      calls.push({ name: 'dataverse.get', args: [url] });
+      if (/^\/appmodules\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)/.test(url)) {
+        if (opts.draftAppsError) return { status: 503, body: null };
+        const value = [{ appmoduleid: APP_ID, appmoduleidunique: SELF_UNIQUE_VALUE, uniquename: opts.selfAppUnique, componentstate: 0 }];
+        (opts.otherApps || []).forEach((a, i) => value.push({ appmoduleid: `app-${i + 2}`, appmoduleidunique: `uv-${i + 2}`, uniquename: a.uniquename, componentstate: 0 }));
+        (opts.draftApps || []).forEach((d, j) => value.push({ appmoduleid: `draft-${j}`, appmoduleidunique: draftLayerKey(j), uniquename: d.uniquename, componentstate: 1 }));
+        return { status: 200, body: { value } };
+      }
+      if (!/^\/sitemaps\/Microsoft\.Dynamics\.CRM\.RetrieveUnpublishedMultiple\(\)/.test(url)) return { status: 404, body: null };
+      if (opts.savedNavigationError) return { status: 503, body: null };
+      const value = [];
+      (opts.otherApps || []).forEach((a, i) => {
+        const sitemapid = `sm-${i + 2}`;
+        const sitemapnameunique = a.uniquename;
+        if (a.savedRows) value.push(...a.savedRows.map((r) => ({ sitemapid, sitemapnameunique, ...r })));
+        else if (a.savedSitemapXml !== undefined) value.push({ sitemapid, sitemapnameunique, sitemapxml: a.sitemapxml, componentstate: 0 }, { sitemapid, sitemapnameunique, sitemapxml: a.savedSitemapXml, componentstate: 1 });
+        else value.push({ sitemapid, sitemapnameunique, sitemapxml: a.sitemapxml, componentstate: 0 });
+      });
+      (opts.draftApps || []).forEach((d, j) => {
+        const sitemapnameunique = d.sitemapName === undefined ? d.uniquename : d.sitemapName;
+        if (d.savedRows) value.push(...d.savedRows.map((r) => ({ sitemapid: draftSitemapId(j), sitemapnameunique, ...r })));
+        else value.push({ sitemapid: draftSitemapId(j), sitemapnameunique, sitemapxml: d.savedSitemapXml, componentstate: 1 });
+      });
+      return { status: 200, body: { value } };
+    },
   };
   return { sdk, calls };
 }
@@ -5531,6 +5579,96 @@ test('pages: an env app-list failure HALTS pages-shared-check-failed (fail-close
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
+// The build reads other things through the client too; the shared-page scan's own read is the sitemap collection's.
+const SAVED_URL = '/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=sitemapid,sitemapxml,componentstate,sitemapnameunique';
+const savedLayerReads = (calls) => find(calls, 'dataverse.get').filter((c) => c.args[0].startsWith('/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()'));
+
+test('pages: a page shared with another app\'s SAVED (unpublished) navigation HALTS pages-shared-across-apps and names where it is saved', async () => {
+  const spec = overviewSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+    const sitemapWithO = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}" Title="Overview"/></Group></Area></SiteMap>`;
+    // contoso_secondapp's PUBLISHED navigation does not have the page; its maker has saved the page into the draft, and not published it.
+    // The published scan alone read this as "not shared" and the build rewrote the page.
+    const mk = () => mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sitemapWithO, otherApps: [{ uniquename: 'contoso_secondapp', sitemapxml: '<SiteMap><Area><Group/></Area></SiteMap>', savedSitemapXml: sitemapWithO }] });
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => { uploads.push(o); return { pageId: o.pageId || GP_O }; } };
+    for (const allowDestructive of [false, true]) {
+      const { sdk, calls } = mk();
+      await assert.rejects(
+        runSdkBuild(spec, { sdk, apply: true, allowDestructive, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+        (e) => {
+          assert.strictEqual(e.phase, 'pages');
+          assert.strictEqual(e.code, 'pages-shared-across-apps');
+          assert.match(e.message, new RegExp(`${GP_O} \\(also in contoso_secondapp \\[saved, not published\\]\\)`));
+          return true;
+        },
+        `allowDestructive=${allowDestructive}: cross-app mutation has no escape`
+      );
+      assert.strictEqual(savedLayerReads(calls).length, 1, 'the saved layer of every other app is one read');
+    }
+    assert.deepStrictEqual(uploads, [], 'the shared page was never uploaded');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('pages: another app\'s saved navigation that cannot be read HALTS pages-shared-check-failed (fail-closed — cannot prove non-sharing)', async () => {
+  const spec = overviewSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+    const sitemapWithO = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}" Title="Overview"/></Group></Area></SiteMap>`;
+    const empty = '<SiteMap><Area><Group/></Area></SiteMap>';
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => { uploads.push(o); return { pageId: o.pageId || GP_O }; } };
+    const cases = {
+      // The whole read fails: no app's draft is known.
+      'the saved read fails': [{ savedNavigationError: true, otherApps: [{ uniquename: 'contoso_secondapp', sitemapxml: empty }] }, /could not scan the environment[\s\S]*saved \(unpublished\) navigation/],
+      // The read works, but the app's own saved row did not come back: that app's draft cannot be ruled out.
+      'one app\'s saved row is missing': [{ otherApps: [{ uniquename: 'contoso_secondapp', sitemapxml: empty, savedRows: [] }] }, /1 app\(s\) had an unreadable sitemap \(contoso_secondapp\)/],
+      'one app\'s saved XML is cut short': [{ otherApps: [{ uniquename: 'contoso_secondapp', sitemapxml: empty, savedRows: [{ sitemapxml: '<SiteMap><Area', componentstate: 1 }] }] }, /1 app\(s\) had an unreadable sitemap \(contoso_secondapp\)/],
+    };
+    for (const [what, [extra, message]] of Object.entries(cases)) {
+      const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sitemapWithO, ...extra });
+      await assert.rejects(
+        runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+        (e) => {
+          assert.strictEqual(e.phase, 'pages', what);
+          assert.strictEqual(e.code, 'pages-shared-check-failed', what);
+          assert.match(e.message, message, what);
+          return true;
+        },
+        what
+      );
+    }
+    assert.deepStrictEqual(uploads, [], 'nothing was uploaded while sharing could not be ruled out');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+test('pages: other apps that do not hold the page — in either layer — pass the check, with one saved-layer read in all', async () => {
+  const spec = overviewSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+    const sitemapWithO = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}" Title="Overview"/></Group></Area></SiteMap>`;
+    const other = '<SiteMap><Area><Group><SubArea GenPageId="00000000-0000-4000-8000-0000000000aa" Title="Other"/></Group></Area></SiteMap>';
+    const { sdk, calls } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sitemapWithO, otherApps: [
+      { uniquename: 'contoso_secondapp', sitemapxml: other },
+      { uniquename: 'contoso_thirdapp', sitemapxml: other, savedSitemapXml: other },
+      { uniquename: 'contoso_fourthapp', sitemapxml: other },
+    ] });
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => { uploads.push(o); return { pageId: o.pageId || GP_O }; } };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    assert.strictEqual(uploads.length, 1);
+    assert.strictEqual(uploads[0].pageId, GP_O, 'reused (UPDATE): nobody else holds the page');
+    assert.strictEqual(savedLayerReads(calls).length, 1, 'three other apps, one saved-layer read');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
 test('pages: a single-app env passes the shared-page check (reads no other sitemaps) and reuses the page', async () => {
   const spec = overviewSpec();
   const appUnique = appUniqueName(spec);
@@ -5538,13 +5676,144 @@ test('pages: a single-app env passes the shared-page check (reads no other sitem
   try {
     const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
     const sm = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}"/></Group></Area></SiteMap>`;
-    const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sm }); // no otherApps
+    const { sdk, calls } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sm }); // no otherApps
     const uploads = [];
     const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => { uploads.push(o); return { pageId: o.pageId || GP_O }; } };
     await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
     assert.strictEqual(uploads.length, 1);
     assert.strictEqual(uploads[0].pageId, GP_O, 'reused (UPDATE); a single-app env has no other app to share with');
+    // The cost of knowing there is no draft app: ONE small read of the list of apps that were never published, and no sitemap — saved or published — of any other app.
+    assert.deepStrictEqual(scanReads(calls), [APPS_LIST_URL], 'one request in all');
+    assert.strictEqual(savedLayerReads(calls).length, 0);
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// An app saved in the maker and never published has no row in the published app list, so the scan read nothing of it: a page it holds was updated without a halt, and the draft
+// then showed a rewritten page when its maker published it. The scan lists such apps (one request) and reads their saved sitemap from the saved-layer read.
+// The shared-page scan's own reads through the client (the build makes others — entity definitions, say): the list of never-published apps, and the sitemaps' saved layer.
+const scanReads = (calls) => find(calls, 'dataverse.get').map((c) => c.args[0]).filter((url) => url.startsWith('/appmodules/') || url.startsWith('/sitemaps/'));
+const APPS_LIST_URL = '/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()?$select=appmoduleid,appmoduleidunique,uniquename,componentstate';
+const stageUpdate = () => {
+  const spec = overviewSpec();
+  const sitemapWithO = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}" Title="Overview"/></Group></Area></SiteMap>`;
+  const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+  const uploads = [];
+  const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }), upload: async (o) => { uploads.push(o); return { pageId: o.pageId || GP_O }; } };
+  return { spec, appUnique: appUniqueName(spec), appDir: stagePages(spec.pages), sitemapWithO, existing, uploads, genpageCli };
+};
+const runPagesUpdate = (s, sdk, extra = {}) => runSdkBuild(s.spec, { sdk, apply: true, env: 'https://x', appDir: s.appDir, genpageCli: s.genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'], ...extra });
+
+test('pages: a page shared with a NEVER-PUBLISHED app\'s saved navigation HALTS pages-shared-across-apps and names where it is saved', async () => {
+  const s = stageUpdate();
+  try {
+    // The only other app has never been published: the published list has no row for it. The published scan alone read this environment as having no other app.
+    for (const allowDestructive of [false, true]) {
+      const { sdk, calls } = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, draftApps: [{ uniquename: 'contoso_draftapp', savedSitemapXml: s.sitemapWithO }] });
+      await assert.rejects(
+        runPagesUpdate(s, sdk, { allowDestructive }),
+        (e) => {
+          assert.strictEqual(e.phase, 'pages');
+          assert.strictEqual(e.code, 'pages-shared-across-apps');
+          assert.match(e.message, new RegExp(`${GP_O} \\(also in contoso_draftapp \\[saved, not published\\]\\)`));
+          return true;
+        },
+        `allowDestructive=${allowDestructive}: cross-app mutation has no escape`
+      );
+      assert.deepStrictEqual(scanReads(calls), [APPS_LIST_URL, SAVED_URL], 'the list of apps, then the one saved-layer read');
+    }
+    assert.deepStrictEqual(s.uploads, [], 'the shared page was never uploaded');
+    // Control: the same environment whose draft app holds some other page passes, and the page is updated.
+    const other = '<SiteMap><Area><Group><SubArea GenPageId="00000000-0000-4000-8000-0000000000aa" Title="Other"/></Group></Area></SiteMap>';
+    const { sdk } = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, draftApps: [{ uniquename: 'contoso_draftapp', savedSitemapXml: other }] });
+    await runPagesUpdate(s, sdk);
+    assert.strictEqual(s.uploads.length, 1);
+    assert.strictEqual(s.uploads[0].pageId, GP_O);
+  } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
+});
+
+test('pages: the list of never-published apps that cannot be read HALTS pages-shared-check-failed, in a single-app environment too', async () => {
+  const s = stageUpdate();
+  try {
+    const { sdk } = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, draftAppsError: true });
+    await assert.rejects(
+      runPagesUpdate(s, sdk),
+      (e) => {
+        assert.strictEqual(e.phase, 'pages');
+        assert.strictEqual(e.code, 'pages-shared-check-failed');
+        assert.match(e.message, /could not scan the environment[\s\S]*could not list the apps that have never been published/);
+        return true;
+      }
+    );
+    assert.deepStrictEqual(s.uploads, [], 'nothing was uploaded while it could not be told whether a draft app holds the page');
+  } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
+});
+
+// An app saved in the maker with nothing but a name has no sitemap component, and no sitemap of its name: it has no navigation and holds no page. A read that SUCCEEDS and finds no component,
+// with no sitemap of the app's name in the saved layer, shows that, and one such app must not stop every page update in the environment; a read that FAILS proves nothing and still halts
+// (the next test, and the unit tests of fetchAppsForPages).
+test('pages: a never-published app with no sitemap component and no sitemap of its name holds no page, so the update goes ahead — for the list of apps and the one saved-layer read', async () => {
+  const s = stageUpdate();
+  try {
+    // Another app's sitemap that names the page is nothing to do with it: no row carries this app's name.
+    const bare = { uniquename: 'contoso_bareapp', savedRows: [], noSitemapComponent: true };
+    const alone = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, draftApps: [bare] });
+    await runPagesUpdate(s, alone.sdk);
+    assert.strictEqual(s.uploads.length, 1);
+    assert.strictEqual(s.uploads[0].pageId, GP_O, 'the page is updated in place');
+    assert.deepStrictEqual(scanReads(alone.calls), [APPS_LIST_URL, SAVED_URL], 'the saved layer is read once, which is how the app is shown to have no sitemap');
+    // Beside a draft app that does hold the page the build still halts, and names only that app.
+    s.uploads.length = 0;
+    const mixed = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, draftApps: [bare, { uniquename: 'contoso_draftapp', savedSitemapXml: s.sitemapWithO }] });
+    await assert.rejects(
+      runPagesUpdate(s, mixed.sdk),
+      (e) => e.code === 'pages-shared-across-apps' && new RegExp(`${GP_O} \\(also in contoso_draftapp \\[saved, not published\\]\\)`).test(e.message) && !/contoso_bareapp/.test(e.message)
+    );
+    assert.deepStrictEqual(s.uploads, []);
+  } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
+});
+
+// The SDK links an app to its sitemap by the sitemap's unique name, whatever its component rows say, so an app whose layer has no sitemap component can still hold a sitemap — and
+// the page in it. The scan finds it through the saved-layer read it makes anyway, and the update halts like any other shared page.
+test('pages: a never-published app with no sitemap component whose sitemap is linked to it by name HALTS the update, naming the app — a sitemap of another name does not', async () => {
+  const s = stageUpdate();
+  try {
+    const linked = { uniquename: 'contoso_linkedapp', savedSitemapXml: s.sitemapWithO, noSitemapComponent: true };
+    const { sdk, calls } = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, draftApps: [linked] });
+    await assert.rejects(
+      runPagesUpdate(s, sdk),
+      (e) => e.phase === 'pages' && e.code === 'pages-shared-across-apps' && new RegExp(`${GP_O} \\(also in contoso_linkedapp \\[saved, not published\\]\\)`).test(e.message)
+    );
+    assert.deepStrictEqual(scanReads(calls), [APPS_LIST_URL, SAVED_URL], 'no request beyond the ones a draft app costs anyway');
+    assert.deepStrictEqual(s.uploads, [], 'the shared page was never uploaded');
+    // Control: the same sitemap under another app's name is not this app's, so the update goes ahead.
+    const { sdk: other } = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, draftApps: [{ ...linked, sitemapName: 'contoso_someoneelse' }] });
+    await runPagesUpdate(s, other);
+    assert.strictEqual(s.uploads.length, 1);
+  } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
+});
+
+test('pages: a never-published app whose navigation cannot be read HALTS pages-shared-check-failed and names it', async () => {
+  const s = stageUpdate();
+  try {
+    const cases = {
+      'its sitemap component read fails': { uniquename: 'contoso_draftapp', savedSitemapXml: s.sitemapWithO, componentReadFails: true },
+      'its saved row did not come back': { uniquename: 'contoso_draftapp', savedRows: [] },
+      'its saved XML is cut short': { uniquename: 'contoso_draftapp', savedRows: [{ sitemapxml: '<SiteMap><Area', componentstate: 1 }] },
+    };
+    for (const [what, draft] of Object.entries(cases)) {
+      const { sdk } = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, draftApps: [draft] });
+      await assert.rejects(
+        runPagesUpdate(s, sdk),
+        (e) => {
+          assert.strictEqual(e.code, 'pages-shared-check-failed', what);
+          assert.match(e.message, /1 app\(s\) had an unreadable sitemap \(contoso_draftapp\)/, what);
+          return true;
+        },
+        what
+      );
+    }
+    assert.deepStrictEqual(s.uploads, []);
+  } finally { fs.rmSync(s.appDir, { recursive: true, force: true }); }
 });
 
 test('a by-value publish failure reaches the warn channel through the whole build', async () => {

@@ -215,13 +215,89 @@ function spawnProcess(name, args, options = {}, deps = {}) {
   return childProcess.spawn(inv.file, inv.args, withOptions(inv, options));
 }
 
+// The pids under `rootPid` in a `ps -A -o pid=,ppid=` listing — one `<pid> <ppid>` pair per line, in any spacing, no header (the `=` after each
+// name blanks it):
+//     100     1
+//    4242   100
+//    5000  4242
+// Parents come before their children (breadth first). Lines that are not a pair are skipped, and a process listed twice, or two that name each
+// other as parent, are read once, so a damaged listing cannot loop.
+function descendantPids(rootPid, listing) {
+  const children = new Map();
+  for (const line of String(listing == null ? '' : listing).split(/\r?\n/)) {
+    const pair = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
+    if (!pair) continue;
+    const parent = Number(pair[2]);
+    if (!children.has(parent)) children.set(parent, []);
+    children.get(parent).push(Number(pair[1]));
+  }
+  const found = [];
+  const seen = new Set([rootPid]);
+  const queue = [rootPid];
+  for (let i = 0; i < queue.length; i += 1) {
+    for (const pid of children.get(queue[i]) || []) {
+      if (seen.has(pid)) continue;
+      seen.add(pid);
+      found.push(pid);
+      queue.push(pid);
+    }
+  }
+  return found;
+}
+
+// Ends `child` AND everything it started, for a call that ran out of time. Killing only the process that was started is not enough: on Windows
+// `pac.cmd` is a shim — cmd.exe, which runs pac.exe — so ending cmd.exe leaves the stalled pac running and holding its connections. A tree is
+// ended by `taskkill /T /F` on Windows (https://learn.microsoft.com/windows-server/administration/windows-commands/taskkill) and, elsewhere, by
+// SIGKILL to each process `ps` lists under it (SIGKILL, not SIGTERM: a stalled process may ignore that) — the child first, so it can start nothing
+// more, then its descendants deepest first. Both tools are started through spawnResultSync, the audited call above, so each is resolved to an absolute
+// executable on PATH and never taken from the current directory. This never throws, whatever has gone wrong: the caller is already handling a failure,
+// and a process that is already gone, a tool that is absent or one that times out still end with the child itself asked to die.
+// `env` is the environment the tools are looked up in (a seam for the tests).
+//
+// A child that has ALREADY EXITED is not ended by its pid. Node's 'exit' can come before 'close' when a process the child started still holds its pipes — the very case a call that
+// runs out of time is stopped in — and by then the number can belong to another process: Windows reuses ids at once, and a tree kill by it would end that process and everything it started.
+// There is no tree to walk from a process that is gone, either: what it started was re-parented, and taskkill /T and the `ps` walk both start from a live pid. So such a child is only asked to
+// die (a no-op), and whatever it left running is what the caller's own deadline already gave up on.
+function killProcessTree(child, { platform = process.platform, env = process.env, run = spawnResultSync, kill = (pid, signal) => process.kill(pid, signal) } = {}) {
+  const pid = child && child.pid;
+  const endChild = () => {
+    try { if (child && typeof child.kill === 'function') child.kill('SIGKILL'); } catch { /* already gone */ }
+  };
+  if (!Number.isInteger(pid) || pid <= 0) { endChild(); return; }
+  // `exitCode` and `signalCode` are null while a ChildProcess runs; an object that is not one (a test's stand-in) has neither, which reads as running.
+  if (child.exitCode != null || child.signalCode != null) { endChild(); return; }
+  try {
+    if (platform === 'win32') {
+      // taskkill.exe lives in System32, next to cmd.exe. The lookup reads PATH like every executable here, and a PATH without that folder — a service, a CI
+      // runner, a stripped-down shell — would make the kill find nothing and leave the stalled tree running, so System32 goes FIRST on the PATH this one lookup
+      // reads. First also means no earlier, user-writable folder on PATH can stand in for taskkill. The caller's own environment is not changed.
+      // Exits 128 when the process is already gone, which is the outcome wanted. windowsHide: no console window opens for the kill — spawnResultSync's own lookup
+      // (invocation) already hides every child's window, and it is stated here too so that the kill stays hidden whichever `run` is in use.
+      run('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', timeout: 15000, windowsHide: true },
+        { env: withPathFirst(env, path.win32.dirname(windowsCmd(env)), 'win32') });
+      endChild();
+    } else {
+      const listing = run('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 });
+      const under = listing && listing.status === 0 ? descendantPids(pid, listing.stdout) : [];
+      endChild();
+      for (const descendant of under.reverse()) {
+        try { kill(descendant, 'SIGKILL'); } catch { /* already gone */ }
+      }
+    }
+  } catch {
+    endChild();
+  }
+}
+
 module.exports = {
   CMD_INERT_ARG,
   cmdArgument,
+  descendantPids,
   envValue,
   withOptions,
   execFileAsync,
   invocation,
+  killProcessTree,
   resolveExecutable,
   runSync,
   spawnProcess,
