@@ -1025,3 +1025,43 @@ test('aborting a real getAuthTokenAsync read ends the program the az shim starte
     fs.rmSync(work, { recursive: true, force: true });
   }
 });
+
+// --- emitResult: `ascii` keeps a script's stdout pure ASCII ----------------------------------------------------
+//
+// An agent reads a script's stdout off a console. Windows PowerShell 5.1 decodes a child's output with the OEM code
+// page, so UTF-8 bytes of an em dash arrive as three other characters; written as a \uXXXX escape the same JSON
+// survives any code page. Only a script that asks for it changes — every other caller keeps the raw text.
+test('emitResult with `ascii` writes every character above U+007E as a \\uXXXX escape, in either outcome, and leaves stderr as written', () => {
+  const { spawnSync } = require('node:child_process');
+  const path = require('node:path');
+  const libPath = path.join(__dirname, '..', 'lib', 'dataverse-auth.js');
+  // An em dash and an accented letter (BMP), an emoji (a surrogate pair, as JSON writes a character outside the BMP),
+  // DEL, and the characters JSON.stringify already escapes.
+  const message = 'Norwegian Bokm\u00e5l \u2014 \ud83d\ude00 \u007f "quoted" \\ back\nline';
+  for (const [ok, status] of [[true, 0], [false, 1]]) {
+    const payload = { ok, error: message, list: ['1025 ar-SA \u2014 RTL: Yes'] };
+    const code = `
+      const { emitResult } = require(${JSON.stringify(libPath)});
+      emitResult(${ok}, ${JSON.stringify(payload)}, { ascii: true });
+    `;
+    const res = spawnSync(process.execPath, ['-e', code], { encoding: 'utf8' });
+    assert.equal(res.status, status, `ok=${ok}: ${res.stderr}`);
+    assert.match(res.stdout, /^[\x00-\x7e\r\n]*$/, `ok=${ok}: pure ASCII`);
+    assert.ok(res.stdout.includes('\\u2014') && res.stdout.includes('\\u00e5') && res.stdout.includes('\\ud83d\\ude00') && res.stdout.includes('\\u007f'), res.stdout);
+    assert.deepEqual(JSON.parse(res.stdout.trim()), payload, `ok=${ok}: the same document, decoded`);
+    if (!ok) assert.equal(res.stderr.trim(), message.trim(), 'stderr is for people and is not escaped');
+  }
+});
+
+test('emitResult without `ascii` still writes the raw text: no other script\u2019s output changes', () => {
+  const { spawnSync } = require('node:child_process');
+  const path = require('node:path');
+  const libPath = path.join(__dirname, '..', 'lib', 'dataverse-auth.js');
+  const code = `
+    const { emitResult } = require(${JSON.stringify(libPath)});
+    emitResult(true, { s: '1025 ar-SA \\u2014 RTL: Yes' });
+  `;
+  const res = spawnSync(process.execPath, ['-e', code], { encoding: 'utf8' });
+  assert.equal(res.status, 0, res.stderr);
+  assert.ok(res.stdout.includes('\u2014') && !res.stdout.includes('\\u2014'), res.stdout);
+});

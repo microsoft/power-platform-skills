@@ -809,16 +809,30 @@ function readJsonArg(raw) {
 }
 
 /**
+ * `JSON.stringify` with every character above U+007E written as a `\uXXXX` escape: the same document to any JSON
+ * parser, but bytes a console code page cannot garble. Windows PowerShell 5.1 decodes a child's stdout with the OEM
+ * code page, so a raw U+2014 em dash reaches the reader as "ΓÇö" (UTF-8 bytes E2 80 94 read as code page 437).
+ * Each UTF-16 unit is escaped on its own, which is how JSON writes a character outside the BMP too
+ * (https://www.rfc-editor.org/rfc/rfc8259#section-7: a surrogate pair of two escapes).
+ */
+function asciiJson(value) {
+  return JSON.stringify(value).replace(/[^\x00-\x7e]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
+/**
  * Writes a result to stdout and exits.
  *   ok=true → JSON payload to stdout, exit 0
  *   ok=false + Error → message to stderr, exit 1
  *   ok=false + object → JSON payload to stdout (caller can parse partial-failure
  *                       details like `errors: [...]`), short note to stderr, exit 1
  *   ok=false + string → string to stderr, exit 1
+ * `options.ascii` writes the stdout JSON through `asciiJson`, for a script whose output an agent reads off a console.
+ * (stderr is for people and is never escaped.)
  */
-function emitResult(ok, payload) {
+function emitResult(ok, payload, options = {}) {
+  const toJson = options && options.ascii ? asciiJson : JSON.stringify;
   if (ok) {
-    process.stdout.write(JSON.stringify(payload) + '\n');
+    process.stdout.write(toJson(payload) + '\n');
     process.exit(0);
   }
   if (payload instanceof Error) {
@@ -826,7 +840,7 @@ function emitResult(ok, payload) {
   } else if (payload !== null && typeof payload === 'object') {
     // Structured failure. Emit the payload to stdout so callers can parse it, and exit 1 so shells
     // still treat it as a failure.
-    process.stdout.write(JSON.stringify(payload) + '\n');
+    process.stdout.write(toJson(payload) + '\n');
     if (Array.isArray(payload.errors)) {
       // A genuine PARTIAL failure (bulk insert with some rows rejected): the count is the useful
       // summary and the detail is per-row on stdout.

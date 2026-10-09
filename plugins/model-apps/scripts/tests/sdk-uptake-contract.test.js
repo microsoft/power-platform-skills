@@ -9,6 +9,9 @@
 //   1. App icon is now REQUIRED and must be an IMAGE (the behaviour that broke 13 tests on uptake).
 //   2. Business-rule authoring, which was previously impossible on our tenants: supported bound
 //      member first, classic WWF-XAML `workflows` row as a NARROW fallback.
+//   3. The AI setting names the build writes, compared with the bundle's own maps.
+//   4. Exactly one write path for a business rule, so a double write cannot recur.
+//   5. Metadata reads send `Consistency: Strong` (the latest definition), end to end through the plugin client.
 const test = require('node:test');
 const assert = require('node:assert');
 const os = require('node:os');
@@ -414,4 +417,41 @@ test('REAL BUNDLE: the deleted fallback leaves no trace in the bundle', async ()
   const src = fs.readFileSync(BUNDLE, 'utf8');
   assert.ok(!src.includes('x:Null x:Key="Parameters"'),
     'the business-rule XAML compiler\'s null-parameter emission is back — the fallback has been reintroduced');
+});
+
+// ---------------------------------------------------------------------------------------------
+// 5. A metadata read asks for the LATEST definition.
+//
+// The platform caches metadata, and a read right after a metadata write can be served the definition from
+// before it. The SDK now sends `Consistency: Strong` on every read of /EntityDefinitions, /RelationshipDefinitions
+// and /GlobalOptionSetDefinitions (about 10% more per read) and on no other path. The plugin's HTTP client forwards
+// a caller's headers untouched, so the header reaches the wire; it is pinned end to end because a client that
+// rebuilt its headers would turn the fix off without a single other test noticing.
+test('REAL BUNDLE: a metadata read reaches the wire with Consistency: Strong through the plugin client, and a data read does not', async () => {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
+  const { createAzHttpClient } = require('../lib/sdk-http-client.js');
+  const ENV = 'https://contoso.crm.dynamics.com';
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'uptake-'));
+  dirs.push(dir);
+  const seen = [];
+  const request = async ({ url, method, headers }) => {
+    const where = decodeURIComponent(new URL(url).pathname);
+    seen.push({ method, path: where, headers });
+    const body = /EntityDefinitions\(LogicalName='savedquery'\)/.test(where) ? { LogicalName: 'savedquery', EntitySetName: 'savedqueries' } : { value: [] };
+    return { statusCode: 200, headers: {}, body: JSON.stringify(body) };
+  };
+  const client = createAzHttpClient(ENV, { getToken: () => 'token', request, sleep: async () => {} });
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: ENV, httpClient: client });
+  await sdk.initWorkspace();
+
+  await sdk.findTables('account', { top: 5 });
+  await sdk.queryRecords('savedquery', { select: ['savedqueryid'], top: 1 });
+
+  const metadata = seen.find((r) => /\/EntityDefinitions$/.test(r.path));
+  assert.ok(metadata, 'a table search reads /EntityDefinitions; got ' + JSON.stringify(seen.map((r) => r.path)));
+  assert.strictEqual(metadata.headers.Consistency, 'Strong');
+  const data = seen.find((r) => /\/savedqueries$/.test(r.path));
+  assert.ok(data, 'a record query reads /savedqueries; got ' + JSON.stringify(seen.map((r) => r.path)));
+  assert.strictEqual(Object.keys(data.headers).some((h) => h.toLowerCase() === 'consistency'), false,
+    'a read of any other path is passed through untouched');
 });

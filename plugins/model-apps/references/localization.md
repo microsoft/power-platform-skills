@@ -8,7 +8,8 @@
 > (see `app-spec-schema.md` → `languageCode` and *Localized labels*).
 
 Read this only when the planner has detected multiple configured languages OR any
-non-English language via `pac model list-languages`. English-only environments
+non-English language via `scripts/list-languages.js` (or `pac model list-languages --environment '<envUrl>'`, which the planner
+runs when that script cannot read them). English-only environments
 should skip this entire file — the page-builder will write the page without any
 localization scaffolding.
 
@@ -19,7 +20,7 @@ section, not unconditionally.
 
 ### When to Apply
 
-Only apply localization when `pac model list-languages` (run by the planner during requirements gathering) returns **multiple languages** or **any non-English language**. English-only environments skip this entire section.
+Only apply localization when `scripts/list-languages.js` (run by the planner during requirements gathering; its fallback is `pac model list-languages --environment '<envUrl>'`) reports **multiple languages** or **any non-English language**. English-only environments skip this entire section.
 
 ### Language Detection
 
@@ -30,11 +31,13 @@ const language = React.useMemo(() => {
   const uiLanguageId = (typeof Xrm !== "undefined" &&
     Xrm.Utility?.getGlobalContext()?.userSettings?.languageId) || 1033;
   const langMap: Record<number, { code: string; name: string; isRtl: boolean }> = {
-    // One entry per language `pac model list-languages` reports, copied from its columns:
-    //   LCID Language                Code  RTL
-    //   1033 English (United States) en-US No
-    // becomes 1033: { code: "en-US", name: "English (United States)", isRtl: false }.
-    // `isRtl` comes from the RTL column (see RTL Layout Support) — never from memory.
+    // One entry per language in the plan's `## Environment` → `Languages` line, e.g.
+    //   English (1033, en-US); Arabic (Saudi Arabia) (1025, ar-SA) — RTL
+    // becomes 1033: { code: "en-US", name: "English", isRtl: false } and
+    // 1025: { code: "ar-SA", name: "Arabic (Saudi Arabia)", isRtl: true }.
+    // `isRtl` is true exactly where the line carries `— RTL` (see RTL Layout Support) — never from memory.
+    // A language the plan lists with no code has nothing to key a translation by: it gets no entry, and the
+    // fallback below serves that user in English.
   };
   return langMap[uiLanguageId] || { code: "en-US", name: "English", isRtl: false };
 }, []);
@@ -70,13 +73,15 @@ Usage: `<Text>{translate("title")}</Text>` — never `<Text>Dashboard</Text>`.
 
 ### RTL Layout Support
 
-Take each language's direction from the **RTL** column of `pac model list-languages` (carried into the
-plan's `## Environment` → `Languages` line as a `— RTL` mark) — never from a hand-written list of LCIDs. The platform derives that column
-from culture data, and a list always misses some: Windows culture data marks more than 40 right-to-left
-cultures — every Arabic region, Persian and Dari, Urdu, Pashto, Sindhi, Uyghur, Divehi, Syriac, Central
+Take each language's direction from the `rtl` field of `scripts/list-languages.js` (carried into the
+plan's `## Environment` → `Languages` line as a `— RTL` mark; when the planner fell back to `pac model list-languages --environment '<envUrl>'`,
+from that table's RTL column) — never from a hand-written list of LCIDs. The script reads
+it from a table of Windows culture data, and a list always misses some: Windows culture data marks more than 40
+right-to-left cultures — every Arabic region, Persian and Dari, Urdu, Pashto, Sindhi, Uyghur, Divehi, Syriac, Central
 Kurdish, Hebrew and Yiddish among them — and a language a list forgot renders left-to-right.
 
-If a PAC build prints no RTL column, compute the flag from the language's **Code** instead. Direction is a
+If the plan marks no direction for a language (a plan written before the script reported one), compute the flag from
+the language's **Code** instead. Direction is a
 property of the script a language is written in, and `Intl.Locale#maximize()` fills in the likely script
 from CLDR (`fa` → `fa-Arab-IR`, `ur-PK` → `ur-Arab-PK`, `dv-MV` → `dv-Thaa-MV`):
 

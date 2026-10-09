@@ -27,7 +27,7 @@ claude --plugin-dir /path/to/power-platform-skills/plugins/model-apps
 | [PAC CLI](https://learn.microsoft.com/en-us/power-platform/developer/cli/introduction) > 2.10.0 | Schema generation, app creation, table listing, deployment | `dotnet tool install -g Microsoft.PowerApps.CLI.Tool` |
 | [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) (`az`) | Dataverse Web API auth for entity creation | `winget install Microsoft.AzureCLI` |
 
-After installing `az`, run `az login` with the same identity as your active `pac auth list` profile. Without `az`, the `/genpage` skill still works for pages over existing entities or mock data — it only fails when entity creation is needed.
+After installing `az`, run `az login` with the same identity as your active `pac auth list` profile. Without `az`, the `/genpage` skill still works for pages over existing entities or mock data — it only fails when entity creation is needed. (Detecting the environment's languages uses `az` when it is signed in and falls back to `pac model list-languages --environment '<envUrl>'` when it is not.)
 
 Each Azure CLI call (a token, `az account show`) may take up to **60 seconds** — a busy machine can
 take most of that just to start `az`. A call that runs out of time is reported as a timeout (the

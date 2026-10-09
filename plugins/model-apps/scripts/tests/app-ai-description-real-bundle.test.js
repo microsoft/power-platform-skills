@@ -1,7 +1,7 @@
 'use strict';
 // REAL BUNDLE: the app routing description (`app.aiDescription` -> `appmodule.aiappdescription`, #583).
 //
-// The plugin's `applyAppAiDescription` and `haltOnUnpublishedAppHeader` lean on five SDK behaviours that
+// The plugin's `applyAppAiDescription` and `haltOnUnpublishedAppHeader` lean on six SDK behaviours that
 // its own unit tests can only stub:
 //   1. a fetched app carries `aiDescription` ONLY when the row has a value;
 //   2. `updateElement('/aiDescription')` on such an app rejects with PATH_NOT_FOUND, while an
@@ -16,7 +16,11 @@
 //   5. after a refused push, a plain fetch refuses to discard the unpushed copy once the server has
 //      moved (LOCAL_EDITS_WOULD_BE_LOST), and `{ overwrite: true }` resets it — which is why the
 //      never-published halt resets the copy before telling the operator to publish and re-run, and why a
-//      concurrent edit's kept copy stops a blind re-run.
+//      concurrent edit's kept copy stops a blind re-run;
+//   6. a header write is never unconditional: the ROW token a fetch read is sent even when the SDK's own
+//      read of the header fails, and with no token held at all the edit throws APP_UPDATE_NO_ETAG before
+//      anything is written. The plugin edits a header only on a copy it has just fetched, so it never
+//      meets that refusal; if it did, `pushAppHeader` resets the copy and the next run saves.
 // A re-vendor could change any of them with every plugin test still green, so each is pinned here
 // against the real bundle over a fake Dataverse — the same way sitemap-icon-real-bundle.test.js pins
 // the sitemap write.
@@ -65,9 +69,11 @@ async function freshSdk({ ai, componentstate = 0, headerStatus = 204, sitemapSta
   tempDirs.push(dir);
   const writes = [];
   const reads = [];
-  const state = { ai, componentstate, headerStatus, sitemapStatus, etag: 'W/"1"', tokens, description: 'Tickets' };
+  // `noAppEtag`: the appmodule answers no version at all (no ETag header, no `@odata.etag`), so a fetch holds no
+  // token for its header. `headerReadFails`: the SDK's own unpublished-aware header read, made at push, answers 500.
+  const state = { ai, componentstate, headerStatus, sitemapStatus, etag: 'W/"1"', tokens, description: 'Tickets', noAppEtag: false, headerReadFails: false };
   const appEtag = (url) => (!state.tokens ? state.etag : /RetrieveUnpublished/i.test(url) ? state.tokens.content : state.tokens.row);
-  const appRow = (etag = state.etag) => ({ appmoduleid: APP_ID, appmoduleidunique: APP_IDUNIQUE, name: 'Probe', uniquename: APP_UNIQUE, description: state.description, componentstate: state.componentstate, ...(state.ai !== undefined ? { aiappdescription: state.ai } : {}), '@odata.etag': etag });
+  const appRow = (etag = state.etag) => ({ appmoduleid: APP_ID, appmoduleidunique: APP_IDUNIQUE, name: 'Probe', uniquename: APP_UNIQUE, description: state.description, componentstate: state.componentstate, ...(state.ai !== undefined ? { aiappdescription: state.ai } : {}), ...(state.noAppEtag ? {} : { '@odata.etag': etag }) });
   const sitemapRow = () => ({ sitemapid: SITEMAP_ID, sitemapnameunique: APP_UNIQUE, sitemapxml: SITEMAP_XML, '@odata.etag': state.etag });
   const httpClient = {
     get: async (url) => {
@@ -86,6 +92,7 @@ async function freshSdk({ ai, componentstate = 0, headerStatus = 204, sitemapSta
         return { status: 200, headers: { etag: state.etag }, body: multi ? { value: [sitemapRow()] } : sitemapRow() };
       }
       if (/\/appmodules/.test(url)) {
+        if (state.headerReadFails && /RetrieveUnpublished/i.test(url)) return { status: 500, headers: {}, body: { error: { message: 'transient failure' } } };
         // The halt's own draft read. While a draft exists, put the PUBLISHED row first, so the test proves
         // the unpublished layer is found wherever it sits: the live platform returned only the draft row,
         // but does not document that. The SDK's own reads never select componentstate, so they are unaffected.
@@ -94,7 +101,7 @@ async function freshSdk({ ai, componentstate = 0, headerStatus = 204, sitemapSta
         }
         const multi = /RetrieveUnpublishedMultiple/i.test(url) || /\/appmodules\?/.test(url);
         const etag = appEtag(url);
-        return { status: 200, headers: { etag }, body: multi ? { value: [appRow(etag)] } : appRow(etag) };
+        return { status: 200, headers: state.noAppEtag ? {} : { etag }, body: multi ? { value: [appRow(etag)] } : appRow(etag) };
       }
       if (/\/roles/.test(url)) return { status: 200, headers: {}, body: { value: [{ roleid: '66666666-6666-6666-6666-666666666666' }] } };
       return { status: 200, headers: {}, body: { value: [] } };
@@ -107,7 +114,10 @@ async function freshSdk({ ai, componentstate = 0, headerStatus = 204, sitemapSta
       const ifMatch = (options && options.headers && options.headers['If-Match']) || null;
       writes.push({ verb: 'patch', url: String(url), body, ifMatch });
       if (/\/appmodules\(/.test(url) && state.tokens) {
-        if (ifMatch !== state.tokens.row) {
+        // A PATCH with no `If-Match` is accepted whatever the version — that is what a plain write is, and what a header
+        // write that forgot its token would be — so only a token that is not the row's is refused.
+        // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api
+        if (ifMatch !== null && ifMatch !== state.tokens.row) {
           return { status: 412, headers: {}, body: { error: { code: '0x80060882', message: 'The version of the existing record doesn\'t match the RowVersion property provided.' } } };
         }
         if (body && body.aiappdescription !== undefined) state.ai = body.aiappdescription;
@@ -321,4 +331,76 @@ test('REAL BUNDLE: a never-published app THROWS its header refusal, and pushAppH
   assert.strictEqual(await applyAppAiDescription(sdk, spec(WANT), APP_ID), true);
   assert.strictEqual((await pushAppHeader(sdk, APP_ID, 'Probe', true)).saved, true);
   assert.strictEqual(state.ai, WANT);
+});
+
+// cds-maker-sdk 0ffa4384 (an app's header write is never unconditional): before it, the SDK sent the appmodule header
+// PLAIN whenever no token was "usable" — none held, or its own header read had failed — so a transient read failure
+// let a push overwrite another writer's header, and a copy that held no header token wrote it blind. The plugin's
+// existing-app path always fetches the app first (a plain fetch of a clean copy re-reads both row tokens), and the one
+// header edit it makes (the routing description) rides that copy, so no ordinary run meets the refusal. These pin what
+// that rests on, and what the plugin does if the refusal is ever reached.
+test('REAL BUNDLE: a header write is always conditional: a failed header read still sends the held ROW token', async () => {
+  const { sdk, state, writes } = await freshSdk({ ai: 'Route Q1', tokens: { row: 'W/"5"', content: 'W/"5"' } });
+  await sdk.fetchArtifact('app', APP_ID);
+  assert.strictEqual(await applyAppAiDescription(sdk, spec(WANT), APP_ID), true);
+  state.headerReadFails = true; // the SDK's own read of the header, made at push, blips
+  const res = await pushAppHeader(sdk, APP_ID, 'Probe', true);
+  assert.strictEqual(res.saved, true, JSON.stringify(res.error && res.error.message));
+  assert.deepStrictEqual(headerWrites(writes).filter((w) => w.verb === 'patch').map((w) => w.ifMatch), ['W/"5"'], 'conditional on the held row token, never a plain PATCH');
+  assert.strictEqual(state.ai, WANT);
+});
+
+test('REAL BUNDLE: the same failed read over another writer\u2019s header change is a refused concurrent edit, never an overwrite', async () => {
+  const { sdk, state, writes } = await freshSdk({ ai: 'Route Q1', tokens: { row: 'W/"5"', content: 'W/"5"' } });
+  await sdk.fetchArtifact('app', APP_ID);
+  assert.strictEqual(await applyAppAiDescription(sdk, spec(WANT), APP_ID), true);
+  // Another writer saves the header after this run's fetch (the row moves), and the SDK's header read then fails.
+  Object.assign(state, { description: 'Another writer', ai: 'Their routing text', tokens: { row: 'W/"7"', content: 'W/"8"' }, componentstate: 1, headerReadFails: true });
+  const res = await pushAppHeader(sdk, APP_ID, 'Probe', true);
+  assert.strictEqual(res.saved, false);
+  assert.strictEqual(res.error && res.error.code, 'VERSION_CONFLICT');
+  assert.throws(() => requireSuccessfulPush(res, 'app Probe'), (e) => e.code === 'version-conflict');
+  assert.strictEqual(state.ai, 'Their routing text', 'their header is intact');
+  assert.strictEqual(state.description, 'Another writer');
+  assert.ok(headerWrites(writes).filter((w) => w.verb === 'patch').every((w) => w.ifMatch === 'W/"5"'), 'the one attempt was conditional');
+});
+
+test('REAL BUNDLE: with no header token held, a header edit is refused before anything is written, and the next run — whose fetch reads one — saves it', async () => {
+  const { sdk, state, writes } = await freshSdk({ ai: 'Route Q1' });
+  state.noAppEtag = true; // the appmodule answers no version, so this fetch holds no token for its header
+  await sdk.fetchArtifact('app', APP_ID);
+  assert.strictEqual(await applyAppAiDescription(sdk, spec(WANT), APP_ID), true);
+  const writesBefore = writes.length;
+  await assert.rejects(pushAppHeader(sdk, APP_ID, 'Probe', true), (e) => {
+    assert.strictEqual(e.code, 'APP_UPDATE_NO_ETAG');
+    assert.match(e.message, /no concurrency token is held for its appmodule header/);
+    assert.match(e.message, /Nothing was modified/);
+    return true;
+  });
+  assert.deepStrictEqual(writes.slice(writesBefore), [], 'no PATCH at all — neither the header nor the sitemap');
+  // pushAppHeader reset the copy the refused push left holding the edit (discardUnrecordedEdits), so the next run is
+  // not stopped by it: its plain fetch would otherwise refuse to discard the edit once the server had moved.
+  assert.strictEqual((await sdk.listArtifacts('app')).find((a) => a.id === APP_ID).isDirty, false, 'the copy is the server\u2019s again');
+  // The next run: the platform answers versions, the plain fetch reads the header's, and the same edit saves — conditionally.
+  state.noAppEtag = false;
+  await sdk.fetchArtifact('app', APP_ID);
+  assert.strictEqual(await applyAppAiDescription(sdk, spec(WANT), APP_ID), true);
+  const res = await pushAppHeader(sdk, APP_ID, 'Probe', true);
+  assert.strictEqual(res.saved, true, JSON.stringify(res.error && res.error.message));
+  assert.deepStrictEqual(headerWrites(writes).filter((w) => w.verb === 'patch').map((w) => w.ifMatch), [state.etag]);
+  assert.strictEqual(state.ai, WANT);
+});
+
+test('REAL BUNDLE: an unchanged header needs no token: a sitemap-only push goes through with none held', async () => {
+  // The refusal is for a header EDIT. An app whose header the push does not change writes only its sitemap, so the
+  // plugin's ordinary rebuild of an existing app — which rewrites the sitemap and leaves the header alone — is untouched.
+  const { sdk, state, writes } = await freshSdk({ ai: 'Written by the platform.' });
+  state.noAppEtag = true;
+  await sdk.fetchArtifact('app', APP_ID);
+  assert.strictEqual(await applyAppAiDescription(sdk, spec(undefined), APP_ID), false, 'the spec leaves the routing description alone');
+  await sdk.updateElement('app', APP_ID, '/siteMap', appDef(spec(undefined), { forms: {}, views: {}, charts: {} }).siteMap);
+  const res = await sdk.pushArtifact('app', APP_ID);
+  assert.strictEqual(res.saved, true, JSON.stringify(res.error && res.error.message));
+  assert.ok(writes.some((w) => /\/sitemaps\(/.test(w.url)), 'the sitemap was written');
+  assert.strictEqual(headerWrites(writes).length, 0, 'the header was not');
 });

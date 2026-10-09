@@ -75,7 +75,9 @@ section MUST record commands and structured calls verbatim — not just their
 outcomes — because the eval harness greps the log for these tokens. Concretely:
 
 - Every shell command invocation is recorded on its own line as
-  `` `node --version` `` / `` `pac help` `` / `` `pac auth list` `` / `` `pac model list-tables --search '<term>'` ``. Include the literal flag values. Result goes on the next line.
+  `` `node --version` `` / `` `pac help` `` / `` `pac auth list` `` / `` `pac model list-tables --search '<term>'` `` /
+  `` `node "${PLUGIN_ROOT}/scripts/list-languages.js" --env '<envUrl>'` `` /
+  `` `pac model list-languages --environment '<envUrl>'` `` (the fallback below). Include the literal flag values. Result goes on the next line.
 - Every question **the orchestrator asks on your behalf** is recorded as
   `AskUserQuestion: <question text> → <selected option>`. The literal string
   `AskUserQuestion` is required. You do not make that call — you return a
@@ -156,30 +158,84 @@ These questions are asked by the ORCHESTRATOR, one at a time. Return them as a
 
 1. **"Create new page(s) or edit an existing one?"**
    - If edit: return immediately with `{ "action": "edit" }` — the orchestrator
-     handles edits inline, not through agents. **Do not run `list-languages` or
+     handles edits inline, not through agents. **Do not run `list-languages.js` or
      continue further.**
    - If new: continue to next question.
 
 ### Detect Configured Languages
 
-After confirming the user wants to create **new** pages, detect configured languages:
+After confirming the user wants to create **new** pages, detect the languages the
+environment has provisioned. Try the plugin's own script first: it reads them through the
+Dataverse Web API with the Azure CLI (`az`) token.
 
-```powershell
-pac model list-languages
+```bash
+node "${PLUGIN_ROOT}/scripts/list-languages.js" --env '<envUrl>'
 ```
 
-Note the output. If multiple languages are configured (or any non-English language),
-localization will be included in the generated code. Include the detected languages
-when reporting the environment to the user. Record each language's **LCID, Code and RTL**
-columns exactly as PAC prints them, for example:
+`<envUrl>` is the selected environment's `Environment Url` from the `pac auth list` table
+(Step 2; the `Org URL:` line of `pac org who` is the same address): the https origin only — no
+path, no trailing slash — as the `$ENV_URL` the Solution Selection query below passes to
+`dataverse-request.js`.
+
+**Exit 0** — stdout is one JSON line. Its non-ASCII characters (the dash in `summary`, an
+accented name) are written as `\uXXXX` escapes, so that no console code page can garble them:
+read the decoded strings.
+
+```json
+{"ok":true,"baseLanguage":{"lcid":1033,"code":"en-US","name":"English (United States)","rtl":false},"languages":[{"lcid":1033,"code":"en-US","name":"English (United States)","rtl":false},{"lcid":1025,"code":"ar-SA","name":"Arabic (Saudi Arabia)","rtl":true}],"unmapped":[],"summary":["1033 en-US \u2014 RTL: No","1025 ar-SA \u2014 RTL: Yes"]}
+```
+
+`languages` are the **provisioned** languages — the ones a page can be written in — in the
+server's order; `baseLanguage` is the environment's base language. If multiple languages are
+configured (or any non-English language), localization will be included in the generated
+code. Include the detected languages when reporting the environment to the user. Record each
+language's **LCID, Code and RTL** exactly as the script reports them — its `summary` lines
+are the form the plan carries, written with a real `—`, for example `1025 ar-SA — RTL: Yes`.
+
+The page builder takes text direction from that RTL value, never from a list of LCIDs it
+remembers (`references/localization.md` → *RTL Layout Support*).
+
+- **An LCID in `unmapped`** has no culture code in the plugin's table, so its `code`,
+  `name` and `rtl` are `null` and its summary line reads `<LCID> unknown — RTL: unknown`.
+  Record it that way and tell the user which LCID it is. Do not guess a code or a
+  direction: the page builder gives such a language no entry of its own.
+
+**Any non-zero exit — or no answer before your shell tool gives up — means the script could not
+read the languages; decide by the exit status, never by the wording of the message.** A failed read prints
+`{ "ok": false, "error": "…", "code": "…" }` on stdout (`code` only when the SDK gave one); a
+usage error, such as an `--env` that carries a path, prints nothing there and names the flag on
+stderr. The cause is most often the Azure CLI: not installed, not signed in, too slow to answer,
+or signed in to another tenant than the `pac` profile. `/genpage` has never needed `az` for a
+page over existing entities or mock data, so whatever the cause, do not stop and do not ask the
+user to run `az login`: fall back to the command that read the languages before this script,
+which signs in through `pac`:
+
+```powershell
+pac model list-languages --environment '<envUrl>'
+```
+
+Pass the same `<envUrl>` the script was given: without `--environment`, `pac` answers for the
+active organization of its auth profile, which is not necessarily the environment this plan is
+for, and the plan would carry another environment's languages under this one's URL.
+
+Its table carries the same facts:
 
 ```
 LCID Language                Code  RTL
 1025 Arabic (Saudi Arabia)   ar-SA Yes
 ```
 
-The page builder takes text direction from that RTL value, never from a list of LCIDs it
-remembers (`references/localization.md` → *RTL Layout Support*).
+Take each row's **LCID**, **Code** and **RTL** columns as the languages, and write the plan's
+lines from them as `<LCID> <Code> — RTL: Yes|No`. Then **say that you did**:
+
+- In `workflow-log.md`, record the script's command line with its result (its stdout, or its
+  stderr when stdout is empty), and then the `pac model list-languages` line with its table,
+  each verbatim.
+- In your report of the environment, say so: "Languages read with `pac model list-languages`:
+  the languages script could not read them (<its `error`, or its stderr>)."
+
+If `pac model list-languages` fails as well, report that and stop. Never assume the
+environment is English-only — the plan's localization decision depends on this answer.
 
 ### Continue Requirements Gathering
 
@@ -500,8 +556,9 @@ plan mode does not reach the user from a subagent.
 - [solution unique name and prefix — always shown, "Default / new" for code-only flows]
 
 ### Localization
-- [each detected language as `<LCID> <Code> — RTL: Yes|No` from `pac model list-languages`
-  (e.g. `1025 ar-SA — RTL: Yes`), or "English only — no localization needed"]
+- [each detected language as `<LCID> <Code> — RTL: Yes|No` — the `summary` lines of `list-languages.js`,
+  or the rows of `pac model list-languages` when you fell back to it (e.g. `1025 ar-SA — RTL: Yes`) —
+  or "English only — no localization needed"]
 
 ### Design
 - [styling preferences, features, accessibility notes from requirements]

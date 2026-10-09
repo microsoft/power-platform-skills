@@ -153,7 +153,8 @@ node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" '<working-dir>' '<kebab-
 > 1. Prerequisite validation (`node --version`, `pac help` version > 2.10.0)
 > 2. Auth verification (`pac auth list`, environment selection)
 > 3. The structured "Create new / Edit existing" question (`AskUserQuestion`)
-> 4. Language detection (`pac model list-languages`) — only on new-page path
+> 4. Language detection (`node "${PLUGIN_ROOT}/scripts/list-languages.js" --env '<envUrl>'`; when that exits
+>    non-zero, `pac model list-languages --environment '<envUrl>'` — the Azure CLI is not needed here) — only on new-page path
 > 5. Entity existence detection (`pac model list-tables --search`)
 > 6. App detection (`pac model list`) with proper selection prompts
 > 7. Plan-mode presentation and approval (`EnterPlanMode` / `ExitPlanMode`)

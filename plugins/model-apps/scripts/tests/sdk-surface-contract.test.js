@@ -74,6 +74,9 @@ const SKILL_SDK_SURFACE = [
   'getArtifact',
   'getColumnVisualization',
   'getEntityPrivileges',
+  // `scripts/list-languages.js` reads the environment's languages (the planner's language detection, in place of
+  // `pac model list-languages`): LCIDs only — three GETs, no workspace — and maps them to culture codes itself.
+  'getEnvironmentLanguages',
   // The dry run's read-only question to the app folder's workspace (workspaceBindingNote in lib/workspace-binding.js): which
   // environment it belongs to. It reads manifest.json and nothing else — unlike `listArtifacts`, which also parses every
   // saved copy it lists.

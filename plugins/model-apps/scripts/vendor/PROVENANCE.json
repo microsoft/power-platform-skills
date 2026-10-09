@@ -1,14 +1,14 @@
 {
-  "commit": "80316bfdd65dd1d99ee70c27286935f6dfb3ed76",
-  "subject": "Fix Business Function revision schema refresh",
+  "commit": "0ffa4384f9e2bba5a8d9d44f1d5d3ee2d72e6091",
+  "subject": "cds-maker-sdk: small fixes, open items (app publish bracket, Active BPF edit, metadata consistency, header writes) and getEnvironmentLanguages",
   "dirtySdkPackage": 0,
-  "libBuiltAt": "2026-10-07T00:10:51.090Z",
-  "newestSrcAt": "2026-10-06T23:07:06.716Z",
+  "libBuiltAt": "2026-10-08T15:16:23.180Z",
+  "newestSrcAt": "2026-10-08T15:15:33.120Z",
   "libIsStale": false,
   "nostub": false,
   "esbuildVersion": "0.28.1",
   "nodeVersion": "v20.20.2",
-  "builtAt": "2026-10-07T00:11:15.586Z",
-  "bundleSha256": "fd49776ae90c2ef4c0bc752a150c6dc52ba0752cf810e76cd06ac7d0e92c57ca",
-  "bundleBytes": 913558
+  "builtAt": "2026-10-08T15:21:49.272Z",
+  "bundleSha256": "4dacd9b9700dd0bd781edacad2dc2b9e73e73c816014fad4e447329b861bb408",
+  "bundleBytes": 930555
 }

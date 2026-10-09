@@ -18,13 +18,23 @@ const { dataverseOrigin, getAuthToken, makeRequest, tokenFailureMessage } = requ
 //   {"error":{"code":"0x80044150","message":" Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205"}}
 // Only the SQL number identifies it; the code and message text are shared with every other SQL error.
 // The vendored SDK recognizes the same marker for its own re-send (1 s / 2 s / 4 s) of reads, an app create,
-// PublishXml, a form create and a publisher create — requests this client has already re-sent by then, because it
-// re-sends every 5xx that is not a record delete or a $batch (TRANSIENT, below). So a deadlock the client clears
-// costs one re-send in all and the SDK's never fires; one that never clears is attempted up to the client's six
-// times per SDK attempt (24 in all, measured on a form create), a ceiling on a pathological case. A record DELETE
-// and a conditional-delete $batch are the exception: this client re-sends their deadlocks itself (below), and the
-// SDK re-sends an app delete only for a different answer — the platform's search-index race (HTTP 400, SQL 547) —
-// so the two never act on the same one. Both are pinned against the real bundle in sdk-resend-layers.test.js.
+// PublishXml, a form create, a view create and a publisher create — requests this client has already re-sent by
+// then, because it re-sends every 5xx that is not a record delete or a $batch (TRANSIENT, below). So a deadlock the
+// client clears costs one re-send in all and the SDK's never fires; one that never clears is attempted up to the
+// client's six times per SDK attempt (24 in all, measured on a form create and on a view create), a ceiling on a
+// pathological case. A record DELETE and a conditional-delete $batch are the exception: this client re-sends their
+// deadlocks itself (below), and the SDK re-sends an app delete only for a different answer — the platform's
+// search-index race (HTTP 400, SQL 547) — so the two never act on the same one. The deletes of a row-summary
+// removal are the one record delete whose deadlock the SDK re-sends as well (a 500 carrying SQL 1205, or a 400
+// quoting SQL's "chosen as the deadlock victim"): a 500 is re-sent by this client first, so one that clears costs
+// one re-send in all and one that never clears at most 16 attempts (this client's four per SDK attempt). All of it
+// is pinned against the real bundle in sdk-resend-layers.test.js.
+//
+// The one other `$batch` this client sends again is a change set that only CREATES columns (a new table's ordinary columns, see
+// isColumnCreateBatch), and only after a 429: the platform refused to start it, so nothing in it committed (a change set is
+// atomic) and it goes out again on the throttle schedule. After any other answer, a deadlock included, it is sent once, because a
+// change set can commit behind a lost or failed answer; the SDK has no re-send of its own for it, so the layers never multiply
+// here either. Pinned through the real client and bundle in table-columns-in-create.test.js and in sdk-http-client.test.js.
 const SQL_DEADLOCK_VICTIM = /\bSql Number:\s*1205\b/i;
 // At most this many re-sends of a deadlock victim, 1 s / 2 s / 4 s apart — the SDK's own schedule.
 const DEADLOCK_RESENDS = 3;

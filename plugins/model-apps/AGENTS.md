@@ -628,6 +628,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   before any other (`relationshipsInCreateOrder`, `lib/entity-provision.js`) so that none follows such a
   read whatever order the spec declares them in, and the repair's reads come after every create. Lifting
   the skip needs a live measurement of these reads ahead of a localized create in a two-language environment.
+  The vendored SDK now sends `Consistency: Strong` on every metadata read (see "Newer SDK behaviors" below);
+  whether that changes this effect has not been measured, so every rule above stands until a live
+  two-language rebuild says otherwise.
   **A lookup column's label defaults to the PARENT table's name** (ADO 6691205). An omitted
   `relationships[].lookup.displayName` reached the SDK as `lookupDisplayName: undefined`, which the
   vendored SDK fills with the referenced table's **logical name** (`label(opts.lookupDisplayName ??
@@ -1402,6 +1405,7 @@ scripts/
   list-connections.js          ← Connector discovery: PAC connections + Dataverse connection references
   create-connection-reference.js ← Creates Dataverse connectionreference rows for connector bindings
   list-custom-apis.js          ← Discovers bindable Custom APIs (Global + entity-bound) + parameter kinds (custom-api gated)
+  list-languages.js            ← /genpage planner: the environment's base language and each provisioned language (LCID, culture code, right-to-left) — the SDK's `getEnvironmentLanguages()` over the az-token client, three reads and no write, printed as one pure-ASCII JSON line. The planner's FIRST choice: when it exits non-zero, for any reason (most often the Azure CLI), the planner runs `pac model list-languages --environment '<envUrl>'` instead (as before the script existed, but pinned to the same environment), and says so
   add-page-to-solution.js      ← Adds GenPages and optional connection references to a solution
   provision-entities.js        ← CLI wrapper for entity provisioning (solution + data-model + sample-data; --language-code)
   provision-solution.js        ← Creates a Dataverse solution via the SDK
@@ -1428,10 +1432,11 @@ scripts/
   lib/
     entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data): a new table is created with only its primary name attribute and its ordinary columns follow in one atomic change set (`createColumns`), falling back to one request per column; the primary name column's length is always sent (100 unless the spec gives one) and, where the platform did not keep a length the spec gave, set last in the phase; and `mapLimit`, the bounded fan-out every parallel path reuses
     provision-input.js         ← Input validation for entity provisioning (the entry gate of `/genpage` and `/app-builder`; it applies `app-spec.js`'s own `primaryNameLengthProblem`, so a name-column length is refused here exactly as in `validateAppSpec`)
-    dataverse-auth.js          ← Shared auth + HTTP helpers (`az account get-access-token`, memoized per process and replaced on a 401 — a synchronous `az` call, which a caller running other probes beside the request opts out of with `refreshOn401: false`; responses decoded as UTF-8 once; an environment URL is used only as a Dataverse https origin, `dataverseOrigin`; a request path must stay under `/api/data/v9.2/` as both the client and the server resolve it, `webApiUrl`), plus the CLI arg contract (parseArgs/validateFlags)
+    dataverse-auth.js          ← Shared auth + HTTP helpers (`az account get-access-token`, memoized per process and replaced on a 401 — a synchronous `az` call, which a caller running other probes beside the request opts out of with `refreshOn401: false`; responses decoded as UTF-8 once; an environment URL is used only as a Dataverse https origin, `dataverseOrigin`; a request path must stay under `/api/data/v9.2/` as both the client and the server resolve it, `webApiUrl`), plus the CLI arg contract (parseArgs/validateFlags) and the result printer (`emitResult`, whose `{ ascii: true }` option writes stdout JSON as pure ASCII for a script an agent reads off a console)
     process-runner.js          ← how every script starts az/pac/npm/npx/git: the executable is resolved to an absolute path on PATH, never the project folder, and started without a shell (a Windows batch shim runs through cmd.exe with its arguments checked); `killProcessTree` ends a stalled child AND everything it started (`taskkill /T /F` on Windows, where `pac.cmd` is cmd.exe → pac.exe, looked up with the System32 folder first on PATH so a PATH without it cannot leave the tree running, and with its window hidden; SIGKILL to the descendants `ps` lists elsewhere), through the same audited calls; a child that has already exited is only asked to die, never ended by its pid, which may be another process's by then; synchronous, and it never throws
     cli-failure.js             ← how a CLI child failed (timeout / missing / failed), the Azure CLI budget (60 s, `POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS`), so a slow `az` is never reported as missing or signed out, and the budget of one `pac model genpage` call (3 min to list or download, 10 min to upload; `POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS`, 1 s to 60 min, sets all of them); `commandArg` quotes a path with white space so a command a message tells you to paste stays one argument
     nearest-name.js            ← pure single-edit "did you mean" matcher for closed vocabularies (CLI flags, FetchXML operators)
+    lcid-cultures.js           ← pure: a Windows language id (LCID) → culture code and right-to-left, from a table of Windows' own culture data (what `pac` printed; the SDK reports numbers only, and no Intl API maps an LCID); a language id with no entry stays numeric and is reported, never guessed (`list-languages.js`)
     supported-dependencies.js  ← Single source of truth for runtime + dev deps versions
     feature-flags.js           ← Default-OFF feature flag probe + Custom API script backstop
     sdk-build.js               ← app-builder build engine (idempotent; incl. the pages phase)
@@ -2370,6 +2375,12 @@ component types, the temp-workspace cleanup) rather than regex-matching the sour
 `Array`/`Object` prototypes, so every array the script builds would fail `assert.deepStrictEqual`
 against a host array with "same structure but not reference-equal".
 
+**Testing a CLI in a real process:** what only a process shows — its exit status, the one line on stdout and
+that line's bytes — is tested by spawning the script. `scripts/tests/helpers/fake-org-languages-preload.js`
+(`node --require …`) swaps the az-token client for a fake Dataverse that answers the three language reads, so
+`list-languages.test.js` runs the real script, bundle and `emitResult` with no Azure CLI and no network; with
+the PATH emptied, the same test shows what a machine with no `az` gets.
+
 ## Dataverse Access From Scripts
 
 **Default: go through the vendored SDK.** Anything the SDK models — tables, columns, relationships,
@@ -2670,24 +2681,124 @@ real bundle, because a stub stays green through a change in the SDK's own rule.
   or an environment that answers a replayed create with 404 halts as before, now with the SDK's reason.
   The header-carrying `sdk` does not get the option: it does no workspace I/O, so it never creates forms.
 - **An AI override saved but not yet published is `pendingPublish`** — see the AI features note above.
-- **A form or dashboard delete reads the row's kind first** — one more GET
-  (`RetrieveUnpublished()?$select=type`) — and the SDK refuses another kind with
-  `SYSTEMFORM_KIND_MISMATCH`. Teardown reports that as the step's failure in the SDK's own words, never
-  as "already gone". The plugin's own pin checks (`resolveExistingFormId`, `findPinnedDashboard`)
-  refuse a wrong pin first, so this is the second line.
+- **A form or dashboard is read and written only as its own kind**
+  (`scripts/tests/form-kind-real-bundle.test.js`, `form-order-real-bundle.test.js`,
+  `sdk-resend-layers.test.js`). A fetch and a push decode the row's `type` from a read they already make — a
+  fetch's `RetrieveUnpublished()` selects it, a push's content-token read selects `formid,type` — so the check
+  costs no request; only a delete adds one, a `RetrieveUnpublished()?$select=type` before it, because it reads
+  nothing else first (forms are types 2, 6, 7 and 11, dashboards 0 and 10). The SDK refuses
+  another kind — or a row whose type it cannot read — with `SYSTEMFORM_KIND_MISMATCH`, naming the kind it
+  found; a push that would change an existing form's type is refused `FORM_TYPE_IMMUTABLE` (the plugin never
+  changes one). A fetch refused this way stores nothing, a push of a copy whose row has since become another
+  kind writes nothing, and teardown reports a refused delete as the step's failure in the SDK's own words,
+  never as "already gone". Download's dashboard read reports a sitemap dashboard subarea whose id is a form as
+  unreadable and leaves it out, so the usual gate stops the run. The plugin's own pin checks
+  (`resolveExistingFormId`, `findPinnedDashboard` — a type-0 dashboard only) refuse a wrong pin first, so this
+  is the second line. A fake Dataverse that stores a systemform must answer its `type` (a Main form is 2),
+  honour `$select` and leave a null column out, as the platform does; otherwise every form read in a
+  real-bundle test is refused.
+- **An app header write is never unconditional** (`scripts/tests/app-ai-description-real-bundle.test.js`). The
+  SDK writes the app's name, description and routing description conditioned on the appmodule ROW token a
+  fetch read, even when its own read of the header fails (the header PATCH carries `name`, `description` and,
+  when one is supplied, `aiappdescription`; the icon is written at create only). A header edit made while it
+  holds no token throws `APP_UPDATE_NO_ETAG` before anything is written (it used to send the PATCH plain,
+  which overwrote another writer's header). The plugin edits an existing app's header only on a copy it has
+  just fetched, and only the routing description — every other header field is written at create — so the
+  build does not meet the refusal; a sitemap-only push needs no header token at all. If a push ever did meet
+  it, `pushAppHeader` resets the copy and the next run, whose fetch reads a token, saves the edit.
+- **Metadata reads ask for the latest definition** (`scripts/tests/sdk-uptake-contract.test.js`). The SDK
+  sends `Consistency: Strong` on every read of `/EntityDefinitions`, `/RelationshipDefinitions` and
+  `/GlobalOptionSetDefinitions` — about 10% more per read — and on no other path, so a read right after a
+  metadata write is not served the definition from before it, and a schema write drops the cached
+  definitions of the tables it changes. The plugin's HTTP client passes a caller's headers through, so the
+  header reaches the wire. The plugin still carries three waits for the metadata-read lag (`lib/entity-provision.js`),
+  and keeps them, because it is not measured whether `Consistency: Strong` leaves any lag: `readTextColumnLength`
+  asks a 404 on the attribute of a table created a moment ago again, twice; `confirmInlineColumns` re-reads the
+  attribute collection of a new table, up to three reads in all; and the relationship create, told that its
+  name is already used while no read shows the row, reads twice more (about 2 s, then 4 s) before it calls the
+  name unidentified. They are candidates for removal once a live run shows no lag. The `MetadataCache` 400 that
+  a form, view or chart lookup on a table that does not exist yet answers (`resolveExistingFormId`, the plan's
+  artifact probes) is the platform's answer to a read of a DATA table, which the header does not cover, so
+  that handling stays. See the localized-label note above for the one effect that is not measured.
+- **The environment's languages come from the SDK, with `pac` behind it** (`scripts/list-languages.js`,
+  `lib/lcid-cultures.js`; `scripts/tests/list-languages*.test.js`, `lcid-cultures.test.js`).
+  `getEnvironmentLanguages()` makes three reads — the organization's base language,
+  `RetrieveProvisionedLanguages()`, `RetrieveAvailableLanguages()` — and touches no workspace; it is strict, so
+  a response of an unexpected shape throws `ENVIRONMENT_LANGUAGES_UNREADABLE` and a failed read throws its own
+  error. The planner runs the script first: it prints one pure-ASCII JSON line with the base language and, for
+  each provisioned language, its LCID, culture code and whether it is right-to-left. The SDK returns numbers
+  only, so the host maps them with a table of Windows' own culture data; an LCID the table does not name stays
+  numeric (the base language's too), is reported in `unmapped` and on stderr, and is never given a guessed
+  code or direction. The script writes nothing and emits no telemetry of its own.
+  **The script is the preferred source, not the only one.** It reads through the `az` token, and `/genpage` has
+  never needed `az` for a page over existing entities or mock data (README). So when it exits non-zero — for
+  any reason; most often the Azure CLI is missing, signed out, slow or signed in to another tenant — the
+  planner runs `pac model list-languages --environment '<envUrl>'`, as before the script existed but pinned to the
+  environment the script was given (without the flag `pac` answers for the active organization of its auth
+  profile, which is not necessarily the environment the plan is for), records both in the log and says so,
+  and stops only when `pac` fails too. The rule is the exit status, on purpose: the SDK reports a missing
+  Azure CLI, a slow one, a token another tenant refuses and a dropped connection alike, as `CONNECTION_ERROR`
+  (`statusCode` 0, or the HTTP status of a refusal), so no code tells them apart, and a rule keyed on the
+  wording of the sign-in advice (`Run 'az login' first`) is met by a signed-out Azure CLI only. The planner's section
+  and README's promise are pinned (`list-languages.test.js`), and so is the eval grader's reading of a run
+  that fell back (`phase-expectations.test.js`). The plugin's own `readProvisionedLanguages` /
+  `readOrgLanguageCode` (`lib/dataverse-auth.js`) stay: they run before an SDK exists (it needs the language
+  at construction) and fail soft, where the SDK's read is strict.
 - **Two layers re-send, and for a delete they add** (`scripts/tests/sdk-resend-layers.test.js` pins every
   count). The HTTP client re-sends a 429 or 5xx — except a record delete and a `$batch`, which it
   re-sends only for a deadlock (SQL 1205) or a 429. The SDK re-sends a deadlock for reads, an app
-  create, `PublishXml`, a form create and a publisher create, and re-sends an app delete that hits the
-  platform's search-index insert race (HTTP 400, SQL 547). A delete's two triggers are different
-  answers, so a race, then a deadlock, then success is three change sets, and a persistent one of
+  create, `PublishXml`, a form create, a view create, a publisher create and each delete of a row-summary
+  removal (there a 400 quoting SQL's "chosen as the deadlock victim" counts too), and re-sends an app delete
+  that hits the platform's search-index insert race (HTTP 400, SQL 547). An app delete's two triggers are
+  different answers, so a race, then a deadlock, then success is three change sets, and a persistent one of
   either is four — never four times four. A POST's deadlock is a 500 the client has already re-sent by
   the time the SDK sees it, so one deadlock costs one re-send in all; only a deadlock that never
   clears multiplies, bounded by the client's six attempts times the SDK's four (24 requests, measured
-  on a form create).
-- **A row-summary removal deletes the AI model only when it is the one `configureRowSummary` made**
-  (named `<table> row summary`, built from the row-summary template), and always the skill row, so
-  teardown's best-effort `aiSummary` step leaves another maker's model alone.
+  on a form create and on a view create). A row-summary delete is re-sent by both layers for a 500/1205
+  (one that clears costs one re-send; one that never clears at most 16, the client's four times the SDK's
+  four), and by the SDK alone for the 400 form.
+- **A row-summary removal settles each delete** (`sdk-resend-layers.test.js`). The skill row is deleted first
+  and alone, then the AI model — only when it is the one `configureRowSummary` made (named
+  `<table> row summary`, built from the row-summary template). A delete is re-sent while it loses a deadlock
+  and, when its answer is lost or odd, settled by reading the row back. A model another component still
+  uses is refused by the platform (HTTP 400, `0x8004f01f`) and KEPT, which is success — a removal that threw
+  there would fail the teardown step of every table whose model another component had adopted. What the SDK
+  cannot settle throws `ROW_SUMMARY_REMOVAL_UNCONFIRMED` (the skill-row delete's outcome unknown, naming our
+  model) or `ROW_SUMMARY_MODEL_NOT_DELETED` (the model left behind, naming it). Teardown's `aiSummary` step
+  still treats every failure as best-effort and does not surface these: the table delete that follows reports the
+  dependency if the skill row is still there, and a model left behind blocks only a later row summary for the
+  same table, by name.
+- **Changes in the same SDK release that no plugin path reaches** — read these again before a plugin change
+  reaches one. `importSolution` now requires `overwriteUnmanagedCustomizations` and `publishWorkflows` (no
+  script calls it, and `sdk-surface-contract.test.js` fails on a new call until it is listed). An Active
+  business process flow is edited in one conditional change set and stays Active — it needs a client with
+  `postRaw`, which the plugin's has — where the build only creates a flow and toggles the state of one that
+  exists, never editing a definition.
+- **Changes in the same release that the plugin's paths DO reach, with the outcome unchanged** — re-test them
+  when one of these paths changes.
+  - *Commands.* A command push writes only its own table's bar, with every check before the first write. The
+    build's commands phase is a command push (`createArtifact('command')`, then `pushArtifact`), so the
+    anchoring, the table-id resolution and the write plan run on it; the requests are the same two as before
+    — one table-id read, one write — and a bar that exists is skipped (`command-real-bundle.test.js`).
+  - *The app-publish token bracket costs requests.* Every `publishArtifact('app')` — the app shell's rewrite of
+    an existing app, the pages finalizer, the AI re-confirm step, and phase 8's envelope when it carries the
+    app; a typical build makes two or three — now reads the app before the publish and again after it, to adopt
+    the tokens the publish rotated when its content is unchanged and its whole token vector was proven, so
+    that a header edit right after needs no fetch. That is about **10 more GETs per app publish** (probed over
+    a fake app after a fetch: none on the previous bundle, ten on this one). The adoption is of no use to the
+    plugin, which fetches before every header or sitemap write because a pages run changes the live app
+    between its first fetch and its finalize, and no step of it was a workaround for a token a publish
+    rotated. The bracket is best-effort: a failed or throttled read leaves the app un-rebaselined and never
+    fails the publish.
+  - *Component proofs.* An app create or update that pins tables reads the app's current layer at most once for
+    its component proofs — the table proof and, when the spec lists the Main forms of a table, the Main-form
+    proof — where each proof read it for itself (one read fewer when both run; the same requests when only the
+    table proof does). An ambiguous layer fails closed (`APP_COMPONENTS_UNVERIFIED`): a create unwinds, an
+    update reports a warning. The plugin's own component reader (`lib/app-components.js`) is separate.
+  - *Unchanged pushes.* A push of an unchanged artifact skips its artifact write and reads less from the
+    workspace. The plugin's own push-if-changed decision (`hasUnsyncedEdits`, which asks the SDK's
+    `diffArtifact`: the copy against its snapshot) is made before the push and is unaffected
+    (`rebuild-writes-real-bundle.test.js`).
 - **Left off: `readConcurrency`**, which overlaps a generative page's file downloads and
   `fetchSolution`'s component reads. The plugin makes neither read — pages go through
   `pac model genpage`, and no script fetches a solution — so the option would change nothing.
