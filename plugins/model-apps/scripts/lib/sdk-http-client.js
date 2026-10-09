@@ -17,7 +17,14 @@ const { dataverseOrigin, getAuthToken, makeRequest, tokenFailureMessage } = requ
 //   HTTP 500 from …/api/data/v9.0/workflows(<id>):  Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205
 //   {"error":{"code":"0x80044150","message":" Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205"}}
 // Only the SQL number identifies it; the code and message text are shared with every other SQL error.
-// The vendored SDK recognizes the same marker for its own re-send of reads, app creates and PublishXml.
+// The vendored SDK recognizes the same marker for its own re-send (1 s / 2 s / 4 s) of reads, an app create,
+// PublishXml, a form create and a publisher create — requests this client has already re-sent by then, because it
+// re-sends every 5xx that is not a record delete or a $batch (TRANSIENT, below). So a deadlock the client clears
+// costs one re-send in all and the SDK's never fires; one that never clears is attempted up to the client's six
+// times per SDK attempt (24 in all, measured on a form create), a ceiling on a pathological case. A record DELETE
+// and a conditional-delete $batch are the exception: this client re-sends their deadlocks itself (below), and the
+// SDK re-sends an app delete only for a different answer — the platform's search-index race (HTTP 400, SQL 547) —
+// so the two never act on the same one. Both are pinned against the real bundle in sdk-resend-layers.test.js.
 const SQL_DEADLOCK_VICTIM = /\bSql Number:\s*1205\b/i;
 // At most this many re-sends of a deadlock victim, 1 s / 2 s / 4 s apart — the SDK's own schedule.
 const DEADLOCK_RESENDS = 3;

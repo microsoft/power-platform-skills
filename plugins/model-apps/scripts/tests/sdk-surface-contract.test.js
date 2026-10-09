@@ -68,6 +68,10 @@ const SKILL_SDK_SURFACE = [
   'getArtifact',
   'getColumnVisualization',
   'getEntityPrivileges',
+  // The dry run's read-only question to the app folder's workspace (workspaceBindingNote in lib/workspace-binding.js): which
+  // environment it belongs to. It reads manifest.json and nothing else — unlike `listArtifacts`, which also parses every
+  // saved copy it lists.
+  'getManifest',
   'getSolution',
   'initWorkspace',
   'insertStatusValue',

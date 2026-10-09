@@ -405,7 +405,8 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `entities[]`. `scripts/lib/app-components.js` is the one home for component inventory, pin/proof
   and layer reads. It resolves `MetadataId,EntitySetName` before any app write, pins only missing
   tables right after app identity exists on both create and reuse, then re-resolves the CURRENT
-  layer and proves the rows. An SDK create already publishes, so a fresh app's new pins are
+  layer and proves the rows. An SDK create already publishes (the build keeps it that way — see
+  "Newer SDK behaviors" under `## Building & Testing`), so a fresh app's new pins are
   published again even without `--publish`; an existing app's normal finalizer/publish includes
   them. Dropping a table from the list never unpins it.
   **`app.mainForms` is a name-based Main-form allow-list for sitemap Entity tables.** Names resolve
@@ -481,6 +482,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   sequential deletes, so a transport without it fails every teardown with `APP_DELETE_NOT_ATOMIC` (see
   that file for the wire contract, why a `$batch` is sent once unless its answer proves nothing in it
   ran — a SQL deadlock or a 429 — and why a conditional write that gets no answer is never re-sent).
+  The SDK re-sends an app delete itself when the platform's search-index insert race refuses it (HTTP
+  400, SQL 547) — an answer this client never re-sends — so the two layers add and never multiply
+  (counts pinned in `scripts/tests/sdk-resend-layers.test.js`).
   Pinned by
   `scripts/tests/app-delete-real-bundle.test.js` against the real bundle — every other teardown test
   drives a mock and would stay green through a regression here.
@@ -626,7 +630,11 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   dropped and counted in `droppedSubareas`.
 - **`scripts/verify-model-app.js` → `scripts/lib/verify-spec.js`** — read-only reconcile of the App Spec
   against what actually deployed; exits non-zero and lists anything missing, catching silent partial
-  builds. Checks **existence** (entities/columns/views/charts/forms + sitemap subareas + icons + pages by
+  builds. It works through a throwaway SDK workspace, never the folder's `.maker-workspace` (which belongs to
+  the environment it was first opened for): every read it makes goes to the server, so it verifies any
+  environment the app is deployed to and creates or binds nothing in the folder. It only READS the build's
+  baseline, `last-applied.json`, from `--workspace`, and only when that baseline describes this
+  environment. Checks **existence** (entities/columns/views/charts/forms + sitemap subareas + icons + pages by
   id) AND, best-effort, **content** so an *unapplied edit* is caught (not just a missing artifact): a
   view's **column set** (parsed from `layoutxml`; every spec column must be deployed — an extra deployed
   column passes by design, so a column REMOVED from the spec, which the additive `reconcileView` leaves
@@ -688,10 +696,31 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   no AI features while reporting success. The build surfaces **every** non-success bucket as a `⊘` warning plus in the phase detail
   — buckets are read off the result object, so one a future SDK adds is reported verbatim rather than
   silently dropped — and `--verify` fails on any of them. **An app-scope setting WRITE is a no-op until
-  the app is published** (live-measured: the write reports `notPersisted` and `appsettings` holds no row
-  at all, while publishing and re-issuing the same call applies every feature). This is not read lag, so
+  the app is published** (live-measured: the write reported `notPersisted` and `appsettings` held no row
+  at all, while publishing and re-issuing the same call applied every feature). This is not read lag, so
   re-*proving* after publish cannot fix it — the build **re-issues** the write after publish for anything
-  the first attempt did not apply, `skipped` INCLUDED. On a fresh app nothing persists pre-publish, so
+  the first attempt did not apply, `skipped` INCLUDED. (The SDK now also proves a write against the app's
+  UNPUBLISHED layer — `appsettings/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()` — so a row it
+  saved but that is not published yet comes back `applied` with `pendingPublish` instead of
+  `notPersisted`. That is still not in force: `--verify` and the runtime read the published row. So
+  `rebucketPendingPublish` in `lib/ai-app-settings.js` moves it out of `applied` into a `pendingPublish`
+  bucket of the plugin's own, and the post-publish pass gives it the publish — not a second write, since
+  its row is already saved: with `--publish` the publish phase has put it in force and the pass only
+  PROVES it, otherwise the pass fetches and publishes the app first. A feature the SDK did not save at all
+  is still re-issued after that publish, and the re-issue's result is filed the same way: a publish that
+  failed, or could not be confirmed, leaves the row in the unpublished layer, and the SDK then answers
+  `applied` + `pendingPublish` again. Whatever the proof does not find in the published layer is reported
+  `NOT YET PUBLISHED` (and listed under `pendingPublish` in `--json`), never `applied`. That proof reads
+  an absent row up to three times, 500 ms apart — the budget `--verify` has (`AI_PROOF_BUDGET`, one value
+  in `lib/ai-app-settings.js`; `sdk-build.test.js` and `verify-spec.test.js` pin both sides) — because a
+  publish can answer before its row is readable, and a single read
+  reported that lag as `NOT YET PUBLISHED` in a run whose own `--verify` passed. A check that could not run
+  (the app, the definition or the row could not be read) says so first in the warning — "the check after
+  the publish could not run: …" — ahead of what the SDK said, so a failed read is never taken for a look that
+  found nothing. Without the move,
+  a build with no `--publish` would end with unpublished rows that `--verify` fails on. Pinned in
+  `ai-app-features-real-bundle.test.js`, `sdk-build.test.js` and `sdk-build-publish-batch.test.js` — the
+  batched publish tells the pass whether the app's own publish went through.) On a fresh app nothing persists pre-publish, so
   the gate diagnosis fires for every feature that has one; abandoning those would leave `--verify`
   failing on a row the build declined to write a second time, and a reported customer environment ran a
   working app at `NLGridSearchSetting = 2` with `EnableNLGridSearch` off. Anything still `skipped` after
@@ -888,6 +917,7 @@ scripts/
     apply-snapshot-store.js    ← changed-only: atomic snapshot write (writeFileAtomic, also the baseline's) + workspace lease + invalidate/claim/tombstone/delete + distrust marker
     apply-snapshot-index.js    ← changed-only: build result.created → snapshot artifact map
     workspace-paths.js         ← the `.maker-workspace` name + the guard that gates destructive --clear-workspace cleanup
+    workspace-binding.js       ← a persistent `.maker-workspace` belongs to the environment it was first opened for (only `--apply` opens it; a dry run uses a temporary workspace): turns the SDK's `WORKSPACE_ORG_MISMATCH`, and a manifest the JSON parser rejects, into the build's halt (both environments as origins, the safe remedies — the teardown one only for another environment that was built in, with the folder printed on its own line; a folder that was only opened gets no build-there/teardown advice; a folder with no usable environment is moved aside, not deleted; never clears or re-binds) and into the dry run's warning
     changed-only-flow.js       ← changed-only: --changed-only orchestration (decide fast/full, live identity, snapshot lifecycle)
     projection.js              ← changed-only: pure post-apply verifiers (form placement / sitemap / page dual-hash)
     detect-browser.js          ← System Chromium/Edge/Chrome detection (used by the launcher)
@@ -1921,6 +1951,11 @@ artifacts, 2xx statuses, green build. The test therefore does two things: a **so
 fails on any un-awaited `provision.*`/`sdk.*` call to those methods (annotate a deliberate one with
 `sdk-async-ok`), and a **dynamic check** that the real bundle still returns Promises for exactly that
 list — so if a future SDK makes one synchronous again, the scan can't go on enforcing a dead rule.
+The same file pins the **throwaway-workspace lifecycle**: a CLI that makes a temporary workspace must
+build its SDK behind a `try` whose own `catch` or `finally` removes it (`cleanup()`, `dispose()` or
+`rmSync`), or a failed construction strands the directory. The guard is read from the syntax tree — the
+first `try` after the `mkdtempSync`, in the same function — so a cleanup elsewhere in the file neither
+satisfies the check nor breaks it by changing shape.
 
 `scripts/tests/workspace-projection-real-bundle.test.js` — the **upgrade** guard. The SDK refuses to
 push a workspace copy stamped with another parser version (`ARTIFACT_PROJECTION_STALE`), so a
@@ -1941,6 +1976,107 @@ a fence), so rebuilding the same spec over a cleared copy could overwrite that c
 to look at the change in Maker and put into the spec what should stay, then make the same reset. (A
 re-download is no substitute: it captures no forms, views or charts, and an interrupted first build
 can leave them before the app exists.)
+
+**Newer SDK behaviors the plugin adopts, and the options it leaves off.** Each is pinned against the
+real bundle, because a stub stays green through a change in the SDK's own rule.
+
+- **A workspace belongs to its environment** (`scripts/tests/workspace-binding.test.js`). The SDK
+  records the environment a workspace was first opened for in `manifest.json` and refuses an SDK for
+  another one (`WORKSPACE_ORG_MISMATCH`) before it reads or writes anything. Only `build-model-app.js
+  --apply` opens the app folder's workspace — a dry run, download, `ai-preflight`, the `provision-*`
+  scripts, teardown and the standalone verify use throwaway ones (verify reads only the build's
+  `last-applied.json` from the folder, so it verifies any environment the app is deployed to and never
+  binds a fresh folder). A **dry run** works in a temporary workspace inside the SDK's own temp dir and
+  creates nothing in the app folder: opening binds, a preview builds nothing, and a folder it bound to the
+  environment it only previewed would refuse the environment the operator meant (a preview against the wrong
+  environment followed by `--apply` against the right one would be told the folder's saved copies belong to
+  the wrong environment, though nothing was built there). Every read its live plan makes goes to the server, so it
+  needs nothing from the folder; the folder is only ASKED, read-only, which environment it belongs to
+  (`getManifest`: it parses `manifest.json` and no saved copy, and writes nothing), and the answer is a `⚠` note on stderr
+  (`workspaceBindingNote`) that an `--apply` would stop — the preview itself, its plan and its "No spec
+  changes since the last apply" advisory (read from the baseline file) are unchanged. The question is not
+  a listing of the app artifacts, which would check the environment just as well: listing also parses every
+  artifact's saved copy and its metadata (to flag unpushed edits), so a corrupt copy in a folder that belongs to
+  THIS environment would throw the very error a corrupt manifest does and be reported as one. A saved copy says
+  nothing about which environment a folder belongs to, so the preview reads none and says nothing about one (an
+  `--apply` opens such a folder; the SDK meets the copy when it first reads it). A link or a file where
+  the folder should be is still refused; a folder that is not there is just one with no workspace. So
+  `--apply` is the one entry point that turns the refusal into a halt (`lib/workspace-binding.js`) that
+  names both environments as normalized origins, never the manifest's own text, and offers the safe ways
+  forward: build against the environment the workspace belongs to, use a fresh app folder or `--workspace`,
+  or — only when that environment's copy of the app is no longer wanted — tear it down there with
+  `--clear-workspace`. The folder is printed on a line of its own and the teardown command takes it as
+  `--workspace <the folder printed above>`, never embedding it: teardown otherwise clears the folder beside
+  its spec, and no quoting of a path is right for every shell (inside double quotes PowerShell and POSIX
+  shells still expand `$name`, so a folder named `$work` would point the delete elsewhere; single quotes are
+  not quotes in cmd.exe), so the halt says to pass it quoted for the operator's shell. Teardown already keeps
+  the folder while a page-ownership receipt remains. A folder that holds **nothing a build saved** (the SDK's
+  manifest listing no artifact, and its empty folders, and nothing else — `holdsNothing`, which is
+  conservative: any other file, a link or an unreadable entry counts as saved work) was only ever opened —
+  by a preview of an earlier release, or a build that stopped at its start — so nothing was built in that
+  environment: the halt says so and offers neither `--env <that environment>` nor the teardown, only
+  deleting or moving the folder aside, or a fresh one. A manifest the JSON parser rejects would otherwise
+  surface the parser's own "Unterminated string in JSON at position N" (no path, no advice); it is
+  recognized by the error's name (enough, because opening a workspace and asking it for its manifest parse
+  `manifest.json` and no other file, so a corrupt saved copy is never mistaken for it), never echoed (newer
+  Node versions quote the file), and halts with
+  `WORKSPACE_MANIFEST_INVALID` as the folder with no usable environment does: move it aside — rename it, do
+  not delete it, it can hold page-ownership receipts and the baseline a new workspace does not get back.
+  The plugin never clears or re-binds a workspace for the operator — the SDK's own remedy,
+  `cleanWorkspace()`, discards its saved copies, metadata and baselines, a copy can hold an edit that was
+  never pushed, and the receipts and baseline beside them are the other environment's — and no script
+  calls it. Not even an empty folder is cleared automatically: the check and the act cannot be made atomic
+  against a build that starts in that folder in between.
+  The SDK compares the recorded URL as text (trimmed, lower-cased, trailing slashes dropped), and `--env`
+  takes an https origin and nothing more, so the one spelling of the SAME environment a run of this
+  plugin can meet is the `.api.` host (`<org>.api.crm.dynamics.com` against `<org>.crm.dynamics.com`).
+  The plugin does not fold the two — the baseline, the receipts, the token and the HTTP client's origin
+  guard all key on the host it was given — so the halt says it is the same environment (never "another"),
+  gives the host to re-run with, and offers no teardown, whose target would be the run's own
+  environment. A manifest another tool wrote with a path or port has no `--env` that matches it, and
+  gets a fresh folder only. Handing the SDK one canonical origin would prevent neither: it already
+  ignores case and trailing slashes, and the plugin does not treat the two hosts as one.
+- **`createRecovery: 'adoptExact'` on the SDK that creates forms** (`provisionSdk` in
+  `build-model-app.js`; `scripts/tests/form-create-recovery-real-bundle.test.js`). The HTTP client
+  re-sends a create whose answer never arrived, and the platform answers the re-send 412 because the SDK
+  mints the `formid`. The SDK then reads that row and adopts it only when it is exactly what was sent (a
+  Main form with the same XML, name, table and type). The push comes back `{ saved: false,
+  adoptedExisting: true }` having written nothing, so `pushFailed` (`lib/entity-provision.js`) does not
+  count it as a failure and `reportPartialPush` says it happened. An inexact row, a Quick Create form,
+  or an environment that answers a replayed create with 404 halts as before, now with the SDK's reason.
+  The header-carrying `sdk` does not get the option: it does no workspace I/O, so it never creates forms.
+- **An AI override saved but not yet published is `pendingPublish`** — see the AI features note above.
+- **A form or dashboard delete reads the row's kind first** — one more GET
+  (`RetrieveUnpublished()?$select=type`) — and the SDK refuses another kind with
+  `SYSTEMFORM_KIND_MISMATCH`. Teardown reports that as the step's failure in the SDK's own words, never
+  as "already gone". The plugin's own pin checks (`resolveExistingFormId`, `findPinnedDashboard`)
+  refuse a wrong pin first, so this is the second line.
+- **Two layers re-send, and for a delete they add** (`scripts/tests/sdk-resend-layers.test.js` pins every
+  count). The HTTP client re-sends a 429 or 5xx — except a record delete and a `$batch`, which it
+  re-sends only for a deadlock (SQL 1205) or a 429. The SDK re-sends a deadlock for reads, an app
+  create, `PublishXml`, a form create and a publisher create, and re-sends an app delete that hits the
+  platform's search-index insert race (HTTP 400, SQL 547). A delete's two triggers are different
+  answers, so a race, then a deadlock, then success is three change sets, and a persistent one of
+  either is four — never four times four. A POST's deadlock is a 500 the client has already re-sent by
+  the time the SDK sees it, so one deadlock costs one re-send in all; only a deadlock that never
+  clears multiplies, bounded by the client's six attempts times the SDK's four (24 requests, measured
+  on a form create).
+- **A row-summary removal deletes the AI model only when it is the one `configureRowSummary` made**
+  (named `<table> row summary`, built from the row-summary template), and always the skill row, so
+  teardown's best-effort `aiSummary` step leaves another maker's model alone.
+- **Left off: `readConcurrency`**, which overlaps a generative page's file downloads and
+  `fetchSolution`'s component reads. The plugin makes neither read — pages go through
+  `pac model genpage`, and no script fetches a solution — so the option would change nothing.
+  `scripts/tests/sdk-opt-ins.test.js` fails if a script starts to make one of those reads without
+  passing it.
+- **Left off: creating the app as a draft (`published: false`), so the final publish covers it.** A
+  draft is not in the published projection: a by-id read answers 404 and `findArtifact('app')` finds
+  nothing, and so does every other probe the build, verify and download make — the collision gate, the
+  sitemap and navigation reads of the pages phase, the app-shell "does it exist" check. A failed first
+  build would leave an app its own re-run cannot see, the pages phase right after the create would find
+  no sitemap, and a build without `--publish` would never publish it. The app is created published;
+  `scripts/tests/sdk-opt-ins.test.js` pins the SDK facts this rests on and that no script passes
+  `published: false`.
 
 
 **Live end-to-end (app-builder — writes to a real Dataverse env; optional).** All build/verify/

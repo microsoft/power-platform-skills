@@ -656,6 +656,11 @@ function operatorRemedy(err) {
 // every caller that reacts to a failed push decides "failed" exactly as the halt does.
 function pushFailed(result) {
   if (!result) return false;
+  // `createRecovery: 'adoptExact'` (build-model-app.js): a create whose answer was lost had already
+  // committed, and the SDK proved the row is exactly what this push would have written, so it adopted it
+  // locally. It says `saved: false` because THIS attempt wrote nothing — but nothing failed. Only the
+  // boolean the SDK sets, and only with no error beside it.
+  if (result.adoptedExisting === true && !result.error) return false;
   const committed = result.saved !== undefined ? result.saved : result.success;
   return committed === false || (committed === undefined && Boolean(result.error));
 }
@@ -740,6 +745,11 @@ function reportPartialPush(result, what, warn) {
   if (!result || typeof warn !== 'function') return result;
   const label = what || result.type || 'artifact';
   const st = result.publish;
+  // An adoption writes nothing, so there is nothing to confirm — but a build that quietly took over a row it
+  // did not create this attempt would leave the operator unable to tell why the create was never logged.
+  if (result.adoptedExisting === true) {
+    warn(`${label} was already created by an earlier attempt whose answer was lost, and the row is exactly what this build would have written, so it was adopted — nothing was written again`);
+  }
   if (st && st.kind === 'failed') {
     warn(`publish ${label} FAILED: ${(st.error && st.error.message) || 'unknown error'} — the change is SAVED but the runtime still serves the previously published copy; the build is idempotent, so re-run it once the cause is cleared`);
   } else if (st && st.kind === 'unverifiable') {

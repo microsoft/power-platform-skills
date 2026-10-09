@@ -4,8 +4,12 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { commandDef, chartDef, runSdkBuild, planFor, resolvePhases, compileFormIntent, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, dashboardTileOpts, PHASES, appUniqueName, personaRoleSpecFor } = require('../lib/sdk-build.js');
+const { commandDef, chartDef, runSdkBuild: runSdkBuildWithRealWaits, planFor, resolvePhases, compileFormIntent, formFieldLogicals, viewDef, appDef, defaultViewColumns, enrichesDefaultViews, artifactIdentityQuery, resolveExistingFormId, FORM_TYPE_CODE, dashboardTileOpts, PHASES, appUniqueName, personaRoleSpecFor } = require('../lib/sdk-build.js');
 const { validateAppSpec } = require('../lib/app-spec.js');
+// The AI phase's proof after a publish waits 500 ms between reads of an override row that is not there yet, as --verify
+// does. No test below is about that wait (it is pinned through `proofBudget`), and every one that leaves a row absent
+// would otherwise sleep a second for it.
+const runSdkBuild = (spec, opts = {}) => runSdkBuildWithRealWaits(spec, { proofDelayMs: 0, ...opts });
 
 // Real GUIDs (Imp9) for the three-authority sitemap mock. SELF_* identify THIS app's appmodule + sitemap
 // so fetchSitemap(appUnique) resolves to opts.liveSitemapXml; otherApps get synthetic ids. Ids that flow
@@ -615,6 +619,14 @@ test('app icon: an explicit spec.app.icon (declared web resource) is used instea
   assert.ok(!find(calls, 'createWebResource').some((c) => /_icon$/.test(c.args[0].name)), 'no generated icon when app.icon is set');
   const appCreate = find(calls, 'createArtifact').find((c) => c.args[0] === 'app');
   assert.ok(appCreate.args[1].iconWebResourceId, 'app def carries the explicit icon id');
+});
+
+test('app create: the def leaves `published` unset, so the SDK publishes the new app (a draft is invisible to the build\'s own probes)', async () => {
+  const { sdk, calls } = mockSdk();
+  await runSdkBuild(makeSpec(), { sdk, apply: true, phases: ['solution', 'data-model', 'web-resources', 'app-shell'] });
+  const appCreate = find(calls, 'createArtifact').find((c) => c.args[0] === 'app');
+  assert.ok(appCreate, 'the app is created');
+  assert.ok(!('published' in appCreate.args[1]), `published must stay unset; def keys: ${Object.keys(appCreate.args[1]).join(', ')}`);
 });
 
 test('sitemap: the app sitemap is added to the solution (componenttype 62)', async () => {
@@ -4391,9 +4403,11 @@ const aiRetrySpec = () => makeSpec({ ai: { appFeatures: { nlSearch: true }, summ
 const withAiResults = (results) => {
   const { sdk, calls } = mockSdk();
   let n = 0;
+  // A fresh copy per call, like the SDK's own: the build moves features between a result's buckets, and a result
+  // handed out twice would carry the first call's moves into the second.
   sdk.setAppAiFeatures = async (appUnique, flags, opts) => {
     calls.push({ name: 'setAppAiFeatures', args: [appUnique, flags, opts] });
-    return results[Math.min(n++, results.length - 1)];
+    return clone(results[Math.min(n++, results.length - 1)]);
   };
   return { sdk, calls };
 };
@@ -4715,6 +4729,368 @@ test('ai-features phase: an override holding the WRONG value is not treated as p
   const events = [];
   await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['ai-features'], emit: (e) => events.push(e) });
   assert.ok(events.some((e) => e.phase === 'ai-features' && e.status === 'skip'), 'a wrong-valued override must still warn');
+});
+
+// ── `pendingPublish`: an override the SDK now PROVES while it is still unpublished ──────────────────
+// An app-scope setting write lands in the app's unpublished layer, which the published `appsettings`
+// projection the SDK used to prove against cannot show: on a freshly created app the first write read
+// back `notPersisted`, and the build's post-publish re-issue (fetch, publish, write again) is what
+// put the rows in force. The SDK now proves the row where it is, and reports it `applied` with
+// `pendingPublish: true` — saved, taking effect when the app is published. That is NOT "applied" for the
+// build's purposes unless a publish follows: without `--publish` nothing else publishes the app after
+// this write, and `--verify` reads the published layer.
+const pendingOutcome = (feature) => ({ feature, setting: `S_${feature}`, requestedValue: '2', status: 'applied', appOverrideExists: true, pendingPublish: true });
+const pendingResult = (features) => ({ applied: [...features], skipped: [], notPersisted: [], unverified: [], failed: [], outcomes: features.map(pendingOutcome) });
+const inForceResult = (features) => ({ applied: [...features], skipped: [], notPersisted: [], unverified: [], failed: [], outcomes: features.map((feature) => ({ feature, status: 'applied', appOverrideExists: true })) });
+const withOverrideRow = (sdk, rows) => {
+  sdk.queryRecords = async (set) => {
+    if (set === 'appmodule') return [{ appmoduleid: 'APPID' }];
+    if (set === 'settingdefinition') return [{ settingdefinitionid: 'DEFID' }];
+    if (set === 'appsetting') return rows;
+    return [];
+  };
+};
+
+// What the app's publish answers, in order (the last answer repeats). The SDK reports a publish that did not succeed
+// BY VALUE — `failed` and `unverifiable` RESOLVE, they do not throw — so that is what these hand back. Only the
+// app's publish is scripted: every other target publishes cleanly.
+const failedPublish = () => ({ kind: 'failed', error: new Error('PublishXml was refused') });
+const unverifiablePublish = () => ({ kind: 'unverifiable', reason: 'the published copy could not be read back' });
+const verifiedPublish = () => ({ kind: 'verified' });
+const withAppPublishes = (sdk, calls, answers) => {
+  let n = 0;
+  sdk.publishArtifact = async (type, id) => {
+    calls.push({ name: 'publishArtifact', args: [type, id] });
+    const publish = type === 'app' ? answers[Math.min(n++, answers.length - 1)]() : verifiedPublish();
+    return { type, id, shipped: publish.kind === 'verified', publish };
+  };
+};
+const notPersistedResult = (features) => ({ applied: [], skipped: [], notPersisted: [...features], unverified: [], failed: [], outcomes: features.map((feature) => ({ feature, status: 'notPersisted', appOverrideExists: false, reason: 'no override observed' })) });
+const aiWarnings = (events) => events.filter((e) => e.phase === 'ai-features' && e.status === 'skip').map((e) => e.label);
+const appPublishCalls = (calls) => find(calls, 'publishArtifact').filter((c) => c.args[0] === 'app');
+const aiOutcome = (r, feature) => r.created.ai.appFeatures.outcomes.find((o) => o.feature === feature);
+
+test('ai-features phase: a feature saved but not yet published is published once and PROVED — not written again', async () => {
+  // Its row is already in the app's unpublished layer, so a second write would only save it again: the publish is what
+  // puts it in force, and the proof reads the row where the runtime does.
+  const { sdk, calls } = withAiResults([pendingResult(['formFill'])]);
+  withOverrideRow(sdk, [{ value: '2' }]); // in force once the app is published
+  const events = [];
+  const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+
+  assert.strictEqual(find(calls, 'setAppAiFeatures').length, 1, 'no second write');
+  const firstWrite = calls.findIndex((c) => c.name === 'setAppAiFeatures');
+  const fetchIdx = calls.findIndex((c, i) => i > firstWrite && c.name === 'fetchArtifact' && c.args[0] === 'app');
+  const pubIdx = calls.findIndex((c, i) => i > firstWrite && c.name === 'publishArtifact' && c.args[0] === 'app');
+  assert.ok(fetchIdx > firstWrite && pubIdx > fetchIdx, 'without --publish nothing else publishes the app, so it is fetched and published after the write');
+  assert.strictEqual(appPublishCalls(calls).length, 1);
+
+  const af = r.created.ai.appFeatures;
+  assert.deepStrictEqual(af.applied, ['formFill'], 'reported once, not twice');
+  assert.ok(!(af.pendingPublish || []).length, 'the bucket is emptied once the feature is in force');
+  const outcome = aiOutcome(r, 'formFill');
+  assert.strictEqual(outcome.status, 'applied');
+  assert.strictEqual(outcome.pendingPublish, undefined, 'no longer pending');
+  assert.match(outcome.reason, /override-row proof/, 'what was claimed is what was proved, not a write that never happened');
+  assert.strictEqual(aiWarnings(events).length, 0, 'a recovered feature is not reported as a problem');
+});
+
+test('ai-features phase: when the publish that should put a saved override in force FAILS, it is NOT YET PUBLISHED — never applied', async () => {
+  const { sdk, calls } = withAiResults([pendingResult(['formFill'])]);
+  withOverrideRow(sdk, []); // the published layer holds nothing: the publish did not happen
+  withAppPublishes(sdk, calls, [failedPublish]);
+  const events = [];
+  const warnings = [];
+  const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e), warn: (w) => warnings.push(w) });
+
+  assert.ok(aiWarnings(events).some((l) => /NOT YET PUBLISHED: formFill/.test(l)), JSON.stringify(aiWarnings(events)));
+  assert.ok(warnings.some((w) => /publish app .*FAILED: PublishXml was refused/.test(w)), `the failed publish is reported too: ${JSON.stringify(warnings)}`);
+  assert.strictEqual(find(calls, 'setAppAiFeatures').length, 1, 'a second write could not put it in force either');
+  const af = r.created.ai.appFeatures;
+  assert.ok(!af.applied.includes('formFill'), 'nothing is in force, so nothing is claimed');
+  assert.deepStrictEqual(af.pendingPublish, ['formFill'], 'and a --json consumer sees it as what it is');
+  assert.strictEqual(aiOutcome(r, 'formFill').status, 'pendingPublish');
+});
+
+for (const [label, answer] of [['UNVERIFIABLE', unverifiablePublish], ['verified', verifiedPublish]]) {
+  test(`ai-features phase: after a ${label} publish, what is claimed is what the override-row proof reads`, async () => {
+    // `unverifiable` means PublishXml answered 2xx and only the SDK's own read-back was not possible, so the proof —
+    // the same read --verify makes — decides, in both directions.
+    for (const [rows, applied] of [[[{ value: '2' }], true], [[], false]]) {
+      const { sdk, calls } = withAiResults([pendingResult(['formFill'])]);
+      withOverrideRow(sdk, rows);
+      withAppPublishes(sdk, calls, [answer]);
+      const events = [];
+      const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+      assert.strictEqual(r.created.ai.appFeatures.applied.includes('formFill'), applied, `${label}, ${rows.length ? 'row present' : 'row absent'}`);
+      assert.strictEqual(aiWarnings(events).some((l) => /NOT YET PUBLISHED: formFill/.test(l)), !applied);
+      assert.strictEqual(find(calls, 'setAppAiFeatures').length, 1);
+    }
+  });
+}
+
+for (const [label, answer] of [['FAILED', failedPublish], ['UNVERIFIABLE', unverifiablePublish]]) {
+  test(`ai-features phase: a re-issue that only reaches the unpublished layer after a ${label} publish is NOT YET PUBLISHED, never applied`, async () => {
+    // The first write saved nothing, so it IS written again after the publish. When that publish did not put the app in
+    // force the SDK proves the row where the write put it — the unpublished layer — and answers `applied` with
+    // `pendingPublish`. Counting that `applied` reported a feature nothing serves.
+    const { sdk, calls } = withAiResults([notPersistedResult(['formFill']), pendingResult(['formFill'])]);
+    withOverrideRow(sdk, []);
+    withAppPublishes(sdk, calls, [answer]);
+    const events = [];
+    const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+
+    assert.strictEqual(find(calls, 'setAppAiFeatures').length, 2, 'it was not saved at first, so it is written again after the publish');
+    assert.ok(aiWarnings(events).some((l) => /NOT YET PUBLISHED: formFill/.test(l)), JSON.stringify(aiWarnings(events)));
+    assert.ok(!aiWarnings(events).some((l) => /NOT PERSISTED/.test(l)), 'the first write\u2019s verdict is superseded: the row IS saved');
+    const af = r.created.ai.appFeatures;
+    assert.deepStrictEqual(af.applied, [], 'nothing is in force');
+    assert.deepStrictEqual([af.pendingPublish, af.notPersisted], [['formFill'], []], 'the --json result agrees with the report');
+    assert.strictEqual(aiOutcome(r, 'formFill').status, 'pendingPublish');
+  });
+}
+
+test('ai-features phase: a re-issue the SDK proves in force is applied, whatever the publish before it answered', async () => {
+  const { sdk, calls } = withAiResults([notPersistedResult(['formFill']), inForceResult(['formFill'])]);
+  withAppPublishes(sdk, calls, [unverifiablePublish]);
+  const events = [];
+  const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+  assert.deepStrictEqual(r.created.ai.appFeatures.applied, ['formFill']);
+  assert.strictEqual(aiWarnings(events).length, 0);
+});
+
+for (const [label, answer] of [['FAILED', failedPublish], ['UNVERIFIABLE', unverifiablePublish]]) {
+  test(`ai-features phase: with --publish, a re-issue that only reaches the unpublished layer after a ${label} post-publish publish is NOT YET PUBLISHED`, async () => {
+    // The publish phase published the app (its answer is the first), but the feature was not saved by the first write, so
+    // the post-publish pass publishes once more (its answer is the second) and writes it again.
+    const { sdk, calls } = withAiResults([notPersistedResult(['formFill']), pendingResult(['formFill'])]);
+    withOverrideRow(sdk, []);
+    withAppPublishes(sdk, calls, [verifiedPublish, answer]);
+    const events = [];
+    const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, publish: true, phases: ['app-shell', 'ai-features', 'publish'], emit: (e) => events.push(e) });
+    assert.strictEqual(appPublishCalls(calls).length, 2);
+    assert.strictEqual(find(calls, 'setAppAiFeatures').length, 2);
+    assert.ok(aiWarnings(events).some((l) => /NOT YET PUBLISHED: formFill/.test(l)), JSON.stringify(aiWarnings(events)));
+    assert.deepStrictEqual([r.created.ai.appFeatures.applied, r.created.ai.appFeatures.pendingPublish], [[], ['formFill']]);
+  });
+}
+
+test('ai-features phase: when the build\u2019s own publish follows, a saved-but-unpublished feature is only CONFIRMED — no second publish, no second write', async () => {
+  // The publish phase publishes the app in its one envelope, which carries the saved override. Re-issuing the
+  // write after it (a fetch, another PublishXml and a second write with its own proof) would pay again for
+  // what is already in force.
+  const { sdk, calls } = withAiResults([pendingResult(['formFill'])]);
+  withOverrideRow(sdk, [{ value: '2' }]); // in force once published, holding ENABLED for this family
+  const events = [];
+  const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, publish: true, phases: ['app-shell', 'ai-features', 'publish'], emit: (e) => events.push(e) });
+
+  assert.strictEqual(find(calls, 'setAppAiFeatures').length, 1, 'no re-issue: the publish phase already put the row in force');
+  const appPublishes = find(calls, 'publishArtifact').filter((c) => c.args[0] === 'app');
+  assert.strictEqual(appPublishes.length, 1, 'the app is published once, by the publish phase');
+  const firstWrite = calls.findIndex((c) => c.name === 'setAppAiFeatures');
+  assert.ok(!calls.some((c, i) => i > firstWrite && c.name === 'fetchArtifact' && c.args[0] === 'app'), 'and not re-fetched for a retry');
+
+  const af = r.created.ai.appFeatures;
+  assert.deepStrictEqual(af.applied, ['formFill']);
+  const outcome = af.outcomes.find((o) => o.feature === 'formFill');
+  assert.strictEqual(outcome.status, 'applied');
+  assert.strictEqual(outcome.pendingPublish, undefined);
+  assert.match(outcome.reason, /override-row proof/, 'the claim is the proof it is: the row was read where the runtime reads it');
+  assert.strictEqual(events.filter((e) => e.phase === 'ai-features' && e.status === 'skip').length, 0);
+});
+
+test('ai-features phase: after the publish the override is read back, and one still not visible is reported, not claimed', async () => {
+  const { sdk } = withAiResults([pendingResult(['formFill'])]);
+  withOverrideRow(sdk, []); // the publish did not carry it
+  const events = [];
+  const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, publish: true, phases: ['app-shell', 'ai-features', 'publish'], emit: (e) => events.push(e) });
+  const warnings = events.filter((e) => e.phase === 'ai-features' && e.status === 'skip').map((e) => e.label);
+  assert.ok(warnings.some((l) => /NOT YET PUBLISHED: formFill/.test(l)), JSON.stringify(warnings));
+  const af = r.created.ai.appFeatures;
+  assert.ok(!af.applied.includes('formFill'), 'not claimed as in force');
+  assert.deepStrictEqual(af.pendingPublish, ['formFill'], 'and visible to a --json consumer as what it is');
+});
+
+// ── the proof after a publish: the budget --verify has, and a read that failed said plainly ─────────────────────────
+// A publish can answer before the published `appsettings` row is readable. `--verify` reads the row three times, 500 ms
+// apart, to ride that out; the build's proof after its publish read once, so a row that appeared a moment late was reported
+// NOT YET PUBLISHED (and left out of `applied`) by a run whose own --verify passed.
+
+// An override row that becomes readable on the `visibleOn`th read of it (never, when omitted); `reads.count` is how often it was read.
+const withLateOverrideRow = (sdk, reads, visibleOn = Infinity) => {
+  sdk.queryRecords = async (set) => {
+    if (set === 'appmodule') return [{ appmoduleid: 'APPID' }];
+    if (set === 'settingdefinition') return [{ settingdefinitionid: 'DEFID' }];
+    if (set === 'appsetting') { reads.count += 1; return reads.count >= visibleOn ? [{ value: '2' }] : []; }
+    return [];
+  };
+};
+
+for (const withPublishPhase of [false, true]) {
+  test(`ai-features phase: a published row that appears a moment after the publish is found by the proof, not reported NOT YET PUBLISHED (${withPublishPhase ? 'with' : 'without'} --publish)`, async () => {
+    const { sdk, calls } = withAiResults([pendingResult(['formFill'])]);
+    const reads = { count: 0 };
+    withLateOverrideRow(sdk, reads, 3); // readable on the third read
+    const events = [];
+    const r = await runSdkBuild(aiProblemSpec(), {
+      sdk, apply: true, publish: withPublishPhase,
+      phases: ['app-shell', 'ai-features', ...(withPublishPhase ? ['publish'] : [])],
+      emit: (e) => events.push(e),
+    });
+    assert.strictEqual(reads.count, 3, 'it read until the row was there, and no longer');
+    assert.strictEqual(find(calls, 'setAppAiFeatures').length, 1, 'no second write: the row was saved all along');
+    assert.deepStrictEqual(r.created.ai.appFeatures.applied, ['formFill']);
+    assert.strictEqual(aiWarnings(events).length, 0, JSON.stringify(aiWarnings(events)));
+    assert.match(aiOutcome(r, 'formFill').reason, /override-row proof/);
+  });
+}
+
+test('ai-features phase: a row still absent after the same three reads --verify makes is reported NOT YET PUBLISHED, not claimed', async () => {
+  const { sdk } = withAiResults([pendingResult(['formFill'])]);
+  const reads = { count: 0 };
+  withLateOverrideRow(sdk, reads); // never readable
+  const events = [];
+  const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+  assert.strictEqual(reads.count, 3, 'three reads: the budget --verify has');
+  assert.ok(aiWarnings(events).some((l) => /NOT YET PUBLISHED: formFill/.test(l)), JSON.stringify(aiWarnings(events)));
+  assert.ok(!aiWarnings(events).some((l) => /could not run/.test(l)), 'the check ran and found nothing: it is not reported as unable to run');
+  assert.deepStrictEqual(r.created.ai.appFeatures.pendingPublish, ['formFill']);
+  assert.ok(!r.created.ai.appFeatures.applied.includes('formFill'));
+});
+
+test('the override proof budget is one value for the build and --verify, with the one pair of test seams both take', () => {
+  const { AI_PROOF_BUDGET, proofBudget } = require('../lib/ai-app-settings.js');
+  assert.deepStrictEqual({ ...AI_PROOF_BUDGET }, { attempts: 3, delayMs: 500 });
+  assert.ok(Object.isFrozen(AI_PROOF_BUDGET), 'neither caller can change what the other waits for');
+  assert.deepStrictEqual(proofBudget(), { attempts: 3, delayMs: 500 });
+  assert.deepStrictEqual(proofBudget({}), { attempts: 3, delayMs: 500 });
+  assert.deepStrictEqual(proofBudget({ proofAttempts: 1, proofDelayMs: 0 }), { attempts: 1, delayMs: 0 });
+  assert.deepStrictEqual(proofBudget({ proofAttempts: 5 }), { attempts: 5, delayMs: 500 });
+});
+
+// A check that could not run leaves the verdict from before it standing. The warning has to say it did not look: a reader who sees
+// only that verdict takes the check for having found nothing.
+const READ_FAILURES = [
+  ['the override row cannot be read', (set) => { if (set === 'appsetting') throw new Error('429 Too Many Requests'); }, 'the app-scope override row could not be read: 429 Too Many Requests'],
+  ['the app module cannot be read', (set) => { if (set === 'appmodule') throw new Error('503 Service Unavailable'); }, 'the app module could not be read: 503 Service Unavailable'],
+  ['the setting definition cannot be read', (set) => { if (set === 'settingdefinition') throw new Error('403 Forbidden'); }, 'the setting definition could not be read: 403 Forbidden'],
+];
+for (const [what, fail, readError] of READ_FAILURES) {
+  test(`ai-features phase: when ${what}, the warning says the check could not run — ahead of what the SDK said`, async () => {
+    const sdkSaid = 'no override observed for FormFillBarUXEnabled';
+    const { sdk } = withAiResults([{ applied: [], skipped: [], notPersisted: ['formFill'], unverified: [], failed: [], outcomes: [{ feature: 'formFill', status: 'notPersisted', reason: sdkSaid }] }]);
+    sdk.queryRecords = async (set) => {
+      fail(set);
+      if (set === 'appmodule') return [{ appmoduleid: 'APPID' }];
+      if (set === 'settingdefinition') return [{ settingdefinitionid: 'DEFID' }];
+      return [];
+    };
+    const events = [];
+    await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+    const [warning] = aiWarnings(events);
+    assert.match(warning, /^NOT PERSISTED: formFill \u2014 /, 'the verdict that stands is the first write\u2019s');
+    const couldNotRun = warning.indexOf(`the check after the publish could not run: ${readError}`);
+    assert.ok(couldNotRun > 0, warning);
+    assert.ok(warning.indexOf(sdkSaid) > couldNotRun, `what the SDK said comes after it, and is not lost: ${warning}`);
+  });
+}
+
+test('ai-features phase: the same holds for a feature the re-issue saved but could not put in force', async () => {
+  // The reason that rides along is the one the build files a saved-but-unpublished override under.
+  const { sdk, calls } = withAiResults([notPersistedResult(['formFill']), pendingResult(['formFill'])]);
+  withAppPublishes(sdk, calls, [failedPublish]);
+  sdk.queryRecords = async (set) => {
+    if (set === 'appmodule') return [{ appmoduleid: 'APPID' }];
+    if (set === 'settingdefinition') return [{ settingdefinitionid: 'DEFID' }];
+    if (set === 'appsetting') throw new Error('429 Too Many Requests'); // the override row cannot be read
+    return [];
+  };
+  const events = [];
+  await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+  const [warning] = aiWarnings(events);
+  assert.match(warning, /^NOT YET PUBLISHED: formFill \u2014 the check after the publish could not run: the app-scope override row could not be read: 429 Too Many Requests \u2014 saved in the app's unpublished layer/, warning);
+});
+
+test('ai-features phase: a publish phase whose app publish FAILED does not count — the app is published again and the override proved, with no second write', async () => {
+  const { sdk, calls } = withAiResults([pendingResult(['formFill'])]);
+  withOverrideRow(sdk, [{ value: '2' }]);
+  withAppPublishes(sdk, calls, [failedPublish, verifiedPublish]);
+  const events = [];
+  const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, publish: true, phases: ['app-shell', 'ai-features', 'publish'], emit: (e) => events.push(e) });
+  assert.strictEqual(appPublishCalls(calls).length, 2, 'an unpublished app has not put the override in force, so it is published once more');
+  assert.strictEqual(find(calls, 'setAppAiFeatures').length, 1, 'the override was saved by the first write; publishing is all it needed');
+  assert.deepStrictEqual(r.created.ai.appFeatures.applied, ['formFill']);
+  assert.strictEqual(aiWarnings(events).length, 0);
+});
+
+test('ai-features phase: with --publish, an app publish that FAILS twice leaves the saved override NOT YET PUBLISHED', async () => {
+  const { sdk, calls } = withAiResults([pendingResult(['formFill'])]);
+  withOverrideRow(sdk, []);
+  withAppPublishes(sdk, calls, [failedPublish]); // the publish phase's and the post-publish pass's, alike
+  const events = [];
+  const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, publish: true, phases: ['app-shell', 'ai-features', 'publish'], emit: (e) => events.push(e) });
+  assert.strictEqual(appPublishCalls(calls).length, 2);
+  assert.ok(aiWarnings(events).some((l) => /NOT YET PUBLISHED: formFill/.test(l)), JSON.stringify(aiWarnings(events)));
+  assert.ok(!r.created.ai.appFeatures.applied.includes('formFill'));
+  assert.deepStrictEqual(r.created.ai.appFeatures.pendingPublish, ['formFill']);
+});
+
+test('ai-features phase: with --publish, an UNVERIFIABLE app publish counts as published: the override is only proved, in either direction', async () => {
+  // PublishXml answered 2xx; only the SDK's read-back was not possible. A second publish would add nothing, and the
+  // proof — which reads the row where the runtime does — settles the verdict.
+  for (const [rows, applied] of [[[{ value: '2' }], true], [[], false]]) {
+    const { sdk, calls } = withAiResults([pendingResult(['formFill'])]);
+    withOverrideRow(sdk, rows);
+    withAppPublishes(sdk, calls, [unverifiablePublish]);
+    const events = [];
+    const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, publish: true, phases: ['app-shell', 'ai-features', 'publish'], emit: (e) => events.push(e) });
+    assert.strictEqual(appPublishCalls(calls).length, 1, 'published once, by the publish phase');
+    assert.strictEqual(find(calls, 'setAppAiFeatures').length, 1);
+    assert.strictEqual(r.created.ai.appFeatures.applied.includes('formFill'), applied, rows.length ? 'row present' : 'row absent');
+    assert.strictEqual(aiWarnings(events).some((l) => /NOT YET PUBLISHED: formFill/.test(l)), !applied);
+  }
+});
+
+test('ai-features phase: features that need a write and features that need only the publish share one fetch and one publish', async () => {
+  const spec = makeSpec({ ai: { appFeatures: { formFill: true, nlSearch: true }, summaries: { default: 'off' } } });
+  const first = {
+    applied: ['formFill'], skipped: [], notPersisted: ['nlSearch'], unverified: [], failed: [],
+    outcomes: [pendingOutcome('formFill'), { feature: 'nlSearch', status: 'notPersisted', reason: 'no override observed' }],
+  };
+  const { sdk, calls } = withAiResults([first, inForceResult(['nlSearch'])]);
+  withOverrideRow(sdk, [{ value: '2' }]); // formFill's saved row, in force once published
+  const events = [];
+  const r = await runSdkBuild(spec, { sdk, apply: true, phases: ['app-shell', 'ai-features'], emit: (e) => events.push(e) });
+  const writes = find(calls, 'setAppAiFeatures');
+  assert.strictEqual(writes.length, 2);
+  assert.deepStrictEqual(Object.keys(writes[1].args[1]), ['nlSearch'], 'only the feature that was not saved is written again');
+  const firstWrite = calls.findIndex((c) => c.name === 'setAppAiFeatures');
+  assert.strictEqual(calls.filter((c, i) => i > firstWrite && c.name === 'fetchArtifact' && c.args[0] === 'app').length, 1);
+  assert.strictEqual(appPublishCalls(calls).length, 1, 'one publish serves both');
+  assert.deepStrictEqual([...r.created.ai.appFeatures.applied].sort(), ['formFill', 'nlSearch']);
+  assert.strictEqual(aiWarnings(events).length, 0);
+});
+
+test('ai-features phase: a feature already in force is applied at once, and only the pending one waits for the publish', async () => {
+  const spec = makeSpec({ ai: { appFeatures: { formFill: true, nlSearch: true }, summaries: { default: 'off' } } });
+  const mixed = { applied: ['formFill', 'nlSearch'], skipped: [], notPersisted: [], unverified: [], failed: [], outcomes: [
+    { feature: 'formFill', status: 'applied', appOverrideExists: true },
+    pendingOutcome('nlSearch'),
+  ] };
+  const { sdk, calls } = withAiResults([mixed]);
+  withOverrideRow(sdk, [{ value: '2' }]);
+  const r = await runSdkBuild(spec, { sdk, apply: true, phases: ['app-shell', 'ai-features'] });
+  assert.strictEqual(find(calls, 'setAppAiFeatures').length, 1, 'nothing is written twice');
+  assert.strictEqual(appPublishCalls(calls).length, 1);
+  assert.deepStrictEqual([...r.created.ai.appFeatures.applied].sort(), ['formFill', 'nlSearch']);
+});
+
+test('ai-features phase: an SDK result with no pending outcome is handled exactly as before', async () => {
+  const { sdk, calls } = withAiResults([inForceResult(['formFill'])]);
+  const r = await runSdkBuild(aiProblemSpec(), { sdk, apply: true, phases: ['app-shell', 'ai-features'] });
+  assert.strictEqual(find(calls, 'setAppAiFeatures').length, 1, 'an override already in force needs no second write');
+  assert.strictEqual(find(calls, 'publishArtifact').length, 0, 'and no publish');
+  assert.deepStrictEqual(r.created.ai.appFeatures.applied, ['formFill']);
 });
 
 test('ai-features planFor: spec.ai adds enable + per-table summary plan entries', () => {

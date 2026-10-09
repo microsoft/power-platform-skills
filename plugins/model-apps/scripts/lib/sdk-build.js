@@ -104,7 +104,7 @@ const { fetchSitemap, navigationProof, fetchAppsForPages } = require('./sitemap-
 // classifies every generative navigateTo pageId at a REAL call site (never a decoy string / comment GUID).
 const { extractNavTargets, navReferencedKeys, navMalformedRefs, resolvePageRefs, navTargetParity, strayPageRefs, describePageRefLocations, pageRefAdvice, frontierNote, PAGEREF_RULE } = require('./pageref-resolver.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
-const { AI_APP_SETTING, resolveAiFlags, encodeAiFlags, rebucketNonEnablingSkips, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride } = require('./ai-app-settings.js');
+const { AI_APP_SETTING, resolveAiFlags, encodeAiFlags, rebucketNonEnablingSkips, rebucketPendingPublish, specOptsIntoAi, featureWantValue, sameSettingValue, resolveAppModuleId, proveAppOverride, proofBudget } = require('./ai-app-settings.js');
 const { DASHBOARD_LAUNCHER_URL, adoptLiveSitemap, chromeByTargetKey, describeSitemapNotes } = require('./sitemap-merge.js');
 const { buildPromptSpec } = require('./ai-prompt.js');
 const { odataLit } = require('./odata.js');
@@ -1777,6 +1777,10 @@ function partialEnrichment(error) {
 // `keepGoing` is for the halt path (settleOwedPublishes): there a target whose own publish THROWS is
 // reported and the others are still published, because nothing else will publish them. The publish
 // phase keeps the old behaviour — a thrown publish halts it — so a build reports that as it always did.
+//
+// Returns `{ appPublished }`: whether the app's own publish went through (a failed one, or no app target, is
+// false). The ai-features re-confirmation reads it — an override saved in the app's unpublished layer is in force
+// once the app is published, and the publish phase is what does that.
 async function publishTargets(provision, runner, concurrency, entityTargets, appTarget, warn, { keepGoing = false } = {}) {
   const labelOf = ([type, id]) => (type === 'app' && appTarget ? appTarget[2] : `${type} ${id}`);
   const publishOne = async ([type, id], label) => {
@@ -1788,7 +1792,11 @@ async function publishTargets(provision, runner, concurrency, entityTargets, app
       return undefined;
     }
   };
+  // A publish that was not refused. `unverifiable` still means PublishXml answered 2xx; only the read-back that
+  // would confirm it was not possible. An outcome that says nothing about publishing proves nothing.
+  const published = (result) => !!(result && result.publish && result.publish.kind && result.publish.kind !== 'failed' && result.publish.kind !== 'notRequested');
   const all = appTarget ? [...entityTargets, appTarget] : entityTargets;
+  const isApp = (target) => !!appTarget && target[0] === 'app' && target[1] === appTarget[1];
   if (all.length > 1 && typeof provision.publishArtifacts === 'function') {
     let results = null;
     try {
@@ -1798,16 +1806,24 @@ async function publishTargets(provision, runner, concurrency, entityTargets, app
     }
     if (Array.isArray(results) && results.length === all.length) {
       const failed = [];
+      let appResult;
       results.forEach((outcome, i) => {
         if (outcome && outcome.publish && outcome.publish.kind === 'failed') failed.push(all[i]);
-        else reportPartialPush(outcome, labelOf(all[i]), warn);
+        else {
+          reportPartialPush(outcome, labelOf(all[i]), warn);
+          if (isApp(all[i])) appResult = outcome;
+        }
       });
-      for (const target of failed) await publishOne(target, labelOf(target));
-      return;
+      for (const target of failed) {
+        const retried = await publishOne(target, labelOf(target));
+        if (isApp(target)) appResult = retried;
+      }
+      return { appPublished: published(appResult) };
     }
   }
   await runner.mapLimit(entityTargets, concurrency, (async (target) => publishOne(target, `${target[0]} ${target[1]}`)));
-  if (appTarget) await publishOne(['app', appTarget[1]], appTarget[2]);
+  const appResult = appTarget ? await publishOne(['app', appTarget[1]], appTarget[2]) : undefined;
+  return { appPublished: published(appResult) };
 }
 
 // The publishes a build still OWED when it stopped: the tables whose default views its deferred
@@ -4528,6 +4544,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
       }
       // Create: the full def (siteMap + explicit components + iconWebResourceId) serializes unchanged
       // through createArtifact, and push emits appmodule -> sitemap -> AddAppComponents -> publish.
+      // The def leaves `published` unset on purpose, so the push above publishes the app. The SDK can
+      // create a never-published draft (`published: false`) for the final publish to cover — one publish
+      // round trip less — but a draft answers 404 by id and is missing from the PUBLISHED projection that
+      // every probe here reads (findArtifact('app'), the collision gate, the sitemap/navigation reads of
+      // the pages phase that follows, verify, download). A failed first build would leave an app its own
+      // re-run cannot see (it would POST the same unique name again), the pages phase would find no sitemap
+      // and halt, and a build without --publish would never publish it. Pinned in sdk-opt-ins.test.js.
       const art = await provision.createArtifact('app', def);
       const pushed = requireSuccessfulPush(await explainAppPushWarnings(provision.dataverse, await provision.pushArtifact('app', art.id), def.name), `app ${def.name}`, opts.warn);
       // Join the solution straight after the push, before the hidden-table pin, its read-back and the
@@ -5000,17 +5023,23 @@ async function runSdkBuildPhases(spec, opts, owed) {
   // Features the SDK did not put in `applied`, deferred for a post-publish re-issue (see inside the
   // ai-features phase for why the verdict cannot honestly be decided at write time).
   const pendingAiReconfirm = [];
+  // Set by the publish phase when it published the app: an override the SDK saved in the app's unpublished layer
+  // (`pendingPublish`) is then in force, and only needs proving (8b), not writing again.
+  let appPublishedByPublishPhase = false;
 
   if (has('ai-features') && specOptsIntoAi(spec)) {
     const solutionUniqueName = spec.solution && spec.solution.uniqueName;
     const appUnique = appUniqueName(spec);
     const flags = resolveAiFlags(spec);
-    // NOTE: this first write frequently NO-OPS. An app-scope setting write does nothing until the
-    // app is published, and this phase runs moments after `app-shell` created it (the `publish`
-    // phase is later, and is opt-in). It is still issued here so an ALREADY-published app — the
-    // common case on a rebuild/edit — applies immediately and needs no retry. Anything it does not
-    // apply is re-issued after publish by the block at the end of this function, which replicates
-    // the fetch → publish → write sequence measured to work live.
+    // NOTE: an app-scope setting write lands in the app's UNPUBLISHED layer, and does nothing until the
+    // app is published. The SDK proves it where it is and reports it `applied` with `pendingPublish`
+    // (rebucketPendingPublish moves that to a bucket of its own; before the SDK could read that layer, the
+    // same write came back `notPersisted`). This phase runs moments after `app-shell` created the app, and
+    // the `publish` phase is later and opt-in — so what is not in force yet is put there after publish by
+    // the block at the end of this function: a saved override only needs the publish (which the publish
+    // phase has already done, when it ran) and is then PROVED, while one the SDK did not save at all is
+    // re-issued by the fetch → publish → write sequence measured to work live. An ALREADY-published app —
+    // the common case on a rebuild/edit — applies immediately and needs neither.
     await runner.run('ai-features', 'enable app AI features', async () => {
       // The SDK confirms each app-scope write by polling for its `appsettings` override row, keyed by
       // appmoduleid. That id is normally resolved from the app's unique NAME — but a freshly created
@@ -5027,17 +5056,22 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // after the write (measured live), so the SDK's 4-attempt/500ms default is tight but the budget
       // is only ever spent when the row is genuinely absent.
       const encodedFlags = encodeAiFlags(flags);
-      const r = rebucketNonEnablingSkips(await provision.setAppAiFeatures(appUnique, encodedFlags, {
+      const r = rebucketPendingPublish(rebucketNonEnablingSkips(await provision.setAppAiFeatures(appUnique, encodedFlags, {
         solutionUniqueName,
         appModuleId: result.created.app || undefined,
         verifyAttempts: 8,
         verifyDelayMs: 1000,
-      }), encodedFlags);
+      }), encodedFlags));
       result.created.ai.appFeatures = r;
       // `applied` is the SDK's ONLY success bucket: a feature reaches it only when the APP-SCOPE
       // override row is proven present holding the requested value. Every other bucket is a
       // non-success the build must surface, because reporting them as plain success was the
       // false-PASS half of ADO 6603383 (features were pushed onto `applied` while writing nothing):
+      //   pendingPublish — the plugin's own bucket (rebucketPendingPublish): the SDK proved the row in
+      //                  the app's UNPUBLISHED layer, so it is saved and takes effect once the app is
+      //                  published. Deferred like the rest: the publish phase puts it in force when the
+      //                  build publishes, and otherwise the post-publish pass publishes the app — it is
+      //                  not written again, its row is already saved.
       //   notPersisted — the write returned 204 but no override was observed for the whole retry
       //                  budget; Dataverse can accept an app-scope write and store nothing.
       //   skipped      — as notPersisted, PLUS the feature's org readiness gate reads off, which is
@@ -5499,7 +5533,8 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // Tables whose enriched default views still owe their publish (4b), when nothing above names them.
       for (const [k, target] of owed.tables) { if (!seen.has(k)) { seen.add(k); perEntity.push(target); } }
       const appTarget = result.created.app ? ['app', result.created.app, `app ${(spec.app && spec.app.name) || result.created.app}`] : null;
-      await publishTargets(provision, runner, concurrency, perEntity, appTarget, opts.warn);
+      const publishedTargets = await publishTargets(provision, runner, concurrency, perEntity, appTarget, opts.warn);
+      appPublishedByPublishPhase = publishedTargets.appPublished;
     });
     // Paid. A target that failed to publish was reported above, and the build is idempotent, so its
     // re-run publishes it; a halt from here on owes nothing more, nor does an earlier attempt's.
@@ -5507,13 +5542,19 @@ async function runSdkBuildPhases(spec, opts, owed) {
     owed.tables.clear();
   }
 
-  // 8b. AI feature re-issue + re-confirmation. An app-scope setting write is a NO-OP on a freshly
-  //     created app: measured live on two different apps, the write returned `notPersisted` and a
-  //     direct `appsettings` query showed no override row at ALL, while fetching + publishing that
-  //     same app and re-issuing the identical call produced every feature `applied` with real rows
-  //     holding the requested values. So this pass RE-ISSUES the write (re-proving alone cannot help
-  //     — there is nothing to find), then falls back to proving the override row for anything the
-  //     retry still did not claim. It can only ever UPGRADE a feature, never hide a real failure.
+  // 8b. AI feature re-issue + re-confirmation. An app-scope setting write lands in the app's UNPUBLISHED
+  //     layer, which the published `appsettings` projection cannot show: measured live on two different
+  //     apps, the write used to come back `notPersisted` with no override row at ALL, while fetching +
+  //     publishing that same app and re-issuing the identical call produced every feature `applied` with
+  //     real rows holding the requested values. The SDK now reads the unpublished layer and calls a
+  //     saved-but-unpublished feature `applied` with `pendingPublish`; rebucketPendingPublish files it as
+  //     the plugin's own `pendingPublish` bucket, because it is not in force until a publish. Such a
+  //     feature needs the PUBLISH, not a second write, so it is published here unless the publish phase
+  //     already did that. Anything the SDK did not save at all is RE-ISSUED after the publish, as before.
+  //     Then the override row is PROVED for whatever is left. A re-issue's own `pendingPublish` is filed
+  //     the same way: a publish that failed, or could not be confirmed, leaves the row in the unpublished
+  //     layer, and that is not "applied". This pass can only ever UPGRADE a feature, never hide a real
+  //     failure.
   if (pendingAiReconfirm.length) {
     const flags = resolveAiFlags(spec);
     const appUnique = appUniqueName(spec);
@@ -5526,31 +5567,56 @@ async function runSdkBuildPhases(spec, opts, owed) {
       skipped: ['ADMIN GATE OFF', 'the write was issued, no app-scope override appeared, and the feature\u2019s org readiness gate reads off \u2014 an environment admin must enable it first'],
       unverified: ['UNVERIFIED', 'the write was issued but could not be confirmed \u2014 verify manually before relying on it'],
       failed: ['FAILED', 'the write threw'],
+      // The SDK proved the row, in the app's unpublished layer; this is what is left to say when no publish
+      // has since put it in force (or its publish could not be confirmed by reading the row back).
+      pendingPublish: ['NOT YET PUBLISHED', 'the override is saved but not in force: it takes effect once the app is published, and the published row could not be read back'],
     };
     // Replicate the sequence proven to work live, in order: fetch the app (so the workspace holds the
     // server's copy), publish it, then write. Each step is best-effort — a failure here must not fail
     // the build, it just leaves the original non-success verdict standing and reported.
+    //
+    // A feature the SDK SAVED but flagged `pendingPublish` is not written again: its row is already in the
+    // unpublished layer, so a second write would only save it again. It needs the publish — and not even that
+    // when the publish phase has published the app this run. The proof below reads the row where the runtime
+    // does, so whatever the publish did not put in force is reported, never claimed.
     const retryApplied = new Set();
+    // Features whose re-issue the SDK saved in the unpublished layer only, with its reason for saying so.
+    const retryPending = new Map();
     if (result.created.app) {
       const retryFlags = {};
-      for (const p of pendingAiReconfirm) if (flags && Object.prototype.hasOwnProperty.call(flags, p.feature)) retryFlags[p.feature] = flags[p.feature];
-      if (Object.keys(retryFlags).length) {
+      let owesPublish = false;
+      for (const p of pendingAiReconfirm) {
+        if (p.bucket === 'pendingPublish') {
+          if (!appPublishedByPublishPhase) owesPublish = true;
+          continue;
+        }
+        if (flags && Object.prototype.hasOwnProperty.call(flags, p.feature)) retryFlags[p.feature] = flags[p.feature];
+      }
+      const rewrite = Object.keys(retryFlags).length > 0;
+      if (rewrite || owesPublish) {
         try {
           await provision.fetchArtifact('app', result.created.app);
           reportPartialPush(await provision.publishArtifact('app', result.created.app), `app ${(spec.app && spec.app.name) || result.created.app}`, opts.warn);
-          const retry = await provision.setAppAiFeatures(appUnique, encodeAiFlags(retryFlags), {
-            solutionUniqueName: spec.solution && spec.solution.uniqueName,
-            appModuleId: result.created.app,
-            verifyAttempts: 6,
-            verifyDelayMs: 1000,
-          });
-          for (const f of (retry && retry.applied) || []) retryApplied.add(f);
+          if (rewrite) {
+            // Filed like the first write: after a publish that failed or could not be confirmed, the SDK proves
+            // this write only in the unpublished layer and answers `applied` + `pendingPublish`.
+            const retry = rebucketPendingPublish(await provision.setAppAiFeatures(appUnique, encodeAiFlags(retryFlags), {
+              solutionUniqueName: spec.solution && spec.solution.uniqueName,
+              appModuleId: result.created.app,
+              verifyAttempts: 6,
+              verifyDelayMs: 1000,
+            }));
+            for (const f of (retry && retry.applied) || []) retryApplied.add(f);
+            for (const o of (retry && retry.outcomes) || []) if (o && o.status === 'pendingPublish') retryPending.set(o.feature, o.reason);
+          }
         } catch { /* leave the original verdict standing; it is reported below */ }
       }
     }
     const app = await resolveAppModuleId(provision, appUnique);
     const stillBad = [];
     const reproven = [];
+    // Saved in the unpublished layer by the re-issue though the first write said otherwise (`notPersisted`, say).
+    const movedToPending = [];
     // Track HOW each feature was recovered so the reported reason is true for that path. Claiming a
     // re-issue applied something the proof merely found is the same "report what you did not verify"
     // failure this whole phase exists to remove.
@@ -5563,16 +5629,25 @@ async function runSdkBuildPhases(spec, opts, owed) {
       }
       const setting = AI_APP_SETTING[p.feature];
       let proof = { error: app.error };
-      if (!app.error && setting) proof = await proveAppOverride(provision, app.appModuleId, setting);
+      // The same reads, as many and as far apart, as `--verify` makes (proofBudget): the publish can answer before the
+      // published row is readable, and a single read reported that lag as NOT YET PUBLISHED in a run whose own verify passed.
+      if (!app.error && setting) proof = await proveAppOverride(provision, app.appModuleId, setting, proofBudget(opts));
       if (!proof.error && proof.exists && sameSettingValue(proof.value, featureWantValue(flags && flags[p.feature], p.feature), p.feature)) {
         reproven.push(p.feature);
         reprovenBy.set(p.feature, 'confirmed present after publish by the build\u2019s own override-row proof');
         continue;
       }
-      const [label, why] = BUCKET_LABELS[p.bucket] || [String(p.bucket).toUpperCase(), 'reported by the SDK as a non-success outcome'];
-      // Prefer the SDK's OWN per-feature reason: it carries the real error text for `failed`, which
-      // a canned bucket description throws away.
-      stillBad.push({ feature: p.feature, label, why: p.reason || proof.error || why });
+      // What the re-issue found supersedes what the first write said: the row IS saved, it is just not in force.
+      const savedUnpublished = retryPending.has(p.feature);
+      const bucket = savedUnpublished ? 'pendingPublish' : p.bucket;
+      if (savedUnpublished && p.bucket !== 'pendingPublish') movedToPending.push(p.feature);
+      const [label, why] = BUCKET_LABELS[bucket] || [String(bucket).toUpperCase(), 'reported by the SDK as a non-success outcome'];
+      // A check that could not run says so FIRST: the verdict that stands is then the one from before it, and a reader who
+      // sees only that verdict takes the check for having looked. What the SDK said (prefer its OWN per-feature reason: it
+      // carries the real error text for `failed`, which a canned bucket description throws away) follows it.
+      const said = savedUnpublished ? retryPending.get(p.feature) : p.reason;
+      const checkFailed = proof.error ? `the check after the publish could not run: ${proof.error}` : null;
+      stillBad.push({ feature: p.feature, label, why: [checkFailed, said].filter(Boolean).join(' \u2014 ') || why });
     }
     // Reflect the corrected verdict in the machine-readable result too, so a caller reading
     // `created.ai.appFeatures` is not told a feature failed when it demonstrably did not.
@@ -5585,7 +5660,14 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // move from `skipped` to `applied`, and leaving it listed in both would make
       // `created.ai.appFeatures` contradict itself for any `--json` consumer.
       for (const key of Object.keys(af)) if (Array.isArray(af[key]) && key !== 'applied' && key !== 'outcomes') af[key] = af[key].filter((f) => !reproven.includes(f));
-      for (const o of af.outcomes || []) if (reproven.includes(o.feature)) { o.status = 'applied'; o.appOverrideExists = true; o.reason = reprovenBy.get(o.feature); }
+      for (const o of af.outcomes || []) if (reproven.includes(o.feature)) { o.status = 'applied'; o.appOverrideExists = true; o.reason = reprovenBy.get(o.feature); delete o.pendingPublish; }
+    }
+    // ...and the same for a feature the re-issue saved but could not put in force: it leaves the bucket the first
+    // write put it in, for `pendingPublish`, so the result says what the warning below does.
+    if (af && movedToPending.length) {
+      for (const key of Object.keys(af)) if (Array.isArray(af[key]) && key !== 'applied' && key !== 'outcomes') af[key] = af[key].filter((f) => !movedToPending.includes(f));
+      af.pendingPublish = [...(af.pendingPublish || []), ...movedToPending];
+      for (const o of af.outcomes || []) if (movedToPending.includes(o.feature)) { o.status = 'pendingPublish'; o.appOverrideExists = true; o.pendingPublish = true; o.reason = retryPending.get(o.feature); }
     }
     // `runner.skip` renders as `⊘ <label>` — the closest thing the narrator has to a warning — and
     // advances the step counter correctly, which a hand-built `runner.emit` did not.

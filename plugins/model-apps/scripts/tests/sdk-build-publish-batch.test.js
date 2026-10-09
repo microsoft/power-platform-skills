@@ -271,3 +271,115 @@ test('publishTargets: a single target and an empty list never use the envelope',
   await publishTargets(provision, runner, 2, [['form', 'f1'], ['view', 'v1']], ['app', 'a1', 'app One'], () => {});
   assert.deepEqual(calls.map((c) => c[0]), ['publishArtifacts', 'publishArtifact', 'publishArtifact', 'publishArtifact']);
 });
+
+// `publishTargets` tells the publish phase whether the app's OWN publish went through, because an AI override saved in
+// the app's unpublished layer is in force once the app is published (and only then). The batched branch is the one a
+// build takes whenever tables and the app publish together, so it answers for itself.
+test('publishTargets reports whether the app\u2019s own publish went through, in the envelope or on its own', async () => {
+  const runner = { mapLimit: async (items, n, fn) => Promise.all(items.map(fn)) };
+  const publishOf = (kind) => (kind === 'failed' ? { kind, error: new Error('publish refused') } : kind === 'unverifiable' ? { kind, reason: 'the published copy was not read back' } : { kind });
+  const outcome = (type, id, kind) => ({ type, id, shipped: kind === 'verified', publish: publishOf(kind) });
+  // `envelope`: what the one envelope answers for [form, app]; `single`: what a publish on its own answers, by type.
+  const run = async ({ envelope, single = {}, entities = [['form', 'f1']], app = ['app', 'a1', 'app One'] }) => {
+    const provision = {
+      publishArtifacts: async (targets) => targets.map(({ type, id }, i) => outcome(type, id, envelope[i])),
+      publishArtifact: async (type, id) => outcome(type, id, single[type] || 'verified'),
+    };
+    return publishTargets(provision, runner, 2, entities, app, () => {});
+  };
+  assert.deepEqual(await run({ envelope: ['verified', 'verified'] }), { appPublished: true });
+  assert.deepEqual(await run({ envelope: ['verified', 'unverifiable'] }), { appPublished: true }, 'PublishXml answered; only the read-back was not possible');
+  assert.deepEqual(await run({ envelope: ['verified', 'failed'] }), { appPublished: true }, 'failed in the envelope, published on its own');
+  assert.deepEqual(await run({ envelope: ['verified', 'failed'], single: { app: 'unverifiable' } }), { appPublished: true });
+  assert.deepEqual(await run({ envelope: ['verified', 'failed'], single: { app: 'failed' } }), { appPublished: false }, 'failed in the envelope and again on its own');
+  assert.deepEqual(await run({ envelope: ['failed', 'verified'], single: { form: 'failed' } }), { appPublished: true }, 'another target\u2019s failure says nothing about the app');
+  assert.deepEqual(await run({ envelope: ['verified', 'notRequested'] }), { appPublished: false }, 'an outcome that says nothing about publishing proves nothing');
+  assert.deepEqual(await run({ envelope: ['verified', 'verified'], app: null }), { appPublished: false }, 'no app target, no app publish');
+  assert.deepEqual(await run({ envelope: ['verified', 'verified', 'verified'], entities: [['form', 'f1'], ['view', 'v1']] }), { appPublished: true }, 'the app\u2019s own entry is the one that counts, wherever it sits in the envelope');
+});
+
+test('publishTargets: a refused envelope falls back to per-target publishes, and the app\u2019s own decides', async () => {
+  const runner = { mapLimit: async (items, n, fn) => Promise.all(items.map(fn)) };
+  const run = async (appKind) => publishTargets({
+    publishArtifacts: async () => { throw new Error('ARTIFACT_NOT_FOUND: view/x not in workspace'); },
+    publishArtifact: async (type, id) => ({ type, id, publish: type === 'app' && appKind === 'failed' ? { kind: 'failed', error: new Error('refused') } : { kind: appKind === 'unverifiable' && type === 'app' ? 'unverifiable' : 'verified' } }),
+  }, runner, 2, [['form', 'f1']], ['app', 'a1', 'app One'], () => {});
+  assert.deepEqual(await run('verified'), { appPublished: true });
+  assert.deepEqual(await run('unverifiable'), { appPublished: true });
+  assert.deepEqual(await run('failed'), { appPublished: false });
+});
+
+// The same fixture with an AI override that the SDK saved but could not yet publish — the case the report is for. The
+// override row reads as present only once an app publish has really gone through, as on a live environment.
+function aiBatchSdk({ envelope, single } = {}) {
+  const state = { inForce: false };
+  const { sdk, calls } = batchSdk({
+    envelope: (targets) => {
+      const out = envelope ? envelope(targets) : targets.map(({ type, id }) => ({ type, id, shipped: true, publish: { kind: 'verified' } }));
+      out.forEach((o, i) => { if (targets[i].type === 'app' && o.publish.kind !== 'failed') state.inForce = true; });
+      return out;
+    },
+  });
+  sdk.publishArtifact = async (type, id) => {
+    calls.push(['publishArtifact', type, id]);
+    const publish = single ? single(type) : { kind: 'verified' };
+    if (type === 'app' && publish.kind !== 'failed') state.inForce = true;
+    return { type, id, shipped: publish.kind === 'verified', publish };
+  };
+  const fetched = sdk.fetchArtifact;
+  sdk.fetchArtifact = async (type, id, ...rest) => { calls.push(['fetchArtifact', type, id]); return fetched(type, id, ...rest); };
+  const query = sdk.queryRecords;
+  sdk.queryRecords = async (entity, ...rest) => {
+    if (entity === 'appmodule') return [{ appmoduleid: 'APPID' }];
+    if (entity === 'settingdefinition') return [{ settingdefinitionid: 'DEFID' }];
+    if (entity === 'appsetting') return state.inForce ? [{ value: '2' }] : [];
+    return query(entity, ...rest);
+  };
+  sdk.setAppAiFeatures = async (appUnique, flags) => {
+    calls.push(['setAppAiFeatures', appUnique, flags]);
+    return { applied: ['formFill'], skipped: [], notPersisted: [], unverified: [], failed: [], outcomes: [{ feature: 'formFill', status: 'applied', appOverrideExists: true, pendingPublish: true }] };
+  };
+  return { sdk, calls };
+}
+const aiSpec = () => ({ ...spec(), ai: { appFeatures: { formFill: true }, summaries: { default: 'off' } } });
+const aiWarnings = (events) => events.filter((e) => e.phase === 'ai-features' && e.status === 'skip').map((e) => e.label);
+const appPublishes = (calls) => named(calls, 'publishArtifact').filter((c) => c[1] === 'app');
+
+test('with --publish, an app the envelope published is not published again for a saved AI override: it is only proved', async () => {
+  const { sdk, calls } = aiBatchSdk();
+  const events = [];
+  const r = await runSdkBuild(aiSpec(), { sdk, apply: true, publish: true, emit: (e) => events.push(e) });
+  assert.equal(named(calls, 'publishArtifacts').length, 1, 'one envelope');
+  assert.equal(appPublishes(calls).length, 0, 'the app rode in the envelope; nothing publishes it again');
+  assert.equal(named(calls, 'fetchArtifact').filter((c) => c[1] === 'app').length, 0, 'and it is not fetched for a retry');
+  assert.equal(named(calls, 'setAppAiFeatures').length, 1, 'nor is the override written again');
+  assert.deepEqual(r.created.ai.appFeatures.applied, ['formFill']);
+  assert.deepEqual(aiWarnings(events), []);
+});
+
+test('with --publish, an app the envelope could not publish is published again for a saved AI override, and the result is the proof\u2019s', async () => {
+  const failedApp = { kind: 'failed', error: new Error('publish refused') };
+  const { sdk, calls } = aiBatchSdk({
+    envelope: (targets) => targets.map(({ type, id }) => (type === 'app'
+      ? { type, id, shipped: false, publish: failedApp }
+      : { type, id, shipped: true, publish: { kind: 'verified' } })),
+    single: (type) => (type === 'app' ? failedApp : { kind: 'verified' }),
+  });
+  const events = [];
+  const r = await runSdkBuild(aiSpec(), { sdk, apply: true, publish: true, emit: (e) => events.push(e), warn: () => {}, proofDelayMs: 0 });
+  assert.equal(appPublishes(calls).length, 2, 'on its own after the envelope, and once more for the override');
+  assert.equal(named(calls, 'setAppAiFeatures').length, 1, 'publishing is what a saved override needs; it is not written again');
+  assert.ok(aiWarnings(events).some((l) => /NOT YET PUBLISHED: formFill/.test(l)), JSON.stringify(aiWarnings(events)));
+  assert.ok(!r.created.ai.appFeatures.applied.includes('formFill'));
+});
+
+test('with --publish, an app the envelope could not publish but its own publish then did is not published a third time', async () => {
+  const { sdk, calls } = aiBatchSdk({
+    envelope: (targets) => targets.map(({ type, id }) => (type === 'app'
+      ? { type, id, shipped: false, publish: { kind: 'failed', error: new Error('envelope 400') } }
+      : { type, id, shipped: true, publish: { kind: 'verified' } })),
+  });
+  const r = await runSdkBuild(aiSpec(), { sdk, apply: true, publish: true });
+  assert.equal(appPublishes(calls).length, 1, 'the retry on its own is the app\u2019s publish; the override needs no other');
+  assert.deepEqual(r.created.ai.appFeatures.applied, ['formFill']);
+});

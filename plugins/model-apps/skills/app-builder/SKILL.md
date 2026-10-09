@@ -412,6 +412,24 @@ phase re-uses what's already created and only fills the gaps. SDK metadata is pe
 `<working-dir>/.maker-workspace/` (override with `--workspace`). There is no apply-safe
 `--from <phase>` shortcut; a full rerun is the correct and safe recovery path. One exception: an
 `already-exists` halt recurs on a rerun until that workspace directory is deleted — follow its message.
+Another: that workspace belongs to the environment it was first opened for. Only `--apply` opens it — a dry
+run works in a temporary workspace, so it binds nothing, previews from any folder, and warns when an `--apply`
+there would be stopped. A build pointed at a different `--env` **halts before reading or writing anything in
+it** and names both environments. It is never cleared or re-bound for you — that discards the SDK's saved copies
+of the other environment's artifacts, including any edit made in them that was never pushed, and the
+page-ownership receipts and baseline kept beside them are that environment's too. Build against the
+environment the halt names, or use a fresh app folder (copy `app-spec.json` and the files it names) or a new
+`--workspace`. Only if that environment's copy of the app is no longer wanted, tear it down there with the
+`--clear-workspace` command the halt prints, which keeps the folder while a page-ownership receipt remains. The
+halt prints the folder on a line of its own, and that command takes it as `--workspace` — pass it exactly as
+printed, quoted for your shell (inside double quotes PowerShell and bash expand a `$` in the path). A folder that
+holds nothing a build saved — the SDK's empty folders only, which an earlier preview or a build that stopped at
+its start leaves — is described as exactly that: nothing was built in that environment, so there is nothing to go
+back to or tear down, and the folder can simply be deleted or moved aside. A folder whose `manifest.json` names
+no usable environment, or is not valid JSON, halts too: move it aside (rename it rather than delete it — it can
+hold page-ownership receipts and the baseline) and run again. The same environment under its other host name
+(`<org>.api.crm…` against `<org>.crm…`) also halts: re-run with the host the halt names. The standalone verifier
+never opens that workspace either, so it verifies any environment the app is deployed to.
 
 ### Phase 3 — Verify & iterate
 **`--apply --verify` already reconciled the spec against what deployed** (Phase 2) — the build appends a

@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 'use strict';
 // verify-model-app: reconcile an App Spec against the DEPLOYED app and report any missing artifacts
-// (entities/columns/views/charts/forms/sitemap subareas + icons). Read-only WITH RESPECT TO DATAVERSE
-// (it only READS the org — no create/update/delete), though it does write a local SDK workspace/cache
-// directory (--workspace, default <spec-dir>/.maker-workspace). Exit non-zero if anything declared is
-// missing — catches silent partial builds.
+// (entities/columns/views/charts/forms/sitemap subareas + icons). Read-only: it only READS the org — no
+// create/update/delete — and writes nothing into the app folder. Its SDK works in a throwaway temporary
+// workspace, removed when the run ends, so it never opens the folder's persistent `.maker-workspace` (which belongs
+// to the environment it was first opened for, and is the build's). `--workspace` (default
+// <spec-dir>/.maker-workspace) names only where the build's baseline, `last-applied.json`, is READ from.
+// Exit non-zero if anything declared is missing — catches silent partial builds.
 //
 // Usage: node verify-model-app.js --env <orgUrl> --spec @<app-folder>/app-spec.json [--workspace <dir>]
 
@@ -24,27 +26,37 @@ const { assertSafeOutputDir } = require('./lib/safe-fs.js');
 const { depthFromMask } = require('./lib/role-privileges.js');
 const { appEntityComponentsFor, appMainFormsFor, appComponentRows } = require('./lib/app-components.js');
 
-// A throwaway SDK workspace for ONE dashboard read (readerFor's dashboardComponents), deleted after it. The tiles
-// verify checks must be the server's: read through the build's own workspace, a copy holding unpushed edits — or
-// one another writer changed mid-read — was what got verified, and a forced refresh there could discard a
-// concurrent writer's edit. A fresh workspace has no local copy to read, discard or race with, and a fresh SDK no
-// cached read to hand back. One per read, not per run: a second read of the same dashboard must not come from
-// the first one's cache. The HTTP client — and with it the Azure CLI token — is shared: `opts.httpClient` (the
-// run's own), else one made on the first read. A client per read ran `az account get-access-token` once per
-// dashboard. `opts.makeClient` is a test seam.
+// An SDK on a THROWAWAY workspace — a temporary folder `dispose()` removes — and never on the app folder's own.
+//
+// For the run's own reads: every one of them goes to the server (queries, catalog and relationship reads,
+// the privilege and setting reads), so nothing in the app folder's workspace could answer them, and opening it
+// would only tie a read-only verify to the environment that workspace was first opened for (the SDK refuses a
+// workspace for another one, WORKSPACE_ORG_MISMATCH) — a folder built in one environment and imported into another
+// could not be verified there — and bind a folder that has no workspace yet to whichever environment verified first.
+//
+// For a dashboard read (readerFor's dashboardComponents) the tiles verify checks must be the server's: read
+// through the build's own workspace, a copy holding unpushed edits — or one another writer changed mid-read — was
+// what got verified, and a forced refresh there could discard a concurrent writer's edit. A fresh workspace has no
+// local copy to read, discard or race with, and a fresh SDK no cached read to hand back. One per read, not per run:
+// a second read of the same dashboard must not come from the first one's cache.
+async function throwawaySdk(env, httpClient, prefix) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const dispose = () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ } };
+  try {
+    return { sdk: await makeProvision(env, dir, httpClient), dispose };
+  } catch (e) {
+    dispose();
+    throw e;
+  }
+}
+
+// The reader for ONE dashboard read: a throwaway SDK (throwawaySdk), deleted after it. The HTTP client — and with it
+// the Azure CLI token — is shared: `opts.httpClient` (the run's own), else one made on the first read. A client per
+// read ran `az account get-access-token` once per dashboard. `opts.makeClient` is a test seam.
 function isolatedReaderFor(env, opts = {}) {
   let client = opts.httpClient || null;
   const makeClient = opts.makeClient || createAzHttpClient;
-  return async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-dashboard-'));
-    try {
-      const sdk = await makeProvision(env, dir, client || (client = makeClient(env)));
-      return { sdk, dispose: () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ } } };
-    } catch (e) {
-      try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
-      throw e;
-    }
-  };
+  return async () => throwawaySdk(env, client || (client = makeClient(env)), 'verify-dashboard-');
 }
 
 async function makeProvision(env, workspaceDir, httpClient = createAzHttpClient(env)) {
@@ -489,21 +501,33 @@ async function main() {
   if (!v.ok) { emitResult(false, { ok: false, errors: v.errors }); return; }
   for (const w of v.warnings || []) process.stderr.write(`WARNING: ${w}\n`);
   const workspaceDir = workspaceArg || path.join(path.dirname(specPath), '.maker-workspace');
-  // Before the SDK. A link planted as the workspace root is refused here so the factory
-  // is never called; a real directory is allowed.
+  // Only the build's baseline is READ from here, so nothing is created: a folder that does not exist (or cannot be
+  // inspected) is simply one with no baseline. A LINK at the folder is still refused, as everywhere else the plugin
+  // takes a workspace — the baseline would be read from wherever the link points.
   try {
-    assertSafeOutputDir(workspaceDir, { create: true, fs });
+    assertSafeOutputDir(workspaceDir, { fs });
   } catch (err) {
-    emitResult(false, err instanceof Error ? err : new Error(String(err)));
-    return;
+    if (!(err && err.reason === 'uninspectable')) {
+      emitResult(false, err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
   }
   const httpClient = createAzHttpClient(env);
-  const sdk = await makeProvision(env, workspaceDir, httpClient);
-  const genpageCli = makeGenpageCli(env);
-  // The spec's baseline for this environment and app, when the workspace has one: an icon the build
-  // kept because it was changed in the designer since then is not a failure (AB#6726727).
-  const baselineSpec = readBaseline(workspaceDir, { environment: dataverseOrigin(env), appUniqueName: appUniqueName(spec) }) || undefined;
-  const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec), { genpageCli, workspaceDir, isolatedReader: isolatedReaderFor(env, { httpClient }) }), { baselineSpec });
+  // The SDK works in a throwaway workspace (see throwawaySdk), never the app folder's `.maker-workspace`: verify
+  // must run against any environment the app is deployed to, whichever one that folder was built against.
+  const session = await throwawaySdk(env, httpClient, 'verify-');
+  let r;
+  try {
+    const genpageCli = makeGenpageCli(env);
+    // The spec's baseline for this environment and app, when the workspace has one: an icon the build
+    // kept because it was changed in the designer since then is not a failure (AB#6726727). It is keyed by
+    // environment, so a folder built against another one yields none.
+    const baselineSpec = readBaseline(workspaceDir, { environment: dataverseOrigin(env), appUniqueName: appUniqueName(spec) }) || undefined;
+    r = await verifySpec(spec, readerFor(session.sdk, appUniqueName(spec), { genpageCli, workspaceDir, isolatedReader: isolatedReaderFor(env, { httpClient }) }), { baselineSpec });
+  } finally {
+    // Before the result is printed: emitResult ends the process, so a cleanup placed after it never ran.
+    session.dispose();
+  }
   // Show `detail` on a failing check. Without it a READ that failed (throttling, auth expiry, a 5xx)
   // is indistinguishable from an artifact that is genuinely absent — verifySpec records the cause
   // but the operator saw only "✗ view: Active Orders" and would chase a phantom deployment drift.
