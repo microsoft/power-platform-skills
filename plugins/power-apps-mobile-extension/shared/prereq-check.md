@@ -33,6 +33,14 @@ The plugin itself is markdown + scripts (zero install) and uses public tooling a
 
 Each skill runs **only the check below that matches it** (per [`./shared-instructions.md`](./shared-instructions.md) §1.5). When in doubt, run less — a missing build dependency surfaces naturally via the command that fails, whose failure handler points back here.
 
+### `/telemetry` - Node.js only
+
+The transmission-preference command needs Node.js 20+, not npm, PAC, sign-in,
+native tools or a control project. Check `node --version` only when Node's presence
+is unknown; if missing, give the public Node installation link and stop. Never
+install tools or request authentication solely to collect telemetry. See
+[`telemetry.md`](./telemetry.md) for the current release state and controls.
+
 Exit codes: `0` = pass; `1` = hard failure (user must fix, or confirm an auto-fix below).
 
 > **No "baseline" one-liner in this track.** Each skill runs *only its own* check below. No package-feed or source-control authentication is required, so if a skill's Step 1 says "run the baseline one-liner," read it as "run the matching per-skill check below."

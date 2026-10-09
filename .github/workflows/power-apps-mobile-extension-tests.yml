@@ -1,0 +1,54 @@
+name: power-apps-mobile-extension-tests
+
+on:
+    pull_request:
+        branches:
+            - main
+        paths:
+            - "plugins/power-apps-mobile-extension/**"
+            - "shared/telemetry/lib/**"
+            - ".github/workflows/power-apps-mobile-extension-tests.yml"
+    push:
+        branches:
+            - main
+        paths:
+            - "plugins/power-apps-mobile-extension/**"
+            - "shared/telemetry/lib/**"
+            - ".github/workflows/power-apps-mobile-extension-tests.yml"
+
+permissions:
+    contents: read
+
+concurrency:
+    group: power-apps-mobile-extension-tests-${{ github.event.pull_request.number || github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    test-power-apps-mobile-extension:
+        name: test-power-apps-mobile-extension (${{ matrix.os }}, node ${{ matrix.node }})
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 15
+        env:
+            POWER_PLATFORM_SKILLS_TELEMETRY_POWER_APPS_MOBILE_EXTENSION_OPTOUT: "1"
+        strategy:
+            fail-fast: false
+            matrix:
+                os:
+                    - ubuntu-latest
+                    - windows-latest
+                    - macos-latest
+                node:
+                    - 20
+                    - 22
+        steps:
+            - name: checkout
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            - name: setup-node
+              uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+              with:
+                  node-version: ${{ matrix.node }}
+
+            - name: run-plugin-tests
+              shell: bash
+              run: node --test plugins/power-apps-mobile-extension/scripts/tests/*.test.js
