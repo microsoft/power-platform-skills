@@ -1499,6 +1499,13 @@ and structurally verifies the root provider/theme/safe-area contract. It
 preserves custom navigation, existing helper bytes, `offlineProfile`, provider
 props, and the template's `@ts-ignore` generation boundaries.
 
+Preparation also copies missing app-local guidance from `template/AGENTS.md`,
+`template/CLAUDE.md`, and `template/.github/copilot-instructions.md`. Existing
+customer guidance is preserved byte-for-byte; no symlinked destination is
+followed. `copiedGuidanceFiles` and `preservedGuidanceFiles` describe the result,
+and only actual copies appear in `writtenFiles`. Do not overwrite a preserved
+file just to make the default skill routing appear.
+
 **Generated ownership boundary:** Step 5 must not create, reset, delete, or
 write anything under `src/generated/`. Only Power Apps schema/data-source
 generation commands own that directory. A generated file required later is
@@ -3247,7 +3254,44 @@ cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1;
 npm run dev
 ```
 
-`npm run dev` runs the template-owned `predev` script first. If either lifecycle script fails, capture the full output once, batch-fix by root cause, then rerun `npm run dev`; continue only when `predev` passes and the development command prints its Metro URL.
+`npm run dev` runs the template-owned `predev` script first. If either lifecycle
+script fails, capture a minimal sanitized error and stage once, then offer
+**Diagnose startup** or **Stop here**. Do not bypass the template-owned scripts.
+Do not start a separate repair/reinstall/restart loop in this skill. On diagnosis
+approval, invoke the existing `/debug-app` startup-only path:
+
+```text
+Invoke skill: /debug-app
+
+Arguments:
+  startup "<original sanitized startup symptom>"
+  --working-dir '<working_dir>'
+
+Caller context:
+  caller: create-mobile-app
+  working_dir: <same absolute working_dir>
+  launch_command: npm run dev
+  launch_args: <validated arguments used after npm's `--`; `[]` for the normal launch>
+  failed_stage: <install/predev/schema/type-check/Metro>
+  startup_attempts: <attempts already made, including the initial launch>
+  original_symptom: <minimal sanitized error, no raw log or credentials>
+  return_to_caller: true
+```
+
+The shared [startup diagnostics](../debug-app/references/startup-diagnostics.md)
+own inspection, classification, and any explicitly approved same-lock restoration
+or bounded retry. Forward launch arguments as structured data so an authenticated
+`--tunnel` / `--tunnel-tenant <tenant-guid>` launch is retried with the same
+transport and tenant; never place a prompt-derived command string in caller
+context. Creation approval is not dependency-restoration or restart approval.
+Do not upgrade packages, delete the lockfile, patch host/MSAL source, or repeat
+a repair already attempted by the child.
+
+Continue QR delivery only when `predev` passes and the child verifies a live
+Metro session with its native URL. Report device verification pending until the
+user opens the app; Metro startup alone is not end-to-end app verification.
+On pending/blocked/cancelled, report the incomplete startup and next step instead
+of claiming the app is running. The child returns without the runtime monitor.
 
 This is a long-running dev server. In hosts that support background terminals, run it as a background/async terminal only for process lifetime; do not persist or depend on the terminal ID. `/debug-app` discovers logs from `.powernative/metro-logs/`, not from terminal output.
 
@@ -3310,7 +3354,12 @@ After Metro is running and the QR has been presented, offer a single optional de
 
 > "If the app shows an error or a workflow looks wrong after you load it in the native dev client, tell me the symptom and I can run `/debug-app "<symptom>"` using the project-local Metro log."
 
-Only invoke `/debug-app` if the user asks for debugging or gives a concrete symptom. `/debug-app` uses `.powernative/metro-logs/` as its primary diagnostic source; it must not request a bundle URL or run any React Native Web setup. If the user gives no symptom, proceed directly to Step 13.
+After a successful launch, only invoke `/debug-app` if the user asks for debugging
+or gives a concrete symptom (including QR/device-opening failure). Step 12's
+approved startup-only failure handoff is separate and never starts indefinite
+monitoring. `/debug-app` uses `.powernative/metro-logs/` for runtime diagnosis;
+it must not request a bundle URL or run any React Native Web setup. If the user
+gives no symptom, proceed directly to Step 13.
 
 When the user is ready to deploy:
 
