@@ -26,8 +26,9 @@ Carry the brief in existing
 approved `newSiteDesign.composition`/`designContext` and native operation inputs, not a new mandatory
 schema or a second design workflow. Review once at the final coordinated local verification.
 Classic source-only conclusions remain provisional; status/plan HTML and structural wireframes
-are not runtime evidence. Keep pre-approval image checks and exact-plan `--imageChecks` publication
-unchanged, reusing the receipt for unchanged URLs rather than probing at every owner handoff.
+are not runtime evidence. Classic image-network checks are opt-in; unchecked images remain
+explicitly unverified. Reuse any exact-plan image-check receipt rather than probing at every
+owner handoff. Do not add a mandatory browser review or verification-choice gate.
 
 New classic creation recommends Enhanced with Bootstrap 5, with explicit model/admin approval,
 the helper's Bootstrap-filtered template catalog, and downloaded Bootstrap verification using
@@ -43,13 +44,21 @@ Web File imports or fake output bindings. Preserve suitable existing template im
 file delivery outside that route still reuses `prepare-declarative-asset.js` and `author-web-file`.
 Keep final `style-site` guards and the plan's visual context hash-bound and visible in approval
 HTML. Review external-host availability, license, privacy and CSP; do not silently relax policies.
+Align external Unsplash sourcing with SPA's WebSearch-to-CDN flow: no mandatory photo-page fetch
+or photographer lookup. Retain photo-page/photographer metadata when reliably known; require the
+license basis and valid direct URL. Retain exact-plan `--imageChecks` evidence when requested. Do not
+mistake a source-page bot challenge for a CDN failure or invent missing attribution. Explicit
+Web File imports retain their existing source metadata and staging requirements.
 The plan library validates completeness/dependencies, not visual fidelity. Status/approval HTML
 is not a site preview; local verification leaves Studio/runtime rendering pending.
 
 New classic designs and full-site redesigns explicitly plan header branding, navigation styling
 and responsive treatment in the existing brief and owner operations, or record why the header is
-preserved. Template selection is not a visual constraint or a preservation reason. Coordinate
-snippet/template work before final styling, retain native header behavior and binding safety,
+preserved. Every header update includes an explicit website-appropriate logo or wordmark decision:
+replace an unsuitable starter logo, or record why the verified current logo meets the requirements
+or must be preserved. Resolve desktop/mobile callers and requested locales; verify the approved
+logo outcome, not just header CSS. Template selection is not a visual constraint or a preservation
+reason. Coordinate snippet/template work before final styling, retain native header behavior and binding safety,
 and keep narrow edits scoped. Do not add a header schema, no-op task, approval gate or SPA change.
 
 Customization-plan presentation preserves the approved JSON: neutral informational notes,
@@ -58,12 +67,14 @@ wireframes. Omit the maker-facing technical implementation trace; retain complet
 in the canonical approved JSON and its archived history for tooling and maintainer diagnostics.
 Hosted asset previews load lazily in the browser with no referrer, source attribution,
 and an explicit load-failure fallback/link; rendering HTML does not stage or import images.
-The review CLI checks unique external image URLs with bounded, public-only HTTPS requests
-before generating approval HTML. Keep this in `scripts/lib/declarative-image-verification.js`;
-it reuses the asset inspector where applicable and never persists image bytes. Publication
-requires the exact-plan `--imageChecks` report, retains it in the execution receipt, and passes
-it through operation resolution without probing again. Revisions need fresh checked approval;
-legacy approved receipts remain resumable without fabricated verification claims.
+The review CLI makes no image-network requests by default and labels external images unverified.
+Only `--verifyImages true` checks unique external URLs with bounded, public-only HTTPS requests.
+Keep this in `scripts/lib/declarative-image-verification.js`; it reuses the asset inspector where
+applicable and never persists image bytes. Requested checks fail explicitly, never silently
+downgrading to unchecked review. Publication accepts unchecked plans; any supplied `--imageChecks`
+report must match the exact plan, is retained in the execution receipt, and passes through
+operation resolution without probing again. Revisions need fresh review and approval, plus fresh
+checks if requested. Legacy receipts remain resumable without fabricated verification claims.
 Keep unknown layouts and unavailable local-image previews explicit rather than inventing data.
 
 ## Classic styling — local-only exception
@@ -281,7 +292,8 @@ User-invocable via `/power-pages:<skill-name>`:
   pending work without mutating the approved plan. It derives safe content and supported
   `section -> columns -> elements` structures, represents card-like layouts with columns rather
   than an unsupported native card type. New-site imagery uses approved external HTTPS URLs with
-  pre-approval source checks and exact-plan image-check publication; explicit file delivery outside
+  optional source checks and explicit unverified status when unchecked; exact-plan reports remain
+  validated when supplied. Explicit file delivery outside
   that route retains secure staging and verified Web File bindings. It invokes the owning classic authoring
   skills, runs
   `style-site` last when requested, verifies the combined local diff, commits coherent changes,

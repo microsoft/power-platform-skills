@@ -60,8 +60,23 @@ test('GET checks final image bytes, pins public DNS and sends no ambient credent
   });
 });
 
-test('404, HTML, mislabeled images and empty or partial responses cannot pass', async () => {
+test('Unsplash checks only the direct CDN resource, with or without optional photo metadata', async () => {
+  const url = 'https://images.unsplash.com/photo-example?w=1600&h=900&fit=crop&fm=jpg';
+  for (const metadata of [{}, { sourcePage: 'https://unsplash.com/photos/example', photographer: 'Example Photographer' }]) {
+    const plan = externalPlan([url]);
+    plan.assets[0].source = { type: 'unsplash', license: 'Unsplash License', ...metadata };
+    const net = transport([{}]);
+    const report = await verifyPlanImages(plan, {
+      check: (imageUrl) => checkImage(imageUrl, { request: net.request, resolve: publicDns }),
+    });
+    assert.deepEqual(net.calls.map((call) => call.url), [url], 'No photo-page requests or attribution lookup.');
+    assert.equal(validateImageChecks(plan, report), report);
+  }
+});
+
+test('HTTP errors, HTML, mislabeled images and empty or partial responses cannot pass', async () => {
   const cases = [
+    [{ status: 401 }, /HTTP 401/],
     [{ status: 404 }, /HTTP 404/],
     [{ status: 403 }, /HTTP 403/],
     [{ status: 500 }, /HTTP 500/],

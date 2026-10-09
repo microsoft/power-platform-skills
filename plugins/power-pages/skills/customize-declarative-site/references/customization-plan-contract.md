@@ -59,19 +59,29 @@ The maker-facing rendering preserves the contract while making it readable:
   Keep source links and attribution visible even when the image fails to load. Previewing does
   not mutate the asset manifest, execution receipt, or image-delivery policy.
 
-Before approval, the renderer verifies unique external image URLs and writes a sibling
+By default, rendering and publication make no image-network requests. External images may be
+reviewed and published without a report, with explicit **unverified** notices in the HTML and
+`unverifiedImages` counts in the command results. No report means no HTTP/content evidence;
+neither a successful preview nor plan validation changes that status.
+
+When the user requests source verification, render with `--verifyImages true`. The renderer
+verifies unique external image URLs before approval and writes a sibling
 `plan.html.image-checks.json` report. The report contains `schemaVersion: 1`, the exact `planHash`,
 and one result per URL with `url`, `finalUrl`, `statusCode: 200`, `mimeType`, `sizeBytes`, and
 `checkedAt`. It records bounded HTTP/content verification, not stored image bytes or a full
-browser decode. A failed source prevents review HTML from being produced.
+browser decode. A failed requested check prevents review HTML from being produced; do not
+silently retry with checks disabled.
 
-Pass the report through `--imageChecks` when publishing. External-image plans cannot be newly
-published without matching successful results. The publisher stores the report as `imageChecks`
+Pass the report through `--imageChecks` when publishing a checked review; omit it for an unchecked
+review. Supplied `--imageChecks` reports must match this exact plan and contain successful results;
+missing, malformed, stale or failed supplied reports block publication. The publisher stores the report as `imageChecks`
 in `current-execution.json`; operation resolution returns it separately from owner inputs.
 Publication and child authoring reuse it rather than performing repeated network checks.
 Do not insert report fields into `assets[].preparation` or change the plan schema. Existing
 approved receipts without this optional field remain valid for resume; their image availability
-must not be described as verified. Changed plans require a new checked review and approval.
+must not be described as verified. Changed plans require new review and approval, with fresh
+checks only when requested. Keep the same evidence state from review through publication;
+never drop a checked review's report or invent one for an unchecked review.
 
 Render each proposed plan in a fresh external review directory outside the declarative site root.
 After approval, publish the JSON with
@@ -177,17 +187,28 @@ present, `newSiteDesign.composition`/`responsive`. For an existing-site redesign
 brief, use the summary and approved operation inputs; do not add a mandatory header field or
 migrate an approved plan.
 
+For every header update, make the chosen logo or wordmark and its website-specific rationale
+explicit in the summary and operation details. An image logo belongs in the existing `assets`
+manifest with `kind: "logo"`, `role: "brand"`, approved source/delivery, site-wide header placements
+and localized alternative text. A typography-only wordmark uses native owner inputs, not a fake
+image asset. Identify the actual desktop/mobile callers, requested locales, source/value, accessible
+brand name, home-link destination and sizing intent. Keep an external logo URL as an exact static
+owner input, not only embedded in HTML. Record justified logo retention in
+`preservation`; an unsuitable starter logo cannot remain by omission.
+
 Map actual header changes to the relevant snippet/template/styling operations. Use a clear
 operation `summary`, exact existing `target`, site-wide `inputs.scope`, and maker-readable
 `inputs.details` alongside the owner's required values. These appear in the current component
 and styling cards without a new technical trace or plan tab. Keep functional contracts in
 `preserve`, real prerequisites in `dependsOn`, and local checks/pending runtime observations in
-`verification`. Final styling must follow all header structural work as well as page work.
+`verification`. Final styling must follow all header structural work as well as page work,
+including any logo source/value change. Verify the approved logo outcome in its native callers;
+header CSS or an unrelated image swap does not complete a planned logo replacement.
 
 For intentional header preservation, state the reason in `preservation` instead of creating a
 dummy operation. Neither choosing a creation template nor omitting header work explains
 preservation. Narrow edits need no unrelated header changes. Apply the existing plan and owner
-approvals, exact hashes and image checks; header planning adds no separate gate or schema.
+approvals, exact hashes and any requested image checks; header planning adds no separate gate or schema.
 
 ## Capability records
 
@@ -221,8 +242,6 @@ with the actual discovered image and provenance:
   "purpose": "Establish a calm, credible first impression for prospective clients.",
   "source": {
     "type": "unsplash",
-    "sourcePage": "https://unsplash.com/photos/<photo>",
-    "photographer": "<photographer>",
     "license": "Unsplash License"
   },
   "delivery": "external-url",
@@ -267,10 +286,16 @@ Rules:
   `inputs`, including nested component sources. No staging/import operation or output binding
   is needed. Availability, actual image content, hotlink permission, privacy and CSP are reviewed
   separately; schema validation neither fetches nor certifies the remote resource. The
-  pre-approval image check supplies the separate HTTP/content evidence.
-- Unsplash external delivery uses `externalUrl` on `images.unsplash.com` plus its Unsplash photo
-  page, photographer and license. Legacy `source.downloadUrl`, if supplied too, must match
-  `externalUrl` exactly. Web File imports retain the required `source.downloadUrl`.
+  optional image check supplies the separate HTTP/content evidence when requested.
+- Unsplash external delivery uses a direct `externalUrl` on `images.unsplash.com` discovered
+  through WebSearch and a required license basis. `source.sourcePage` and `source.photographer`
+  are optional: retain them when reliably known, otherwise omit them without inventing values.
+  No photo-page fetch or photographer lookup is required. Supplied fields must be non-empty
+  strings, and a supplied photo page must use an approved Unsplash HTTPS host without credentials
+  or custom ports. Legacy `source.downloadUrl`, if supplied too, must match `externalUrl` exactly.
+  Web File imports retain required `sourcePage`, `photographer`, `license` and `downloadUrl`.
+  Optional source verification and exact-plan report handling follow the contract above;
+  omitted checks must never be presented as successful checks.
 - For `web-file` delivery, `existing-site` sources use `preparation.status: "existing"` and new
   sources use `staged`.
 - Agent-authored assets are safe original SVGs, not raster images.
@@ -285,7 +310,6 @@ Rules:
 - Every configured site locale has an alternative-text entry. Informative images require
   non-empty text; decorative assets use an empty value.
 - Do not include binary bytes, data URIs, tokens, private URLs, or unresolved source choices.
-- Unsplash assets retain their photo page, direct image URL, photographer, and license basis.
 - Logos and favicons with site-wide placements must identify their exact approved caller in the
   corresponding operation.
 

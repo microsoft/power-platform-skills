@@ -244,7 +244,7 @@ test('image load/error and already-complete images settle to a visible image or 
   for (const cached of [false, true]) {
     for (const succeeds of [false, true]) {
       const stub = imageStub(cached, cached && succeeds ? 1200 : 0);
-      render(t, externalImagePlan(), [stub.image]);
+      const { document } = render(t, externalImagePlan(), [stub.image]);
       if (!cached) {
         assert.equal(stub.fallback.hidden, false, 'Loading state stays visible until the image settles.');
         stub.image.naturalWidth = succeeds ? 1200 : 0;
@@ -253,6 +253,8 @@ test('image load/error and already-complete images settle to a visible image or 
       assert.equal(stub.image.hidden, !succeeds);
       assert.equal(stub.fallback.hidden, succeeds);
       if (!succeeds) assert.equal(stub.label.textContent, 'Image preview unavailable');
+      assert.match(document.get('imageVerification').innerHTML, /External images are unverified/);
+      assert.equal(document.get('imageChecksData').textContent, 'null', 'Preview load/error is not source-check evidence.');
     }
   }
 });

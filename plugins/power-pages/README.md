@@ -104,6 +104,9 @@ whether it was provisioned by `/create-site` or created manually in Design Studi
   hosted illustrations using approved direct HTTPS URLs, not new image Web Files; imagery can
   be explicitly declined. Existing template images can be reused, and explicit Web File imports
   remain available for other customization work
+- Sources external Unsplash images through WebSearch and direct CDN URLs, like SPA creation;
+  photo-page and photographer metadata are optional when unavailable. License information remains
+  required; network checks are opt-in, and unchecked images are explicitly labeled unverified
 - Preserves platform behavior and existing-site visual intent, resolves dependencies before
   consumers run, and applies guarded styling after structural authoring
 - Verifies and commits the combined local result, then optionally hands off to `/deploy-site`

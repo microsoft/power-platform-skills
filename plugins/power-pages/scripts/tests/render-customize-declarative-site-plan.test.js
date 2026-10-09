@@ -304,11 +304,62 @@ test('refuses to overwrite an existing plan', () => {
   assert.match(second.stderr, /Output file already exists/);
 });
 
-test('a failed external image cannot create review HTML or a successful check report', async (t) => {
+test('default and explicitly disabled image checks render unverified images without network requests', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'unchecked-image-review-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const plan = externalImagePlan(['https://cdn.example.invalid/image.png', 'https://cdn.example.invalid/image.png']);
+  for (const [name, options] of [['default', {}], ['disabled', { verifyImages: false }]]) {
+    const output = path.join(root, name, 'plan.html');
+    const before = JSON.stringify(plan);
+    const result = await renderReviewedPlan(plan, output, {
+      ...options, check: () => assert.fail('Network verification must be explicitly requested.'),
+    });
+    assert.equal(JSON.stringify(plan), before);
+    assert.equal(result.imageChecks, null);
+    assert.equal(result.verifiedImages, 0);
+    assert.equal(result.unverifiedImages, 1, 'Count unique URLs, not placements.');
+    assert.equal(fs.existsSync(`${output}.image-checks.json`), false);
+    const document = renderDocument(fs.readFileSync(output, 'utf8'));
+    assert.match(document.get('imageVerification').innerHTML, /External images are unverified/);
+    assert.match(document.get('imageVerification').innerHTML, /Network checks were not run/);
+    assert.doesNotMatch(document.get('imageVerification').innerHTML, /checks passed/);
+    assert.match(document.get('assetChanges').innerHTML, /Unverified \(not checked\)/);
+    assert.deepEqual(fs.readdirSync(path.dirname(output)).sort(), ['plan.html', 'power-pages-icon.png']);
+  }
+});
+
+test('invalid verification options and invalid unchecked plans fail before writing review artifacts', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'invalid-image-review-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const verifyImages of ['true', null, 1]) {
+    await assert.rejects(renderReviewedPlan(externalImagePlan(), path.join(root, 'plan.html'), {
+      verifyImages, check: () => assert.fail('Invalid options must fail before network checks.'),
+    }), /verifyImages must be a boolean/);
+  }
+  const invalid = externalImagePlan();
+  delete invalid.assets[0].source.license;
+  await assert.rejects(renderReviewedPlan(invalid, path.join(root, 'plan.html')), /source.license/);
+  assert.deepEqual(fs.readdirSync(root), []);
+});
+
+test('plans without external images have no unverified-image notice or fabricated checks', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'no-external-image-review-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const result = await renderReviewedPlan(externalImagePlan([]), path.join(root, 'plan.html'), {
+    check: () => assert.fail('There are no external images to check.'),
+  });
+  assert.equal(result.imageChecks, null);
+  assert.equal(result.verifiedImages, 0);
+  assert.equal(result.unverifiedImages, 0);
+  assert.equal(renderDocument(fs.readFileSync(result.output, 'utf8')).get('imageVerification').innerHTML, '');
+});
+
+test('a failed opt-in image check cannot silently create unchecked HTML or a successful report', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'failed-image-review-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const output = path.join(root, 'plan.html');
   await assert.rejects(renderReviewedPlan(externalImagePlan(), output, {
+    verifyImages: true,
     check: async () => { throw new Error('Image URL returned HTTP 404.'); },
   }), /HTTP 404/);
   assert.deepEqual(fs.readdirSync(root), []);
@@ -321,6 +372,7 @@ test('review rendering records and displays image checks without changing image 
   const output = path.join(root, 'plan.html');
   let calls = 0;
   const result = await renderReviewedPlan(plan, output, {
+    verifyImages: true,
     check: async (url) => { calls++; return successfulImageCheck(url); },
   });
   assert.equal(calls, 1);
@@ -331,19 +383,58 @@ test('review rendering records and displays image checks without changing image 
   assert.match(document.get('imageVerification').innerHTML, /2026-01-01T00:00:00.000Z/);
   assert.equal(report.images[0].url, plan.assets[0].externalUrl);
   assert.equal(result.verifiedImages, 1);
+  assert.equal(result.unverifiedImages, 0);
+  assert.doesNotMatch(document.get('imageVerification').innerHTML, /are unverified/);
+  assert.match(document.get('assetChanges').innerHTML, /Passed \(HTTP\/content only\)/);
   assert.deepEqual(fs.readdirSync(root).sort(), ['plan.html', 'plan.html.image-checks.json', 'power-pages-icon.png']);
   await assert.rejects(renderReviewedPlan(plan, output, {
+    verifyImages: true,
     check: () => assert.fail('Existing artifacts must fail before repeating network checks.'),
   }), /already exists/);
 });
 
-test('the CLI enforces public-image verification before rendering external sources', (t) => {
+test('the CLI renders unverified external images by default or with checks explicitly disabled', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'unchecked-review-cli-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const data = writePlan(root, externalImagePlan(['https://cdn.example.invalid/image.png']));
+  for (const [name, args] of [['default', []], ['disabled', ['--verifyImages', 'false']]]) {
+    const output = path.join(root, `${name}.html`);
+    const result = spawnSync(process.execPath, [scriptPath, '--output', output, '--data', data, ...args], {
+      encoding: 'utf8',
+      shell: false,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).unverifiedImages, 1);
+    assert.equal(JSON.parse(result.stdout).imageChecks, null);
+    assert.equal(fs.existsSync(`${output}.image-checks.json`), false);
+    assert.match(renderDocument(fs.readFileSync(output, 'utf8')).get('imageVerification').innerHTML, /are unverified/);
+  }
+});
+
+test('the CLI rejects a missing or invalid verification flag value without rendering', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'invalid-review-cli-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const data = writePlan(root, externalImagePlan());
+  const output = path.join(root, 'plan.html');
+  for (const values of [[], ['yes']]) {
+    const result = spawnSync(process.execPath, [
+      scriptPath, '--output', output, '--data', data, '--verifyImages', ...values,
+    ], { encoding: 'utf8', shell: false });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /--verifyImages must be true or false/);
+    assert.equal(fs.existsSync(output), false);
+  }
+});
+
+test('the CLI enforces public-only destinations when image verification is requested', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'image-review-cli-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const plan = externalImagePlan(['https://127.0.0.1/image.png']);
   const data = writePlan(root, plan);
   const output = path.join(root, 'plan.html');
-  const result = spawnSync(process.execPath, [scriptPath, '--output', output, '--data', data], { encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [
+    scriptPath, '--output', output, '--data', data, '--verifyImages', 'true',
+  ], { encoding: 'utf8', shell: false });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /public Internet addresses/);
   assert.equal(fs.existsSync(output), false);

@@ -25,7 +25,7 @@ Score only evidenced categories when scoring is useful. With source-only or miss
 
 ## Keep the local contract
 
-No browser, local server, deployment, or extra gate is required. Reuse child verification and the approved image-check receipt without repeating unchanged probes. Preserve exact-diff/hash approval, native ownership, Bootstrap/Studio structures, authentication, navigation and locales.
+No browser, local server, deployment, or extra gate is required. Reuse child verification and any approved image-check receipt without repeating unchanged probes; unchecked images remain unverified, not a reason to add mandatory network checks. Preserve exact-diff/hash approval, native ownership, Bootstrap/Studio structures, authentication, navigation and locales.
 
 The SPA automatic capture/fix/commit loop does not apply to classic creation, customization, styling, or read-only critique. Missing rendering cannot block an otherwise independently verified local edit or authorize deploying it for screenshots. Known local failures still follow the existing owner and approval rules.
 

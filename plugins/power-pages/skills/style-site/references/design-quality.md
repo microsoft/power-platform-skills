@@ -38,6 +38,11 @@ Coordinate header surfaces, link/button states, spacing and responsive rules wit
 custom composition. Keep declared preservation preferences, site-wide scope and expanded
 exact-diff review; this is not an extra approval stage.
 
+For every header update, carry the approved logo or wordmark decision through desktop/mobile
+treatment: preserve its aspect ratio, avoid cropping or stretching the mark, and size it for the
+approved header. CSS-only restyling does not replace an unsuitable starter logo or update its
+accessible brand name and home link. Follow the native owner's approved source/value change,
+or the plan's justified logo-retention decision; do not silently substitute another brand asset.
 Return missing snippet, markup or Liquid changes to their native owners before styling.
 Do not duplicate/hide the global header, replace its behavior with CSS, or rebind `website.yml`
 as a styling shortcut. Preserve navigation, authentication, locale, accessibility and caching

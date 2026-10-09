@@ -69,10 +69,20 @@ context, not a visual constraint; do not retain its default header merely becaus
 This header treatment is part of the required custom site composition, not a substitute for
 designing Home and the primary visitor journey.
 
+For every header update, including a header-only request, explicitly assess whether the logo or
+wordmark matches the website's approved name and brand requirements. Plan its replacement when
+it does not; changing header colors or navigation alone does not resolve an unsuitable starter
+logo. Follow **Logos and favicons** in [visual asset planning](visual-asset-planning.md) for source
+selection, justified retention and unresolved brand decisions. Reuse those decisions rather than
+adding a separate logo questionnaire.
+
 Resolve the active header binding and real source/callers before assigning work. Plan localized
 brand text or snippet-backed logo values through `author-content-snippet`, header markup/Liquid
 through `author-web-template`, and visual treatment through the final `style-site` pass. Navigation
 record changes use their verified owner; do not hardcode a replacement menu or invent destinations.
+Trace desktop and mobile logo variants, image URLs or wordmark values, accessible brand names,
+home links and requested locales in the actual callers; do not assume a snippet name or one shared
+value covers them all. Include logo source/value changes before final sizing and responsive styling.
 Use only the owners needed by the approved change. Preserve the existing binding and record IDs
 when modifying the bound source; a new header binding requires explicitly approved global scope.
 
@@ -82,8 +92,8 @@ branches, accessible labels/skip links, native responsive behavior, and narrowly
 visual layout. Do not duplicate the global header inside page content or hide it with CSS.
 Keep logo delivery and source verification within the existing visual-asset contract.
 
-Make the header outcome visible in the existing plan summary and relevant component/styling
-cards. If the user requests preservation, or an inspected existing header already meets the
+Make the header outcome, including its logo decision, visible in the existing plan summary and
+relevant component/styling cards. If the user requests preservation, or an inspected existing header already meets the
 approved direction, record what remains and why in `preservation`; template selection alone
 is not a preservation reason. Do not add a no-op owner task. Unresolved bindings or unavailable
 source are readiness findings with remediation, not a claim that customization succeeded.

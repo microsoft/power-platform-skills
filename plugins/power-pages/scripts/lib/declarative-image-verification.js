@@ -222,7 +222,7 @@ async function verifyPlanImages(plan, { check = checkImage } = {}) {
     throw new Error(`Image verification failed:\n${failures.map((failure) => {
       const names = plan.assets.filter((asset) => asset.externalUrl === failure.url).map((asset) => asset.name).join(', ');
       return `- ${names}: ${failure.error} Source: ${failure.url}`;
-    }).join('\n')}\nChoose a working direct image URL from the source page and regenerate the review. Do not approve or import a failed image.`);
+    }).join('\n')}\nChoose a working direct image URL from search results or an approved hosted source and regenerate the review. Do not approve or import a failed image.`);
   }
   const report = { schemaVersion: 1, planHash: planHash(plan), images };
   validateImageChecks(plan, report);
