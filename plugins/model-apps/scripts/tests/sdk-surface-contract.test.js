@@ -40,6 +40,9 @@ const SKILL_SDK_SURFACE = [
   'createAlternateKey',
   'createArtifact',
   'createColumn',
+  // A new table's ordinary columns follow the table in ONE atomic change set (entity-provision.js), which needs the
+  // transport's `postRaw` (lib/sdk-http-client.js); a refusal falls back to `createColumn` per column.
+  'createColumns',
   'createCustomerColumn',
   'createGlobalOptionSet',
   'createPersonaRole',

@@ -119,8 +119,53 @@ async function appRoleIdsFor(sdk, appUnique) {
   }
 }
 
+// Page ids per `pac model genpage download` run in readerFor's pageCodes. pac takes them as ONE comma-joined
+// argument: 25 GUIDs are under a kilobyte, far below the command-line limit of the pac.cmd shim on Windows,
+// and an app with more pages than that is rare — so an app's pages go in one run, an unusual one in a few.
+const PAGE_DOWNLOAD_CHUNK = 25;
+
+// The longest readerFor's endPageReads waits for the downloads it has just ended to remove their folders. Killing pac
+// answers them at once; this only bounds a reader whose pac client cannot end its runs.
+const PAGE_READS_END_WAIT_MS = 10000;
+
+// The SDK resolves a table's EntitySetName with one metadata GET before the table's first record read, and
+// remembers only the ANSWER — so reads of one table that start together each ask for it. Verify's checks
+// overlap, and many of them read the same table (every view reads `savedquery`, every persona `role`), so
+// the first read of each table goes by itself and the others start when its answer is cached: the same
+// requests as when the checks ran one after another, not one extra per overlapping read.
+//
+// A first read that FAILS cached nothing, so the next waiting read becomes the first and the failure is
+// never shared — each check still reports the outcome of its own read. Everything but `queryRecords`
+// is the SDK's own, bound to it.
+function singleFlightFirstReads(sdk) {
+  if (!sdk || typeof sdk.queryRecords !== 'function') return sdk;
+  const cached = new Set();
+  const firstReads = new Map();
+  const queryRecords = async (set, query) => {
+    const table = String(set);
+    while (!cached.has(table)) {
+      const inFlight = firstReads.get(table);
+      if (!inFlight) {
+        const read = sdk.queryRecords(set, query);
+        firstReads.set(table, Promise.resolve(read).then(() => { cached.add(table); }, () => {}).then(() => { firstReads.delete(table); }));
+        return read;
+      }
+      await inFlight;
+    }
+    return sdk.queryRecords(set, query);
+  };
+  return new Proxy(sdk, {
+    get(target, prop) {
+      if (prop === 'queryRecords') return queryRecords;
+      const value = Reflect.get(target, prop, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
 function readerFor(sdk, appUnique, opts) {
   opts = opts || {};
+  sdk = singleFlightFirstReads(sdk);
   const genpageCli = opts.genpageCli;
   const workspaceDir = opts.workspaceDir;
   const { fetchSitemap: _fetchSitemap, sitemapGenPageIds: _sitemapGenPageIds } = require('./lib/sitemap-pages.js');
@@ -154,7 +199,10 @@ function readerFor(sdk, appUnique, opts) {
   // keeping the first scan would report a table created between passes as missing, and a rejected
   // scan would fail every later pass. verifySpec calls beginVerificationPass at the start of each.
   let catalogP;
-  const beginVerificationPass = () => { catalogP = null; };
+  // Set once verifySpec has ended this reader's page reads (endPageReads, below): nothing that runs pac, or makes a temporary
+  // download folder, starts again until the next pass begins.
+  let pageReadsEnded = false;
+  const beginVerificationPass = () => { catalogP = null; pageReadsEnded = false; };
   const catalog = () => {
     if (!catalogP) {
       catalogP = Promise.resolve().then(() => sdk.findTables('')).catch((err) => {
@@ -417,7 +465,24 @@ function readerFor(sdk, appUnique, opts) {
   // for a page-bearing spec (Imp7/C6: missing methods → unableToRun).
   if (genpageCli) {
     let existenceP;
+    let existenceRunning = false;
     let manifestP;
+    // The downloads in flight, each as the promise of the WHOLE call: the temporary folder it made is removed when that
+    // settles, which is what endPageReads waits for.
+    const downloading = new Set();
+    const tracked = (work) => {
+      const call = work();
+      downloading.add(call);
+      const forget = () => downloading.delete(call);
+      call.then(forget, forget);
+      return call;
+    };
+    const PAGE_READS_ENDED = 'the page reads were ended: the verification pass no longer needs them';
+    // The folder is removed the moment its download ends, and a download that was just ended — pac killed — can still be
+    // letting go of it for a moment (Windows answers EBUSY/EPERM while a handle is open), so removal is retried briefly.
+    const removeDownloadDir = (dir) => {
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* leave the temp dir */ }
+    };
 
     // MEMBERSHIP: the app's live sitemap page ids. Fail-closed: throw when the sitemap is unreadable.
     // verifySpec catches reader-incapacity via the method-presence check, not a try/catch here; a throw
@@ -430,10 +495,15 @@ function readerFor(sdk, appUnique, opts) {
 
     // EXISTENCE: env-wide generative-page id set. Memoized (one enumerateEnv per verify run). Throw on
     // failure — fail-closed: an unknown environment means we cannot tell deployed from absent.
-    base.existenceIds = () => (existenceP || (existenceP = (async () => {
-      const e = await genpageCli.enumerateEnv();
-      if (!e.ok) throw new Error(e.error);
-      return e.ids;
+    base.existenceIds = () => existenceP || (pageReadsEnded ? Promise.reject(new Error(PAGE_READS_ENDED)) : (existenceP = (async () => {
+      existenceRunning = true;
+      try {
+        const e = await genpageCli.enumerateEnv();
+        if (!e.ok) throw new Error(e.error);
+        return e.ids;
+      } finally {
+        existenceRunning = false;
+      }
     })()));
 
     // IDENTITY: the durable page manifest web resource. Returns null when absent OR corrupt — verifySpec
@@ -450,10 +520,13 @@ function readerFor(sdk, appUnique, opts) {
     // pageCode(id): download THAT page by id (pageIds:[id]) into a per-id cached directory. Caches result
     // so repeated calls for the same id never re-download. Fail-closed: a download failure rejects (throws)
     // so the caller receives a page-code miss rather than silently receiving empty code.
-    base.pageCode = async (pageId) => {
+    base.pageCode = (pageId) => tracked(async () => {
       const key = String(pageId).toLowerCase();
       if (codeById.has(key)) return codeById.get(key);
       const id = await appId();
+      // Checked after the wait for the app id, right before the folder is made and pac started: a pass that ended these
+      // reads while this one waited must not have a download begin behind it.
+      if (pageReadsEnded) throw new Error(PAGE_READS_ENDED);
       // A fixed name under the workspace (verify-pages/<id>) is a place a link can be left.
       // pac follows links, and removing that name would delete through the link. The download
       // therefore goes to a private temp directory this call creates and always removes.
@@ -470,7 +543,82 @@ function readerFor(sdk, appUnique, opts) {
         codeById.set(key, code);
         return code;
       } finally {
-        try { fs.rmSync(outDir, { recursive: true, force: true }); } catch { /* leave the temp dir */ }
+        removeDownloadDir(outDir);
+      }
+    });
+
+    // pageCodes(ids): the code of SEVERAL pages from one pac download per chunk of ids, where pageCode(id) runs
+    // pac once per page — a process start, an auth and a round trip each, seconds apiece. Answers a Map of
+    // lower-cased id -> `{ code }` or `{ error }`: what pageCode(id) would have returned or thrown, so a caller
+    // reports every page exactly as it always has.
+    //
+    // pac writes each page of a multi-id download to <outDir>/<pageId>/page.tsx (the layout download-model-app
+    // reads too), so a page is found by the NAME of its directory, matched case-insensitively. A page that
+    // cannot be answered from the batch — a lone page, a batch pac failed, or an id with no directory in a batch
+    // that succeeded — is asked for by itself, the way it always was: one bad page then costs its own miss,
+    // never its neighbours', and nothing is guessed from another page's files.
+    const downloadPageCodes = (ids) => tracked(async () => {
+      // The app id first, then the folder: a pass that ended these reads while the id was being read has nothing to download for.
+      let id;
+      try { id = await appId(); } catch { return null; }
+      if (pageReadsEnded) return null;
+      const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-page-'));
+      try {
+        await genpageCli.download({ appId: id, outputDir: outDir, pageIds: ids });
+        const codeByDir = new Map();
+        for (const entry of fs.readdirSync(outDir)) {
+          const dir = path.join(outDir, entry);
+          if (!fs.statSync(dir).isDirectory()) continue;
+          const tsx = path.join(dir, 'page.tsx');
+          codeByDir.set(entry.toLowerCase(), fs.existsSync(tsx) ? fs.readFileSync(tsx, 'utf8') : '');
+        }
+        return codeByDir;
+      } catch {
+        return null;
+      } finally {
+        removeDownloadDir(outDir);
+      }
+    });
+    base.pageCodes = async (pageIds) => {
+      const answers = new Map();
+      const wanted = [];
+      for (const id of pageIds || []) {
+        const key = String(id).toLowerCase();
+        if (answers.has(key) || wanted.some((w) => w.key === key)) continue;
+        if (codeById.has(key)) answers.set(key, { code: codeById.get(key) });
+        else wanted.push({ id, key });
+      }
+      for (let i = 0; i < wanted.length; i += PAGE_DOWNLOAD_CHUNK) {
+        const chunk = wanted.slice(i, i + PAGE_DOWNLOAD_CHUNK);
+        const fetched = chunk.length > 1 ? await downloadPageCodes(chunk.map((c) => c.id)) : null;
+        for (const { id, key } of chunk) {
+          if (fetched && fetched.has(key)) {
+            codeById.set(key, fetched.get(key));
+            answers.set(key, { code: fetched.get(key) });
+            continue;
+          }
+          try { answers.set(key, { code: await base.pageCode(id) }); } catch (error) { answers.set(key, { error }); }
+        }
+      }
+      return answers;
+    };
+
+    // Ends the page reads that run pac, for a verify pass that has stopped needing their answers (verifySpec calls this when
+    // it gave up on them): every pac run still in flight is ended, process tree and all; no new one starts, and no download
+    // folder is made, until the next pass begins; and it answers once the downloads that were in flight have removed their
+    // folders — so a verify CLI that exits right after has left neither a pac nor a `verify-page-*` folder behind. The wait is
+    // bounded, and never throws: it may delay the end of a pass for a moment, not hold it.
+    base.endPageReads = async () => {
+      pageReadsEnded = true;
+      // A listing that was cut short is not the answer to remember for a later pass.
+      if (existenceRunning) existenceP = undefined;
+      if (typeof genpageCli.abort === 'function') genpageCli.abort();
+      let timer;
+      const bound = new Promise((resolve) => { timer = setTimeout(resolve, Number.isInteger(opts.endWaitMs) ? opts.endWaitMs : PAGE_READS_END_WAIT_MS); });
+      try {
+        await Promise.race([Promise.allSettled([...downloading]), bound]);
+      } finally {
+        clearTimeout(timer);
       }
     };
   }

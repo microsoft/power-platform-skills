@@ -64,6 +64,28 @@ function isSqlDeadlockVictim(res) {
 }
 
 /**
+ * The operations a `$batch` REQUEST carries, as `{ method, url, ifMatch }` in the order sent, read from the request lines
+ * (`<METHOD> <url> HTTP/1.1`) the SDK renders — see isConditionalDeleteBatch and isColumnCreateBatch for the shapes. `ifMatch` is the
+ * operation's own `If-Match` header when it has one. A body that is not text carries none.
+ */
+function batchOperations(body) {
+  if (typeof body !== 'string') return [];
+  const lines = body.split(/\r?\n/);
+  const ops = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const request = /^([A-Z]+) (\S+) HTTP\/1\.1$/.exec(lines[i]);
+    if (!request) continue;
+    let ifMatch;
+    for (let j = i + 1; j < lines.length && lines[j] !== ''; j += 1) {
+      const m = /^If-Match:\s*(\S.*?)\s*$/i.exec(lines[j]);
+      if (m) ifMatch = m[1];
+    }
+    ops.push({ method: request[1], url: request[2], ifMatch });
+  }
+  return ops;
+}
+
+/**
  * True when a `$batch` REQUEST may be sent again after a proven rollback: every operation in it is a
  * DELETE conditioned on the exact row version its caller read. That is the vendored SDK's atomic app
  * delete, the app and its sitemap in one change set (abridged):
@@ -80,26 +102,46 @@ function isSqlDeadlockVictim(res) {
  *   --changeset_<id>--
  *   --batch_<id>--
  * A second send of such a batch meets the rows exactly as the first did, or is refused with 412: it cannot
- * remove anything its caller did not read. No other batch qualifies. Notably the SDK updates a generative
+ * remove anything its caller did not read. No other batch qualifies, bar the column creates of
+ * isColumnCreateBatch (after a 429 only). Notably the SDK updates a generative
  * page's files in a batch of `If-Match: *` writes after checking their versions itself; sent again after
  * a backoff, that batch would skip the check and overwrite another maker's edit. An unconditional DELETE
  * does not qualify either (the SDK's create rollback sends those; it is sent once, as before).
  */
 function isConditionalDeleteBatch(body) {
-  if (typeof body !== 'string') return false;
-  const lines = body.split(/\r?\n/);
-  const ops = [];
-  for (let i = 0; i < lines.length; i += 1) {
-    const request = /^([A-Z]+) \S+ HTTP\/1\.1$/.exec(lines[i]);
-    if (!request) continue;
-    let ifMatch;
-    for (let j = i + 1; j < lines.length && lines[j] !== ''; j += 1) {
-      const m = /^If-Match:\s*(\S.*?)\s*$/i.exec(lines[j]);
-      if (m) ifMatch = m[1];
-    }
-    ops.push({ method: request[1], ifMatch });
-  }
+  const ops = batchOperations(body);
   return ops.length > 0 && ops.every((op) => op.method === 'DELETE' && op.ifMatch && op.ifMatch !== '*');
+}
+
+// The collection a column is created in: `…/EntityDefinitions(LogicalName='new_ticket')/Attributes`.
+const COLUMN_COLLECTION_URL = /\/EntityDefinitions\([^)]*\)\/Attributes$/;
+
+/**
+ * True when a `$batch` REQUEST only CREATES columns: every operation is a POST to a table's `Attributes` collection. That is the
+ * vendored SDK's createColumns, the ordinary columns of a new table in one change set (abridged):
+ *   --batch_<id>
+ *   Content-Type: multipart/mixed;boundary=changeset_<id>
+ *
+ *   --changeset_<id>
+ *   Content-Type: application/http
+ *   Content-ID: 1
+ *
+ *   POST https://contoso.crm.dynamics.com/api/data/v9.0/EntityDefinitions(LogicalName='new_ticket')/Attributes HTTP/1.1
+ *   Content-Type: application/json;type=entry
+ *   MSCRM.SolutionUniqueName: <solution>
+ *
+ *   {"@odata.type":"Microsoft.Dynamics.CRM.StringAttributeMetadata",...}
+ *   --changeset_<id>--
+ *   --batch_<id>--
+ * It carries no delete and no write conditioned on a row version, so — unlike every other batch — a second send after an answer that
+ * proves nothing in it committed (HTTP 429, see isBatchThrottled; a change set is atomic) cannot remove or overwrite anything. The worst a second send can meet is
+ * a column that is already there, which the platform refuses whole ("already exists", 0x80060304); the caller falls back to one
+ * request per column, where an existing column is skipped. Sent once after any other answer, as before: a change set can commit
+ * behind a lost answer.
+ */
+function isColumnCreateBatch(body) {
+  const ops = batchOperations(body);
+  return ops.length > 0 && ops.every((op) => op.method === 'POST' && COLUMN_COLLECTION_URL.test(op.url));
 }
 
 /**
@@ -158,7 +200,8 @@ function batchResults(res) {
 }
 
 /**
- * True when a `$batch` ANSWER proves the server refused to START it (HTTP 429), so nothing in it ran.
+ * True when a `$batch` ANSWER proves the server refused it (HTTP 429), so nothing in it committed. A plain 429 means no operation
+ * was even read; in a change set, which is atomic, an operation refused with a 429 takes the operations before it with it.
  * Two shapes qualify:
  *   - the whole request refused before any operation was read: a plain error answer with status 429, not
  *     a multipart one — service protection limits answer this way, e.g.
@@ -313,8 +356,9 @@ function createAzHttpClient(orgUrl, deps = {}) {
     //    its sitemap in one atomic change set), so it inherits the record-delete hazard above. It is
     //    also ambiguous on failure: the server may have committed while the response was lost, so a
     //    blind re-issue is exactly the racing retry that wedges the row. Issue it once and let the
-    //    SDK surface the unknown outcome to the caller — unless it is a batch of conditional deletes and
-    //    its answer proves no operation in it ran (see the re-sends below).
+    //    SDK surface the unknown outcome to the caller — unless its answer proves no operation in it ran,
+    //    and it is a batch of conditional deletes or, for a 429 only, one of column creates (see the
+    //    re-sends below).
     const method_ = String(method).toUpperCase();
     const isMetadataDelete = /\/(EntityDefinitions|RelationshipDefinitions|GlobalOptionSetDefinitions)\b/i.test(url);
     const isBatch = method_ === 'POST' && /\/\$batch(\?|$)/i.test(url);
@@ -392,9 +436,14 @@ function createAzHttpClient(orgUrl, deps = {}) {
       //    process-flow delete failed exactly this way, and so did a teardown's app delete — a change set —
       //    which stopped the whole teardown with nothing removed; both were clean on a re-run.
       // A batch is re-sent only when it is made of conditional deletes (isConditionalDeleteBatch) and its
-      // answer shows that no operation in it ran (isBatchThrottled, isBatchDeadlockVictim).
+      // answer shows that no operation in it ran (isBatchThrottled, isBatchDeadlockVictim) — or when it only
+      // creates columns (isColumnCreateBatch) and the answer is a 429 (isBatchThrottled). That change set
+      // follows the create of its table, and a table's customization lock can stay held for ~20 s behind
+      // that (see maxAttempts): one column's own POST rides it out on this schedule, so the change set that
+      // replaces a column's POST gets the same treatment instead of a refusal the caller has to work around.
       const conditionalDeleteBatch = isBatch && isConditionalDeleteBatch(bodyStr);
-      const throttled = (recordDelete && res.statusCode === 429) || (conditionalDeleteBatch && isBatchThrottled(res));
+      const columnCreateBatch = isBatch && isColumnCreateBatch(bodyStr);
+      const throttled = (recordDelete && res.statusCode === 429) || ((conditionalDeleteBatch || columnCreateBatch) && isBatchThrottled(res));
       if (throttled && !last) {
         // A batch refused operation by operation may carry the wait in that operation's own headers.
         await sleep(Math.max(retryWaitMs(res, attempt), isBatch ? batchRetryAfterMs(res, now()) : 0));
@@ -435,4 +484,4 @@ function createAzHttpClient(orgUrl, deps = {}) {
   };
 }
 
-module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM, isBatchDeadlockVictim, isBatchThrottled, batchRetryAfterMs, isConditionalDeleteBatch, retryAfterMs, RETRY_AFTER_CAP_MS };
+module.exports = { createAzHttpClient, SQL_DEADLOCK_VICTIM, isBatchDeadlockVictim, isBatchThrottled, batchRetryAfterMs, isConditionalDeleteBatch, isColumnCreateBatch, retryAfterMs, RETRY_AFTER_CAP_MS };

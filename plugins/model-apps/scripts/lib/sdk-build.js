@@ -32,6 +32,7 @@ const {
   manyToManySchemaName,
   normalizePageSource,
   quickCreateEnabledFor,
+  askedPrimaryNameLength,
   isPlatformIconRef,
   FORM_TYPE_CODE,
   formIdentityKey,
@@ -528,6 +529,12 @@ function planFor(spec, opts) {
         else if (entityByLogical(spec, r.referenced)) shown = `${humanized}, or the label from the environment if ${parent} is already there`;
       }
       items.push({ phase: 'data-model', label: `lookup label ${String(r.referencing).toLowerCase()}.${r.lookup.schemaName} (default ${shown})` });
+    }
+    // Present exactly when the spec gives a name column a length: provisionDataModel narrates one step for it either way (run, or
+    // skipped with the reason), so the count holds. Listed after the relationships and the lookup labels because that is where the build sets the
+    // length of a table it creates: once every labelled create and repair of the phase is done.
+    for (const e of spec.entities) {
+      if (askedPrimaryNameLength(e) !== undefined) items.push({ phase: 'data-model', label: `primary column length ${e.schemaName}.${e.primaryAttribute.schemaName}` });
     }
   }
   if (has('sample-data') && opts.sampleData) {
@@ -1574,20 +1581,26 @@ async function ensureAppNotAvailableToRole(sdk, appId, roleId) {
 // sdk-teardown.js, verify verify-spec.js, and the roleGrant apply path) — a name-only match could
 // touch a same-named role in a DIFFERENT business unit, which for a grant is privilege escalation.
 // `q` is a queryRecords fn (the teardown `sdk` or the verify `read`); `cache` memoizes the root-BU
-// lookup for the run.
+// lookup for the run — as the lookup IN FLIGHT, not its answer: verify resolves several personas' and
+// grants' roles at once, and a cache that only held the answer (or a placeholder set before the read
+// settled) handed every concurrent caller but the first an unresolved BU, which they all reported as
+// "role not found".
 async function resolveRoleBusinessUnit(q, businessUnitId, cache = {}) {
   if (businessUnitId && FORM_GUID_RE.test(businessUnitId)) return businessUnitId;
-  if (Object.prototype.hasOwnProperty.call(cache, 'rootBu')) return cache.rootBu;
-  cache.rootBu = null;
-  try {
-    if (typeof q === 'function') {
-      // Root BU has no parent. Mirrors the vendored SDK's own resolveRootBusinessUnit query.
-      const rows = await q('businessunit', { select: ['businessunitid'], filter: '_parentbusinessunitid_value eq null', top: 1 });
-      const id = rows && rows[0] && rows[0].businessunitid;
-      if (id && FORM_GUID_RE.test(String(id))) cache.rootBu = String(id);
-    }
-  } catch { /* best-effort: fall back to a name-only match */ }
-  return cache.rootBu;
+  if (!cache.rootBuLookup) {
+    cache.rootBuLookup = (async () => {
+      try {
+        if (typeof q === 'function') {
+          // Root BU has no parent. Mirrors the vendored SDK's own resolveRootBusinessUnit query.
+          const rows = await q('businessunit', { select: ['businessunitid'], filter: '_parentbusinessunitid_value eq null', top: 1 });
+          const id = rows && rows[0] && rows[0].businessunitid;
+          if (id && FORM_GUID_RE.test(String(id))) return String(id);
+        }
+      } catch { /* best-effort: fall back to a name-only match */ }
+      return null;
+    })();
+  }
+  return cache.rootBuLookup;
 }
 
 // The `_businessunitid_value eq <guid>` OData clause (Edm.Guid is UNQUOTED) that scopes a role query to a

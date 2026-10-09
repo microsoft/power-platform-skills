@@ -404,6 +404,8 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   "primaryAttribute": { "schemaName": "new_subject", "displayName": "Subject" },
   // primary can be auto-numbered (the number IS the record identity — recommended for orders/cases):
   // "primaryAttribute": { "schemaName": "new_ordernumber", "displayName": "Order Number", "autoNumberFormat": "WO-{SEQNUM:5}" },
+  // and its length can be set (1–850 characters; when omitted the build asks for 100, as before) — see "Primary column length" below:
+  // "primaryAttribute": { "schemaName": "new_subject", "displayName": "Subject", "maxLength": 120 },
   "columns": [
     { "schemaName": "new_priority", "displayName": "Priority", "type": "Choice", "options": ["Low","High"],
       "description": "How urgently the ticket needs attention." },   // RECOMMENDED — see below
@@ -457,6 +459,32 @@ spec with its last snapshot, not with the deployed row, so it does not notice).
   (see `globalChoices` below). **Customer** is a polymorphic account/contact lookup.
 - **AutoNumber** can also be the **primary** column — put `autoNumberFormat` on `primaryAttribute`
   (above) instead of adding a separate column, so the generated number is the record identity.
+- **Primary column length — `primaryAttribute.maxLength`** (optional; a whole number from 1 to 850, the
+  most Dataverse allows for a table's name column — more is refused by Dataverse, so
+  anything else is rejected at validation, for `/genpage` and `/app-builder` input as well). Without it
+  the build asks for **100** characters, the length it has always asked for, whether the name column is
+  text or auto-numbered (`autoNumberFormat`). The table is created as before, with its name column alone
+  (its other columns follow in a request of their own), and what an environment makes of the 100 asked can
+  differ — some keep it, and some make a plain text name column 850 characters long whatever length is asked
+  (100 and 120 both came back 850) while keeping the length asked of an auto-numbered one — and the build
+  leaves a name column without `maxLength` as the environment made it, as before. A length you give is
+  applied **when the table is created**: once everything else in the data model has been created (or as far as
+  a build that stops got), the build
+  reads the name column back and, where the environment did not keep the length, updates it to the value you
+  gave.
+  The length is fixed at that point: a rebuild never changes the name column of a table that already exists —
+  neither to this value nor back to the default — because shortening a column that holds data can fail or
+  lose text, and a rebuild must not undo a length someone widened in Maker. Like every column's
+  `maxLength`, it is not reconciled afterwards; to change it on an existing table, change it in Maker. If
+  the length cannot be set after the create, the build reports a failed `primary column length` step that
+  names the table, the length asked and the length the platform made, and goes on — or, when the data model
+  stopped first, says so, and that a re-run leaves the column as it is. One exception to
+  "applied when the table is created": a table the build finds **after** its create — the answer to the
+  create was lost, or another maker created the table first — is not written to, because nothing shows that
+  this build made it. The build reads its name column's length once instead, and warns when it is not the
+  length the spec asks for (or cannot be read). A build that stops because the table was created but cannot
+  be read back yet (`TABLE_METADATA_NOT_VISIBLE`) warns that the length may not have been applied, since a
+  re-run leaves an existing table's name column alone.
 
 ### `visualization` — custom grid rendering (optional, PREVIEW)
 

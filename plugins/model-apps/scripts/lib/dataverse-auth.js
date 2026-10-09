@@ -8,7 +8,7 @@
 // about what counts as an LCID. app-spec.js does not require this module, so there is no cycle.
 const { normalizeLanguageCode } = require('./app-spec.js');
 const { nearestName } = require('./nearest-name.js');
-const { execFileAsync, runSync } = require('./process-runner.js');
+const { execFileAsync, runSync, killProcessTree } = require('./process-runner.js');
 const { azTimeoutMs, azTimeoutAdvice, cliFailureKind } = require('./cli-failure.js');
 
 // Dataverse environment hosts, one family per cloud (the same families power-pages accepts in
@@ -141,6 +141,13 @@ function getAuthToken(envUrl, opts = {}) {
   }
 }
 
+// `opts.signal` (an AbortSignal) lets a caller that started this read beside other probes cancel it when
+// one of them already decides the run (check-auth: an `az account show` verdict ends it before the token
+// matters). The abort ends the child's whole PROCESS TREE (killProcessTree): on Windows `az` is a batch shim
+// run under cmd.exe, and the signal Node would send on its own reaches only that wrapper, leaving `az`'s Python
+// process running after this one exits — which is why the signal is NOT handed to the child's start. A cancelled
+// read resolves null WITHOUT noting a failure: nothing was wrong with the Azure CLI, and a remembered 'failed'
+// would be reported later as if it were.
 function getAuthTokenAsync(envUrl, opts = {}) {
   const resource = dataverseOrigin(envUrl);
   if (!resource) return Promise.resolve(null);
@@ -148,14 +155,21 @@ function getAuthTokenAsync(envUrl, opts = {}) {
   if (!opts.fresh && authTokenMemo.has(resource)) {
     return Promise.resolve(authTokenMemo.get(resource));
   }
+  if (opts.signal && opts.signal.aborted) return Promise.resolve(null);
   return new Promise((resolve) => {
+    let child = null;
+    let settled = false;
+    const stop = () => (opts.killTree || killProcessTree)(child);
+    const stopListening = () => { settled = true; if (opts.signal) opts.signal.removeEventListener('abort', stop); };
     try {
-      exec(
+      child = exec(
         'az',
         ['account', 'get-access-token', '--resource', resource, '--query', 'accessToken', '-o', 'tsv'],
         { encoding: 'utf8', timeout: azTimeoutMs(), windowsHide: true },
         (error, stdout) => {
+          stopListening();
           if (error) {
+            if (opts.signal && opts.signal.aborted) { resolve(null); return; }
             if (opts.fresh) authTokenMemo.delete(resource);
             noteTokenFailure(resource, error);
             resolve(null);
@@ -170,7 +184,9 @@ function getAuthTokenAsync(envUrl, opts = {}) {
           resolve(token);
         }
       );
+      if (opts.signal && !settled) opts.signal.addEventListener('abort', stop, { once: true });
     } catch (e) {
+      stopListening();
       if (opts.fresh) authTokenMemo.delete(resource);
       noteTokenFailure(resource, e);
       resolve(null);
@@ -427,6 +443,10 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
  * @param {boolean} [opts.includeHeaders=false] - Include response headers in result
  * @param {object} [opts.extraHeaders={}] - Extra request headers (e.g. Prefer)
  * @param {number} [opts.timeout=60000]
+ * @param {boolean} [opts.refreshOn401=true] - On a 401, replace the token (`getAuthToken(.., { fresh: true })` is a
+ *   SYNCHRONOUS Azure CLI call: seconds on a cold Windows process, with the whole event loop — every other probe's
+ *   timers included — frozen) and send again. `false` hands the 401 back as it is, for a caller that is running
+ *   other work alongside and will decide where to retry (check-auth's early WhoAmI).
  * @returns {Promise<{status: number, data: any, headers?: object}>}
  */
 async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {}) {
@@ -435,7 +455,7 @@ async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {})
   const cleanUrl = requireDataverseOrigin(envUrl);
   const url = webApiUrl(cleanUrl, apiPath);
   const bodyStr = body == null ? null : typeof body === 'string' ? body : JSON.stringify(body);
-  const { includeHeaders = false, extraHeaders = {}, timeout = 60000, token: presetToken = null } = opts;
+  const { includeHeaders = false, extraHeaders = {}, timeout = 60000, token: presetToken = null, refreshOn401 = true } = opts;
   // Test seams, matching `preflightAuth`'s injection style. Without them the token-reuse behaviour
   // below could only be exercised against a live Azure CLI and a real org.
   const acquireToken = opts.getToken || getAuthToken;
@@ -477,7 +497,7 @@ async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {})
       throw new Error(`Request failed: ${res.error}`);
     }
 
-    if (res.statusCode === 401 && attempt < maxRetries) {
+    if (res.statusCode === 401 && refreshOn401 && attempt < maxRetries) {
       token = acquireToken(cleanUrl, { fresh: true });
       if (!token) throw new Error(tokenFailureMessage(cleanUrl, "Token refresh failed. Run 'az login' again."));
       continue;

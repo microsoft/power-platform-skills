@@ -821,7 +821,7 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   **`scripts/lib/sdk-http-client.js` must implement `postRaw`**: the SDK will not fall back to two
   sequential deletes, so a transport without it fails every teardown with `APP_DELETE_NOT_ATOMIC` (see
   that file for the wire contract, why a `$batch` is sent once unless its answer proves nothing in it
-  ran — a SQL deadlock or a 429 — and why a conditional write that gets no answer is never re-sent).
+  ran — a SQL deadlock or a 429 for conditional deletes, a 429 for a change set that only creates columns — and why a conditional write that gets no answer is never re-sent).
   The SDK re-sends an app delete itself when the platform's search-index insert race refuses it (HTTP
   400, SQL 547) — an answer this client never re-sends — so the two layers add and never multiply
   (counts pinned in `scripts/tests/sdk-resend-layers.test.js`).
@@ -1112,6 +1112,167 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   `findExistingColumns`, `relationshipExists`, `artifactIdentityQuery`) rather than a parallel
   implementation, so the plan cannot disagree with what the apply then does; it is read-only, and
   `--no-live-plan` restores the offline, spec-only listing.
+- **Bounded parallelism in the read-heavy and publish-heavy paths.** Each item below has tests that count
+  requests and prove the overlap (`verify-parallel-checks`, `verify-page-code-batch`,
+  `download-parallel-reads`, `teardown-publish-once`, `table-columns-in-create`, and the check-auth tests),
+  and each keeps a one-at-a-time form (`concurrency: 1`, `inlineColumns: false`) that is the oracle its
+  output is compared with byte for byte. Every fan-out is
+  `mapLimit` (`lib/entity-provision.js`; its `firstInOrder` option makes the thrown error the
+  lowest-numbered task's, deterministically), never an unbounded `Promise.all`, and each request still
+  retries its own 429s (`lib/sdk-http-client.js`) — so a throttled environment slows the pass down rather
+  than being hit by a burst.
+  - **Verify** (`lib/verify-spec.js`) runs its checks as ordered tasks on a pool of 4
+    (`verifySpec(spec, read, { concurrency })`). Each task reports into its own buffer and the report is
+    the buffers joined in listing order, so it is the same whichever read answers first; a failure stops
+    anything new from starting and the failure first in report order is the one thrown. A failed pass does
+    not wait for the page checks' early reads (a hung `pac` run would turn a fast failure into a hang): the
+    early read and the check that consumes it both stop waiting once a check listed BEFORE the page check has
+    failed. A failure in a check listed after it does not end the wait — the page check's own failure is the
+    lower-numbered one and must be the one thrown, as when the checks ran one at a time. A read the pass gave
+    up on is ended before the pass returns or throws: `verifySpec` calls the reader's `endPageReads()`, which
+    ends every `pac` run in flight with its whole process tree (`killProcessTree` — `pac` can be a `.cmd`
+    shim, and Node's own kill reaches only the `cmd.exe`), starts no new run — a listing paused between two
+    attempts included: the pac client's `abort()` makes every run of a call that began before it answer
+    "ended" without starting anything — and makes no download folder until the next pass begins, and waits
+    (bounded) for the downloads in flight to remove their `verify-page-*` folders — the verify CLI exits the
+    moment the pass does. Reads that several
+    checks share are single-flight: the root business unit (`resolveRoleBusinessUnit` caches the *lookup*
+    in flight — caching only its answer made every concurrent caller but the first report its role
+    missing), a table's and a role's privileges, the sitemap, the resolved Main forms. The reader sends the
+    first read of each table alone, so the SDK resolves its `EntitySetName` once instead of once per
+    overlapping read. The page checks' slow reads (the `pac` listing, the manifest) start with the pass,
+    and the code of every page whose navigation is checked comes from `readerFor().pageCodes`: one
+    `pac model genpage download --page-id a,b,c` per chunk of 25 ids instead of one run per page. A page the
+    batch cannot answer (a failed batch, an id with no directory in the output) is asked for by itself, so
+    one bad page costs its own miss, never its neighbours'.
+  - **check-auth** starts `az account show` and (with `--env`) the Dataverse token read together, and
+    WhoAmI as soon as the token is ready, so it overlaps the `pac` probe. The verdict order is unchanged
+    (account → token timeout → pac → no environment → WhoAmI), and an early verdict cancels the probes
+    still running — on Windows the token read's whole process tree (the `cmd.exe` that runs `az.cmd`, and
+    the Python process it starts), through `killProcessTree` in `lib/process-runner.js`, because Node's own
+    abort signals only the `cmd.exe` wrapper. The early WhoAmI is sent with `refreshOn401: false`: a 401
+    would otherwise refresh the token with a synchronous `az` call (seconds, with every other probe's timer
+    frozen), so a 401 on the early request is re-sent at WhoAmI's old place, after `pac`, where that refresh
+    costs nothing.
+  - **Download** overlaps each table's auxiliary reads (entity and attribute labels, the money
+    base-currency flags, option sets) and the per-table relationship reads, bounded at 4
+    (`runDownload({ concurrency })`; `1` is the sequential oracle), and merges them in the original fixed
+    order, so the written spec, pages and stderr are byte-identical. Tables themselves are still read one
+    at a time (the SDK's `fetchEntityMetadata` already fans out), and dashboards are not overlapped.
+  - **Teardown** saves the default-view resets with `publish: false` and publishes ONCE, in one
+    `publishArtifacts` envelope, at a barrier after the last reset and before the relationship deletes. A
+    failed envelope is retried table by table with `publishArtifact` (the SDK fails every target of an
+    envelope with one shared error), and a table that still cannot be published is named in a warning —
+    teardown does not fail on it. A single table keeps the one-table publish.
+  - **Data model** (`provisionDataModel`): a NEW table is created exactly as the previous release created it — one
+    request that carries only its primary name attribute — and its ordinary columns (Text, Memo, the number types,
+    Money, DateTime, Boolean, Choice and MultiChoice with inline options, AutoNumber; at most 25) then follow in ONE
+    atomic change set instead of one request each: the SDK's `createColumns`, an OData `$batch` of POSTs to the table's
+    `Attributes` collection. Dataverse runs the operations in order and, if one fails, rolls back the ones already done
+    ([change sets](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/execute-batch-operations-using-web-api#change-sets)),
+    so a refused change set has created nothing, and the build then creates the columns one by one as it always did,
+    with a warning that says why (the platform's own message when its answer carries one). The same fallback covers a
+    transport that cannot send a change set — the SDK refuses before sending anything when its HTTP client has no
+    `postRaw` (`DataverseClient.supportsAtomicBatch`; `lib/sdk-http-client.js` has it) — and a change set whose answer
+    was lost or could not be read (a transport failure, a server error, an unreadable success), which may have
+    committed: the table is read once, and when it has EVERY column the change set is taken as committed and its
+    columns are narrated as created, with their ids, after a warning that the answer was lost; otherwise each column
+    already there answers "already exists" and is skipped, so a lost answer costs requests, never a column or a
+    duplicate. A refusal (any 4xx) is not followed by that read. The HTTP client sends the change set again
+    only when its answer is a 429 — the platform refused it, so nothing in it committed (the change set is atomic), as it can while the table
+    just created is still held by its customization lock — on the schedule of any other throttled write (six attempts,
+    1 s / 2 s / 4 s / 8 s / 8 s with jitter, longer when `Retry-After` asks, `isColumnCreateBatch` in
+    `lib/sdk-http-client.js`). It never sends it again after another transient status or a lost answer (a change set can
+    commit behind those), so such a refusal costs one request and then the per-column path's own 429 retries, never a
+    burst; a change set still refused with a 429 once the attempts are spent falls back the same way, with a warning
+    that says the table was throttled rather than that the request failed. The columns are not put in
+    the table's own create request, which Dataverse also accepts (an `Attributes` array beside the primary name
+    attribute, [Create columns](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-update-column-definitions-using-web-api#create-columns)):
+    a table create that carries columns is not a request the previous release ever sent, and an environment can treat it
+    differently (see the next bullet). The SDK builds each operation's body with the same function `createColumn` uses,
+    so a column's body is its per-column body — `table-columns-in-create.test.js` compares them column by column and,
+    where `MODEL_APPS_RELEASED_SCRIPTS` names the `scripts` directory of the previous release (the CI job that installs
+    the parser oracles sets it), with the requests the
+    released code itself posts — and each operation carries the solution header (the one on the outer `$batch` request is
+    ignored by the platform). Customer, File, Image, Calculated, Rollup and global-choice columns, columns past 25, and
+    every column of a table that already exists, or that was found after its create (the answer to the create was lost,
+    so nothing shows what it holds), keep the one-request-per-column path. A column also stays out of the change set
+    when its name is one the platform would create twice — the primary name, `<table>id`, a companion of a column of the
+    table (a Money column's `<name>_base` twin, a Choice, MultiChoice or Boolean column's `<name>name` shadow, reserved
+    even when that column takes the per-column path itself), or a repeat of an earlier name in any case — because
+    Dataverse then refuses the WHOLE change set
+    ([0x80060304](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes),
+    "Attribute {0} already exists for entity {1}.") where the one-by-one path meets the collision in one
+    column's own request and skips it. A column whose name EXTENDS the name of a column that takes the
+    per-column path (Customer, File, Image, Calculated, Rollup, global-choice) stays out as well, and the
+    build does not try to list what the platform makes beside such a column: `<name>name`, `<name>yominame`
+    and `<name>idtype` beside a Customer column (measured), `<name>_name` beside a
+    [File column](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/file-column-data#file-name-column),
+    `<name>id`, `<name>_timestamp` and `<name>_url` beside an
+    [Image column](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/image-column-data#download-url),
+    `<name>_date` and `<name>_state` beside a
+    [rollup column](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/define-rollup-fields).
+    Such a column is made AFTER the change set, so a twin inside it would be made before its owner and the
+    owner's own create would answer "already exists" — a skip — dropping the owner without a word, where one by
+    one the owner comes first and the twin is the skip. The twin is made in spec order after the change set, as
+    before; a longer name that merely starts like its neighbour's costs one request. The mirror rule keeps the order
+    the spec's for the columns that DO go in the change set: one by one the first column to name something creates
+    it and the next is skipped, so when a twin is listed BEFORE its owner the twin is the column kept — and the
+    change set, which runs before every per-column create, would reverse that. A column therefore stays out of the
+    change set when an earlier column has a name that extends its own — every name a column's creation can take
+    (a companion listed for it, or one the platform makes that the build does not know) is named after the column —
+    and is made after that column, in spec order; where an earlier column merely starts like a later one's name that costs one
+    request. One narrow
+    read of the table's `Attributes` (ids and names, no labels) then confirms the columns and returns the ids
+    `createColumn` would have (a change set answers none), keyed by the column object, never by its name: a second
+    column of exactly the same name is a repeat, skipped as already existing and never given the first one's id. A
+    column the read does not show — unreadable, lagging, or ignored by the platform — is created the per-column way,
+    where an already-exists answer is a skip. A table whose create answer was lost and that is found afterwards
+    is given no change set. Used only when the SDK has `createColumns` and a raw Dataverse client is there to read the
+    columns back (`inlineEnabled`); otherwise every column takes the per-column path.
+  - **Primary name column length.** Every table create sends the primary name attribute's `MaxLength` explicitly: the
+    spec's `primaryAttribute.maxLength` (a whole number from 1 to 850, one rule — `primaryNameLengthProblem` in
+    `lib/app-spec.js` — applied by `validateAppSpec` AND by the provision-entities input gate that `/genpage` and
+    `/app-builder` pass through), else 100 — what the previous release always sent (it is the SDK's own default for the
+    option), for a plain and an auto-numbered name column alike. So a spec without a length posts the previous release's
+    table request byte for byte and gets its result on every environment. What an environment makes of the length asked
+    of a create that carries only the primary name attribute was measured on two: one keeps it (100 → 100); the other
+    makes a plain text name column 850 characters long whatever length is asked (100 and 120 both came back 850) but
+    keeps the length asked of an auto-numbered one (100 → 100), and keeps the length asked in a create that also carries
+    other columns (120 → 120) — which is why the columns are not put in the table's create: no one length asked of such
+    a create matches the previous release on both environments. More than 850 is refused (HTTP 400, "The maximum length
+    of Primary attribute '…' is 4000. The maximum allowed limit is 850." — measured in a create that carried other
+    columns), and a PUT of the finished column — the SDK's `updateColumn`, with `MSCRM.MergeLabels: true` — is honored
+    (850 → 120 → 850). So when the spec gives a length and THIS build created the table, it reads the length back with
+    one typed `…/Attributes(LogicalName='…')/Microsoft.Dynamics.CRM.StringAttributeMetadata?$select=MaxLength` GET and
+    calls `updateColumn` only when it differs — LAST in the data-model phase, once every table, column, status reason,
+    alternate key and relationship has been created, and inside a `finally`, so that a phase that halts after creating a
+    table still sets that table's length (a re-run finds the table and leaves an existing table's name column alone; a
+    length that cannot be set while the phase is halting is warned about as one a re-run will not set either).
+    Last, because `updateColumn` starts by reading the column WITH its labels, and a label-bearing metadata read ahead of
+    a labelled create is what strips non-base languages (measured; see `findExistingColumns`): within one attempt, nothing
+    labelled is created after it. The build's automatic retry of a transient halt (a 429, a lock) runs the phase again as a
+    second attempt: the attempt that created the table has already set its length (the `finally` runs after a halt too), and
+    the retry finds the table and keeps its name column as it finds it, so the length is set once — but what the retry
+    creates comes after the first attempt's read, and the loss was measured only for a create straight after the read, so
+    whether it reaches across the pause between two attempts is not known (`table-columns-in-create.test.js` pins what
+    each attempt does). That is one narrated `primary column length` step, planned (after the relationships) and counted
+    only when the spec gives a length (`planFor`, and the provision-entities plan and total): `ok … -> N` when it set the
+    length, or a skip — `(already N)`, `(table exists — kept)` or `(table found after its create — kept at N, asked M)` —
+    or a FAILED step naming the table, the length asked and the length the platform made (for a read as well as an
+    update), with a warning, that never stops the build. There is no read for the default: a spec without a length
+    leaves the column as the environment made it, which is what the previous release did. A rebuild leaves an existing
+    table's name column alone, like every column's `maxLength`, because it must not shorten a column that may hold data
+    or undo a length widened in Maker. A table found after the answer to its create was lost (or that another maker
+    created first) is treated as not made by this build, since nothing shows that it was not made by someone else, so
+    its column is never written — but it is read, once, and a length that differs from the spec's, or cannot be read, is
+    a warning (`reportFoundPrimaryNameLength`). And a build that stops on `TABLE_METADATA_NOT_VISIBLE` out of the create
+    warns that the length asked may not have been applied (some environments make a name column created this way 850
+    characters long), since the re-run that follows treats the table as an existing one — except for an auto-numbered
+    name column, which keeps its length, and for 850, which the column comes out as either way. The
+    build reads only `schemaName`, `displayName`, `autoNumberFormat`, `required` and `maxLength` from
+    `primaryAttribute`; any other key inside it is still accepted and ignored (unlike the table level, it has
+    no key allow-list).
 
 The end-to-end flow (Phase 0 working dir → Phase 1 author **in the main loop** per
 `references/authoring-flow.md` → Phase 2 narrated SDK build → Phase 3 verify & iterate; **edit** an
@@ -1174,7 +1335,7 @@ scripts/
   launch-playwright-mcp.js     ← Playwright MCP server launcher (fullscreen; uses lib/detect-browser.js)
   playwright-mcp-fullscreen.config.json ← Fullscreen browser config for the launcher
   regenerate-verified-icons.js ← Regenerates references/verified-icons.txt from npm
-  check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match (pac overlaps the az probes); a CLI too slow to answer is `az_timeout`/`pac_timeout`
+  check-auth.js                ← Pre-flight: az present + logged in, pac identity, WhoAmI, identity match (the az probes, the token read + WhoAmI and pac overlap; the verdict order is fixed); a CLI too slow to answer is `az_timeout`/`pac_timeout`
   check-version.js             ← Skill-start update notice: compares the plugin clone with its origin/main (git runs in the plugin, never the user's repo)
   resolve-interaction-mode.js  ← Reports whether a human can answer in this run (unattended defaults)
   lint-app-spec.js             ← Validate + lint an App Spec without touching an environment
@@ -1206,9 +1367,9 @@ scripts/
   check-griffel-styles.js      ← /genpage and /app-builder: a page's `makeStyles` calls hold none of the ten shorthands Griffel's runtime drops (lib/griffel-styles.js; see "Griffel shorthands" below)
   capture-fixture.js           ← Copies /genpage working dir into an eval fixture and runs both runners
   lib/
-    entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data)
-    provision-input.js         ← Input validation for entity provisioning
-    dataverse-auth.js          ← Shared auth + HTTP helpers (`az account get-access-token`, memoized per process and replaced on a 401; responses decoded as UTF-8 once; an environment URL is used only as a Dataverse https origin, `dataverseOrigin`; a request path must stay under `/api/data/v9.2/` as both the client and the server resolve it, `webApiUrl`), plus the CLI arg contract (parseArgs/validateFlags)
+    entity-provision.js        ← Shared entity-provisioning core (solution + data-model + sample-data): a new table is created with only its primary name attribute and its ordinary columns follow in one atomic change set (`createColumns`), falling back to one request per column; the primary name column's length is always sent (100 unless the spec gives one) and, where the platform did not keep a length the spec gave, set last in the phase; and `mapLimit`, the bounded fan-out every parallel path reuses
+    provision-input.js         ← Input validation for entity provisioning (the entry gate of `/genpage` and `/app-builder`; it applies `app-spec.js`'s own `primaryNameLengthProblem`, so a name-column length is refused here exactly as in `validateAppSpec`)
+    dataverse-auth.js          ← Shared auth + HTTP helpers (`az account get-access-token`, memoized per process and replaced on a 401 — a synchronous `az` call, which a caller running other probes beside the request opts out of with `refreshOn401: false`; responses decoded as UTF-8 once; an environment URL is used only as a Dataverse https origin, `dataverseOrigin`; a request path must stay under `/api/data/v9.2/` as both the client and the server resolve it, `webApiUrl`), plus the CLI arg contract (parseArgs/validateFlags)
     process-runner.js          ← how every script starts az/pac/npm/npx/git: the executable is resolved to an absolute path on PATH, never the project folder, and started without a shell (a Windows batch shim runs through cmd.exe with its arguments checked); `killProcessTree` ends a stalled child AND everything it started (`taskkill /T /F` on Windows, where `pac.cmd` is cmd.exe → pac.exe, looked up with the System32 folder first on PATH so a PATH without it cannot leave the tree running, and with its window hidden; SIGKILL to the descendants `ps` lists elsewhere), through the same audited calls; a child that has already exited is only asked to die, never ended by its pid, which may be another process's by then; synchronous, and it never throws
     cli-failure.js             ← how a CLI child failed (timeout / missing / failed), the Azure CLI budget (60 s, `POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS`), so a slow `az` is never reported as missing or signed out, and the budget of one `pac model genpage` call (3 min to list or download, 10 min to upload; `POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS`, 1 s to 60 min, sets all of them); `commandArg` quotes a path with white space so a command a message tells you to paste stays one argument
     nearest-name.js            ← pure single-edit "did you mean" matcher for closed vocabularies (CLI flags, FetchXML operators)
@@ -1243,11 +1404,11 @@ scripts/
     role-privileges.js         ← pure: declared persona privileges + subset comparison against a deployed role
                                   (also the oracle for `roleGrants[]`, which is additive rather than converged)
     odata.js                   ← OData literal escaping helpers
-    genpage-cli.js             ← pac model genpage upload/list/download wrapper, plus a page's own name read from its row (pac stores `"` as `\"`; `unescapePacName`); an uncertain create reports its candidates and stops without adopting one as an UPDATE. Every pac call is time-bounded (`runPac`: the process tree is ended when the budget runs out and the result is `{ status: null, timedOut: true }`); a timed-out list or download is retried once, a timed-out UPDATE is not (it may have landed, and a re-send can record the prompt twice or overwrite a later change: it is reported with the check to run — `genpage-base.js check` for the upload script, a `pac model genpage download` of the page and then a re-run of the build for the build, which keeps no base marker), and a timed-out CREATE is an uncertain create that is never run again (a Page ID pac had printed names the page it created, stalled before publish or placement; a create that fails after the Page ID is reported the same way and never sent again; every error that follows a create whose outcome is not known to be nothing carries `transient: false`, so the build's own retry of a halt that reads as transient cannot re-send it, while a create that failed outright and left nothing in the listing is retried, as in 2.13.0)
+    genpage-cli.js             ← pac model genpage upload/list/download wrapper, plus a page's own name read from its row (pac stores `"` as `\"`; `unescapePacName`); an uncertain create reports its candidates and stops without adopting one as an UPDATE. Every pac call is time-bounded (`runPac`: the process tree is ended when the budget runs out and the result is `{ status: null, timedOut: true }`); a timed-out list or download is retried once, a timed-out UPDATE is not (it may have landed, and a re-send can record the prompt twice or overwrite a later change: it is reported with the check to run — `genpage-base.js check` for the upload script, a `pac model genpage download` of the page and then a re-run of the build for the build, which keeps no base marker), and a timed-out CREATE is an uncertain create that is never run again (a Page ID pac had printed names the page it created, stalled before publish or placement; a create that fails after the Page ID is reported the same way and never sent again; every error that follows a create whose outcome is not known to be nothing carries `transient: false`, so the build's own retry of a halt that reads as transient cannot re-send it, while a create that failed outright and left nothing in the listing is retried, as in 2.13.0); `runPac` also takes an AbortSignal and the client's `abort()` ends the pac runs it has in flight, each with its whole process tree (through the same `killProcessTree` as a timeout), and keeps a call that is paused between two attempts from starting another (an attempt that was ended is not followed by another pause either, and an ended upload is never sent again; a verify pass ends the page reads it gave up on this way)
     genpage-base.js            ← base-marker hash, compare, and read/write (sibling dotfile of the code file; no environment URL)
     safe-fs.js                 ← confined output writes and deletes: the named directory's final component must not be a link or junction (readlink, not a path-text compare, so an 8.3 name and a share root stay usable); write via exclusive temp + rename. Shared by genpage markers and later callers
     hydrate-spec.js            ← reconstruct an App Spec from a deployed app (edit flow)
-    verify-spec.js             ← spec-vs-deployed reconciliation core
+    verify-spec.js             ← spec-vs-deployed reconciliation core (checks are ordered tasks on a pool of 4)
     build-journal.js           ← durable JSONL build journal (resume diagnostics)
     form-preview.js            ← form wireframe renderer
     app-preview.js             ← whole-app design renderer (data model + sitemap + forms + page-intents + design)

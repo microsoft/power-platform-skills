@@ -853,6 +853,32 @@ const ENTITY_KEY_HINTS = Object.assign(Object.create(null), {
   localizedLabels: ' — write the LCID map on the label FIELD itself (e.g. "displayName": { "1033": "Baseline", "3082": "Línea base" }), not in a separate per-table block; see references/app-spec-schema.md → "Localized labels"',
 });
 
+// The most characters a table's primary name column may be asked for. A single line of text elsewhere in a table takes up
+// to 4,000, but the name column of a table does not: asked for more than 850 in a table create that also carried other columns, the
+// platform refuses it — HTTP 400, "The maximum length of Primary attribute 'new_name' is 4000. The maximum allowed limit
+// is 850." (live-measured, with 4000 asked for). `primaryAttribute.maxLength` was accepted and ignored until the build
+// began sending it, so a value the platform cannot take is refused at the spec gate rather than part-way through a build.
+// See: https://learn.microsoft.com/en-us/power-apps/maker/data-platform/types-of-fields
+const PRIMARY_NAME_MAX_LENGTH = 850;
+
+// Why a `primaryAttribute.maxLength` cannot be used, or null when it can; an omitted one is fine (the build then asks for
+// 100, as it always has). The ONE rule behind both gates — validateAppSpec and the
+// provision-entities input validator, the entry point of /genpage and /app-builder — so that neither accepts what the other
+// refuses. `!== undefined`, so an explicit null or 0 is refused rather than read as "not given".
+function primaryNameLengthProblem(length) {
+  if (length === undefined) return null;
+  if (Number.isInteger(length) && length >= 1 && length <= PRIMARY_NAME_MAX_LENGTH) return null;
+  return `primaryAttribute.maxLength must be a whole number from 1 to ${PRIMARY_NAME_MAX_LENGTH} (got ${describeSpecValue(length)})`;
+}
+
+// The length the spec asks for a table's primary name column, or undefined when it does not ask. The build, its dry-run plan
+// and its progress total all key on this one answer — it decides whether the build has a "primary column length" step for
+// the table — so they cannot disagree about it (the same arrangement as quickCreateEnabledFor).
+function askedPrimaryNameLength(entity) {
+  const asked = entity && entity.primaryAttribute && entity.primaryAttribute.maxLength;
+  return asked === undefined || asked === null ? undefined : asked;
+}
+
 // The keys the build READS on each `appShell` level (appDef, sdk-build.js), for the same reason as
 // ENTITY_KEYS (#537). The levels name their title differently — areas and groups take `label`,
 // subareas take `title` — and a key with no reader was accepted and dropped: an area written with
@@ -2391,6 +2417,12 @@ function validateAppSpec(spec, opts = {}) {
     }
     if (!e.primaryAttribute || !e.primaryAttribute.schemaName) {
       errors.push(`entity ${e.schemaName}: primaryAttribute.schemaName required`);
+    }
+    // The length of the table's name column, asked for when the table is created (an existing table's column is left as it
+    // is).
+    if (e.primaryAttribute && typeof e.primaryAttribute === 'object') {
+      const lengthProblem = primaryNameLengthProblem(e.primaryAttribute.maxLength);
+      if (lengthProblem) errors.push(`entity ${e.schemaName}: ${lengthProblem}`);
     }
     if (e.quickCreate !== undefined && typeof e.quickCreate !== 'boolean') {
       errors.push(`entity ${e.schemaName}: quickCreate must be a boolean`);
@@ -4195,6 +4227,9 @@ module.exports = {
   subgridDuplicateProblems,
   subgridUnknownKeys,
   validateAppSpec,
+  PRIMARY_NAME_MAX_LENGTH,
+  primaryNameLengthProblem,
+  askedPrimaryNameLength,
   validateSampleDataRows,
   normalizePageSource,
   normalizeLanguageCode,

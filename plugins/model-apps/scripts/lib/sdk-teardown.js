@@ -54,7 +54,7 @@
 // the identical phase-grouped, status-marked log.
 
 const { topoOrderEntities } = require('./_graph.js');
-const { appUniqueName, commandsByEntity, defaultViewColumns, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, bpfFilter } = require('./sdk-build.js');
+const { appUniqueName, commandsByEntity, defaultViewColumns, enrichesDefaultViews, dashboardsInSolution, findDashboardsByName, findPinnedDashboard, resolveExistingFormId, resolveRoleBusinessUnit, roleBuClause, bpfFilter, partialEnrichment } = require('./sdk-build.js');
 const { manifestResourceName, parseManifestBase64 } = require('./page-manifest.js');
 const { relationshipSchemaName, manyToManySchemaName, lookupColumnsFor, SDK_ROLE_MARKER, canonicalPersonaName, FORM_GUID_RE } = require('./app-spec.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
@@ -115,6 +115,80 @@ function isUndeletable(err) {
 // Solution component type codes used when reporting what still references a relationship.
 // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/dependency
 const DEPENDENT_COMPONENT_LABELS = { 1: 'table', 2: 'column', 10: 'relationship', 26: 'view', 59: 'chart', 60: 'form' };
+
+function canBatchResetDefaultViewPublishes(sdk) {
+  return typeof (sdk && sdk.publishArtifacts) === 'function'
+    && typeof (sdk && sdk.publishArtifact) === 'function'
+    && typeof (sdk && sdk.enrichDefaultViews) === 'function';
+}
+
+function recordDeferredResetPublish(ctx, logical, record) {
+  if (!ctx || !record) return;
+  for (const pending of record.pendingPublish || []) {
+    const first = (pending.artifacts || [])[0];
+    if (!first || !first.id || ctx.owedByTable.has(logical)) continue;
+    ctx.owedByTable.set(logical, { table: logical, type: first.type || 'view', id: first.id });
+  }
+}
+
+function warnDeferredResetPublishFailure(ctx, table, err) {
+  if (!ctx) return;
+  const message = `default-view reset for ${table} is saved but may still be unpublished: ${errMsg(err)} — `
+    + 'the next relationship delete may still report the lookup as still referenced until that table publishes';
+  ctx.warnings.push(message);
+  if (typeof ctx.warn === 'function') ctx.warn(message);
+}
+
+function publishFailure(outcome) {
+  return outcome && outcome.publish && outcome.publish.kind === 'failed'
+    ? (outcome.publish.error || new Error('publish failed'))
+    : null;
+}
+
+// The reset step exists only so relationship deletes stop seeing those lookups on the built-in
+// default views. Saving the reset is not enough: until Dataverse publishes the table, the
+// relationship delete can still report the lookup as referenced. So every reset defers its publish
+// and this barrier pays that debt ONCE, after the last reset and before the first relationship
+// delete. One target still uses publishArtifact (request-for-request unchanged); several use the
+// SDK's publishArtifacts envelope and retry each failed target on its own, which the SDK README
+// prescribes because a shared failure can still have published some scopes.
+async function settleDeferredResetPublishes(sdk, ctx) {
+  if (!ctx || ctx.flushing || !ctx.owedByTable.size || typeof (sdk && sdk.publishArtifact) !== 'function') return;
+  ctx.flushing = true;
+  try {
+    const owed = [...ctx.owedByTable.values()];
+    ctx.owedByTable.clear();
+    const publishOne = async (target) => {
+      try {
+        const failed = publishFailure(await sdk.publishArtifact(target.type, target.id));
+        if (failed) warnDeferredResetPublishFailure(ctx, target.table, failed);
+      } catch (err) {
+        warnDeferredResetPublishFailure(ctx, target.table, err);
+      }
+    };
+    if (owed.length === 1 || typeof (sdk && sdk.publishArtifacts) !== 'function') {
+      for (const target of owed) await publishOne(target);
+      return;
+    }
+    let outcomes = null;
+    try {
+      outcomes = await sdk.publishArtifacts(owed.map((target) => ({ type: target.type, id: target.id })));
+    } catch {
+      outcomes = null;
+    }
+    const retry = [];
+    if (Array.isArray(outcomes) && outcomes.length === owed.length) {
+      outcomes.forEach((outcome, i) => {
+        if (outcome && outcome.publish && outcome.publish.kind === 'failed') retry.push(owed[i]);
+      });
+    } else {
+      retry.push(...owed);
+    }
+    for (const target of retry) await publishOne(target);
+  } finally {
+    ctx.flushing = false;
+  }
+}
 
 // Turn a blocked relationship delete into something an operator can act on.
 //
@@ -871,9 +945,19 @@ const KIND_HANDLERS = {
     async resolve(sdk, target) {
       return [{ id: target.entityLogical, cols: target.cols }];
     },
-    async del(sdk, item) {
+    async del(sdk, item, ctx) {
       if (typeof sdk.enrichDefaultViews === 'function') {
-        try { await sdk.enrichDefaultViews(item.id, item.cols); } catch { /* best-effort — a reset that fails just leaves the surfacing lookup, which the delete will then report */ }
+        if (!ctx || !ctx.deferPublish) {
+          try { await sdk.enrichDefaultViews(item.id, item.cols); } catch { /* best-effort — a reset that fails just leaves the surfacing lookup, which the delete will then report */ }
+          return;
+        }
+        try {
+          recordDeferredResetPublish(ctx, item.id, await sdk.enrichDefaultViews(item.id, item.cols, { publish: false }));
+        } catch (err) {
+          recordDeferredResetPublish(ctx, item.id, partialEnrichment(err));
+          // Best-effort exactly as before: a reset failure is swallowed, because the relationship
+          // delete that follows is what reports the actionable leftover.
+        }
       }
     },
   },
@@ -1271,12 +1355,12 @@ function planTeardown(spec) {
 // Reporting both as "undeletable" would send an operator hunting a platform problem that isn't
 // there. `skippedIds` is retained as the union of both for callers that only need the count.
 // A not-found error counts as already-gone. Throws only on a genuine failure.
-async function deleteStep(sdk, handler, items) {
+async function deleteStep(sdk, handler, items, ctx) {
   const deletedIds = [];
   const skipped = [];
   for (const item of items) {
     try {
-      await handler.del(sdk, item);
+      await handler.del(sdk, item, ctx);
       deletedIds.push(item.id);
     } catch (err) {
       if (handler.tolerateNotFound && isNotFound(err)) {
@@ -1322,8 +1406,31 @@ async function deleteStep(sdk, handler, items) {
 // Execute a teardown. Dry-run discovers page candidates when an SDK reader is supplied, without writes.
 // Apply resolves each step's live id(s) and deletes them, emitting per-step status. Best-effort:
 // a failed step is recorded and teardown CONTINUES (halting mid-way would strand orphans), then
-// ok=false with an `errors[]` is returned. deps: { sdk (MakerSdk client), emit(event) }.
+// ok=false with an `errors[]` is returned. deps: { sdk (MakerSdk client), emit(event), warn(message) }.
+//
+// `warn` hears (and `result.warnings` lists, when there are any) the default-view resets whose publish
+// could not be confirmed. This wrapper exists so the batched publish of those resets is settled however
+// the steps end — normally, through the app-delete stop, or because a callback threw — without wrapping
+// the step loop (and re-indenting every line of it) in a try/finally.
 async function runTeardown(spec, opts = {}, deps = {}) {
+  const deferredResetPublishes = {
+    deferPublish: canBatchResetDefaultViewPublishes(deps.sdk),
+    owedByTable: new Map(),
+    warnings: [],
+    warn: deps.warn,
+    flushing: false,
+  };
+  let result;
+  try {
+    result = await runTeardownSteps(spec, opts, deps, deferredResetPublishes);
+    return result;
+  } finally {
+    await settleDeferredResetPublishes(deps.sdk, deferredResetPublishes);
+    if (deferredResetPublishes.warnings.length && result) result.warnings = deferredResetPublishes.warnings;
+  }
+}
+
+async function runTeardownSteps(spec, opts, deps, deferredResetPublishes) {
   const emit = deps.emit || (() => undefined);
   const sdk = deps.sdk;
   const apply = opts.apply === true;
@@ -1402,6 +1509,9 @@ async function runTeardown(spec, opts = {}, deps = {}) {
   let n = 0;
   for (const step of plan) {
     const myN = (n += 1);
+    // The barrier for the batched default-view resets: nothing past the resets may run before they are
+    // published (the relationship deletes that follow them are what the resets unblock).
+    if (step.kind !== 'resetDefaultViews') await settleDeferredResetPublishes(sdk, deferredResetPublishes);
     emit({ phase: step.phase, status: 'start', label: step.label, n: myN, total });
     if (step.kind === 'webResource' && pagesFailed && pageManifests.has(String(step.target.name).toLowerCase())) {
       const why = `${step.label} (kept — the generative pages step failed, and a re-run needs this manifest to find remaining page candidates; it is deleted once that step succeeds)`;
@@ -1460,7 +1570,7 @@ async function runTeardown(spec, opts = {}, deps = {}) {
         emit({ phase: step.phase, status: 'skip', skip: skipReason ? 'kept' : 'not-found', label: `${step.label} (${skipReason || 'not found'})`, n: myN, total });
         continue;
       }
-      const { deletedIds, skipped } = await deleteStep(sdk, handler, items);
+      const { deletedIds, skipped } = await deleteStep(sdk, handler, items, step.kind === 'resetDefaultViews' ? deferredResetPublishes : undefined);
       (result.deleted[step.kind] = result.deleted[step.kind] || []).push(...deletedIds);
       if (step.kind === 'genpage') {
         completePageDeletions(opts.workspaceDir, step.target.appUnique, deletedIds, opts.env);

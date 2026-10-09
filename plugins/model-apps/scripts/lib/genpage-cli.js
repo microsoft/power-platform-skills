@@ -38,11 +38,18 @@ function neverRetriedError(message, options) {
 // timeout: see makeGenpageCli for what each kind of call does with one, and why.
 const TIMED_OUT_ATTEMPTS = 2;
 
+// What a pac run reports when its caller ended it (`runPac`'s `signal`), in the failed result's stderr.
+const PAC_ENDED = 'pac was ended: its answer is no longer needed';
+
 // Runs `pac <args>` and waits at most `timeoutMs` for it. When the time is up the whole process tree is ended (killTree: `pac.cmd` → cmd.exe → pac.exe is
 // three processes on Windows, and ending the shim alone would leave the stalled one running) and the result says so — `status: null, timedOut: true,
 // timeoutMs, command` — which no exit code is, so a caller can tell a stalled call from a failed one. Output printed before the stall is kept.
 // `spawn`, `killTree` and `clock` are seams for the tests; a call with no budget gets the read one, so no pac call is ever unbounded.
-function runPac(args, { timeoutMs = pacTimeoutMs('list'), spawn = spawnProcess, killTree = killProcessTree, clock = REAL_CLOCK } = {}) {
+//
+// `signal` (an AbortSignal) ends the run too: pac AND everything it started are killed — through the same `killTree` as a timeout — and the result is a failed one
+// marked `ended: true` with no output, since a half-read listing must never be parsed. A caller that ended a run is not waiting for it, which is not what
+// a stall is: `ended` is for the caller to treat as it treats `timedOut` wherever a re-send could do harm. A signal that has already aborted starts nothing.
+function runPac(args, { timeoutMs = pacTimeoutMs('list'), spawn = spawnProcess, killTree = killProcessTree, clock = REAL_CLOCK, signal } = {}) {
   // Asynchronous, and it NEVER rejects. It was spawnSync, which froze the whole process for the
   // length of every pac call — about five seconds for one `pac model genpage list` — so two
   // independent listings could not overlap even when a caller awaited them together (an update in
@@ -59,22 +66,28 @@ function runPac(args, { timeoutMs = pacTimeoutMs('list'), spawn = spawnProcess, 
     const err = [];
     let settled = false;
     let timer = null;
-    // Settles ONCE, whichever of the child's 'close', its 'error' and the deadline comes first: a child that is killed at the deadline still closes, and
-    // that close must not resolve the call a second time or turn the timeout into an exit code.
-    const finish = (status, launchError, timedOut = false) => {
+    // Settles ONCE, whichever of the child's 'close', its 'error', the deadline and the caller's signal comes first: a child that is killed at the deadline or on
+    // the signal still closes, and that close must not resolve the call a second time or turn the timeout into an exit code.
+    // `how` is 'timedOut' (the deadline passed) or 'ended' (the caller's signal ended the run), otherwise null.
+    const finish = (status, launchError, how = null) => {
       if (settled) return;
       settled = true;
       if (timer !== null) clock.clearTimeout(timer);
       const stderr = Buffer.concat(err).toString('utf8');
       resolve({
-        status: timedOut ? null : (status == null ? 1 : status),
-        stdout: Buffer.concat(out).toString('utf8'),
+        status: how === 'timedOut' ? null : (status == null ? 1 : status),
+        stdout: how === 'ended' ? '' : Buffer.concat(out).toString('utf8'),
         // POSIX reports a missing pac as a spawn 'error' (ENOENT) with nothing on stderr; carry its
         // message so the diagnostic says why instead of "pac exited 1 with no output".
         stderr: stderr || (launchError ? String(launchError.message || launchError) : ''),
-        ...(timedOut ? { timedOut: true, timeoutMs, command: ['pac', ...args.slice(0, 3)].join(' ') } : {}),
+        ...(how === 'timedOut' ? { timedOut: true, timeoutMs, command: ['pac', ...args.slice(0, 3)].join(' ') } : {}),
+        ...(how === 'ended' ? { ended: true } : {}),
       });
     };
+    if (signal && signal.aborted) {
+      finish(1, new Error(PAC_ENDED), 'ended');
+      return;
+    }
     let child;
     try {
       // Resolution and argument checks throw here too, and resolve as a failed result like a launch error.
@@ -97,7 +110,7 @@ function runPac(args, { timeoutMs = pacTimeoutMs('list'), spawn = spawnProcess, 
       timer = clock.setTimeout(() => {
         // End the tree first, so pac is gone before the caller acts on the result — the retry of a read, or the check an upload's message sends the user to, must not race the call it gave up on.
         try { killTree(child); } catch { /* the call is reported as stalled either way */ }
-        finish(null, null, true);
+        finish(null, null, 'timedOut');
         // A process that outlived the kill (or one the kill missed) holds these pipes open, and a pipe nobody has finished reading keeps this process alive
         // at exit: release them, and the child's own handle, now that the result is out.
         for (const stream of [child.stdout, child.stderr]) {
@@ -107,6 +120,16 @@ function runPac(args, { timeoutMs = pacTimeoutMs('list'), spawn = spawnProcess, 
       }, timeoutMs);
       // The child's handle keeps the loop alive while pac runs; the deadline must not be what keeps a process running once it does not.
       if (timer && typeof timer.unref === 'function') timer.unref();
+    }
+    if (signal) {
+      // Settled here rather than at 'close': a caller that stopped waiting must not wait for the pipes of a process that
+      // is on its way out. On Windows taskkill has finished by the time killTree returns; elsewhere the signal is sent.
+      const end = () => {
+        try { killTree(child); } catch { /* the run is reported as ended either way */ }
+        finish(1, new Error(PAC_ENDED), 'ended');
+      };
+      signal.addEventListener('abort', end, { once: true });
+      child.on('close', () => signal.removeEventListener('abort', end));
     }
   });
 }
@@ -278,7 +301,32 @@ function classifyListOutput(stdout) {
 }
 
 function makeGenpageCli(env, deps = {}) {
-  const run = deps.run || runPac;
+  // The pac runs this client has in flight, one controller each, so that `abort()` can end them: pac has no timeout of its
+  // own, and a verify pass that stopped needing its answers must not leave it running.
+  const inFlight = new Set();
+  // Bumped by abort(); see runForCall.
+  let abortEpoch = 0;
+  // Forwards a call's own options (its time budget: `budget(kind)`) beside the controller that lets abort() end the run.
+  const startRun = deps.run || ((args, options = {}) => {
+    const controller = new AbortController();
+    inFlight.add(controller);
+    const call = runPac(args, { ...options, signal: controller.signal });
+    const forget = () => inFlight.delete(controller);
+    call.then(forget, forget);
+    return call;
+  });
+  // The `run` that ONE call of this client — an enumeration, an upload, a download — starts its pac runs with. abort() ends the
+  // runs in flight, but a call that is PAUSED between two attempts (a listing that failed once waits before it asks again) has
+  // none in flight: when the pause ends, its next attempt would start a pac that nothing ever ends. So a call remembers how many
+  // aborts there had been when it began, and once there has been another, every run it asks for answers `ended` — what a run
+  // ended in flight answers — without starting anything. No retry loop needs a check of its own that way, and one added later is
+  // covered by making its runs with this. A call that begins after the abort is an ordinary one: the client stays usable.
+  const runForCall = () => {
+    const epoch = abortEpoch;
+    return (...callArgs) => (abortEpoch === epoch
+      ? startRun(...callArgs)
+      : Promise.resolve({ status: 1, stdout: '', stderr: PAC_ENDED, ended: true }));
+  };
   const sleep = deps.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
   const attempts = deps.attempts || 3; // pac genpage upload/list flake intermittently (transient help-dump exits)
   // The budget of ONE pac call of this kind (lib/cli-failure.js pacTimeoutMs: 3 min to list or download, 10 min to upload, or
@@ -300,13 +348,19 @@ function makeGenpageCli(env, deps = {}) {
   //                    already printed names the page it created, whether it then stalled or failed; otherwise the env-wide id diff reports any page that is already
   //                    visible; and a page that is not visible YET proves nothing, because a second create is exactly how a duplicate is made. Each error that ends
   //                    such a create carries `transient: false` (neverRetriedError), so the build's own re-run of a halt it takes for transient never sends it again.
+  //   a run that was ENDED (`ended`: abort(), see runForCall) says as little as one that timed out, so an upload it ends is never sent again either: an UPDATE fails with
+  //                    `transient: false` and the advice to look at the page first, and a CREATE is judged like one that stalled. A listing or a download that was ended is just reported.
   const processEnv = deps.processEnv || process.env;
   const budget = (kind) => ({ timeoutMs: pacTimeoutMs(kind, processEnv) });
+  // A pac run that stops without an answer: it ran out of its budget (`timedOut`) or its caller ended it (`ended`). Neither says what the call did before it stopped.
+  const unanswered = (r) => !!(r && (r.timedOut || r.ended));
   // How a stopped upload is told. pacTimeoutAdvice, which a stopped READ gets, ends in "retry" — not what to say about an upload.
-  const stoppedAfter = (r) => `timed out after ${Math.round((r.timeoutMs || 0) / 1000)} s and was stopped`;
+  const stoppedAfter = (r) => (r.ended ? 'was ended before it answered' : `timed out after ${Math.round((r.timeoutMs || 0) / 1000)} s and was stopped`);
   // A message's command is one the user pastes, and a path under a Windows profile folder often has a space ("C:\Users\Dev User\..."): keep it ONE argument.
   const argText = commandArg;
   const allowLonger = (r) => {
+    // A run that was ended did not run out of time, so a longer budget would not have changed it.
+    if (r.ended) return '';
     const longer = pacLongerTimeoutMs(r.timeoutMs || pacTimeoutMs('upload', processEnv));
     return longer === null ? '' : ` ${PAC_TIMEOUT_ENV}=${longer} allows a slow upload longer.`;
   };
@@ -388,6 +442,7 @@ function makeGenpageCli(env, deps = {}) {
 
   // List the pages already in the app (parsed from its sitemap by pac). Returns [{ pageId, name }].
   async function listPages(appId) {
+    const run = runForCall();
     const r = await run(['model', 'genpage', 'list', '--environment', env, '--app-id', appId], budget('list'));
     return r.status === 0 ? parseList(r.stdout) : [];
   }
@@ -403,6 +458,7 @@ function makeGenpageCli(env, deps = {}) {
   //                                       — never masquerade as empty.
   // Callers that drive a create decision MUST check ok before trusting pages:[] as "truly empty".
   async function enumeratePages(appId, options = {}) {
+    const run = runForCall();
     let lastErr = '';
     let tried = 0;
     let timedOut = 0;
@@ -411,6 +467,8 @@ function makeGenpageCli(env, deps = {}) {
       if (options && options.includeUnpublished === true) args.push('--include-unpublished');
       const r = await run(args, budget('list'));
       tried += 1;
+      // A run the caller ended is not a flake to retry: nobody is waiting for the answer any more.
+      if (r.ended) return { ok: false, pages: [], error: `pac genpage list was ended: ${r.stderr}` };
       if (r.status === 0) {
         const c = classifyListOutput(r.stdout);
         if (c.kind !== 'unrecognized') return { ok: true, pages: c.pages, empty: c.kind === 'empty' };
@@ -433,13 +491,17 @@ function makeGenpageCli(env, deps = {}) {
   // discoverable before placement. Enumeration itself grants no ownership or update authority.
   // Reuses classifyListOutput (fail-closed): an unrecognized/incomplete listing NEVER
   // masquerades as an empty environment. `ids` are lower-cased for case-insensitive set membership.
-  async function enumerateEnv() {
+  // `run` is the one a caller already inside a call of this client (upload, below) makes its runs with; a listing of its own
+  // makes its own.
+  async function enumerateEnv(run = runForCall()) {
     let lastErr = '';
     let tried = 0;
     let timedOut = 0;
     for (let i = 0; i < attempts; i += 1) {
       const r = await run(['model', 'genpage', 'list', '--environment', env, '--include-unpublished'], budget('list'));
       tried += 1;
+      // A run the caller ended is not a flake to retry: nobody is waiting for the answer any more.
+      if (r.ended) return { ok: false, ids: [], error: `pac genpage list (env-wide) was ended: ${r.stderr}` };
       if (r.status === 0) {
         const c = classifyListOutput(r.stdout);
         if (c.kind !== 'unrecognized') {
@@ -480,6 +542,9 @@ function makeGenpageCli(env, deps = {}) {
     // given for an UPDATE that timed out (below), never what is sent or when.
     async upload({ appId, pageId, codeFile, compiledCodeFile, name, prompt, agentMessage, dataSources,
       addToSitemap, model, connectors, actions, caller }) {
+      // Every pac run of this upload — its snapshots and listings included — is made with the one `run`, so an abort() that lands
+      // while the upload pauses between attempts starts nothing more (see runForCall).
+      const run = runForCall();
       // pac REQUIRES both a prompt and an agent-message for a new page. Resolve the effective text
       // (preserving the historical defaults) ONCE, then hand both to pac BY FILE via --prompt-file /
       // --agent-message-file rather than inline --prompt / --agent-message. A downloaded page prompt is
@@ -545,7 +610,7 @@ function makeGenpageCli(env, deps = {}) {
         const label = name || '(unnamed)';
         for (let i = 0; i < attempts; i += 1) {
           if (!pid && beforeIds === null) {
-            const before = await enumerateEnv();
+            const before = await enumerateEnv(run);
             if (!before.ok) {
               throw new Error(
                 `pac genpage upload for '${name || '(unnamed)'}': cannot snapshot the environment before create (${before.error}) — refusing to create (would risk a duplicate)`
@@ -615,10 +680,10 @@ function makeGenpageCli(env, deps = {}) {
                     + `The create was NOT run again: a second create would make a duplicate page. To finish it, ${finishPage(created, appId)}.`
               );
             }
-            const after = await enumerateEnv();
+            const after = await enumerateEnv(run);
             if (!after.ok) {
               throw neverRetriedError(
-                `pac genpage upload for '${name || '(unnamed)'}' ${r.timedOut ? `${stoppedAfter(r)}, and ` : ''}had an uncertain result and env enumeration failed — refusing to retry (would risk a duplicate): ${String(after.error).replace(/[.\s]+$/, '')}. `
+                `pac genpage upload for '${name || '(unnamed)'}' ${unanswered(r) ? `${stoppedAfter(r)}, and ` : ''}had an uncertain result and env enumeration failed — refusing to retry (would risk a duplicate): ${String(after.error).replace(/[.\s]+$/, '')}. `
                 + `The create may have made a page. ${lookForThePage(appId)}${r.timedOut ? allowLonger(r) : ''}`
               );
             }
@@ -644,18 +709,18 @@ function makeGenpageCli(env, deps = {}) {
               // left is most likely NOT in the app's navigation: an update of it is refused (not in the app's navigation, no base marker), and `finishPage` is the way on. A
               // failure after pac printed `Page ID` is the same state as a stall after it: the page is written, and the publish or the placement did not finish.
               const way = `If one is yours, ${finishPage(newIds.length === 1 ? newIds[0] : '<its id>', appId)}; otherwise leave them and re-run the create.`;
-              throw neverRetriedError(`pac genpage upload for '${name || '(unnamed)'}' ${r.timedOut ? 'timed out and was stopped, and ' : ''}had an uncertain create (ambiguous ownership). Candidates: ${details.join('; ')}. Refusing to adopt or update any candidate. ${way}`, readFailure ? { cause: readFailure } : undefined);
+              throw neverRetriedError(`pac genpage upload for '${name || '(unnamed)'}' ${r.timedOut ? 'timed out and was stopped, and ' : (r.ended ? 'was ended before it answered, and ' : '')}had an uncertain create (ambiguous ownership). Candidates: ${details.join('; ')}. Refusing to adopt or update any candidate. ${way}`, readFailure ? { cause: readFailure } : undefined);
             }
-            // A create that TIMED OUT is never run again, even with nothing in the diff: the request may still be in flight on the service, and the page not
+            // A create that TIMED OUT, or was ENDED, is never run again, even with nothing in the diff: the request may still be in flight on the service, and the page not
             // visible YET. Re-running it is how a duplicate is made.
-            if (r.timedOut) {
+            if (unanswered(r)) {
               throw neverRetriedError(
                 `pac genpage upload for '${label}' ${stoppedAfter(r)} — an UNCERTAIN create: `
                 + 'no new page is visible in the environment yet, but the service may still be creating it. Refusing to re-run the create (a second create would risk a duplicate page). '
                 + `${lookForThePage(appId)}${allowLonger(r)}`
               );
             }
-            // Only a CREATE that failed outright reaches here (a timed-out one has thrown above), and it left nothing behind → did NOT land → safe to retry (pid stays undefined; beforeIds unchanged)
+            // Only a CREATE that failed outright reaches here (one that timed out or was ended has thrown above), and it left nothing behind → did NOT land → safe to retry (pid stays undefined; beforeIds unchanged)
           }
           // A DETERMINISTIC failure will repeat for the same inputs, so retrying it only burns the
           // caller's time and buries the real message under "after 3 attempt(s)". Break out and
@@ -663,6 +728,17 @@ function makeGenpageCli(env, deps = {}) {
           //
           // The next attempt always uses the same explicit id (or remains CREATE); recovery
           // never changes command identity, so deterministic failures must stop in both modes.
+          //
+          // A run that was ENDED (abort()) is no flake either: nobody is waiting for the answer, and every attempt after it answers
+          // "ended" at once, so pausing for them would only delay the failure. (A CREATE that was ended has already been judged above, like one
+          // that timed out, so what reaches here is an UPDATE.) What it did before it was ended is unknown, as it is after a timeout, so it is
+          // never sent again — not by this loop, and not by the build's own re-run of a halt it takes for transient (`transient: false`).
+          if (r.ended) {
+            throw neverRetriedError(
+              `pac genpage upload failed for '${name || '(unnamed)'}': ${lastErr}`
+              + (pid ? ` — the UPDATE of page ${pid} may have landed before it was ended, and it was NOT sent again: look at the page before running it again` : '')
+            );
+          }
           if (isDeterministic(lastErr)) break;
           if (i < attempts - 1) await sleep(500 * (i + 1));
         }
@@ -693,11 +769,20 @@ function makeGenpageCli(env, deps = {}) {
     enumerateEnv() {
       return enumerateEnv();
     },
+    // Ends every pac run this client started that has not finished, with the whole process tree of each (see runPac), and
+    // keeps every call that is still going — one paused between two attempts, say — from starting another (see runForCall).
+    // A call that begins afterwards is not affected: the client stays usable.
+    abort() {
+      abortEpoch += 1;
+      for (const controller of [...inFlight]) controller.abort();
+    },
     // Download page CONTENT into `outputDir/<pageId>/{page.tsx,page.js,config.json,prompt.txt}`. With
     // `pageIds` (non-empty) pull exactly those pages via `--page-id <comma>` — the sitemap's id set,
     // so download is headless-free and fetches only real app content. Omit `pageIds` to download all
     // app pages (back-compat for any legacy caller that does not provide the sitemap id set).
     async download({ appId, outputDir, pageIds }) {
+      // A single run today; a retry added here must make its runs with this `run`, which starts none once abort() has come.
+      const run = runForCall();
       const args = ['model', 'genpage', 'download', '--environment', env, '--app-id', appId, '--output-directory', outputDir];
       if (pageIds && pageIds.length) args.push('--page-id', pageIds.join(','));
       // Read only, so a call that times out is simply made again (once); any other failure is reported at once, as it always was.

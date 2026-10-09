@@ -379,3 +379,85 @@ test('descendantPids reads a ps listing: every depth, irregular spacing and CRLF
   assert.deepStrictEqual(runner.descendantPids(10, ''), []);
   assert.deepStrictEqual(runner.descendantPids(10, undefined), []);
 });
+
+// The same two checks, and the ones a real tree answers below, written for a recording runner: `run` and `kill` stand in for taskkill, ps and the signal, so
+// no test here can end a process it did not start.
+test('killProcessTree on Windows asks taskkill for the whole tree of the process, found beside cmd.exe, and then asks the process itself to die as well', () => {
+  const calls = [];
+  const child = fakeChild(4321);
+  runner.killProcessTree(child, {
+    platform: 'win32',
+    env: { SystemRoot: 'C:\\Windows', Path: 'C:\\elsewhere' },
+    run: (name, args, options, deps) => { calls.push({ name, args, options, path: deps.env.PATH }); return { status: 0 }; },
+  });
+  assert.deepStrictEqual(calls.map((c) => [c.name, c.args]), [['taskkill', ['/pid', '4321', '/T', '/F']]]);
+  assert.strictEqual(calls[0].path, 'C:\\Windows\\System32;C:\\elsewhere', 'taskkill is looked for in the directory cmd.exe lives in first, never the current directory');
+  assert.strictEqual(calls[0].options.stdio, 'ignore');
+  assert.deepStrictEqual(child.killed, ['SIGKILL'], 'a tree kill that missed the process cannot leave it running');
+});
+
+test('killProcessTree falls back to the process\'s own kill when taskkill cannot end the tree, off Windows, or with no pid — and never throws', () => {
+  const kills = [];
+  const child = (pid) => ({ pid, kill: () => { kills.push(pid); } });
+  const env = { SystemRoot: 'C:\\Windows', Path: 'C:\\elsewhere' };
+  const signalled = [];
+  const kill = (pid) => signalled.push(pid);
+  runner.killProcessTree(child(1), { platform: 'win32', env, run: () => ({ status: 128 }), kill });
+  runner.killProcessTree(child(2), { platform: 'win32', env, run: () => ({ status: null, error: new Error('spawn taskkill ENOENT') }), kill });
+  runner.killProcessTree(child(3), { platform: 'win32', env, run: () => { throw new Error('taskkill exploded'); }, kill });
+  runner.killProcessTree(child(4), { platform: 'linux', run: () => { throw new Error('spawn ps ENOENT'); }, kill });
+  runner.killProcessTree({ kill: () => kills.push('no pid') }, { platform: 'win32', env, run: () => { throw new Error('no pid, no taskkill'); }, kill });
+  assert.deepStrictEqual(kills, [1, 2, 3, 4, 'no pid']);
+  assert.deepStrictEqual(signalled, [], 'no process is signalled by its number when the tool that lists the tree gave nothing');
+  runner.killProcessTree(null);
+  runner.killProcessTree(undefined, { platform: 'win32' });
+  runner.killProcessTree({ pid: 5, kill: () => { throw new Error('already gone'); } }, { platform: 'linux', run: () => ({ status: 0, stdout: '' }), kill });
+  assert.deepStrictEqual(signalled, []);
+});
+
+// The premise and the fix, on a real cmd.exe. A batch shim runs its program as cmd.exe's CHILD, exactly as az.cmd runs
+// Python, and Node's own kill ends only the cmd.exe it started.
+const processAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Starts `fakecli.cmd` (which runs a node process that records its pid and idles) and waits until that process runs.
+async function startShimmedProgram() {
+  const dir = scratch('process-runner-tree-');
+  const pidFile = path.join(dir, 'program.pid');
+  const script = path.join(dir, 'idle.js');
+  // The timer is a backstop: whatever a failing test leaves behind ends by itself.
+  fs.writeFileSync(script, `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => process.exit(0), 120000);\n`, 'utf8');
+  fs.writeFileSync(path.join(dir, 'fakecli.cmd'), `@echo off\r\n"${process.execPath}" "${script}" %*\r\n`, 'utf8');
+  const env = { ...process.env, Path: dir, PATH: dir };
+  const wrapper = runner.execFileAsync('fakecli', ['x'], { windowsHide: true }, () => {}, { env });
+  let program = 0;
+  for (let i = 0; i < 150 && !program; i += 1) {
+    await pause(100);
+    program = fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, 'utf8')) : 0;
+  }
+  assert.ok(program > 0 && processAlive(program), 'the shim started its program');
+  assert.notStrictEqual(program, wrapper.pid, 'which is a different process from the cmd.exe Node started');
+  return { wrapper, program };
+}
+
+test('Node\'s own kill of a batch shim leaves the program the shim started running (why killProcessTree exists)', { skip: process.platform !== 'win32' }, async () => {
+  const { wrapper, program } = await startShimmedProgram();
+  try {
+    wrapper.kill();
+    await pause(1500);
+    assert.ok(processAlive(program), 'only the cmd.exe wrapper was ended');
+  } finally {
+    try { process.kill(program); } catch { /* already gone */ }
+  }
+});
+
+test('killProcessTree ends a batch shim AND the program it started (real cmd.exe)', { skip: process.platform !== 'win32' }, async () => {
+  const { wrapper, program } = await startShimmedProgram();
+  try {
+    runner.killProcessTree(wrapper);
+    for (let i = 0; i < 50 && processAlive(program); i += 1) await pause(100);
+    assert.ok(!processAlive(program), 'the program the shim started is gone too');
+  } finally {
+    try { process.kill(program); } catch { /* already gone */ }
+  }
+});

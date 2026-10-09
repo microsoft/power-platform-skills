@@ -311,6 +311,76 @@ test('getAuthTokenAsync shares the token memo with getAuthToken and honors fresh
   ]);
 });
 
+test('cancelling a getAuthTokenAsync read ends the child\'s whole process tree, not just the wrapper Node starts, and is not a remembered failure', async () => {
+  // check-auth starts this read beside `az account show`; when the account verdict ends the run, the token child is
+  // cancelled. On Windows `az` is a batch shim under cmd.exe, so Node's own abort would end only that wrapper and leave az's
+  // Python process running after this one exits — the abort is handled here, through killProcessTree, and the signal is not
+  // handed to the child's start. The cancellation must also not be recorded as the Azure CLI failing: a later reader of
+  // tokenFailureKind would be told the CLI "failed" when it was simply told to stop.
+  const { getAuthTokenAsync, tokenFailureKind } = require('../lib/dataverse-auth.js');
+  const url = 'https://contoso-abort.crm.dynamics.com';
+  const controller = new AbortController();
+  const child = { pid: 4242 };
+  const killed = [];
+  let seen;
+  let finish;
+  const execFile = (_file, _args, options, cb) => { seen = options; finish = cb; return child; };
+  const pending = getAuthTokenAsync(url, { execFile, signal: controller.signal, killTree: (c) => killed.push(c) });
+  assert.ok(!('signal' in seen), 'the signal is not handed to Node, whose own kill would reach only the cmd.exe wrapper');
+  assert.deepEqual(killed, [], 'nothing is ended before the abort');
+  controller.abort();
+  assert.deepEqual(killed, [child], 'the abort ends the child\'s process tree');
+  finish(Object.assign(new Error('Command failed'), { code: 1 }), '', '');
+  assert.equal(await pending, null);
+  assert.equal(tokenFailureKind(url), null, 'a cancelled read leaves no failure behind');
+});
+
+test('a getAuthTokenAsync read that already finished is not ended by a later abort, and one cancelled before it starts runs nothing', async () => {
+  const { getAuthTokenAsync } = require('../lib/dataverse-auth.js');
+  const controller = new AbortController();
+  const killed = [];
+  const execFile = (_file, _args, _options, cb) => { setImmediate(() => cb(null, 'TOKEN\n', '')); return { pid: 7 }; };
+  assert.equal(await getAuthTokenAsync('https://contoso-finished.crm.dynamics.com', { execFile, signal: controller.signal, killTree: (c) => killed.push(c) }), 'TOKEN');
+  controller.abort();
+  assert.deepEqual(killed, [], 'the child had finished: there is nothing to end');
+  let started = 0;
+  const cancelled = new AbortController();
+  cancelled.abort();
+  assert.equal(await getAuthTokenAsync('https://contoso-never.crm.dynamics.com', { execFile: () => { started += 1; return {}; }, signal: cancelled.signal }), null);
+  assert.equal(started, 0, 'no process is started for a read that was already cancelled');
+});
+
+test('without a signal getAuthTokenAsync starts the CLI with exactly the options it always did, and a real failure is still remembered', async () => {
+  const { getAuthTokenAsync, tokenFailureKind } = require('../lib/dataverse-auth.js');
+  const url = 'https://contoso-plain.crm.dynamics.com';
+  let seen;
+  const execFile = (_file, _args, options, cb) => { seen = options; setImmediate(() => cb(Object.assign(new Error('boom'), { killed: true, signal: 'SIGTERM' }), '', '')); return {}; };
+  assert.equal(await getAuthTokenAsync(url, { execFile }), null);
+  assert.deepEqual(Object.keys(seen).sort(), ['encoding', 'timeout', 'windowsHide'], 'no `signal` key unless the caller supplied one');
+  assert.equal(tokenFailureKind(url), 'timeout');
+});
+
+test('dataverseRequest hands a 401 back without refreshing the token when refreshOn401 is false — the refresh is a synchronous CLI read', async () => {
+  const { dataverseRequest } = require('../lib/dataverse-auth.js');
+  const run = async (options) => {
+    const tokenCalls = [];
+    let sends = 0;
+    const res = await dataverseRequest('https://contoso.crm.dynamics.com', 'GET', 'WhoAmI', null, {
+      getToken: (_url, o) => { tokenCalls.push(Boolean(o && o.fresh)); return 'TOK'; },
+      request: async () => { sends += 1; return { statusCode: 401, body: '' }; },
+      ...options,
+    });
+    return { res, tokenCalls, sends };
+  };
+  const refreshing = await run({});
+  assert.deepEqual(refreshing.tokenCalls, [false, true, true], 'by default each 401 is followed by a fresh token read, twice');
+  assert.equal(refreshing.sends, 3);
+  const handedBack = await run({ refreshOn401: false });
+  assert.equal(handedBack.res.status, 401);
+  assert.deepEqual(handedBack.tokenCalls, [false], 'only the memoized token was used: no synchronous read');
+  assert.equal(handedBack.sends, 1, 'and the 401 was not sent again');
+});
+
 test('emitResult: partial-failure object writes JSON to stdout (not [object Object])', () => {
   // Spawn a tiny script that calls emitResult(false, {errors:[...]}) and
   // verify that stdout contains the JSON payload — not the literal string
@@ -905,6 +975,53 @@ test('the Dataverse entry points refuse a non-origin URL before anything runs (r
     const logged = fs.existsSync(azLog) ? fs.readFileSync(azLog, 'utf8') : '';
     assert.doesNotMatch(logged, /MARKER/, `the URL never reached the Azure CLI: ${logged}`);
   } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});
+
+// Cancelling the token read, end to end on a real cmd.exe. `az.cmd` runs the Azure CLI's program as cmd.exe's CHILD, so ending only
+// the cmd.exe Node started (what an AbortSignal handed to execFile does) leaves that program running after the process that
+// cancelled it has exited. Here the "CLI" is a node program that records its pid and idles.
+test('aborting a real getAuthTokenAsync read ends the program the az shim started too, so nothing is left running (real cmd.exe, Windows)', { skip: process.platform !== 'win32' }, () => {
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'dv-abort-e2e-'));
+  const pidFile = path.join(work, 'az-program.pid');
+  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+  let program = 0;
+  try {
+    const bin = path.join(work, 'bin');
+    fs.mkdirSync(bin);
+    // The timer is a backstop: whatever a failing run leaves behind ends by itself.
+    fs.writeFileSync(path.join(bin, 'idle.js'), `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => process.exit(0), 120000);\n`, 'utf8');
+    fs.writeFileSync(path.join(bin, 'az.cmd'), `@echo off\r\n"${process.execPath}" "${path.join(bin, 'idle.js')}" %*\r\n`, 'utf8');
+    const url = 'https://contoso.crm.dynamics.com';
+    const driver = `
+      const fs = require('fs');
+      const { getAuthTokenAsync, tokenFailureKind } = require(${JSON.stringify(path.join(__dirname, '..', 'lib', 'dataverse-auth.js'))});
+      (async () => {
+        const controller = new AbortController();
+        const read = getAuthTokenAsync(${JSON.stringify(url)}, { signal: controller.signal });
+        for (let i = 0; i < 150 && !fs.existsSync(${JSON.stringify(pidFile)}); i += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+        controller.abort();
+        process.stdout.write(JSON.stringify({ token: await read, failure: tokenFailureKind(${JSON.stringify(url)}) }));
+      })();`;
+    const env = { ...process.env, Path: `${bin};${process.env.SystemRoot}\\System32`, PATH: `${bin};${process.env.SystemRoot}\\System32` };
+    const run = spawnSync(process.execPath, ['-e', driver], { cwd: work, env, encoding: 'utf8', timeout: 60000 });
+    assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
+    assert.deepEqual(JSON.parse(run.stdout), { token: null, failure: null }, 'a cancelled read is null and leaves no failure behind');
+    program = Number(fs.readFileSync(pidFile, 'utf8'));
+    assert.ok(program > 0, 'the az shim started its program');
+    // The tree was ended before the reader that cancelled it exited; allow the OS a moment to finish reaping it.
+    const until = Date.now() + 5000;
+    while (alive(program) && Date.now() < until) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    assert.equal(alive(program), false, 'the program the az shim started is no longer running');
+  } finally {
+    // Whatever the assertions above found, never leave the program the shim started running.
+    if (!program && fs.existsSync(pidFile)) program = Number(fs.readFileSync(pidFile, 'utf8')) || 0;
+    if (program && alive(program)) { try { process.kill(program); } catch { /* already gone */ } }
     fs.rmSync(work, { recursive: true, force: true });
   }
 });

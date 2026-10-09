@@ -22,7 +22,7 @@ const { AI_APP_SETTING, resolveAiFlags, specOptsIntoAi, featureWantValue, sameSe
 const { declaredPrivileges, compareRolePrivileges } = require('./role-privileges.js');
 const { resolveSurfaces } = require('./surface-resolver.js');
 const { selectSummaryTables } = require('./ai-candidates.js');
-const { isVisualizationUnsupported } = require('./entity-provision.js');
+const { isVisualizationUnsupported, mapLimit } = require('./entity-provision.js');
 const { sectionGridWidth, mergeFieldOptions, fieldOptionsMap, normalizeFieldEntry, compileFormIntent, isNonFieldControl, formFieldLogicals, declaredSectionByField } = require('./artifact-intent.js');
 // The fields an explicit layout prunes, as the destructive gate and the build's prune pass both name them.
 const { formRemovals } = require('./op-diff.js');
@@ -31,6 +31,114 @@ const { wantsTimeline, timelineVerifyProblem, FULL_BUILD } = require('./form-tim
 const { placementOf, resolvePlacement, columnSequence, neighbourOf, tokenLabel, findGridSection, AUTO_TAB_NAME } = require('./form-subgrid-placement.js');
 const { isMainForm, selectDefaultForm, plannedMainFormSequence, displayConditionsOrder, compareServedOrder } = require('./form-order.js');
 const { hasLabelUses, resolveViewFilterLabels, memoizeChoiceReader, describeProblem } = require('./view-filter-labels.js');
+
+// How many verification reads may be in flight at once. A verify pass is nothing but reads, but each is a
+// Dataverse request that already retries on its own 429s (lib/sdk-http-client.js), so the bound is small:
+// enough to hide the per-request latency that made a pass cost the SUM of its reads, not so many that a
+// large spec turns into a burst. `opts.concurrency` overrides it; 1 runs the checks one after another, in the
+// order they are reported, which is the oracle the verify-parallel-checks tests compare the overlapped report with.
+const VERIFY_CONCURRENCY = 4;
+
+// The pass as an ordered list of tasks. Every check of a verify pass is a task that reads and then reports
+// into ITS OWN buffer; the report is the buffers joined in task order, which is the order the checks have
+// always been reported in, whatever order the reads answered in. The pool is entity-provision's mapLimit,
+// the limiter every other bounded fan-out of this plugin uses, with its `firstInOrder` rule: tasks START in
+// list order, nothing starts once one has failed, and the failure that is thrown is the one of the
+// lowest-numbered task — the error a pass that ran them one after another would have met first.
+//
+// A task may wait for an EARLIER one (a promise `section`/`each` returned). That cannot deadlock: tasks start
+// in order, so everything a task waits for has already started.
+function makeCheckPlan(concurrency) {
+  const tasks = [];
+  // A section's promise -> its task, to find where in the report the section sits (`unlessFailed`).
+  const taskOf = new Map();
+  // Marks a promise as handled: its failure is the POOL's to report (as the failed task's error); only a
+  // dependent task reads it, and one that never starts must not leave an unhandled rejection behind.
+  const handled = (promise) => { promise.catch(() => {}); return promise; };
+  // One check section: `fn` is handed the three places a check reports into. Resolves when it has run.
+  const section = (fn) => {
+    let settle;
+    const done = handled(new Promise((resolve, reject) => { settle = { resolve, reject }; }));
+    const task = async (buffers) => {
+      try {
+        await fn(buffers);
+        settle.resolve();
+      } catch (error) {
+        settle.reject(error);
+        throw error;
+      }
+    };
+    tasks.push(task);
+    taskOf.set(done, task);
+    return done;
+  };
+  // A section whose items read independently of each other: one task per item, each handed `[item]` and the
+  // item's index in the list, so the loop a section already has runs unchanged over its one item.
+  const each = (items, fn) => handled(Promise.all(Array.from(items, (item, index) => section((buffers) => fn(buffers, [item], index)))));
+  // A slow read that depends on no check's answer can be started WITH the pass instead of after the checks
+  // listed before it. It is a task of its own, listed first, that reports nothing — so the report is
+  // unchanged and it is one of the `concurrency` reads in flight like any other. `fn` must not throw: the
+  // check that consumes its answer (`consumer`, the promise its `section` returned) throws it, in that check's own
+  // place in the report. One read at a time there is nothing to overlap, so `fn` runs where its consumer first
+  // asks — the original read order.
+  //
+  // It is also a read the pass stops waiting for once a check LISTED BEFORE ITS CONSUMER has failed (`unlessFailed`).
+  // The pass throws the failure of the lowest-numbered task, so after that the consumer cannot change what is thrown
+  // whatever it reports — and the read can be slow without bound as far as this pass is concerned (it is a `pac`
+  // run, which the pass cannot time out), so draining it would turn a failure that used to be immediate into a
+  // hang. A check listed AFTER the consumer is another matter: the consumer's own failure outranks it, and the
+  // pass must still throw that one, as it did when the checks ran one after another — so a failure there does not
+  // end the wait. A read the pass gave up on is left to finish, or hang, on its own; `abandonedReads()` says there
+  // was one, so that whoever started it can end it.
+  let lowestFailure = Infinity;
+  const watchers = new Set();
+  let gaveUp = false;
+  const abandoned = Symbol('abandoned');
+  const positionOf = (consumer) => tasks.indexOf(taskOf.get(consumer));
+  const notifyFailed = (position) => {
+    if (position >= lowestFailure) return;
+    lowestFailure = position;
+    for (const check of [...watchers]) check();
+  };
+  // Answers `read`'s answer, or `abandoned` once a task listed before `consumer` has failed. A consumer that cannot
+  // be found in the list is never given up on.
+  const unlessFailed = (read, consumer) => new Promise((resolve, reject) => {
+    const check = () => {
+      const position = positionOf(consumer);
+      if (position < 0 || lowestFailure >= position) return;
+      watchers.delete(check);
+      gaveUp = true;
+      resolve(abandoned);
+    };
+    watchers.add(check);
+    read.then((answer) => { watchers.delete(check); resolve(answer); }, (error) => { watchers.delete(check); reject(error); });
+    check();
+  });
+  const early = (fn, consumer) => { if (concurrency > 1) tasks.unshift(async () => { await unlessFailed(fn(), consumer); }); };
+  const run = async () => {
+    const buffers = await mapLimit(tasks, concurrency, async (task, position) => {
+      const b = { checks: [], environmentSkipped: [], phaseSkipped: [] };
+      b.add = (kind, name, present, detail) => b.checks.push({ kind, name, present: !!present, detail: detail || '' });
+      try {
+        await task(b);
+      } catch (error) {
+        notifyFailed(position);
+        throw error;
+      }
+      return b;
+    }, { firstInOrder: true });
+    return {
+      checks: buffers.flatMap((b) => b.checks),
+      environmentSkipped: buffers.flatMap((b) => b.environmentSkipped),
+      phaseSkipped: buffers.flatMap((b) => b.phaseSkipped),
+    };
+  };
+  return { section, each, early, unlessFailed, abandoned, abandonedReads: () => gaveUp, run };
+}
+
+// Memoizes an async read for ONE pass: every consumer, however many sections ask at once, awaits the single
+// read in flight. (A Map of these is the same thing keyed.) The read starts on first use, never earlier.
+const once = (read) => { let started; return () => (started || (started = Promise.resolve().then(read))); };
 
 // The PER-APP setting each AI feature writes now lives in ./ai-app-settings.js, together with the
 // flag-resolution and override-proof helpers the BUILD uses — see that module for why one source of
@@ -41,8 +149,14 @@ const { hasLabelUses, resolveViewFilterLabels, memoizeChoiceReader, describeProb
 // defaults are the budget the build's own proof after a publish shares (AI_PROOF_BUDGET).
 async function verifySpec(spec, read, opts = {}) {
   if (read && typeof read.beginVerificationPass === 'function') read.beginVerificationPass();
-  const checks = [];
-  const add = (kind, name, present, detail) => checks.push({ kind, name, present: !!present, detail: detail || '' });
+  // Every check below is a task of this plan and reports into its own buffers (see makeCheckPlan), which
+  // are joined at the end in the order the tasks are listed — the order the checks were always reported in.
+  // The section bodies keep the indentation they had when they ran one after another, so this reads as
+  // additions around unchanged code.
+  if (opts.concurrency !== undefined && (!Number.isInteger(opts.concurrency) || opts.concurrency < 1)) {
+    throw new Error(`verify concurrency must be a positive integer (got ${JSON.stringify(opts.concurrency)})`);
+  }
+  const plan = makeCheckPlan(opts.concurrency === undefined ? VERIFY_CONCURRENCY : opts.concurrency);
   // Artifacts the BUILD reported as impossible on this environment, keyed `entity|name`. Supplied by
   // the caller because verify is also runnable standalone, where no build result exists — in that
   // case the set is empty and every declared rule is checked, which is the right default: absent a
@@ -65,9 +179,8 @@ async function verifySpec(spec, read, opts = {}) {
   // Two DIFFERENT reasons a check was not performed, kept apart because they warrant opposite
   // messages. Reporting a phase that simply did not run as "this environment cannot host it" tells
   // an operator on a perfectly healthy environment that their environment is broken — and on the
-  // normal `--changed-only` fast-apply path that would be wrong every single time.
-  const environmentSkipped = [];
-  const phaseSkipped = [];
+  // normal `--changed-only` fast-apply path that would be wrong every single time. (Each task collects
+  // its own `environmentSkipped` / `phaseSkipped`; the plan joins them in report order.)
 
   const selectedDefaultForms = new Map();
   const declaredMainFormsByEntity = new Map();
@@ -89,7 +202,8 @@ async function verifySpec(spec, read, opts = {}) {
   }
 
   // Entities + their declared columns.
-  for (const e of spec.entities || []) {
+  plan.each(spec.entities || [], async ({ add }, entities) => {
+  for (const e of entities) {
     const logical = e.schemaName.toLowerCase();
     const tbl = await read.findTable(logical);
     add('entity', e.schemaName, tbl);
@@ -125,6 +239,7 @@ async function verifySpec(spec, read, opts = {}) {
       }
     }
   }
+  });
 
   // Views / charts / forms — by (entity, name) identity.
   //
@@ -136,7 +251,8 @@ async function verifySpec(spec, read, opts = {}) {
   const readChoices = typeof read.choiceAttributes === 'function'
     ? memoizeChoiceReader((entity) => read.choiceAttributes(entity, { languageCode: spec.languageCode }))
     : null;
-  for (const v of spec.views || []) {
+  plan.each(spec.views || [], async ({ add }, views) => {
+  for (const v of views) {
     const viewName = `${String(v.entity).toLowerCase()}.${v.name}`;
     // Also select layoutxml so a CONTENT check can catch a spec column the view does not carry (an
     // added or renamed column that never landed would otherwise pass an existence-only verify). It
@@ -223,10 +339,13 @@ async function verifySpec(spec, read, opts = {}) {
       }
     }
   }
-  for (const ch of spec.charts || []) {
+  });
+  plan.each(spec.charts || [], async ({ add }, charts) => {
+  for (const ch of charts) {
     const rows = await read.queryRecords('savedqueryvisualization', { select: ['savedqueryvisualizationid'], filter: `primaryentitytypecode eq '${String(ch.entity).toLowerCase()}' and name eq '${odataLit(ch.name)}'`, top: 1 });
     add('chart', ch.name, rows && rows[0]);
   }
+  });
   // DASHBOARDS — existence, then that every deployed chart tile is internally consistent (#586 item 3).
   // A chart tile names a table (`TargetEntityType`), a view and a chart. The platform accepts and
   // publishes a tile whose chart belongs to ANOTHER table, and two same-named charts on different
@@ -292,7 +411,8 @@ async function verifySpec(spec, read, opts = {}) {
     if (!ownDashboards.has(name)) ownDashboards.set(name, identifyDashboard(name));
     return ownDashboards.get(name);
   };
-  for (const d of spec.dashboards || []) {
+  plan.each(spec.dashboards || [], async ({ add }, dashboards) => {
+  for (const d of dashboards) {
     if (!d || !d.name) continue;
     const own = await ownDashboard(d.name);
     if (!own.id) { add('dashboard', d.name, false, own.detail); continue; }
@@ -321,6 +441,7 @@ async function verifySpec(spec, read, opts = {}) {
     }
     add('dashboard', d.name, problems.length === 0, problems.join('; '));
   }
+  });
   // One published systemform row feeds the default flag, the layout proof and the stored order.
   // formRow selects all of them. Memoized for THIS verify only: the reader is reused, and a later
   // verify must observe a row that changed in between (a recorded FormXML can be rewritten).
@@ -346,8 +467,9 @@ async function verifySpec(spec, read, opts = {}) {
     return read.formTopology(entity, formId);
   };
   const canReadDefault = useCombinedFormRead || typeof read.formDefaultState === 'function';
-  const resolvedMainFormsByEntity = new Map();
-  for (const f of spec.forms || []) {
+  const resolvedMainFormsByIndex = [];
+  const formsResolved = plan.each(spec.forms || [], async ({ add }, forms, formIndex) => {
+  for (const f of forms) {
     const name = f.name || `${f.entity} form`;
     // Resolve with the SAME identity the build reconcile uses — (entity, name, TYPE) or a validated pinned
     // formId (which checks the row's table/type/name) — so verify can't be fooled by a same-named sibling
@@ -361,8 +483,7 @@ async function verifySpec(spec, read, opts = {}) {
     add('form', name, id);
     const entityLogical = String(f.entity || '').toLowerCase();
     if (id && declaredMainFormsByEntity.has(entityLogical) && (f.formType || 'Main') === 'Main') {
-      if (!resolvedMainFormsByEntity.has(entityLogical)) resolvedMainFormsByEntity.set(entityLogical, []);
-      resolvedMainFormsByEntity.get(entityLogical).push({ form: f, name, id });
+      resolvedMainFormsByIndex[formIndex] = { entityLogical, form: f, name, id };
     }
     if (id && selectedDefaultForms.get(entityLogical) === f && canReadDefault) {
       let state = null;
@@ -379,8 +500,24 @@ async function verifySpec(spec, read, opts = {}) {
           : `expected this Main form to be the table default, but deployed systemform.isdefault is ${state && state.isDefault === false ? 'false' : 'unreadable'}`);
     }
   }
+  });
+  // The forms that resolved as a declared Main form, per table, in the order the spec lists them — the
+  // order the checks below report in — however the resolutions finished. They wait for every form's
+  // resolution (`formsResolved`); tasks start in order, so those have all started by the time they ask.
+  const resolvedMainForms = once(async () => {
+    await formsResolved;
+    const byEntity = new Map();
+    for (const r of resolvedMainFormsByIndex) {
+      if (!r) continue;
+      if (!byEntity.has(r.entityLogical)) byEntity.set(r.entityLogical, []);
+      byEntity.get(r.entityLogical).push({ form: r.form, name: r.name, id: r.id });
+    }
+    return byEntity;
+  });
   if (canReadDefault) {
-    for (const [entityLogical, selected] of selectedDefaultForms) {
+    plan.each([...selectedDefaultForms], async ({ add }, defaults) => {
+    for (const [entityLogical, selected] of defaults) {
+      const resolvedMainFormsByEntity = await resolvedMainForms();
       const selectedName = selected.name || `${selected.entity} form`;
       for (const sibling of resolvedMainFormsByEntity.get(entityLogical) || []) {
         if (sibling.form === selected) continue;
@@ -396,6 +533,7 @@ async function verifySpec(spec, read, opts = {}) {
               : 'could not prove this spec-declared Main form is not also default');
       }
     }
+    });
   }
 
   // AB#6736948 — the Main Form Set order, for every table the build orders (lib/form-order.js). Two
@@ -410,8 +548,10 @@ async function verifySpec(spec, read, opts = {}) {
   // Neither sees a user's remembered form (the one they last switched to), which opens first for them
   // while they may open it; it is per user and not configuration (references/app-spec-schema.md).
   if (useCombinedFormRead || typeof read.formTopology === 'function') {
-    for (const [entityLogical, declared] of declaredMainFormsByEntity) {
+    plan.each([...declaredMainFormsByEntity], async ({ add, environmentSkipped }, declaredMain) => {
+    for (const [entityLogical, declared] of declaredMain) {
       if (!plannedMainFormSequence(spec, entityLogical)) continue;
+      const resolvedMainFormsByEntity = await resolvedMainForms();
       const resolved = resolvedMainFormsByEntity.get(entityLogical) || [];
       const idOf = new Map(resolved.map((r) => [r.form, r.id]));
       const nameOf = new Map(resolved.map((r) => [r.form, r.name]));
@@ -464,12 +604,14 @@ async function verifySpec(spec, read, opts = {}) {
         add('form-order-served', `${entityLogical} opens with '${first}'`, true);
       }
     }
+    });
   }
 
   // Relationships. A name on the child is not proof: a 1:N and an N:N between the same pair derive
   // the same schema name, and the second create used to be skipped. Match the endpoints the build
   // sends. Plain-string rows (older test doubles) stay name-only. A read failure stays an empty
   // list, which fails closed, same as before.
+  plan.section(async ({ add }) => {
   if (typeof read.entityRelationships === 'function') {
     const prefix = spec.solution && spec.solution.publisherPrefix;
     const relCache = new Map();
@@ -528,6 +670,7 @@ async function verifySpec(spec, read, opts = {}) {
       add('relationship', schema, false);
     }
   }
+  });
 
   // Form TOPOLOGY. Existence is not proof of shape: every wrong-layout defect this plugin has hit —
   // fields flattened into the first section, a duplicate tab appended on each rebuild, a relocated
@@ -549,7 +692,8 @@ async function verifySpec(spec, read, opts = {}) {
   // explicit form passed verify on identity and default checks alone with no layout proof at all.
   const canReadTopology = useCombinedFormRead || typeof read.formTopology === 'function';
   {
-    for (const f of spec.forms || []) {
+    plan.each(spec.forms || [], async ({ add }, forms) => {
+    for (const f of forms) {
       const explicit = Array.isArray(f.tabs) && f.tabs.length > 0;
       const entity = String(f.entity || '').toLowerCase();
       const name = f.name || `${f.entity} form`;
@@ -876,6 +1020,7 @@ async function verifySpec(spec, read, opts = {}) {
         section: (secName) => matchedSections.get(secName),
       });
     }
+    });
   }
 
   // Commands (existence) — a spec can declare a command bar that didn't build and still pass verify
@@ -883,11 +1028,13 @@ async function verifySpec(spec, read, opts = {}) {
   // effort: only when the reader can resolve a command bar (`commandBar(entity)` -> truthy when present).
   if (typeof read.commandBar === 'function') {
     const cmdEntities = new Set((spec.commands || []).map((c) => String(c.entity).toLowerCase()));
-    for (const entity of cmdEntities) {
+    plan.each([...cmdEntities], async ({ add }, entities) => {
+    for (const entity of entities) {
       let present = false;
       try { present = !!(await read.commandBar(entity)); } catch { present = false; }
       add('command', `${entity} command bar`, present);
     }
+    });
   }
 
   // Business rules. A rule that EXISTS is not a rule that RUNS: a Draft (statecode 0) rule is inert,
@@ -900,7 +1047,8 @@ async function verifySpec(spec, read, opts = {}) {
   //   existence   — the rule never built at all
   //   cardinality — more than one row for the same (entity, name) fires the logic repeatedly
   //   state       — deployed Draft when the spec asked for Active (or the reverse)
-  for (const rule of spec.businessRules || []) {
+  plan.each(spec.businessRules || [], async ({ add, environmentSkipped, phaseSkipped }, rules) => {
+  for (const rule of rules) {
     const entityLogical = String(rule.entity).toLowerCase();
     const name = `${entityLogical}.${rule.name}`;
     // A rule the BUILD skipped because this environment cannot host business rules at all is not a
@@ -972,12 +1120,14 @@ async function verifySpec(spec, read, opts = {}) {
     add('business-rule', name, wantActive === isActive,
       wantActive === isActive ? '' : (wantActive ? 'deployed but DRAFT — the rule does not run' : 'deployed ACTIVE but the spec asks for Draft — the rule is running'));
   }
+  });
 
   // Business process flows. Reconciled on the same three axes as business rules, because a BPF fails
   // the same three silent ways: it never built, it built twice (users are offered the same process
   // more than once), or it is deployed Draft and therefore invisible on the form. Activation is
   // best-effort in the build, so verify is what makes the outcome loud.
-  for (const flow of spec.businessProcessFlows || []) {
+  plan.each(spec.businessProcessFlows || [], async ({ add }, flows) => {
+  for (const flow of flows) {
     const entityLogical = String(flow.entity).toLowerCase();
     const name = `${entityLogical}.${flow.name}`;
     let rows;
@@ -1006,11 +1156,17 @@ async function verifySpec(spec, read, opts = {}) {
     add('business-process-flow', name, wantActive === isActive,
       wantActive === isActive ? '' : (wantActive ? 'deployed but DRAFT — the process does not appear on the form' : 'deployed ACTIVE but the spec asks for Draft — the process is running'));
   }
+  });
 
   // Sitemap subareas (+ icons). Scope every check to the specific element type (and, for a subarea
   // icon, the owning entity) so an icon/entity value reused elsewhere in the XML can't satisfy an
   // unrelated check (e.g. an Area icon must not make a missing SubArea icon look present).
-  const xml = (await read.sitemapXml()) || '';
+  //
+  // The sitemap is read once for the pass, by whichever check needs it first: this section always reads it
+  // (as it always has), and the page checks read the same promise.
+  const sitemapXml = once(async () => (await read.sitemapXml()) || '');
+  plan.section(async ({ add }) => {
+  const xml = await sitemapXml();
   // AB#6726727: a rebuild KEEPS a nav entry's icon that changed in the designer since the spec's
   // baseline while the spec did not (sitemap-merge.js), and its own --verify must not fail on that.
   // Such a failing icon check is accepted only when the build's rule (keepsLiveValue) holds for the
@@ -1094,6 +1250,7 @@ async function verifySpec(spec, read, opts = {}) {
       }
     }
   }
+  });
 
   // App-module TABLE membership (appmodulecomponent componenttype 1).
   //
@@ -1109,6 +1266,7 @@ async function verifySpec(spec, read, opts = {}) {
   // Optional capability: verify-spec is also driven by minimal readers, and an optional reader must
   // never become a TypeError for them (same rule as `columnVisualization`).
   const hiddenTables = Array.isArray(spec.app && spec.app.tables) ? spec.app.tables : [];
+  plan.section(async ({ add }) => {
   if (typeof read.appEntityComponents === 'function' || hiddenTables.length) {
     const sitemapEntities = [...new Set([...sitemapEntityTables(spec), ...hiddenTables.map((name) => String(name).toLowerCase())])];
     if (sitemapEntities.length) {
@@ -1138,8 +1296,10 @@ async function verifySpec(spec, read, opts = {}) {
       }
     }
   }
+  });
 
   const mainForms = spec.app && spec.app.mainForms;
+  plan.section(async ({ add }) => {
   if (mainForms && Object.keys(mainForms).length) {
     let membership;
     try {
@@ -1168,6 +1328,7 @@ async function verifySpec(spec, read, opts = {}) {
       add('app-main-forms', table, problems.length === 0, problems.join('; '));
     }
   }
+  });
 
   // Pages (design §13.1). Match BY ID against three authorities — IDENTITY (manifest), EXISTENCE
   // (env-wide id set), MEMBERSHIP (app sitemap ids). Reader must supply sitemapPageIds(),
@@ -1182,6 +1343,55 @@ async function verifySpec(spec, read, opts = {}) {
     typeof read.existenceIds !== 'function' ||
     typeof read.manifest !== 'function'
   )) || !!(hasNavPages && typeof read.pageCode !== 'function');
+  // Build key→id from the manifest (IDENTITY authority). A spec page's own pageId (edit-snapshot,
+  // C3) OUTRANKS the manifest entry for the same key — use idOf() consistently.
+  const pageIdOf = (man) => {
+    const idByKey = new Map(
+      ((man && man.pages) || [])
+        .filter((p) => p && p.key && p.pageId)
+        .map((p) => [p.key, p.pageId]),
+    );
+    // idOf: spec pageId first (highest authority), then manifest key→id (C3 outranks C1).
+    return (p) => p.pageId || idByKey.get(p.key || p.name);
+  };
+  // The page checks' slow reads, made in the order the checks have always made them: the three authorities
+  // (one is a pac listing, about five seconds) and then the code of the pages whose navigation is checked,
+  // which a reader that can (`pageCodes`) downloads in one pac run instead of one run per page. One memo, so
+  // the early start below and the check share the same reads. It never throws: a failed read is handed to the
+  // pages check, which throws it in its own place in the report — the read is no longer made at that point,
+  // and the error that ends the pass must not depend on when it was.
+  const pageReads = once(async () => {
+    try {
+      const sitemapIds = new Set((await read.sitemapPageIds()).map((id) => String(id).toLowerCase()));
+      const existenceIds = new Set((await read.existenceIds()).map((id) => String(id).toLowerCase()));
+      const man = await read.manifest();
+      let codes = null;
+      if (typeof read.pageCodes === 'function') {
+        // Only pages the checks below will read: deployed, in this app, with navigation to check — once
+        // each, in spec order. A page that ends up unresolved here is simply asked for by itself later.
+        const idOf = pageIdOf(man);
+        const wanted = [];
+        const seen = new Set();
+        for (const p of implementedPages) {
+          const id = idOf(p);
+          const key = id ? String(id).toLowerCase() : '';
+          if (!key || !(p.navigatesTo || []).length || seen.has(key)) continue;
+          if (!existenceIds.has(key) || !sitemapIds.has(key)) continue;
+          seen.add(key);
+          wanted.push(id);
+        }
+        // One page is the one-page download, which pageCode already is.
+        if (wanted.length > 1) {
+          try { codes = await read.pageCodes(wanted); } catch { codes = null; }
+        }
+      }
+      return { sitemapIds, existenceIds, man, codes };
+    } catch (error) {
+      return { error };
+    }
+  });
+  const pagesCheck = plan.section(async ({ add }) => {
+  const xml = await sitemapXml();
   if (implementedPages.length) {
     if (unableToRun) {
       // Reader is missing required page-authority methods — add a sentinel check and skip the loop.
@@ -1190,18 +1400,21 @@ async function verifySpec(spec, read, opts = {}) {
       // ONE cached snapshot of each authority (Imp7 — never re-query per page). Throws from
       // sitemapPageIds/existenceIds propagate out of verifySpec; the build gate's try/catch converts them
       // to a non-zero exit (design §13.1). The caller that constructed the reader bears fail-closed responsibility.
-      const sitemapIds = new Set((await read.sitemapPageIds()).map((id) => String(id).toLowerCase()));
-      const existenceIds = new Set((await read.existenceIds()).map((id) => String(id).toLowerCase()));
-      const man = await read.manifest();
-      // Build key→id from the manifest (IDENTITY authority). A spec page's own pageId (edit-snapshot,
-      // C3) OUTRANKS the manifest entry for the same key — use idOf() consistently.
-      const idByKey = new Map(
-        ((man && man.pages) || [])
-          .filter((p) => p && p.key && p.pageId)
-          .map((p) => [p.key, p.pageId]),
-      );
-      // idOf: spec pageId first (highest authority), then manifest key→id (C3 outranks C1).
-      const idOf = (p) => p.pageId || idByKey.get(p.key || p.name);
+      // The pass stops waiting for these reads once a check listed before this one has failed (see makeCheckPlan's
+      // unlessFailed): whatever this check would go on to report cannot change what the pass throws then. A failure
+      // in a check listed after this one does not end the wait — this check's own failure outranks it.
+      const reads = await plan.unlessFailed(pageReads(), pagesCheck);
+      if (reads === plan.abandoned) return;
+      if (reads.error) throw reads.error;
+      const { sitemapIds, existenceIds, man, codes } = reads;
+      const idOf = pageIdOf(man);
+      // The code `pageCodes` already fetched, else that one page's own download.
+      const pageCodeOf = async (id) => {
+        const got = codes && codes.get(String(id).toLowerCase());
+        if (!got) return read.pageCode(id);
+        if ('error' in got) throw got.error;
+        return got.code;
+      };
       // Imp7: if NO implemented page can be given an id (manifest empty/absent AND no spec pageIds),
       // the verifier cannot correlate spec pages to live ids → unableToRun (page-identity), NOT N misses.
       const resolvable = implementedPages.filter((p) => !!idOf(p));
@@ -1233,7 +1446,7 @@ async function verifySpec(spec, read, opts = {}) {
           let code;
           try {
             // Download THAT page's code by id (not all pages) — the real reader caches per id.
-            code = (await read.pageCode(id)) || '';
+            code = (await pageCodeOf(id)) || '';
           } catch (e) {
             // A single page's download blip is a specific verifiable miss, not reader-incapacity.
             add('page-code', p.name, false, String((e && e.message) || e));
@@ -1264,6 +1477,8 @@ async function verifySpec(spec, read, opts = {}) {
       }
     }
   }
+  });
+  if (implementedPages.length && !unableToRun) plan.early(pageReads, pagesCheck);
 
   // Persona security roles. Existence + SDK-ownership is a sufficient content oracle here (unlike the
   // additive view/form checks): the SDK applies a role's privileges with ReplacePrivilegesRole, so an
@@ -1277,7 +1492,21 @@ async function verifySpec(spec, read, opts = {}) {
     if (!appRoleIdsP) appRoleIdsP = read.appRoleIds();
     return appRoleIdsP;
   };
-  for (const p of spec.personas || []) {
+  // The same table's privilege set, and the same role's privileges, are asked for by several personas,
+  // grants and flows. Each is read once per pass (a failed read is remembered with it, which is how every
+  // caller already treats a failure: a finding, never a pass).
+  const readPerKey = (fn) => {
+    const answers = new Map();
+    return (key) => {
+      const k = String(key).trim().toLowerCase();
+      if (!answers.has(k)) answers.set(k, Promise.resolve().then(() => fn(key)));
+      return answers.get(k);
+    };
+  };
+  const entityPrivilegesOf = readPerKey((entity) => read.entityPrivileges(entity));
+  const rolePrivilegesOf = readPerKey((roleId) => read.rolePrivileges(roleId));
+  plan.each(spec.personas || [], async ({ add }, personas) => {
+  for (const p of personas) {
     const roleName = canonicalPersonaName(p); // trimmed — matches the SDK's created name
     if (!roleName) continue;
     let row;
@@ -1316,7 +1545,7 @@ async function verifySpec(spec, read, opts = {}) {
       const declared = declaredPrivileges(p);
       let actual = null;
       try {
-        actual = await read.rolePrivileges(row.roleid);
+        actual = await rolePrivilegesOf(row.roleid);
       } catch { actual = null; }
       if (!Array.isArray(actual)) {
         // Fail CLOSED: an unreadable role is not a role we can call correct.
@@ -1326,7 +1555,7 @@ async function verifySpec(spec, read, opts = {}) {
         const entityPrivileges = new Map();
         for (const entity of new Set(declared.map((d) => d.entity))) {
           try {
-            const privs = await read.entityPrivileges(entity);
+            const privs = await entityPrivilegesOf(entity);
             if (Array.isArray(privs)) entityPrivileges.set(entity, privs);
           } catch { /* left absent → reported as a finding by compareRolePrivileges */ }
         }
@@ -1338,6 +1567,7 @@ async function verifySpec(spec, read, opts = {}) {
       }
     }
   }
+  });
 
   // Role grants (`roleGrants[]`) — privileges ADDED to a pre-existing role. AB#6686429.
   //
@@ -1348,7 +1578,8 @@ async function verifySpec(spec, read, opts = {}) {
   // role holds beyond the declared set is somebody else's and must never be a finding.
   //
   // Deliberately NOT checked: the SDK ownership marker. The role belongs to someone else by definition.
-  for (const g of spec.roleGrants || []) {
+  plan.each(spec.roleGrants || [], async ({ add }, grants) => {
+  for (const g of grants) {
     const declaredName = typeof g.role === 'string' ? g.role.trim() : '';
     const label = declaredName || String(g.roleId || '?');
     let row;
@@ -1376,7 +1607,7 @@ async function verifySpec(spec, read, opts = {}) {
     }
     let actual = null;
     try {
-      actual = await read.rolePrivileges(row.roleid);
+      actual = await rolePrivilegesOf(row.roleid);
     } catch { actual = null; }
     if (!Array.isArray(actual)) {
       add('role-grant-privileges', label, false, 'could not read the role\'s privileges');
@@ -1386,7 +1617,7 @@ async function verifySpec(spec, read, opts = {}) {
     const entityPrivileges = new Map();
     for (const entity of new Set(declared.map((d) => d.entity))) {
       try {
-        const privs = await read.entityPrivileges(entity);
+        const privs = await entityPrivilegesOf(entity);
         if (Array.isArray(privs)) entityPrivileges.set(entity, privs);
       } catch { /* left absent → reported as a finding by compareRolePrivileges */ }
     }
@@ -1395,6 +1626,7 @@ async function verifySpec(spec, read, opts = {}) {
       ? `${declared.length} granted privilege(s) held`
       : cmp.missing.map((m) => `${m.entity}.${m.access}: ${m.reason}`).join('; '));
   }
+  });
 
   // Business process flow role grants (`businessProcessFlows[].securityRoles`). #513.
   //
@@ -1402,7 +1634,8 @@ async function verifySpec(spec, read, opts = {}) {
   // named `bpfUniqueName(flow.name)` (live-measured), and holding privileges on it is what lets a
   // persona run the process. Subset semantics as everywhere else — a persona legitimately holds far
   // more than this one grant.
-  for (const f of spec.businessProcessFlows || []) {
+  plan.each(spec.businessProcessFlows || [], async ({ add }, flows) => {
+  for (const f of flows) {
     if (!f || !f.securityRoles || !Array.isArray(f.securityRoles.personas)) continue;
     if (typeof read.rolePrivileges !== 'function' || typeof read.entityPrivileges !== 'function') continue;
     // READ the deployed unique name, do not derive it. A flow authored in Maker, or one renamed
@@ -1441,7 +1674,7 @@ async function verifySpec(spec, read, opts = {}) {
     }
     let privs = null;
     try {
-      privs = await read.entityPrivileges(backingTable);
+      privs = await entityPrivilegesOf(backingTable);
     } catch { privs = null; }
     if (!Array.isArray(privs)) {
       // Fail CLOSED: an unreadable backing table is not proof the grant landed. It also catches the
@@ -1465,7 +1698,7 @@ async function verifySpec(spec, read, opts = {}) {
       } catch { row = undefined; }
       if (!row) { add('bpf-roles', `${f.name} / ${roleName}`, false, 'persona role not found'); continue; }
       let actual = null;
-      try { actual = await read.rolePrivileges(row.roleid); } catch { actual = null; }
+      try { actual = await rolePrivilegesOf(row.roleid); } catch { actual = null; }
       if (!Array.isArray(actual)) { add('bpf-roles', `${f.name} / ${roleName}`, false, "could not read the role's privileges"); continue; }
       const actualByPrivilegeId = new Map(actual.map((a) => [String((a && a.privilegeId) || '').trim().toLowerCase(), a && a.depth]));
       const declared = BPF_ROLE_ACCESS.map((access) => ({ entity: backingTable, access, scope: 'organization' }));
@@ -1475,6 +1708,7 @@ async function verifySpec(spec, read, opts = {}) {
         : cmp.missing.map((m) => `${m.access}: ${m.reason}`).join('; '));
     }
   }
+  });
 
   // AI app features. The verifier previously had NO awareness of `spec.ai` at all, so a build whose
   // every requested AI feature was skipped (admin gate off) or silently not persisted still reported a
@@ -1503,6 +1737,7 @@ async function verifySpec(spec, read, opts = {}) {
   // Reader-gated like the other content checks: this needs BOTH `retrieveSetting` (context) and
   // `queryRecords` (the proof), so an existence-only reader skips it entirely rather than falling
   // back to the unsound effective-value compare. The shipped CLI reader has both.
+  plan.section(async ({ add }) => {
   const requestedFeatures = resolveAiFlags(spec);
   if (requestedFeatures && typeof read.retrieveSetting === 'function' && typeof read.queryRecords === 'function') {
     // MUST be the same identity the build wrote under — `appUniqueName(spec)`, which falls back to
@@ -1547,12 +1782,14 @@ async function verifySpec(spec, read, opts = {}) {
             : `requested '${want}' but the app-scope override for '${setting}' holds '${proof.value === '' || proof.value === undefined ? '(empty)' : proof.value}'`);
     }
   }
+  });
 
   // App routing description (`app.aiDescription`, #583). Asserted only when the spec sets one: absent
   // means the build left the deployed value alone, so there is nothing to compare. The oracle is the
   // row's own `appmodule.aiappdescription`, found by the SAME identity the build wrote under
   // (`appUniqueName(spec)`). Reader-gated on `queryRecords`; a failed read FAILS the check, because a
   // routing description nobody can read back is not proven applied.
+  plan.section(async ({ add }) => {
   const wantAiDescription = spec.app && typeof spec.app.aiDescription === 'string' && spec.app.aiDescription.trim()
     ? spec.app.aiDescription : null;
   if (wantAiDescription && typeof read.queryRecords === 'function') {
@@ -1572,6 +1809,7 @@ async function verifySpec(spec, read, opts = {}) {
         : got ? `the deployed routing description ${shown(got)} differs from the spec's`
           : 'the app has no routing description (appmodule.aiappdescription is empty)');
   }
+  });
 
   // AI row summaries (`ai.summaries`). AB#6689110.
   //
@@ -1601,7 +1839,8 @@ async function verifySpec(spec, read, opts = {}) {
   // `--verify` exit code, and it hits most specs, since almost every table has a text column.
   const summaryTables = specOptsIntoAi(spec) ? selectSummaryTables(spec) : [];
   if (summaryTables.length && typeof read.queryRecords === 'function') {
-    for (const logical of summaryTables) {
+    plan.each(summaryTables, async ({ add }, tables) => {
+    for (const logical of tables) {
       const modelName = `${String(logical).toLowerCase()} row summary`;
       let rows = null;
       let readError = null;
@@ -1642,7 +1881,27 @@ async function verifySpec(spec, read, opts = {}) {
             + 'The build reports this as a skip when the environment does not license the row-summary (AI Builder) capability — '
             + 'run against a licensed environment, or set the table to enabled:false so the spec stops requesting it.');
     }
+    });
   }
+
+  // Every check above is registered and none has run yet: run them. The reads overlap (at most
+  // `concurrency` at a time); the report below does not depend on which answered first.
+  //
+  // A page read the pass gave up on (see makeCheckPlan) can still be running when the pass ends: a `pac` run outlives
+  // whoever stopped waiting for it, a batch shim keeps running after the process that started it is ended, and the
+  // temporary folder a download writes to is removed only when that download ends. So the reader is asked to end what it
+  // started, and to say when it has — before the pass returns, or throws, whichever it is, because a verify CLI exits
+  // the moment it does. Best-effort: nothing it throws may replace the outcome of the pass.
+  let ran;
+  try {
+    ran = await plan.run();
+  } finally {
+    if (plan.abandonedReads() && read && typeof read.endPageReads === 'function') {
+      try { await read.endPageReads(); } catch { /* the pass's own outcome stands */ }
+    }
+  }
+  const { checks, environmentSkipped, phaseSkipped } = ran;
+  const add = (kind, name, present, detail) => checks.push({ kind, name, present: !!present, detail: detail || '' });
 
   // JTBD rollup — translates a technical failure into the business impact it caused. Every other
   // check answers "is this artifact deployed?"; this one answers "can this persona still do this
