@@ -36,13 +36,26 @@ references/
   PowerFxGuide.md              ← State, events, named formulas, and mock data
   DesignGuide.md               ← Aesthetic guidelines, anti-patterns, design process
   QAChecks.md                  ← Named runtime anti-pattern checks for per-screen self-QA
-  PlanTemplates.md             ← Progressive index, shared plan, and screen-brief structures
-  CreateWorkflow.md            ← Empty-app planning and planner handoff
-  EditWorkflow.md              ← Simple vs complex edit routing and planning
-  ValidationWorkflow.md        ← Wave compile gates and bounded diagnostic convergence
+  CreateWorkflow.md            ← CREATE stages 1–4, revision/resume, and approval
+  CreateBuilderCore.md         ← CREATE implementation rules and topic-module ownership
+  CreateSelectionControls.md   ← CREATE selection, filtering, defaults, and reset
+  CreateGalleryLayout.md       ← CREATE galleries, record surfaces, and dataset bounds
+  CreateNavigationState.md     ← CREATE cross-screen context and shared state
+  CreateMutations.md           ← CREATE mutations and persisted-data initialization
+  CreateConformance.md         ← CREATE inspection, repair, and evidence procedures
+  CreateImplementation.md      ← CREATE stage 5 shared wiring, screen waves, and compilation
+  CreateValidation.md          ← CREATE final validation gates
+  EditWorkflow.md              ← EDIT routing and direct/partitioned/planned execution
+  EditConformance.md           ← EDIT implementation checks
+  PlannedEditHandoff.md        ← Planned EDIT acceptance and screen-wave handoff
 agents/
-  canvas-app-planner.md        ← Discovers resources and writes plan document; invoked by canvas-app
-  canvas-screen-builder.md     ← Builds or modifies one screen; invoked by canvas-app (parallel)
+  canvas-create-functionality.md ← CREATE stage 1: owns create-functionality.md
+  canvas-create-screens.md       ← CREATE stage 2: owns create-screens.md
+  canvas-create-layout.md        ← CREATE stage 3: owns create-design.md and per-screen compositions
+  canvas-create-discovery.md      ← CREATE stage 4: owns create-discovery.md and feasibility findings
+  canvas-create-builder.md        ← CREATE stage 5 worker: owns exactly one assigned screen YAML file
+  canvas-app-planner.md           ← Planned EDIT: owns the dispatch index, shared contract, and screen briefs
+  canvas-screen-builder.md       ← EDIT worker: modifies one assigned screen
 skills/
   canvas-app/
     SKILL.md                   ← Unified skill: create or edit a Canvas App (auto-detects mode)
@@ -66,8 +79,13 @@ Agents are invoked by skills via the `Task` tool — they are not user-invocable
 
 | Agent | Invoked By | Description |
 |-------|-----------|-------------|
-| `canvas-app-planner` | `canvas-app` | Receives the approved plan, discovers resources, validates CREATE-mode `App.pa.yaml`, and writes a compact dispatch index, shared conventions, and one self-sufficient brief per screen. |
-| `canvas-screen-builder` | `canvas-app` | Creates or modifies exactly one screen from its shared plan and screen brief, then reports every named self-QA outcome. Builders run in waves of at most three; `canvas-app` owns compilation. |
+| `canvas-create-functionality` | `canvas-app` | CREATE stage 1; defines requirements and actions in `create-functionality.md` without choosing screens or implementation. |
+| `canvas-create-screens` | `canvas-app` | CREATE stage 2; organizes approved functionality into screens and states in `create-screens.md`. |
+| `canvas-create-layout` | `canvas-app` | CREATE stage 3; owns shared visual design and each screen's composition artifact. |
+| `canvas-create-discovery` | `canvas-app` | CREATE stage 4; checks control/data/API/image and composition feasibility in `create-discovery.md`. |
+| `canvas-create-builder` | `canvas-app` | CREATE stage 5 worker; implements exactly one assigned screen from the approved composition and bindings. The skill coordinator owns shared bindings, app/editor files, and compilation; builders run in waves of at most three. |
+| `canvas-app-planner` | `canvas-app` | Planned EDIT only; discovers missing resource contracts and writes the dispatch index, shared contract, and affected-screen briefs for an approved edit. |
+| `canvas-screen-builder` | `canvas-app` | EDIT worker; modifies one assigned screen from its approved brief and shared contract. |
 
 ## MCP Tools
 
