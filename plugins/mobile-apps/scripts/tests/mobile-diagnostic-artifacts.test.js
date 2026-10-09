@@ -15,7 +15,8 @@ const { writeJson, readJson, modifyJson, writeProject, fixtureRelease, addDepend
 
 const HOST = '@microsoft/power-apps-native-host';
 const TEMPLATE = '@microsoft/power-apps-native-template';
-const LOCAL = ['auth', 'common', 'assets', 'host'].map((name) => `@microsoft/power-apps-native-${name}`);
+const PUSH = '@microsoft/power-apps-native-push-notifications';
+const LOCAL = ['auth', 'common', 'assets', 'push-notifications', 'host'].map((name) => `@microsoft/power-apps-native-${name}`);
 const hash = (file, algorithm = 'sha256', encoding = 'hex') => createHash(algorithm).update(fs.readFileSync(file)).digest(encoding);
 const version = '1.0.0-diagnostic.1';
 const privateVersion = '1.0.0-expo57-diagnostic.0';
@@ -36,6 +37,7 @@ function fixture(t, {
   inspectionOnly = false, privateTargets = false,
   hostVersion = privateTargets ? privateVersion : version,
   templatePackageVersion = privateTargets ? privateVersion : version, managedRange = false,
+  includePush = true, hostRequiresPush = includePush,
 } = {}) {
   const root = path.join(__dirname, `.diagnostic-fixture-${randomUUID()}`);
   fs.mkdirSync(root);
@@ -47,10 +49,12 @@ function fixture(t, {
   release.managedDependencies.dependencies.expo = '57.0.0';
   release.nativePackages['node_modules/expo'] = '57.0.0';
   if (managedRange) release.managedDependencies.dependencies['expo-haptics'] = '^2.0.0';
-  for (const name of LOCAL.filter((item) => item !== HOST)) {
+  const localPackages = LOCAL.filter((name) => name !== PUSH || includePush);
+  for (const name of localPackages.filter((item) => item !== HOST)) {
     release.managedDependencies.dependencies[name] = '0.1.0';
     release.nativePackages[`node_modules/${name}`] = '0.1.0';
   }
+  if (hostRequiresPush && !includePush) release.nativePackages[`node_modules/${PUSH}`] = '0.1.0';
   writeProject(reference, release);
   const profile = {
     schemaVersion: 1, targetTemplateVersion: 2, expoSdk: 57, expoVersion: '57.0.0',
@@ -69,7 +73,7 @@ function fixture(t, {
     diagnostic: { protocol: 'online-only-57-v1', nativeRuntime: profile.nativeRuntime },
   };
   const packed = [];
-  for (const name of [...LOCAL, TEMPLATE]) {
+  for (const name of [...localPackages, TEMPLATE]) {
     const packageRoot = path.join(root, 'sources', name.split('/')[1], 'package');
     const packageVersion = name === HOST ? hostVersion : name === TEMPLATE ? templatePackageVersion : '0.1.0';
     const pkg = { name, version: packageVersion };
@@ -82,6 +86,7 @@ function fixture(t, {
       } : { protocol: 'online-only-57-v1', purpose: 'upgrade-inspection-only' };
     }
     if (name === HOST) {
+      if (hostRequiresPush) pkg.dependencies = { [PUSH]: '0.1.0' };
       pkg.bin = { 'upgrade-template': 'bin/upgrade.js' };
       writeJson(path.join(packageRoot, 'compatibility/current.json'), profile);
       writeJson(path.join(packageRoot, 'compatibility/migrations/template-v2.json'), {
@@ -190,6 +195,8 @@ function bindToBundle(f, app) {
 
 test('explicit immutable local selection verifies real package CLI and lock without publishing or installing', (t) => {
   const f = fixture(t);
+  assert.equal(f.manifest.packages.length, 6);
+  assert.ok(f.manifest.packages.some((item) => item.name === PUSH));
   const result = summary(loadDiagnosticArtifacts(f.file, f.options));
   assert.equal(result.validationScope, 'local-diagnostic-only');
   assert.equal(result.deploymentAllowed, false);
@@ -210,6 +217,24 @@ test('explicit immutable local selection verifies real package CLI and lock with
   assert.equal(readCatalog().defaultRelease, null);
   assert.throws(() => selectRelease(), /No verified/);
   assert.equal(fs.readdirSync(process.cwd()).some((name) => name.startsWith('.mobile-artifact-inspection-')), false);
+});
+
+test('historical five-archive selections remain inspectable without inventing push support', (t) => {
+  const f = fixture(t, { includePush: false });
+  assert.equal(f.manifest.packages.length, 5);
+  assert.equal(summary(loadDiagnosticArtifacts(f.file, f.options)).deploymentAllowed, false);
+});
+
+test('an installed push package cannot substitute for the verified archive a packed host requires', (t) => {
+  const f = fixture(t, { includePush: false, hostRequiresPush: true });
+  assert.throws(() => loadDiagnosticArtifacts(f.file, f.options), /must include the push-notifications archive/);
+});
+
+test('diagnostic selections reject unknown replacement archives', (t) => {
+  const f = fixture(t);
+  f.manifest.packages.find((item) => item.name === PUSH).name = '@microsoft/unreviewed-runtime';
+  writeJson(f.file, f.manifest);
+  assert.throws(() => loadDiagnosticArtifacts(f.file, f.options), /Diagnostic artifacts require packed/);
 });
 
 test('failed extraction removes its staged archive without changing the selected bundle', (t) => {

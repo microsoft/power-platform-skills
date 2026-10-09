@@ -12,7 +12,8 @@ const {
 
 const HOST = '@microsoft/power-apps-native-host';
 const TEMPLATE = '@microsoft/power-apps-native-template';
-const LOCAL = ['auth', 'common', 'assets', 'host'].map((name) => `@microsoft/power-apps-native-${name}`);
+const PUSH = '@microsoft/power-apps-native-push-notifications';
+const LOCAL = ['auth', 'common', 'assets', 'push-notifications', 'host'].map((name) => `@microsoft/power-apps-native-${name}`);
 const PLAYER_KEY = 'com.microsoft.powerapps.devlauncher.PLAYER_COMPATIBILITY';
 const PLAYER_ASSET = 'assets/powerapps-player-compatibility.json';
 const OFFLINE = '@microsoft/power-apps-native-offline';
@@ -269,11 +270,13 @@ function loadDiagnosticArtifacts(manifestPath, options = {}) {
   const manifestSha256 = digest(manifestPath);
   const manifest = json(manifestPath);
   requireValue(manifest.schemaVersion === 1 && manifest.kind === 'mobile-local-diagnostic'
-    && Array.isArray(manifest.packages) && manifest.packages.length === LOCAL.length + 1,
+    && Array.isArray(manifest.packages) && [LOCAL.length, LOCAL.length + 1].includes(manifest.packages.length),
   'Unsupported diagnostic artifact contract; no production release was selected.');
   const names = manifest.packages.map((item) => item.name);
-  requireValue(new Set(names).size === names.length && [...LOCAL, TEMPLATE].every((name) => names.includes(name)),
-    'Diagnostic artifacts require packed host, auth, common, assets and template packages.');
+  const localPackages = LOCAL.filter((name) => name !== PUSH || names.includes(PUSH));
+  requireValue(new Set(names).size === names.length && names.length === localPackages.length + 1
+    && [...localPackages, TEMPLATE].every((name) => names.includes(name)),
+  'Diagnostic artifacts require packed host, auth, common, assets, template and any selected push-notifications package.');
   const reference = relativeFile(root, manifest.referenceProject?.path, true);
   verifyHash(path.join(reference, 'package.json'), manifest.referenceProject.packageJsonSha256, 'Reference package');
   verifyHash(path.join(reference, 'package-lock.json'), manifest.referenceProject.packageLockSha256, 'Reference lock');
@@ -352,11 +355,19 @@ function loadDiagnosticArtifacts(manifestPath, options = {}) {
       'Inspection artifacts require a private diagnostic template, consistent package versions/roles/sourceVersion provenance, an SDK 57 profile and no stale template lock.');
     }
     const templateApp = json(path.join(template.packageRoot, 'template/package.json'), 'packed template app manifest');
+    if (!localPackages.includes(PUSH)) {
+      const requiresPush = [...packages.values(), { pkg: templateApp }].some(({ pkg }) => (
+        Object.values(dependencySections(pkg)).some((section) => (
+          Object.entries(section).some(([name, spec]) => name === PUSH || npmAliasTarget(spec) === PUSH)
+        ))
+      ));
+      requireValue(!requiresPush, 'Diagnostic artifacts must include the push-notifications archive required by their packed packages.');
+    }
     const expectedDeclarations = dependencySections(templateApp);
     for (const section of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
       const expected = { ...expectedDeclarations[section] };
       if (section === 'dependencies') {
-        for (const name of LOCAL) expected[name] = project.declarations.dependencies[name];
+        for (const name of localPackages) expected[name] = project.declarations.dependencies[name];
       }
       requireValue(same(project.declarations[section] || {}, expected),
         'Reference dependency declarations must match the packed template, with only selected local package substitutions.');
@@ -380,7 +391,7 @@ function loadDiagnosticArtifacts(manifestPath, options = {}) {
     ]) {
       requireValue(managed && typeof managed === 'object' && !Array.isArray(managed), 'Packed host managed dependency contract is missing.');
       for (const [name, spec] of Object.entries(managed)) {
-        requireValue(LOCAL.includes(name) || project.declarations[section]?.[name] === spec,
+        requireValue(localPackages.includes(name) || project.declarations[section]?.[name] === spec,
           'Reference declarations differ from the packed host managed dependencies.');
       }
     }

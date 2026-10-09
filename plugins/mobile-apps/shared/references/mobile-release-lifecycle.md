@@ -156,9 +156,13 @@ Previously verified `0.x` source-version inspection bundles retain their origina
 two-field marker and report the future production-major requirement; do not
 substitute them for a producer CLI requiring the current private target.
 Equal npm versions do not imply equal builds: lock integrity and installed bytes
-decide whether the selected local host needs installation. Consume all four
+decide whether the selected local host needs installation. Consume all five
 already-staged runtime archives unchanged. Never transform package code or
 manifests in the consumer/customer app to simulate the producer's private target.
+Current selections include auth, common, assets, push-notifications and host,
+plus the inspection-only template. Historical five-archive selections remain
+inspectable only when their packed packages do not require push-notifications;
+never omit a required archive or fill it from the registry.
 The migration's host `from` range establishes the source major even if the host
 is already updated; its future `to` range never overrides the verified local
 archive declaration or selects a registry package.
@@ -192,7 +196,7 @@ approvals, snapshot, per-edge conflict review, rollback, and telemetry checkpoin
 After explicit approval, keep the immutable artifact bundle in a controlled,
 stable directory. Do not re-scaffold, copy reference source/lock into an old app,
 or pre-edit its package declarations. The producer host CLI owns all migration
-writes and binds all four local archives/overrides itself. Offline preflight must
+writes and binds every selected local runtime archive/override itself. Offline preflight must
 precede even creating a directory inside the target app.
 
 Use the **verified reference installation's target host CLI** for the preview,
