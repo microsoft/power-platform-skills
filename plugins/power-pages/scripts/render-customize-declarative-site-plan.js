@@ -10,6 +10,7 @@ const {
   validateCustomizationPlan,
 } = require('./lib/customize-declarative-site-plan');
 const { externalImageUrls, validateImageChecks, verifyPlanImages } = require('./lib/declarative-image-verification');
+const { compositionLayouts } = require('./lib/classic-native-layout');
 
 const templatePath = path.join(
   __dirname,
@@ -39,6 +40,7 @@ function renderCustomizationPlan(plan, outputPath, options = {}) {
       ASSETS_DATA: plan.assets || [],
       IMAGE_CHECKS_DATA: options.imageChecks || null,
       OPERATIONS_DATA: plan.operations,
+      COMPOSITIONS_DATA: compositionLayouts(plan.operations),
       WARNINGS_DATA: plan.warnings,
       VERIFICATION_DATA: plan.verification,
       DEPLOYMENT_DATA: plan.deployment,
@@ -56,6 +58,7 @@ function renderCustomizationPlan(plan, outputPath, options = {}) {
       'ASSETS_DATA',
       'IMAGE_CHECKS_DATA',
       'OPERATIONS_DATA',
+      'COMPOSITIONS_DATA',
       'WARNINGS_DATA',
       'VERIFICATION_DATA',
       'DEPLOYMENT_DATA',

@@ -102,7 +102,8 @@ Choose independently when safe:
 Stop before writing when a material choice remains unresolved, including:
 
 - multiple target files, target sections, or components;
-- an unknown section layout or component-to-column mapping;
+- an unresolved section geometry or ambiguous component-to-column mapping, not merely
+  a layout name missing from the recipe examples;
 - missing visitor-facing text, image source, destination, alternative text, or
   video title required by the selected component;
 - an unresolved web-file URL, snippet name, or page destination;
@@ -119,6 +120,8 @@ Prefer a structured specification containing:
 - operation mode: `create`, `replace`, `append`, or `modify`;
 - ordered sections;
 - each section's supported layout and ordered elements by column;
+- optional explicit `columns[].span` values and intended wrapping/unused space; otherwise
+  resolve CSS-driven widths with the styling owner instead of guessing a preset;
 - resolved content, URLs, snippet names, and accessibility values;
 - explicit preservation requirements for an existing page.
 
@@ -194,7 +197,11 @@ For `append` or `modify`, follow **Existing-page operations**. Resolve exact
 structural boundaries before changing the file, preserve unrelated markup, and
 do not reserialize the entire page for a narrow edit.
 
-Use page-element examples only as serialization contracts. Replace every sample
+Use the section-layout reference's recipes as defaults, not exhaustive geometry constraints.
+Broader safe local layouts may proceed with **Studio editing compatibility unverified**
+disclosed in the existing review and final report. Other page-element serialization contracts
+remain unchanged; do not invent Studio controls, preview components, or an additional gate.
+Replace every sample
 value and marker with resolved plan values. Do not leave placeholder text,
 placeholder URLs, `<!-- COMPONENT_HTML -->`, TODOs, or unexplained empty
 components.

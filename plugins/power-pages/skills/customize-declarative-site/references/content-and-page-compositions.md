@@ -108,8 +108,9 @@ their required source, bindings and dependencies; a smaller section count alone 
 
 Use [page blueprints](../../../references/page-blueprints.md) to select narrative beats and a
 role-appropriate first screen from that same brief. Translate ideas through the native structures
-below: a product-moment split may use supported one-third or equal columns, not a guessed 7/5
-Studio serialization; a bento-like composition is supported sections/columns/elements, not a new
+below: a product-moment split can use native column spans such as 7/5 when explicitly resolved;
+report unobserved Studio editing behavior rather than presenting it as a verified preset.
+A bento-like composition is native sections/columns/elements, not a new
 component type. Keep the primary task clear without forcing oversized hero text onto every native
 form or list. A signature moment must use an approved, genuinely available capability or static
 explanatory composition, not invented data or new behavior.
@@ -193,7 +194,8 @@ Choose structure in this order:
    required content, data bindings and supported native serialization;
 2. for new-site work, author the custom composition with supported native primitives and place
    reusable components within it; for existing-site narrow work, adapt the suitable local pattern;
-3. map every section to a supported layout;
+3. resolve each native section's widths/order from a recipe, explicit `columns[].span`, or
+   approved CSS-driven geometry; the five named recipes are not an exhaustive list;
 4. map each column to ordered supported elements: text, image, button, video, or spacer;
 5. for existing-site narrow work, add `style-site` only when the requested presentation needs it.
 
@@ -210,8 +212,13 @@ URLs can be reused, and explicitly selected file imports outside URL-based creat
 `outputBindings` value from an earlier `author-web-file` operation. Never place a local filesystem
 path, symbolic asset name, gallery-page URL, or Design Studio placeholder data URI into the page.
 
-Do not invent a new Design Studio component serialization. If the request requires unsupported
-nested markup or behavior, disclose the boundary and propose the closest supported composition.
+Do not invent a new Design Studio component serialization. Broader safe native section geometry may
+be authored locally with **Studio editing compatibility unverified** in the existing warnings
+and verification. Do not silently replace it with a preset. Known editing incompatibilities and
+unresolved native dependencies require remediation; unobserved controls alone do not.
+Component and behavior contracts are unchanged by the section-layout extension. If a request
+requires unsupported component markup or behavior, disclose that separate boundary and propose
+a supported alternative rather than inventing a serialization.
 
 ## Minimal skill selection
 

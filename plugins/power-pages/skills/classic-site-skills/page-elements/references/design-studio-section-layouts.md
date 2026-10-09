@@ -4,6 +4,15 @@ Canonical reference for skills that add a page element in a new Power Pages Desi
 section or edit an existing section layout. The five column structures below were
 observed in PAC CLI-downloaded webpage HTML. Microsoft documentation describes adding
 components to sections but does not specify this serialized HTML contract.
+These are default recipes, not a limit on classic section design. Broader approved local
+geometry must preserve native editing boundaries, identities, locale and required behavior.
+Report **Studio editing compatibility unverified** when canvas selection, control mapping,
+drag/reorder or save/reopen behavior has not been established. Missing editing evidence alone
+does not block safe local composition or require a new Studio example; known incompatibilities,
+unsafe source and unresolved scope remain blockers. Do not add a new gate or deploy automatically.
+For example, `row-reverse` loses Studio drag-and-drop support; use another composition method
+when retaining that capability is required. See
+[Studio page editing](https://learn.microsoft.com/power-pages/getting-started/customize-pages).
 
 First follow `${PLUGIN_ROOT}/skills/classic-site-skills/page-elements/references/design-studio-component-authoring.md`: derive the
 target section, requested layout, component placement, and preservation requirements from
@@ -31,6 +40,11 @@ Sources: [Power Pages Bootstrap 5](https://learn.microsoft.com/power-pages/confi
 
 ## Layout selection
 
+The names below remain backward-compatible shortcuts. Also accept an explicit ordered
+native column composition from the approved design; a missing recipe name is not a blocker.
+Preserve the section/container/column boundaries and inspected Bootstrap major. Do not
+claim Studio controls or save/reopen behavior for an unobserved arrangement.
+
 | Design Studio option | Bootstrap columns, in order |
 |---|---|
 | One column | `col-lg-12` |
@@ -45,6 +59,25 @@ The `col-lg-*` values describe the large-screen width. Each observed column also
 The Design Studio menu also displays **Spacer**. It is not a column layout; use
 `${PLUGIN_ROOT}/skills/classic-site-skills/page-elements/references/design-studio-spacer-component.md` for its PAC-observed
 component and full-width forms.
+
+### Explicit native grid and responsive styling
+
+For an explicit large-screen Bootstrap grid, each planned column may supply an integer
+`span` from 1 through 12, mapped to `col-lg-<span>` for the verified Bootstrap version.
+All columns must supply spans when any does. `3+3+3+3`, `3+9` and `7+5` are examples, not
+another allowlist. Preserve intentional unused space or wrapping instead of forcing a sum
+of 12 or stretching equal columns. A conflicting named preset and span list needs a clear
+non-preset layout name; do not silently pick one.
+
+Keep **Studio editing compatibility unverified** visible for explicit geometry. Native
+markers, valid grid classes and local validation are not a Studio round-trip test.
+For CSS-driven widths, responsive grouping, gaps or alignment, resolve the actual targets
+and use the normal `style-site` approval. Sample `min-width`, padding, margins and flex values
+are defaults, not immutable design tokens; coordinate their winning declarations with the
+approved layout so they do not undo intended proportions. Do not inject nested rows merely
+to simulate a new component, or remove native boundaries for visual convenience. Where a
+broader structure has unobserved editing behavior, disclose it without prohibiting safe
+local implementation; known incompatible editing operations remain out of scope.
 
 ## Component placement
 
@@ -134,13 +167,14 @@ To apply an approved layout edit:
 
 1. Preserve the selected outer section's unrelated attributes, such as `id`,
    `data-component-theme`, classes beyond the layout contract, and non-layout styles.
-2. Replace only the container/column structure and layout-specific inline styles needed
-   for the selected OOB target.
+2. Replace only the approved container/column structure and layout-specific declarations
+   needed for the resolved target, retaining native editing boundaries.
 3. Move each existing component exactly once according to the approved mapping while
    preserving its markup byte-for-byte where practical.
 4. Preserve component order within each target column.
 5. Leave newly introduced target columns empty unless the mapping assigns content.
-6. Remove source columns only after confirming all their child nodes were mapped.
+6. Remove source columns only after confirming all their child nodes were mapped or
+   explicitly accounted for as approved removals.
 
 For a many-to-one migration, define the interleaving order when components come from
 multiple source columns. For a one-to-many migration, require a destination column for
@@ -151,20 +185,24 @@ Do not edit component properties while changing layout unless those edits were s
 requested and included in the preview. Do not change one-third orientation by merely
 swapping `col-lg-4` and `col-lg-8`; preserve the approved component-to-column mapping.
 
-After migration, verify that the direct column classes exactly match one supported OOB
-layout and that the before/after component inventory has identical counts and identities.
+After migration, verify the resolved column order/widths and the component inventory against
+the approved mapping. Layout-only moves keep counts and identities; a coordinated replacement
+also verifies explicit additions/removals and retained native dependencies. Do not verify by
+membership in the five-recipe list.
 
 ## Preservation rules
 
-- Do not translate column widths into custom percentages.
-- Do not add Bootstrap `.row` elements inside the observed section.
+- Keep prescribed grid spans as their intended Bootstrap classes. Approved CSS-driven sizing
+  belongs to the guarded styling owner, not an arbitrary structural-authoring substitution.
+- Preserve native section boundaries; nested structure must have an explicit purpose and
+  editing-compatibility disclosure, never an invented Studio component contract.
 - Preserve the exact `container`, `sectionBlockLayout`, and `columnBlockLayout` classes.
-- Preserve native inline style order and values from the selected version-appropriate template
-  during structural authoring. An approved visual change belongs to `style-site`, which can
+- Preserve unrelated native declarations and their order during structural authoring.
+  An approved visual change belongs to `style-site`, which can
   update the actual winning inline declaration without replacing the native structure.
 - Do not add content to unselected columns.
 - Do not leave the `<!-- COMPONENT_HTML -->` marker in the edited page.
 - If the target page already demonstrates a different serialization for the selected OOB
   layout, preserve the page-local convention rather than rewriting it to match this reference.
-- For an edit, confirm exactly one selected section changed and every preexisting child
-  component is present exactly once afterward.
+- Confirm only approved sections changed; every retained child is present exactly once and
+  every approved removal is absent, without deleting backing records or unrelated callers.

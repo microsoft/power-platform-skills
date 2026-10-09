@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { UUID_REGEX } = require('./validation-helpers');
+const { compositionLayouts } = require('./classic-native-layout');
 
 const PLAN_SCHEMA_VERSION = 1;
 const EXECUTION_SCHEMA_VERSION = 1;
@@ -483,6 +484,9 @@ function validateCustomizationPlan(plan) {
   }
 
   validateNewSiteDesign(plan, operationsById);
+  // Only new explicit span descriptors add validation. Legacy named or opaque
+  // layouts keep their existing acceptance and are never silently rewritten.
+  compositionLayouts(plan.operations);
   return plan;
 }
 

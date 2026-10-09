@@ -149,6 +149,12 @@ every font or color. Preserve required capabilities/content, valid PAC metadata,
 and relationships, required forms/lists and data bindings, navigation, authentication, and locale scope.
 Native Bootstrap/Studio-compatible serialization is protected, not the template's section
 arrangement: plan supported recomposition through the native owners before final styling.
+Treat known section-layout recipes as defaults, not a pattern allowlist. Resolve explicit
+native column geometry even when the starter has no matching layout sample.
+Safe approved local layout changes with unobserved Studio editing behavior carry
+**Studio editing compatibility unverified** in the existing warnings/verification and report;
+do not add a live-check gate or silently downgrade the design. Known incompatibilities,
+unsafe source and unresolved scope remain blockers. Other element/owner contracts stay unchanged.
 Existing-site and narrow edits remain preservation-first unless redesign is requested.
 Use the native content-composition adapter below to select relevant `page-blueprints.md` narrative
 patterns once for a new-site design or approved redesign, without adopting its SPA execution rules.

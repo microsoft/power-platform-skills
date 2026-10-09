@@ -415,6 +415,9 @@ On **Customize now**, invoke `/customize-declarative-site` through the `Skill` t
   the starter arrangement or ask for separate redesign permission merely because it differs;
 - any already established experience brief, brand source, primary action, and narrative intent;
   let the customizer complete only missing decisions rather than asking for them again;
+- native-editing requirements: known layout recipes are defaults, not an exhaustive list.
+  Explicit broader safe local geometry carries a Studio-editing-unverified warning through
+  planning, authoring and verification; no automatic deployment or preview-component creation;
 - `creationIntent: "new-site"` and `verifiedBootstrapMajor: <BOOTSTRAP_VERSION>` with the inspected
   evidence; for the Standard path, include the user's explicit compatibility choice;
 - the requirement to include header branding, navigation styling and mobile treatment in the

@@ -50,8 +50,8 @@ The maker-facing rendering preserves the contract while making it readable:
   strings or invent missing destinations.
 - Use consistent, distinct colors for **Modify** and **Replace** on change-card accents and
   action badges. Always keep the action text visible.
-- Show `inputs.sections` as a labeled wireframe in section, column, and element order. Use the
-  five native large-screen column proportions, preserve empty columns and repeated elements,
+- Show `inputs.sections` as a labeled wireframe in section, column, and element order. Resolve
+  legacy recipe proportions or optional explicit column spans, preserve empty columns and repeated elements,
   and disclose unspecified or inconsistent layouts rather than inventing widths. This is a
   structural diagram, not a live site preview or a prediction of mobile rendering. On narrow
   screens, keep multi-column diagrams readable in labeled, keyboard-scrollable regions.
@@ -391,6 +391,23 @@ appear in the source operation's `expectedOutputs`, and a consumer input cannot 
 Do not put authentication tokens, environment secrets, or binary file contents in the plan.
 
 ## Webpage-content operation
+
+The five named section layouts are backward-compatible shortcuts, not the only native designs.
+For explicit Bootstrap geometry, add `span` to every `columns[]` entry in the existing section:
+an integer from 1 through 12 describing that column's large-screen grid width. Examples include
+`[3,3,3,3]`, `[3,9]`, and `[7,5]`; intentional wrapping and unused grid space remain intact.
+A named preset must agree with supplied spans; use a descriptive non-preset name otherwise.
+Missing/malformed spans in a partially specified list block validation rather than silently
+changing the design. Legacy sections without this optional descriptor remain valid.
+
+The classic-only layout helper validates and derives the diagram without mutating the plan.
+Explicit spans are hash-bound inputs and display **Studio editing compatibility unverified**;
+valid grid syntax is not evidence of canvas controls or save/reopen behavior. Keep this warning
+in the plan's existing `warnings`/`verification` and final owner report; safe local authoring
+may continue through existing approvals. Known unsafe or incompatible edits remain blocked.
+For CSS-driven geometry, retain the native structure and put resolved styling in the existing
+owner inputs; the diagram labels geometry it cannot depict rather than inventing equal widths.
+No new required schema, preview-component type, or deployment authority is introduced.
 
 Use the canonical nested section structure expected by `author-webpage-content`:
 

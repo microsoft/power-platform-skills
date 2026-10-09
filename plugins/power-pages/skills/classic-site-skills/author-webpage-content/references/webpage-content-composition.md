@@ -44,7 +44,8 @@ The request does not need to use YAML, but it must resolve the same decisions:
   the caller's approved `designContext` when supplied;
 - one operation mode;
 - ordered sections;
-- one supported layout for every new or structurally changed section;
+- one resolved native layout for every new or structurally changed section, with its
+  intended widths and editing-compatibility evidence or unverified warning;
 - ordered columns matching that layout;
 - ordered page elements within each column;
 - final visitor-facing values and accessibility properties;
@@ -89,13 +90,19 @@ Preserve order at every level. A page plan that lists section A before section B
 serialize A before B. Within a section, columns follow the selected layout from left to
 right. Within a column, elements appear in the exact supplied order.
 
-Each new section must use one supported Design Studio layout from
+Use the recipes and **Explicit native grid and responsive styling** contract in
 `${PLUGIN_ROOT}/skills/classic-site-skills/page-elements/references/design-studio-section-layouts.md`.
-The number and width of direct `.columnBlockLayout` children must match that layout.
+The recipes are defaults, not a closed list. Resolve the number/order/widths of native columns,
+using optional `columns[].span` for explicit large-screen Bootstrap spans or an approved
+CSS-driven description. Do not silently force an unfamiliar layout into the nearest preset.
+Explicit spans are integers from 1 through 12 on every column, with wrapping/unused space
+preserved. Unknown Studio behavior is **Studio editing compatibility unverified** in review
+and reporting; it does not block otherwise safe, approved local implementation.
 
 When a column contains multiple elements, place their component markup as consecutive
 children of the same `.columnBlockLayout`. Do not wrap each element in another section,
-container, or column. Preserve empty sibling columns required by the selected layout.
+container, or column merely to satisfy a recipe. Preserve required native boundaries and
+explicitly planned grouping, with editing compatibility disclosed; empty planned columns remain.
 
 A spacer may be:
 
@@ -157,10 +164,11 @@ Use this workflow for `create` and `replace`:
    the plan.
 6. Generate new elements using their final resolved values and place verified reused source at
    its resolved destination, without changing its protected internals.
-7. For each section, start from the selected section layout and place all column
+7. For each section, use the resolved native layout and place all column
    elements and retained source blocks in the approved document order.
-8. Concatenate completed sections in page order without adding an undocumented outer
-   page wrapper.
+8. Concatenate completed sections in page order. Any additional outer grouping must have
+   an approved purpose, preserved native boundaries, and an explicit compatibility warning
+   if its Studio behavior is unobserved; do not add a wrapper incidentally.
 9. Confirm that every requested element and reused component appears at its planned destination
    exactly once; reconcile required source/bindings with the original inventory.
    Confirm approved removals are absent from the source rather than hidden with CSS.
@@ -233,7 +241,8 @@ resolved for that locale.
 - [ ] The caller supplied one existing localized target file and locale.
 - [ ] The operation mode and preservation contract match the performed edit.
 - [ ] Top-level sections appear in the requested order.
-- [ ] Each new or migrated section matches one supported layout.
+- [ ] Each new or migrated section matches its resolved native geometry, not an exhaustive
+  recipe list; unobserved Studio behavior is reported without claiming round-trip proof.
 - [ ] Direct columns have the expected count, width classes, and order.
 - [ ] Every planned element appears exactly once in its assigned column and order.
 - [ ] Approved removals are absent; required and explicitly preserved source remains intact.
@@ -250,6 +259,7 @@ resolved for that locale.
 - Do not invoke separate element skills that edit the same target file independently.
 - Do not copy an unrelated page as a design shortcut.
 - Do not invent translations, assets, destinations, snippets, or Liquid contracts.
-- Do not flatten a multi-column design into arbitrary custom markup.
+- Do not discard native editable boundaries or flatten a resolved multi-column design.
+  Broader safe local compositions are allowed with explicit editing-compatibility warnings.
 - Do not replace an existing page merely because reconstructing it is easier than a
   precise edit.

@@ -233,6 +233,7 @@ code{font-family:var(--mono);font-size:12px;background:var(--soft);padding:2px 5
 <script id="imageChecksData" type="application/json">__JSON_IMAGE_CHECKS_DATA__</script>
 <script id="newSiteDesignData" type="application/json">__JSON_NEW_SITE_DESIGN_DATA__</script>
 <script id="operationsData" type="application/json">__JSON_OPERATIONS_DATA__</script>
+<script id="compositionsData" type="application/json">__JSON_COMPOSITIONS_DATA__</script>
 <script id="warningsData" type="application/json">__JSON_WARNINGS_DATA__</script>
 <script id="verificationData" type="application/json">__JSON_VERIFICATION_DATA__</script>
 <script id="deploymentData" type="application/json">__JSON_DEPLOYMENT_DATA__</script>
@@ -242,6 +243,7 @@ const esc=value=>{const node=document.createElement("span");node.textContent=val
 const words=value=>String(value||"").replace(/[-_]/g," ").replace(/([a-z])([A-Z])/g,"$1 $2").replace(/\b\w/g,char=>char.toUpperCase());
 const basename=value=>String(value||"").split(/[\\/]/).pop();
 const operations=read("operationsData");
+const compositions=read("compositionsData");
 const assets=read("assetsData");
 const imageChecks=read("imageChecksData");
 if(imageChecks&&imageChecks.images.length){
@@ -295,9 +297,6 @@ const renderValue=value=>{
   }
   return esc(value);
 };
-// These large-screen proportions follow the five native layouts in
-// classic-site-skills/page-elements/references/design-studio-section-layouts.md.
-const layoutColumns={"one-column":[12],"two-equal-columns":[6,6],"three-equal-columns":[4,4,4],"one-third-left":[4,8],"one-third-right":[8,4]};
 const wireElement=element=>{
   const type=element.type||"component";
   const kind=["text","image","button","video","spacer"].includes(type)?type:"other";
@@ -309,12 +308,14 @@ const composition=item=>{
   if(!sections.length)return"";
   return`<div class="change-detail"><div class="label">Page composition</div><p class="composition-note">Structure only, not a live site preview. Column proportions show the planned large-screen layout, not final mobile rendering.</p><div class="composition">${sections.map((section,index)=>{
     const columns=Array.isArray(section.columns)?section.columns:[];
-    const widths=Object.hasOwn(layoutColumns,section.layout)?layoutColumns[section.layout]:null;
+    const layout=compositions[item.id][index];
+    const widths=layout.spans;
     const resolved=widths&&widths.length===columns.length;
-    const tracks=columns.map((_,columnIndex)=>`minmax(0,${resolved?widths[columnIndex]:1}fr)`).join(" ");
-    return`<section class="composition-row" aria-label="Section ${index+1}"><div class="composition-heading"><strong>Section ${index+1}${section.name?`: ${esc(section.name)}`:""}</strong><span>${esc(words(section.layout||"unspecified layout"))}</span></div>${!resolved?`<p class="composition-note">Column widths unresolved; confirm the layout and column count.</p>`:""}${columns.length?`<div class="wire-scroll${columns.length>1?" multi":""}"${columns.length>1?` tabindex="0" role="region" aria-label="Section ${index+1} columns"`:""}><div class="wire-columns" style="grid-template-columns:${tracks}">${columns.map((column,columnIndex)=>{
+    const tracks=layout.source==="explicit"?"repeat(12,minmax(0,1fr))":columns.map((_,columnIndex)=>`minmax(0,${resolved?widths[columnIndex]:1}fr)`).join(" ");
+    return`<section class="composition-row" aria-label="Section ${index+1}"><div class="composition-heading"><strong>Section ${index+1}${section.name?`: ${esc(section.name)}`:""}</strong><span>${esc(words(section.layout||"unspecified layout"))}</span></div>${layout.warning?`<p class="composition-note">${esc(layout.warning)}</p>`:""}${!resolved?`<p class="composition-note">Column widths unresolved or CSS-driven geometry not depicted; use the design details. This is not a restriction on local authoring.</p>`:""}${columns.length?`<div class="wire-scroll${columns.length>1?" multi":""}"${columns.length>1?` tabindex="0" role="region" aria-label="Section ${index+1} columns"`:""}><div class="wire-columns" style="grid-template-columns:${tracks}">${columns.map((column,columnIndex)=>{
       const elements=Array.isArray(column.elements)?column.elements:[];
-      return`<div class="wire-column"><div class="wire-column-label">Column ${columnIndex+1}${resolved?` · ${widths[columnIndex]}/12 width`:" · Width unspecified"}</div><div class="wire-elements">${elements.length?elements.map(wireElement).join(""):`<p class="wire-empty">Empty column</p>`}</div></div>`;
+      const position=layout.positions&&layout.positions[columnIndex];
+      return`<div class="wire-column"${position?` style="grid-column:${position.start}/span ${position.span};grid-row:${position.row}"`:""}><div class="wire-column-label">Column ${columnIndex+1}${resolved?` · ${widths[columnIndex]}/12 width`:" · Width unspecified"}</div><div class="wire-elements">${elements.length?elements.map(wireElement).join(""):`<p class="wire-empty">Empty column</p>`}</div></div>`;
     }).join("")}</div></div>${columns.length>1?`<p class="composition-scroll-hint">Scroll sideways to inspect columns.</p>`:""}`:`<p class="wire-empty">No columns specified.</p>`}</section>`;
   }).join("")}</div></div>`;
 };

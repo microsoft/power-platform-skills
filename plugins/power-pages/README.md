@@ -117,6 +117,8 @@ whether it was provisioned by `/create-site` or created manually in Design Studi
   existing-site narrow edits remain preservation-first unless a redesign is requested
 - Can remove unneeded starter sections and component placements for a fresh approved layout,
   while preserving required functionality, explicit preservation preferences and backing records
+- Uses native layout recipes as defaults rather than a design limit; explicit column spans and
+  responsive styling retain their intended geometry and disclose unverified Studio editing behavior
 - Preserves platform behavior and explicit visual preferences, resolves dependencies before
   consumers run, and applies guarded styling after structural authoring
 - Verifies and commits the combined local result, then optionally hands off to `/deploy-site`
