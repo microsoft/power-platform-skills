@@ -326,6 +326,7 @@ Execution policy reason codes: [stable reason codes]
 Synced files: [absolute [working directory] paths]
 """
 )
+```
 
 The planner writes the plan index, shared plan, and one screen brief per dispatch row. It
 does not edit any `.pa.yaml` file in EDIT mode.
