@@ -25,6 +25,20 @@ function writeService(root, name) {
   );
 }
 
+test('documented service generation uses the resolved CLI and grouped Dataverse selectors', () => {
+  const skill = fs.readFileSync(
+    path.resolve(__dirname, '../../skills/add-dataverse/SKILL.md'), 'utf8',
+  ).replace(/\r\n?/g, '\n');
+  const step = skill.slice(
+    skill.indexOf('### Step 6 — Add data sources'),
+    skill.indexOf('### Step 6b'),
+  );
+  const commands = [...step.matchAll(/^\$PA app add data-source[^\n]*$/gm)];
+  assert.equal(commands.length, 1, 'Expected one executable service-generation command');
+  assert.equal(commands[0][0], '$PA app add data-source --connector dataverse --org-url <envUrl> --table <table-logical-name>');
+  assert.doesNotMatch(step, /^npx[^\n]*\b(?:pa|power-apps)\b/m);
+});
+
 test('accepts literal default.cds and entity-set-derived service names', (testContext) => {
   const root = project(testContext);
   fs.writeFileSync(path.join(root, 'power.config.json'), JSON.stringify({

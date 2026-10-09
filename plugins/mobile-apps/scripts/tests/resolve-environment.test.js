@@ -71,6 +71,7 @@ test('failed cluster metadata refresh preserves connection details and auth sett
     cwd: root, encoding: 'utf8', timeout: 5000, env: { ...process.env, PATH: '' },
   });
   assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /CLI az was not found on PATH.*Using matching cached environment details/);
   assert.deepEqual(JSON.parse(result.stdout), { ...cached, clusterEnvironment: null, clusterGeoName: null, source: 'cache-refresh' });
   const auth = JSON.parse(fs.readFileSync(path.join(root, 'auth.config.json'), 'utf8'));
   assert.equal(auth.msal.clientId, 'preserve');
@@ -205,10 +206,9 @@ test('resolveClusterEnvironment refreshes legacy metadata, skips saved lookups, 
   const resolverModule = { exports: {} };
   let offline = false;
   const mockedRequire = (name) => {
-    if (name === 'child_process') return { execFileSync(command, args) {
-      cliCalls.push({ command, args });
-      assert.equal(command, 'az');
-      if (offline) throw new Error('offline');
+    if (name === './azure-cli') return { ...requireFromScript(name), runAzureCli(args) {
+      cliCalls.push({ args });
+      if (offline) throw Object.assign(new Error('offline'), { status: 1 });
       return args[1] === 'show' ? environmentId : 'test-token';
     } };
     if (name === 'https') return { request(url, options, callback) {

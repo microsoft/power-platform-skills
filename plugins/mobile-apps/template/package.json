@@ -87,6 +87,7 @@
     "@tamagui/babel-plugin": "2.4.5",
     "@types/react": "19.2.14",
     "babel-preset-expo": "55.0.18",
+    "qrcode": "1.5.4",
     "react-refresh": "0.14.2",
     "typescript": "5.9.3"
   },

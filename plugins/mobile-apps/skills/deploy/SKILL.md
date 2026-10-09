@@ -80,7 +80,7 @@ npm run build
 If `package.json` has no `build` script, fall back to:
 
 ```bash
-npx expo export --platform web
+npx --no-install expo export --platform web
 ```
 
 (The current template does not define a `build` script, so this fallback is the normal path for freshly scaffolded apps. Both forms produce the same `dist/` web output.)
@@ -92,7 +92,7 @@ npx expo export --platform web
 ```bash
 mkdir -p .tmp
 rm -f .tmp/expo-web-export.log
-npx expo export --platform web > .tmp/expo-web-export.log 2>&1 &
+npx --no-install expo export --platform web > .tmp/expo-web-export.log 2>&1 &
 EXPORT_PID=$!
 for _ in $(seq 1 90); do
   grep -q "Exported: dist" .tmp/expo-web-export.log 2>/dev/null && break
@@ -166,10 +166,16 @@ If a native packaging step fails, surface the error and STOP. If the app renders
 
 This is the final chance to catch schema that never made it into the Mobile Offline Profile before it ships — a table added to the data model but not the profile never syncs to devices, and a new column arrives blank offline. Validate that every schema change is covered **before** pushing.
 
+For this offline gate, first resolve the approved app's absolute `working_dir`
+using [app-working-directory.md](${PLUGIN_ROOT}/shared/references/app-working-directory.md)
+before running the check below or any helper. Bind every offline check, file
+read, and helper call to that same root.
+
 Run the local, no-network delta check (`.datamodel-manifest.json` vs `offline-profile.json`):
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js"
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js" --project-root '<working_dir>'
 ```
 
 Branch on the JSON `status` (full contract in [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md)):
@@ -194,7 +200,7 @@ Branch on the JSON `status` (full contract in [offline-profile-reconciliation.md
 
 Options:
 
-- **Update the offline profile now (recommended)** — read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` for each `missingTables[]` entry (or once with `--all-new`), then read and execute `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` with `--table <t> --columns add:<newColumns>` for each `tablesWithNewColumns[]` entry. Follow the ordering in the reconciliation reference, then re-run the delta check; when it reports `in-sync`, continue to Step 3.
+- **Update the offline profile now (recommended)** — use the reconciliation reference's **Scoped helper handoffs** with `orchestrator: deploy`, absolute `working_dir`, `phase: implementation`, and the approved environment/profile/table scope. Read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` with `--working-dir '<working_dir>' --table <t>` for each approved `missingTables[]` entry, then `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` with those arguments plus `--columns add:<newColumns>` for each approved `tablesWithNewColumns[]` entry. Re-run the guarded delta check; when it reports `in-sync`, continue to Step 3.
 - **Deploy anyway** — requires an explicit override. Wait for the exact phrase `deploy without offline` (case-insensitive); a bare `y`/`yes` is not enough, mirroring the environment-mismatch gate in Step 3. Then continue to Step 3 and note the skipped reconciliation in the Step 4 build-history row.
 
 Do not push until the gate is resolved (reconciled to `in-sync`, or explicitly overridden).
@@ -203,7 +209,7 @@ Do not push until the gate is resolved (reconciled to `in-sync`, or explicitly o
 
 **Telemetry checkpoint: `push_app_to_power_platform`**
 
-**Resolve and confirm the target environment FIRST.** `npx power-apps push` deploys to the environment configured in `power.config.json`. Resolve that ID to a Dataverse URL so the user catches drift before pushing.
+**Resolve and confirm the target environment FIRST.** `pa app push` deploys to the environment configured in `power.config.json`. Resolve that ID to a Dataverse URL so the user catches drift before pushing.
 
 Run:
 
@@ -219,7 +225,7 @@ From `resolve-environment.js` capture the **Environment URL** (e.g. `https://con
 - **Cannot resolve/authenticate** → STOP with `az login --tenant <env-tenant>` instructions, or ask the user to provide the environment URL directly.
 
 **Print before starting:**
-> "→ Pushing bundle to Power Platform via `npx power-apps push`. ~30–60 seconds."
+> "→ Pushing bundle to Power Platform via `pa app push`. ~30–60 seconds."
 
 Confirm with the user using the **resolved env URL, not just the friendly name**:
 
@@ -227,8 +233,10 @@ Confirm with the user using the **resolved env URL, not just the friendly name**
 
 Wait for the exact phrase `yes deploy to <env-name>` (case-insensitive, env-name matching). A bare `y` / `yes` is not enough — too easy to fire on autopilot when the wrong env is active. Then:
 
+> Resolve the CLI first (see [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md)): run as `$PA app push` (`npx --no-install pa …`), never a bare `pa`. On `power-apps`-only projects, translate to `power-apps push`.
+
 ```bash
-npx power-apps push --non-interactive
+$PA app push --non-interactive
 ```
 
 Capture the app URL from the output if printed.
@@ -248,9 +256,9 @@ If deploy fails, report the error and STOP — do not retry silently. Common fix
 
 | Error | Fix |
 |---|---|
-| `npx power-apps push` auth error, wrong user, or multiple accounts | Follow shared-instructions command-failure handling. `az login` / `az account set` does not switch the standalone Power Apps CLI account. |
-| Environment mismatch | Re-run `npx power-apps init -t MobileApp --display-name <name> --environment-id <id> --non-interactive` in a fresh/app root for the intended target|
-| `npx power-apps push` not recognised | Run `npm install` in the project so `@microsoft/power-apps` provides the CLI, or install `@microsoft/power-apps-cli` only as a last-resort prerequisite after user confirmation. |
+| `pa app push` auth error, wrong user, or multiple accounts | Follow shared-instructions command-failure handling. `az login` / `az account set` does not switch the standalone Power Apps CLI account. |
+| Environment mismatch | Re-run `$PA app init -t MobileApp --display-name <name> --environment-id <id> --non-interactive` in a fresh/app root for the intended target|
+| `$PA` is empty (`PA_KIND=none` — CLI not installed) | Ask the user to run `npm install` in the project root (the template pins `@microsoft/power-apps-cli`), then re-resolve `$PA` per [cli-binary.md](${PLUGIN_ROOT}/shared/cli-binary.md). Never fall back to a bare `npx pa` or `npx power-apps`. |
 
 ### Step 4 — Update memory bank
 

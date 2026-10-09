@@ -116,6 +116,8 @@ Each plugin follows this structure:
 - `.plugin/plugin.json` — Open Plugins metadata (name, version, keywords)
 - `.claude-plugin/plugin.json` — legacy mirror of `.plugin/plugin.json` kept for existing subscriptions
 - `.mcp.json` — MCP server configuration (optional)
+- `plugin.json` and `mcp.json` — optional additive Agent Plugins 1.0.0 files at the
+  individual plugin root (currently `process-intelligence`); retain the legacy files above
 - `agents/` — Agent definitions (`.md` files with YAML frontmatter)
 - `skills/` — Skill definitions, each in its own subdirectory with a `SKILL.md`
 - `scripts/` — Shared utility scripts referenced by skills and agents
@@ -182,6 +184,13 @@ subscriptions may still resolve the legacy paths during auto-update, so removing
 drifting these files can force users to reinstall. Because mirrors are committed
 files (not symlinks), update both source and legacy copies together, then run
 `node scripts/validate-legacy-compatibility.js` after metadata changes.
+
+Plugins adopting Agent Plugins 1.0.0 also keep root `plugin.json` metadata synchronized with
+the legacy manifests' common fields, excluding `$schema`. Their root `mcp.json` uses the matching
+canonical schema and explicit transport type while preserving the legacy launcher. Both formats
+share skills/runtime files. A recognized portable root manifest takes precedence; clients do not
+merge the two component sets. Do not migrate siblings or remove legacy mirrors merely because
+one plugin adopts the portable format.
 
 ### External plugins
 

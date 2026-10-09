@@ -1,7 +1,13 @@
 #!/usr/bin/env node
 'use strict';
 
-const { emitTemplateOutcome } = require('./lib/create-site-template-telemetry');
+let emitTemplateOutcome = null;
+try {
+  ({ emitTemplateOutcome } = require('./lib/create-site-template-telemetry'));
+} catch {
+  // Template telemetry is optional and must never affect the create-site flow.
+}
+
 const { formatJsonResult } = require('./lib/template-cli-args');
 
 // Accepted argv shape:
@@ -24,6 +30,7 @@ function parseArgs(argv) {
 }
 
 function run(argv = process.argv.slice(2)) {
+  if (!emitTemplateOutcome) return null;
   const args = parseArgs(argv);
   return emitTemplateOutcome(args);
 }
@@ -35,7 +42,9 @@ function toCliResult(result) {
 }
 
 if (require.main === module) {
-  process.stdout.write(formatJsonResult(toCliResult(run())));
+  if (formatJsonResult) {
+    process.stdout.write(formatJsonResult(toCliResult(run())));
+  }
 }
 
 module.exports = { parseArgs, run, toCliResult };

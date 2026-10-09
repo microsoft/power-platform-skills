@@ -1,0 +1,6 @@
+# esbuild records source byte counts; checkouts must not change these inputs.
+src/*.mjs text eol=lf
+package.json text eol=lf
+# Compare generated artifacts byte-for-byte, including embedded license notices.
+server/mcp.mjs -text
+server/bundle-meta.json -text

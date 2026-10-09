@@ -2,6 +2,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const { buildTemplateOutcomeEvent, emitTemplateOutcome, normalizeBool, sanitizeTemplateOutcomeInfo } = require('../lib/create-site-template-telemetry');
 const { parseArgs, toCliResult } = require('../emit-create-site-template-outcome');
@@ -204,6 +208,42 @@ test('telemetry CLI output excludes the emitted event and organization identifie
   }), { ok: true });
   assert.deepEqual(toCliResult({ ok: false, error: 'private failure details' }), { ok: false });
   assert.deepEqual(toCliResult(null), { ok: false });
+});
+
+test('template telemetry CLI exits 0 when its optional module cannot load', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ppskills-template-load-'));
+  const preload = path.join(tempDir, 'block-template-telemetry-load.js');
+  fs.writeFileSync(
+    preload,
+    [
+      "'use strict';",
+      "const Module = require('node:module');",
+      'const originalLoad = Module._load;',
+      'Module._load = function (request, parent, isMain) {',
+      "  if (String(request).includes('create-site-template-telemetry')) {",
+      "    throw new Error('simulated template telemetry load failure');",
+      '  }',
+      '  return originalLoad.call(this, request, parent, isMain);',
+      '};',
+      '',
+    ].join('\n'),
+    'utf8'
+  );
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      '--require',
+      preload,
+      path.resolve(__dirname, '../emit-create-site-template-outcome.js'),
+      '--eventName',
+      'create_site_from_scratch',
+    ],
+    { encoding: 'utf8', timeout: 30_000 }
+  );
+
+  assert.equal(result.status, 0);
+  assert.doesNotMatch(result.stderr, /simulated template telemetry load failure/);
 });
 
 test('sanitizeTemplateOutcomeInfo drops invalid dynamic telemetry values', () => {

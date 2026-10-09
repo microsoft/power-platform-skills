@@ -38,12 +38,16 @@ Application Insights is **off by default**. Invoking this skill (or approving it
 **Telemetry checkpoint: `resolve_app_insights_mode`**
 
 ```
-1. Check env var CODE_APPS_NATIVE_ORCHESTRATING=1
+1. Check MOBILE_APP_ORCHESTRATING=1 AND explicit edit-app caller context
    → Mode A (invoked by /edit-app). Use the passed --working-dir. Return a status block.
 
 2. Else resolve working_dir from cwd (must contain app.json with an expo object)
    → Mode B (standalone). Return a human summary.
 ```
+
+Use the invocation-scoped context from
+[app-edit-routing.md](../../shared/references/app-edit-routing.md), not a stale
+shell value. Configuration approval remains owned by Step 3 in either mode.
 
 ## Step 2 — Inspect and determine the action
 
@@ -91,7 +95,7 @@ node "${PLUGIN_ROOT}/hooks/run-telemetry.js" \
   app-insights-selection \
   "<enabled-or-disabled>" \
   "<prompt-or-pretool>" \
-  "<working_dir>"
+  '<working_dir>'
 ```
 
 Pass the invocation source so the event's `invocationSource` matches how the skill was reached: `pretool` in Mode A (delegated from another skill such as `/edit-app` via the Skill tool) and `prompt` in Mode B (the user ran `/setup-app-insights` directly).
@@ -230,7 +234,7 @@ import appConfig from '../app.json';
 <PowerAppsProvider appConfig={appConfig}>
 ```
 
-If either part is missing, patch only the import and the `appConfig` prop; preserve all other provider props and layout behavior. Run `npx tsc --noEmit` only when `app/_layout.tsx` changed.
+If either part is missing, patch only the import and the `appConfig` prop; preserve all other provider props and layout behavior. Run `npx --no-install tsc --noEmit` only when `app/_layout.tsx` changed.
 
 Parse `app.json` with Node after the mutation and assert:
 

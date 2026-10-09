@@ -2,6 +2,7 @@
 
 const assert = require('assert');
 const test = require('node:test');
+const { AzureCliLaunchError } = require('../lib/azure-cli');
 const {
   AZURE_CLI_MAX_BUFFER_BYTES,
   CONNECTOR_PERMISSIONS,
@@ -71,13 +72,19 @@ test('builds encoded Graph URLs without shell interpolation', () => {
 test('allows permission-heavy Graph pages within a bounded Azure CLI buffer', () => {
   let invocation;
   const result = runAzJson(['rest', '--url', 'https://graph.microsoft.com'], 30000,
-    (command, args, options) => {
-      invocation = { command, args, options };
+    (args, options) => {
+      invocation = { args, options };
       return '{"value":[]}';
     });
 
+    test('registration discovery preserves launcher errors rather than reporting an account problem', () => {
+      const failure = new AzureCliLaunchError('Azure CLI executable is missing.', 'CLI_NOT_FOUND');
+      assert.throws(() => runAzJson(['account', 'show'], 30000, () => { throw failure; }),
+        (error) => error === failure);
+    });
+
   assert.deepEqual(result, { value: [] });
-  assert.equal(invocation.command, 'az');
+  assert.deepEqual(invocation.args, ['rest', '--url', 'https://graph.microsoft.com']);
   assert.equal(invocation.options.maxBuffer, AZURE_CLI_MAX_BUFFER_BYTES);
   assert.equal(AZURE_CLI_MAX_BUFFER_BYTES, 16 * 1024 * 1024);
 });
