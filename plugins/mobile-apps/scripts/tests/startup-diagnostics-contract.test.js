@@ -45,10 +45,15 @@ test('unclassified failures require evidence beyond successful metadata inspecti
 });
 
 test('startup commands distinguish PowerShell from Bash without rewriting native roots', () => {
-  assert.match(startup, /Do not rewrite it to a POSIX path/);
+  assert.match(startup, /Do not rewrite them to POSIX paths/);
   assert.doesNotMatch(startup, /inspect-startup\.js"[^\n]*\\\n/);
-  assert.match(startup, /```powershell\nnode "<plugin_root>\\scripts\\inspect-startup\.js"/);
-  assert.match(startup, /Set-Location -LiteralPath "<working_dir>" -ErrorAction Stop/);
+  assert.match(startup, /APP_ROOT='<working_dir>'\nnode "\$\{PLUGIN_ROOT\}\/scripts\/inspect-startup\.js" --working-dir "\$APP_ROOT"/);
+  assert.match(startup, /escape each embedded\s+apostrophe/);
+  assert.ok(startup.includes("APP_ROOT='/tmp/app'\\''s folder'"));
+  assert.match(startup, /```powershell\n\$AppRoot = '<working_dir>'/);
+  assert.match(startup, /\$Inspector = Join-Path '<plugin_root>' 'scripts\\inspect-startup\.js'/);
+  assert.match(startup, /node \$Inspector --working-dir \$AppRoot/);
+  assert.match(startup, /Set-Location -LiteralPath \$AppRoot -ErrorAction Stop/);
   assert.match(startup, /npm\.cmd ci --ignore-scripts --no-audit --no-fund/);
   assert.match(startup, /\$LASTEXITCODE -ne 0/);
   assert.match(startup, /In PowerShell use `npm\.cmd run dev`/);

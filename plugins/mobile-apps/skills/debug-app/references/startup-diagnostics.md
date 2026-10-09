@@ -39,10 +39,17 @@ because `predev` can fail before the logger starts. Never require a terminal ID.
 If no output is available, ask for a small relevant error excerpt; do not request
 the full npm log, `.npmrc`, auth config, or environment-variable dump.
 
-Run the bundled local-only inspector from the selected root:
+Run the bundled local-only inspector from the selected root. For every fresh
+Bash call, bind the already-resolved root using the shell-literal escaping from
+[`app-working-directory.md`](../../../shared/references/app-working-directory.md):
+replace `<working_dir>` inside the single quotes and escape each embedded
+apostrophe as `'\''` (`/tmp/app's folder` becomes
+`APP_ROOT='/tmp/app'\''s folder'`). After that one literal assignment, pass only
+the double-quoted variable:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/inspect-startup.js" --working-dir '<working_dir>'
+APP_ROOT='<working_dir>'
+node "${PLUGIN_ROOT}/scripts/inspect-startup.js" --working-dir "$APP_ROOT"
 ```
 
 It reads JSON metadata and resolves host configuration entry points without
@@ -58,15 +65,20 @@ the inspector reports it.
 For a specific failed import, inspect that exact package subpath as well:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/inspect-startup.js" --working-dir '<working_dir>' --entry-point '<failed-package-or-subpath>'
+APP_ROOT='<working_dir>'
+node "${PLUGIN_ROOT}/scripts/inspect-startup.js" --working-dir "$APP_ROOT" --entry-point '<failed-package-or-subpath>'
 ```
 
 **Windows / PowerShell:** substitute the resolved plugin root, and pass the native
 absolute working directory as one quoted argument (for example, `C:\Apps\Demo App`).
-Do not rewrite it to a POSIX path or use Bash `\` line continuation:
+Use single-quoted PowerShell literals and double embedded apostrophes for both
+resolved paths. Do not rewrite them to POSIX paths or use Bash `\` line
+continuation:
 
 ```powershell
-node "<plugin_root>\scripts\inspect-startup.js" --working-dir "<working_dir>" --entry-point "<failed-package-or-subpath>"
+$AppRoot = '<working_dir>'
+$Inspector = Join-Path '<plugin_root>' 'scripts\inspect-startup.js'
+node $Inspector --working-dir $AppRoot --entry-point '<failed-package-or-subpath>'
 ```
 
 Inspect only relevant findings:
@@ -175,14 +187,16 @@ approval, record hashes of the manifest and effective lock, then run from that r
 Bash / Git Bash:
 
 ```bash
-cd -- '<working_dir>' || exit 1
+APP_ROOT='<working_dir>'
+cd -- "$APP_ROOT" || exit 1
 npm ci --ignore-scripts --no-audit --no-fund
 ```
 
 PowerShell (including Windows PowerShell 5.1):
 
 ```powershell
-Set-Location -LiteralPath "<working_dir>" -ErrorAction Stop
+$AppRoot = '<working_dir>'
+Set-Location -LiteralPath $AppRoot -ErrorAction Stop
 npm.cmd ci --ignore-scripts --no-audit --no-fund
 if ($LASTEXITCODE -ne 0) { throw "Locked dependency restoration failed (exit $LASTEXITCODE)." }
 ```
