@@ -4,22 +4,54 @@ The orchestrator owns compilation, evidence-based functional acceptance, and the
 summary. Completion is fail-closed: the final successful compile must occur after the last
 app-YAML mutation.
 
+Use this workflow to validate edits to existing apps. For whole-app creation, use `${PLUGIN_ROOT}/references/CreateValidation.md`. Apply `${PLUGIN_ROOT}/references/EditConformance.md` and the Change and Preservation Contract before the detailed rules below. For Modify, scope conformance to changed regions and regression-sensitive dependencies; for added screens, check the new screen and affected app integration. Preserve unrelated existing behavior and layout. Generic requirements below never authorize redesigning untouched regions or repairing unrelated pre-existing defects.
+
+Use `${PLUGIN_ROOT}/references/MutationBehavior.md` as the owner of mutation feedback applicability and proof requirements. The mode-aware evidence cells below record actual receipt bindings or preserved feedback/static field proof, as appropriate.
+
+Direct EDIT and Partitioned EDIT are direct workflows. They do not
+produce planner or builder artifacts. For a direct workflow:
+
+1. Compare the requested edit and preservation contract with the final YAML. Confirm the requested semantics, approved literal control/property/formula changes, and visible results are implemented and reachable; verify builder/executor-chosen formulas rather than requiring a prewritten recipe.
+2. Confirm structural ownership: a newly generated screen has one responsive root as the
+   sole top-level visible child, and every visible control is nested inside that root.
+   Preserve a valid existing root or a deliberately fixed desktop layout. Do not extend a
+   malformed generated hierarchy. Direct navigation formulas must reference an existing
+   screen, and added screens must appear in `[working directory]/_EditorState.pa.yaml`.
+   This generated-screen check does not apply to a Direct edit that adds one leaf control
+   to an existing screen. For that route, verify that the current hierarchy is unchanged
+   and no container, AutoLayout conversion, or reparenting was introduced.
+3. Repair any mismatch.
+4. Follow Section 1 until the app compiles cleanly. If diagnostic repair mutates app
+   YAML, repeat the direct comparison before compiling again.
+5. After the final successful compile, skip Section 2, do not create
+   `[working directory]/canvas-app-plan.md`, `[working directory]/canvas-app-shared.md`, screen-plan files, or
+   `[working directory]/canvas-app-acceptance.md`, and follow the applicable summary format in Section 3.
+
+The remaining instructions apply to planned workflows unless they explicitly mention a
+direct workflow.
+
+Builder-local QA evidence is reusable when the builder's target file is byte-for-byte
+unchanged since the evidence was returned and no later app-level or shared-contract
+change invalidates its assumptions. Do not repeat the same file-local checks merely to
+produce duplicate evidence. Any later mutation to that file requires the affected local
+checks again. The orchestrator always retains ownership of cross-file conformance,
+acceptance evidence, and the final successful compile after the last mutation.
+
 ## Contents
 
 - Section 0 — Compile gates: when to compile, and why gate 3 exists
 - Section 1 — Compile: diagnostic tiers, parse-error coordinates, version conflicts,
-  reading diagnostics, liveness, the convergence budget, repair ownership, and verifying
+  reading diagnostics, scope, progress-based convergence, repair ownership, and verifying
   before summarizing
 - Section 2 — Functional conformance: post-compile transition and scenario gate
-- Section 3 — Summary: the CREATE, EDIT, and unresolved report formats
+- Section 3 — Summary: the EDIT and unresolved report formats
 
 ## 0. Compile Gates
 
 Compilation is not a final step. Four gates precede completion:
 
-1. `[working directory]/App.pa.yaml` is compiled immediately after the planner writes it: the planner
-   owns this gate when it has `compile_canvas`; otherwise the MCP-owning orchestrator does.
-2. The orchestrator confirms that result before dispatching builders.
+1. The orchestrator applies the plan's `Before builders` app changes and calls `compile_canvas`.
+2. The orchestrator resolves App-level diagnostics before dispatching builders. The planner writes planning artifacts, not app YAML, and never compiles.
 3. The orchestrator compiles after each **wave** of builders returns, before dispatching
    the next wave.
 4. After functional and layout repairs, the orchestrator compiles once more and makes no
@@ -31,11 +63,10 @@ repairing it across six finished files is not.
 
 When gate 3 reveals a systemic defect:
 
-- Repair the files that already exist in place, with targeted `edit` calls.
+- Repair the files that already exist in place, with targeted `Edit` calls.
 - Correct the shared plan and the briefs for rows **not yet dispatched**, so the next wave
   does not repeat the defect.
-- Never re-dispatch a builder whose file already exists. A regenerated screen discards the
-  repairs you just made. The only exception is a builder that returned `Status: Blocked`.
+- Never regenerate a screen whose file already exists. A blocked builder can resume targeted work after a missing contract is reconciled; it must preserve existing repairs.
 
 A between-wave compile only sees the screens written so far, so a `Navigate` to a screen
 scheduled for a later wave reports `Name isn't recognized: '<ScreenName>'`. That is
@@ -43,6 +74,10 @@ expected. Confirm the name matches a remaining dispatch row and leave it alone �
 the navigation to satisfy an intermediate compile breaks the finished app.
 
 ## 1. Compile
+
+Classify diagnostics as introduced/directly coupled, demonstrated unrelated pre-existing, or unknown origin. Use actual baseline observations when available; never infer that an error is pre-existing merely because its file was not edited. Changed shared schemas/state can break otherwise untouched consumers. Diagnose unknown origin against current source and the edit contract before assigning scope.
+
+Repair introduced or directly coupled defects necessary for the requested result. Do not modify unrelated pre-existing defects just to make compilation green. If those prevent applying the edit, report them explicitly, distinguish workspace drafts from applied Studio state, and do not claim completion or a clean compile. If origin or required scope remains uncertain after targeted investigation, report that uncertainty and the needed decision. Do not take an extra pre-approval compile solely to manufacture baseline evidence.
 
 Call `compile_canvas`.
 
@@ -60,11 +95,11 @@ already been referenced using a different version`
 
 For each tier:
 
-1. Read every referenced file under `[working directory]`.
-2. Fix all diagnostics in the tier.
+1. Read the relevant original-source ranges under `[working directory]`, at most 100 lines per call.
+2. Diagnose scope, then fix all in-scope root causes in the tier.
 3. Re-run `compile_canvas` before moving to the next tier.
 
-Repeat until compilation succeeds. Do not chase cascading screen errors before earlier
+Repeat while verified repairs progress toward successful compilation. Do not chase cascading screen errors before earlier
 tiers are clean.
 
 ### Parse errors carry coordinates — use them
@@ -82,7 +117,7 @@ reports only the _first_ one it meets — the second instance of the identical m
 invisible until you fix the first. After correcting an unquoted `: ` in a formula, a
 mis-indented `Children:` entry, or a duplicate property key, read the rest of that file and
 fix every other occurrence of the same pattern in the same pass. Otherwise each one costs a
-full compile cycle and burns the convergence budget on a single defect.
+full compile cycle for the same root cause. Sweep the same malformed family across every affected file in bounded original-source ranges before recompiling; do not expand into unrelated cleanup.
 
 ### Creation-keyword conflicts masquerade as unknown properties
 
@@ -91,7 +126,7 @@ creation keywords that disagree with the current `describe_control` response, th
 bind to a different template version and report every property that exists only in the
 other version as
 `Unknown property 'P' for control type 'T'` — where `T` is the internal control name, not
-the name you wrote. The properties are fine; the version pin is not.
+the name you wrote. Diagnose the selected contract and preserved version before deciding whether keywords or properties need repair; current metadata alone does not invalidate an existing pin.
 
 Symptoms of this exact failure:
 
@@ -101,9 +136,7 @@ Symptoms of this exact failure:
   YAML says `ModernText`.
 - One or two version diagnostics buried in the same compile output.
 
-The fix is always the same: re-run `describe_control`, copy its complete creation-keyword
-block to every instance of that type, then re-compile once. Do not edit a single property
-until you have done that, and do not independently add or strip an `@version` suffix.
+Re-run `describe_control` for the exact selected type and compare with current creation keywords. Repair introduced mismatches across affected instances before chasing property cascades. Existing version pins are preservation constraints: do not upgrade every instance or independently add/strip an `@version` suffix. If current metadata cannot describe the preserved version or a repair requires an unapproved migration, report the exact conflict for scope reconciliation.
 
 ### Reading diagnostics
 
@@ -123,55 +156,36 @@ lines. Reading all of them wastes the context you need to fix them.
 
 ### Liveness
 
-Every turn in the repair phase must end in an `edit` or a `compile_canvas`. Those are the
-only two actions that change the outcome.
-
-After **two consecutive turns** containing neither, stop and emit the unresolved-diagnostics
-report in section 3. Do not spend a third. A repair phase that has stopped writing and
-stopped compiling is not thinking — it is searching for a capability that does not exist,
-and it will not recover on its own.
-
+Continue repair and remaining builder waves in the same maker turn while concrete evidence supports progress. Reading genuinely unread source ranges to complete a bounded sweep is work; repeated reads of unchanged covered material are not. Do not require the maker to repeat "continue" to clear repairable YAML errors.
 
 Reading a file, planning an approach, or delegating is not progress on its own. If you find
-yourself unable to express a fix with `edit`, return to the named file and diagnostic
+yourself unable to express a fix with `Edit`, return to the named file and diagnostic
 location. Repeated identical lines need separate targeted edits with enough surrounding
-context to make each match unique.
+context to make each match unique. Respect the file-tool boundary in the system prompt rather than looking for command-line substitutes.
 
+### Progress-based convergence
 
-### Convergence budget
+There is no fixed compile-cycle cap. Track diagnostic identity by root cause, file/control/property and failing instance, not raw counts or moving line numbers. A parse repair can reveal new errors; unchanged counts can hide elimination of earlier instances.
 
-Track the count of **distinct** diagnostics after every compile.
-
-- Allow at most 5 compile-and-fix cycles. A cycle is one failed compile followed by your
-  repair; the planner's `App.pa.yaml` gate does not count.
-- Compare counts within the same tier. Clearing a parse error or a version conflict
-  **reveals** diagnostics that were previously suppressed, so the total can legitimately
-  rise — that is progress, not regression. Reset your baseline whenever a higher tier is
-  cleared.
-- Within one tier, if the distinct count does not strictly decrease across two consecutive
-  cycles, stop. You are guessing, not converging.
-- If two consecutive compiles return the _same_ distinct diagnostic set, your last edit
-  changed nothing that mattered. Do not compile a third time hoping for a different
-  answer. Re-read the exact file and line the diagnostic names, and fix that text.
-- On stopping, report the remaining diagnostics explicitly as described in section 3.
-  Never loop indefinitely and never claim success you have not observed.
+- An edit alone is not progress. Require verified elimination of the failing instance or advancement past a diagnostic tier on the next compile. A previously seen failing state is oscillation, regardless of how much source changed.
+- Sweep all in-scope instances of a malformed family before recompiling. Maintain covered source ranges and diagnostic outcomes in context, not a new artifact. Finish unread source ranges instead of treating a multi-read sweep as stagnation.
+- If the same failing instance survives two targeted attempts, or reads/edits repeat without new evidence, reread the exact source and authoritative metadata, change the hypothesis once and perform one targeted reassessment. If it still fails without verified progress, stop with the explicit blocker; do not cycle blind edits or identical compiles.
+- Expected references to pending screens require finishing their waves, not deleting navigation or claiming success.
+- Cancellation, denied tools, unavailable indispensable capability or a material user decision stops work honestly. This policy changes no draft-persistence or synchronization behavior.
 
 ### Repair ownership
 
 You repair the app yourself. You already hold the plan, the dispatch table, and the
 diagnostic history, and a fresh agent would have to rediscover all of it.
 
-- Fix compile diagnostics with targeted `edit` calls against the named file. This is
-  always the correct response to a diagnostic.
+- Fix in-scope compile diagnostics with targeted `Edit` calls against the named file after identifying the root cause.
 - Do not spawn a general-purpose agent to "fix compilation." That restarts discovery from
   zero and has no shared budget with you.
 - **Do not re-invoke `canvas-app-planner` and re-dispatch builders to regenerate screens
   because the app failed to compile.** A regenerated screen is a new screen: the fixes you
   already landed are gone and a new set of defects arrives in their place. That loop does
   not converge; a handful of targeted edits does.
-- The only sanctioned re-delegation is back to `canvas-app-planner` when a builder
-  returned `Status: Blocked` because its brief was genuinely missing a definition or an
-  assignment field — never for a diagnostic on a file that already exists.
+- Re-delegate to the planner only for a genuinely missing shared decision, unresolved metadata/version contract or assignment field. Builders obtain ordinary selected-control metadata directly. Preserve current YAML; repair the missing decision and resume targeted work, never regenerate an existing screen for compile diagnostics.
 - Modify `[working directory]/_EditorState.pa.yaml` when a diagnostic identifies it or when the requested
   screen or component-definition order requires correction. Preserve valid names and
   repair only the affected order entries.
@@ -191,8 +205,10 @@ because functional conformance still writes the acceptance artifact.
 ## 2. Functional Conformance
 
 A clean compile proves syntax and formula binding, not that named actions change the
-state users observe. After the final clean compile, read the plan index and generated
-files and evaluate every `## Functional Test Matrix` row.
+state users observe. For a planned workflow, after the final clean compile, read the plan
+index and generated files and evaluate every `## Functional Test Matrix` row.
+
+Use `${PLUGIN_ROOT}/references/PlanModel.md` for the ownership boundary: semantic intent in a planner-owned cell is valid input, not missing YAML. Resolve each local role to the builder's actual final control and inspect its event, observer, state predicate, and geometry. Require exact syntax where the contract preserves a binding, approves a literal edit, or defines a coordinator/shared interface. All acceptance formula cells below contain exact final-YAML evidence, even when the planning cell used implementation intent.
 
 For each scenario, record one result:
 
@@ -205,6 +221,8 @@ For each scenario, record one result:
   notification, input text, or static copy.
 
 Write the result to `[working directory]/canvas-app-acceptance.md`:
+
+Also include `QA scope:` and `Preservation:` evidence from EditConformance for the affected regions and dependencies. Reuse existing action/scenario keys; do not create a second test matrix. Label static analysis as static, and leave runtime evaluation NOT RUN unless exercised.
 
 ```markdown
 Runtime evaluation: NOT RUN
@@ -225,13 +243,13 @@ Source revision: [git revision, package version, or "unavailable"]
 
 | Action | Receipt binding | Canonical source / observer | Requested destination / observer | Stable ID continuity | Synchronization | Focus | Result |
 | ------ | --------------- | --------------------------- | -------------------------------- | -------------------- | --------------- | ----- | ------ |
-| [mutation] | [exact final-YAML returned-record/ID or deletion-snapshot and receipt bindings] | [exact source and observer formula] | [exact destination and observer formula] | [same ID expression throughout] | [exact success-path sync, or N/A — same live source] | [exact focus-by-ID, or N/A] | PASS |
+| [mutation] | [Feedback: Receipt - exact final result/snapshot and receipt bindings; Feedback: Preserve - exact existing feedback/observer bindings and static write proof] | [exact source and observer formula] | [exact destination and observer formula] | [same ID expression throughout] | [exact success-path sync, or N/A — same live source] | [exact receipt-mode or preserved focus-by-ID, or N/A — no new focus in Preserve mode] | PASS |
 
 ## Mutation Field Evidence
 
 | Action | Field | Classification | Canonical pre-state or input | Write / preservation formula | Receipt / proof binding | Post-state observer | Result |
 | ------ | ----- | -------------- | ---------------------------- | ---------------------------- | ----------------------- | ------------------- | ------ |
-| [mutation] | [field/status] | Changed / Preserved | [exact final-YAML binding] | [exact final-YAML write, omission, or carry-forward evidence] | [exact labeled receipt or preservation evidence] | [exact observer for same ID/field] | PASS |
+| [mutation] | [field/status] | Changed / Preserved | [exact final-YAML binding] | [exact final-YAML write, omission, or carry-forward evidence] | [Receipt-mode exact result binding, Preserve-mode static field/write proof plus existing feedback path, or preserved-field proof] | [canonical same-ID/field proof and exact actual observer path] | PASS |
 
 ## Continuation Evidence
 
@@ -265,13 +283,7 @@ Contract `Observer and evidence` cell declares an exact
 | ------------ | ---------------------------------------- | ------------ | ---------------- | ------ |
 | [plan key] | [exact final-YAML typed input or parse/normalize binding] | [exact `Sort` or `SortByColumns` binding over the declared typed/canonical field] | [exact visible observer binding] | PASS |
 
-For canonical text, static PASS is intentionally bounded to a direct
-`If(IsBlank(input), ..., IfError(Patch(declaredSource, ..., {declaredField:
-Text(TimeValue(input), "HH:mm")}), ...))` shape. The blank guard, conversion, and write must
-use the same input. Wrappers or suffixes around the normalized value and staged-variable
-dataflow are unverified; do not replace missing structural evidence with token-presence claims.
-Typed-time evidence likewise requires the assigned field value itself, rather than a nested
-argument, to return `Time`, `TimeValue`, `DateTime`, or `DateTimeValue`.
+For canonical text, trace the actual final input through blank/invalid rejection, normalization to the declared canonical 24-hour format, the canonical field write, and sort/observer consumption. The guard, conversion, and write must use the same live value; inspect staged dataflow when used rather than requiring one inline `If`/`IfError`/`Patch` recipe. For typed-time storage, prove that the assigned value has the declared time/date-time type, not merely that a time conversion appears somewhere in the formula. Reject missing provenance, malformed values, or lexical sorting of noncanonical time text.
 
 ## Viewport Containment Evidence
 
@@ -297,7 +309,7 @@ argument, to return `Time`, `TimeValue`, `DateTime`, or `DateTimeValue`.
 
 | Pair | Selected-record expression | Operation-state reset binding | Invalid-submit gate | Receive/increase mutation | Issue/decrease mutation | Canonical-source observer | Receipt bindings | Result |
 | ---- | -------------------------- | ----------------------------- | ------------------- | ------------------------- | ----------------------- | ------------------------- | ---------------- | ------ |
-| [Receive/Issue] | [nullable selected ID; final YAML must blank-reset, row-assign, and consistently consume it] | [operation state plus exact entry/success `Blank()` reset event] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [five `<br>`-separated bindings: `operation`, `old`, `amount`, `expected`, `actual`] | PASS |
+| [Receive/Issue] | [exact final stable-ID selection/reset/consumer bindings; direct row identity when applicable] | [exact shared-operation reset event, or N/A - independent direct actions] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [exact `Control.Property: =formula`] | [Feedback: Receipt - required directional result bindings; Feedback: Preserve - static operation/old/amount/expected/actual proof and exact existing feedback/observer bindings] | PASS |
 
 ## Compound Sequence Evidence
 
@@ -317,7 +329,7 @@ argument, to return `Time`, `TimeValue`, `DateTime`, or `DateTimeValue`.
 
 | Screen / container | QACHK | Branch / width source | Available size | Required-size arithmetic | Protected controls | Result |
 | ------------------ | ------ | --------------------- | -------------- | ------------------------ | ------------------ | ------ |
-| [screen / control] | [QACHK-NO-HEIGHT-TRAP / QACHK-GALLERY-ROW-FITS-CONTENT / QACHK-HORIZONTAL-BUDGET / QACHK-PRIMARY-ACTION-REACHABILITY] | [screen-level expression and branch] | [total numeric container/root width or height] | [numeric child widths/heights + gaps + padding] | [amount, Save/Apply, receipt fields, etc.] | PASS |
+| [screen / control] | [QACHK-NO-HEIGHT-TRAP / QACHK-GALLERY-ROW-FITS-CONTENT / QACHK-HORIZONTAL-BUDGET / QACHK-PRIMARY-ACTION-REACHABILITY] | [screen-level expression and branch] | [total numeric container/root width or height] | [numeric child widths/heights + gaps + padding] | [amount, Save/Apply, receipt-mode fields or preserved feedback, etc.] | PASS |
 ```
 
 
@@ -337,16 +349,14 @@ layout, or downstream visibility scenarios that were not executed and evidenced.
 
 The mutation lifecycle, field-ledger, and continuation tables are static formula evidence
 under that same boundary. A `PASS` proves
-that final YAML contains the receipt, canonical-source and requested-destination observers,
-same-ID trace, field ledger, synchronization/focus formulas, and conditional continuation
+that final YAML supports the action's mode-specific feedback proof, canonical-source and requested-destination observers,
+same-ID trace, field ledger, synchronization/applicable focus formulas, and conditional continuation
 bindings claimed by the plan. It does not prove that an event fired, an external write or
 refresh completed, a destination rendered the record, or focus moved in the running app.
 
 When the plan declares state-driven surface visibility—either in its dedicated table or
 with an exact `Surface.Visible=state predicate` Action Contract observer—static
-acceptance must preserve the named surface's exact `Visible` binding. The final YAML
-predicate must be the same as the plan or fall within the validator's bounded Boolean
-equivalence rules. This contract does not infer requirements for always-visible surfaces,
+acceptance must inspect the actual surface's own `Visible` binding. When the plan specifies an exact preserved/literal/shared predicate, require that predicate or a proven Boolean equivalent; when it specifies implementation intent, prove the final predicate realizes every declared visible/hidden state and record it exactly. Do not substitute prose for final evidence. This contract does not infer requirements for always-visible surfaces,
 child-only visibility, navigation-based disclosure, or visibility absent from the plan.
 
 The first line of the file must be exactly `Runtime evaluation: NOT RUN`; do not place a
@@ -423,7 +433,7 @@ Repeat a container in separate rows for each axis or responsive branch as needed
 the applicable `QACHK` and branch in each row. `Available size` is the total width/height
 for that row, not a post-padding value.
 Evidence must show amount controls and Save/primary mutation actions remain reachable and
-all five labeled receipt fields fit together. These calculations are static evidence only;
+the applicable feedback region fits; use MutationBehavior's conditional receipt layout requirements only for Receipt mode. These calculations are static evidence only;
 a browser evaluation remains necessary to prove rendered reachability.
 
 Include `## Data Entry Label Evidence` for every required classic or modern TextInput,
@@ -445,31 +455,20 @@ For list-driven requirements, post-export/runtime proof must include a screensho
 least one real data row visibly rendered and its required row action reachable. A runtime
 probe reporting only four interactive descendants is hard-fail evidence for an expected
 multi-control/list screen, not support for static success. Keep these claims labeled
-runtime/post-export: the local static validator can reject risky Gallery shapes but cannot
+runtime/post-export: static inspection can reject risky Gallery shapes but cannot
 prove that a host rendered rows.
 
 When the plan contains an opposing directional pair, include `## Directional Mutation
-Evidence` with exactly one row per pair. This is an executable gate, not a self-reported
-trace: copy final-YAML formulas exactly. The validator independently requires one nullable
-selected ID initialized/reset blank and assigned by row selection, consistent consumers,
-an actual operation-state reset event, representable blank/non-positive amount states, a
+Evidence` with exactly one row per pair. Copy final-YAML formulas exactly; a self-reported trace is insufficient. Inspect selected-ID assignment/reset and consistent consumers, shared-operation reset when applicable, representable blank/non-positive amount states, a
 gate that rejects them, plus/minus arithmetic, one canonical source
-read by the observer, and five receipt bindings including an actual persisted `Patch`
-result. The operation selector, amount, submit, and validation/status surface must remain
+read by the observer, and mode-specific feedback evidence under MutationBehavior. Independent direct actions identify direction by their own handlers and need no shared-operation reset; direct row actions may use stable row identity. The operation selector when used, amount, submit, and validation/status surface must remain
 visible in invalid states; the submit may be disabled but neither it nor a required
 ancestor may be gated to the selected/valid state. A gallery-only selected-ID event also
 requires bounded Gallery `Height`, explicit positive `TemplateSize`, numeric
 `TemplatePadding`, `Items`, and row controls.
-For the amount rejection, accept either supported equivalent spelling in final YAML:
-`value <= 0` or `Not(value > 0)`; do not prescribe a third form unsupported by the
-validator.
+For amount rejection, inspect the final formula's semantics over blank, zero, negative, and valid positive values. `value <= 0` and `Not(value > 0)` are examples, not an exhaustive syntax allowlist; prove any equivalent implementation against the same scenarios.
 
-Receipt controls may include visible label text. Static evidence still has to expose one
-unambiguous underlying value expression for each required receipt field. A direct value
-formula is valid, as is literal label decoration around exactly one dynamic value
-expression after quoted/block-scalar normalization. When multiple dynamic expressions
-could be the field value, fail with a dedicated ambiguous-receipt-expression error; do not
-guess an operand or accept the visible text alone.
+For Receipt mode, inspect actual result bindings against `${PLUGIN_ROOT}/references/MutationBehavior.md`'s Mutation receipt contract, including unambiguous dynamic field values. For Preserve mode, inspect exact write/operand/post-state evidence and existing feedback/source-observer bindings; do not demand new per-field receipt controls.
 
 During final validation, cross-check the Action Contract cells against final YAML and
 against `## Directional Mutation Evidence`; do not allow either table to contradict the
@@ -489,7 +488,7 @@ evaluation must still prove that each selector and the distinct mutation control
 reached and clicked in the stated Given state.
 
 The directional gate also checks the two static shapes behind QAChecks Check 34
-"staging-variable liveness" and Check 43 "LookUp key integrity." A receipt old/amount
+"staging-variable liveness" and Check 43 "LookUp key integrity." A mutation old/amount
 operand that is a global `var*` or screen-context `loc*` staging variable must be assigned
 from a live `.Selected`, `.Text`, or `.Value` expression before `Patch`, either through
 `Set(...)`/`UpdateContext({...})` in the mutation prelude or through a reachable
@@ -509,47 +508,27 @@ Sequence Evidence` with one row per same-record pair. It records the same-record
 `start -> op1 -> mid -> op2 -> end` sequence, and the exact final-YAML binding that sources
 the second operation's old value from the canonical collection (e.g. a `LookUp` over the
 patched source), proving the second operation reads the already-mutated value, not the
-original. Unlike the directional table, the validator does not machine-check this table —
-no static check can prove the running app's submit button becomes clickable or that the
+original. No static check can prove the running app's submit button becomes clickable or that the
 second read observes the mutated value; that remains the live browser evaluation's job — so
 copy the formulas exactly and treat it as a required authoring/reviewer proof.
 
 Do not replace `NOT RUN` with another value unless a runtime evaluator actually executed
 against this app and the artifact records its run ID or result URL and score.
 
+Before writing the final response, reopen the artifact and repair it if the first line,
+any required row, or any exact formula is missing.
 
-After writing the artifact, run:
-
-```text
-dotnet run --file "${PLUGIN_ROOT}/scripts/validate-canvas-acceptance.cs" -- \
-  "[absolute working directory]" "${PLUGIN_ROOT}"
-```
-
-The validator compares the acceptance rows with the plan's Action Contracts, Functional
-Test Matrix, and dispatch screens. A nonzero exit blocks completion. Repair the artifact
-and rerun the validator until it passes; never summarize success without its `PASS`
-result.
-
-The validator itself is regression-tested. `scripts/tests/` drives it against the
-`receive-issue` fixture (a correctly-signed Receive/Issue workspace must `PASS`; a
-reversed-sign one must fail on the directional check) via `node scripts/run-tests.js`,
-which the `canvas-apps-script-tests` CI workflow runs on every change under
-`plugins/canvas-apps/**`. This is a static conformance gate only — it does not execute the
-app, and a live browser evaluation remains the authority for the runtime functional grade.
-
-
-For mutations, also compare the handler, write set, proof set, receipt bindings, and
-downstream observer one-for-one. Require one `## Mutation Lifecycle Evidence` row per
-mutation Action Contract. Confirm the receipt, canonical observer, requested destination,
+For mutations, compare the handler, write set, proof set, mode-specific field evidence, and
+actual downstream observer path. Require one `## Mutation Lifecycle Evidence` row per
+mutation Action Contract. Confirm record-bound feedback, canonical observer, requested destination,
 and destination observer all use the mutated stable ID. When destination and canonical
 source differ, require an exact successful-path synchronization formula before destination
-evidence; for multi-record destinations require an exact focus-by-ID formula.
+evidence. Inspect exact focus-by-ID formulas when required by Receipt mode or already part of preserved behavior; Preserve mode never requires adding focus.
 
 Require `## Mutation Field Evidence` to match the plan ledger. Every handler-written field
-is classified Changed, occurs in the Action Contract write and proof sets, and has one
-readable receipt binding. Every Preserved row identifies canonical pre-state, proves
+is classified Changed, occurs in the Action Contract write and proof sets, and has the field proof required by its feedback mode: a readable receipt binding or static write/post-state proof tied to actual existing feedback/source observers. Every Preserved row identifies canonical pre-state, proves
 omission from a partial update or exact carry-forward, and names a post-state observer for
-the same stable ID. A default, stale selection, display value, or parallel collection is
+the same stable ID without requiring a new per-field UI. A default, stale selection, display value, or parallel collection is
 not preservation evidence.
 
 Require `## Continuation Evidence` only when the plan declares a continuation from create
@@ -591,7 +570,7 @@ authored app rather than the original blank shell:
    Do not place planning, acceptance, or other non-YAML files in it.
 2. Call `sync_canvas` with that temporary directory.
 3. Inspect the synchronized `App.pa.yaml` and every screen named by the plan's dispatch
-   table. Every expected file must exist. In CREATE mode, every screen must contain at
+   table. Every expected file must exist. Every screen added by a `Create` dispatch row must contain at
    least one meaningful visible leaf control beneath its screen root; the root Screen and
    layout-only containers do not count.
 4. If a screen is missing, root-only, or does not contain the controls present in the
@@ -621,8 +600,8 @@ Immediately before the summary:
    needed, remain before the barrier and complete them first.
 4. Call `compile_canvas`, even when the clean-candidate compile succeeded.
 5. After it succeeds, make no further tool call. Return the summary immediately. In
-   particular, do not call `Task`, `read_agent`, `edit`, `create`, `apply_patch`,
-   `sync_canvas`, `view`, `glob`, `rg`, `Bash`, or another MCP tool.
+   particular, do not call `Task`, `read_agent`, `Edit`, `Write`, `apply_patch`,
+   `sync_canvas`, `Read`, `glob`, `rg`, `Bash`, or another MCP tool.
 6. If any later tool call, delegation, write, inspection, or repair occurs, the compile is
    no longer final. Finish that work, confirm every agent has returned, and repeat this
    entire gate. A compile predating later activity is not final proof.
@@ -633,24 +612,7 @@ distinguish a completed app from an app changed after validation.
 
 ## 3. Summary
 
-For CREATE:
-
-```markdown
-**App generation complete.**
-
-| Screen   | File           | Status  |
-| -------- | -------------- | ------- |
-| [Screen] | [file].pa.yaml | Created |
-
-**Compiled clean** after [N] pass(es).
-**Functional readiness:** [passed]/[total] scenarios passed static conformance.
-**Acceptance evidence:** `[working directory]/canvas-app-acceptance.md`.
-**Runtime evaluation:** NOT RUN.
-
-
-**Plugin provenance:** [exact plugin root] · version [version] · revision [revision or unavailable].
-
-```
+Direct workflows omit the Acceptance evidence line and do not cite planner artifacts.
 
 For EDIT:
 
@@ -671,11 +633,11 @@ For EDIT:
 
 ```
 
-If diagnostics remain after the convergence budget is exhausted, report them explicitly
+If diagnostics remain because progress stalled, required scope is unresolved, or unrelated pre-existing errors block application, report them explicitly
 instead of claiming completion:
 
 ```markdown
-**App generated with unresolved diagnostics.**
+**Edit blocked by unresolved diagnostics.**
 
 | Screen   | File           | Status  |
 | -------- | -------------- | ------- |
@@ -688,6 +650,7 @@ instead of claiming completion:
 | [message]  | [count]     | [file] |
 
 [One line on what was tried and what is likely blocking.]
+[Classify diagnostic origin and scope; state which edits are workspace-only versus confirmed applied. Unknown origin stays explicit.]
 ```
 
 If compilation is clean but functional scenarios remain unresolved, report them instead

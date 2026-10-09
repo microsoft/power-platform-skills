@@ -1,8 +1,6 @@
 # Canvas App YAML - Responsive GridLayout
 
-Read this guide only when a screen uses `GroupContainer` with
-`Variant: GridLayout`. The planner turns these rules into exact formulas in the screen
-brief; the builder does not read this file.
+Read the relevant sections only when a screen uses `GroupContainer` with `Variant: GridLayout`. The approved contract fixes content order, shared sizing constraints and required viewport behavior. The builder uses direct metadata and these rules to implement local track formulas and reports budgets from the actual YAML.
 
 ## Contents
 
@@ -30,8 +28,9 @@ brief; the builder does not read this file.
    breadcrumb, filters, search and data grids in AutoLayout sections unless the approved
    design explicitly requires one flat grid.
 6. **Use semantic card controls.** Use `ModernCard` for card cells, not a stretched
-   `GroupContainer`. Set `Image: =Blank()` for text-only cards and set every visible text
-   slot.
+   `GroupContainer`. Assign each image-bearing card a concrete stock-image URL or media
+   asset from the shared plan and set every visible slot. Use a planned AutoLayout
+   surface when the cell is intentionally text-only.
 7. **Protect shadows.** Give card grids at least 8px padding on every side where a shadow
    can render.
 8. **Position consistently.** Auto-flow is fine for a uniform card set. If any child uses
@@ -101,8 +100,7 @@ controls.
 - Compute `LayoutGridRows` from the last occupied track and derive `Height` from that
   same value.
 
-This pattern is fragile. The brief must provide the exact positions and formulas; do not
-ask the builder to invent the track map.
+This pattern is fragile. Derive the track map from the approved content order and prove that every child fits at each reachable branch. Escalate incompatible composition constraints; do not require the planner to prewrite a second copy of the local grid formulas.
 
 ## Grid troubleshooting
 

@@ -62,11 +62,11 @@ Example: The `Children` keyword is always a named-object-sequence.
 ```yaml
 Children:
   - child1:
-      Control: Text
+      Control: ModernText
   - child9:
-      Control: Text
+      Control: ModernText
   - child2:
-      Control: Text
+      Control: ModernText
 ```
 The meaning of the `Children` order depends on the parent, but in most cases it reflects either Z-index order or order within a layout container.
 
