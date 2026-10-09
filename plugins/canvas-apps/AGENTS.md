@@ -48,6 +48,7 @@ references/
   EditWorkflow.md              ← EDIT routing and direct/partitioned/planned execution
   EditConformance.md           ← EDIT implementation checks
   PlannedEditHandoff.md        ← Planned EDIT acceptance and screen-wave handoff
+  ValidationWorkflow.md        ← EDIT compile, repair, acceptance, and final validation gates
 agents/
   canvas-create-functionality.md ← CREATE stage 1: owns create-functionality.md
   canvas-create-screens.md       ← CREATE stage 2: owns create-screens.md
