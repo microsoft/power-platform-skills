@@ -118,7 +118,7 @@ function validateCodeProject(projectRoot) {
 
 function readWebsiteIdentity(websitePath) {
   const raw = fs.readFileSync(websitePath, 'utf8');
-  const match = raw.match(/^\s*id\s*:\s*(.+?)\s*$/im);
+  const match = raw.match(/^\s*(?:id|adx_websiteid)\s*:\s*(.+?)\s*$/im);
   if (!match) return { raw, id: null };
   let id = match[1].replace(/\s+#.*$/, '').trim();
   if (
