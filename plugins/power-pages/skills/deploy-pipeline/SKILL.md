@@ -952,10 +952,11 @@ Follow the skill tracking instructions in the reference to record this skill's u
 node "${PLUGIN_ROOT}/scripts/lib/refresh-alm-plan-data.js" \
   --projectRoot "." \
   --phase deploy-pipeline \
+  --live \
   --render
 ```
 
-The helper reads the `docs/alm/last-deploy.json` you just wrote, ingests it into `planData.pipelineMeta.lastDeploy`, drops any pre-deploy "host not yet provisioned" risks, and re-renders `docs/alm-plan.html` so the Pipelines tab shows the actual run state (status, version, component count, activation, site URL). When `docs/.alm-plan-data.json` is absent (the skill was invoked standalone, not part of an ALM plan), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
+The helper reads the `docs/alm/last-deploy.json` you just wrote, ingests it into `planData.pipelineMeta.lastDeploy`, merges per-stage env var values (from `deployment-settings.json`, plus — via `--live` — each plan stage's live `environmentvariablevalues` table, with the file winning), drops any pre-deploy "host not yet provisioned" risks, and re-renders `docs/alm-plan.html` so the Pipelines tab shows the actual run state (status, version, component count, activation, site URL). When `docs/.alm-plan-data.json` is absent (the skill was invoked standalone, not part of an ALM plan), the helper returns `ok:false` as a soft no-op — safe to run unconditionally.
 
 This step is what keeps the rendered plan current — `plan-alm` is a planner and does not refresh the plan itself, so each execution skill owns its own post-run refresh. Running it more than once is idempotent (same input → same output).
 
