@@ -8,6 +8,8 @@ not as a constraint on visual design, page composition, layout, branding, or mod
 Custom design and layout are required on the customization path, not an optional enhancement.
 Reuse needed native forms, lists, content snippets and other components inside that custom
 composition; do not deliver the starter layout with only different content, imagery or colors.
+Unneeded starter sections and component placements may be removed for the fresh composition;
+preserve required functionality and explicit user exceptions, not everything the template contains.
 Then coordinate a polished, image-rich design through the existing customization and styling
 owners, unless the user explicitly chooses to keep the bare template.
 Use approved direct HTTPS image URLs for image additions, not downloaded/imported Web Files.
@@ -406,6 +408,8 @@ On **Customize now**, invoke `/customize-declarative-site` through the `Skill` t
 - the user's original site intent, when present;
 - the requirement for a custom modern page composition, layout, branding and presentation,
   reusing needed native forms/lists/snippets rather than their surrounding starter layout.
+  Allow removal of unneeded starter sections and component placements within the approved scope,
+  without deleting backing records or discarding required capabilities.
   Record it in the existing `summary` and
   `newSiteDesign.composition` brief and carry it through `designContext`; do not default to retaining
   the starter arrangement or ask for separate redesign permission merely because it differs;

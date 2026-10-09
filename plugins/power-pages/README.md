@@ -115,6 +115,8 @@ whether it was provisioned by `/create-site` or created manually in Design Studi
 - New-site plans separate reusable components from custom Home/primary-journey composition,
   map layout work to native owners, and flag an unchanged starter layout during final verification;
   existing-site narrow edits remain preservation-first unless a redesign is requested
+- Can remove unneeded starter sections and component placements for a fresh approved layout,
+  while preserving required functionality, explicit preservation preferences and backing records
 - Preserves platform behavior and explicit visual preferences, resolves dependencies before
   consumers run, and applies guarded styling after structural authoring
 - Verifies and commits the combined local result, then optionally hands off to `/deploy-site`

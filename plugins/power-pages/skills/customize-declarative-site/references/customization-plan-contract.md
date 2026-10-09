@@ -134,6 +134,10 @@ Follow **New-site custom layout planning** in `content-and-page-compositions.md`
 template-derived requirements and reusable forms/lists/snippets from the new composition.
 Record the proposed Home/primary-journey sections and component destinations in actual native
 operation `inputs`, with reusable source/bindings in `preserve`, before final styling.
+Unneeded starter sections and component placements may be removed. Describe what is removed
+and why in the existing operation `summary` and `inputs`, with required source and explicit
+exceptions in `preserve`. Use the native owner's supported `replace` or scoped `modify`;
+do not add a deletion schema, delete backing records or treat template presence as a requirement.
 List any specifically retained appearance or layout as an explicit preference rather than
 inferring it from `site.templateName`. Copy/image substitutions plus CSS on the starter layout
 do not fulfill this brief.

@@ -137,6 +137,9 @@ forms, lists, snippets and Liquid dependencies within that composition while pre
 bindings, editable regions and runtime behavior. A working form does not make its surrounding
 layout immutable. Apply the explicit header/footer source scope when supplied; a custom look
 does not require changing the website binding or dropping authentication/navigation branches.
+Within that approved source scope, remove unneeded starter sections and component placements
+whose removal and dependencies the plan accounts for. Do not retain them solely for template
+fidelity, remove required rendering contracts, or delete their backing records or unrelated callers.
 
 Do not implicitly create a page template. A web template used as an include,
 base layout, derived layout, header/footer, or reusable source does not need one.

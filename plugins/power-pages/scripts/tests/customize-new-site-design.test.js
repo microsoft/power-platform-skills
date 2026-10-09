@@ -253,7 +253,7 @@ test('existing-site schema-1 plans need neither a new design brief nor added ima
   assert.equal(validateCustomizationPlan(plan), plan);
 });
 
-test('custom Home layout and reusable native source survive approval and final styling handoff', async (t) => {
+test('custom Home layout, approved removals and reused native source survive approval and styling handoff', async (t) => {
   const root = temporaryRoot(t);
   const plan = externalImagePlan();
   plan.site.name = 'Contoso Student Camp';
@@ -263,6 +263,7 @@ test('custom Home layout and reusable native source survive approval and final s
     + 'program discovery and a registration path; retain the logo at the user-requested size.';
   const reusedSource = ["{% include 'Program List' %}", "{% entityform name: 'Registration' %}",
     "{{ snippets['Camp/Eligibility'] }}"];
+  const removal = 'Remove the starter carousel and unused newsletter form placement; neither serves the camp journey.';
   plan.assets[0].placements = [{
     page: 'Home', section: 'Student welcome', usage: 'Responsive editorial image', scope: 'page',
   }];
@@ -270,7 +271,7 @@ test('custom Home layout and reusable native source survive approval and final s
   content.id = 'recompose-home';
   content.skill = 'author-webpage-content';
   content.action = 'replace';
-  content.summary = 'Replace the starter Home layout, retaining required native program components.';
+  content.summary = `Replace the starter Home layout, retaining required native program components. ${removal}`;
   content.target = { path: 'web-pages/home/content-pages/Home.en-US.webpage.copy.html' };
   content.inputs = {
     targetFile: content.target.path, locale: 'en-US', bootstrapMajor: 5, mode: 'replace',
@@ -289,10 +290,12 @@ test('custom Home layout and reusable native source survive approval and final s
     }],
     details: `Place the existing ${reusedSource[0]} after the Program discovery heading. `
       + `Place ${reusedSource[2]} then ${reusedSource[1]} after the Registration heading. `
-      + 'Retain each verified source block unchanged at its destination; do not add new element types.',
+      + 'Retain each verified source block unchanged at its destination; do not add new element types. '
+      + removal,
   };
   content.preserve = [...reusedSource, 'Program and registration data bindings.',
-    'User-approved logo, native markers, Liquid behavior and en-US locale scope.'];
+    'User-approved logo, native markers, Liquid behavior and en-US locale scope.',
+    'The underlying newsletter form record and unrelated callers.'];
   content.expectedOutputs = ['localizedTargetFile'];
   plan.operations[1].dependsOn = [content.id];
 
@@ -307,6 +310,7 @@ test('custom Home layout and reusable native source survive approval and final s
   const review = await renderReviewedPlan(plan, path.join(root, 'review.html'), { check: successfulImageCheck });
   const contentReview = renderDocument(fs.readFileSync(review.output, 'utf8')).get('componentChanges').innerHTML;
   assert.match(contentReview, /Replace the starter Home layout/);
+  assert.ok(contentReview.includes(removal), 'Approval shows the removed components and rationale.');
   const wireframe = contentReview.slice(contentReview.indexOf('<div class="composition">'));
   assert.equal((wireframe.match(/class="composition-row"/g) || []).length, 3);
   const sectionNames = [...wireframe.matchAll(/class="composition-heading"><strong>Section \d+: ([^<]+)<\/strong>/g)]
@@ -318,6 +322,7 @@ test('custom Home layout and reusable native source survive approval and final s
   const resolved = updateExecution({ projectRoot: root, action: 'resolve', operationId: content.id });
   assert.deepEqual(resolved.operation.preserve, content.preserve);
   assert.deepEqual(resolved.resolvedInputs, content.inputs);
+  assert.ok(resolved.resolvedInputs.details.includes(removal));
   assert.deepEqual(resolved.operation.preserve.slice(0, 3), reusedSource);
   assert.equal(resolved.designContext.composition, plan.newSiteDesign.composition);
   assert.throws(() => updateExecution({
@@ -332,6 +337,9 @@ test('custom Home layout and reusable native source survive approval and final s
   assert.deepEqual(styling.designContext, resolved.designContext);
   assert.deepEqual(styling.imageChecks, resolved.imageChecks);
   const approvedHash = planHash(plan);
+  const changedRemovals = structuredClone(plan);
+  changedRemovals.operations[0].inputs.details += ' Also remove the required registration form.';
+  assert.notEqual(planHash(changedRemovals), approvedHash, 'Removal scope is bound to the approved plan.');
   plan.preservation = 'Discard the required registration behavior.';
   assert.notEqual(planHash(plan), approvedHash);
   fs.writeFileSync(dataPath, JSON.stringify(plan), 'utf8');

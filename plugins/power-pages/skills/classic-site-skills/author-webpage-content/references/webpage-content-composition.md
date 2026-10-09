@@ -132,6 +132,10 @@ not a visual copy of the starter page. If a required component cannot be safely 
 through a supported contract, return that dependency to its owner; never replace it with a
 static lookalike or silently discard it for a cleaner design. Final CSS belongs to `style-site`.
 This does not broaden an unrelated existing-site `append` or `modify` into a whole-page redesign.
+An approved new-site composition may remove unneeded starter sections and component placements,
+including unused form/list/snippet references. Preserve the required native markers and behavior
+of retained/new content, not the wrappers of a removed section. Account for the removed source
+and its dependencies; leave backing records, data and unrelated callers unchanged.
 
 Use this workflow for `create` and `replace`:
 
@@ -140,6 +144,8 @@ Use this workflow for `create` and `replace`:
 3. For `replace`, inventory the current top-level sections, Liquid blocks, comments, and
    standalone nodes. Require the preservation contract to account for anything that
    cannot safely be discarded.
+   Distinguish required or explicitly preserved source from approved removals. An omitted
+   component with unknown purpose or dependencies remains unresolved, not implicitly disposable.
 4. For each reused component, resolve its exact existing source boundary or Liquid/snippet
    reference and destination in the approved composition before rebuilding its surroundings.
    Keep the existing native block/reference and bindings intact; do not regenerate a form/list
@@ -157,6 +163,7 @@ Use this workflow for `create` and `replace`:
    page wrapper.
 9. Confirm that every requested element and reused component appears at its planned destination
    exactly once; reconcile required source/bindings with the original inventory.
+   Confirm approved removals are absent from the source rather than hidden with CSS.
 10. Write the complete body only after the full composition is internally coherent.
 
 An empty page is valid only when the resolved plan explicitly requests no body content.
@@ -194,6 +201,8 @@ with unrelated component redesign.
 Treat replacement as destructive. Preserve only the nodes explicitly required by the
 handoff, but do not discard unaccounted Liquid, scripts, forms, lists, entities, or
 custom markup merely because they are absent from a visual mockup.
+Unneeded starter sections and components accounted for as removals in an approved new-site
+handoff may be discarded within that boundary; this does not authorize deleting their records.
 
 ## Locale rules
 
@@ -227,6 +236,7 @@ resolved for that locale.
 - [ ] Each new or migrated section matches one supported layout.
 - [ ] Direct columns have the expected count, width classes, and order.
 - [ ] Every planned element appears exactly once in its assigned column and order.
+- [ ] Approved removals are absent; required and explicitly preserved source remains intact.
 - [ ] No `<!-- COMPONENT_HTML -->`, sample content, unresolved token, or TODO remains.
 - [ ] No web-file URL, internal route, snippet name, or Liquid value remains symbolic.
 - [ ] Text, links, images, buttons, videos, and spacers pass their component checklist.

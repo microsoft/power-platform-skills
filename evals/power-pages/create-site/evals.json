@@ -173,6 +173,23 @@
         "The result is described as an unchanged baseline, not a completed custom design",
         "The ordinary explicit model, environment and provisioning consent boundaries remain intact"
       ]
+    },
+    {
+      "id": 8,
+      "prompt": "Continue creating our new classic camp site from the downloaded template. Give it a fresh design and layout. The starter carousel and newsletter sign-up form are not needed and can be removed. Keep the working program list, registration form, our logo and their required behavior. Do not delete any underlying records or deploy.",
+      "expected_output": "The customization plan accounts for removing the unused starter carousel and newsletter form placement, retaining required program/registration behavior and the logo, and composing a fresh native layout. It records removal rationale in existing operation summaries/inputs and preservation in preserve, then uses supported native replacement or scoped modification. Removed placements disappear from source rather than being hidden by CSS; backing records, permissions, data and unrelated callers remain untouched.",
+      "files": [],
+      "expectations": [
+        "Template presence alone does not make a section or component mandatory; reuse is optional for unneeded components, not required for every native form/list/snippet",
+        "The plan inventories retain, relocate, replace and remove decisions against actual requirements and explicit preservation preferences, including the carousel and unused newsletter form placement",
+        "Removal scope and rationale are visible in the existing approved operation summaries and inputs without adding a schema, deletion action or approval gate",
+        "Supported native replace or scoped modify operations remove the planned source boundaries after inspecting dependent scripts, IDs, Liquid scope and callers; unknown dependencies are resolved before writing",
+        "The working program list, registration form, logo, native rendering contracts, locale scope and required behavior remain intact in the new composition",
+        "Removing the newsletter form placement does not delete its basic-form record, permissions, underlying data or other callers",
+        "Final source verification checks that approved removals are absent rather than hidden by CSS, while retained components and dependencies remain intact",
+        "Image verification, exact-plan approval and separate styling approval remain required; no deployment or runtime-proof claim is made",
+        "This new-site permission does not broaden unrelated existing-site narrow edits or override explicit preservation choices"
+      ]
     }
   ]
 }

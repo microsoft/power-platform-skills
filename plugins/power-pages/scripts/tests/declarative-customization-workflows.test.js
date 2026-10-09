@@ -281,6 +281,35 @@ test('component reuse preserves existing source without forcing the surrounding 
   assert.match(webTemplate, /does not require changing the website binding or dropping authentication\/navigation branches/);
 });
 
+test('new-site layout work may remove unneeded starter sections and component placements without deleting records', () => {
+  const shared = read(path.join('references', 'site-design-quality.md'));
+  const creation = read(path.join('skills', 'create-site', 'workflows', 'declarative-site.md'));
+  const customization = read(path.join('skills', 'customize-declarative-site', 'SKILL.md'));
+  const planning = read(path.join('skills', 'customize-declarative-site', 'references', 'content-and-page-compositions.md'));
+  const contract = read(path.join('skills', 'customize-declarative-site', 'references', 'customization-plan-contract.md'));
+  const content = read(path.join('skills', 'classic-site-skills', 'author-webpage-content', 'SKILL.md'));
+  const composition = read(path.join('skills', 'classic-site-skills', 'author-webpage-content',
+    'references', 'webpage-content-composition.md'));
+  const webTemplate = read(path.join('skills', 'classic-site-skills', 'author-web-template', 'SKILL.md'));
+  assert.match(shared, /remove, replace or reorder unneeded out-of-box sections and\s+components/);
+  assert.match(shared, /Presence in the starter template\s+alone does not make something a requirement/);
+  assert.match(creation, /Allow removal of unneeded starter sections and component placements/);
+  assert.match(planning, /retain, relocate, replace or remove/);
+  assert.match(planning, /what is removed and why/);
+  assert.match(planning, /does not delete its definition, permissions,\s+underlying data or other callers/);
+  assert.match(contract, /existing operation `summary` and `inputs`/);
+  assert.match(contract, /do not add a deletion schema, delete backing records/);
+  for (const owner of [content, webTemplate]) {
+    assert.match(owner, /remove unneeded starter sections (?:and|or) component placements/i);
+    assert.match(owner, /backing records/);
+  }
+  assert.match(composition, /not the wrappers of a removed section/);
+  assert.match(composition, /unknown purpose or dependencies remains unresolved/);
+  assert.match(composition, /does not broaden an unrelated existing-site `append` or `modify`/);
+  assert.match(customization, /approved removals are absent from the authored source, not merely hidden by CSS/);
+  assert.match(customization, /required components, their dependencies and explicitly preserved regions remain intact/);
+});
+
 test('the existing final review treats an unimplemented custom layout as incomplete without adding gates', () => {
   const customization = read(path.join('skills', 'customize-declarative-site', 'SKILL.md'));
   const review = customization.split('## Phase 6:')[1].split('## Phase 7:')[0];

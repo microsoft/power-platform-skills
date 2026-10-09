@@ -135,12 +135,15 @@ reference, not a constraint on appearance, page composition, layout, branding, o
 Design the complete modern visitor experience from the user's intent, not the starter arrangement.
 Custom design and layout are required. Reuse needed native forms, lists, content snippets and
 their verified bindings as components; do not reuse the template's page composition by default.
+Remove or replace unneeded starter sections and component placements when the fresh composition
+calls for it. Template presence alone is not a preservation requirement; account for removals
+and their dependencies in the existing plan, without deleting backing records or unrelated callers.
 Honor explicit preservation preferences or a choice to keep the template unchanged; otherwise
 do not require separate redesign permission just to depart from it. Reuse the shared quality
 reference to choose a coherent typography system, role-based palette, spacing rhythm, responsive composition, and
 meaningful hero/supporting imagery. Make context-specific design decisions without asking for
 every font or color. Preserve required capabilities/content, valid PAC metadata, record identities
-and relationships, forms/lists and data bindings, navigation, authentication, and locale scope.
+and relationships, required forms/lists and data bindings, navigation, authentication, and locale scope.
 Native Bootstrap/Studio-compatible serialization is protected, not the template's section
 arrangement: plan supported recomposition through the native owners before final styling.
 Existing-site and narrow edits remain preservation-first unless redesign is requested.
@@ -215,6 +218,9 @@ owning skill supports the requested operation.
    For new-site design, map the proposed layout to actual native composition operations on Home
    and the primary journey. Include web-template/page-template or shared-shell work when that
    source owns the layout; reusing a form/list/snippet does not require retaining its whole page.
+   Include planned section/component removals and their rationale in operation summaries and
+   resolved inputs; use supported native `replace` or scoped `modify` operations, not invented
+   deletion actions or CSS hiding. Retain required source/bindings and explicit exceptions in `preserve`.
    A plan containing only copy/image substitutions, additional pages and styling while leaving
    the starter Home/layout intact is incomplete unless that scope was explicitly preserved.
 3. Order operations by actual dependencies, not by skill name. Assets/snippets/templates normally
@@ -398,6 +404,8 @@ Do not invoke a child skill for an empty operation, and do not invoke deployment
    the downloaded baseline: copy/image swaps or CSS on an unchanged starter layout do not satisfy
    a custom-layout brief. Record missing planned composition work as incomplete and return it to
    its native owner through the existing revision/approval flow, not a completed modern design.
+   Verify that approved removals are absent from the authored source, not merely hidden by CSS,
+   and that required components, their dependencies and explicitly preserved regions remain intact.
    A changed section count or new class name alone is not evidence of custom composition.
    Reuse child verification and the approved image-check receipt; do not repeat unchanged network
    probes, add a screenshot gate, or run a critique per operation. Report observed local gaps and

@@ -38,6 +38,11 @@ and layout are required: inventory reusable forms/lists/snippets separately from
 composition, map both into native owner operations, and compare the source result with that plan
 at the existing final review. Copy/image swaps and CSS over the unchanged starter layout are not
 completion. Do not broaden unrelated existing-site edits into redesigns.
+Unneeded out-of-box sections and component placements may be removed for the approved fresh
+design. Inventory retain/relocate/replace/remove decisions against actual requirements; template
+presence alone does not make a component mandatory. Keep removal rationale in existing plan
+summaries/inputs, preserve required dependencies and explicit exceptions, and verify source
+removal rather than CSS hiding. Removing a placement does not delete its backing records or data.
 
 New classic creation recommends Enhanced with Bootstrap 5, with explicit model/admin approval,
 the helper's Bootstrap-filtered template catalog, and downloaded Bootstrap verification using

@@ -58,6 +58,10 @@ approval stage:
    navigation/authentication behavior and useful content. Resolve each component's source,
    identity, bindings, callers, locale and any positioning dependency. Preserving a form's
    behavior does not mean preserving the hero or section arrangement around it.
+   Classify existing sections and component placements as retain, relocate, replace or remove
+   against actual requirements and explicit preservation preferences. Unneeded starter components
+   may be removed; their presence alone is not a requirement. Inspect dependencies and callers
+   before dropping a block, and resolve unknown impact rather than silently discarding it.
 2. Design Home and the primary visitor journey from the experience brief before choosing a
    starter-page pattern. Specify the first-screen hierarchy, section purposes and sequence,
    supported column composition, image/copy balance, actions, responsive stacking and placements
@@ -68,11 +72,17 @@ approval stage:
    required source/bindings and explicit user exceptions in `preserve`. Use
    `newSiteDesign.composition` for the overall rationale, not as a substitute for those executable
    details. Resolve all required layout work before the final dependent `style-site` operation.
-4. State what is reused as a component, what surrounding composition changes, and what remains
-   only because the user explicitly requested it. Show these decisions in the existing plan's
-   summaries, inputs and wireframes. A preserved logo or working registration form does not
+4. State what is reused as a component, what is removed and why, what surrounding composition
+   changes, and what remains only because the user explicitly requested it. Show these decisions
+   in the existing plan's summaries, inputs and wireframes. A preserved logo or working registration form does not
    preserve the whole page. Reuse generic native grid primitives without copying the starter
    page's full composition; do not churn IDs or change sections merely to inflate a diff.
+
+Implement removals through the owning skill's supported whole-page `replace` or scoped `modify`,
+with the removed source boundaries accounted for and the retained composition fully resolved.
+Do not invent a `delete` action or a removal element type, or hide discarded content with CSS.
+Removing an unused form/list/snippet placement does not delete its definition, permissions,
+underlying data or other callers. Keep unrelated records and files unchanged.
 
 For example, a student-camp site can reuse a verified program list, registration form and
 eligibility snippet while composing a student-focused first screen, an activity-led introduction,
@@ -91,6 +101,8 @@ and downloaded baseline. A rename, copy/image swap or palette change on the same
 composition is not a custom-layout result. Missing planned layout work is incomplete, even
 when individual edits validate. Report rendered appearance as unobserved until actually checked;
 no browser, screenshot, diff-size threshold or additional approval gate is introduced.
+Confirm approved removals are absent from the authored source and retained capabilities still have
+their required source, bindings and dependencies; a smaller section count alone is not the goal.
 
 ## Applying page blueprints
 

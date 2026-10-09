@@ -131,6 +131,9 @@ An approved new-site handoff requires custom composition using supported native 
 columns and elements, not just text/image substitutions. Follow its resolved composition and
 `designContext`, not the creation template's arrangement. Retain/place required existing components through the
 resolved-source rules in **Whole-page composition**, without inventing new native element types.
+Remove unneeded starter sections or component placements when the approved handoff accounts for
+their removal and dependencies. Do not retain them solely because they came with the template,
+hide them with CSS, or delete their backing records.
 Preserve required content/capabilities and native serialization as described in **Whole-page
 composition**; an unrelated existing-site `append` or `modify` remains a narrow edit.
 

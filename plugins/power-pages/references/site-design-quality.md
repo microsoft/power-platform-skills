@@ -36,8 +36,14 @@ An individually useful asset or native grid pattern may be reused; that does not
 the template's overall arrangement. Honor an explicit preservation preference only for its named
 scope, or **Keep the template unchanged** for the whole baseline.
 
+For a fresh new-site design, remove, replace or reorder unneeded out-of-box sections and
+components, including unused form/list/snippet placements. Presence in the starter template
+alone does not make something a requirement. Account for removals in the approved composition;
+reuse is optional for components that serve no required purpose and are not explicitly preserved.
+Removing a placement does not authorize deleting its backing records, data or unrelated callers.
+
 Visual freedom does not authorize discarding required capabilities or content. Preserve valid
-PAC metadata, record identities and relationships, forms/lists and data bindings, authentication,
+PAC metadata, record identities and relationships, required forms/lists and data bindings, authentication,
 navigation behavior, locale scope, and supported Bootstrap/Studio-compatible serialization.
 Native owners may recompose sections, columns, and elements within that contract; the original
 template arrangement is not protected. Use the existing approved operations and final styling
