@@ -110,8 +110,8 @@ whether it was provisioned by `/create-site` or created manually in Design Studi
   be explicitly declined. Existing template images can be reused, and explicit Web File imports
   remain available for other customization work
 - Sources external Unsplash images through WebSearch and direct CDN URLs, like SPA creation;
-  photo-page and photographer metadata are optional when unavailable. License information and
-  pre-approval checks of the exact image URLs remain required
+  photo-page and photographer metadata are optional when unavailable. License information remains
+  required; network checks are opt-in, and unchecked images are explicitly labeled unverified
 - New-site plans separate reusable components from custom Home/primary-journey composition,
   map layout work to native owners, and flag an unchanged starter layout during final verification;
   existing-site narrow edits remain preservation-first unless a redesign is requested

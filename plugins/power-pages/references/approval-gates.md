@@ -493,7 +493,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
-| `customize-declarative-site:4.approve` | gate | plan | 4 | External review JSON, rendered HTML, and successful exact-plan external-image checks complete — *"Approve and customize / Revise plan / Cancel"* | plan-artifacts |
+| `customize-declarative-site:4.approve` | gate | plan | 4 | External review JSON and rendered HTML complete; external images explicitly unverified or supported by successful requested exact-plan checks — *"Approve and customize / Revise plan / Cancel"* | plan-artifacts |
 | `customize-declarative-site:7.deploy` | gate | plan | 7 | Verified local customization — *"Deploy now / Keep changes local"* | local-customization |
 
 ---

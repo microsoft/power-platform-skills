@@ -225,6 +225,13 @@ test('website identity rejects conflicting aliases, duplicate keys and nested sa
     assert.equal(readWebsiteIdentity(filePath).id, WEBSITE_ID);
   }));
 
+test('readWebsiteIdentity supports Standard model adx_websiteid', () =>
+  withTempDir((root) => {
+    const filePath = path.join(root, 'website.yml');
+    fs.writeFileSync(filePath, `adx_websiteid: ${WEBSITE_ID}\n`);
+    assert.equal(readWebsiteIdentity(filePath).id, WEBSITE_ID);
+  }));
+
 test('preserves the existing code-site validation path', () =>
   withTempDir((root) => {
     fs.mkdirSync(path.join(root, '.git'));

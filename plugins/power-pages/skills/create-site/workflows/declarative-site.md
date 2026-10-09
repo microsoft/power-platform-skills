@@ -417,6 +417,11 @@ On **Customize now**, invoke `/customize-declarative-site` through the `Skill` t
   let the customizer complete only missing decisions rather than asking for them again;
 - `creationIntent: "new-site"` and `verifiedBootstrapMajor: <BOOTSTRAP_VERSION>` with the inspected
   evidence; for the Standard path, include the user's explicit compatibility choice;
+- the requirement to include header branding, navigation styling and mobile treatment in the
+  existing customization plan, including an explicit website-appropriate logo or wordmark
+  decision. Pass any supplied approved logo and known brand requirements; replace an unsuitable
+  starter logo rather than inheriting it by default, and honor explicit preservation preferences.
+  Header work is part of the custom composition, not a replacement for page design;
 - `imageDelivery: "external-url"`: record this as `newSiteDesign.imageDelivery` and use direct
   approved HTTPS URLs for new images. Skip image staging/downloads, `author-web-file` image
   imports, and fabricated import dependencies. Retain source/license, alt text, sizing/crop,

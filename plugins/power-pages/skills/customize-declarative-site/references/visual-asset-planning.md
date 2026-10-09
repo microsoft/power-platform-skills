@@ -27,36 +27,49 @@ For each external image:
   restrictions. Power Pages permissions do not protect external URLs. Never relax CSP
   automatically; choose a permitted source or obtain separate approval for policy changes.
 - Keep localized alt text, aspect ratio, reserved layout space, crop/focal point, and appropriately
-  sized CDN variants. The review renderer must verify the final image resource before approval;
-  source-page evidence and syntactic URL validation alone are not proof of availability.
+  sized CDN variants. Source-page evidence and syntactic URL validation alone are not proof of
+  availability. Keep unchecked external images explicitly **unverified**.
 
-`render-customize-declarative-site-plan.js` checks each unique `externalUrl` once before writing
-review HTML. It uses up to three concurrent unauthenticated HTTPS GETs, a 20-second deadline per
-URL including redirects, at most three redirects, and the existing 15 MiB asset byte limit.
+### Optional network checks
+
+`render-customize-declarative-site-plan.js` makes no image-network requests by default. It
+validates the plan and renders external images with an explicit unverified notice, without
+creating an image-check report. Its result includes `imageChecks: null`, `verifiedImages: 0`,
+and the number of unique unchecked URLs in `unverifiedImages`. Normal review and publication
+can proceed in this state; neither a mandatory check-choice question nor a live site preview
+is required.
+
+Only when the user requests source verification, append `--verifyImages true` to the review
+command. The existing verifier checks each unique `externalUrl` once before writing review HTML.
+It uses up to three concurrent unauthenticated HTTPS GETs, a 20-second deadline per URL including
+redirects, at most three redirects, and the existing 15 MiB asset byte limit.
 Every destination must resolve to public Internet addresses; DNS answers are pinned for the
 request. No cookies, auth headers, referrers, or image files are retained.
 
 Require HTTP 200, a supported image Content-Type, non-empty bytes, and matching image content
 signatures (PNG/APNG, JPEG, WebP, GIF, AVIF, SVG, or ICO). This is an HTTP/content check, not a full
 browser decode or visual-fidelity guarantee. For oversized assets, choose a smaller CDN variant.
-A 404, HTML/gallery response, timeout, or other failure blocks review generation with the affected
+A requested check's 404, HTML/gallery response, timeout, or other failure blocks review generation with the affected
 asset names and URLs. Select a working direct resource and update both its manifest entry and
 all consumer inputs before rendering again; never repeatedly retry a known 404 or substitute
-an unapproved image after approval.
+an unapproved image after approval. Do not disable checking to hide a known failure or silently
+fall back to unchecked HTML.
 
 Successful checks are stored in `plan.html.image-checks.json`, bound to the complete plan hash
-and exact URLs, and displayed in the review. Publication requires that report and preserves it
-in `current-execution.json`; `--action resolve` passes it to child skills without more requests.
-Reuse it for unchanged URLs within that approved run. A revised plan requires a fresh check and
-approval. The timestamps describe observed availability, not a promise that remote content
-cannot change. Old approved receipts without reports remain resumable without claiming checks
-that were not performed.
+and exact URLs, and displayed in the review. If the approved review included checks, publish with
+`--imageChecks` pointing to that report; otherwise omit the argument. Supplied reports must
+validate and are preserved in `current-execution.json`; `--action resolve` passes them to child
+skills without more requests. Missing, stale or failed supplied reports never silently become
+unchecked publication. Reuse valid evidence within that approved run. A revised plan requires
+fresh review and approval, with fresh checks only when requested. The timestamps describe
+observed availability, not a promise that remote content cannot change. Receipts without reports,
+including legacy receipts, remain resumable without claiming checks that were not performed.
 
 The generated plan lazily displays approved hosted images in the browser with localized preview
 alt text, the planned aspect ratio, and a no-referrer policy. Retain clickable image/source links,
 known attribution, license, and hosting caveats alongside the preview. If an image cannot load, show an
 explicit unavailable state with an image-source link, not a broken-image box or endless loading
-message. Pure HTML serialization and publication do not fetch images; the pre-approval check
+message. Pure HTML serialization and publication do not fetch images; an optional source check
 reads them in memory without staging files or importing Web Files.
 Browser preview requests go to the approved provider; successful previews do not prove site CSP,
 final crop/focal-point treatment, or Studio/runtime rendering. A local-only or newly authored image
@@ -172,10 +185,11 @@ continue with a direct CDN URL found through WebSearch. If none is found, search
 suitable Unsplash photo or request an approved hosted URL. Continue content/layout planning
 while resolving imagery, but do not request approval with unresolved images.
 
-Keep the existing pre-approval image checks: verify the **final direct image URL**, not the photo
-page. A failed CDN image check still blocks approval HTML; successful checks remain bound to
-the exact plan and published through `--imageChecks`. Do not download it to a file; the renderer's
-bounded in-memory verification is the only preparation needed for external delivery.
+Do not download the image to a file. Network verification is optional as described above;
+when requested, check the **final direct image URL**, not the photo page. A failed CDN image
+check still blocks approval HTML for that checked review; successful checks remain bound to
+the exact plan and are published through `--imageChecks`. Without checks, preserve the explicit
+unverified status.
 
 For an explicitly selected Web File delivery outside that creation path, retain the required
 photo page, photographer, license and `source.downloadUrl`, then stage the selected image:
@@ -217,15 +231,30 @@ Studio placeholder SVG payloads.
 
 ## Logos and favicons
 
-Do not silently invent an official company logo. Prefer, in order:
+During every header update, match the logo or wordmark to the approved website name and brand
+requirements. Do not preserve an unrelated starter logo merely because it came with the template.
+Do not silently invent an official company logo or use stock photography as a substitute.
+Resolve the direction using known inputs:
 
-1. preserve the verified current logo;
-2. use a supplied approved logo;
-3. propose a clearly labeled typography-only wordmark or simple original geometric mark;
-4. make no logo change.
+1. use a supplied approved logo when the requirements call for it;
+2. retain the verified current logo only when it meets those requirements or the user explicitly
+   requests preservation, and record why;
+3. if no suitable logo is available, propose a clearly labeled typography-only wordmark or simple
+   original geometric mark for approval in the existing customization plan;
+4. when brand authorization or required source material is unresolved, ask only for that missing
+   decision in the normal clarification round. Report unresolved logo work as incomplete rather
+   than silently choosing no change. Honor an explicit no-logo or no-change request.
+
+A typography-only wordmark uses native text/HTML. Image marks still follow the resolved delivery
+contract: new-site additions need an approved hosted URL, not an automatic upload or a new Web File.
+Keep logo and meaningful content imagery separate; a logo alone does not satisfy the new-site
+imagery requirement.
 
 A logo or favicon change is site-wide even when only one Web File is imported. Resolve the exact
-existing snippet, template, site setting, or other caller. Update only that caller after approval.
+existing snippets, templates, site settings, or other callers, including separate desktop/mobile
+logo variants and requested locales. Update only those approved callers, with the correct brand
+name/alternative text, home-link destination, aspect ratio and responsive sizing intent. Do not
+silently expand a header-logo change to favicons, footer branding or unrequested locales.
 Do not replace the complete website header merely to change a logo, and preserve navigation,
 search, language selection, sign-in behavior, caching assumptions, and anonymous/authenticated
 branches.

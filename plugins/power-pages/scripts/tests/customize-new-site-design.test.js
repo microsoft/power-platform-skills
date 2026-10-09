@@ -66,6 +66,195 @@ function temporaryRoot(t) {
   return root;
 }
 
+test('header changes are visible, hash-bound and prevent early styling without a new schema', async (t) => {
+  for (const scope of ['new-site', 'existing-site-redesign']) {
+    const root = temporaryRoot(t);
+    const plan = externalImagePlan();
+    const header = {
+      id: 'customize-site-header',
+      skill: 'author-web-template',
+      action: 'modify',
+      summary: 'Align the site header with the editorial page design.',
+      target: {
+        name: 'Header',
+        targetFile: path.join('web-templates', 'header', 'Header.webtemplate.source.html'),
+      },
+      locales: plan.site.languages,
+      inputs: {
+        scope: 'site',
+        details: 'Group primary navigation beside the approved wordmark and retain the native mobile menu.',
+      },
+      dependsOn: [],
+      outputBindings: {},
+      preserve: ['Keep the header binding, navigation, sign-in, languages and dynamic substitution regions.'],
+      expectedOutputs: ['sourcePath'],
+    };
+    plan.summary = 'Design the page composition and a coordinated site header.';
+    plan.newSiteDesign.composition += ' Header: grouped navigation beside the approved wordmark.';
+    if (scope === 'existing-site-redesign') delete plan.newSiteDesign;
+    plan.operations.splice(-1, 0, header);
+    plan.operations.at(-1).dependsOn.push(header.id);
+    assert.equal(plan.schemaVersion, 1);
+    assert.equal(validateCustomizationPlan(plan), plan);
+
+    let probes = 0;
+    const review = await renderReviewedPlan(plan, path.join(root, 'review.html'), {
+      verifyImages: true,
+      check: (url) => { probes += 1; return successfulImageCheck(url); },
+    });
+    const dataPath = path.join(root, 'approved.json');
+    fs.writeFileSync(dataPath, JSON.stringify(plan), 'utf8');
+    const published = publishApprovedPlan({ projectRoot: root, dataPath, imageChecksPath: review.imageChecks });
+    const document = renderDocument(fs.readFileSync(published.currentHtml, 'utf8'));
+    assert.equal(document.get('summary').textContent, plan.summary);
+    const componentCard = document.get('componentChanges').innerHTML;
+    assert.ok(componentCard.includes(header.summary));
+    assert.ok(componentCard.includes(header.inputs.details));
+    assert.ok(componentCard.includes(header.preserve[0]));
+    assert.match(componentCard, /Page or component[\s\S]*Header/);
+    assert.equal(document.has('technicalOperations'), false);
+
+    const resolved = updateExecution({ projectRoot: root, action: 'resolve', operationId: header.id });
+    assert.deepEqual(resolved.resolvedInputs, header.inputs);
+    assert.deepEqual(resolved.operation.target, header.target);
+    assert.deepEqual(resolved.operation.preserve, header.preserve);
+    if (plan.newSiteDesign) {
+      assert.equal(resolved.designContext.composition, plan.newSiteDesign.composition);
+      assert.ok(document.get('newSiteDesign').innerHTML.includes('Header: grouped navigation'));
+      const earlyStyling = structuredClone(plan);
+      earlyStyling.operations.at(-1).dependsOn = [plan.operations[0].id];
+      assert.throws(() => validateCustomizationPlan(earlyStyling), /depend on all structural/);
+    } else {
+      assert.equal(Object.hasOwn(resolved, 'designContext'), false);
+    }
+    assert.throws(() => updateExecution({
+      projectRoot: root, action: 'resolve', operationId: 'style-new-site',
+    }), /incomplete dependencies:.*customize-site-header/);
+    assert.equal(probes, 1, 'Publication and header handoff reuse the checked image receipt.');
+
+    const changed = structuredClone(plan);
+    changed.operations.find((operation) => operation.id === header.id).inputs.details = 'Unapproved replacement header.';
+    assert.notEqual(planHash(changed), planHash(plan));
+    fs.writeFileSync(dataPath, JSON.stringify(changed), 'utf8');
+    assert.throws(() => publishApprovedPlan({
+      projectRoot: root, dataPath, imageChecksPath: review.imageChecks,
+    }), /stale image checks/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(published.currentJson, 'utf8')), plan);
+  }
+});
+
+test('header logo updates remain visible, hash-bound and resolved before styling without network checks', async (t) => {
+  for (const scope of ['new-site', 'existing-header-update']) {
+    const root = temporaryRoot(t);
+    const plan = externalImagePlan();
+    const logo = {
+      id: 'site-logo',
+      name: 'Approved Contoso Event Portal logo',
+      kind: 'logo',
+      role: 'brand',
+      purpose: 'Replace the unrelated starter logo with the approved website branding.',
+      source: { type: 'user-provided', license: 'User-owned logo approved for this website.' },
+      delivery: 'external-url',
+      externalUrl: 'https://cdn.example.com/brand/contoso-events.svg',
+      placements: [
+        { page: 'All pages', section: 'Desktop header', usage: 'Linked brand image', scope: 'sitewide' },
+        { page: 'All pages', section: 'Mobile header', usage: 'Linked brand image', scope: 'sitewide' },
+      ],
+      visual: { rationale: 'Use the approved website identity.', aspectRatio: '3:1', crop: 'No cropping or stretching.' },
+      accessibility: { decorative: false, altByLocale: { 'en-US': 'Contoso Event Portal' } },
+      preparation: { status: 'remote' },
+    };
+    const operation = {
+      id: 'update-header-logo',
+      skill: 'author-content-snippet',
+      action: 'modify',
+      summary: 'Replace the starter header logo with the approved Contoso Event Portal logo.',
+      target: {
+        name: 'Header/Logo',
+        targetFile: path.join('content-snippets', 'header-logo', 'Header-Logo.en-US.contentsnippet.value.html'),
+      },
+      locales: plan.site.languages,
+      inputs: {
+        scope: 'site',
+        details: 'Update the shared desktop/mobile header logo; retain the home link and size the mark without cropping.',
+        logoUrl: logo.externalUrl,
+        value: `<a href="/"><img src="${logo.externalUrl}" alt="Contoso Event Portal" width="180" height="60"></a>`,
+      },
+      dependsOn: [],
+      outputBindings: {},
+      preserve: ['Keep snippet identity, desktop/mobile callers, navigation, sign-in and locale scope.'],
+      expectedOutputs: ['valuePath'],
+    };
+    plan.summary = operation.summary;
+    plan.assets.push(logo);
+    plan.operations.splice(-1, 0, operation);
+    plan.operations.at(-1).dependsOn.push(operation.id);
+    if (scope === 'existing-header-update') {
+      delete plan.newSiteDesign;
+      plan.assets = [logo];
+      plan.operations.shift();
+      plan.operations.at(-1).dependsOn = [operation.id];
+      assert.deepEqual(plan.operations.map((entry) => entry.skill), ['author-content-snippet', 'style-site']);
+    } else {
+      plan.newSiteDesign.composition += ' Header: use the approved Contoso Event Portal logo on desktop and mobile.';
+    }
+    assert.equal(validateCustomizationPlan(plan), plan);
+    assert.equal(plan.schemaVersion, 1);
+    assert.ok(plan.operations.every((entry) => entry.skill !== 'author-web-file'));
+    const rendered = await renderReviewedPlan(plan, path.join(root, 'review.html'), {
+      check: () => assert.fail('A header logo does not opt into network verification.'),
+    });
+    assert.equal(rendered.imageChecks, null);
+    assert.equal(rendered.unverifiedImages, plan.assets.length);
+    const dataPath = path.join(root, 'approved.json');
+    fs.writeFileSync(dataPath, JSON.stringify(plan), 'utf8');
+    const published = publishApprovedPlan({ projectRoot: root, dataPath });
+    const document = renderDocument(fs.readFileSync(published.currentHtml, 'utf8'));
+    assert.equal(document.get('summary').textContent, operation.summary);
+    assert.ok(document.get('componentChanges').innerHTML.includes(operation.inputs.details));
+    assert.ok(document.get('assetChanges').innerHTML.includes(logo.name));
+    assert.ok(document.get('assetChanges').innerHTML.includes(logo.externalUrl));
+    const resolved = updateExecution({ projectRoot: root, action: 'resolve', operationId: operation.id });
+    assert.deepEqual(resolved.resolvedInputs, operation.inputs);
+    assert.deepEqual(resolved.operation.target, operation.target);
+    assert.deepEqual(resolved.operation.locales, plan.site.languages);
+    assert.equal(Object.hasOwn(resolved, 'imageChecks'), false);
+    assert.throws(() => updateExecution({
+      projectRoot: root, action: 'resolve', operationId: 'style-new-site',
+    }), /incomplete dependencies:.*update-header-logo/);
+
+    const changed = structuredClone(plan);
+    const replacement = 'https://cdn.example.com/brand/unapproved.svg';
+    changed.assets.at(-1).externalUrl = replacement;
+    const changedInputs = changed.operations.find((entry) => entry.id === operation.id).inputs;
+    changedInputs.logoUrl = replacement;
+    changedInputs.value = operation.inputs.value.replace(logo.externalUrl, replacement);
+    assert.equal(validateCustomizationPlan(changed), changed);
+    assert.notEqual(planHash(changed), planHash(plan));
+    fs.writeFileSync(published.currentJson, JSON.stringify(changed), 'utf8');
+    assert.throws(() => updateExecution({
+      projectRoot: root, action: 'resolve', operationId: operation.id,
+    }), /current execution receipt does not match current-plan.json/);
+  }
+});
+
+test('explicit header and logo preservation is visible without adding a no-op operation', (t) => {
+  const root = temporaryRoot(t);
+  const plan = externalImagePlan();
+  const operationsBefore = plan.operations.map((operation) => operation.id);
+  plan.preservation = 'Preserve the existing branded header and logo because the user explicitly requested it.';
+  plan.newSiteDesign.composition += ' Retain the requested header while designing the page composition.';
+  plan.operations.at(-1).inputs.details = 'Style the approved page composition; leave the header unchanged.';
+  plan.operations.at(-1).preserve.push(plan.preservation);
+  const output = path.join(root, 'preserved-header.html');
+  renderCustomizationPlan(plan, output, { emitStatus: false });
+  const document = renderDocument(fs.readFileSync(output, 'utf8'));
+  assert.equal(document.get('preservation').textContent, plan.preservation);
+  assert.ok(document.get('styleChanges').innerHTML.includes(plan.preservation));
+  assert.deepEqual(plan.operations.map((operation) => operation.id), operationsBefore);
+  assert.ok(plan.operations.every((operation) => operation.skill !== 'author-web-template'));
+});
+
 test('new-site design accepts meaningful imagery and transitive styling dependencies', () => {
   const plan = newSitePlan();
   assert.equal(validateCustomizationPlan(plan), plan);
@@ -207,9 +396,8 @@ test('URL-based creation renders exact delivery details and resolves image input
   assert.notEqual(planHash(plan), originalHash);
   const dataPath = path.join(root, 'url-plan.json');
   fs.writeFileSync(dataPath, JSON.stringify(plan), 'utf8');
-  assert.throws(() => publishApprovedPlan({ projectRoot: root, dataPath }), /require --imageChecks/);
   const checkedUrls = [];
-  const review = await renderReviewedPlan(plan, path.join(root, 'review.html'), { check: (url) => {
+  const review = await renderReviewedPlan(plan, path.join(root, 'review.html'), { verifyImages: true, check: (url) => {
     checkedUrls.push(url);
     return successfulImageCheck(url);
   } });
@@ -253,7 +441,8 @@ test('existing-site schema-1 plans need neither a new design brief nor added ima
   assert.equal(validateCustomizationPlan(plan), plan);
 });
 
-test('custom Home layout, approved removals and reused native source survive approval and styling handoff', async (t) => {
+for (const verifyImages of [false, true]) {
+test(`custom Home layout, approved removals and reused native source survive ${verifyImages ? 'checked' : 'unchecked'} approval and styling handoff`, async (t) => {
   const root = temporaryRoot(t);
   const plan = externalImagePlan();
   plan.site.name = 'Contoso Student Camp';
@@ -307,8 +496,20 @@ test('custom Home layout, approved removals and reused native source survive app
     assert.deepEqual(alternative.operations[0].inputs.sections, content.inputs.sections);
     assert.equal(alternative.preservation, plan.preservation);
   }
-  const review = await renderReviewedPlan(plan, path.join(root, 'review.html'), { check: successfulImageCheck });
-  const contentReview = renderDocument(fs.readFileSync(review.output, 'utf8')).get('componentChanges').innerHTML;
+  let probes = 0;
+  const review = await renderReviewedPlan(plan, path.join(root, 'review.html'), {
+    verifyImages,
+    check: (url) => {
+      assert.equal(verifyImages, true, 'Custom layout and removal work must not force image-network checks.');
+      probes += 1;
+      return successfulImageCheck(url);
+    },
+  });
+  const document = renderDocument(fs.readFileSync(review.output, 'utf8'));
+  const contentReview = document.get('componentChanges').innerHTML;
+  assert.equal(document.has('technicalOperations'), false);
+  assert.match(document.get('imageVerification').innerHTML,
+    verifyImages ? /Image source checks passed/ : /External images are unverified/);
   assert.match(contentReview, /Replace the starter Home layout/);
   assert.ok(contentReview.includes(removal), 'Approval shows the removed components and rationale.');
   const wireframe = contentReview.slice(contentReview.indexOf('<div class="composition">'));
@@ -318,7 +519,7 @@ test('custom Home layout, approved removals and reused native source survive app
   assert.deepEqual(sectionNames, ['Student welcome', 'Program discovery', 'Registration']);
   const dataPath = path.join(root, 'approved.json');
   fs.writeFileSync(dataPath, JSON.stringify(plan), 'utf8');
-  publishApprovedPlan({ projectRoot: root, dataPath, imageChecksPath: review.imageChecks });
+  const published = publishApprovedPlan({ projectRoot: root, dataPath, imageChecksPath: review.imageChecks });
   const resolved = updateExecution({ projectRoot: root, action: 'resolve', operationId: content.id });
   assert.deepEqual(resolved.operation.preserve, content.preserve);
   assert.deepEqual(resolved.resolvedInputs, content.inputs);
@@ -336,6 +537,8 @@ test('custom Home layout, approved removals and reused native source survive app
   const styling = updateExecution({ projectRoot: root, action: 'resolve', operationId: 'style-new-site' });
   assert.deepEqual(styling.designContext, resolved.designContext);
   assert.deepEqual(styling.imageChecks, resolved.imageChecks);
+  assert.equal(Object.hasOwn(styling, 'imageChecks'), verifyImages);
+  assert.equal(probes, verifyImages ? 1 : 0, 'Publication and final styling reuse the reviewed evidence state.');
   const approvedHash = planHash(plan);
   const changedRemovals = structuredClone(plan);
   changedRemovals.operations[0].inputs.details += ' Also remove the required registration form.';
@@ -343,10 +546,16 @@ test('custom Home layout, approved removals and reused native source survive app
   plan.preservation = 'Discard the required registration behavior.';
   assert.notEqual(planHash(plan), approvedHash);
   fs.writeFileSync(dataPath, JSON.stringify(plan), 'utf8');
-  assert.throws(() => publishApprovedPlan({
-    projectRoot: root, dataPath, imageChecksPath: review.imageChecks,
-  }), /plan|hash/i);
+  if (verifyImages) {
+    assert.throws(() => publishApprovedPlan({
+      projectRoot: root, dataPath, imageChecksPath: review.imageChecks,
+    }), /plan|hash/i);
+  }
+  fs.writeFileSync(published.currentJson, JSON.stringify(plan), 'utf8');
+  assert.throws(() => updateExecution({ projectRoot: root, action: 'status' }),
+    /current execution receipt does not match current-plan.json/);
 });
+}
 
 test('existing-site narrow edits keep explicit layout preservation without acquiring a design workflow', (t) => {
   const root = temporaryRoot(t);
@@ -374,6 +583,32 @@ test('existing-site narrow edits keep explicit layout preservation without acqui
     .map((operation) => operation.id), ['correct-heading']);
 });
 
+test('unchecked new-site imagery preserves its approved brief and native handoff without importing files', async (t) => {
+  const root = temporaryRoot(t);
+  const plan = externalImagePlan();
+  delete plan.assets[0].source.sourcePage;
+  delete plan.assets[0].source.photographer;
+  const review = await renderReviewedPlan(plan, path.join(root, 'review.html'), {
+    check: () => assert.fail('New-site creation must not add mandatory image-network checks.'),
+  });
+  const dataPath = path.join(root, 'approved.json');
+  fs.writeFileSync(dataPath, JSON.stringify(plan), 'utf8');
+  const published = publishApprovedPlan({ projectRoot: root, dataPath });
+  assert.equal(published.unverifiedImages, 1);
+  assert.equal(review.imageChecks, null);
+  const resolved = updateExecution({
+    projectRoot: root, action: 'resolve', operationId: 'create-speakers-page',
+  });
+  assert.equal(resolved.designContext.composition, plan.newSiteDesign.composition);
+  assert.equal(resolved.designContext.imageDelivery, 'external-url');
+  assert.deepEqual(resolved.resolvedInputs, plan.operations[0].inputs);
+  assert.equal(Object.hasOwn(resolved, 'imageChecks'), false);
+  const document = renderDocument(fs.readFileSync(published.currentHtml, 'utf8'));
+  assert.match(document.get('imageVerification').innerHTML, /External images are unverified/);
+  assert.equal(fs.existsSync(path.join(root, '.powerpages-customization')), false);
+  assert.equal(fs.existsSync(path.join(root, 'web-files')), false);
+});
+
 test('experience brief remains visible and hash-bound through checked image publication and native handoffs', async (t) => {
   const root = temporaryRoot(t);
   const plan = externalImagePlan();
@@ -387,6 +622,7 @@ test('experience brief remains visible and hash-bound through checked image publ
   assert.equal(validateCustomizationPlan(plan), plan);
   let probes = 0;
   const checked = await renderReviewedPlan(plan, path.join(root, 'review.html'), {
+    verifyImages: true,
     check: (...args) => {
       probes += 1;
       return successfulImageCheck(...args);

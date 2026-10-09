@@ -121,14 +121,6 @@ h3{margin:0;font-size:16px}
 .check{display:flex;gap:11px;align-items:flex-start}
 .check-mark{width:20px;height:20px;border:2px solid var(--cyan);border-radius:6px;flex:0 0 auto;margin-top:1px}
 .deploy.recommended{border-color:#b88cc0;background:linear-gradient(135deg,#fff,var(--plum-soft))}
-.technical{margin-top:24px;background:var(--panel);border:1px solid var(--line);border-radius:14px}
-.technical>summary{padding:16px 19px;cursor:pointer;color:var(--plum-dark);font-weight:700}
-.technical-copy{padding:0 19px 17px;color:var(--muted)}
-.trace{margin:0 19px 13px;padding:16px;border-radius:11px;background:#faf9fb;border:1px solid var(--line)}
-.trace:last-child{margin-bottom:19px}
-.trace-title{font:700 12px var(--mono);overflow-wrap:anywhere}
-.trace-meta{display:flex;gap:6px;flex-wrap:wrap;margin:9px 0}
-.trace pre{margin:9px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.5 var(--mono);color:#463d4b}
 code{font-family:var(--mono);font-size:12px;background:var(--soft);padding:2px 5px;border-radius:5px;overflow-wrap:anywhere}
 @media(max-width:800px){
   .topbar{align-items:flex-start}.top-tags{display:none}
@@ -230,11 +222,6 @@ code{font-family:var(--mono);font-size:12px;background:var(--soft);padding:2px 5
       <div id="checks"></div>
       <h2 class="section-title">After local verification</h2>
       <div id="deployments"></div>
-      <details class="technical" id="technicalDetails">
-        <summary>Technical implementation trace</summary>
-        <div class="technical-copy">For maintainers: owning skills, operation IDs, dependency bindings, exact targets, and expected outputs.</div>
-        <div id="technicalOperations"></div>
-      </details>
     </section>
   </main>
 </div>
@@ -259,6 +246,8 @@ const assets=read("assetsData");
 const imageChecks=read("imageChecksData");
 if(imageChecks&&imageChecks.images.length){
   document.getElementById("imageVerification").innerHTML=`<div class="card plan-note"><strong>Image source checks passed before review</strong><p>Each unique external URL returned an image response. These checks do not guarantee future availability or site rendering.</p><ul class="preserve-list">${imageChecks.images.map(image=>`<li>${esc(image.url)} · ${esc(image.mimeType)} · ${esc(image.checkedAt)}</li>`).join("")}</ul></div>`;
+}else if(assets.some(asset=>asset.delivery==="external-url")){
+  document.getElementById("imageVerification").innerHTML=`<div class="card plan-note"><strong>External images are unverified</strong><p>Network checks were not run. Availability and image content are unverified. A loaded preview does not verify site rendering.</p></div>`;
 }
 const categoryFor=skill=>{
   if(["author-webpage","author-page-template"].includes(skill))return"page";
@@ -386,6 +375,7 @@ const assetCard=asset=>{
   const details=[
     ["Source",source.type==="unsplash"?["Unsplash",source.photographer].filter(Boolean).join(" · "):words(source.type)],
     ["Delivery",asset.delivery==="external-url"?"Direct external HTTPS URL (not imported)":"Local Power Pages Web File"],
+    ["Source checks",asset.delivery==="external-url"?(imageChecks?"Passed (HTTP/content only)":"Unverified (not checked)"):null],
     ["Image URL",asset.externalUrl||source.downloadUrl],
     ["Source page",source.sourcePage],
     ["License",source.license],
@@ -415,8 +405,6 @@ const checks=read("verificationData");
 document.getElementById("checks").innerHTML=checks.length?checks.map(item=>`<div class="card check"><span class="check-mark"></span><div><strong>${esc(typeof item==="string"?item:item.label)}</strong>${typeof item==="object"&&item.description?`<div>${esc(item.description)}</div>`:""}</div></div>`).join(""):`<div class="card empty">No verification checks recorded.</div>`;
 const deployments=read("deploymentData");
 document.getElementById("deployments").innerHTML=deployments.length?deployments.map(item=>`<div class="card deploy ${item.recommended?"recommended":""}"><strong>${esc(item.title)}</strong><p>${esc(item.description||"")}</p></div>`).join(""):`<div class="card empty">Keep the verified changes local.</div>`;
-const technical=item=>`<article class="trace"><div class="trace-title">${esc(item.id)}</div><div class="trace-meta"><span class="tag">${esc(item.skill)}</span>${actionBadge(item.action)}${(item.dependsOn||[]).map(value=>`<span class="tag">after ${esc(value)}</span>`).join("")}</div><pre>${esc(JSON.stringify({target:item.target,inputs:item.inputs,outputBindings:item.outputBindings,expectedOutputs:item.expectedOutputs},null,2))}</pre></article>`;
-document.getElementById("technicalOperations").innerHTML=operations.length?operations.map(technical).join(""):`<div class="technical-copy">No implementation operations are planned.</div>`;
 document.querySelectorAll(".nav-btn").forEach(button=>button.addEventListener("click",()=>{
   document.querySelectorAll(".nav-btn").forEach(node=>node.classList.toggle("active",node===button));
   document.querySelectorAll(".view").forEach(node=>node.classList.toggle("active",node.id===button.dataset.view));

@@ -9,7 +9,7 @@ const { parseArgs, renderTemplate } = require('./lib/render-template');
 const {
   validateCustomizationPlan,
 } = require('./lib/customize-declarative-site-plan');
-const { validateImageChecks, verifyPlanImages } = require('./lib/declarative-image-verification');
+const { externalImageUrls, validateImageChecks, verifyPlanImages } = require('./lib/declarative-image-verification');
 
 const templatePath = path.join(
   __dirname,
@@ -67,23 +67,36 @@ function renderCustomizationPlan(plan, outputPath, options = {}) {
 }
 
 async function renderReviewedPlan(plan, outputPath, options = {}) {
+  if (options.verifyImages !== undefined && typeof options.verifyImages !== 'boolean') {
+    throw new Error('verifyImages must be a boolean.');
+  }
+  validateCustomizationPlan(plan);
   const output = path.resolve(outputPath);
   const imageChecksPath = `${output}.image-checks.json`;
   if (fs.existsSync(output) || fs.existsSync(imageChecksPath)) {
     throw new Error('Output file already exists. Choose a fresh review directory.');
   }
-  const imageChecks = await verifyPlanImages(plan, options);
+  // Do not probe image sources by default. An explicitly requested check must
+  // succeed; never turn its failure into an unchecked but successful review.
+  const imageChecks = options.verifyImages === true ? await verifyPlanImages(plan, options) : null;
   fs.mkdirSync(path.dirname(output), { recursive: true });
-  fs.writeFileSync(imageChecksPath, `${JSON.stringify(imageChecks, null, 2)}\n`, { flag: 'wx' });
+  if (imageChecks) {
+    fs.writeFileSync(imageChecksPath, `${JSON.stringify(imageChecks, null, 2)}\n`, { flag: 'wx' });
+  }
   renderCustomizationPlan(plan, output, { imageChecks, emitStatus: false });
-  return { status: 'ok', output, imageChecks: imageChecksPath, verifiedImages: imageChecks.images.length };
+  return {
+    status: 'ok', output, imageChecks: imageChecks ? imageChecksPath : null,
+    verifiedImages: imageChecks ? imageChecks.images.length : 0,
+    unverifiedImages: imageChecks ? 0 : externalImageUrls(plan).length,
+  };
 }
 
 async function main() {
   const args = parseArgs(process.argv);
   if (!args.output || !args.data) {
     console.error(
-      'Usage: node render-customize-declarative-site-plan.js --output <path> --data <json-file>'
+      'Usage: node render-customize-declarative-site-plan.js --output <path> --data <json-file> ' +
+        '[--verifyImages <true|false>]'
     );
     process.exit(1);
   }
@@ -103,7 +116,12 @@ async function main() {
   }
 
   try {
-    console.log(JSON.stringify(await renderReviewedPlan(plan, args.output)));
+    if (process.argv.includes('--verifyImages') && !['true', 'false'].includes(args.verifyImages)) {
+      throw new Error('--verifyImages must be true or false.');
+    }
+    console.log(JSON.stringify(await renderReviewedPlan(plan, args.output, {
+      verifyImages: args.verifyImages === 'true',
+    })));
   } catch (error) {
     console.error(`Invalid plan: ${error.message}`);
     process.exit(1);

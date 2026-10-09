@@ -78,6 +78,9 @@ Create these tasks before starting:
 4. Read the site identity, configured languages, existing pages, navigation,
    snippets, web files, web templates, page templates, CSS sources, Bootstrap evidence, logos,
    favicons, existing page imagery, and the exact callers of site-wide brand assets.
+   For header work, resolve the active website header binding, its source/includes, localized
+   branding snippets, navigation callers, and responsive/authenticated variants. Do not assume
+   that a template named `Header` is the one the site uses.
    For a `creationIntent: "new-site"` handoff, revalidate `verifiedBootstrapMajor` against actual
    downloaded asset evidence with the create-site validator's `--bootstrapVersion` option.
    Never infer Bootstrap from a template name or silently migrate an existing site.
@@ -181,6 +184,17 @@ For a new-site design, include at least one relevant content photograph or origi
 with an actual page placement; a logo, favicon, icon, or decorative divider alone is insufficient.
 An explicit user choice to omit imagery is the only exception, recorded in `newSiteDesign`.
 
+For new-site design and full-site redesign, explicitly plan the site header alongside the page
+composition; do not leave it at the starter appearance by omission. Follow **Site header planning**
+in `references/content-and-page-compositions.md`, reusing known brand and navigation decisions.
+For every header update, explicitly resolve the logo or wordmark against the website requirements:
+update an unsuitable starter logo, or record justified retention. Header CSS alone does not
+complete an approved logo replacement. Follow **Logos and favicons** in the visual-asset reference
+for source selection and missing brand inputs, without a separate approval gate.
+Record concrete header treatment or a reasoned preservation decision in the existing plan, with
+native owner operations for actual changes. A narrow existing-site edit does not expand to the
+header unless requested. Header changes alone do not fulfill a new site's custom-layout brief.
+
 <!-- not-a-gate: compact clarification gathers missing content and layout inputs; Phase 4 approves the plan -->
 
 When material inputs remain, ask once with the unresolved business facts plus compact choices for
@@ -207,7 +221,8 @@ owning skill supports the requested operation.
    Use a discovered direct image URL without requiring a photo-page fetch or photographer
    lookup; retain those details when known, never invent them. Do not derive a CDN path from a
    photo-page slug or search-result ID. A blocked photo page does not establish a CDN failure.
-   The review renderer still verifies final external URLs before producing approval artifacts.
+   The renderer labels unchecked external images as unverified. Network source checks are
+   opt-in, not an additional prerequisite for the normal planning flow.
    Only assets intentionally delivered as new Web Files are prepared through
    `scripts/prepare-declarative-asset.js`. Keep approved bytes in the project-local ignored asset
    cache and record the returned hash, MIME type, dimensions, filename, and cache path. Do not
@@ -226,6 +241,8 @@ owning skill supports the requested operation.
 3. Order operations by actual dependencies, not by skill name. Assets/snippets/templates normally
    precede their consumers; webpage metadata must create an exact localized copy file before
    `author-webpage-content` fills it; styling runs after structural authoring.
+   Include planned header snippet/template changes in those dependencies before final styling.
+   CSS-only header treatment needs no dummy structural operation or website-binding change.
 4. Follow the plan contract and write a schema-version-1 JSON plan, including the complete
    `assets` manifest and, for a new-site handoff, the complete `newSiteDesign` brief, into a fresh external review directory
    outside the selected site root. Do not replace the canonical approved plan during review.
@@ -252,33 +269,38 @@ owning skill supports the requested operation.
    ```
 
    If either review filename exists, create a fresh review directory instead of overwriting it.
-   The renderer checks each unique external image URL once, with bounded parallel HTTPS GETs,
-   and writes `plan.html.image-checks.json` alongside successful review HTML. It rejects HTTP
-   errors (including 404), non-image responses, invalid image signatures, private destinations,
-   oversized responses, and timeouts. These requests inspect bytes in memory only; they do not
-   save images or create Web Files. Plans without external image additions make no image requests.
-   If a check fails, do not request approval. Choose a working direct source URL, update every
-   affected asset and consumer input, and render a fresh review. Do not repeatedly retry a 404,
-   silently drop required imagery, or claim an unchecked URL is verified.
+   By default, the renderer validates the plan without image-network requests or an image-check
+   report. It labels unchecked images unverified and returns their unique URL count as
+   `unverifiedImages`. Disclose that state in the approval summary; it does not block review.
+   Do not add a mandatory verification-choice question or live-preview requirement.
+
+   Only when the user requests source verification, append `--verifyImages true`. The verifier
+   checks each unique external URL once with bounded public-only HTTPS GETs and writes
+   `plan.html.image-checks.json` after all checks succeed. See the visual-asset reference for
+   limits and evidence semantics. If a check fails, do not request approval or silently disable
+   checks. Choose a working direct source URL, update every affected asset and consumer input,
+   and render a fresh review. Do not repeatedly retry a 404, silently drop required imagery, or
+   claim an unchecked URL is verified.
 7. Open the rendered HTML with the OS-native default-browser launcher. A launch failure does not
    invalidate the plan; print the exact path as a fallback.
 
 ## Phase 4: Approve the plan
 
 Present a short terminal summary and direct the user to the HTML for the complete user-facing
-proposal: pages and navigation, content and page compositions, assets and reusable components,
-styling, preservation decisions, warnings, verification, and the local/live boundary. The default
-HTML view describes visible outcomes rather than authoring-skill mechanics. A collapsed technical
-implementation trace may expose operation IDs, owning skills, dependencies, bindings, and exact
-targets for maintainers; the validated JSON remains the execution source of truth.
+proposal: header treatment when in scope, pages and navigation, content and page compositions,
+assets and reusable components,
+styling, preservation decisions, warnings, verification, and the local/live boundary. The HTML
+describes visible outcomes rather than authoring-skill mechanics. Do not include an inline
+technical implementation trace. Keep the complete execution details in the validated JSON,
+which remains the execution source of truth and is persisted after approval.
 
 <!-- gate: customize-declarative-site:4.approve | category=plan | cancel-leaves=plan-artifacts -->
 
 > 🚦 **Gate (plan · customize-declarative-site:4.approve):** Approve the coordinated
 > customization plan before invoking any authoring skill.
 >
-> **Trigger:** JSON and HTML plan artifacts are complete, with successful image checks for every
-> external image in this exact plan.
+> **Trigger:** JSON and HTML plan artifacts are complete, with external images explicitly
+> unverified or supported by successful requested checks for this exact plan.
 > **Why:** The next phase can create or modify several related declarative records.
 > **Cancel leaves:** External review artifacts only; the downloaded site and current approved plan
 > remain unchanged.
@@ -297,17 +319,22 @@ After approval, publish the approved JSON:
 ```bash
 node "${PLUGIN_ROOT}/scripts/promote-customize-declarative-site-plan.js" \
   --projectRoot "<PROJECT_ROOT>" \
-  --data "<APPROVED_REVIEW_DIR>/plan.json" \
-  --imageChecks "<APPROVED_REVIEW_DIR>/plan.html.image-checks.json"
+  --data "<APPROVED_REVIEW_DIR>/plan.json"
 ```
+
+If the approved review included source checks, append
+`--imageChecks "<APPROVED_REVIEW_DIR>/plan.html.image-checks.json"`; otherwise omit it.
 
 The publisher validates the approved JSON, renders canonical HTML from that exact data, creates
 `current-execution.json`, and records hashes plus a run ID. When a current approved run exists, it
 archives the plan, HTML, execution receipt, and icon together before replacement. Use only the
 published current plan and execution receipt for child-skill coordination.
-The publisher requires matching successful image checks for external images, copies them into
-the execution receipt, and performs no second network probe. Changed plans or missing/failed
-reports require fresh review and approval; never edit the report to make publication succeed.
+The publisher makes no image-network requests. Unchecked images remain explicitly unverified
+in the canonical HTML and command result. A supplied report must match the exact plan and contain
+successful checks; it is copied into the execution receipt. Missing, malformed, stale or failed
+supplied reports block publication, never silently downgrade it. Preserve the reviewed evidence
+state; do not drop a checked review's report or invent one for unchecked images. Changed plans
+need fresh review and approval, and fresh checks if requested.
 
 ## Phase 5: Execute through owning skills
 
@@ -321,10 +348,11 @@ For each ready operation:
    decisions, not an implicit instruction to retain the creation template's layout or branding.
    The shared brief supplies Bootstrap and visual direction, not permission to change unrelated
    records, discard required capabilities/content, or bypass the owner's approval.
-   Also pass returned `imageChecks`: reuse these source checks for unchanged URLs instead of
+   If returned, also pass `imageChecks`: reuse these source checks for unchanged URLs instead of
    probing once per child or placement. Keep local caller/URL verification and browser failure
    handling. Previously approved receipts without this optional field remain resumable, but do
-   not claim their image sources were checked. A source change needs a new verified plan.
+   not claim their image sources were checked. An unchecked new plan has the same resumable
+   behavior. A source change needs a new approved plan, with fresh checks if requested.
 3. Include the exact selected site root, action, target identity, locales, final values, callers,
    and preservation requirements. The operation may be expressed as structured YAML/JSON or
    unambiguous natural language; it must resolve the same decisions as the plan contract.
@@ -348,7 +376,9 @@ Bootstrap 3 patterns only for the explicit compatibility path.
 For every staged visual asset, invoke `author-web-file` before its consumers and record the
 verified `publicUrl`. Dependent page, snippet, template, or styling operations must consume that
 URL through an approved `outputBindings` entry; never predict a Web File URL. For a global logo or
-favicon, update only the exact verified snippet, template, or setting caller. Do not replace the
+favicon, update only the exact verified snippet, template, or setting callers. Resolve all approved
+desktop/mobile logo variants and requested locales, including the accessible brand name and
+home-link destination; do not assume one logo snippet covers every header state. Do not replace the
 whole header merely to change a logo, and preserve navigation, search, language selection,
 sign-in behavior, and authenticated/anonymous branches.
 
@@ -396,6 +426,13 @@ Do not invoke a child skill for an empty operation, and do not invoke deployment
    Reuse `style-site`'s local contrast checks and resolve known failures. Report desktop/mobile
    rendering, Studio save/reopen, and unknown image-overlay contrast as pending separate live
    checks; do not start a server or claim local validation proves visual fidelity.
+   For any planned header work, trace its branding, source and styling decisions to the changed
+   native files and retained navigation, authentication, locale and caching contracts. Confirm the
+   approved logo or wordmark in every resolved desktop/mobile caller and requested locale,
+   including its source/value, accessible name, link destination and responsive sizing intent.
+   An unchanged starter logo is incomplete when the plan approved its replacement. Report
+   missing planned header work as incomplete; mobile-menu, keyboard and live-state behavior
+   remain unverified until separately observed.
 7. Compare the completed composition with the approved experience brief once, using
    `${PLUGIN_ROOT}/skills/style-site/references/design-critique.md`'s native interpretation of the
    shared categories and source-only evidence.
@@ -407,9 +444,10 @@ Do not invoke a child skill for an empty operation, and do not invoke deployment
    Verify that approved removals are absent from the authored source, not merely hidden by CSS,
    and that required components, their dependencies and explicitly preserved regions remain intact.
    A changed section count or new class name alone is not evidence of custom composition.
-   Reuse child verification and the approved image-check receipt; do not repeat unchanged network
+   Reuse child verification and, when present, the approved image-check receipt; do not repeat unchanged network
    probes, add a screenshot gate, or run a critique per operation. Report observed local gaps and
-   unobserved runtime checks separately. Revisions still require the existing plan/owner approvals;
+   unobserved runtime checks separately, retaining unverified status for unchecked images.
+   Revisions still require the existing plan/owner approvals;
    a low or provisional visual score does not authorize direct edits or deployment.
 
 ## Phase 7: Commit, report, and offer deployment

@@ -36,6 +36,9 @@ function main() {
   }
 
   try {
+    if (process.argv.includes('--imageChecks') && !args.imageChecks?.trim()) {
+      throw new Error('--imageChecks requires a non-empty report path.');
+    }
     const result = publishApprovedPlan({
       projectRoot: path.resolve(args.projectRoot),
       dataPath: path.resolve(args.data),
@@ -61,12 +64,13 @@ function publishApprovedPlan({ projectRoot, dataPath, imageChecksPath = null, no
   }
   validateCustomizationPlan(plan);
   let imageChecks = null;
-  if (imageChecksPath) {
+  if (imageChecksPath !== null) {
+    if (typeof imageChecksPath !== 'string' || !imageChecksPath.trim()) {
+      throw new Error('Image checks path must be a non-empty string.');
+    }
     try { imageChecks = JSON.parse(fs.readFileSync(imageChecksPath, 'utf8')); }
     catch (error) { throw new Error(`Cannot read image checks: ${error.message}. Render a fresh review before approval.`); }
     validateImageChecks(plan, imageChecks);
-  } else if (externalImageUrls(plan).length) {
-    throw new Error('External images require --imageChecks from this plan review. Render and approve the verified plan first.');
   }
 
   const paths = customizationPaths(projectRoot);
@@ -112,6 +116,8 @@ function publishApprovedPlan({ projectRoot, dataPath, imageChecksPath = null, no
       currentHtml: paths.currentHtml,
       currentExecution: paths.currentExecution,
       archivedPreviousPlan: archivePath,
+      verifiedImages: imageChecks ? imageChecks.images.length : 0,
+      unverifiedImages: imageChecks ? 0 : externalImageUrls(plan).length,
     };
   } finally {
     try {

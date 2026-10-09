@@ -9,6 +9,72 @@ function read(relativePath) {
   return fs.readFileSync(path.join(pluginRoot, relativePath), 'utf8');
 }
 
+test('classic header planning reaches creation, approval and styling without widening narrow edits', () => {
+  const workflow = read(path.join('skills', 'create-site', 'workflows', 'declarative-site.md'));
+  const customization = read(path.join('skills', 'customize-declarative-site', 'SKILL.md'));
+  const composition = read(path.join('skills', 'customize-declarative-site', 'references', 'content-and-page-compositions.md'));
+  const contract = read(path.join('skills', 'customize-declarative-site', 'references', 'customization-plan-contract.md'));
+  const styling = read(path.join('skills', 'style-site', 'references', 'design-quality.md'));
+  const headerSection = composition.match(/## Site header planning\r?\n([\s\S]*?)(?=\r?\n## |$)/);
+  assert.ok(headerSection);
+  const header = headerSection[1];
+  assert.match(workflow, /requirement to include header branding, navigation styling and mobile treatment/);
+  assert.match(customization, /For new-site design and full-site redesign, explicitly plan the site header/);
+  assert.match(customization, /Do not assume\s+that a template named `Header` is the one the site uses/);
+  assert.match(customization, /CSS-only header treatment needs no dummy structural operation/);
+  assert.match(customization, /missing planned header work as incomplete/);
+  assert.match(header, /creation template supplies component\/domain\s+context, not a visual constraint/);
+  assert.match(header, /part of the required custom site composition, not a substitute/);
+  for (const owner of ['author-content-snippet', 'author-web-template', 'style-site']) {
+    assert.ok(header.includes(`\`${owner}\``), owner);
+  }
+  assert.match(header, /new header binding requires explicitly approved global scope/);
+  for (const preserved of ['navigation', 'search', 'language selection', 'sign-in/out',
+    'anonymous/authenticated', 'accessible labels/skip links', 'substitution']) {
+    assert.ok(header.includes(preserved), preserved);
+  }
+  assert.match(header, /Do not duplicate the global header inside page content or hide it with CSS/);
+  assert.match(header, /Narrow existing-site work leaves unrelated header content and appearance unchanged/);
+  assert.match(contract, /do not add a mandatory header field/);
+  assert.match(contract, /header planning adds no separate gate or schema/);
+  assert.match(contract, /instead of creating a\s+dummy operation/);
+  assert.match(styling, /Return missing snippet, markup or Liquid changes to their native owners before styling/);
+  assert.match(styling, /remain pending separately authorized observation/);
+});
+
+test('every classic header update includes a website-appropriate logo decision and native verification', () => {
+  const workflow = read(path.join('skills', 'create-site', 'workflows', 'declarative-site.md'));
+  const customization = read(path.join('skills', 'customize-declarative-site', 'SKILL.md'));
+  const composition = read(path.join('skills', 'customize-declarative-site', 'references', 'content-and-page-compositions.md'));
+  const contract = read(path.join('skills', 'customize-declarative-site', 'references', 'customization-plan-contract.md'));
+  const assets = read(path.join('skills', 'customize-declarative-site', 'references', 'visual-asset-planning.md'));
+  const styling = read(path.join('skills', 'style-site', 'references', 'design-quality.md'));
+  const logoSection = assets.match(/## Logos and favicons\r?\n([\s\S]*?)(?=\r?\n## |$)/);
+  assert.ok(logoSection);
+  const logos = logoSection[1];
+
+  assert.match(workflow, /explicit website-appropriate logo or wordmark\s+decision/);
+  assert.match(customization, /For every header update, explicitly resolve the logo or wordmark against the website requirements/);
+  assert.match(composition, /including a header-only request/);
+  assert.match(logos, /Do not preserve an unrelated starter logo/);
+  assert.match(logos, /1\. use a supplied approved logo/);
+  assert.match(logos, /retain the verified current logo only when it meets those requirements or the user explicitly/);
+  assert.match(logos, /Report unresolved logo work as incomplete/);
+  assert.match(logos, /Honor an explicit no-logo or no-change request/);
+  assert.match(logos, /Do not silently invent an official company logo or use stock photography/);
+  assert.match(logos, /new-site additions need an approved hosted URL/);
+  assert.match(logos, /a logo alone does not satisfy the new-site\s+imagery requirement/);
+  assert.match(logos, /Do not\s+silently expand a header-logo change to favicons, footer branding or unrequested locales/);
+  assert.match(contract, /`kind: "logo"`, `role: "brand"`/);
+  assert.match(contract, /typography-only wordmark uses native owner inputs, not a fake\s+image asset/);
+  assert.match(contract, /including any logo source\/value change/);
+  assert.match(customization, /approved logo or wordmark in every resolved desktop\/mobile caller and requested locale/);
+  assert.match(customization, /An unchanged starter logo is incomplete when the plan approved its replacement/);
+  assert.match(styling, /CSS-only restyling does not replace an unsuitable starter logo/);
+  assert.match(styling, /avoid cropping or stretching the mark/);
+  assert.doesNotMatch(customization, /<!-- gate: [^\n]*logo/);
+});
+
 test('create-site can hand a Standard or Enhanced baseline to declarative customization', () => {
   const skill = read(path.join('skills', 'create-site', 'SKILL.md'));
   const workflow = read(path.join('skills', 'create-site', 'workflows', 'declarative-site.md'));
@@ -57,7 +123,7 @@ test('customize-declarative-site coordinates owning skills without authoring rec
   assert.match(skill, /--imageChecks "<APPROVED_REVIEW_DIR>\/plan.html.image-checks.json"/);
   assert.match(skill, /If a check fails, do not request approval/);
   assert.match(skill, /reuse these source checks for unchanged URLs/);
-  assert.match(contract, /External-image plans cannot be newly\s+published without matching successful results/);
+  assert.match(contract, /External images may be\s+reviewed and published without a report/);
   assert.match(contract, /"layout": "two-equal-columns"/);
   assert.match(contract, /do not flatten\s+elements into numeric column indexes/i);
   assert.match(contract, /immutable latest approved plan/);
@@ -75,16 +141,35 @@ test('classic Unsplash sourcing follows SPA discovery without a photo-page or at
   const contract = read(path.join('skills', 'customize-declarative-site', 'references', 'customization-plan-contract.md'));
   assert.match(skill, /WebSearch-to-CDN flow, as in SPA creation/);
   assert.match(skill, /without requiring a photo-page fetch or photographer\s+lookup/);
-  assert.match(skill, /renderer still verifies final external URLs before producing approval artifacts/);
+  assert.match(skill, /renderer labels unchecked external images as unverified/);
   assert.match(assets, /same \*\*WebSearch-to-CDN\*\* sourcing approach as SPA creation/);
   assert.match(assets, /do not require a photo-page fetch, scraping, API credentials, or a\s+photographer lookup/);
   assert.match(assets, /otherwise omit them rather than inventing attribution/);
   assert.match(assets, /anti-bot challenge[\s\S]*is not evidence that\s+`images\.unsplash\.com` is unavailable/);
   assert.match(assets, /Do not bypass the challenge/);
-  assert.match(assets, /failed CDN image check still blocks approval HTML/);
+  assert.match(assets, /failed CDN image\s+check still blocks approval HTML for that checked review/);
   assert.match(contract, /`source\.sourcePage` and `source\.photographer`\s+are optional/);
-  assert.match(contract, /does not relax the final direct-image check or exact-plan `--imageChecks`/);
+  assert.match(contract, /Supplied `--imageChecks` reports must match this exact plan/);
   assert.doesNotMatch(assets, /Record both:|Extract the actual CDN resource URL from that photo's source evidence/);
+});
+
+test('classic image verification is opt-in without another gate or mandatory runtime preview', () => {
+  const skill = read(path.join('skills', 'customize-declarative-site', 'SKILL.md'));
+  const assets = read(path.join('skills', 'customize-declarative-site', 'references', 'visual-asset-planning.md'));
+  const contract = read(path.join('skills', 'customize-declarative-site', 'references', 'customization-plan-contract.md'));
+  const gates = read(path.join('references', 'approval-gates.md'));
+  assert.match(skill, /Only when the user requests source verification, append `--verifyImages true`/);
+  assert.match(skill, /By default, the renderer validates the plan without image-network requests/);
+  assert.match(skill, /Do not add a mandatory verification-choice question or live-preview requirement/);
+  assert.match(skill, /If the approved review included source checks, append/);
+  assert.match(skill, /do not drop a checked review's report or invent one for unchecked images/);
+  assert.match(assets, /`imageChecks: null`, `verifiedImages: 0`/);
+  assert.match(assets, /Do not disable checking to hide a known failure/);
+  assert.match(contract, /missing, malformed, stale or failed supplied reports block publication/);
+  assert.match(gates, /external images explicitly unverified or supported by successful requested exact-plan checks/);
+  assert.deepEqual([...skill.matchAll(/<!-- gate: ([^ |]+)/g)].map((match) => match[1]), [
+    'customize-declarative-site:4.approve', 'customize-declarative-site:7.deploy',
+  ]);
 });
 
 test('deploy-site keeps code and declarative upload commands isolated', () => {
@@ -161,7 +246,7 @@ test('creation image URL policy reaches content planning and the classic design 
   const contract = read(path.join('skills', 'customize-declarative-site', 'references', 'customization-plan-contract.md'));
   assert.match(assetGuide, /direct HTTPS URLs for added images/);
   assert.match(assetGuide, /Power Pages permissions do not protect external URLs/);
-  assert.match(assetGuide, /Do not download it/);
+  assert.match(assetGuide, /Do not download the image to a file/);
   assert.match(contentGuide, /approved direct HTTPS URL for a new-site image addition/);
   assert.match(designGuide, /During creation, add images using direct approved HTTPS URLs/);
   assert.match(contract, /"delivery": "external-url"/);
