@@ -529,6 +529,7 @@ test('CLI parses plan and currency and reports missing flag values explicitly', 
   test('explicit matching currency binding is preserved and source lookup/exchange rate fields are not forwarded', async (t) => {
     const data = { entitySetName: 'cr123_invoices', records: [{
       cr123_total: 20, _transactioncurrencyid_value: RECORD_ID, exchangerate: 1.23,
+      '_transactioncurrencyid_value@Microsoft.Dynamics.CRM.associatednavigationproperty': CURRENCY_NAV,
       [`${CURRENCY_NAV}@odata.bind`]: `/transactioncurrencies(${CURRENCY_ID})`,
     }] };
     const requests = [];
@@ -1529,21 +1530,21 @@ test('applySeedData rejects disallowed attachment extensions and Git LFS pointer
   assert.match(result.errors[1].message, /Git LFS pointer/);
 });
 
-test('applySeedData reports auth failure as best-effort summary', async () => {
-  assert.deepEqual(await applySeedData({ seedDir: '/tmp/missing', envUrl: 'https://org.crm.dynamics.com' }, {
+test('applySeedData reports auth failure as best-effort summary', async (t) => {
+  assert.deepEqual(await applySeedData(seedFixture(t, { entitySetName: 'contacts', records: [{}] }), {
     getAuthToken: () => null,
   }), {
     ok: false,
     inserted: 0,
     failed: 1,
     skipped: 0,
-    errors: [{ scope: 'auth', message: 'Azure CLI token unavailable for https://org.crm.dynamics.com' }],
+    errors: [{ scope: 'auth', message: `Azure CLI token unavailable for ${TEST_ENV}` }],
   });
 
 });
 
-test('applySeedData catches token and filesystem failures as summaries', async () => {
-  assert.deepEqual(await applySeedData({ seedDir: '/tmp/seed', envUrl: 'https://org.crm.dynamics.com' }, {
+test('applySeedData catches token and filesystem failures as summaries', async (t) => {
+  assert.deepEqual(await applySeedData(seedFixture(t, { entitySetName: 'contacts', records: [{}] }), {
     getAuthToken: () => { throw new Error('token exploded'); },
   }), {
     ok: false,
@@ -1601,8 +1602,12 @@ for (const statusCode of ['204', 200.5, null, undefined]) {
 
 test('missing seed source is an explicit plan/apply failure, never a successful empty fallback', async () => {
   let calls = 0;
+  let authCalls = 0;
   const args = { seedDir: path.resolve('nonexistent-seed-fixture'), envUrl: TEST_ENV };
-  const deps = { token: 'test-token', makeRequest: async () => { calls++; return { statusCode: 204 }; } };
+  const deps = {
+    getAuthToken: () => { authCalls++; return null; },
+    makeRequest: async () => { calls++; return { statusCode: 204 }; },
+  };
   const plan = await planSeedData(args, deps);
   const applied = await applySeedData(args, deps);
   assert.equal(plan.ok, false);
@@ -1611,6 +1616,7 @@ test('missing seed source is an explicit plan/apply failure, never a successful 
   assert.match(plan.errors[0].message, /seed.*JSON|seed.*source/i);
   assert.match(applied.errors[0].message, /seed.*JSON|seed.*source/i);
   assert.equal(calls, 0);
+  assert.equal(authCalls, 0);
 });
 
 test('empty refreshed/custom tokens fail before authenticated metadata requests', async (t) => {

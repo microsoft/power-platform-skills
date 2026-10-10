@@ -870,7 +870,9 @@ function bindTargetCurrency(financial, currency) {
       // Source lookup GUIDs and exchange rates are environment-specific.
       // Select only the reviewed target currency; Dataverse owns its exchange rate.
       // https://learn.microsoft.com/power-apps/developer/data-platform/transaction-currency-currency-entity
-      delete record._transactioncurrencyid_value;
+      for (const key of Object.keys(record)) {
+        if (/^_transactioncurrencyid_value(?:@|$)/i.test(key)) delete record[key];
+      }
       delete record.exchangerate;
       record[`${entity.navigationProperty}@odata.bind`] = bind;
     }
@@ -937,8 +939,8 @@ async function applySeedData({ seedDir, seedFile, envUrl, currencyCode }, deps =
       return summary;
     }
 
-    const tokenProvider = runTokenProvider(envUrl, deps);
     if (!seedEntries.length) throw new Error('No seed JSON source was found');
+    const tokenProvider = runTokenProvider(envUrl, deps);
     if (currencyCode) {
       const financial = await discoverFinancialEntities(seedEntries, envUrl, tokenProvider, deps);
       const [currency] = await queryTargetCurrencies(envUrl, tokenProvider, deps, currencyCode);

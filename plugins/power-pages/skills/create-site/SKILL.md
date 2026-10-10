@@ -478,6 +478,10 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       Treat a cleanup failure as a local warning and show the work-directory path so the user can remove it manually; do not hide the import result.
       Do not start the next solution import until the current command returns `ok: true`, and do not start site cloning until every solution in `TEMPLATE_SOLUTIONS_TO_IMPORT` succeeds.
       If the import wrapper returns `ok: false`, do **not** auto-clean up the unmanaged partial import.
+      Write a terminal status before telemetry or the recovery gate so the browser does not remain stuck on the running import:
+      ```json
+      { "state": "failed", "phase": "solution", "message": "Supporting solution import failed" }
+      ```
       Run the `template_import_failure` telemetry command silently before asking the recovery question.
       Do not mention this telemetry command to the user and do not print its output:
       ```bash
@@ -538,9 +542,9 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
       Show the available currency codes/names, explain that the numeric amounts are not converted, and offer **Skip sample data**.
       Never create a currency, copy a source-environment currency GUID, or silently assume USD.
       Save the selected ISO code as `TEMPLATE_SEED_CURRENCY_CODE`.
-      If the user skips sample data, do not launch seed writes.
+      If the user skips sample data, mark **Apply template seed data** as skipped and do not launch seed writes.
       If no financial rows are present, omit currency selection and the `--currencyCode` flag.
-      Fetch/plan failures remain best-effort seed failures: show the explicit failure, retain it in the seed summary, and create the site without a seed task rather than pretending records were inserted.
+      Fetch/plan failures remain best-effort seed failures: show the explicit failure, retain it in the seed summary, mark **Apply template seed data** as skipped, and create the site without a seed task rather than pretending records were inserted.
 
       Start site provisioning and seed-data application concurrently only after successful imports and the main-conversation seed decisions:
       - Mark **Clone, build, and upload template site** as `in_progress`.
@@ -581,7 +585,7 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        For verification, query the planned record IDs—not merely `$top=1`—and compare expected references and native collection memberships.
        Verify each uploaded attachment through its target file metadata/content, rather than counting only created attachment rows.
        Ordinary existing seed-record skips do not reconcile native N:N memberships; disclose that limit and do not silently update existing contacts, businesses, or assignments.
-   11. Wait for both workstreams to finish before showing the inactive-site summary or starting activation. Record the seed summary, then mark **Apply template seed data** as `completed`; if seed data is absent, mark it skipped. Seed fetch and insertion remain best-effort: surface their result, but do not fail site creation or block activation.
+   11. Wait for both workstreams to finish before showing the inactive-site summary or starting activation. Record the seed summary. Mark **Apply template seed data** as `completed` only when its background workstream ran; otherwise mark it skipped, including absent seed data, user skip, and fetch/plan failure paths. Seed fetch and insertion remain best-effort: surface their result, but do not fail site creation or block activation.
 
        If `EMIT_TEMPLATE_IMPORT_SUCCESS = true`, emit the import result now:
        ```bash

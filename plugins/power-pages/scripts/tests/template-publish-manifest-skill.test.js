@@ -30,3 +30,17 @@ test('template install has no second publication phase', () => {
   assert.doesNotMatch(skill, /Publish template customizations/);
   assert.doesNotMatch(skill, /publication-scope|publication-failed/);
 });
+
+test('template import failure updates browser status before telemetry and recovery', () => {
+  const failure = skill.indexOf('If the import wrapper returns `ok: false`');
+  const status = skill.indexOf('{ "state": "failed", "phase": "solution"', failure);
+  const telemetry = skill.indexOf('--eventName template_import_failure', failure);
+  const recovery = skill.indexOf('gate: create-site:1.5.import-failed', failure);
+  assert.ok(failure !== -1 && status > failure && telemetry > status && recovery > telemetry);
+});
+
+test('template seed task is skipped whenever no seed workstream launches', () => {
+  assert.match(skill, /user skips sample data, mark \*\*Apply template seed data\*\* as skipped/);
+  assert.match(skill, /Fetch\/plan failures[\s\S]*mark \*\*Apply template seed data\*\* as skipped/);
+  assert.match(skill, /Mark \*\*Apply template seed data\*\* as `completed` only when its background workstream ran; otherwise mark it skipped/);
+});
