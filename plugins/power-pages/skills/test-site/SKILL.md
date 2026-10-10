@@ -358,11 +358,30 @@ Server logic endpoints (`/_api/serverlogics/<name>`) commonly return a standard 
 For each `/_api/serverlogics/` request observed on any tested page:
 
 1. Record the endpoint name from the URL (`/_api/serverlogics/<endpointName>`), the HTTP method, query string parameters, and HTTP status code.
-2. When the request was a GET (no CSRF token required), re-execute it from the browser with `browser_evaluate` so the full response body is captured. Progressively parse the payload — keep parsing string-typed fields until further parsing fails — and record the shape at each level. Use a script of this form, replacing the URL with the observed one:
+2. When the request was a GET, re-execute it from the same authenticated site with `browser_evaluate` so its response shape is captured.
+   Power Pages API requests require the site's verification token; GET is read-only, not an authentication or CSRF exemption.
+   Prefer the site's existing authenticated request wrapper when it is exposed to the browser.
+   Otherwise obtain the token through the supported `shell.getTokenDeferred()` API, keep it in memory, and never include it in logs or reports.
+   If the token API is unavailable or the observed URL is not same-origin, report the replay as blocked instead of importing cookies or making an unauthenticated request.
+   Progressively parse string-typed payload fields and record the shape at each level.
+   Use a script of this form, replacing the URL with the observed one:
 
     ```javascript
     async () => {
-      const res = await fetch('<observed-url>', { credentials: 'include', headers: { 'Content-Type': 'application/json' } });
+      const url = new URL('<observed-url>', window.location.origin);
+      if (url.origin !== window.location.origin) throw new Error('API replay must remain on the authenticated site.');
+      if (!window.shell || typeof window.shell.getTokenDeferred !== 'function') {
+        throw new Error('The site verification-token API is unavailable; read-only replay is blocked.');
+      }
+      const token = await new Promise((resolve, reject) => {
+        window.shell.getTokenDeferred().done(resolve).fail(reject);
+      });
+      if (typeof token !== 'string' || !token.trim()) throw new Error('The site verification token is unavailable.');
+      const res = await fetch(url.href, {
+        credentials: 'include',
+        redirect: 'error',
+        headers: { Accept: 'application/json', '__RequestVerificationToken': token },
+      });
       const status = res.status;
       const text = await res.text();
       const levels = [];

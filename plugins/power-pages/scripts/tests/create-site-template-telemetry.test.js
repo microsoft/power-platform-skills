@@ -72,7 +72,7 @@ test('buildTemplateOutcomeEvent emits import result details separately from temp
     framework: 'react',
     audience: 'internal',
     outcome: 'failure',
-    errorClass: 'ImportSolutionAsync',
+    errorClass: 'PacSolutionImport',
     errorDescription: 'https://example.crm.dynamics.com/private/path',
     correlationId: 'corr',
   }, {
@@ -82,7 +82,7 @@ test('buildTemplateOutcomeEvent emits import result details separately from temp
   });
   assert.equal(failure.data.eventName, 'template_import_failure');
   assert.equal(failure.data.outcome, 'failure');
-  assert.equal(failure.data.errorClass, 'ImportSolutionAsync');
+  assert.equal(failure.data.errorClass, 'PacSolutionImport');
   assert.equal('errorDescription' in failure.data, false);
   assert.equal(failure.data.severity, 'Error');
 });

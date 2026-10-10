@@ -48,7 +48,13 @@ The plugin provides 34 skills that cover the full lifecycle of a Power Pages sit
 >
 > "Create a site from a Power Pages SPA template"
 
-Starts a complete code site either from a curated SPA template or from a fresh framework scaffold. The template path previews installable templates, imports the selected unmanaged solution into your environment, applies optional seed data, activates the site, and opens the live URL. The from-scratch path applies your design direction (fonts, colors, layout), builds out pages and components, and provides a live preview throughout development.
+Starts a complete code site either from a curated SPA template or from a fresh framework scaffold.
+The template path previews installable templates, imports each selected unmanaged solution, applies optional seed data, activates the site, and opens the live URL.
+Solutions marked `publishChanges` in the template manifest use `pac solution import --publish-changes`; other solutions import without that flag.
+The install confirmation warns that PAC's publication step can include other pending customizations in the target environment.
+Financial seed rows use an explicitly selected existing active currency with their amounts unchanged.
+Declared attachment uploads omit generated file-name fields from record creation, and seed summaries report partial failures explicitly.
+The from-scratch path applies your design direction (fonts, colors, layout), builds out pages and components, and provides a live preview throughout development.
 
 - Start from a curated SPA template or scaffold from scratch
 - Choose from React, Vue, Angular, or Astro
