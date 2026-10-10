@@ -102,7 +102,7 @@ test('default PAC runner receives a timeout longer than the CLI wait', (t) => {
     publishChanges: false,
   }, {
     runCommand(command, args, commandOptions) {
-      assert.equal(command, 'pac');
+      assert.equal(command, process.platform === 'win32' ? 'pac.exe' : 'pac');
       assert.equal(args.includes('--async'), true);
       options = commandOptions;
       return '';
