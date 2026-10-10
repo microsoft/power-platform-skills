@@ -131,6 +131,18 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     cover newly added skills automatically. These static checks verify the
     instruction contract, not model compliance; do not claim smaller-model or
     host reliability without agent-run evidence.
+25. **Startup diagnosis precedes runtime monitoring when necessary** —
+    `/debug-app startup` can inspect a failed install, pre-start command, or QR
+    opening without a loaded app. `scripts/inspect-startup.js` is local/read-only
+    and never authorizes repair or verifies startup. Clean metadata is not an
+    exhaustive diagnosis; unexplained symptoms require scoped investigation of
+    the original failure, not a guessed reinstall. The bounded workflow in
+    [`skills/debug-app/references/startup-diagnostics.md`](skills/debug-app/references/startup-diagnostics.md)
+    owns explicit same-lock restoration and restart approval, preserves the
+    selected `npm run dev` arguments (including authenticated tunnel options),
+    and verifies the original symptom. No lock deletion, automatic dependency
+    updates, or host/MSAL patches are allowed. Creation reuses this workflow on
+    an observed startup failure instead of launching another repair loop.
 
 ## Telemetry
 

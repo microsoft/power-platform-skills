@@ -35,19 +35,17 @@ connector wiring.
 	3. Find the Power Platform mobile-app plugin and select **Install**.
 	4. Reload VS Code if prompted, then open Copilot Chat in Agent mode.
 
-	Alternatively, install it from a terminal with GitHub Copilot CLI:
+	Alternatively, run these manual commands **inside a Claude Code or GitHub
+	Copilot CLI session**, not a shell:
 
-	```sh
-	copilot plugin marketplace add microsoft/power-platform-skills
-	copilot plugin install mobile-app@power-platform-skills
+	```text
+	/plugin marketplace add microsoft/power-platform-skills
+	/plugin install mobile-app@power-platform-skills
 	```
 
-	For Claude CLI:
-
-	```sh
-	claude plugin marketplace add microsoft/power-platform-skills
-	claude plugin install mobile-app@power-platform-skills --scope user
-	```
+	See the [public manual installation instructions](https://github.com/microsoft/power-platform-skills#manual-installation).
+	If installed but disabled or not loaded, enable/load the plugin in your host.
+	Installation is optional and never performed automatically by app guidance.
 
 3. Open the template folder in VS Code and run the skill from Copilot Chat:
 
@@ -98,8 +96,9 @@ connector wiring.
 
 5. Start mobile app:
 
-	`/create-mobile-app` starts Metro with `npm run dev`; its `predev` lifecycle
-	runs schema generation and type-checking before Expo starts.
+	`/create-mobile-app` starts Metro with `npm run dev`. The template owns its
+	`dev` and `predev` command bodies; skills do not bypass them by invoking an
+	underlying launcher directly.
 	The template's Metro config delegates sanitized logging to the native host package, which writes `.powernative/metro-logs/`,
 	allowing `/debug-app` to work across VS Code, Copilot CLI, and Claude Code
 	without a terminal ID.
@@ -143,12 +142,42 @@ connector wiring.
 
 	Pass `--tunnel-tenant <tenant-id>` to select an Entra tenant. The command
 	creates no anonymous access rule and deletes the tunnel when Metro exits.
+	If startup diagnosis performs an approved retry, invoke it with matching
+	`--tunnel` and `--tunnel-tenant` options so the transport and tenant are
+	preserved:
+
+	```text
+	/debug-app startup "tunnel launch fails" --tunnel --tunnel-tenant <tenant-id>
+	```
 
 
 6. Preview the app by scanning the QR code with the Power Apps Mobile Preview app
 
 	- App store: https://apps.apple.com/us/app/power-apps-developer/id6753083462
 	- Play store: https://play.google.com/store/apps/details?id=com.microsoft.PreviewApp
+
+## App-local agent guidance
+
+[AGENTS.md](AGENTS.md) is the canonical guidance for agents working in this app.
+[CLAUDE.md](CLAUDE.md) imports it, and
+[.github/copilot-instructions.md](.github/copilot-instructions.md) links to it
+relatively, so the guidance travels with the app without private plugin paths.
+It routes relevant requests to skills advertised by the current host, keeps
+small edits small, and separates startup diagnosis from upgrades.
+
+Approved fresh-template preparation adds only missing guidance files and preserves
+existing customer guidance byte-for-byte. Existing apps can opt into guidance
+adoption separately; do not run fresh-template preparation over them.
+`/debug-app` can diagnose startup failures before the app loads. An agent already
+running creation can offer that workflow after observing a failure, but
+`npm run dev` alone does not wake an agent or install a monitor. No automatic
+hooks or watchers are added.
+
+For app problems (including dependency installation, startup, runtime, or QR
+opening), try the available `/debug-app` skill first before reporting an issue.
+This is a recommendation, not a prerequisite: honor explicit direct report
+requests. Plugin installation/loading failures can make app diagnosis unavailable;
+do not block reporting in those cases.
 
 ## Upgrade the Native Host
 
