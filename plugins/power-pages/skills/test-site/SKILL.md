@@ -364,11 +364,14 @@ For each `/_api/serverlogics/` request observed on any tested page:
    Otherwise fetch the token from the same-origin `/_layout/tokenhtml` endpoint, keep it in memory, and never include it in logs or reports.
    If the token endpoint is unavailable or the observed URL is not same-origin, report the replay as blocked instead of importing cookies or making an unauthenticated request.
    Progressively parse string-typed payload fields and record the shape at each level.
-   Use a script of this form, replacing the URL with the observed one:
+   Serialize the observed URL with `JSON.stringify(observedUrl)`, then replace
+   `<serialized-observed-url>` with that complete serialized value, including
+   its quotes. Do not wrap the placeholder in another string literal.
+   Use a script of this form:
 
     ```javascript
     async () => {
-      const url = new URL('<observed-url>', window.location.origin);
+      const url = new URL(<serialized-observed-url>, window.location.origin);
       if (url.origin !== window.location.origin) throw new Error('API replay must remain on the authenticated site.');
       const tokenResponse = await fetch(new URL('/_layout/tokenhtml', window.location.origin).href, {
         credentials: 'include',

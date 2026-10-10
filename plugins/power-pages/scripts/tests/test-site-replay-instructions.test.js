@@ -37,7 +37,8 @@ function replay({
       }),
     };
   };
-  const fn = vm.runInNewContext(`(${code.replace('<observed-url>', url)})`, {
+  const serializedUrl = JSON.stringify(url);
+  const fn = vm.runInNewContext(`(${code.replace('<serialized-observed-url>', serializedUrl)})`, {
     window, fetch, URL, Promise, Error, JSON, Object, Array,
   });
   return { execute: fn, calls };
@@ -60,6 +61,14 @@ test('test-site read-only replay uses authenticated same-origin GET with an in-m
   assert.equal(result.levels[1].parsedFrom, 'data');
   assert.equal(result.levels[2].parsedFrom, 'Body');
   assert.ok(!JSON.stringify(result).includes('local-fixture-csrf'));
+});
+
+test('test-site safely serializes observed URLs containing quotes and backslashes', async () => {
+  const observedUrl = `${origin}/_api/serverlogics/example?$filter=name eq 'O\\Reilly'`;
+  const probe = replay({ url: observedUrl });
+  await probe.execute();
+  assert.equal(probe.calls.length, 2);
+  assert.equal(probe.calls[1].requestUrl, new URL(observedUrl).href);
 });
 
 test('test-site cannot replay off-origin requests or redirects carrying credentials', async () => {
