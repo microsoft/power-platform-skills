@@ -7,6 +7,11 @@ const os = require('node:os');
 const { spawnSync } = require('node:child_process');
 
 const runner = path.join(__dirname, '..', 'run-app-builder.js');
+// The fixture roster comes from the CONTRACT (evals.json), not from a number typed here. A hardcoded
+// count turns "someone added an eval" into a red build for a reason unrelated to the runner, and the
+// obvious fix — bump the number — is indistinguishable from silently accepting a fixture that
+// vanished. Reading the manifest keeps the check meaningful in both directions.
+const evalsManifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'evals.json'), 'utf8'));
 
 function run(args) {
   const r = spawnSync(process.execPath, [runner, ...args], { encoding: 'utf8' });
@@ -21,7 +26,10 @@ test('runner: real fixtures all pass and emit TAP v13', () => {
   assert.match(stdout, /# Subtest: 2-orders-multipage/);
   assert.match(stdout, /# Subtest: 3-assets-dashboard/);
   assert.match(stdout, /# Subtest: 4-hardening/);
-  assert.match(stdout, /# fixtures 4 \(pass 4, fail 0\)/);
+  assert.match(stdout, /# Subtest: 5-process-logic/);
+  const n = evalsManifest.evals.length;
+  assert.ok(n >= 5, `the manifest should still carry every fixture; got ${n}`);
+  assert.match(stdout, new RegExp(`# fixtures ${n} \\(pass ${n}, fail 0\\)`));
 });
 
 test('runner: --eval selects one fixture; --tier smoke filters', () => {

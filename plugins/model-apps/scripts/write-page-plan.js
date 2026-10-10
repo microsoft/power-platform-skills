@@ -8,14 +8,16 @@
 //
 // Usage:
 //   node write-page-plan.js --spec @<working-dir>/app-spec.json --working-dir <dir>
-//     [--env <orgUrl>] [--app <label>] [--languages "English (1033) only"] [--out <path>]
+//     [--env <orgUrl>] [--app <label>] [--languages "English (1033) only"]
 //
 // The default output is `app-builder-page-plan.md`, NOT `genpage-plan.md`. Both skills derive their
 // working directory from a slug off the user's request, so the two can land on the same folder — and
 // `genpage-plan.md` is the filename standalone `/genpage` treats as its authoritative state. Writing
 // there would let a later `/genpage` run silently consume an app-builder plan, whose dialect differs
 // (`Mode: app-builder` + stable keys vs. no Mode + filename stems), producing wrong PAGEREF tokens.
-// The worker is handed the plan PATH explicitly in its dispatch, so the name is free to differ.
+// The worker is handed the plan PATH explicitly in its dispatch, so the name is free to differ. It is not
+// configurable: an `--out` could name any file — the input `app-spec.json`, the page manifest, /genpage's
+// own `genpage-plan.md` — and the plan would overwrite it, so the working directory alone decides the path.
 //
 // Output: { "ok": true, "planPath": "...", "pages": [{ "key", "file", "dataMode" }, ...] }
 // The `pages[]` echo is what Phase 1.5 iterates to dispatch one worker per page, so the CLI is the
@@ -23,22 +25,31 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { migrateAppSpec } = require('./lib/app-spec.js');
-const { buildPagePlan, pageKey, pageFile, pageDataMode, mdText } = require('./lib/page-plan.js');
+const { buildPagePlan, pageKey, pageFile, planFile, pageDataMode, mdText } = require('./lib/page-plan.js');
+const { pageFileProblems } = require('./lib/page-file-targets.js');
 
 function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
-  // parseArgs yields boolean `true` for a value-less flag; treat those as missing so a bare flag
-  // fails with usage instead of reaching path.resolve/readFile as a boolean.
-  const str = (v) => (typeof v === 'string' ? v : undefined);
-  const specArg = str(flags.spec) || (typeof positional[0] === 'string' ? positional[0] : undefined);
-  const workingDir = str(flags['working-dir']);
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE =
+    'Usage: node scripts/write-page-plan.js --spec @<app-folder>/app-spec.json --working-dir <dir> '
+    + '[--env <orgUrl>] [--app <label>] [--languages <text>]';
+  // Every flag here carries a value, so all of them go in needValue; a bare one would otherwise
+  // reach path.resolve/readFile as a boolean.
+  const flagError = validateFlags(argv, {
+    known: ['spec', 'working-dir', 'env', 'app', 'languages'],
+    needValue: ['spec', 'working-dir', 'env', 'app', 'languages'],
+  });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
+    process.exit(1);
+  }
+  const specArg = flags.spec || positional[0];
+  const workingDir = flags['working-dir'];
   if (!specArg || !workingDir) {
-    process.stderr.write(
-      'Usage: node scripts/write-page-plan.js --spec @<app-folder>/app-spec.json --working-dir <dir> '
-      + '[--env <orgUrl>] [--app <label>] [--languages <text>] [--out <path>]\n'
-    );
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
 
@@ -47,9 +58,9 @@ function main() {
   const absWorkingDir = path.resolve(workingDir);
 
   const markdown = buildPagePlan(spec, {
-    envUrl: str(flags.env),
-    appLabel: str(flags.app),
-    languages: str(flags.languages),
+    envUrl: flags.env,
+    appLabel: flags.app,
+    languages: flags.languages,
     // Forward slashes: the plan schema requires them on Windows because downstream agents embed the
     // path in shell commands where a backslash is an escape character.
     workingDir: absWorkingDir.replace(/\\/g, '/'),
@@ -59,7 +70,7 @@ function main() {
     pluginRoot: path.resolve(__dirname, '..').replace(/\\/g, '/'),
   });
 
-  const planPath = str(flags.out) ? path.resolve(str(flags.out)) : path.join(absWorkingDir, 'app-builder-page-plan.md');
+  const planPath = path.join(absWorkingDir, 'app-builder-page-plan.md');
 
   // Fail BEFORE writing if the plan names a sample that does not exist — the worker's Step 3 reads
   // `${PLUGIN_ROOT}/samples/<name>` and a missing file derails generation with a confusing error.
@@ -68,6 +79,65 @@ function main() {
   const missing = named.filter((n) => !fs.existsSync(path.join(samplesDir, n)));
   if (missing.length) {
     emitResult(false, new Error(`page plan references sample(s) that do not exist in samples/: ${missing.join(', ')}`));
+    return;
+  }
+
+  // The checks that need the disk — a link at a page path, a folder that links outside the working
+  // directory, a page already there under another spelling — run HERE, where the working directory is
+  // known: buildPagePlan is pure, so it applies only the lexical rules and collisions. /genpage runs the
+  // same checks through check-page-files.js before its workers; this is /app-builder's, before Phase 1.5
+  // dispatches any. Only the pages a worker will write are held to the whole rule — a built page is
+  // written by nobody — but the built pages go along as `built`, in the plan's own spelling: a new page
+  // must not reach one through a link or junction (`loop/home.tsx`, with `loop` pointing back here, IS
+  // `home.tsx`), and only here is the working directory known to resolve that.
+  // The working directory ITSELF must not be a link — the rule generate-page-manifest.js and the page-file
+  // rule apply to it. Phase 0's `mkdir -p` succeeds silently on a link already at that path, and the plan
+  // is written INTO the directory, so a planted link redirected the plan write whether or not any page was
+  // left for a worker (the page-file rule refuses only the pages it is given). A linked ancestor is still
+  // followed. A directory that is not there yet is created below.
+  let linkedWorkingDir = false;
+  try {
+    const at = fs.lstatSync(absWorkingDir);
+    linkedWorkingDir = at.isSymbolicLink();
+    // Anything else that is not a folder — a file there — cannot hold the plan: refused before the write,
+    // not left to throw EEXIST out of mkdir. generate-page-manifest.js applies the same rule.
+    if (!linkedWorkingDir && !at.isDirectory()) {
+      emitResult(false, new Error(`refusing to write the page plan into ${absWorkingDir}: it exists and is not a directory`));
+      return;
+    }
+  } catch (e) {
+    if (!(e && e.code === 'ENOENT')) {
+      emitResult(false, new Error(`cannot inspect the working directory ${absWorkingDir} (${(e && e.code) || e}); fix its permissions or pass another one`));
+      return;
+    }
+  }
+  if (linkedWorkingDir) {
+    emitResult(false, new Error(`refusing to write the page plan into ${absWorkingDir}: it is a symbolic link or junction. Pass the directory it points to if that is intended.`));
+    return;
+  }
+  // The plan file itself, directly in the working directory whose own checks are above. A link at its path —
+  // or a hard link, whose other names the write rewrites too — put the plan wherever it points, outside the
+  // working directory included. Nothing else is ever at that path, so refusing costs a legitimate run
+  // nothing, and a plain plan left by an earlier run is still rewritten; a folder there gets a reason, not
+  // EISDIR.
+  let planEntry = null;
+  try {
+    planEntry = fs.lstatSync(planPath);
+  } catch (e) {
+    if (!(e && e.code === 'ENOENT')) {
+      emitResult(false, new Error(`cannot inspect ${planPath} (${(e && e.code) || e}); fix its permissions or remove it`));
+      return;
+    }
+  }
+  if (planEntry && (!planEntry.isFile() || planEntry.nlink > 1)) {
+    emitResult(false, new Error(`refusing to write the page plan to ${planPath}: it is not a plain file (a link, junction, hard link or folder). Remove it and re-run.`));
+    return;
+  }
+  const intentFiles = (spec.pages || []).filter((p) => p && (!p.source || p.source.kind === 'intent')).map(pageFile);
+  const builtFiles = (spec.pages || []).filter((p) => p && p.source && p.source.kind === 'tsx' && p.source.codeFile).map(planFile);
+  const problems = pageFileProblems(intentFiles, { workingDir: absWorkingDir, built: builtFiles });
+  if (problems.length) {
+    emitResult(false, new Error(`page file(s) are not safe to write in ${absWorkingDir}: ${problems.map((p) => p.message).join('; ')}`));
     return;
   }
 

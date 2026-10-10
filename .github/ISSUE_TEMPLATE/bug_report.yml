@@ -15,6 +15,7 @@ body:
         - model-apps
         - power-automate
         - power-pages
+        - process-intelligence
     validations:
       required: true
 

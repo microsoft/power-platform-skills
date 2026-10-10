@@ -8,7 +8,7 @@ description: >-
   template for, or scaffold a new Power Pages website or portal.
 user-invocable: true
 argument-hint: Optional site description
-allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click
+allowed-tools: Read, Write, Edit, Grep, Glob, Bash, WebSearch, AskUserQuestion, Task, TaskCreate, TaskUpdate, TaskList, Skill, mcp__plugin_power-pages_playwright__browser_navigate, mcp__plugin_power-pages_playwright__browser_snapshot, mcp__plugin_power-pages_playwright__browser_click, mcp__plugin_power-pages_playwright__browser_take_screenshot, mcp__plugin_power-pages_playwright__browser_evaluate
 model: opus
 ---
 
@@ -20,13 +20,16 @@ Guide the user through creating a complete, production-quality Power Pages code 
 
 ## Core Principles
 
-- **Use best judgement for design details**: Once the user picks an aesthetic direction and mood, make confident decisions about specific fonts, colors, page layouts, and component behavior. Do not ask the user to specify every detail — use the design reference and your own taste to make creative, distinctive choices.
+- **Design for the first impression**: The site must make the user say "wow" the moment the Home page replaces the scaffold, and keep earning it on every page. Once the user answers the aesthetic, mood, and brand questions, make confident decisions about fonts, colors, layouts, imagery, and motion yourself - the design references (`design-aesthetics.md`, `page-blueprints.md`, `design-critique.md` under `${PLUGIN_ROOT}/references/`) define the bar, and your own taste fills the rest.
 - **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the path-agnostic upfront tasks first, then append branch-specific tasks after the creation path is selected.
 - **Scaffold early, design with intention**: Get the dev server running immediately after discovery so the user has something to look at. Then plan the design and features while the scaffold is live — apply the chosen aesthetic during implementation.
-- **Live preview feedback loop**: The dev server MUST be running before any customization begins. Browse the site via Playwright (`browser_navigate` + `browser_snapshot`) to verify every significant change. Do NOT take screenshots — only use accessibility snapshots to check page structure and content.
+- **Live preview feedback loop**: The dev server MUST be running before any customization begins. Browse the site via Playwright (`browser_navigate` + `browser_snapshot`) to verify the structure of every significant change. Visual design review captures every page with one script call and opens the screenshots in one turn (see [5.7](#57-design-critique-pass)); use Playwright MCP screenshots only for brand extraction in Phase 3.
 - **Keep the scaffold loader in sync with reality**: The scaffold loader polls `public/scaffold-status.json`. Update this file before every `AskUserQuestion` (to raise the "waiting for your input" banner so the user doesn't miss a terminal prompt) and before each implementation step in Phase 5 (so the progress-bar label matches what you're actually doing while the decorative spinner continues its default cycle). See [Live Preview Status Protocol](#live-preview-status-protocol).
-- **Use real images**: Source high-quality photos from Unsplash wherever pages need visual content — hero sections, feature cards, about pages, backgrounds, etc. Use `https://images.unsplash.com/photo-{id}?w={width}&h={height}&fit=crop` URLs with specific photo IDs found via `WebSearch`. Never leave image placeholders or broken `<img>` tags pointing to nonexistent files.
+- **Use purposeful visuals**: Every image explains, orients, demonstrates, or reinforces identity. Prefer the site's own UI composed as a product moment, then bespoke inline SVG, then specific Unsplash photography with one art direction (see [5.3](#53-source-purposeful-visuals)). Never leave image placeholders or broken `<img>` tags pointing to nonexistent files.
 - **Git checkpoints**: Commit after every individual page and component — each gets its own commit so breaking changes can be reverted.
+- **Site content language is independent of Dataverse language**: Generate every user-visible SPA string in the approved content language. Dataverse and Power Pages platform-managed messages remain English (`en-US`, LCID `1033`) in this workflow.
+- **Bidirectional by default**: Read `${PLUGIN_ROOT}/references/bidirectional-design.md`. Every site must use direction-neutral layout, mixed-content boundaries, and script-capable typography even when its initial language has only one direction. A later LTR/RTL locale must not require a general redesign.
+- **Lifecycle-ready output**: Follow `${PLUGIN_ROOT}/references/site-modification-integrity.md` so later pages and components can preserve localization, direction, and content-expansion behavior through the shared post-modification validator.
 
 **Constraint**: Only static SPA frameworks are supported (React, Vue, Angular, Astro). NOT supported: Next.js, Nuxt.js, Remix, SvelteKit, Liquid.
 
@@ -97,8 +100,8 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 4. From the user's answers, derive:
    - `__SITE_NAME__` (Title Case, e.g., `Contoso Portal`)
-   - `__SITE_SLUG__` (kebab-case derived from site name, e.g., `contoso-portal`)
-   - `__SITE_DESCRIPTION__` (one-line description based on name + purpose)
+   - A preliminary `__SITE_SLUG__` (lowercase ASCII kebab-case derived from
+     the site name when possible)
 5. Summarize the path-agnostic understanding and confirm with user before proceeding:
    - Site name
    - Site purpose/type
@@ -108,10 +111,10 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
 
 **Audience influences site generation:**
 
-- **Internal**: Prioritize data tables, dashboards, authentication, navigation depth, functional over flashy design
-- **External**: Prioritize landing page appeal, SEO-friendly structure, contact forms, clean marketing-oriented layout
+- **Internal**: Prioritize task completion - status, the next action, data tables, dashboards, authentication, navigation depth. The wow comes from clarity, density done right, and polish in the details rather than marketing heroes.
+- **External**: Prioritize a striking first impression, a persuasive page narrative with proof at the point of doubt, SEO-friendly structure, and contact forms.
 
-**Output**: Clear statement of site purpose, audience, and derived naming values.
+**Output**: Clear statement of site purpose, audience, site name, and preliminary technical slug.
 
 ---
 
@@ -680,7 +683,53 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
        - **No, finish here**: mark **Select template or choose from-scratch** as `completed`, then stop.
        - **Yes, customize now**: append the template customization tasks (see [Progress Tracking](#progress-tracking)), then continue below.
 
-   20. Mark **Plan template customizations** as `in_progress`, then ask what the user wants changed in `PROJECT_ROOT`. Use the existing Phase 3/4/5/6/7 implementation, verification, and review flow against the cloned project; do **not** run Phase 2 scaffold/copy-template.
+   20. Mark **Plan template customizations** as `in_progress`, then inspect the
+       cloned project before asking what the user wants changed:
+
+       ```bash
+       node "${PLUGIN_ROOT}/scripts/lib/localization-config.js" inspect --projectRoot "<PROJECT_ROOT>"
+       ```
+
+       Establish the language context required by the Phase 4 plan in this order:
+       - When `localization.detected=true` and `localization.valid=true`, use
+         `localization.defaultLocale` as the authoritative locale. Resolve it
+         with `resolve-locale`, set `SITE_LOCALE`, `SITE_DIRECTION`, and
+         `SITE_LANGUAGE` from the returned `locale`, `direction`, and
+         `languageName`, and retain `localeName` when regional or script detail
+         needs to be displayed. Do not scan locale-specific document roots as
+         though they described one single-language site.
+       - When `localization.detected=true` and `localization.valid=false`, show
+         the localization conflicts and stop before planning customization. The
+         localization configuration must be repaired; do not fall back to
+         static document attributes or report localized roots as a
+         single-language conflict.
+       - When no localization is detected and `siteLanguage.detected=true` with
+         `siteLanguage.valid=true`, resolve `siteLanguage.locale` with
+         `resolve-locale`. Use the returned `locale`, `direction`, and
+         `languageName` to establish `SITE_LOCALE`, `SITE_DIRECTION`, and
+         `SITE_LANGUAGE`.
+       - When `siteLanguage.reason` is `document-not-found`,
+         `html-root-not-found`, `document-ambiguous`, or
+         `document-configuration-invalid`, show its conflicts and
+         `expectedSources`, then stop before planning customization. Locate or
+         repair the actual application root document before asking for a
+         content language.
+       - When the document exists but its static language attributes are
+         missing or invalid, ask the **Content language** question below,
+         resolve the answer with `resolve-locale`, and include repairing
+         `siteLanguage.source` in the approved customization plan.
+
+       After `SITE_LANGUAGE`, `SITE_LOCALE`, and `SITE_DIRECTION` are all
+       established, ask what the user wants changed in `PROJECT_ROOT`. Use the
+       existing Phase 3/4/5/6/7 implementation, verification, and review flow
+       against the cloned project; do **not** run Phase 2 scaffold/copy-template.
+       In Phase 3, skip the Brand sub-prompt and set `BRAND_SOURCE` to
+       `template` - the template's existing theme tokens are the source of truth
+       unless the user asks for a redesign. On this path Phase 5 edits the cloned
+       project in place: keep the existing theme file, layout, and pages, change
+       only what the approved plan names, and skip every `scaffold-status.json`
+       step because no loader is running. Run the Phase 5.7 design critique on
+       the pages you changed.
    21. After the customization plan is approved, mark **Plan template customizations** as `completed`, **Implement pages and components** as `in_progress`, and make the requested changes.
    22. Run the existing validation/review flow. Do not automatically deploy unless the user explicitly asks to run `/deploy-site`.
 
@@ -695,17 +744,124 @@ Write the file with the `Write` tool (atomic overwrite). You do not need to read
    | Which frontend framework? | Framework | React (Recommended), Vue, Angular, Astro |
    | Where should the project be created? | Location | Current directory, New folder in current directory (Recommended), Any other directory |
 
-10. Resolve the project location:
+10. Determine the site's single content language independently of whether the
+   purpose was supplied in `$ARGUMENTS`.
+
+   - If the request explicitly names the content language, resolve it without
+     asking again and include it in the confirmation.
+   - Do not infer the desired site language merely from the language used to
+     converse with the maker.
+
+   <!-- not-a-gate: the locale is validated before it can affect scaffolding -->
+
+   When the content language was not explicit, get a best-effort suggestion:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/suggest-content-locale.js"
+   ```
+
+   The script returns the selected Dataverse environment's base language as a
+   canonical BCP-47 locale when PAC and Azure CLI authentication are available.
+   It silently returns `en-US` with `"source": "fallback"` when the environment,
+   authentication, API response, or LCID mapping is unavailable. Do not retry,
+   display an error, or block site creation when the lookup falls back.
+
+   Use `AskUserQuestion`:
+
+   | Question | Header | Options |
+   |----------|--------|---------|
+   | Which language should the site content use?<br><br>Pages, navigation, buttons, forms, and accessibility text will use this language. Dataverse and Power Pages system messages will remain in English. | Site content language | `<language> (<locale>) (Suggested)`, English (`en-US`) |
+
+   Replace `<language>` and `<locale>` with the script result. If that result is
+   `en-US`, show only `English (United States) (en-US) (Suggested)` rather than
+   adding a duplicate English option. Label the environment-derived choice
+   **Suggested**, not **Recommended**: an environment's base language is useful
+   context but may not match the intended language of a public site.
+
+   The question UI's free-text option lets the maker enter another language or
+   locale, such as `Spanish (es-ES)`, `Japanese (ja-JP)`, or `Arabic (ar-SA)`.
+   Convert a language name to an appropriate BCP-47 tag, preserving an explicit
+   region or script when supplied. Keep the raw answer as data only: never place
+   it in a shell command. In agent memory, convert it to
+   `SAFE_LOCALE_CANDIDATE`, which must match
+   `^[A-Za-z0-9]{1,8}(?:-[A-Za-z0-9]{1,8})*$` and be at most 255 characters.
+   Reject and re-prompt before running a command if no safe candidate can be
+   derived. Validate and canonicalize only that constrained candidate:
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/lib/localization-config.js" resolve-locale --locale "<SAFE_LOCALE_CANDIDATE>"
+   ```
+
+   Do not quote, escape, sanitize, or otherwise interpolate the raw maker answer
+   into this command. Reject invalid resolver output and re-prompt with the
+   reason. Record the canonical resolver output rather than inventing a
+   language label:
+
+   - `SITE_LANGUAGE` — resolver `languageName`, such as `Spanish`; if display
+     names are unavailable, show the canonical locale and ask the maker for a
+     readable label rather than guessing
+   - `SITE_LOCALE` — canonical BCP-47 tag, such as `es-ES`
+   - `SITE_DIRECTION` — `ltr` or `rtl` from the resolver
+   - `SITE_LOCALE_NAME` — resolver `localeName`, such as `European Spanish`,
+     retained for plan text that needs regional or script specificity
+
+11. Resolve the project location:
    - **If "Current directory"**: Project root = `<cwd>`.
-   - **If "New folder in current directory"**: Create a folder named `__SITE_NAME__` inside the cwd. Project root = `<cwd>/__SITE_NAME__/`.
+   - **If "New folder in current directory"**: Create a folder named
+     `__SITE_NAME__` inside the cwd. Project root =
+     `<cwd>/__SITE_NAME__/`. First verify that `__SITE_NAME__` is a valid
+     directory name on the current operating system. Non-Latin characters alone
+     are not a reason to reject it. If the site name contains invalid path
+     characters, is reserved by the operating system, is empty after
+     sanitization, or otherwise cannot be used safely, fall back to
+     `__SITE_SLUG__`. Before creating a fallback folder, tell the maker which
+     name will be used and why the original site name was not filesystem-safe.
    - **If "Any other directory"**: Ask for the full path. Verify/create it. Project root = provided path.
 
    After resolving, confirm: "The site will be created at `<resolved path>`."
 
    Store this as `PROJECT_ROOT`.
-11. Append the from-scratch task list (Phases 2-8) to the todo list (see [Progress Tracking](#progress-tracking)), then mark **Select template or choose from-scratch** as `completed`.
 
-**Output**: cloned template site identity (`IMPORTED_SITE_NAME`, `IMPORTED_WEBSITE_RECORD_ID`) and a local project path ready for optional customization; or `CREATION_PATH = "from-scratch"` with selected framework and resolved project location.
+12. Finalize the derived values:
+   - `__SITE_NAME__` — preserve the maker's site/brand name as entered, e.g.
+     `Contoso Portal`; it does not need to match the content language.
+   - `__SITE_SLUG__` — a lowercase ASCII kebab-case technical identifier used
+     by npm, Angular project configuration, build paths, and the default folder.
+     Derive it from the site name when possible, e.g. `Contoso Portal` →
+     `contoso-portal`. Transliterate when reliable. If a non-Latin name cannot
+     produce a safe, meaningful slug, derive one from the site's purpose or ask
+     for a technical project name rather than emitting an empty or invalid
+     identifier.
+   - `__SITE_DESCRIPTION__` — one-line description written in `SITE_LANGUAGE`
+     based on the name and purpose.
+
+13. Summarize understanding and confirm with the user before proceeding. Include
+   site name, technical slug, framework, purpose, audience, project location,
+   `SITE_LANGUAGE` (`SITE_LOCALE`, `SITE_DIRECTION`), and the explicit statement
+   that Dataverse and Power Pages system messages remain English.
+14. After confirmation, emit the approved, taxonomy-only site configuration:
+
+   - Map the purpose to `company-portal`, `blog-content`, `dashboard`,
+     `landing-page`, or `other`. Never pass the maker's free-text purpose.
+   - Set `choiceSource` to `arguments` only when both framework and content
+     locale came from the initial request; otherwise use `prompt`.
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/emit-skill-configured-telemetry.js" --skillName "create-site" --projectRoot "<PROJECT_ROOT>" --framework "<react|vue|angular|astro>" --siteContentLocale "<SITE_LOCALE>" --purpose "<PURPOSE_TAXONOMY>" --audience "<internal|external>" --choiceSource "<arguments|prompt>"
+   ```
+
+   The telemetry helper is fail-closed and removes locale extensions/private-use
+   subtags. Do not add the site name, description, pages, routes, components,
+   feature labels, or any other free-text requirement to this command.
+
+15. Append the from-scratch task list (Phases 2-8) to the todo list (see
+    [Progress Tracking](#progress-tracking)), then mark **Select template or
+    choose from-scratch** as `completed`.
+
+**Output**: cloned template site identity (`IMPORTED_SITE_NAME`,
+`IMPORTED_WEBSITE_RECORD_ID`) and a local project path ready for optional
+customization; or `CREATION_PATH = "from-scratch"` with selected framework,
+content language, derived naming values, and resolved project location.
 
 ---
 
@@ -751,6 +907,8 @@ See [Live Preview Status Protocol](#live-preview-status-protocol) for the full c
 After copying, replace all `__PLACEHOLDER__` tokens in every file. Use `Edit` with `replace_all: true` on each file.
 
 - **Name/slug/description placeholders**: Use the actual values from Phase 1 (`__SITE_NAME__`, `__SITE_SLUG__`, `__SITE_DESCRIPTION__`).
+- **Document-language placeholders**: Replace `__SITE_LOCALE__` with
+  `SITE_LOCALE` and `__SITE_DIRECTION__` with `SITE_DIRECTION`.
 
 > **Note:** The scaffold loading screen uses hardcoded Power Pages branding colors — there are no color placeholders (`__PRIMARY_COLOR__`, etc.) to replace. The user's chosen color palette is applied fresh during Phase 5 when the scaffold is completely replaced.
 
@@ -799,7 +957,7 @@ Run `npm run dev` in the background using `Bash` with `run_in_background: true`.
 Immediately after the dev server starts, verify the scaffold is working:
 
 1. Use `mcp__plugin_power-pages_playwright__browser_navigate` to open the dev server URL
-2. Use `mcp__plugin_power-pages_playwright__browser_snapshot` to verify the page loaded correctly (do NOT take screenshots — only use accessibility snapshots)
+2. Use `mcp__plugin_power-pages_playwright__browser_snapshot` to verify the page loaded correctly (accessibility snapshots only - screenshots are reserved for the Phase 5 design checks)
 3. **Share the dev server URL with the user** so they can preview the site in their own browser (e.g., "Your site is running at `http://localhost:5173` — open it in your browser to follow along as I build.")
 
 > **GATE: Do NOT proceed to Phase 3 until ALL of the following are true:**
@@ -823,10 +981,10 @@ Immediately after the dev server starts, verify the scaffold is working:
 
 <!-- gate: create-site:3.requirements | category=plan | cancel-leaves=nothing -->
 
-> 🚦 **Gate (plan · create-site:3.requirements):** Three sub-prompts (features multi-select, aesthetic, mood) — shape the Phase 4 plan and the Phase 5 implementation. Fires at step 2 of the action list below.
+> 🚦 **Gate (plan · create-site:3.requirements):** Four sub-prompts (features multi-select, aesthetic, mood, brand) plus a brand follow-up when the user has brand inputs - shape the Phase 4 plan and the Phase 5 implementation. Fires at step 2 of the action list below.
 >
 > **Trigger:** Phase 3 entry; scaffold loader is up.
-> **Why we ask:** Wrong feature set / aesthetic gets baked into the rendered plan — the Phase 4.7 gate would still catch most errors, but it's wasteful to defer the catch.
+> **Why we ask:** Wrong feature set / aesthetic / brand gets baked into the rendered plan - the Phase 4.7 gate would still catch most errors, but it's wasteful to defer the catch.
 > **Cancel leaves:** Nothing — scaffold loader files are throwaway artifacts replaced wholesale in Phase 5.
 
 **Actions**:
@@ -834,10 +992,10 @@ Immediately after the dev server starts, verify the scaffold is working:
 1. **Raise the "awaiting input" banner** so the user notices the terminal prompt even while the browser loader is full-screen. `Write` `<PROJECT_ROOT>/public/scaffold-status.json`:
 
    ```json
-   { "message": "Planning your site", "awaitingInput": true, "inputPrompt": "Features, aesthetic, and mood — please answer in the terminal." }
+   { "message": "Planning your site", "awaitingInput": true, "inputPrompt": "Features, aesthetic, mood, and brand - please answer in the terminal." }
    ```
 
-   Immediately after the user answers, `Write` the same file again with `"awaitingInput": false` so the banner disappears.
+   Immediately after the user answers (including any brand follow-up), `Write` the same file again with `"awaitingInput": false` so the banner disappears.
 
 2. Use `AskUserQuestion` to collect feature and design requirements:
 
@@ -846,6 +1004,9 @@ Immediately after the dev server starts, verify the scaffold is working:
    | Which features? (multi-select) | Features | *(generate 3-4 context-aware options based on the site name, purpose, and audience from Phase 1)* |
    | What aesthetic direction do you want? | Aesthetic | Minimal & Clean (Recommended), Bold & Vibrant, Dark & Moody, Warm & Organic |
    | What's the overall mood? | Mood | Professional & Trustworthy (Recommended), Creative & Playful, Technical & Precise, Elegant & Premium |
+   | Is there an existing brand the site should match? | Brand | No, create a fresh identity (Recommended), Match my existing website, Use my brand colors or logo |
+
+   **Brand follow-up.** Record the answer as `BRAND_SOURCE` (`fresh`, `website`, or `assets`). For **Match my existing website**, use `AskUserQuestion` to ask for the URL (free text - use a single generic option so the user types it via "Other"); accept only an `http://` or `https://` URL and ask again otherwise. For **Use my brand colors or logo**, ask the same way for the hex colors and/or the absolute path of a logo file. On the template customization path, skip this sub-prompt (see Phase 1.5 step 20).
 
    > **Feature options are NOT hardcoded.** Infer relevant features from Phase 1 answers. For example:
    > - "HR Dashboard" + Internal → Employee Directory, Leave Requests, Announcements, Org Chart
@@ -889,31 +1050,37 @@ Immediately after the dev server starts, verify the scaffold is working:
 
    The `marker` string is the comment tag Phase 5 emits into the page source as a reserved anchor that `/add-ai-webapi` later finds. Keep the shape uniform — one marker per placement, always the same tag, so the follow-up skill's explore step can grep for them deterministically.
 
-5. Read the design aesthetics reference: `${PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md`
-6. **Map aesthetic + mood to design choices** using the Aesthetic x Mood Mapping table from the design reference. Record the chosen font direction, color direction, and motion direction.
-7. Analyze requirements and determine needed components. If `AI_SUMMARY_PLACEMENTS` from step 4 implies a page that wasn't already in the plan (e.g., a `CaseDetail` page for a data-summarization pick on the support-case table), add it to the page list now. Present the component plan to the user as a table:
+5. Read the design references: `${PLUGIN_ROOT}/references/design-aesthetics.md`, `${PLUGIN_ROOT}/references/page-blueprints.md`, and `${PLUGIN_ROOT}/references/bidirectional-design.md`.
+6. **Write the experience brief** (design-aesthetics.md section 1) - audience and job, primary and secondary action, principal doubt, proof strategy, design thesis, hero concept, and signature moment. Resolve the brand source first (section 2): for `website`, extract the brand from the URL with the Playwright snippet there; for `assets`, build the palette around the supplied colors; for `fresh`, start from the matching cell of the aesthetic x mood map (section 11). Record the display and body fonts, color direction, geometry, and motion direction. Font choices must support the complete writing system used by `SITE_LOCALE`; verify glyph coverage and shaping rather than selecting a Latin-only font solely because it matches the aesthetic, and use a compatible script-aware fallback stack.
+7. Analyze requirements and determine needed components. Plan each page's content as narrative beats from `page-blueprints.md`, in order, one line per section with its purpose. If `AI_SUMMARY_PLACEMENTS` from step 4 implies a page that wasn't already in the plan (e.g., a `CaseDetail` page for a data-summarization pick on the support-case table), add it to the page list now. Present the component plan to the user as a table:
 
    ```
    | Component Type      | Count | Details |
    |---------------------|-------|---------|
    | Pages               | 4     | Home, About, Services, Contact |
    | Shared Components   | 3     | Navbar, Footer, ContactForm |
-   | Design Elements     | 4     | Google Fonts (Playfair Display + Source Sans Pro), Color palette (6 CSS vars), Page transitions, Gradient backgrounds |
+   | Design Elements     | 5     | Schibsted Grotesk + Public Sans, 15 color tokens, product-moment hero, status-timeline signature moment, paper-grain backgrounds |
    | Routes              | 4     | /, /about, /services, /contact |
    ```
 
-8. Use best judgement to determine the final color palette based on the chosen aesthetic + mood. These will be written fresh into a new `theme.css` during Implementation (Phase 5) when the scaffold loading screen is completely replaced:
+   Build `BIDIRECTIONAL_REVIEW_DATA` for every planned visible or interactive
+   component, including page-local controls that are not shared source
+   components. Classify each entry as `direction-neutral`, `direction-aware`,
+   `direction-fixed`, or `unknown-third-party` using the shared bidirectional
+   standard. Record the localized reason, applicable states, applicable
+   `desktop`/`narrow` viewports, and planned checks. Treat anything involving
+   inline placement, text direction, horizontal movement, sequence,
+   directional meaning, mixed-script content, or rendering outside the normal
+   component subtree as a potential bidirectional surface.
 
-   | CSS Variable | Description | Value |
-   |-------------|-------------|-------|
-   | `--color-primary` | Primary hex color | *(choose based on aesthetic + mood)* |
-   | `--color-secondary` | Complementary hex color | *(choose based on aesthetic + mood)* |
-   | `--color-bg` | Background color | *(choose based on aesthetic + mood)* |
-   | `--color-surface` | Surface/card color | *(choose based on aesthetic + mood)* |
-   | `--color-text` | Main text color | *(choose based on aesthetic + mood)* |
-   | `--color-text-muted` | Muted text color | *(choose based on aesthetic + mood)* |
+   This is the expected review scope, not a project manifest. Phase 5 must
+   reconcile it against the actual source and rendered application, adding
+   components or states discovered during implementation. Do not write a
+   separate component-inventory JSON file.
 
-**Output**: Confirmed list of pages, components, design elements, and routes to create
+8. Choose the final color tokens - every color role in design-aesthetics.md section 3 - from the brief and brand source. Check each text and background pair against WCAG AA now, before the values reach the plan. These are written fresh into a new `theme.css` during Implementation (Phase 5) when the scaffold loading screen is completely replaced.
+
+**Output**: Confirmed list of pages (with narrative beats), components, design elements, and routes to create, plus the experience brief and color tokens
 
 ---
 
@@ -923,9 +1090,9 @@ Immediately after the dev server starts, verify the scaffold is working:
 
 > **Why HTML instead of a chat message**: A structured HTML plan (like the ones produced by `/integrate-backend`, `/add-server-logic`, and `/add-cloud-flow`) lets the user skim sections, compare swatches, and preview typography — all impossible in a terminal. The scaffold loader in their browser may also be full-screen, so surfacing the plan in a new tab puts it where they can actually read it.
 
-### 4.1 Read the Design Reference
+### 4.1 Read the Design References
 
-Read the design aesthetics reference: `${PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md`. Every field you populate below should be justified by the chosen aesthetic + mood from Phase 3.
+Read `${PLUGIN_ROOT}/references/design-aesthetics.md` and `${PLUGIN_ROOT}/references/page-blueprints.md` if they are not already in context. Every field you populate below must trace back to the experience brief from Phase 3.
 
 > **AI Readiness in the plan.** If `AI_SUMMARY_PLACEMENTS` from Phase 3 is non-empty, reflect each placement in the matching `PAGES_DATA` entry's `description` or `content` — e.g., *"Reserved slot for an AI summary card; populated later by `/add-ai-webapi`. The page ships without AI."* This keeps the user's expectation honest: the site does not depend on generative-AI features being enabled on the tenant, and there is no "Run /add-ai-webapi" placeholder visible to end-users. If `AI_SUMMARY_PLACEMENTS` is empty, omit any AI references from the plan.
 
@@ -935,33 +1102,213 @@ Assemble a single JSON object with the following keys. The plan template rejects
 
 | Key | Type | Content |
 |-----|------|---------|
-| `SITE_NAME` | string | Title-case site name from Phase 1 |
-| `PLAN_TITLE` | string | Always `"Implementation Plan"` |
+| `SITE_NAME` | string | Site/brand name from Phase 1, preserved as entered |
+| `PLAN_TITLE` | string | Localized equivalent of `"Implementation Plan"` in `SITE_LOCALE` |
 | `FRAMEWORK` | string | `React` / `Vue` / `Angular` / `Astro` |
+| `SITE_LANGUAGE` | string | Readable content-language name from Phase 1, written in that language when practical |
+| `SITE_LOCALE` | string | Canonical BCP-47 content locale |
+| `SITE_DIRECTION` | string | `ltr` or `rtl` |
 | `AESTHETIC` | string | Chosen aesthetic (e.g., `Minimal & Clean`) |
 | `MOOD` | string | Chosen mood (e.g., `Professional & Trustworthy`) |
-| `SUMMARY` | string | One paragraph describing what the site is and who it serves |
-| `TYPOGRAPHY_DATA` | object | `{ primary: { name, sample, reason }, secondary: { name, sample, reason } }` — `name` must be a real Google Font family |
-| `PALETTE_DATA` | array | `[{ var, hex, description }]` — one entry per CSS variable (primary, secondary, bg, surface, text, text-muted) |
-| `MOTION_DATA` | array | `[{ label, description }]` — page transitions, hover states, etc. |
-| `BACKGROUNDS_DATA` | array | `[{ label, description }]` — hero backgrounds, section treatments, patterns |
-| `PAGES_DATA` | array | `[{ name, route, description, content: [...], components: [...] }]` — `content` is an outline of what's on the page, `components` is shared component names used |
+| `SUMMARY` | string | One localized paragraph describing what the site is and who it serves |
+| `PLAN_LABELS` | object | Complete localized template-label dictionary defined below |
+| `DESIGN_DIRECTION_DATA` | object | The experience brief: `{ thesis, brandSource, audience, primaryAction, secondaryAction, principalDoubt, proofStrategy, heroConcept, signatureMoment }` - all strings. `brandSource` says where tokens came from (e.g., `"Fresh identity"`, `"Matched to https://contoso.com"`) |
+| `TYPOGRAPHY_DATA` | object | `{ primary: { name, sample, reason }, secondary: { name, sample, reason } }` - `primary` is the body face, `secondary` the display face; `name` must be a family from the verified faces table in design-aesthetics.md (or the brand's own Google Font) |
+| `PALETTE_DATA` | array | `[{ var, hex, description }]` - one entry per color token from design-aesthetics.md section 3 |
+| `MOTION_DATA` | array | `[{ label, description }]` - first-screen entrance, signature moment, scroll reveals, interaction states, route transitions |
+| `BACKGROUNDS_DATA` | array | `[{ label, description }]` - hero atmosphere, section bands, textures, patterns |
+| `PAGES_DATA` | array | `[{ name, route, description, content: [...], components: [...] }]` - `content` is the page's narrative beats in order, one line per section with its purpose; `components` is shared component names used |
 | `COMPONENTS_DATA` | array | `[{ name, purpose, usedBy: [...] }]` — shared components with the page names that consume them |
 | `ROUTES_DATA` | array | `[{ path, page }]` — every route the router will register |
-| `REVIEW_DATA` | array of strings | Verification checklist items (e.g., "All pages load without console errors") |
+| `BIDIRECTIONAL_REVIEW_DATA` | array | Every planned visible or interactive component as `{ component, classification, reason, states: [...], viewports: ["desktop" or "narrow"], checks: [...] }`; all maker-facing strings are localized |
+| `REVIEW_DATA` | object | `{ agentChecks: [...], makerReview: [...] }` using the responsibility contract below |
 | `DEPLOYMENT_DATA` | array | `[{ title, description, recommended?: boolean }]` — mark exactly one as `recommended: true` |
 
-**Write the data for the user**, not for internal tooling — phrase `description` and `reason` fields in plain language.
+`PLAN_LABELS` must contain every key below. The English values describe each
+label's meaning; translate every value into `SITE_LOCALE`. Preserve `{siteName}`
+and `{count}` exactly because the renderer substitutes those tokens at runtime.
+Do not omit keys or fall back to English for individual labels.
+
+```json
+{
+  "navigation": {
+    "group": "Plan",
+    "overview": "Overview",
+    "design": "Design",
+    "pages": "Pages & Components",
+    "deployment": "Deployment & Review"
+  },
+  "overview": {
+    "title": "Overview",
+    "description": "Implementation plan for {siteName}",
+    "stats": {
+      "pages": "Pages",
+      "components": "Shared Components",
+      "routes": "Routes"
+    },
+    "nextSteps": {
+      "title": "What happens next",
+      "design": {
+        "title": "Apply design tokens",
+        "description": "Fonts, palette, motion, and backgrounds written into your theme"
+      },
+      "components": {
+        "title": "Build shared components",
+        "descriptionOne": "{count} reusable component used across pages",
+        "descriptionOther": "{count} reusable components used across pages"
+      },
+      "pages": {
+        "title": "Create pages",
+        "descriptionOne": "{count} page with routing and navigation",
+        "descriptionOther": "{count} pages with routing and navigation"
+      },
+      "critique": {
+        "title": "Critique the design",
+        "description": "Desktop and mobile screenshots scored and refined against the design rubric"
+      },
+      "verify": {
+        "title": "Verify & accessibility",
+        "description": "axe-core audit, Playwright checks, and user review"
+      }
+    }
+  },
+  "design": {
+    "title": "Design",
+    "description": "Design direction, typography, palette, motion, and background treatments",
+    "direction": {
+      "title": "Design direction",
+      "heroConcept": "Hero concept",
+      "signatureMoment": "Signature moment",
+      "primaryAction": "Primary action",
+      "secondaryAction": "Secondary action",
+      "principalDoubt": "Principal doubt",
+      "proofStrategy": "Proof strategy",
+      "brandSource": "Brand source",
+      "audience": "Audience and job"
+    },
+    "typography": "Typography",
+    "palette": "Color palette",
+    "motion": "Motion & animation",
+    "backgrounds": "Background treatment",
+    "primaryRole": "Primary — body & UI",
+    "secondaryRole": "Secondary — headings"
+  },
+  "pages": {
+    "title": "Pages & Components",
+    "description": "Pages to build, their content outline, and the shared components they rely on",
+    "pages": "Pages",
+    "components": "Shared components",
+    "routing": "Routing",
+    "path": "Path",
+    "page": "Page",
+    "content": "Content",
+    "componentsUsed": "Components used",
+    "usedBy": "Used by",
+    "noComponents": "No shared components planned yet."
+  },
+  "bidirectional": {
+    "title": "Bidirectional review scope",
+    "description": "Planned component, state, and viewport coverage; reconciled with the actual implementation before handoff",
+    "classification": "Classification",
+    "reason": "Reason",
+    "states": "Applicable states",
+    "viewports": "Applicable viewports",
+    "checks": "Planned checks",
+    "classifications": {
+      "directionNeutral": "Direction-neutral",
+      "directionAware": "Direction-aware",
+      "directionFixed": "Direction-fixed",
+      "unknownThirdParty": "Unknown or third-party"
+    },
+    "viewport": {
+      "desktop": "Desktop",
+      "narrow": "Narrow or mobile"
+    }
+  },
+  "deployment": {
+    "title": "Deployment & Review",
+    "description": "Verification checklist and deployment options",
+    "verify": "Before handoff — verify",
+    "agentChecks": "Agent verification",
+    "agentChecksDescription": "The agent will run and report these checks before handoff.",
+    "makerReview": "Maker review",
+    "makerReviewDescription": "Review these judgment-based items in the live preview.",
+    "options": "Deployment options",
+    "recommended": "Recommended"
+  },
+  "common": {
+    "noneSpecified": "None specified."
+  },
+  "footer": {
+    "aiWarning": "AI-generated content may be incorrect"
+  }
+}
+```
+
+**Write all maker-facing plan data in the selected content language.** This
+includes `PLAN_TITLE`, `SUMMARY`, `PLAN_LABELS`, descriptive `AESTHETIC` and
+`MOOD` names, typography reasons/samples, palette descriptions, motion and
+background labels/descriptions, page display names/descriptions/content
+outlines, component display names/purposes, route page labels, review items,
+and deployment titles/descriptions.
+
+Keep technical values unchanged: framework and package names, file paths,
+routes, commands, locale tags, CSS variables, hex colors, identifiers, API
+names, and brand/product names. When a page or component `name` is also the
+planned code identifier, keep it unchanged; localize only human-readable
+display names. Use complete translated phrases rather than joining translated
+fragments in English word order.
+
+Build `REVIEW_DATA` as two non-empty localized string arrays:
+
+```json
+{
+  "agentChecks": [
+    "The root document uses the canonical site locale and resolved writing direction",
+    "The bidirectional-readiness audit reports no errors; layout uses logical CSS and every physical exception is documented and verified",
+    "Every visible or interactive component is classified, and the planned review scope is reconciled with the actual source and rendered application",
+    "Every applicable state and viewport of direction-aware, direction-fixed, and unknown or third-party components has verification evidence",
+    "Localized form labels, placeholders, hints, helper text, validation messages, prefixes, suffixes, and overlays follow the active UI direction; only classified machine-oriented values remain LTR",
+    "Representative routes work in the selected direction and a pseudo-opposite direction at desktop and narrow widths without console errors, broken reading order, or broken focus order",
+    "Unknown-direction content uses bdi or dir=auto, while URLs, email addresses, code, paths, GUIDs, and identifiers are explicitly isolated",
+    "Dates, numbers, currency, percentages, and relative time use locale-aware Intl formatting",
+    "Typography covers the selected script and expanded or opposite-direction text does not clip or overlap",
+    "Directional components, interactions, icons, and assets behave according to their reviewed mirror, preserve, or replace classification",
+    "Every route has zero critical or serious axe-core accessibility violations"
+  ],
+  "makerReview": [
+    "Language, terminology, tone, regional wording, and regulated content are appropriate",
+    "Visual hierarchy and reading flow feel natural in the selected direction and the opposite-direction preview",
+    "Typography remains readable and preserves the intended brand character",
+    "Icon and image direction choices are culturally and semantically appropriate",
+    "Text wrapping, expansion, and narrow-screen layouts remain visually acceptable"
+  ]
+}
+```
+
+Translate these as complete criteria rather than copying the English wording.
+The two groups communicate responsibility:
+
+- `agentChecks` are objective commitments the agent must execute and report
+  during Phases 5–7. They are not instructions for the maker.
+- `makerReview` contains linguistic, cultural, brand, and visual judgments that
+  automation cannot approve. The maker reviews them in the live preview during
+  Phase 7.
+
+Do not move subjective maker judgments into `agentChecks`, and do not ask the
+maker to repeat deterministic source, browser, or accessibility checks.
 
 ### 4.3 Render the HTML Plan
 
 Pick an output path under `<PROJECT_ROOT>/docs/`. Default is `create-site-plan.html`; if that file already exists, pick a descriptive variant like `create-site-plan-v2.html` (the render script refuses to overwrite existing files).
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/render-createsite-plan.js" --output "<PROJECT_ROOT>/docs/create-site-plan.html" --data-inline '<json-string>'
+node "${PLUGIN_ROOT}/scripts/render-createsite-plan.js" --output "<PROJECT_ROOT>/docs/create-site-plan.html" --data - <<'PLAN'
+<plan JSON>
+PLAN
 ```
 
-Use `--data-inline` so no temp JSON file is written. If the JSON is too large for a single shell argument, write it to a temp file and use `--data <path>` instead, then delete the temp file after the render succeeds.
+Send the plan JSON on stdin as shown, so no temp file is written and nothing in it - such as the brand URL the user typed - is parsed by the shell; the quoted `'PLAN'` delimiter turns off expansion.
 
 The script prints `{"status":"ok","output":"<path>"}` on success. Capture and use that actual output path for the next step.
 
@@ -974,8 +1321,8 @@ Open `<OUTPUT_PATH>` in the default browser using the platform-appropriate file 
 Keep the terminal message short — **the full plan lives in the HTML file now**. Include:
 
 - One sentence confirming the plan was rendered and where (the output path).
-- A 3-5 line bullet summary: framework, page count, component count, palette primary + mood.
-- A pointer: "See the open browser tab for pages, color swatches, typography samples, and deployment options."
+- A 3-5 line bullet summary: the design thesis, signature moment, framework, content language, page and component count, and primary palette color.
+- A pointer: "See the open browser tab for the design direction, pages, color swatches, typography samples, and deployment options."
 
 Do NOT dump the full plan contents into the terminal — that defeats the purpose of the HTML view.
 
@@ -1014,11 +1361,11 @@ Use `AskUserQuestion`:
 
 ## Phase 5: Implementation
 
-**Goal**: Build all pages, components, and design elements with the chosen aesthetic applied from the start
+**Goal**: Build all pages, components, and design elements with the design thesis applied from the start, then prove the result with a visual design critique
 
 > **Prerequisite:** The dev server MUST already be running and verified via Playwright (completed in Phase 2). If it is not, go back and complete Phase 2.
 >
-> **Design reference:** Read `${PLUGIN_ROOT}/skills/create-site/references/design-aesthetics.md` and apply its principles throughout this phase. All pages and components should be built with the chosen typography, color palette, motion, and backgrounds from the start — do NOT build with neutral styling first and redesign later.
+> **Design references:** Build from `${PLUGIN_ROOT}/references/design-aesthetics.md` (the design system) and `${PLUGIN_ROOT}/references/page-blueprints.md` (page narratives, hero patterns, copy). Read them now if they are not already in context. All pages and components carry the chosen typography, color tokens, imagery, motion, and backgrounds from the start - do NOT build with neutral styling first and redesign later.
 
 **Actions**:
 
@@ -1030,7 +1377,8 @@ Use `AskUserQuestion`:
 - **One todo per shared component** — e.g., "Create ContactForm component", "Create DataTable component"
 - **One todo for routing** — "Update router with all new routes"
 - **One todo for navigation** — "Update Layout/Header with navigation links"
-- **One todo for design foundations** — "Apply design tokens (fonts, colors, motion, backgrounds)"
+- **One todo for design foundations** - "Apply design tokens (theme tokens, fonts, motion, backgrounds)"
+- **One todo for the design critique** - "Run design critique pass (desktop and mobile)"
 
 Each todo should have a clear `subject`, `activeForm`, and `description` that includes the file path and what the page/component does. Then work through the todos in order, marking each `in_progress` → `completed`.
 
@@ -1040,13 +1388,13 @@ The scaffold is a temporary loading screen — it must be **completely replaced*
 
 > **Narrate progress in the loader**: Before each of the steps below, update `<PROJECT_ROOT>/public/scaffold-status.json` so the user — who may still be watching the Home page loader — sees what's actually happening instead of the hardcoded placeholder cycle. Use a short present-participle `message` (e.g., `"Creating Navbar component"`, `"Creating Contact page"`). Include any useful grouping context inline in the message itself. The loader picks up changes within ~1.5 seconds. Updates become no-ops once step 4 replaces the Home page.
 
-1. **Design foundations** — **Completely rewrite** `theme.css` (or `styles.css` for Angular) from scratch with the chosen color palette as CSS custom properties, Google Fonts, motion/animation utilities, and background treatments. The scaffold's loading screen CSS is discarded entirely. Commit after this step. *Before starting, set the loader status to `{ "message": "Applying design tokens" }`.*
-2. **Layout** — **Rewrite** the Layout component (and Header/Footer for Astro) with proper navigation, header, and footer that reflect the chosen design. The scaffold's passthrough Layout is replaced with a real layout structure. *Set status to `{ "message": "Rewriting Layout" }`.*
-3. **Shared components** — Build reusable components (Navbar, Footer, ContactForm, etc.) that pages will use. *For each component, set status to `{ "message": "Creating <Component> component" }`.*
-4. **Pages** — Create route components for each requested page, **replacing** the scaffold Home page and About placeholder entirely. Each page component must update `document.title` on mount to reflect the current page (e.g., `"Contact — Contoso Portal"`). Use the framework's idiomatic lifecycle hook: `useEffect` (React), `onMounted` (Vue), `ngOnInit` (Angular), or a `<title>` tag in the frontmatter (Astro). Format: `"<Page Name> — <Site Name>"`, with the home page using just `"<Site Name>"`. *For each page, set status to `{ "message": "Creating <Page> page" }` before writing the file. The loader disappears when the Home page itself is replaced — no further status updates are needed after that.*
+1. **Design foundations** - **Completely rewrite** `theme.css` (or `styles.css` for Angular) from scratch with the full token set from design-aesthetics.md section 3, base element styles, the interaction-state styles from section 8, a `prefers-reduced-motion` block, background treatments, and logical CSS properties. The selected font stack must cover `SITE_LOCALE`'s resolved script. Do not use physical left/right layout as the default, even for an initially LTR-only site. Add the chosen Google Fonts to the entry HTML's font `<link>` (`index.html`, or `Layout.astro` for Astro) *alongside* the scaffold's DM Sans + Outfit, which the loader still uses until step 4. The scaffold's loading-screen CSS is discarded entirely. Commit after this step. *Before starting, set the loader status to `{ "message": "Applying design tokens" }`.*
+2. **Layout** - **Rewrite** the Layout component (and Header/Footer for Astro) with proper navigation, header, and footer that reflect the chosen design, with a link for every route in the approved plan so the header is final before the first-impression review. The scaffold's passthrough Layout is replaced with a real layout structure. *Set status to `{ "message": "Rewriting Layout" }`.*
+3. **Shared components** - Build reusable components (Navbar, Footer, ContactForm, etc.) that pages will use, each with every state in the design-aesthetics.md state table that applies to it. *For each component, set status to `{ "message": "Creating <Component> component" }`.*
+4. **Pages** - Create route components for each requested page, **replacing** the scaffold Home page and About placeholder entirely. **Build Home first, and its hero first**, following the hero concept from the brief. As soon as Home is built, run a **first-impression review** of `/` (see "Running a review" in [5.7](#57-design-critique-pass)) and fix the hero until it passes, for at most three rounds - every later page inherits that foundation. Build each page's sections in the order of its planned narrative beats. Each page component must update `document.title` on mount to reflect the current page (e.g., `"Contact — Contoso Portal"`). Use the framework's idiomatic lifecycle hook: `useEffect` (React), `onMounted` (Vue), `ngOnInit` (Angular), or a `<title>` tag in the frontmatter (Astro). Format: `"<Page Name> — <Site Name>"`, with the home page using just `"<Site Name>"`. *For each page, set status to `{ "message": "Creating <Page> page" }` before writing the file. The loader disappears when the Home page itself is replaced - no further status updates are needed after that.*
 5. **Router** — Register all new routes (the scaffold only has `/` and `/about` — add all requested routes)
-6. **Navigation** — Add links to the new Layout/Header component
-7. **Entry HTML** — Update `index.html` (or `Layout.astro` for Astro) to load the chosen Google Fonts instead of the scaffold's DM Sans + Outfit
+6. **Navigation** - Confirm every Layout/Header link resolves to a registered route, and mark the current item with `aria-current="page"`
+7. **Entry HTML** - Remove the scaffold's DM Sans + Outfit from the font `<link>` in `index.html` (or `Layout.astro` for Astro) so only the chosen families load, and set `<meta name="theme-color">` to the `--color-bg` value
 8. **Reserve AI summary slots** — only if `AI_SUMMARY_PLACEMENTS` from Phase 3 is non-empty. For each placement, insert a single comment marker in the target page source at the intended insertion point. No visible placeholder UI, no stub components, no extra routes — just a grep-able anchor that `/add-ai-webapi` will later find and replace. Syntax depends on the framework:
 
    | Framework | Marker syntax |
@@ -1066,32 +1414,61 @@ The scaffold is a temporary loading screen — it must be **completely replaced*
 
    One marker per placement, exactly as defined in the `marker` field of the `AI_SUMMARY_PLACEMENTS` record. Do NOT add stub components (`<CopilotSummaryCard />`, etc.), CSS classes, or empty `<aside>` elements — the slot is just a comment. The site must ship as if AI is not a consideration; the follow-up skill does the real work.
 
-**Important**: Build real, functional UI with distinctive design applied — not placeholder "coming soon" pages, and not generic unstyled markup. Every page and component should reflect the chosen aesthetic from the moment it's created. The scaffold loading screen should be completely gone after this phase — no trace of the Power Pages branded animation should remain.
+**Content-language requirements**:
 
-### 5.3 Source Real Images
+- Write content natively in `SITE_LANGUAGE`; do not author an English site and
+  mechanically translate it afterward.
+- Localize every user-visible SPA string: navigation, headings, body copy,
+  buttons, links, forms, validation, loading/error/empty states, document
+  titles, metadata, image alt text, and ARIA labels.
+- Keep code identifiers, package names, CSS classes, Dataverse logical names,
+  API endpoints, and environment variables technical and untranslated.
+- Keep route paths as stable semantic English ASCII identifiers by default
+  (for example, `/services`), while navigation labels and page titles use
+  `SITE_LANGUAGE`. Do not translate paths during single-language site creation;
+  stable routes avoid breaking bookmarks, analytics, integrations, tests, and
+  a later `/add-localization` setup. Use localized paths only when the maker
+  explicitly requests them for a permanently single-language SEO strategy.
+- For every locale, use logical CSS properties and preserve meaningful DOM
+  reading/focus order. Do not reverse arrays or use `row-reverse` to simulate
+  RTL. Initial RTL sites must also be visually verified in RTL.
+- Treat each form field as one compound direction surface: localized labels,
+  placeholders, hints, helper text, validation messages, prefixes, suffixes,
+  icons, and open menus follow the active UI direction and use logical
+  alignment. Native free-form inputs and textareas use adaptive `dir`: the
+  active UI direction while empty, `auto` while populated, and the active UI
+  direction again after clearing. Preserve or add `dirname` where submitted
+  direction metadata is appropriate. Keep only
+  classified machine-oriented values such as email addresses, telephone
+  numbers, URLs, code, paths, GUIDs, and identifiers LTR; add the adjacent
+  `/* bidi-fixed: <specific reason>; verify=ltr,rtl */` or equivalent HTML
+  directive required by the shared standard. Their surrounding field UI
+  remains direction-aware.
+- Wrap independently inserted unknown-direction content (names, comments,
+  titles, search queries) with `<bdi>` or `dir="auto"`. Keep URLs, email,
+  code, file paths, GUIDs, and other machine values explicitly isolated,
+  normally LTR. Free-form native controls must not use permanent `dir="auto"`;
+  bind their native direction to value emptiness and the active UI direction.
+- Format dates, numbers, currency, percentages, and relative time with `Intl`
+  APIs rather than concatenating locale-sensitive punctuation or symbols.
+- Classify directional icons and assets as unchanged, mirrored, or replaced.
+  Mirror only controls whose semantics follow reading progression.
+- A required physical declaration may remain only with an adjacent
+  `/* bidi-physical: <specific reason>; verify=ltr,rtl */` directive and
+  successful browser verification in both directions.
 
-Use high-quality photos from Unsplash wherever the site needs visual content. Do NOT use placeholder services (e.g., `placeholder.com`, `placehold.co`), broken `<img>` tags, or leave empty image slots.
+**Important**: Build real, functional UI with the design thesis applied - not placeholder "coming soon" pages, and not generic unstyled markup. Every page and component reflects the thesis from the moment it's created. The scaffold loading screen should be completely gone after this phase - no trace of the Power Pages branded animation should remain.
 
-**How to find images:**
+### 5.3 Source Purposeful Visuals
 
-1. Use `WebSearch` to search Unsplash for relevant photos (e.g., `site:unsplash.com modern office workspace`)
-2. Pick specific photos and use their direct URL with sizing parameters: `https://images.unsplash.com/photo-{id}?w={width}&h={height}&fit=crop`
-3. Choose images that match the site's aesthetic and mood
+Follow the visuals order in design-aesthetics.md section 6: the site's own UI composed as a product moment first, bespoke inline SVG second, photography third. Do NOT use placeholder services (e.g., `placeholder.com`, `placehold.co`), broken `<img>` tags, or empty image slots.
 
-**Where to use images:**
+**Finding photography:**
 
-- **Hero sections** — Striking, high-resolution photos that set the tone for the site
-- **Feature/service cards** — Relevant photos that illustrate each feature or service
-- **About/team sections** — Professional or contextual photos matching the site's purpose
-- **Backgrounds** — Atmospheric photos used as full-bleed or overlay backgrounds
-- **Content sections** — Supporting photos that break up text and add visual interest
-
-**Guidelines:**
-
-- Pick images that feel cohesive together — consistent style, lighting, and color tone
-- Use appropriate sizing (`w=800` for cards, `w=1600` for heroes/backgrounds) to avoid slow loads
-- Add descriptive `alt` text to every `<img>` for accessibility
-- For icons and logos, use inline SVGs instead of photos
+1. Use `WebSearch` to search Unsplash for the specific subject the section needs (e.g., `site:unsplash.com city clerk helping resident at counter`) - specific to the audience and the job, never a generic "business meeting".
+2. Pick specific photos and use their direct URL with sizing parameters: `https://images.unsplash.com/photo-{id}?w={width}&h={height}&fit=crop` (`w=800` for cards, `w=1600` for heroes and full-bleed bands).
+3. Choose photos that share one art direction - similar lighting and color temperature - and apply the same crop ratios and palette-tinted treatment to all of them.
+4. Give every `<img>` descriptive `alt` text (or `alt=""` when decorative), explicit `width` and `height`, and `loading="lazy"` below the fold.
 
 ### 5.4 Git Commit Checkpoints
 
@@ -1102,12 +1479,16 @@ git add -A
 git commit -m "<short description of what was added/changed>"
 ```
 
+Every tool call re-sends the whole conversation, so save calls without merging commits: write a component's files (e.g., `Navbar.tsx` and `Navbar.css`) in one turn, and when several components are written in one turn, make their separate commits in one command (`git add src/components/Navbar.* && git commit -m "Add Navbar component" && git add src/components/Footer.* && git commit -m "Add Footer component"`).
+
 **When to commit:**
 
-- After applying design foundations (fonts, colors, motion)
+- After applying design foundations (tokens, fonts, motion)
 - After creating each page (e.g., "Add Home page", "Add Contact page")
+- After the first-impression review fixes on the Home page
 - After creating each shared component (e.g., "Add Navbar component", "Add Footer component")
 - After updating routing and navigation
+- After each round of design critique fixes
 - Before attempting anything risky or experimental
 
 **If something breaks**, revert to the last good commit:
@@ -1118,21 +1499,200 @@ git revert HEAD
 
 ### 5.5 Live Verification
 
-After each significant change (new page or component), browse the site via Playwright to ensure everything is up to the mark:
+After each significant change (new page or component), browse the site via Playwright to confirm structure and content:
 
 1. Use `mcp__plugin_power-pages_playwright__browser_navigate` to reload or navigate to the updated page
-2. Use `mcp__plugin_power-pages_playwright__browser_snapshot` to verify the page structure and content are correct — do NOT take screenshots
+2. Use `mcp__plugin_power-pages_playwright__browser_snapshot` to verify the page structure and content are correct
 3. If something looks wrong in the snapshot, fix it before proceeding
 
-The user is previewing in their own browser via the dev server URL shared in Phase 2.7.
+Visual judgement - screenshots at desktop and mobile widths - happens only in the first-impression review (step 4 of 5.2) and the critique pass (5.7). Screenshots stay in the conversation and are re-sent with every later call, so per-page checks during the build use `browser_snapshot`, not the capture script. The user is previewing in their own browser via the dev server URL shared in Phase 2.7.
+
+Run the deterministic readiness audit after all pages and components exist:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/audit-bidirectional-readiness.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+The command prints structured JSON and exits nonzero when deterministic errors
+exist; parse the JSON even on that expected failure path. Fix every `error`
+finding. Review every geometry, scrolling, visual-order, and content-expansion
+finding in the live site. For an intentionally physical product requirement,
+keep the declaration, add the validated adjacent `bidi-physical` directive,
+and verify that component in both LTR and RTL. For intentionally fixed
+machine-oriented text, add the adjacent `bidi-fixed` directive and verify the
+surrounding UI in both directions. Use pseudo-opposite-direction content to
+check wrapping, navigation, forms, mixed names/identifiers, icons, calendars,
+and narrow/mobile layout even when no second real locale exists yet. For every
+free-form native input or textarea, verify empty, RTL-valued, LTR-valued,
+clear-after-RTL, and clear-after-LTR states under both UI directions. Each
+clear state must enter the corresponding value before clearing it; empty and
+cleared states follow the UI locale, while populated states follow the entered
+value.
+
+Reconcile `BIDIRECTIONAL_REVIEW_DATA` against the completed source and rendered
+routes. Add every implemented visible or interactive component that was not
+known during planning, and add every applicable state or viewport discovered
+during implementation. Verify the selected direction and pseudo-opposite
+direction for every site: LTR sites receive pseudo-RTL coverage, and RTL sites
+receive pseudo-LTR coverage. Direction-neutral components need an inheritance
+check; direction-aware components need all applicable states in both
+directions; direction-fixed components need a semantic reason plus surrounding
+UI checks; unknown/third-party components need rendered checks including
+dialogs, menus, autocomplete panels, tooltips, teleports, portals, overlays,
+Shadow DOM, or iframes they open.
+
+Build the ephemeral rendered-verification specification described in
+`${PLUGIN_ROOT}/references/rendered-bidirectional-verification.md`. Derive it
+from the reconciled component scope and actual selectors; do not commit it as a
+component manifest. Give unstable but important verification surfaces a
+`data-bidi-id` attribute. Include every applicable state and viewport, compound
+form parts, body-mounted overlays, explicit focus sequences, non-overlap pairs,
+and direction-specific computed-style expectations. Use the real configured
+LTR and RTL locales when both exist; otherwise add a browser-only
+pseudo-opposite locale. Real locales must be activated through the application
+and prove representative localized content; only pseudo locales may use the
+browser-only `set-document` action. If runtime localization was added, include both
+default -> locale -> default and locale -> default -> locale transition
+sequences for every real non-default locale, with route, form-state,
+application-state, and focus preservation checks. Pseudo locales do not
+participate in application-switch transitions. Every real locale, including
+the default, needs a reusable application activation action; `use-current`
+cannot restore a locale during a round trip. For a newly added runtime locale,
+use the localization verification transaction defined by add-localization:
+temporarily expose only the recorded target through the normal selector, run
+Playwright against a loopback dev server, keep it available on success, and
+restore fail-closed availability on failure. Exclude pre-existing unavailable
+locales from activation and declare them in `unavailableLocaleChecks`. Do not
+complete creation or offer deployment while the verification transaction
+exists. Bare `preserve` selectors are only for form controls; use explicit
+text, attribute, or property preservation entries for tabs, panels, counters,
+and other application state.
+
+Retain evidence for every applicable `REVIEW_DATA.agentChecks` item: audit
+result, routes/viewports exercised, direction used, mixed-content fixtures,
+font/text-expansion observations, component/asset classifications, console
+result, and any remediations. Do not mark an agent-owned criterion complete
+based only on visual inspection by the maker.
 
 ### 5.6 Clean Up the Live Status File
 
 Once the scaffold loader is gone, `public/scaffold-status.json` is just dead weight that would ship with the deployed site. Delete the file from `<PROJECT_ROOT>/public/` and commit the removal alongside the final implementation.
 
-> **GATE: Do NOT proceed to Phase 6 until ALL customization is complete with design applied.** The site must have distinctive typography (Google Fonts — no generic Inter/Roboto/Arial), a cohesive color palette (CSS variables), motion/animations, and all requested pages/features before moving to accessibility verification.
+### 5.7 Design Critique Pass
 
-**Output**: All pages, components, and design elements implemented and verified
+Judge the site from screenshots against `${PLUGIN_ROOT}/references/design-critique.md` (read it once, at the first review). Every tool call re-sends the whole conversation, so the review is built to take few calls: one script call captures every route at both widths and runs the automated checks, and one turn opens all the screenshots in parallel. Single-step browser calls (navigate, resize, screenshot, evaluate per page) cost many times more for the same review.
+
+**Running a review** (used for the first-impression review in 5.2 step 4 and for each critique round):
+
+1. Capture by sending the request on stdin, as design-critique.md's Capture section shows - the dev server URL and the routes never go on the command line. Nothing needs installing: the script uses the plugin's pinned Playwright.
+
+   ```bash
+   node "${PLUGIN_ROOT}/scripts/capture-design-review.js" --input - <<'REQUEST'
+   {"url": "<DEV_SERVER_URL>", "routes": ["/", "/about"]}
+   REQUEST
+   ```
+2. Open every path in `summary.images` in one turn, and read the automated checks from the JSON.
+3. Judge as design-critique.md describes and write the compact scorecard and fix list it defines.
+4. Apply every fix from the scorecard, highest impact first, and commit. Capture again only at the start of the next round - one capture per round, after all of its fixes - rather than after each individual fix.
+
+**The critique pass**: review every route, then fix and review again, capturing only the routes that changed plus `/`, until one of these holds:
+
+- No critical gate fails and every category scores 3 or more - the pass is complete.
+- Three rounds have run and no critical gate fails - the pass is complete, with each category still below 3 recorded in the scorecard with its reason, so the Phase 7 summary shows it to the user.
+- Three rounds have run and a critical gate still fails - go to the gate below; a critical gate never passes silently. Keep the final scorecard for the Phase 7 summary, then remove each round's screenshots by sending `{"cleanup": "<outputDir>"}` to the same script the same way.
+
+<!-- gate: create-site:5.7.critique-blocked | category=progress | cancel-leaves=nothing -->
+
+> 🚦 **Gate (progress · create-site:5.7.critique-blocked):** A critical design gate still fails after three critique rounds.
+>
+> **Trigger:** Phase 5.7 round three ends with at least one critical gate from `design-critique.md` failing.
+> **Why we ask:** A critical gate means a broken first screen, mobile layout, accessible flow, or honest-proof problem; moving on silently would carry it into the audit and the deployed site.
+> **Cancel leaves:** Nothing - site files and commits stay on disk.
+
+Use `AskUserQuestion`, naming each failing critical gate and its evidence in the question:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| *(failing gate and evidence)* - how should I proceed? | Design gate | Keep fixing (Recommended), Continue and record it as a known issue, Stop here |
+
+- **Keep fixing**: run up to three more rounds on the failing gate, then return to this gate if it still fails.
+- **Continue and record it as a known issue**: add it to the scorecard as a known issue and proceed to 5.7's completion; the Phase 7 summary lists it.
+- **Stop here**: stop the skill; the project and its commits remain on disk.
+
+> **GATE: Do NOT proceed to Phase 6 until ALL customization is complete and the 5.7 critique pass is complete.** All requested pages and features exist, the design tokens live in the theme file, the chosen Google Fonts pass the font check, no critical gate fails unless the user chose to continue past it, and the scorecard is recorded.
+
+**Output**: All pages, components, and design elements implemented, critiqued, and verified
+
+### 5.8 Offer Additional Languages
+
+Query the centralized add-localization availability before offering the child
+workflow:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/lib/localization-config.js" mode-availability --framework "<react|vue|angular|astro>"
+```
+
+If `availableModes` is empty, explain that localization is temporarily
+unavailable for the selected framework using the returned reason, set
+`LOCALIZATION_REQUESTED=false`, and do not ask the additional-languages
+question. This currently applies to Astro. Do not hardcode a separate
+framework availability list in create-site.
+
+Ask whether more languages should be added now:
+
+> **Would you like to add more languages now?**
+> The site is currently single-language in `<SITE_LANGUAGE>`. This adds SPA localization only; Dataverse and Power Pages system messages remain English.
+
+<!-- not-a-gate: this selects whether to enter the child workflow, whose Phase 3 gate approves every localization write -->
+
+Use `AskUserQuestion` with this exact wording and these exact options:
+
+| Question | Header | Options |
+|----------|--------|---------|
+| Would you like to add more languages now?<br><br>The site is currently single-language in `<SITE_LANGUAGE>`. This adds SPA localization only; Dataverse and Power Pages system messages remain English. | Additional languages | Yes — add more languages now, No — keep the site in `<SITE_LANGUAGE>` only |
+
+Record the answer as `LOCALIZATION_REQUESTED=true|false`. Ask at this point even
+when `$ARGUMENTS` mentioned localization, so the maker's answer immediately
+determines whether the child workflow starts.
+
+When `LOCALIZATION_REQUESTED=true`, invoke:
+
+```text
+/power-pages:add-localization <PROJECT_ROOT> [FROM_CREATE_SITE]
+```
+
+Wait for the skill to complete before accessibility verification. The child
+skill owns locale/package questions, translation generation, selector wiring,
+its implementation review, build, and localization checks. The
+`[FROM_CREATE_SITE]` context prevents a duplicate deployment prompt; control
+returns here so create-site can run accessibility verification, final review,
+and its existing deployment prompt.
+
+When `LOCALIZATION_REQUESTED=false`, skip the child workflow.
+
+### 5.9 Validate the Approved Site Language
+
+Run the create-site validator explicitly with the approved language context.
+Use only the canonical `SITE_LOCALE` returned by `resolve-locale` and the
+validated `SITE_DIRECTION` enum; never pass the maker's original free-text
+answer. Run the command with its working directory set to `PROJECT_ROOT`:
+
+```bash
+node "${PLUGIN_ROOT}/skills/create-site/scripts/validate-site.js" \
+  --expectedLocale "<SITE_LOCALE>" \
+  --expectedDirection "<SITE_DIRECTION>"
+```
+
+Treat exit code `2` as blocking. Repair the reported document or
+localization-default mismatch and rerun the command until it passes. The
+automatic skill validator runs without these arguments and still checks that
+the detected document or localization context is internally valid. The
+explicit invocation verifies that it also matches the locale and direction
+approved in this create-site session without temporary or persistent metadata.
+
+> **GATE: Do NOT proceed to Phase 6 until the Phase 5.7 design critique is complete, any requested localization has completed, and the approved site language validation passes. The finished design must use script-capable typography and logical direction-neutral layout.**
+
+**Output**: All pages, components, design elements, and requested localization implemented and verified
 
 ---
 
@@ -1144,26 +1704,90 @@ Once the scaffold loader is gone, `public/scaffold-status.json` is just dead wei
 
 **Actions**:
 
-### 6.1 Install Playwright Dependency
+### 6.1 Prerequisites
 
-Install `playwright` as a dev dependency in the project so the audit script can launch a headless browser. This uses the system-installed browser (Edge/Chrome) — no browser download is needed:
-
-```bash
-cd "<PROJECT_ROOT>"
-npm install --save-dev playwright
-```
+The dev server must be running. Nothing needs installing: the audit uses the plugin's pinned Playwright with the system-installed browser (Edge or Chrome), and verifies the axe-core script against a pinned hash before running it.
 
 ### 6.2 Run axe-core Audit on Every Page
 
-Run the audit script via `Bash`, passing the dev server URL and all site routes:
+Run the audit script via `Bash`, sending the dev server URL and every site route as a JSON request on stdin, so neither is parsed by the shell:
 
 ```bash
-node "${PLUGIN_ROOT}/skills/create-site/scripts/axe-audit.js" --url <DEV_SERVER_URL> --routes /,/about,/services,/contact --project-root "<PROJECT_ROOT>"
+node "${PLUGIN_ROOT}/scripts/axe-audit.js" --input - <<'REQUEST'
+{"url": "<DEV_SERVER_URL>", "routes": ["/", "/about", "/services", "/contact"]}
+REQUEST
 ```
 
-Parse the returned JSON array of per-route results. Each result contains `violations` (with `id`, `impact`, `description`, `helpUrl`, and affected `nodes`), `passes` count, and `incomplete` count. A nonzero exit means at least one `critical` or `serious` violation was found.
+Parse the returned JSON array of per-route results. Each result contains `violations` (with `id`, `impact`, `description`, `helpUrl`, and affected `nodes`), `passes` count, and `incomplete` count. A nonzero exit means at least one `critical` or `serious` violation was found, or a route could not be audited - its result has `error` instead of violations, so fix the cause (a broken route, or the dev server down) and audit it again.
 
 Parse the JSON output and record all violations.
+
+### 6.2b Run Rendered Bidirectional Audit
+
+Read `${PLUGIN_ROOT}/references/rendered-bidirectional-verification.md`. If
+add-localization returned a successful report, first validate and reuse it:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/audit-rendered-bidirectional-readiness.js" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --reuse-report "<ADD_LOCALIZATION_REPORT_PATH>"
+```
+
+This succeeds only when the child report came from a complete `standard` or
+`extensive` run that passed, and source, resources, dependencies, build
+configuration, and locale availability still match it. A `targeted` repair
+report is never reused. Readiness-only metadata does not invalidate it. If reuse
+succeeds, do not build a specification or repeat the matrix. If reuse is
+stale—such as after accessibility remediation changed relevant source—build
+the component/state/viewport specification from the current implementation and
+run it:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/audit-rendered-bidirectional-readiness.js" \
+  --url "<DEV_SERVER_URL>" \
+  --projectRoot "<PROJECT_ROOT>" \
+  --spec "<TEMP_SPEC_PATH>" \
+  --evidence-dir "<PROJECT_ROOT>/docs/bidirectional-evidence/<RUN_ID>" \
+  --output "<PROJECT_ROOT>/docs/bidirectional-evidence/<RUN_ID>/report.json"
+```
+
+The command prints JSON and exits `1` when blocking rendered findings exist;
+parse stdout on that expected path. Exit `2` is a runner/specification failure
+and must be fixed before continuing. Delete the temporary specification after
+the report is written.
+
+Fix every rendered `error` and rerun the complete affected matrix. Review
+findings require screenshot-backed disposition; they are not automatic passes.
+The audit must cover computed `lang`/`dir`, component and compound-field
+direction, clipping, page overflow, viewport escape, declared non-overlap,
+focus order, portals/overlays, unknown/third-party surfaces, and runtime
+round-trip preservation when applicable. A visible opaque external surface is
+blocking unless it is replaced or intentionally unavailable for the affected
+locale.
+
+Use the rendered-verification reference's grouped execution model:
+`maxConcurrency: 3` by default, `reload` state isolation unless a deterministic
+reset exists, `resettable` only with explicit reset actions, and `isolated`
+for global or destructive state. Independent route/viewport/locale groups may
+run concurrently; locale-transition sequences remain serial.
+
+> **GATE: Do NOT proceed to Phase 7 while the create-site report contains an
+> error affecting an available locale or the available site experience, or an
+> untriaged review finding.** Every review item must have evidence and a
+> proposed resolution, judgment-based pass, or usable-limitation disposition
+> for maker review. An add-localization blocker may continue only when its
+> affected locale is verifiably unavailable at every activation boundary; keep
+> that child report as pending evidence and audit the remaining available
+> experience with a real locale plus pseudo-opposite direction. A screenshot
+> documents what rendered; it does not override a deterministic failure.
+
+For each review finding, record whether it was resolved, accepted as a
+judgment-based pass, or proposed as a usable limitation. A usable limitation
+must name the affected component/page, user impact, and report or screenshot
+evidence. Never offer an error finding for maker override. If the
+add-localization child returned `pending-remediation`, verify that every
+affected locale remains excluded from selectors, detection, metadata, and
+production output before continuing with the available site experience.
 
 ### 6.3 Fix Accessibility Violations
 
@@ -1177,7 +1801,7 @@ For each violation found, identify the source file and apply the fix:
 | Missing landmark regions | Wrap content in `<main>`, `<nav>`, `<header>`, `<footer>` |
 | Skipped heading levels | Correct heading hierarchy (h1 → h2 → h3, no gaps) |
 | Missing link text | Add descriptive text or `aria-label` to links |
-| Missing `lang` attribute | Add `lang="en"` to the `<html>` tag |
+| Missing or incorrect `lang`/`dir` attributes | Set `lang="<SITE_LOCALE>"` and `dir="<SITE_DIRECTION>"` on the root `<html>` element |
 | Inadequate focus indicators | Add visible `outline` styles to interactive elements |
 
 After fixing each group of related violations, commit:
@@ -1192,7 +1816,8 @@ git commit -m "Fix accessibility: <violation description>"
 After all fixes are applied, re-run the audit script (same command as 6.2) to confirm violations are resolved:
 
 1. If new violations appear (e.g., a fix introduced a regression), repeat 6.3–6.4
-2. Continue until the script exits with code 0 (zero `critical` and `serious` violations)
+2. Continue until the script exits with code 0 (every route audited, zero `critical` and `serious` violations)
+3. If a fix changed colors, spacing, or layout, run a review round on the affected routes and confirm the scorecard still holds. A review round can change source too, so when it does, re-run the audit on those routes; Phase 6 is done only when the last audit and the last review round both pass without a further fix
 
 Present a summary table to the user:
 
@@ -1207,6 +1832,10 @@ Present a summary table to the user:
 
 > **GATE: Do NOT proceed to Phase 7 until all pages pass axe-core with zero `critical` and `serious` violations.** Minor and moderate violations should also be fixed where possible, but are not blocking.
 
+Record the final axe-core result against the corresponding
+`REVIEW_DATA.agentChecks` item. Accessibility remains agent-owned; the maker is
+not asked to reproduce the automated audit.
+
 **Output**: Accessibility-verified site with zero critical/serious axe-core violations
 
 ---
@@ -1217,7 +1846,7 @@ Present a summary table to the user:
 
 <!-- gate: create-site:7.review | category=plan | cancel-leaves=nothing -->
 
-> 🚦 **Gate (plan · create-site:7.review):** Live-site review — last chance to request changes before the deploy prompt. Cancel branch lets the user keep iterating. Fires at step 4 of the action list below.
+> 🚦 **Gate (plan · create-site:7.review):** Live-site review — last chance to request changes before the deploy prompt. Cancel branch lets the user keep iterating. Fires at step 5 of the action list below.
 >
 > **Trigger:** Phase 7 has verified all pages render via Playwright.
 > **Why we ask:** User loses the chance to spot UI issues before deploy; broken pages get pushed.
@@ -1225,22 +1854,89 @@ Present a summary table to the user:
 
 **Actions**:
 
-1. Browse through each page via Playwright (`browser_navigate` + `browser_snapshot`) to verify all pages load correctly — do NOT take screenshots
-2. Present a summary of what was built:
+1. Confirm every route still loads cleanly with one call - the capture request from 5.7 with every route and `"checksOnly": true` - and fix any route listed under `summary.pageErrors`, `summary.overflow`, or `summary.captureErrors`. The visual review already happened in Phase 5.7
+2. Present a summary of what was built, with the design scorecard from Phase 5.7:
 
    ```
    | Component Type      | Count | Details |
    |---------------------|-------|---------|
    | Pages               | 4     | Home (/), About (/about), Services (/services), Contact (/contact) |
    | Shared Components   | 3     | Navbar, Footer, ContactForm |
-   | Design Elements     | 4     | Playfair Display + Source Sans Pro, 6 CSS variables, fade-in transitions, gradient backgrounds |
-   | Git Commits         | 7     | scaffold + 6 feature commits |
+   | Design Elements     | 5     | Schibsted Grotesk + Public Sans, 15 color tokens, product-moment hero, status-timeline signature moment, paper-grain backgrounds |
+   | Git Commits         | 9     | scaffold + 8 feature and critique commits |
    ```
 
+   Follow it with the design thesis in one sentence and the scorecard
+   (category, score, one-line evidence), including any category recorded below
+   3 and why. Include `SITE_LANGUAGE`, `SITE_LOCALE`, and `SITE_DIRECTION`.
+
+   Present the reconciled bidirectional review scope with each component's
+   classification and the applicable states/viewports exercised. Report
+   direction-aware, direction-fixed, and unknown/third-party evidence
+   separately; do not treat the pre-implementation plan as proof that the
+   implemented component was verified.
+
+   Link each scope entry to its rendered report cases and any captured
+   screenshots. Show case totals for passed, review, and failed. Do not expose
+   temporary specification internals as project configuration.
+
+   Then report the `REVIEW_DATA.agentChecks` criteria separately with the
+   evidence gathered in Phases 5–6. Every criterion must be reported as
+   **Passed** or **Blocked**, never as maker verification. Fix blocked
+   technical criteria before requesting approval.
+
+   Present `REVIEW_DATA.makerReview` as the maker's live-preview checklist.
+   Ask the maker to assess linguistic correctness, terminology, tone, regional
+   wording, regulated content, visual hierarchy and reading flow, brand
+   typography, directional imagery/icons, and text expansion. Automated checks
+   cannot approve these judgment-based criteria.
+
+   Finally, list the sample content still in the site - search `src` for
+   `SAMPLE CONTENT` markers and give each marker's file and what it stands in
+   for - so the user can supply real content in this review.
+
 3. Share the dev server URL with the user and list all available routes
-4. Ask the user to review using `AskUserQuestion`:
+4. Classify bidirectional readiness as:
+   - **Ready** when no unresolved static or rendered findings remain.
+   - **Ready with proposed limitations** only when all remaining findings are
+     review-severity, the site remains functional/readable/accessible, and
+     each finding has exact impact plus evidence.
+   - **Blocked** when a deterministic error affects an available locale or the
+     available site experience. Return to Phases 5–6; do not ask the maker to
+     accept the defect.
+   - **Ready for available locales; localization pending** when every remaining
+     error belongs only to an add-localization locale that is excluded from all
+     activation boundaries. Show the unavailable locale and blocker, and do
+     not offer that locale for approval or enablement.
+5. Ask the user to review using `AskUserQuestion`:
    > "The site is ready for review at `<dev server URL>`. Please check it out in your browser. Would you like any changes?"
-5. If the user requests changes, apply them and re-verify by browsing via `browser_snapshot`
+   For **Ready**, offer **Accept changes** and **Request revisions**. For
+   proposed usable limitations, offer **Fix before handoff**, **Accept with
+   documented limitations**, and **Request revisions**. Acceptance applies
+   only to review-severity limitations; record the approval timestamp, impact,
+   and evidence path in the final summary. If localization is configured,
+   finalize the same disposition in `.powerpages-localization.json`, update
+   every selector, detection, metadata, and static-output availability
+   boundary, then rerun the localization validator, project build, and affected
+   real-locale activation cases before proceeding.
+6. If the user requests changes, apply them and repeat the applicable static,
+   rendered, accessibility, and browser checks before returning to this gate.
+   Re-run the axe-core audit (6.2) on every affected route because a new
+   control, form field, or restructured section can add violations without any
+   visual change. When a change affects appearance, also run another design
+   review round on the affected routes.
+
+### 7.1 Final site-integrity gate
+
+After the user-approved source changes and all normal validation are complete, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every blocking error before proceeding. Inspect and report review findings in the relevant
+directions and with expanded content. If review causes further source changes, rerun this gate.
+Do not enter the deployment phase until it exits successfully.
 
 **Output**: User-approved site ready for deployment
 
@@ -1254,7 +1950,7 @@ Present a summary table to the user:
 
 <!-- gate: create-site:8.deploy | category=plan | cancel-leaves=nothing -->
 
-> 🚦 **Gate (plan · create-site:8.deploy):** Deploy prompt — invokes `/deploy-site` on Yes. Skipping leaves the site files on disk for the user to deploy later. Fires at step 2 of the action list below.
+> 🚦 **Gate (plan · create-site:8.deploy):** Deploy prompt — invokes `/deploy-site` on Yes. Skipping leaves the site files on disk for the user to deploy later. Fires at step 3 of the action list below.
 >
 > **Trigger:** Phase 8 entry; Phase 7 review approved.
 > **Why we ask:** Auto-deploy picks whatever env PAC CLI happens to be pointing at — wrong-env first deploy is messy to undo.
@@ -1268,22 +1964,34 @@ Present a summary table to the user:
 
    Follow the skill tracking instructions in the reference to record this skill's usage. Use `--skillName "CreateSite"`. Note: `.powerpages-site` may not exist for first-time sites — the script exits silently.
 
-2. Use `AskUserQuestion` with options: **Deploy now (Recommended)**, **Skip for now**:
-   > "Would you like to deploy your site to Power Pages now?"
-3. If the user chooses to deploy, invoke the `/deploy-site` skill.
-4. Mark all todos complete
-5. Present a final summary:
+2. Search `src` for `SAMPLE CONTENT` markers again. If any remain, list each with its file before asking, say that they are invented placeholders to replace before a public launch, include the count in the question, and make **Skip for now** the recommended option.
+3. Use `AskUserQuestion` with options: **Deploy now (Recommended)**, **Skip for now** - or **Deploy now**, **Skip for now (Recommended)** when sample content remains:
+   > "Would you like to deploy your site to Power Pages now?" (when sample content remains: "Would you like to deploy your site to Power Pages now? It still contains <N> sample-content placeholders listed above.")
+4. If the user chooses to deploy, invoke the `/deploy-site` skill.
+5. Mark all todos complete
+6. Present a final summary:
    - Site name and purpose
+   - Site content language and the fact that Dataverse/Power Pages system
+     messages remain English
    - Framework and project location
    - Components created (X pages, Y components, Z design elements)
    - Key files and their purposes
    - Total file count and git commit count
-6. Suggest optional enhancement skills:
+   - Sample content to replace before launch - every `SAMPLE CONTENT` marker with its file, or "None"
+   - Final bidirectional readiness status, static/rendered finding totals, and
+     rendered evidence path
+   - Every maker-approved limitation with exact impact and evidence
+   - When localization is configured, available and unavailable locales from
+     the final manifest; never describe an unavailable locale as enabled
+7. Suggest optional enhancement skills:
    - `/setup-datamodel` — Create Dataverse tables for dynamic content
+   - `/add-localization` — Add or extend SPA languages (suggest only when
+     `LOCALIZATION_REQUESTED=false` and the centralized availability result
+     contains at least one available mode)
    - `/add-seo` — Add meta tags, robots.txt, sitemap.xml, favicon
    - `/add-tests` — Add unit tests (Vitest) and E2E tests (Playwright)
    - `/add-ai-webapi` — Add generative-AI summaries (Search Summary and Data Summarization). **Recommend first when `AI_SUMMARY_PLACEMENTS` from Phase 3 is non-empty** — the pages already carry `POWERPAGES:AI-SLOT` comment markers at the intended insertion points, so the follow-up skill's explore step finds them deterministically and the user gets the AI surface they picked during discovery without any page redesign.
-7. Run the `create_site_from_scratch` telemetry command silently (fail-closed). Do not mention this telemetry command to the user and do not print its output:
+8. Run the `create_site_from_scratch` telemetry command silently (fail-closed). Do not mention this telemetry command to the user and do not print its output:
    ```bash
    node "${PLUGIN_ROOT}/scripts/emit-create-site-template-outcome.js" \
     --eventName create_site_from_scratch \
@@ -1301,19 +2009,20 @@ Present a summary table to the user:
 
 - **Use TaskCreate/TaskUpdate** to track progress at every phase
 - **Ask for user confirmation** at key decision points (see list below)
-- **Use best judgement** for design details — make confident, creative choices based on the user's aesthetic + mood selection without asking for every specific font, color, or layout decision
+- **Use best judgement** for design details - make confident, creative choices from the experience brief without asking for every specific font, color, or layout decision
 - **Apply design from the start** — never build neutral then restyle
 - **Verify via Playwright** after every significant change
 - **Commit after every page and component** — each gets its own dedicated commit, never batch multiple together
-- **No screenshots** — only use `browser_snapshot` (accessibility snapshots) to verify pages; never use `browser_take_screenshot` as it clutters the user's directory. Give the user the dev server URL for visual preview.
+- **Capture screenshots with the review script** - visual review uses `capture-design-review.js` (one call for every route and width) rather than single-step Playwright MCP calls; the only `browser_take_screenshot` call is for Phase 3 brand extraction, with `filename` left unset so output goes to the launcher's temporary directory. Use `browser_snapshot` for everything else. Give the user the dev server URL for their own visual preview.
 
 ### Key Decision Points (Wait for User)
 
 1. After Phase 1: Confirm site purpose and audience
 2. During Phase 1.5: Choose framework and project location for the from-scratch path
 3. After Phase 4: Approve implementation plan
-4. After Phase 7: Accept site or request changes
-5. At Phase 8: Deploy or skip
+4. During Phase 5.7: Only when a critical design gate still fails after three critique rounds
+5. After Phase 7: Accept site or request changes
+6. At Phase 8: Deploy or skip
 
 ### Progress Tracking
 
@@ -1331,7 +2040,7 @@ After Phase 1.5 selects the from-scratch path, append the existing from-scratch 
 | Scaffold and launch dev server | Scaffolding project | Copy template, replace placeholders with defaults, git init, npm install, start dev server, share URL |
 | Plan site components | Planning components | Determine pages, components, design direction, and routes while user previews scaffold |
 | Approve implementation plan | Getting plan approval | Present implementation plan covering design and pages, get user approval |
-| Implement pages and components | Building site | Apply chosen design tokens, create all pages, components, routing, navigation |
+| Implement pages and components | Building site | Apply design tokens, create all pages, components, routing, and navigation in the approved content language, run the design critique pass, then ask whether to add more languages |
 | Verify accessibility with axe-core | Verifying accessibility | Run axe-core on every page, fix all critical/serious violations, re-verify until passing |
 | Review with user | Reviewing site | Navigate all pages, share URL, get user feedback, apply changes |
 | Deploy and wrap up | Deploying site | Ask about deployment, present summary, suggest next steps |
@@ -1375,11 +2084,13 @@ Mark each task `in_progress` when starting it and `completed` when done via `Tas
 
 Every site must meet these standards before completion:
 
-- Distinctive typography via Google Fonts (no generic Inter/Roboto/Arial)
-- Cohesive color palette via CSS variables
-- Motion/animations (page transitions, hover states)
+- Passes the Phase 5.7 design critique: no critical gate fails, and every rubric category scores 3 or more or, after three rounds, is recorded below 3 with its reason (see `design-critique.md`); a critical gate the user chose to continue past is recorded as a known issue
+- Design tokens (color roles, fonts, spacing, radii, shadows, motion) defined once in the theme file and consumed everywhere
+- Chosen Google Fonts verified loaded by the font check
+- Complete glyph coverage and correct shaping for `SITE_LOCALE`
 - All requested pages and features implemented (not placeholders)
 - All routes working and navigation complete
+- Root document uses the approved `SITE_LOCALE` and `SITE_DIRECTION`
 - Accessibility verified via axe-core — zero critical/serious violations on all pages
 - Git commits at key milestones
 - Verified via Playwright
@@ -1418,12 +2129,15 @@ Every site must meet these standards before completion:
 - Features: Consultant Directory, Project Tracker, Document Library, Announcements
 - Aesthetic: Minimal & Clean
 - Mood: Professional & Trustworthy
-- Component table presented and approved
-- Design choices made: DM Sans + Space Grotesk, `#1e3a5f` primary, blue-gray palette
+- Brand: Fresh identity
+- Experience brief: primary action "Find a consultant"; principal doubt "Is this directory current?"; proof is a visible "updated today" stamp from live data
+- Design thesis: calm, precise, and quietly confident - warm paper surfaces, Schibsted Grotesk headlines over Public Sans, one deep-teal action color, a task-first welcome hero with live project counts
+- Signature moment: the directory filters instantly with an animated reflow of consultant cards
+- Component table with narrative beats per page presented and approved
 
 ### Phase 4: Plan Approval
 
-- Plan data assembled as a single JSON object
+- Plan data assembled as a single JSON object, including `DESIGN_DIRECTION_DATA`
 - Rendered to `docs/create-site-plan.html` via `render-createsite-plan.js`
 - Opened in the user's default browser
 - Brief summary shown in terminal with a pointer to the browser tab
@@ -1431,10 +2145,10 @@ Every site must meet these standards before completion:
 
 ### Phase 5: Implementation
 
-- Todos created for each page, component, routing, navigation, design foundations
-- Built in order: design tokens (replace defaults with chosen palette) → shared components → pages → router → nav
-- Git commits after each major piece
-- Playwright verified each page
+- Todos created for each page, component, routing, navigation, design foundations, and the critique pass
+- Built in order: design tokens → layout → shared components → Home (hero first, then a first-impression review) → remaining pages → router → nav
+- Design critique round 1 scored Narrative 2 (three identical card sections on Home) and Detail 2 (mixed icon stroke widths); both fixed, round 2 scored every category 3 or more
+- Git commits after each major piece and each critique round
 
 ### Phase 6: Accessibility Verification
 
@@ -1445,7 +2159,7 @@ Every site must meet these standards before completion:
 
 ### Phase 7: Review
 
-- Summary table presented
+- Summary table and design scorecard presented
 - User reviewed at `http://localhost:5173`, requested minor color adjustment
 - Adjustment applied, re-verified
 

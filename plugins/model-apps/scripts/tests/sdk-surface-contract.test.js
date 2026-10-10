@@ -33,6 +33,7 @@ const SCRIPTS_DIR = path.resolve(__dirname, '..');
 // this list is the living contract of what a re-vendored bundle MUST keep exposing.
 const SKILL_SDK_SURFACE = [
   'addElement',
+  'addEntityPrivilegesToRole',
   'addSolutionComponent',
   'associateRecords',
   'configureRowSummary',
@@ -66,11 +67,20 @@ const SKILL_SDK_SURFACE = [
   'getAiReadiness',
   'getArtifact',
   'getColumnVisualization',
+  'getEntityPrivileges',
   'getSolution',
   'initWorkspace',
   'insertStatusValue',
+  // The deferred routing-description push reads the app copy's dirty flag, so it never replays an earlier
+  // run's unpushed edits (sdk-build.js).
+  'listArtifacts',
   'moveElement',
   'publishArtifact',
+  // Step 8 publishes the app and every table whose default-view enrichment was saved but not yet
+  // published in ONE PublishXml envelope (one customization lock, one publish job) instead of one
+  // call per artifact. `publishArtifact` stays above: it is the per-target fallback when the batch
+  // is refused or a target in it fails.
+  'publishArtifacts',
   'pushArtifact',
   'queryRecords',
   'removeElement',
@@ -85,6 +95,9 @@ const SKILL_SDK_SURFACE = [
   // `systemformrole` entity — they live inside `formxml` as `<DisplayConditions>`, so this dedicated
   // call is the only way to write them.
   'setFormSecurityRoles',
+  // Reads a form's <DisplayConditions> back — including its `Order`, the form's place in the table's
+  // Main Form Set, which the forms phase sets and keeps (AB#6736948).
+  'getFormSecurityRoles',
   // Written by the app-shell phase for `app.newLook` — the modern shell is a per-app SETTING
   // (`NewLookAlwaysOn`), not an appmodule column.
   'saveSettingValue',
@@ -98,14 +111,18 @@ const SKILL_SDK_SURFACE = [
   'updateRecord',
   'updateTable',
   'updateWebResource',
+  // ⚠ `validateBusinessRule` was REMOVED from this list deliberately. The SDK no longer exposes it:
+  // the designer's completeness validator now runs INTERNALLY on every business-rule save, so an
+  // incomplete rule is refused by `pushArtifact` rather than by an opt-in call. Re-adding it here
+  // would fail this guard against a correct bundle.
 ];
 
 function realSdk() {
-  const { createMakerSdk } = require(BUNDLE);
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const noop = async () => ({});
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdk-surface-'));
   const sdk = createMakerSdk({
-    workspacePath: dir,
+    workspaceStorage: createNodeWorkspaceStorage(dir),
     instanceUrl: 'https://example.crm.dynamics.com',
     httpClient: { get: noop, post: noop, patch: noop, delete: noop, put: noop },
   });

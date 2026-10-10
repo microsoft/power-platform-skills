@@ -7,6 +7,7 @@ Formula patterns for state, events, reusable logic, and mock data.
 - State management
 - Conditional logic
 - String operations
+- Table operations
 - Date and time formatting
 - Event handling
 - Named formulas and user defined functions
@@ -67,6 +68,19 @@ Visible: =selectedOption = "Option1"
 Any value containing `: ` must be quoted at the YAML level — see
 `${PLUGIN_ROOT}/references/YamlSyntax.md`.
 
+## Table operations
+
+`&` concatenates text; it does not combine tables. To prepend or append a record
+to an existing table, pass the record and table to `Table()` in the desired order:
+
+```powerfx
+Table({FieldName: "Value"}, ExistingTable)
+Table(ExistingTable, {FieldName: "Value"})
+```
+
+The added record must use the table's expected column names and types. `Table()`
+returns a table; it does not modify the existing table or collection.
+
 ## Date and time formatting
 
 Format specifiers are lower case (`mm` for month, not `MM`):
@@ -79,7 +93,65 @@ Text: =Text(varDate, "dddd, mmmm d, yyyy")
 Text: =Text(Now(), "hh:mm:ss")
 ```
 
+### Sort by time semantics, not display text
+
+Do not sort user-facing time strings directly. Lexicographic ordering puts values such as
+`"2:00 PM"` before `"9:00 AM"` and allows padded, non-padded, 12-hour, 24-hour, and blank
+values to mix silently.
+
+Prefer a typed Date/Time column and sort that field directly. When a local/mock source must
+store text, validate the same input that is written and persist a separate zero-padded
+24-hour sort key. One direct form uses an outer blank guard and an `IfError` whose successful
+expression writes `Text(TimeValue(the same input), "HH:mm")` to the declared source field.
+When using staged variables or other control flow, trace the same live input through
+validation, normalization, the field write and the sort binding; unrelated parsing tokens
+are not evidence of correct ordering.
+
+```yaml
+OnSelect: |-
+  =If(
+    IsBlank(Trim(txtStart.Text)),
+    Notify("Time is required"),
+    IfError(
+      Patch(
+        colMeetings,
+        First(colMeetings),
+        {StartSortKey: Text(TimeValue(Trim(txtStart.Text)), "HH:mm")}
+      ),
+      Notify("Enter a valid time")
+    )
+  )
+
+Items: =SortByColumns(colMeetings, "StartSortKey", SortOrder.Ascending)
+```
+
+Keep the original display value separate when the requested presentation is 12-hour time.
+The plan must name accepted input forms and the visible invalid/blank behavior. Do not
+claim free-form time input is valid merely because one seed format sorts correctly.
+
 ## Event handling
+
+### Platform confirmation with Confirm
+
+`Confirm(message [, options])` displays a platform-provided confirmation dialog from a behavior formula such as `OnSelect`. It returns `true` when the user confirms and `false` when the user cancels. The message is required. The options record and each of its text fields (`Title`, `Subtitle`, `ConfirmButton`, `CancelButton`) are optional:
+
+```powerfx
+Confirm("Remove this item?")
+
+Confirm(
+    "Remove this item?",
+    {
+        Title: "Remove confirmation",
+        Subtitle: "This action can't be undone.",
+        ConfirmButton: "Remove",
+        CancelButton: "Cancel"
+    }
+)
+```
+
+Use the result as the condition of `If`: put the mutation only in the affirmative branch, and leave canonical data unchanged on cancellation. Capture the target's stable identity before prompting so the confirmed action uses the same target named in the dialog. Confirmation is consent to attempt the operation, not evidence that the mutation succeeded.
+
+This is a Power Fx capability, not a control to discover with `describe_control`. It does not require a custom modal container, overlay stacking, or app-authored focus-trap state. Consult this section before declaring confirmation infeasible from control descriptions alone. Do not infer target-player support, keyboard dismissal, focus trapping, or focus return from a clean compile; keep unobserved runtime behavior explicitly unverified.
 
 ### Guard clauses
 
@@ -311,6 +383,28 @@ Items: |-
 Use an `App.OnStart` collection when several screens share the records or interactions
 add, edit or remove rows. Never `ClearCollect` fixed display data in a screen's
 `OnVisible`; that couples rendering to navigation and reruns the seed every visit.
+
+When a collection must exist with a known record type but start empty, create one typed
+record and clear it immediately:
+
+```yaml
+OnStart: |-
+  =ClearCollect(
+    colTasks,
+    {
+      ID: GUID(),
+      Title: "",
+      Hours: 0
+    }
+  );
+  Clear(colTasks)
+```
+
+Use this recipe only when downstream formulas require an empty collection with stable
+field types before any real record is created or loaded. `ClearCollect(colTasks, {})`
+does not establish the intended field schema, while `ClearCollect` establishes concrete
+`GUID`, `Text`, and `Number` fields and `Clear(colTasks)` then leaves the typed
+collection empty.
 
 **Keep mock data compact.** `App.OnStart` runs before the first screen paints and its
 entire text is serialized into the saved app, so oversized seed data slows startup and

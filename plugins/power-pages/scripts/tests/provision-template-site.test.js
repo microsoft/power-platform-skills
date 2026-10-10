@@ -11,8 +11,11 @@ const {
   findCodeSiteRoot,
   inspectCompiledOutput,
   inspectClonedSiteIdentity,
+  isPortalFileContentUploadFailure,
+  isRetryManifestName,
   parseArgs,
   provisionTemplateSite,
+  removePacManifestsForRetry,
   runNpm,
   runPac,
 } = require('../provision-template-site');
@@ -30,6 +33,107 @@ function createSource(root, { id = SOURCE_ID, name = 'Template Site' } = {}) {
   fs.writeFileSync(path.join(root, 'powerpages.config.json'), JSON.stringify({ compiledPath: 'dist' }));
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ scripts: { build: 'vite build' } }));
   fs.writeFileSync(path.join(root, '.npmrc'), 'omit-lockfile-registry-resolved=true\n');
+}
+
+function portalFileUploadFailure(fileName = 'index.html') {
+  return {
+    status: 1,
+    stdout: '',
+    stderr: [
+      `Error: Unable to upload webfile name '${fileName}' with record Id ${SOURCE_ID} due to below error(s).`,
+      'PortalFileContentUploadFailed',
+    ].join('\n'),
+  };
+}
+
+function runUploadScenario(t, {
+  firstUploadResult,
+  fsImpl = fs,
+  retryUploadResult = { status: 0, stdout: 'uploaded', stderr: '' },
+  manifestEntries = [
+    { name: 'manifest.yml', kind: 'file', content: 'PAC-generated generic state\n' },
+    {
+      name: 'target-environment-manifest.yml',
+      kind: 'file',
+      content: 'PAC-generated environment state\n',
+    },
+  ],
+  portalConfigKind = 'directory',
+} = {}) {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  const output = path.join(dir, 'output');
+  const clonedPath = path.join(output, 'supplier-portal');
+  const portalConfigPath = path.join(clonedPath, '.powerpages-site', '.portalconfig');
+  const manifestPath = path.join(portalConfigPath, 'manifest.yml');
+  const environmentManifestPath = path.join(portalConfigPath, 'target-environment-manifest.yml');
+  const englishLanguagePath = path.join(portalConfigPath, 'English.portallanguage.yml');
+  const unrelatedYamlPath = path.join(portalConfigPath, 'unrelated.yml');
+  createSource(source);
+  const uploadCalls = [];
+
+  const result = provisionTemplateSite({
+    sourcePath: source,
+    outputDirectory: output,
+    siteName: 'Supplier Portal',
+  }, {
+    fs: fsImpl,
+    runPac(args, commandOptions) {
+      if (args[1] === 'clone') {
+        createSource(clonedPath, { id: CLONED_ID, name: 'Supplier Portal' });
+        let manifestDirectory = portalConfigPath;
+        if (portalConfigKind === 'symlink') {
+          manifestDirectory = path.join(dir, 'outside-portalconfig');
+          fs.mkdirSync(manifestDirectory, { recursive: true });
+          fs.symlinkSync(
+            manifestDirectory,
+            portalConfigPath,
+            process.platform === 'win32' ? 'junction' : 'dir'
+          );
+        } else if (portalConfigKind !== 'missing') {
+          fs.mkdirSync(portalConfigPath, { recursive: true });
+        }
+        if (portalConfigKind !== 'missing') {
+          for (const entry of manifestEntries) {
+            const entryPath = path.join(manifestDirectory, entry.name);
+            if (entry.kind === 'directory') {
+              fs.mkdirSync(entryPath);
+            } else if (entry.kind === 'symlink') {
+              const outsideManifest = path.join(dir, `outside-${entry.name}`);
+              fs.writeFileSync(outsideManifest, 'outside clone\n');
+              fs.symlinkSync(outsideManifest, entryPath, 'file');
+            } else {
+              fs.writeFileSync(entryPath, entry.content || 'PAC-generated manifest state\n');
+            }
+          }
+          fs.writeFileSync(path.join(manifestDirectory, 'English.portallanguage.yml'), 'language\n');
+          fs.writeFileSync(path.join(manifestDirectory, 'unrelated.yml'), 'unrelated\n');
+        }
+        return { status: 0, stdout: 'cloned', stderr: '' };
+      }
+      uploadCalls.push({ args, cwd: commandOptions.cwd });
+      return uploadCalls.length === 1 ? firstUploadResult : retryUploadResult;
+    },
+    runNpm(args, cwd) {
+      if (args[0] === 'run') {
+        fs.mkdirSync(path.join(cwd, 'dist'));
+        fs.writeFileSync(path.join(cwd, 'dist', 'index.html'), '<html></html>');
+      }
+      return { status: 0, stdout: 'ok', stderr: '' };
+    },
+  });
+
+  return {
+    clonedPath,
+    englishLanguagePath,
+    environmentManifestPath,
+    manifestPath,
+    portalConfigPath,
+    result,
+    unrelatedYamlPath,
+    uploadCalls,
+  };
 }
 
 test('parseArgs accepts source, output, and site name', () => {
@@ -360,6 +464,246 @@ test('provisionTemplateSite reports upload failure without retrying', (t) => {
   assert.equal(calls, 2);
 });
 
+test('isPortalFileContentUploadFailure detects the bounded PAC tail token', () => {
+  assert.equal(isPortalFileContentUploadFailure(portalFileUploadFailure('index.html')), true);
+  assert.equal(isPortalFileContentUploadFailure({
+    status: 1,
+    stdout: 'pOrTaLfIlEcOnTeNtUpLoAdFaIlEd',
+    stderr: '',
+  }), true);
+  assert.equal(isPortalFileContentUploadFailure({
+    status: 1,
+    stdout: '',
+    stderr: `Entity 'powerpagecomponent' With Id = ${SOURCE_ID} Does Not Exist`,
+  }), false);
+  assert.equal(isPortalFileContentUploadFailure({
+    status: 1,
+    stdout: '',
+    stderr: 'upload rejected',
+  }), false);
+});
+
+test('provisionTemplateSite retries once for an arbitrary webfile upload envelope', (t) => {
+  const scenario = runUploadScenario(t, {
+    firstUploadResult: portalFileUploadFailure("assets/customer's app.8c2f.js"),
+  });
+
+  assert.equal(scenario.result.ok, true);
+  assert.equal(scenario.uploadCalls.length, 2);
+  assert.deepEqual(scenario.uploadCalls[1], scenario.uploadCalls[0]);
+  assert.equal(fs.existsSync(scenario.manifestPath), false);
+  assert.equal(fs.existsSync(scenario.environmentManifestPath), false);
+});
+
+test('provisionTemplateSite retries once when the bounded tail contains only the PAC token', (t) => {
+  const scenario = runUploadScenario(t, {
+    firstUploadResult: {
+      status: 1,
+      stdout: '',
+      stderr: 'PortalFileContentUploadFailed',
+    },
+  });
+
+  assert.equal(scenario.result.ok, true);
+  assert.equal(scenario.uploadCalls.length, 2);
+});
+
+test('provisionTemplateSite deletes generic and environment manifests but preserves other files', (t) => {
+  const secondEnvironmentManifest = 'regional-backup-manifest.yml';
+  const scenario = runUploadScenario(t, {
+    firstUploadResult: portalFileUploadFailure(),
+    manifestEntries: [
+      { name: 'manifest.yml', kind: 'file' },
+      { name: 'target-environment-manifest.yml', kind: 'file' },
+      { name: secondEnvironmentManifest, kind: 'file' },
+    ],
+  });
+
+  assert.equal(scenario.result.ok, true);
+  assert.equal(scenario.uploadCalls.length, 2);
+  assert.equal(fs.existsSync(scenario.manifestPath), false);
+  assert.equal(fs.existsSync(scenario.environmentManifestPath), false);
+  assert.equal(
+    fs.existsSync(path.join(scenario.portalConfigPath, secondEnvironmentManifest)),
+    false
+  );
+  assert.equal(fs.readFileSync(scenario.englishLanguagePath, 'utf8'), 'language\n');
+  assert.equal(fs.readFileSync(scenario.unrelatedYamlPath, 'utf8'), 'unrelated\n');
+});
+
+test('provisionTemplateSite retries when PAC manifest files are absent', async (t) => {
+  await t.test('empty portalconfig directory', (subtest) => {
+    const scenario = runUploadScenario(subtest, {
+      firstUploadResult: portalFileUploadFailure(),
+      manifestEntries: [],
+    });
+
+    assert.equal(scenario.result.ok, true);
+    assert.equal(scenario.uploadCalls.length, 2);
+    assert.equal(fs.existsSync(scenario.englishLanguagePath), true);
+    assert.equal(fs.existsSync(scenario.unrelatedYamlPath), true);
+  });
+
+  await t.test('missing portalconfig directory', (subtest) => {
+    const scenario = runUploadScenario(subtest, {
+      firstUploadResult: portalFileUploadFailure(),
+      portalConfigKind: 'missing',
+    });
+
+    assert.equal(scenario.result.ok, true);
+    assert.equal(scenario.uploadCalls.length, 2);
+  });
+});
+
+test('provisionTemplateSite does not retry failed output without the PAC token', (t) => {
+  const scenario = runUploadScenario(t, {
+    firstUploadResult: {
+      status: 1,
+      stdout: '',
+      stderr: `Entity 'powerpagecomponent' With Id = ${SOURCE_ID} Does Not Exist`,
+    },
+  });
+
+  assert.equal(scenario.result.ok, false);
+  assert.equal(scenario.result.step, 'upload');
+  assert.equal(scenario.uploadCalls.length, 1);
+  assert.equal(fs.existsSync(scenario.manifestPath), true);
+  assert.equal(fs.existsSync(scenario.environmentManifestPath), true);
+});
+
+test('provisionTemplateSite fails closed when portalconfig is a parent symlink', (t) => {
+  let scenario;
+  try {
+    scenario = runUploadScenario(t, {
+      firstUploadResult: portalFileUploadFailure(),
+      portalConfigKind: 'symlink',
+    });
+  } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') {
+      t.skip(`directory symlinks are unavailable: ${err.code}`);
+      return;
+    }
+    throw err;
+  }
+
+  assert.equal(scenario.result.ok, false);
+  assert.equal(scenario.uploadCalls.length, 1);
+  assert.match(scenario.result.error, /PAC manifest cleanup could not continue/);
+  assert.match(scenario.result.error, /portal configuration path is not a real directory/);
+});
+
+test('provisionTemplateSite fails closed for unsafe matched manifest entries', async (t) => {
+  for (const kind of ['symlink', 'directory']) {
+    await t.test(kind, (subtest) => {
+      let scenario;
+      try {
+        scenario = runUploadScenario(subtest, {
+          firstUploadResult: portalFileUploadFailure(),
+          manifestEntries: [{ name: 'manifest.yml', kind }],
+        });
+      } catch (err) {
+        if (kind === 'symlink' && (err.code === 'EPERM' || err.code === 'EACCES')) {
+          subtest.skip(`file symlinks are unavailable: ${err.code}`);
+          return;
+        }
+        throw err;
+      }
+
+      assert.equal(scenario.result.ok, false);
+      assert.equal(scenario.uploadCalls.length, 1);
+      assert.match(scenario.result.error, /PAC manifest is not a real regular file/);
+    });
+  }
+});
+
+test('provisionTemplateSite preserves the PAC failure when manifest deletion fails', (t) => {
+  const failingFs = {
+    ...fs,
+    unlinkSync() {
+      throw new Error('permission denied');
+    },
+  };
+  const scenario = runUploadScenario(t, {
+    firstUploadResult: portalFileUploadFailure(),
+    fsImpl: failingFs,
+  });
+
+  assert.equal(scenario.result.ok, false);
+  assert.equal(scenario.uploadCalls.length, 1);
+  assert.match(scenario.result.error, /PAC manifest cleanup could not continue/);
+  assert.match(scenario.result.error, /Could not delete PAC manifest/);
+  assert.match(scenario.result.error, /permission denied/);
+  assert.equal(fs.existsSync(scenario.manifestPath), true);
+});
+
+test('provisionTemplateSite fails closed for a redirected canonical portalconfig path', (t) => {
+  const redirectedFs = {
+    ...fs,
+    realpathSync(targetPath) {
+      if (targetPath.endsWith(path.join('.powerpages-site', '.portalconfig'))) {
+        return path.join(path.dirname(targetPath), 'redirected-portalconfig');
+      }
+      return fs.realpathSync(targetPath);
+    },
+  };
+  const scenario = runUploadScenario(t, {
+    firstUploadResult: portalFileUploadFailure(),
+    fsImpl: redirectedFs,
+  });
+
+  assert.equal(scenario.result.ok, false);
+  assert.equal(scenario.uploadCalls.length, 1);
+  assert.match(
+    scenario.result.error,
+    /portal configuration directory resolves outside its expected path/
+  );
+  assert.equal(fs.existsSync(scenario.manifestPath), true);
+});
+
+test('removePacManifestsForRetry uses Windows case-insensitive names and paths', (t) => {
+  const dir = tempDir();
+  const clone = path.join(dir, 'SiteClone');
+  const portalConfig = path.join(clone, '.powerpages-site', '.portalconfig');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(portalConfig, { recursive: true });
+  fs.writeFileSync(path.join(portalConfig, 'MANIFEST.YML'), 'generic\n');
+  fs.writeFileSync(path.join(portalConfig, 'WESTUS-MANIFEST.YML'), 'environment\n');
+  fs.writeFileSync(path.join(portalConfig, 'English.portallanguage.yml'), 'language\n');
+  const caseVariantFs = {
+    ...fs,
+    realpathSync(targetPath) {
+      return fs.realpathSync(targetPath).replace('SiteClone', 'siteclone');
+    },
+  };
+
+  const removed = removePacManifestsForRetry(clone, {
+    platform: 'win32',
+    fs: caseVariantFs,
+  });
+
+  assert.deepEqual(removed.sort(), ['MANIFEST.YML', 'WESTUS-MANIFEST.YML']);
+  assert.equal(fs.existsSync(path.join(portalConfig, 'MANIFEST.YML')), false);
+  assert.equal(fs.existsSync(path.join(portalConfig, 'WESTUS-MANIFEST.YML')), false);
+  assert.equal(fs.existsSync(path.join(portalConfig, 'English.portallanguage.yml')), true);
+  assert.equal(isRetryManifestName('REGION-MANIFEST.YML', 'win32'), true);
+  assert.equal(isRetryManifestName('REGION-MANIFEST.YML', 'linux'), false);
+});
+
+test('provisionTemplateSite reports a failed retry and stops after two upload calls', (t) => {
+  const scenario = runUploadScenario(t, {
+    firstUploadResult: portalFileUploadFailure('assets/app.8c2f.js'),
+    retryUploadResult: { status: 1, stdout: '', stderr: 'retry still rejected' },
+  });
+
+  assert.equal(scenario.result.ok, false);
+  assert.equal(scenario.result.step, 'upload');
+  assert.equal(scenario.uploadCalls.length, 2);
+  assert.match(scenario.result.error, /PAC manifest cleanup was attempted/);
+  assert.match(scenario.result.error, /retry still rejected/);
+  assert.equal(fs.existsSync(scenario.manifestPath), false);
+  assert.equal(fs.existsSync(scenario.environmentManifestPath), false);
+});
+
 test('provisionTemplateSite stops before upload when dependency installation fails', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -614,6 +958,10 @@ test('provisionTemplateSite restores project files omitted by PAC without replac
   fs.writeFileSync(path.join(source, 'tests', 'serviceRequests.test.mjs'), 'export {};\n');
   fs.mkdirSync(path.join(source, '.powerpages-site', '.portalconfig'));
   fs.writeFileSync(path.join(source, '.powerpages-site', '.portalconfig', 'manifest.yml'), 'portalVersion: 1\n');
+  fs.writeFileSync(
+    path.join(source, '.powerpages-site', '.portalconfig', 'source-environment-manifest.yml'),
+    'environment: source\n'
+  );
   const npmCalls = [];
   let pacCalls = 0;
 
@@ -636,7 +984,13 @@ test('provisionTemplateSite restores project files omitted by PAC without replac
       assert.equal(fs.existsSync(path.join(cwd, '.npmrc')), true);
       assert.equal(fs.existsSync(path.join(cwd, 'dataverse-choice-values.json')), true);
       assert.equal(fs.existsSync(path.join(cwd, 'tests', 'serviceRequests.test.mjs')), true);
-      assert.equal(fs.existsSync(path.join(cwd, '.powerpages-site', '.portalconfig', 'manifest.yml')), true);
+      assert.equal(fs.existsSync(path.join(cwd, '.powerpages-site', '.portalconfig', 'manifest.yml')), false);
+      assert.equal(
+        fs.existsSync(
+          path.join(cwd, '.powerpages-site', '.portalconfig', 'source-environment-manifest.yml')
+        ),
+        true
+      );
       if (args[0] === 'run') {
         fs.mkdirSync(path.join(cwd, 'dist'));
         fs.writeFileSync(path.join(cwd, 'dist', 'index.html'), '<html></html>');
@@ -655,7 +1009,7 @@ test('provisionTemplateSite restores project files omitted by PAC without replac
   );
 });
 
-test('copyMissingTemplateFiles rejects source symlinks and preserves cloned website metadata', (t) => {
+test('copyMissingTemplateFiles skips PAC-owned identity files and restores ordinary files', (t) => {
   const dir = tempDir();
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const source = path.join(dir, 'source');
@@ -663,13 +1017,30 @@ test('copyMissingTemplateFiles rejects source symlinks and preserves cloned webs
   createSource(source, { id: SOURCE_ID });
   createSource(clone, { id: CLONED_ID });
   fs.writeFileSync(path.join(source, 'extra.json'), '{}');
+  fs.mkdirSync(path.join(source, '.powerpages-site', '.portalconfig'));
+  fs.writeFileSync(
+    path.join(source, '.powerpages-site', '.portalconfig', 'manifest.yml'),
+    'stale clone state\n'
+  );
 
   assert.deepEqual(copyMissingTemplateFiles(source, clone), ['extra.json']);
   assert.match(
     fs.readFileSync(path.join(clone, '.powerpages-site', 'website.yml'), 'utf8'),
     new RegExp(CLONED_ID)
   );
+  assert.equal(
+    fs.existsSync(path.join(clone, '.powerpages-site', '.portalconfig', 'manifest.yml')),
+    false
+  );
+});
 
+test('copyMissingTemplateFiles rejects source symlinks', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  const clone = path.join(dir, 'clone');
+  createSource(source);
+  createSource(clone);
   const target = path.join(dir, 'outside.json');
   const link = path.join(source, 'linked.json');
   fs.writeFileSync(target, '{}');
@@ -717,4 +1088,208 @@ test('runNpm invokes the Windows npm.cmd shim through cmd.exe without a command 
   assert.deepEqual(calls[0][1], ['/d', '/s', '/c', 'npm.cmd', 'run', 'build']);
   assert.equal(calls[0][2].cwd, '/tmp/site');
   assert.equal(calls[0][2].shell, false);
+});
+
+test('copyMissingTemplateFiles resolves check-then-act TOCTOU when another process creates the directory', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  const cloned = path.join(dir, 'cloned');
+  fs.mkdirSync(path.join(source, 'nested'), { recursive: true });
+  fs.mkdirSync(cloned, { recursive: true });
+
+  const customFs = {
+    ...fs,
+    mkdirSync(targetPath, options) {
+      // Simulate another process creating the directory immediately before this call.
+      fs.mkdirSync(targetPath, options);
+      // The original non-recursive mkdir now receives EEXIST, as it would in the race.
+      return fs.mkdirSync(targetPath, options);
+    }
+  };
+
+  const restored = copyMissingTemplateFiles(source, cloned, customFs);
+  assert.deepEqual(restored, []);
+  assert.equal(fs.existsSync(path.join(cloned, 'nested')), true);
+});
+
+test('copyMissingTemplateFiles rejects when a file exists where a directory is expected', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  const cloned = path.join(dir, 'cloned');
+  fs.mkdirSync(path.join(source, 'conflict-dir'), { recursive: true });
+  fs.mkdirSync(cloned, { recursive: true });
+  fs.writeFileSync(path.join(cloned, 'conflict-dir'), 'this is a file');
+
+  assert.throws(
+    () => copyMissingTemplateFiles(source, cloned, fs),
+    /Clone path conflicts with template directory: conflict-dir/
+  );
+});
+
+
+test('copyMissingTemplateFiles maps ENOTDIR to conflict error during race condition', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = path.join(dir, 'source');
+  const cloned = path.join(dir, 'cloned');
+  fs.mkdirSync(path.join(source, 'nested'), { recursive: true });
+  fs.mkdirSync(cloned, { recursive: true });
+
+  const customFs = {
+    ...fs,
+    mkdirSync(targetPath, options) {
+      if (targetPath.includes('cloned') && targetPath.endsWith('nested')) {
+        const err = new Error('ENOTDIR');
+        err.code = 'ENOTDIR';
+        throw err;
+      }
+      return fs.mkdirSync(targetPath, options);
+    },
+    lstatSync(targetPath) {
+      if (targetPath.includes('cloned') && targetPath.endsWith('nested')) {
+        const err = new Error('ENOTDIR');
+        err.code = 'ENOTDIR';
+        throw err;
+      }
+      return fs.lstatSync(targetPath);
+    }
+  };
+
+  assert.throws(
+    () => copyMissingTemplateFiles(source, cloned, customFs),
+    /Clone path conflicts with template directory: nested/
+  );
+});
+
+test('copyMissingTemplateFiles rejects when a symlink exists where a directory is expected', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('Symlinks require privileges on Windows');
+    return;
+  }
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = require('path').join(dir, 'source');
+  const cloned = require('path').join(dir, 'cloned');
+  fs.mkdirSync(require('path').join(source, 'conflict-dir'), { recursive: true });
+  fs.mkdirSync(cloned, { recursive: true });
+  fs.symlinkSync(require('path').join(cloned, 'dummy'), require('path').join(cloned, 'conflict-dir'));
+
+  assert.throws(
+    () => copyMissingTemplateFiles(source, cloned, fs),
+    /Clone path conflicts with template directory: conflict-dir/
+  );
+});
+
+test('copyMissingTemplateFiles rejects when a symlink to an existing directory exists where a directory is expected', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('Symlinks require privileges on Windows');
+    return;
+  }
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = require('path').join(dir, 'source');
+  const cloned = require('path').join(dir, 'cloned');
+  fs.mkdirSync(require('path').join(source, 'conflict-dir'), { recursive: true });
+  fs.mkdirSync(cloned, { recursive: true });
+  
+  const targetDir = require('path').join(dir, 'target');
+  fs.mkdirSync(targetDir, { recursive: true });
+  
+  fs.symlinkSync(targetDir, require('path').join(cloned, 'conflict-dir'));
+
+  assert.throws(
+    () => copyMissingTemplateFiles(source, cloned, fs),
+    /Clone path conflicts with template directory: conflict-dir/
+  );
+});
+
+test('copyMissingTemplateFiles retries when lstat throws ENOENT and succeeds on retry', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = require('path').join(dir, 'source');
+  const cloned = require('path').join(dir, 'cloned');
+  fs.mkdirSync(require('path').join(source, 'retry-dir'), { recursive: true });
+  fs.mkdirSync(cloned, { recursive: true });
+
+  let attempts = 0;
+  const customFs = {
+    ...fs,
+    mkdirSync(targetPath, options) {
+      attempts++;
+      if (attempts === 1) {
+        const err = new Error('EEXIST');
+        err.code = 'EEXIST';
+        throw err;
+      }
+      return fs.mkdirSync(targetPath, options);
+    },
+    lstatSync(targetPath) {
+      if (attempts === 1 && targetPath.includes('cloned')) {
+        const err = new Error('ENOENT');
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return fs.lstatSync(targetPath);
+    }
+  };
+
+  const restored = copyMissingTemplateFiles(source, cloned, customFs);
+  assert.deepEqual(restored, []);
+  assert.equal(attempts, 2);
+});
+
+test('copyMissingTemplateFiles throws after exhausted retries for ENOENT', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = require('path').join(dir, 'source');
+  const cloned = require('path').join(dir, 'cloned');
+  fs.mkdirSync(require('path').join(source, 'fail-dir'), { recursive: true });
+  fs.mkdirSync(cloned, { recursive: true });
+
+  const customFs = {
+    ...fs,
+    mkdirSync(targetPath, options) {
+      const err = new Error('EEXIST');
+      err.code = 'EEXIST';
+      throw err;
+    },
+    lstatSync(targetPath) {
+      if (targetPath.includes('cloned')) {
+        const err = new Error('ENOENT');
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return fs.lstatSync(targetPath);
+    }
+  };
+
+  assert.throws(
+    () => copyMissingTemplateFiles(source, cloned, customFs),
+    /Failed to create directory after 3 attempts: fail-dir \(last error: ENOENT\)/
+  );
+});
+
+test('copyMissingTemplateFiles propagates EACCES unchanged', (t) => {
+  const dir = tempDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const source = require('path').join(dir, 'source');
+  const cloned = require('path').join(dir, 'cloned');
+  fs.mkdirSync(require('path').join(source, 'err-dir'), { recursive: true });
+  fs.mkdirSync(cloned, { recursive: true });
+
+  const customFs = {
+    ...fs,
+    mkdirSync(targetPath, options) {
+      const err = new Error('EACCES');
+      err.code = 'EACCES';
+      throw err;
+    }
+  };
+
+  assert.throws(
+    () => copyMissingTemplateFiles(source, cloned, customFs),
+    { code: 'EACCES' }
+  );
 });

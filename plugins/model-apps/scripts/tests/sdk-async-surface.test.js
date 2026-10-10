@@ -55,8 +55,10 @@ const SCRIPTS_DIR = path.resolve(__dirname, '..');
 // test fails if the bundle disagrees with this list, in either direction.
 const ASYNC_SDK_METHODS = [
   'addElement',
+  'createArtifact',
   'findElements',
   'getArtifact',
+  'initWorkspace',
   'moveElement',
   'queryTree',
   'removeElement',
@@ -555,7 +557,7 @@ test('a STALE_ARTIFACT from the async surface HALTS the build (fails closed, wit
   // do, rather than continuing and shipping a half-applied artifact. This pins that, so a future
   // refactor of the error path cannot quietly downgrade it to a warning.
   const { makeRunner, BuildHalt } = require(path.resolve(SCRIPTS_DIR, 'lib', 'entity-provision.js'));
-  const { SdkError } = require(BUNDLE);
+  const { SdkError, createNodeWorkspaceStorage } = require(BUNDLE);
 
   const events = [];
   const runner = makeRunner({ emit: (e) => events.push(e), total: 1 });
@@ -757,7 +759,7 @@ test('sanitizeSubject output can NEVER match a merge prefix (the actual contract
 });
 
 test('the real vendored bundle agrees with ASYNC_SDK_METHODS (no drift in either direction)', async () => {
-  const { createMakerSdk } = require(BUNDLE);
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'async-surface-'));
   try {
     const httpClient = {
@@ -767,9 +769,9 @@ test('the real vendored bundle agrees with ASYNC_SDK_METHODS (no drift in either
       delete: async () => ({ status: 204, headers: {}, body: {} }),
       put: async () => ({ status: 204, headers: {}, body: {} }),
     };
-    const sdk = createMakerSdk({ workspacePath: dir, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
-    sdk.initWorkspace();
-    const art = sdk.createArtifact('form', { name: 'F', entityLogicalName: 'account', formType: 'main', status: 'draft' });
+    const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+    await sdk.initWorkspace();
+    const art = await sdk.createArtifact('form', { name: 'F', entityLogicalName: 'account', formType: 'main', status: 'draft' });
 
     for (const method of ASYNC_SDK_METHODS) {
       assert.strictEqual(typeof sdk[method], 'function', `${method} exists on the bundle`);
@@ -789,17 +791,30 @@ test('the real vendored bundle agrees with ASYNC_SDK_METHODS (no drift in either
       await Promise.resolve(returned).catch(() => {});
     }
 
-    // The counter-examples that make "in either direction" true rather than a slogan. These are
-    // called SYNCHRONOUSLY throughout the plugin, in many places, without `await`. If the SDK ever
-    // makes one of them async, every one of those call sites becomes the same silent-corruption bug
-    // — and nothing else in the suite would notice, because the async list above would still be
-    // satisfied. A review pointed out this test proved only one direction; this is the other.
-    assert.ok(!(art && typeof art.then === 'function'),
-      'createArtifact is still synchronous — the plugin uses its return value directly');
-    const ws = sdk.initWorkspace();
-    assert.ok(!(ws && typeof ws.then === 'function'),
-      'initWorkspace is still synchronous — every engine calls it un-awaited before any other work; '
-      + 'if it became async, the workspace could be unready when the first artifact call runs');
+    // `createArtifact` and `initWorkspace` MOVED into this list on the injected-storage re-vendor.
+    // They are the two methods the uptake had to re-await at ~10 call sites, so leaving them out
+    // would have left the tripwire blind exactly where the risk had just moved: a future
+    // `provision.createArtifact(type, def).id` lands as `undefined` with no error.
+    //
+    // They also used to be the "still synchronous" counter-examples below, asserted as
+    // `!(await x).then` — which `await` makes unfalsifiable, so both assertions passed while their
+    // messages stated the opposite of the truth. The counter-example is now a genuinely
+    // synchronous method, probed WITHOUT `await`.
+    // The counter-example that makes "in either direction" true rather than a slogan, probed WITHOUT
+    // `await` so the check can actually fail. `assignMissingIds` is one of only three genuinely
+    // synchronous methods left on the bundle (with `assertLanguageMatches`/`assertStructurallyValid`)
+    // — measured by calling every SDK method and classifying the return.
+    //
+    // Asserted to EXIST rather than guarded with `typeof`: a guarded probe silently becomes a no-op
+    // the moment the method is renamed, which is exactly how the previous version of this check
+    // rotted.
+    const stillSync = 'assignMissingIds';
+    assert.strictEqual(typeof sdk[stillSync], 'function',
+      `${stillSync} must exist on the bundle — this counter-example is the only thing proving the async list is not just "everything"`);
+    const syncReturn = sdk[stillSync]({ tabs: [] });
+    assert.ok(!(syncReturn && typeof syncReturn.then === 'function'),
+      `${stillSync} is still synchronous. If it became async, its un-awaited call sites become the same `
+      + 'silent-corruption bug the list above exists to prevent — add it to ASYNC_SDK_METHODS and await it.');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -828,4 +843,45 @@ test('an unparseable file is REPORTED, never silently skipped', () => {
   // cannot vouch for.
   const hits = findUnawaitedCalls('const x = ;;;(');
   assert.ok(hits.some((h) => h.kind === 'parse error'), 'a parse failure must surface as a finding');
+});
+
+// --- temp-workspace lifecycle: SDK CONSTRUCTION must sit inside the cleanup guard ---------------
+//
+// Every CLI entry point mints a throwaway workspace directory and hands the caller a `cleanup`
+// callback. The caller's `finally { cleanup() }` only becomes reachable once the factory RETURNS, so
+// anything that throws before the return strands the directory for the life of the machine.
+//
+// Guarding only `initWorkspace` is NOT enough, and that was a real (caught-in-review) miss: since the
+// injected-storage uptake the `createMakerSdk` CONSTRUCTOR builds the filesystem adapter
+// (`createNodeWorkspaceStorage`), so it touches disk and can fail on its own. Two entry points had
+// the constructor outside the net while their comments claimed otherwise.
+//
+// Checked by SOURCE SCAN because the factories are CLI-internal — none is exported, so there is no
+// seam to drive a construction failure through. The property checked is the one that matters
+// (construction happens inside a guarded region that cleans up), not a brittle line-order heuristic:
+// an earlier attempt compared `const cleanup` and `initWorkspace` offsets and wrongly flagged
+// teardown-model-app.js, which declares cleanup after the init but inside a try whose catch removes
+// the directory.
+test('every CLI that mints a throwaway workspace constructs the SDK INSIDE its cleanup guard', () => {
+  const dir = path.join(__dirname, '..');
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.js'));
+  const checked = [];
+  for (const file of files) {
+    const src = fs.readFileSync(path.join(dir, file), 'utf8');
+    const mk = src.indexOf('mkdtempSync');
+    if (mk < 0 || !/createMakerSdk\(/.test(src)) continue;
+    const tryAt = src.indexOf('try {', mk);
+    const ctorAt = src.indexOf('createMakerSdk(', mk);
+    assert.ok(tryAt >= 0 && tryAt < ctorAt,
+      `${file}: the createMakerSdk construction after mkdtempSync must be inside a try — the constructor builds the `
+      + 'filesystem adapter and can throw, and the caller\'s finally is unreachable until this function returns');
+    // …and the guard must actually reclaim the directory, not merely swallow the error.
+    const after = src.slice(tryAt);
+    assert.ok(/catch[\s\S]{0,200}?(cleanup\(\)|rmSync)/.test(after) || /finally[\s\S]{0,200}?(cleanup\(\)|rmSync)/.test(after),
+      `${file}: the guard around SDK construction must remove the throwaway directory (cleanup()/rmSync) before rethrowing`);
+    checked.push(file);
+  }
+  // A scan that matches nothing "passes" forever. These are the five entry points that own a
+  // throwaway workspace today; if one is renamed the count changes and this fails loudly.
+  assert.ok(checked.length >= 5, `expected to scan at least 5 entry points, scanned ${checked.length}: ${checked.join(', ')}`);
 });

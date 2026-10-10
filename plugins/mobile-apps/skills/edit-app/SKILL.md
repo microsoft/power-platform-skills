@@ -1,10 +1,12 @@
 ---
 name: edit-app
-description: "Use when the user wants to iterate on an existing generated Power Apps mobile app after /create-mobile-app: update the plan, data model, native capabilities, design, screens, generated app code, and preview without restarting the full project flow."
+description: "Use when the user wants to iterate on an existing generated Power Apps mobile app after /create-mobile-app: update Application Insights configuration, the plan, data model, native capabilities, design, screens, generated app code, and preview without restarting the full project flow."
 user-invocable: true
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task, Skill
 model: opus
 ---
+
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.
 
 **Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** — read first.
 
@@ -30,17 +32,39 @@ Use `--plan-only` only when the user explicitly asks to update planning docs wit
 - "Generate an evidence PDF and retain it on the inspection record"
 - "Add a View PDF action for an HTTPS report URL"
 - "Reorder screens — move profile out of tabs, into a modal from the home header"
+- "Enable Application Insights for this app"
+- "Change the Application Insights resource used by this app"
+- "Disable Application Insights for this app"
 
 ## When NOT to use
 
 - Brand-new project → `/create-mobile-app`
-- Just adding one connector with no screen changes → `/add-connector` directly
-- Just adding a single native wrapper with no screen changes → `/add-native` directly
-- The plan file is missing → re-run `/create-mobile-app` (don't try to reconstruct)
+- Explicit implementation-only request → the matching leaf skill under
+  [app-edit-routing.md](../../shared/references/app-edit-routing.md); do not infer
+  this from a short request or the absence of screen details.
+- The plan file is missing → stop and ask to restore it or confirm a bounded
+  implementation-only operation; never re-scaffold over the existing app.
 
 ## Workflow
 
-0. Locate app + health/drift probe → 1. Discover intent + inspect existing app → 1.5 Impact preview → 2. Re-plan affected sections → 3. Gate intent, plan + mutation preview → 4. Write plan diff → 5. Apply app mutations → 6. Rebuild affected screens → 7. Verify + quality sweep → 8. Preview + memory-bank update + optional debug handoff
+This skill owns direct feature requests forwarded by native, connector,
+data-model, and design entry points. Reuse the forwarded original request,
+arguments, and answers; do not ask the user to repeat them.
+
+Those entry points ask permission before invoking this full workflow. Reuse
+`entry_choice: full-integration` for the current request without repeating the
+mode question. A direct `/edit-app` invocation also needs no entry-choice menu.
+Neither authorizes mutations: keep the impact/plan gates below. Approved child
+calls skip the entry question and return here; do not create a recursive menu.
+
+For each child skill invocation, explicitly pass the
+[app-edit-routing.md](../../shared/references/app-edit-routing.md) context:
+`MOBILE_APP_ORCHESTRATING=1`, `orchestrator: edit-app`, `working_dir`, `phase`,
+and `approved_scope`. Planning uses read-only proposals; Step 5 implementation
+uses the scope approved in Step 3 and saved in Step 4. The marker is not approval
+and must not be persisted or relied on via a previous shell export.
+
+0. Locate app + health/drift probe → 0.5 Application Insights fast path when applicable → 1. Discover intent + inspect existing app → 1.5 Impact preview → 2. Re-plan affected sections → 3. Gate intent, plan + mutation preview → 4. Write plan diff → 5. Apply additions/refreshes → 6. Rebuild affected screens → 6.5 Unregister approved retired sources → 7. Verify + quality sweep → 8. Preview + memory-bank update + optional debug handoff
 
 ---
 
@@ -52,7 +76,7 @@ This is a focused edit workflow, not a lighter quality bar. Reuse `/create-mobil
 
 | Edit touches | Required gates |
 |---|---|
-| Any source file | Existing-app health gate, final `npx tsc --noEmit` |
+| Any source file | Existing-app health gate, final `npx --no-install tsc --noEmit` |
 | Dataverse/schema/connector | Environment drift gate, data-source/schema gate, Generated Services snapshot refresh, final `tsc` |
 | Navigation/routes | Navigation/layout gate, route contract check, final `tsc` |
 | New screen | Shared scaffold gate, skeleton gate, screen-builder wave gate, style-quality sweep, route check, final `tsc` |
@@ -60,6 +84,7 @@ This is a focused edit workflow, not a lighter quality bar. Reuse `/create-mobil
 | Native capability | Native allowlist gate, wrapper existence gate, final `tsc` |
 | Pure-JavaScript dependency | Approved exact-version dependency table, package-content gate, package validation, final `tsc` |
 | Design/component/density | Design-system gate, affected-screen style sweep, final `tsc`, preview |
+| Application Insights configuration only | Valid `app.json`, provider `appConfig` wiring, final `tsc` only if `app/_layout.tsx` changed |
 
 **When a gate fails:** capture full output once, classify by root cause, repair in a batch, rerun the same gate once. Do not make line-by-line fixes with `tsc` after every tiny edit. Continue only when the gate is clean or record a `BLOCKED:` / `DONE_WITH_CONCERNS:` entry in `memory-bank.md`.
 
@@ -73,7 +98,16 @@ This is a focused edit workflow, not a lighter quality bar. Reuse `/create-mobil
 
 ### Step 0 — Locate app + health/drift probe
 
+**Telemetry checkpoint: `assess_app_health_and_drift`**
+
+Before any project read or command, execute
+[app-working-directory.md](${PLUGIN_ROOT}/shared/references/app-working-directory.md).
+Resolve the absolute `working_dir` once, bind every shell call to it with the
+fail-closed guard, and use absolute paths for file tools. Forward that same root
+to every data child; a previous `cd` or inherited launch cwd is not a handoff.
+
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 test -f native-app-plan.md && echo "OK: plan found" || echo "ERROR: no plan"
 test -f package.json && echo "OK: package found" || echo "ERROR: no package"
 test -d app && echo "OK: app routes found" || echo "ERROR: no app routes"
@@ -81,7 +115,9 @@ test -f memory-bank.md && echo "OK: memory bank found" || echo "WARN: no memory 
 git status --short
 ```
 
-If `native-app-plan.md` is missing → STOP. Tell the user this skill edits an existing generated app; they should re-run `/create-mobile-app` on a fresh template or manually recreate the plan before using this editor.
+If `native-app-plan.md` is missing → STOP. Ask to restore the existing plan or
+explicitly limit the request to implementation-only work. Do not reconstruct the
+full app plan from one feature request or run `/create-mobile-app` over this app.
 
 Read if present:
 
@@ -91,6 +127,10 @@ Read if present:
 - `src/generated/services/*.ts` and `src/generated/models/*.ts` — generated data surface
 
 Run these existing-app health checks before any mutation:
+
+This is an inspection-only gate. Include required scaffold/provider/service
+repairs in the proposed mutation scope; do not apply them before Step 3 approval.
+`--plan-only` never authorizes these repairs or any other app/cloud mutation.
 
 | Check | Action if unhealthy |
 |---|---|
@@ -103,7 +143,46 @@ Run these existing-app health checks before any mutation:
 
 If the worktree has uncommitted changes that overlap likely edit targets, show the affected files and ask before continuing. Do not revert or stash automatically.
 
-If the app already fails `npx tsc --noEmit`, capture the errors once. Continue only when the failures are in files this edit will touch or are generated-service drift this edit can repair; otherwise surface the pre-existing failure and ask whether to proceed. If the edit would add screens or generated services, clean the prerequisite gate before continuing.
+If the app already fails `npx --no-install tsc --noEmit`, capture the errors once. Continue only when the failures are in files this edit will touch or are generated-service drift this edit can repair; otherwise surface the pre-existing failure and ask whether to proceed. If the edit would add screens or generated services, clean the prerequisite gate before continuing.
+
+### Step 0.5 — Application Insights configuration fast path
+
+If `--plan-only` is present, do not invoke the configuration skill or change
+Application Insights. For a configuration-only request, report that it has no
+plan section and stop unchanged; for a mixed request, continue with only the
+requested plan proposal.
+
+Use this fast path when the request is only to enable Application Insights, change its resource, or disable it. Application Insights is host/runtime configuration, not a connector or plan section, so do not run the planner, data-model, native, design, screen, or preview flows.
+
+If the request also adds or changes custom events in app screens, configure Application Insights here first, then continue through the normal edit workflow for those source changes.
+
+All Application Insights logic lives in the dedicated `/setup-app-insights` skill. Delegate to it rather than duplicating Azure discovery, connection-string handling, provider wiring, or privacy rules here:
+
+```
+Invoke skill: /setup-app-insights
+
+Environment:
+  MOBILE_APP_ORCHESTRATING=1
+  orchestrator: edit-app
+  working_dir: <working_dir>
+  phase: configuration
+  approved_scope: <requested configuration action; setup-app-insights owns approval>
+
+Arguments:
+  --working-dir <working_dir>
+  --action <enable|change-resource|disable>   # omit to let the skill infer + ask
+```
+
+Determine `--action` from the request (`enable` / `change-resource` / `disable`); omit it if the request only says "update Application Insights" and let the skill ask. The skill owns the mutation preview, approval, `app.json` + `PowerAppsProvider` `appConfig` wiring, `memory-bank.md` updates, and the selection telemetry emit.
+
+Handle the return per the status protocol (AGENTS.md rule #12):
+
+- `DONE` → print the action completed. Then, if the return includes `instrumentation_offer: available` (a successful enable/change-resource), ask the user one question, defaulting to **No**: "Application Insights is on. Want me to add custom telemetry to your app's major operations (create / update / delete)?"
+  - **Yes** → continue into the normal edit workflow (Step 1 onward) with this brief: *"Add custom events at each successful create, update, and delete boundary for the app's main entities; emit named events through `getCustomEventsLogger` with approved scalar properties only (no operation results, payloads, form values, free text, record titles, personal identifiers, tokens, precise coordinates, nested objects, or complete URLs); use `trackScenario()` for any duration."* Screen-planner and screen-builder own the source edits under their existing privacy allowlist.
+  - **No** (or `instrumentation_offer: none`) → stop; do not continue to Step 1.
+- `DONE_WITH_CONCERNS` → surface concerns, then stop.
+- `NEEDS_CONTEXT` → surface the question, re-invoke with the answer.
+- `BLOCKED` → surface the error (usually `app.json` unusable) and stop.
 
 ### Step 1 — Discover intent + inspect existing app
 
@@ -112,6 +191,7 @@ Infer from `$ARGUMENTS` when possible, but do not mutate files until you have a 
 First inspect the app so questions can use real options instead of abstractions:
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 find app -name '*.tsx' -not -name '_layout.tsx' -not -name '+not-found.tsx' | sort
 ls -1 src/generated/services/*.ts 2>/dev/null | sed 's|src/generated/services/||;s|\.ts$||'
 ls -1 src/generated/models/*.ts 2>/dev/null | sed 's|src/generated/models/||;s|\.ts$||'
@@ -138,7 +218,7 @@ Build an edit brief before Step 2:
 
 If the edit brief is incomplete after inspection, ask scenario-specific questions before continuing.
 
-Ask via `AskUserQuestion`:
+Only if the requested change is still unknown after inspection, ask via `AskUserQuestion`:
 
 > "What should this app edit change?
 > (a) Data model — add/extend/reuse Dataverse tables
@@ -150,7 +230,8 @@ Ask via `AskUserQuestion`:
 > (g) Preview only
 > (h) Cancel"
 
-Then ask: "Briefly describe the change you want."
+Ask for a brief description only if the original request and supplied answers
+still do not explain it. Ask one unresolved question at a time.
 
 Scenario-specific questions to ask only when the answer is not already obvious:
 
@@ -163,7 +244,9 @@ Scenario-specific questions to ask only when the answer is not already obvious:
 | Dataverse create form | Which Dataverse table? Existing table or new table? Which fields are required/editable? Where should the form launch from? What happens after save (back, detail, add another)? Are there lookup/file/image fields? |
 | Barcode/QR scan search | Where should scanning live (new scanner screen, existing search screen action, form field)? What does the scanned value represent (record ID, serial number, asset tag, SKU, custom field)? Which table/service/field should it search? What happens on no match or multiple matches? |
 | New requirement + screen | What user workflow is being added? Who uses it? What data/native/connectors does it need? Where does it sit in navigation? What is success/failure behavior? |
-| New data source | What job does the data source support? Is it structured business data (Dataverse), SharePoint list/library, cloud flow/action, or another connector? Which screen(s), if any, should use it now? |
+| New data source | What job does the data source support? Is it structured business data (Dataverse), SharePoint list/library, a connector action, or another connector? Which screen(s), if any, should use it now? |
+| Remove/replace a table or integration | Remove it only from this app, or is server deletion separately intended? Which remaining screens, lookup/identity helpers, native sync, or offline behavior still require it? Preserve server data by default. |
+| Native capability without a workflow | What should the capability do, where should users invoke it, and should the result stay local or be retained in an existing data source? |
 | Preview only | Preview all screens or only changed/key screens? Should Visual Companion auto-open behavior be honored? |
 
 Existing-state checks before deciding to add vs edit:
@@ -188,16 +271,28 @@ Use this scenario coverage matrix for common follow-ups. The goal is one user pr
 | Add a full calendar, agenda, or scheduling view | Screens → JavaScript Dependencies | Add exact `react-native-calendars` version to the approved table, then `npm install --save-exact` before builders | Build the calendar screen with the approved pattern; no `/add-native` or Android/iOS rebuild |
 | Add a new requirement with a new screen | Usually Screens plus whichever of Data Model, Connector, Native, Design the requirement implies | Decompose into one coherent feature; apply data/connector/native/design first, then screens | Generate/refresh service snapshot, layouts, skeletons/shared code, then build affected screens |
 | Add a new data source but no screen | Connector/Data Source; sometimes Data Model | `/add-datasource` when ambiguous; `/add-sharepoint`, `/add-connector`, or `/add-dataverse` when clear | Refresh generated services and memory bank; no screen rebuild unless the user asked for UI |
+| Add Teams/email action or profile lookup | Connectors; Screens when consumed | `/add-connector` after approval | Wire the action/read and its loading/error/success behavior; no Dataverse schema by default |
+| Add SQL/Excel/SharePoint data | Connectors, including external table/list schema; Screens when consumed | Matching connector leaf after approval | Do not add a Dataverse model just because the connector supplies tabular data |
 | Add a new table/entity but no screen | Data Model | `mobile-app:data-model-architect` -> `/add-dataverse --skip-planning` | Refresh generated services; optionally seed sample data; no preview unless UI changed |
+| Stop using a table/connector/flow or replace its data source | Data Model/Connectors and affected Screens | Approved retirement via the matching leaf after consumer updates in Step 6 | CLI removes the app registration and regenerates services/config; Step 6.5 verifies remaining sources and refreshes the schema map |
 | Remove, rename, reorder, or change a screen archetype | Screens | `mobile-app:screen-planner` edit pass | Update route files/layouts/navigation contracts; delete only approved files; run route check |
 | Generate a new static preview | None unless source is stale | `/preview-screens` | No source edits; do not run data/native/design work |
 
 One user-visible feature may require multiple plan sections. That is allowed and expected. Multiple unrelated features in one prompt should be split: list the features, ask which to run first, and do not bundle their mutations.
 
+**Data Model is conditional.** A connector/action/native capability does not
+automatically require Dataverse. Reuse existing storage and schema. Plan Dataverse
+changes only for new/changed Dataverse tables, columns, or relationships actually
+required by the feature; missing generated services alone require regeneration,
+not new schema. Keep connector operations and external table/list schemas in
+`## Connectors`. Preserve unaffected Data Model content verbatim.
+
 Loophole checks before continuing:
 
 - If the request adds UI that reads or writes data, confirm the generated service exists or add the data source before screen work. Never let screen-builders invent services.
-- If the request is ambiguous about Dataverse vs SharePoint vs another connector, route through `/add-datasource` rather than guessing.
+- If the request is ambiguous about Dataverse vs SharePoint vs another connector,
+  consult the `/add-datasource` routing table read-only and resolve the choice
+  before approval. Execute the selected leaf only in Step 5.
 - If a screen requires a native wrapper, run `/add-native` before screen-builders import `src/native/*`.
 - If a native capability is not shipped by the template, stop with a clear block; do not install native packages or fake support.
 - If a screen requires a pure-JavaScript library, add it with an exact version to `## Screens → ### JavaScript Dependencies`, include it in the mutation preview, and install it before screen builders run. Determine JS-only status from shipped contents, not from a package-name prefix.
@@ -209,7 +304,7 @@ For PDF/signature requests, map the change to every affected section instead of 
 
 | User request | Required plan updates |
 |---|---|
-| Add signature capture, sign-off, pen, ink, drawing | Native Capabilities: `pen-input`; Data Model: Image/File column or child Evidence/Signature table; Screens: capture action, preview state, cancelled state, upload failed state |
+| Add signature capture, sign-off, pen, ink, drawing | Native Capabilities: `pen-input`; Screens: capture, preview, cancellation, and applicable failure states; ask about retention, then update Data Model only if new/changed Dataverse storage is required |
 | Store signed approval as Dataverse image | Data Model: Image column; Screens: normalize `data:image/png;base64,...` before update; Native Capabilities: `pen-input` if capture is in-app |
 | Generate/export/print evidence PDF | Native Capabilities: `pdf-report` only when `expo-print` is present, plus `sharing` only when local share is needed and `expo-sharing` is present; Data Model: File column only if retained; Screens: generation pending/failed/success states |
 | Persist generated PDFs | Data Model: Dataverse File column or child Attachment table; Screens: create/update row first, then upload File bytes; Native Capabilities: `pdf-report` |
@@ -218,6 +313,8 @@ For PDF/signature requests, map the change to every affected section instead of 
 If a single PDF/signature request requires multiple plan sections, say so and run the edit loop section-by-section. Do not write a native capability entry that references a Dataverse column or screen state that remains absent from the plan.
 
 ### Step 1.5 — Impact preview (cheap abort gate)
+
+**Telemetry checkpoint: `analyze_edit_impact`**
 
 Before spawning architects or mutating files, show a rough impact preview and ask for proceed/edit/cancel. This mirrors `/create-mobile-app` Step 2c at edit scale.
 
@@ -253,7 +350,8 @@ If the user chooses **edit**, return to Step 1 and refine the edit brief. If can
 
 **If the user picks (d) Design:**
 
-Read and execute the `/design-system` skill instead of spawning a planner agent. Determine the dimension from the user's description:
+Read the `/design-system` references to propose the Design delta without executing
+the skill yet. Determine the dimension from the user's description:
 
 | User says | Route to |
 |---|---|
@@ -267,17 +365,14 @@ Read and execute the `/design-system` skill instead of spawning a planner agent.
 
 **One-major-change-per-prompt enforced.** If the user asks to change palette AND typography → refuse, ask which first. This matches `/design-system`'s own behavior.
 
-After `/design-system --refresh` returns, print:
-
-```
-✅ Design system updated. brand/design-system.md + brand/tokens.ts refreshed.
-
-Continuing with verification and preview. Rebuilding screens only if component shapes, density, navigation, or screen-specific design rules changed.
-```
-
-Do not stop after design refresh. Continue to Step 7 verification and Step 8 preview. If the refresh changed component shapes, density, negatives, or a full reskin requires TSX adjustments, include Screens in the affected sections and rebuild those screens.
+Include runtime token/provider wiring and any affected screens in the proposal.
+Continue through Steps 2-4 before executing `/design-system` in Step 5.
+Do not write brand artifacts before approval or during `--plan-only`, and do not
+jump from design refresh straight to verification if screen changes are needed.
 
 ### Step 2 — Re-plan affected sections
+
+**Telemetry checkpoint: `revise_affected_app_plan`**
 
 Reuse the same planning primitives as `/create-mobile-app`, but only for the affected surfaces:
 
@@ -296,20 +391,32 @@ Reuse the same planning primitives as `/create-mobile-app`, but only for the aff
 
 Read each affected section verbatim from `native-app-plan.md` and pass it as input to the relevant read-only agent. Use the plugin namespace for every `Task` invocation.
 
+For Dataverse schema/new-binding work, first read and execute
+[dataverse-change-planning.md](../../shared/references/dataverse-change-planning.md).
+Use the requested delta and necessary dependencies, not all historical plan
+rows. The foreground obtains and validates compact evidence; the architect
+uses `Dataverse planning mode: required`, not legacy live discovery.
+Native/design/connector-only edits, app-binding removals, and retained-service
+refreshes skip this planning path and never reuse its old artifacts.
+
 Before the first `Task`, run a silent preflight for the leaf agent you need (`mobile-app:data-model-architect`, `mobile-app:screen-planner`, or `mobile-app:screen-builder` preflight later). If the host cannot spawn agents, print once:
 
 > "→ Planner agents unavailable in this host — running inline planning. (No action needed; this is automatic.)"
 
 Inline fallback rules:
 
-- Data Model: draft the section inline from the existing plan, `.datamodel-manifest.json`, generated models, and the user's edit brief; then gate it exactly like an agent result.
+- Data Model: use the existing plan, manifest, models, and edit brief as context,
+  but ground decisions in the shared workflow's validated compact evidence.
+  Produce `_dm_section.md` and the normalized schema contract and run the same
+  decision validator as for an agent result; local files alone are not proof
+  of current server schema.
 - Screens: draft Screen Map / Navigation Contracts / per-screen spec changes inline using `agents/screen-planner.md`, `shared/references/screen-templates.md`, and the existing screen TSX; then gate it exactly like an agent result.
 - Native Capabilities and Connectors: already handled inline by this skill.
 - Never skip approval just because a leaf agent is unavailable.
 
 | Section | Agent (read-only) | Output file |
 |---|---|---|
-| Data Model | `mobile-app:data-model-architect` | `_dm_section.md` |
+| Data Model | `mobile-app:data-model-architect` | `_dm_section.md` + `.tmp/dataverse-schema-contract.json` |
 | Native Capabilities | (handled inline — no separate agent) | `_native_section.md` |
 | Screens | `mobile-app:screen-planner` | `_screens_section.md` |
 
@@ -323,13 +430,32 @@ Prompt:
   Current section content: <verbatim>
   Working directory: <absolute path>
   Plugin root: ${PLUGIN_ROOT}
+  Phase: planning
+  Proposal only: <true for --plan-only or a planning-phase caller>
 
   Mode: edit (preserve existing decisions where the change doesn't affect them).
   Existing generated app must be updated after approval, so include enough detail for builders to mutate code without guessing.
   Return the updated section as a markdown file.
 ```
 
-Parse the first line of every agent result using the return-status protocol in `AGENTS.md`. `DONE` continues, `DONE_WITH_CONCERNS:` must be surfaced and recorded, `NEEDS_CONTEXT:` gets one clarified retry, `BLOCKED:` stops before any file mutation, and unknown first lines are treated as `BLOCKED: malformed agent return`.
+For the Data Model handoff, also include these fields verbatim:
+
+```text
+Dataverse planning mode: required
+Normalized Dataverse foreground planning snapshot (validator input only): <SNAPSHOT_PATH>
+Compact Dataverse architect evidence: <ARCHITECT_EVIDENCE_PATH>
+Structured schema contract output: <working_dir>/.tmp/dataverse-schema-contract.json
+Scope: <requested delta and necessary dependencies; preserve unrelated rows>
+Native capabilities and connector ownership: <retained approved constraints>
+```
+
+Handle structured Dataverse context/revision signals with the shared planning
+recovery before generic retry limits. For other signals, use `AGENTS.md`:
+`DONE` continues to output validation, `DONE_WITH_CONCERNS:` must be surfaced
+and recorded, `NEEDS_CONTEXT:` gets one clarified retry, `BLOCKED:` stops before
+app mutation, and unknown first lines are `BLOCKED: malformed agent return`.
+Every Data Model result, including inline output, must pass the shared decision
+validator; `DONE` alone never authorizes Step 3.
 
 For Native Capabilities (no separate agent), do it inline: read the current capability table, apply the change, regenerate the table. For PDF/pen rows, include storage/output notes in the table or immediately below it:
 
@@ -337,14 +463,44 @@ For Native Capabilities (no separate agent), do it inline: read the current capa
 - `pdf-report` generates a local PDF only when `expo-print` is present; local output may be opened by `native-pdf-viewer` 0.2.9+, shared with `expo-sharing` when present, or uploaded to Dataverse File storage.
 - `pen-input` returns a PNG data URI; cancellation is a non-error state; Dataverse target must be Image, File, or child Evidence/Signature row.
 
-For connector/data-source edits, read and execute `/add-datasource` when the source type is unclear; use `/add-sharepoint`, `/add-connector`, or `/add-dataverse` directly only when the source type is clear. If the connector drives new screens or forms, update the Screens section too before applying code.
+For connector/data-source edits, read
+[connector-planning.md](../../shared/references/connector-planning.md) and the
+`/add-datasource` routing table as reference only. Propose the `## Connectors`
+delta with operations, external tables/list schemas, and consuming screens.
+Do not execute connector skills, create connections, or generate services in
+Step 2. Update Screens when the connector drives new screens/forms; defer the
+selected leaf to Step 5 after approval.
+
+For removals/replacements, follow
+[data-source-removal.md](../../shared/references/data-source-removal.md).
+Before changing the plan, capture the current registration inventory and propose
+retain/add/refresh/removal sets. Do not interpret an omitted table as permission
+to delete it. Include non-screen consumers and offline dependencies, preserve
+server tables/records, and carry the approved removal set through Step 6.5.
 
 ### Step 3 — Gate intent, plan + app mutation preview
+
+**Telemetry checkpoint: `approve_app_mutation_plan`**
+
+For Dataverse planning, require exit `0` from
+`validate-dataverse-planning-decisions.js` for the current normalized contract
+and snapshot before showing this gate. Revisions repeat that check. There is
+no extra create-flow approval gate; preserve this edit's existing UX.
+
+If this is a planning-phase handoff from another owner, return the validated
+proposal and concerns to that owner now, without saving the live plan or
+opening an implementation gate. Do not turn the caller's planning consent
+into approval to apply the edit. A direct `--plan-only` request retains the
+explicit plan-document approval below.
 
 Show the user a side-by-side diff (or before/after) for every changed plan section. Also show an app mutation preview:
 
 - Edit brief: intent, target screens/routes, data/native/JavaScript/design dependencies, and assumptions
 - Data/schema operations to run (`/add-dataverse --skip-planning`, connector add, native wrapper add)
+- Exact app data-source removals, consumer updates, and server data that will be preserved
+- Exact sample-data table allowlist and count/media policy, if requested; exclude
+  retiring tables and include required seed parents only with explicit approval.
+  An empty approved set authorizes no seed writes.
 - Screen files to create, rewrite, rename, or delete
 - Navigation/layout files to update
 - Verification commands to run
@@ -376,26 +532,123 @@ diff --git native-app-plan.md native-app-plan.md
 
 If this is `--plan-only`, update `memory-bank.md` with `plan_only: true`, print the exact follow-up commands, and stop. Otherwise continue immediately.
 
+The saved plan describes approved intent, not successful application. When the
+Data Model changed, merge its newly accepted `_dm_section.md` proposal here;
+never replay stale scratch output for an unrelated edit. Preserve unrelated
+sections and do not reuse execution artifacts/approval receipts bound to an older plan. The leaf
+updates `.datamodel-manifest.json` only from verified schema/service outcomes;
+pending retirements stay transitional until Step 6.5. Record any failure and
+remaining operations in memory-bank rather than claiming this plan is applied.
+For approved Dataverse implementation, freeze the shared workflow's
+`contract_sha256` and final saved `plan_sha256` in `approved_scope`, and retain
+the absolute `planning_snapshot`, `architect_evidence`, and `schema_contract`
+paths. A plan-only save does not create this implementation approval context.
+
 ### Step 5 — Apply app mutations
+
+**Telemetry checkpoint: `apply_app_mutations`**
 
 Apply sections in dependency order so screens always build against the current data/native surface:
 
+Run only operations in the approved delta, not every section of the existing
+plan. Pass `MOBILE_APP_ORCHESTRATING=1` and the explicit implementation context
+above on each handoff, including through routers and on retries. Reuse supplied
+answers, and return to the approval gate if an unresolved choice changes scope.
+
 0. **Environment drift gate for data edits** — before Dataverse, SharePoint, connector, or sample-data work, compare `memory-bank.md`, `power.config.json`, and `.resolved-environment.json`. If they disagree, show the values and ask the user which environment is intended. Do not create tables or connections until confirmed.
-1. **Data Model** — read and execute `/add-dataverse --skip-planning` with the approved Data Model section. It must create/extend Dataverse tables, refresh generated services/models, update `.datamodel-manifest.json`, and leave generated services compiling. After it returns, run `npm run generate-schemas` and `npx tsc --noEmit`; do not continue to screens until clean.
-2. **Sample Data** — if a new Dataverse table was created and any changed screen will show list/detail data from it, read and execute `/add-sample-data` for the project. If seeding fails, record a concern and continue only if the app handles empty states.
-3. **Connector/Data Source** — read and execute `/add-datasource` when ambiguous, or `/add-sharepoint` / `/add-connector` for approved connector changes. Regenerate services and record connection notes in `memory-bank.md`.
+1. **Data Model** — invoke `/add-dataverse --skip-planning` with the approved
+   delta and the scoped planning context below, not every row in the plan.
+   The leaf verifies the evidence/approval hashes and performs fresh live
+   reconciliation before scoped mutations; no partial create-only fast-path
+   flags or fabricated create receipt. It refreshes the affected services,
+   updates verified inventory, and leaves generated services compiling.
+   Pass `offline_reconciliation_owner: edit-app`; Step 5.6 owns the offline
+   check, so the leaf returns its verified delta without prompting twice.
+   After it returns, run `npm run generate-schemas` and `npx --no-install tsc --noEmit`;
+   do not continue to screens until clean.
+2. **Sample Data** — seed only the explicit table allowlist approved in Step 3.
+   Propose newly created Dataverse tables used by changed screens as candidates,
+   not the entire project manifest. Distinguish `createdThisEdit` from historical
+   manifest `status: new`; existing/reused parent tables need explicit inclusion.
+   Validate the approved names against verified output and the retirement set.
+   An empty scope means skip seeding. Missing/unverified/retiring targets return to the owner
+   for correction, not a fallback to project-wide seeding. Pass the handoff below.
+   If insertion fails, record the partial result and continue only if the app
+   handles empty states; never report complete seed coverage.
+3. **Connector/Data Source** — read and execute `/add-datasource` when ambiguous, or `/add-sharepoint` / `/add-connector` for approved connector changes. For a retained source refresh, pass skill-only `--refresh --data-source-name "<registered-name>"` with its verified identity in `approved_scope`; do not route refreshes through addition. Use the same refresh branch for service-only Dataverse repairs without schema changes. Regenerate services and record connection notes in `memory-bank.md`.
 4. **Pure-JavaScript Dependencies** — execute the Installation Contract in [`shared/references/javascript-dependency-planning.md`](${PLUGIN_ROOT}/shared/references/javascript-dependency-planning.md) for new or changed rows in the approved `## Screens → ### JavaScript Dependencies` table. Approval is consent for those exact packages and versions. Install and validate before screen work; if final inspection finds native code/config or incompatible runtime dependencies, remove only the newly added package and stop with the exact failed criterion.
 5. **Native Capabilities** — read and execute `/add-native <capability>` for every new capability. Do not install missing native packages or fake wrappers. If a capability is unsupported by the current template, stop before rebuilding screens that import it, record the block, and tell the user what upstream template support is missing.
-6. **Design** — read and execute `/design-system --refresh <dimension>` or `/design-system --reskin` for design edits. Token-only changes usually do not require TSX rewrites; component/density/negative-rule changes may.
+6. **Design** — read and execute the approved `/design-system` operation (refresh,
+   reskin, theme, or rollback). Include `CODE_APPS_NATIVE_ORCHESTRATING=1` in
+   the child environment to suppress intermediate browser tabs, alongside the
+   scoped `MOBILE_APP_ORCHESTRATING=1` context above. Apply its Tamagui integration reference to changed
+   tokens/themes and provider wiring before verification; a brand artifact alone
+   does not prove runtime integration. Token-only changes usually do not require
+   screen TSX rewrites; component/density/negative-rule changes may. Rebuild
+   affected screens in Step 6 rather than returning early.
+   For an approved custom dark palette, execute the reference's **Approved dark
+   palette** branch: wire `darkTokens.color` into `appDarkTheme`, then into the
+   provider's `brandedDarkTheme`. Verify the export/keys and resolved dark
+   surface/text values; writing `brand/tokens.dark.ts` alone is not completion.
+
+Step 5 applies additions/refreshes, not removals. If the Data Model change is
+removal-only, do not run `/add-dataverse`'s add workflow against the shortened
+plan: it would neither unregister the old source nor safely update its consumers.
+Defer approved retirements until Step 6.5, after source consumers are updated.
 
 After any Data Model, Connector/Data Source, JavaScript Dependency, or Native Capabilities mutation, rerun the generated-service/dependency/native-wrapper probe before screen work. Screen prompts must reflect what exists on disk now, not what the earlier plan expected.
+
+Dataverse handoff (only for approved schema/new-binding work):
+
+```text
+Invoke skill: /add-dataverse
+
+Context:
+  MOBILE_APP_ORCHESTRATING=1
+  orchestrator: edit-app
+  working_dir: <working_dir>
+  phase: implementation
+  offline_reconciliation_owner: edit-app
+  planning_snapshot: <SNAPSHOT_PATH>
+  architect_evidence: <ARCHITECT_EVIDENCE_PATH>
+  schema_contract: <working_dir>/.tmp/dataverse-schema-contract.json
+  approved_scope: <accepted delta and dependencies, contract_sha256, plan_sha256>
+
+Arguments:
+  --working-dir '<working_dir>'
+  --plan-section '<working_dir>/native-app-plan.md#data-model'
+  --skip-planning
+```
+
+Sample-data handoff (only for a nonempty approved seed scope):
+
+```text
+Invoke skill: /add-sample-data
+
+Context:
+  MOBILE_APP_ORCHESTRATING=1
+  orchestrator: edit-app
+  working_dir: <working_dir>
+  phase: implementation
+  approved_scope: <approved seed tables, count/media policy, and lookup decisions>
+  retiring_tables: <approved retirement list, or empty>
+
+Arguments:
+  --working-dir '<working_dir>'
+  --tables "<approved-seed-table-logical-names>"
+  --exclude-tables "<retiring-table-logical-names-or-empty>"
+```
+
+These are skill arguments, not Dataverse CLI flags. A required parent outside
+the allowlist returns `NEEDS_CONTEXT`; the seeding leaf must not expand scope
+or seed a transitional retiring table to satisfy its coverage rules.
 
 #### Step 5.5 — Refresh generated service snapshot
 
 Run this after any data-source/schema/connector mutation and before any screen-builder prompt:
 
 ```bash
-cd <working_dir>
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 for svc in src/generated/services/*.ts; do
   [ -e "$svc" ] || continue
   name=$(basename "$svc" .ts)
@@ -406,21 +659,49 @@ done
 
 Replace or create the `## Generated Services (snapshot at <ISO timestamp>)` section in `native-app-plan.md` immediately after `## Screens`. If there are no services, write an empty table and a note. Screen-builders must treat this table as authoritative.
 
+Mark still-present services in the approved removal set as retiring: builders
+must not introduce or retain dependencies on them. Refresh this snapshot again
+after Step 6.5 so it describes the actual remaining output.
+
 Do not ask the user to run these follow-up skills manually. This skill is the orchestrator.
 
 #### Step 5.6 — Offline profile reconciliation
 
-If Step 5 created or extended Dataverse tables, an existing Mobile Offline Profile may now be missing those tables/columns (new tables never sync to devices; new columns arrive blank). Step 5's `/add-dataverse --skip-planning` suppresses that skill's own Step 8.5 reconciliation, so this orchestrator owns the check. Skip when no Data Model mutation occurred in this edit.
+If Step 5 created or extended Dataverse tables, an existing Mobile Offline Profile may now be missing those tables/columns (new tables never sync to devices; new columns arrive blank). Step 5's complete scoped `/add-dataverse --skip-planning` handoff names `offline_reconciliation_owner: edit-app`, so this orchestrator owns the check instead of the leaf's Step 8.5. The flag alone is not enough. Skip when no Data Model mutation occurred in this edit.
+
+For mixed addition/removal edits, intersect any returned additions with the
+approved retained/added Dataverse set before offering/applying profile changes.
+Never add a retiring table to the offline profile merely because its transitional
+manifest entry remains until Step 6.5.
 
 Run the local, no-network delta check:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js"
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+node "${PLUGIN_ROOT}/scripts/offline-profile-delta.js" --project-root '<working_dir>'
 ```
 
-Branch on the JSON `status` per [offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md): `no-manifest` / `no-profile` / `in-sync` → continue silently (do not nag when no profile exists); `delta` → prompt to update, then read and execute `${PLUGIN_ROOT}/skills/add-table-to-offline-profile/SKILL.md` for `missingTables[]` and `${PLUGIN_ROOT}/skills/edit-offline-profile/SKILL.md` for `tablesWithNewColumns[]`, passing the arguments documented by each workflow, and re-check to `in-sync`. Record the reconciliation outcome in the Step 8 memory-bank edit entry.
+Capture the exit status and stdout/stderr and follow the failure dispatch in
+[offline-profile-reconciliation.md](${PLUGIN_ROOT}/shared/references/offline-profile-reconciliation.md)
+before continuing: a non-zero exit, `status: error`, malformed/missing JSON,
+or unknown status skips mutation helpers and ends with `DONE_WITH_CONCERNS`
+for already-applied changes (otherwise `BLOCKED`), never a clean success.
+For valid `no-manifest` / `no-profile` / `in-sync`, continue silently.
+For `delta`, obtain approval and execute the reference's **Scoped helper
+handoffs** with `orchestrator: edit-app`, the same absolute `working_dir`,
+`phase: implementation`, and the exact approved environment/profile/table
+scope. Pass `--working-dir '<working_dir>'` to each helper along with its table
+and column arguments, then re-check through the same failure dispatch.
+Record the outcome in the Step 8 memory-bank entry without clearing pending
+`offlineRetirement` outcomes.
+
+These statuses concern additions only. Preserve any `offlineRetirement` outcomes
+from earlier attempts, and collect the removal leaf's updated outcomes in
+Step 6.5; an `in-sync` result never resolves a pending retirement.
 
 ### Step 6 — Rebuild affected screens
+
+**Telemetry checkpoint: `rebuild_affected_screens`**
 
 Use the plan diff plus the user's request to build the affected screen set:
 
@@ -431,11 +712,15 @@ Use the plan diff plus the user's request to build the affected screen set:
 | New create/edit form | The form screen plus parent list/detail screens that launch it and refresh on focus |
 | New scanner/camera/PDF/pen workflow | The capability screen plus any result/detail/form screens it routes to |
 | Data-model field added for visible UI | Every screen that displays or writes the field |
+| Data source removed/replaced | Every approved consumer, including shared hooks/helpers and native upload/sync code; retain the old registration until these edits are complete |
 | Navigation pattern changed | Every tab/root screen and any route whose contract changed |
 | Design component/density/reskin changed | All screens whose layout grammar is affected; for full reskin, run a broad screen wave or controlled style sweep |
 
 Before spawning builders:
 
+- Pass the approved retiring service/source list to every affected builder.
+  Still-present generated files are transitional dependencies, not permission
+  to keep or introduce usages that the edit is meant to remove.
 - Update route layout files using the `/create-mobile-app` Step 10b layout rules if navigation changed.
 - Create missing route folders for new screens.
 - Refresh the `## Generated Services` table using `/create-mobile-app` Step 10.7 rules if any data source/schema changed.
@@ -464,7 +749,8 @@ Shared scaffold algorithm:
 Run the navigation/skeleton gate before screen-builder work:
 
 ```bash
-npx tsc --noEmit
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+npx --no-install tsc --noEmit
 ```
 
 If it fails, batch-fix layouts, route names, skeleton imports, generated-service names, shared exports, or hook signatures, then rerun once. Do not launch screen-builders from a broken shell.
@@ -480,7 +766,7 @@ Batch affected screens in waves of up to 5. For each wave:
 3. Parse each first line per `AGENTS.md` (`DONE`, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `BLOCKED`). Unknown first lines are `BLOCKED`.
 4. Retry `NEEDS_CONTEXT` once with the missing context from plan/files/services.
 5. Stop on `BLOCKED` unless the user chooses to skip with an approved placeholder.
-6. Run `npx tsc --noEmit` after the wave before launching the next wave.
+6. Run `npx --no-install tsc --noEmit` after the wave before launching the next wave.
 7. If the wave gate fails, group errors by root cause and respawn affected builders with consolidated TypeScript output. Cap at 2 retries per screen.
 
 Do not launch wave N+1 until wave N is clean.
@@ -501,27 +787,53 @@ current_file: <paste current file content if the file exists>
 Preserve unaffected behavior from the existing screen. Apply the approved plan diff. If this is an existing screen and no skeleton marker is present, update the screen from current_file instead of falling back to sample layout.
 ```
 
+### Step 6.5 — Unregister retired data sources
+
+Skip when the approved removal set is empty. After Step 6 updates/removes the
+consumers, re-check that no retained source depends on a retiring registration.
+Execute [data-source-removal.md](../../shared/references/data-source-removal.md)
+through `/add-dataverse` for Dataverse bindings, `/add-sharepoint` for SharePoint,
+or `/add-connector` for other connectors/procedures/flows, passing removal mode,
+the exact registered identities, and the current approved orchestration context.
+Select removal mode with the skill-only `--remove` argument; never pass it to CLI.
+
+The leaf bypasses its add workflow and uses the supported CLI removal command,
+which owns `.power/schemas/`, `src/generated/`, and `power.config.json` cleanup.
+Then regenerate the runtime schema map, verify absent/retained registrations
+and generated output, and reconcile the app manifest and offline impact.
+Refresh the Generated Services snapshot again before final validation.
+A no-op, partial cleanup, or remaining consumer blocks completion; do not mark
+the new plan as fully applied or manually patch generated/config files.
+Carry each leaf's `offlineRetirement` status into Step 8, including intentionally
+retained coverage and pending decisions/migrations. Do not replace those statuses
+with Step 5.6's addition-only result.
+
 ### Step 7 — Verify
+
+**Telemetry checkpoint: `validate_edited_app`**
 
 Run verification after mutations. Batch-fix root causes, then rerun the failed gate once. Verification is selected by what changed, but TypeScript is always required after an app mutation.
 
 Required gates, selected by what changed:
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 npm run generate-schemas      # if any data source/schema/connector changed
-npx tsc --noEmit              # always after app mutation
+npx --no-install tsc --noEmit              # always after app mutation
 npm run check-routes --if-present
 ```
 
 If `npm run check-routes` is absent but `scripts/check-routes.js` exists, run:
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node scripts/check-routes.js
 ```
 
 When screen files changed, run the mobile plugin's report-mode validators explicitly:
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/hooks/validate-screen-quality.js" --report <changed-screen-files-or-app-dir>
 node "${PLUGIN_ROOT}/hooks/validate-color-contrast.js" --report <changed-screen-files-or-app-dir>
 ```
@@ -539,7 +851,7 @@ Rules:
 3. Auto-fix deterministic issues: weak readable tokens, yellow/orange badges with white text, missing icon-only `aria-label`, missing `role`, tiny icon hit targets, raw hex tokens, missing safe-area padding, `allowFontScaling={false}`. Apply these web-standard accessibility props to Tamagui 2 components; raw React Native components retain their React Native accessibility props.
 4. Treat judgement calls as concerns, not infinite loops: complex safe-area restructuring, ambiguous brand color choices, large hierarchy redesigns, or empty-state rewrites that require large JSX movement.
 5. Re-run the same report validators for touched files. Cap retries at 2 per file per validator.
-6. Run `npx tsc --noEmit` after style fixes. Style concerns may remain, but TypeScript may not.
+6. Run `npx --no-install tsc --noEmit` after style fixes. Style concerns may remain, but TypeScript may not.
 
 If auto-fixable issues remain after retries, record `DONE_WITH_CONCERNS` in `memory-bank.md` with file/rule summaries.
 
@@ -547,7 +859,9 @@ If verification fails because the edit exposed stale generated services, rerun t
 
 ### Step 8 — Preview + memory-bank update
 
-Before Step 8, `npx tsc --noEmit` must be clean after all code edits from this `/edit-app` run. If any code was written after Step 7's `tsc`, rerun `npx tsc --noEmit`, batch-fix root causes, and continue only when TypeScript is error-free.
+**Telemetry checkpoint: `refresh_app_preview_and_history`**
+
+Before Step 8, `npx --no-install tsc --noEmit` must be clean after all code edits from this `/edit-app` run. If any code was written after Step 7's `tsc`, rerun `npx --no-install tsc --noEmit`, batch-fix root causes, and continue only when TypeScript is error-free.
 
 If any UI, design, navigation, native interaction, or visible data state changed — or if the user explicitly asked for a preview — read and execute `/preview-screens` after verification. This regenerates `preview.html` and opens it according to the project's `visual_companion` setting.
 
@@ -566,10 +880,16 @@ Append an edit entry to `memory-bank.md`:
 - Verification: <commands/gates + pass/fail/skipped with reason>
 - Preview: <preview.html path or not generated>
 - Debug handoff: <not requested / /debug-app "<symptom>" invoked>
+- Offline retirement: <per-table not-applicable / retained with reason / pending / reconciled with verification>
 - Blocks/concerns: <none or list>
 ```
 
 Final summary must say what changed in the app, what verification ran, where the preview is, and whether a symptom-debug handoff was requested. Do not end by saying the codebase was not changed unless this was explicitly `--plan-only`.
+If any `offlineRetirement` outcome is `pending`, return `DONE_WITH_CONCERNS` and
+state the unfinished decision separately: "App changes completed. The offline
+profile still includes Orders; deciding whether to retain or remove that coverage
+is pending." Substitute the actual table and only claim app completion when its
+verification passed. Never remove profile entries automatically to clear this note.
 
 ## Notes
 

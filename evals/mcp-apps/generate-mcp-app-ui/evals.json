@@ -3,18 +3,30 @@
   "common_assertions": [
     "Output is a complete HTML file starting with <!DOCTYPE html>",
     "Contains exactly one <script type=\"module\"> block",
-    "Uses named import: import { App } from ... (not default import: import App from ...)",
+    "Uses the selected runtime path: named import { App } in CDN mode or globalThis.McpAppsRuntime in self-contained mode",
     "Sets app.ontoolresult before calling app.connect()",
     "Sets app.onhostcontextchanged before calling app.connect()",
     "Sets app.onteardown before calling app.connect()",
-    "Uses result.structuredContent to access tool data (not result.data, not result directly)",
+    "Preserves result.content, result.structuredContent, and result._meta and does not use result.meta",
     "Defines an escapeHtml function and uses it for user data in innerHTML",
     "Does not contain window.openai",
     "Does not use max-width on the main container",
     "Uses var(--color Fluent design tokens for colors instead of hardcoded values",
-    "Includes a loading state with <fluent-spinner>",
+    "Includes an accessible loading state using <fluent-spinner> in CDN mode or an inline native spinner in self-contained mode",
     "Includes an error state"
   ],
+  "mode_assertions": {
+    "self-contained": [
+      "Contains the embedded MCP Apps runtime and does not contain the MCP_APPS_SELF_CONTAINED_RUNTIME marker",
+      "Contains no public script, module, stylesheet, font, image, media, iframe, worker, map tile, or literal fetch dependency",
+      "Uses native semantic HTML and inline CSS/SVG/Canvas rather than <fluent-*> elements or external visualization libraries"
+    ],
+    "cdn": [
+      "Uses the named import: import { App } from a public CDN",
+      "Loads Fluent Web Components and Fluent theme tokens from public CDNs",
+      "Uses only external libraries that add clear visual value"
+    ]
+  },
   "evals": [
     {
       "id": 1,
@@ -58,9 +70,9 @@
         ]
       },
       "assertions": [
-        "Uses a mapping library with interactive markers",
-        "Loads map library before Fluent UI to avoid global collision",
-        "Saves map library global reference to avoid Fluent overwriting it",
+        "Uses interactive markers implemented with inline SVG/Canvas in self-contained mode or a mapping library in CDN mode",
+        "Does not fetch map tiles in self-contained mode",
+        "If CDN mode uses a UMD map library, loads it before Fluent UI and preserves its global reference",
         "Shows markers for all attractions",
         "Map has explicit height"
       ]
@@ -2420,7 +2432,7 @@
         "stories_remaining": 4
       },
       "assertions": [
-        "Uses a charting library for the chart",
+        "Uses inline SVG/Canvas in self-contained mode or a charting library in CDN mode",
         "Shows actual burndown line",
         "Shows ideal burndown line",
         "Displays sprint dates"
@@ -3711,12 +3723,130 @@
         ]
       },
       "assertions": [
-        "Uses a mapping library for the map",
+        "Uses inline SVG/Canvas in self-contained mode or a mapping library in CDN mode",
         "Does not place markers at [0,0] for leads with empty string coordinates",
         "Leads with empty string lat/lng use city/state fallback or are omitted",
         "Leads with valid string coordinates (e.g. '36.1627') are parsed and placed correctly",
         "Uses parseFloat or equivalent for coordinate parsing, not Number()",
         "Does not use != null as the sole guard for coordinate presence"
+      ]
+    },
+    {
+      "id": 54,
+      "tier": "full",
+      "prompt": "Create an account revenue chart. The supplied test output is an authoring envelope; use its structured account data and private presentation hints.",
+      "data": {
+        "content": "Found 2 accounts.",
+        "structuredContent": {
+          "accounts": [
+            { "name": "Contoso", "revenue": 1500000 },
+            { "name": "Fabrikam", "revenue": 2300000 }
+          ]
+        },
+        "meta": {
+          "preferredView": "bar-chart",
+          "categoryField": "name",
+          "valueField": "revenue"
+        }
+      },
+      "assertions": [
+        "Normalizes authoring meta to runtime _meta",
+        "Uses structuredContent for account data",
+        "Uses the private preferredView hint without exposing it as conversational content",
+        "Does not read result.meta at runtime"
+      ]
+    },
+    {
+      "id": 55,
+      "tier": "full",
+      "prompt": "Create a warehouse occupancy heatmap. The summary is model-visible while detailed cell values are widget-private runtime metadata.",
+      "data": {
+        "content": [
+          { "type": "text", "text": "Warehouse occupancy is 72 percent." }
+        ],
+        "structuredContent": {
+          "facility": "North Warehouse",
+          "occupancyPercent": 72
+        },
+        "_meta": {
+          "cells": [
+            { "zone": "A1", "occupancyPercent": 92 },
+            { "zone": "A2", "occupancyPercent": 68 },
+            { "zone": "B1", "occupancyPercent": 55 },
+            { "zone": "B2", "occupancyPercent": 73 }
+          ]
+        }
+      },
+      "assertions": [
+        "Reads heatmap cells from result._meta",
+        "Reads the model-visible summary from content or structuredContent",
+        "Keeps private cell values out of generated conversational text",
+        "Handles content as an array of text blocks"
+      ]
+    },
+    {
+      "id": 56,
+      "tier": "full",
+      "prompt": "Create a compact success banner from a content-only tool result.",
+      "data": {
+        "content": [
+          { "type": "text", "text": "The deployment completed successfully." }
+        ]
+      },
+      "assertions": [
+        "Renders a meaningful state when structuredContent and _meta are absent",
+        "Extracts text safely from content blocks",
+        "Does not report No data received for a content-only result"
+      ]
+    },
+    {
+      "id": 57,
+      "tier": "smoke",
+      "delivery_mode": "self-contained",
+      "prompt": "Create a self-contained interactive service-health widget for MCP Inspector. Public CDN URLs and all other remote runtime assets are forbidden. Include a Refresh button that calls the get_service_health tool.",
+      "tool_name": "get_service_health",
+      "tool_input": {
+        "region": "west"
+      },
+      "data": {
+        "content": "Two of three services are healthy.",
+        "structuredContent": {
+          "region": "west",
+          "services": [
+            { "name": "API", "status": "healthy", "latencyMs": 82 },
+            { "name": "Worker", "status": "degraded", "latencyMs": 410 },
+            { "name": "Database", "status": "healthy", "latencyMs": 35 }
+          ]
+        }
+      },
+      "assertions": [
+        "Uses globalThis.McpAppsRuntime rather than an import",
+        "Produces one HTML file with the runtime embedded",
+        "Contains no public URL dependencies",
+        "Uses native HTML controls rather than Fluent Web Components",
+        "Refresh calls get_service_health and preserves all result channels"
+      ]
+    },
+    {
+      "id": 58,
+      "tier": "smoke",
+      "delivery_mode": "cdn",
+      "prompt": "Public CDNs are allowed. Create a compact incident trend widget with a line chart.",
+      "data": {
+        "service": "Orders API",
+        "incidents": [
+          { "month": "Apr", "count": 7 },
+          { "month": "May", "count": 4 },
+          { "month": "Jun", "count": 6 },
+          { "month": "Jul", "count": 3 },
+          { "month": "Aug", "count": 2 }
+        ]
+      },
+      "assertions": [
+        "Uses the named App import from a public CDN",
+        "Loads Fluent Web Components and Fluent theme tokens from public CDNs",
+        "Shows an incident trend line",
+        "Does not inline the vendored MCP Apps runtime"
       ]
     }
   ]

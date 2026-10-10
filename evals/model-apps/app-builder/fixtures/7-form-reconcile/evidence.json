@@ -1,0 +1,15 @@
+{
+  "formReconcile": {
+    "forms": [
+      { "id": "00000000-0000-0000-0000-000000000701", "entity": "cnt_workitem", "name": "Work Item", "formType": "Main", "xmlFile": "work-item.xml" },
+      { "id": "00000000-0000-0000-0000-000000000702", "entity": "cnt_workitem", "name": "Work Item Review", "formType": "Main", "xmlFile": "work-item-review.xml" },
+      { "id": "00000000-0000-0000-0000-000000000703", "entity": "cnt_project", "name": "Project Card", "formType": "QuickView", "xmlFile": "project-card.xml" }
+    ],
+    "servedMainForms": {
+      "cnt_workitem": [
+        { "id": "00000000-0000-0000-0000-000000000701", "name": "Work Item" },
+        { "id": "00000000-0000-0000-0000-000000000702", "name": "Work Item Review" }
+      ]
+    }
+  }
+}

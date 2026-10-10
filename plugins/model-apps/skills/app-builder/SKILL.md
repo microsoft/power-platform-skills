@@ -1,20 +1,16 @@
 ---
 name: app-builder
-version: 0.8.1
-description: (Preview) Builds and edits a model-driven Power Apps app from a natural-language intent — tables, columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, generative page intents for overview/dashboard surfaces (page `.tsx` generated in generate-pages after plan approval), and an app module + sitemap — via the headless cds-maker-sdk. Runs an interactive, multi-turn authoring flow (env selection, jobs-to-be-done first, then design-only App Spec authoring across confirmed levels, guardrail lint, plan-mode approval, generate-pages, full build) and a narrated build, and can download a deployed app back into an editable spec to change it. Use when the user says "build an app for X", "create a model-driven app", "make me an app to manage Y", or "edit/add to my app". This skill stands alone and does not require /genpage — but for a standalone generative page added to an app that already exists, use /genpage instead.
+version: 1.0.0
+description: Builds and edits a model-driven Power Apps app from a natural-language intent — tables, columns, relationships, adaptive forms with sub-grids, views, Choice-column charts, business rules, business process flows, generative page intents for overview/dashboard surfaces (page `.tsx` generated in generate-pages after plan approval), and an app module + sitemap — via the headless cds-maker-sdk. Runs an interactive, multi-turn authoring flow (env selection, jobs-to-be-done first, then design-only App Spec authoring across confirmed levels, guardrail lint, plan-mode approval, generate-pages, full build) and a narrated build, and can download a deployed app back into an editable spec to change it. Use when the user says "build an app for X", "create a model-driven app", "make me an app to manage Y", "add a business process flow", or "edit/add to my app". This skill stands alone and does not require /genpage — but for a standalone generative page added to an app that already exists, use /genpage instead.
 author: Microsoft Corporation
 argument-hint: "<app description>"
 user-invocable: true
-allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, AskUserQuestion, EnterPlanMode, ExitPlanMode, TaskCreate, TaskUpdate, TaskList
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, AskUserQuestion, EnterPlanMode, ExitPlanMode, TaskCreate, TaskUpdate, TaskList, read, edit, execute, search, agent, todo
 ---
 
 > **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` — if it outputs a message, show it to the user before proceeding.
 
 # app-builder — intent → model-driven app
-
-> ⚠️ **Preview.** This skill is in preview — its App Spec shape, flags, and build behavior may change
-> between versions. Review the plan-mode summary before applying, and prefer a non-production
-> environment while it stabilizes.
 
 Turn a natural-language intent into a deployed model-driven app. You author a reviewable **App Spec**
 (JSON) with the user across confirmed turns, then a deterministic engine (`cds-maker-sdk`, vendored)
@@ -64,7 +60,7 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   nothing: a command handler is handed the record (`function doThing(primaryControl)`) — the build
   supplies the parameter, so write that signature; and **never hardcode Choice values** like
   `100000003`, because they are assigned per publisher. Resolve by label via `getOptions()`
-  (see `references/app-spec-schema.md` → webResources). Note also that command and web-resource
+  (see `references/app-spec-schema-advanced.md` → webResources). Note also that command and web-resource
   **edits do not redeploy on rebuild** — the phases reuse what exists, so changing a button or a
   script means deleting it first.
 - **Form logic without code** — `businessRules[]`: show/hide, lock/unlock, set-required and
@@ -72,6 +68,14 @@ prod-ready** app; don't under-build (a bare table list) or over-build (surfaces 
   the requirement is field-level and declarative — it is visible in the maker, survives solution
   export, and needs no web resource. Use form JS when the logic needs a real API call, cross-record
   work, or anything beyond the four supported actions.
+- **Guided processes** — `businessProcessFlows[]`: the staged bar across the top of a record
+  (ordered stages, each with steps bound to that table's columns — **every step must bind a `field`**;
+  the platform rejects one without, so use a Boolean flag for a manual check-off). Reach for one when
+  the user describes work moving through **phases** — "triage →
+  investigate → resolve", "lead → qualify → close". Author it `Active` (the default) or the stage bar
+  does not appear at all. Who may run a flow is `securityRoles: { "personas": [...] }` (Active flows
+  only). v1 is single-entity and linear: cross-entity stages, branching and stage actions are
+  **rejected** by the spec gate, so offer Maker for those rather than writing them into the spec.
 - **Surfaces** — **generative pages** (modern dashboards / overviews / analytics / landing — the default),
   classic dashboards (opt-in), external URLs
 - **App shell** — the app module + sitemap, with per-subarea icons. Turn on the **modern shell** with
@@ -145,7 +149,40 @@ Rules:
 Follow **[references/authoring-flow.md](../../references/authoring-flow.md)** step by step, running
 every prompt yourself via `AskUserQuestion`. In short:
 
-1. **Prereqs** — `node --version`, `pac help` (≥ 2.7.0).
+#### Unattended runs (Copilot autopilot / automation)
+
+Resolve the interaction mode once before the first authoring question:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/resolve-interaction-mode.js" [--non-interactive]
+```
+
+`POWER_PLATFORM_SKILLS_NONINTERACTIVE=1`/`true` (or the equivalent
+`--non-interactive` invocation) means there is no user waiting for prompts. In
+that mode:
+
+- do not call `AskUserQuestion`, `EnterPlanMode`, or `ExitPlanMode`;
+- use explicit requirements and supplied existing specs as authoritative, and
+  use documented defaults only where the request leaves a non-destructive
+  choice open;
+- record each skipped gate as
+  `Unattended default: <question> → <answer> (<reason>)` in `workflow-log.md`;
+- treat the completed lint, preview, rendered design document, and build dry-run
+  as the approved plan, then continue with the normal approved path;
+- halt rather than guessing an ambiguous environment, app identity, or
+  destructive structural edit.
+
+Suppressing interaction never authorizes destructive work. An unattended
+existing-app apply still requires `--allow-destructive` wherever the build
+normally requires it; `POWER_PLATFORM_SKILLS_NONINTERACTIVE` only suppresses
+prompts.
+
+Carry the resolved mode through subprocesses: when it is unattended, append
+`--non-interactive` to every `build-model-app.js` invocation (dry-run, data
+pre-build, recovery rerun, and full apply). Do not append `--allow-destructive`
+unless destructive authority was supplied independently.
+
+1. **Prereqs** — `node --version`, `pac help` (> 2.10.0, the plugin's minimum).
 2. **Environment (PAC)** — `pac auth list`. If exactly one / an active profile, **confirm it
    (FYI), don't ask**. If several and none active, **ask** which to use. If none, ask the user
    to `pac auth create`. Capture the org URL (`pac org who`).
@@ -154,7 +191,14 @@ every prompt yourself via `AskUserQuestion`. In short:
 4. **Levelled authoring** — **first read the App Spec format** so you author to the exact
    shape (do this once; don't go spelunking through scripts):
    [`references/app-spec-schema.md`](../../references/app-spec-schema.md) and the worked sample
-   [`samples/app-spec.support-desk.json`](../../samples/app-spec.support-desk.json). Phase 1 is
+   [`samples/app-spec.support-desk.json`](../../samples/app-spec.support-desk.json). That document
+   covers everything an app always has. **Additionally read
+   [`references/app-spec-schema-advanced.md`](../../references/app-spec-schema-advanced.md) once your
+   design calls for a conditional feature** — business rules, a business process flow, command-bar
+   buttons, web resources, global choices, classic dashboards, or `roleGrants[]`. Its pointer table
+   is in the main schema, and the toolbox above tells you when to reach for each; read the detail
+   only for the ones you are actually using, and never skip a capability just to avoid the read.
+   Phase 1 is
    **design-only**: never emit page `.tsx` here. Each level is confirmed via `AskUserQuestion` before
    the next begins, and `app-spec.json` is persisted after each — full prompts in the playbook.
    - **Level (a0) — personas & jobs-to-be-done** (`personas[]`): **before proposing any tables**, ask
@@ -172,6 +216,10 @@ every prompt yourself via `AskUserQuestion`. In short:
      `"Severity 1-5; drives the escalation rule and the SLA clock"`, not `"The priority column"`.
      (`commands[]` and `Customer` columns accept one but the SDK cannot write it — you'll get a
      warning; `personas[]` does not take one at all. See the schema reference for why.)
+     The app itself takes two: `app.description` is the short tile text, and `app.aiDescription` is
+     the **routing description** an orchestrator reads to choose between apps — who the app is for,
+     what it covers and excludes, and how to tell it from a sibling app over the same tables. Write
+     it whenever such a sibling exists or is planned.
    - **Level (b) — artifacts + page-intents + design**: **enumerate every surface each job needs and
      classify it** per the genpage-first policy above — record CRUD → form + view; anything else
      (overview/landing, dashboard, KPIs, analytics, guided/wizard flow, composite or comparison
@@ -194,10 +242,11 @@ every prompt yourself via `AskUserQuestion`. In short:
      right" (see the CRITICAL note above).** The user must be able to SEE each form, the sitemap, and
      the page intents they are approving. For a single form only: `node "${PLUGIN_ROOT}/scripts/preview-form.js" --spec @<working-dir>/app-spec.json`.
    - **Don't pre-create tables/columns** — the build does it idempotently.
-5. **Guardrail lint (hard gate)** — run the **full** `spec-lint.js` on the complete spec; **errors block**, warnings teach. If it blocks (or warns), **paste the findings into your chat reply** — tool output is collapsed and invisible to the user (see the CRITICAL note above), so the user can't fix what they can't see:
+5. **Guardrail lint (hard gate)** — run the **full** lint on the complete spec; **errors block**, warnings teach. If it blocks (or warns), **paste the findings into your chat reply** — tool output is collapsed and invisible to the user (see the CRITICAL note above), so the user can't fix what they can't see:
    ```bash
-   node -e "const{lintAppSpec}=require('${PLUGIN_ROOT}/scripts/lib/spec-lint.js');const s=require('<working-dir>/app-spec.json');const r=lintAppSpec(s);console.log(JSON.stringify(r,null,2));process.exit(r.ok?0:1)"
+   node "${PLUGIN_ROOT}/scripts/lint-app-spec.js" --spec @<working-dir>/app-spec.json --json
    ```
+   This runs migration and `validateAppSpec` — the gates the build itself runs on load — plus the `lintAppSpec` authoring guardrails, which the builder does **not** run. It exits non-zero on errors. It validates under the `plan` profile (which allows not-yet-generated intent pages), matching Step 6's dry run.
 6. **Plan-mode approval (the single build approval)** — present the plan **including the build
    dry-run's phase-grouped plan** (run `build-model-app.js` without `--apply`, using the `plan`
    profile that allows intent pages) inside `EnterPlanMode`, then `ExitPlanMode` to get the user's
@@ -243,7 +292,10 @@ After plan-mode approval (before the full build):
    `{ ok, planPath, pages: [{ name, key, file, dataMode, intent }] }`. Pass `--languages` through
    from the environment probe — omitting it silently defaults every plan to English-only and drops
    the localization pattern. The command fails (before writing) if the plan would name a sample that
-   doesn't exist.
+   doesn't exist, or if a page a worker will write is not a safe target in the working directory — a
+   link at its path, a folder that links outside the directory, or a page already there under another
+   spelling — or if a link, a hard link or a folder is already at the plan's own path. Stop and fix
+   what it names; do not dispatch any worker.
 
 4. **Generate** — for each page from step 3 with `intent: true`, dispatch the **headless**
    `genpage-page-builder` worker via `Task`. Use its documented input contract verbatim — a missing
@@ -254,7 +306,8 @@ After plan-mode approval (before the full build):
    > - Target file: [file from step 3 — already includes .tsx; do NOT append another]
    > - Plan document: [absolute path to the app-builder-page-plan.md written in step 3]
    > - Data mode: **[dataMode from step 3 — `dataverse` or `mock`]**
-   > - Connectors: **disabled**
+   > - Connectors: **none**
+   > - Telemetry: **disabled**
    > - RuntimeTypes: [absolute path to RuntimeTypes.ts]   ← omit this line when Data mode is `mock`
    > - Working directory: [absolute working-dir path]
    > - Plugin root: ${PLUGIN_ROOT}
@@ -264,8 +317,11 @@ After plan-mode approval (before the full build):
    The plan's `## Environment` carries `Mode: app-builder` and every page row carries a **Key**, so
    the worker emits `"PAGEREF_<key>"` for cross-page navigation (never a file-derived token — a
    downloaded page's `codeFile` is a path, not its identity). Custom nav ids go in `data:` — never
-   `recordId`. `Connectors: disabled` is a constant here: the App Spec has no connector-binding
-   concept, so the projected plan always says `No connector bindings.`
+   `recordId`. `Connectors: none` and `Telemetry: disabled` are constants here: the App Spec has no
+   connector-binding concept (so the projected plan always says `No connector bindings.`), and
+   `/app-builder` never runs the Phase 4.7 `custom-telemetry` probe. Both are stated explicitly
+   rather than omitted — the page-builder treats a missing line as the same fail-closed value, but
+   an explicit line is what makes the dispatch contract checkable.
 
 5. **Validate + commit the transition (transactional)** — never flip `source` by hand, and never
    flip pages one at a time as workers return. Run:
@@ -341,10 +397,10 @@ The check is best-effort: if that read fails the build proceeds unchanged.
 
 The App Spec field `languageCode` pins the same value across runs. It now covers the **whole** build:
 data-model labels, and form, dashboard and sitemap labels — the SDK serializers that used to hardcode
-1033 take the authoring language as an option ([#455](https://github.com/microsoft/power-platform-skills/issues/455)).
+1033 take the authoring language as an option.
 
-Narrate progress as it runs. Transient env errors (429 customization-lock, 503 SQL-timeout,
-concurrent-op guards) are **auto-retried** with backoff on `--apply` (the build is idempotent, so a
+Narrate progress as it runs. Transient env errors (429 customization-lock, 503 SQL-timeout, a SQL
+deadlock, concurrent-op guards) are **auto-retried** with backoff on `--apply` (the build is idempotent, so a
 retry reuses what's already created). If the build still **halts** (`BuildHalt`) on an
 unrecoverable error, surface it and ask the user how to proceed via `AskUserQuestion` (adjust the
 spec / cancel), then re-run. Everything is scoped to a dedicated unmanaged solution; **`--publish`
@@ -354,7 +410,8 @@ change takes effect (see *Notes & limits*).
 **Recovery from a failed or halted build: run the full build again.** The build is idempotent — every
 phase re-uses what's already created and only fills the gaps. SDK metadata is persisted under
 `<working-dir>/.maker-workspace/` (override with `--workspace`). There is no apply-safe
-`--from <phase>` shortcut; a full rerun is the correct and safe recovery path.
+`--from <phase>` shortcut; a full rerun is the correct and safe recovery path. One exception: an
+`already-exists` halt recurs on a rerun until that workspace directory is deleted — follow its message.
 
 ### Phase 3 — Verify & iterate
 **`--apply --verify` already reconciled the spec against what deployed** (Phase 2) — the build appends a
@@ -382,7 +439,13 @@ table's privileges can block that table's delete. Command
 teardown removes the whole command bar for any entity the spec authored commands on. **Teardown only
 deletes tables this build created** — a **system/standard table** (account, contact, …) is
 auto-detected and **skipped**, and a **reused custom table** is skipped when its entity is flagged
-`"existing": true`, so pre-existing data survives. **Dry-run by default**; add `--apply
+`"existing": true`, so pre-existing data survives. The same flag protects **relationships and global
+choices** — a download sets it on every one it recovers, so tearing down a downloaded spec never removes
+a lookup column from a retained table or deletes a shared option set. Dashboards are found by name, so
+teardown deletes only those the app's solution holds, never another app's namesake — and none when the spec
+has no real solution to ask (the `Default` a download may leave); it keeps the solution itself while any step
+failed, so a re-run can still tell, and keeps the page manifest while the generative-pages step failed, so a
+re-run still finds the pages the app authored. **Dry-run by default**; add `--apply
 --allow-destructive` to actually delete (`--clear-workspace` also prunes `.maker-workspace/`).
 **`--allow-destructive` is required for `teardown --apply`** — without it teardown refuses and
 touches nothing.
@@ -397,7 +460,13 @@ node "${PLUGIN_ROOT}/scripts/teardown-model-app.js" \
 - **`--allow-destructive`** — authorize destructive operations. For `build --apply`: authorizes
   overwriting an existing app in unattended mode, and allows explicit-layout form-field removals or
   sitemap-target drops; also authorizes DETACHING a `pages-removed` page's nav subarea (the page
-  record is left deployed — it is not deleted). For `teardown --apply`: **required** — all deletes
+  record is left deployed — it is not deleted). For form and sitemap removals, the authority covers
+  the removals the last refusal or approved run recorded; if live state would lose anything more,
+  the apply halts, lists only the newly destructive removals, and records that new list for review.
+  A field or sitemap target that appears during a run is kept or halted before push, never removed
+  unseen. The record is consumed only after a full successful build that ran the removal phases and
+  kept nothing; it is kept on failures, partial runs, changed-only runs, unreadable records, and
+  failed discovery. For `teardown --apply`: **required** — all deletes
   are destructive by construction, so teardown without this flag halts before touching anything.
 - **Pages-phase safety HALTs.** The build halts on identity or safety violations rather than
   proceeding with potentially wrong state. Surface the HALT reason and follow the recovery hint:
@@ -441,7 +510,8 @@ Never fails.
 
 **App-level features** (`ai.appFeatures`) — `formFill` (Copilot-assisted form fill), `nlSearch`
 (natural-language grid/view search), `nlChart` (NL chart / AI data visualization), `m365` (M365
-Copilot). All default to `true` except `m365`; set any to `false` to opt out.
+Copilot). All default to on except `m365`, which is left at its platform default; `false` writes an
+explicit Off for this app (each setting's values: `references/app-spec-schema.md` → `ai`).
 
 **Per-table row summaries** (`ai.summaries`):
 - `default: "auto"` — the skill auto-selects good-candidate tables (skips lookup-only / config /
@@ -477,10 +547,10 @@ matches more than one app is refused, listing the candidate unique names rather 
 This reconstructs the app into `<working-dir>/app-spec.json`. **Round-trip scope — be precise, it is
 not everything:**
 - **Round-trips:** the sitemap → `appShell` (all subareas + icons), **every** generative page (via
-  `pac model genpage download`; names come from the sitemap's `GenPage` subarea titles, so
-  Maker-added pages are included) into `pages[]` + their `.tsx`, the referenced entities (minimal —
-  the build reuses existing tables), **classic dashboards** (id-passthrough tiles carrying the
-  deployed view/chart ids), the icon web resources, and the solution.
+  `pac model genpage download`; the pages are the sitemap's `GenPage` subareas, so Maker-added pages
+  are included, and each keeps its own name and model) into `pages[]` + their `.tsx`, the referenced
+  entities (minimal — the build reuses existing tables), **classic dashboards** (id-passthrough tiles
+  carrying the deployed view/chart ids), the icon web resources, and the solution.
 - **Does NOT round-trip:** `forms[]`, `views[]`, `charts[]`, `commands[]` — they come back empty.
   All four **survive on the live app** (a rebuild preserves them by discovery), so a plain edit is
   safe; they just aren't editable through the downloaded spec. Change them in Maker or a fresh spec.
@@ -519,6 +589,9 @@ canonical control cells / the `/bag/c` events region via the SDK's generic `addE
 → **business rules** (`businessRules[]` — authored as the workflow object model through the bound
 `CreateProcessWithWfomJson` member and activated; **skipped with a warning** on an environment that
 does not declare that member) →
+**business process flows** (`businessProcessFlows[]`; a category-4 process compiled from the
+authored stages and activated — this goes through the SDK's generic artifact surface, a plain
+`workflows` row, so it is NOT subject to the bound-member gate above) →
 **command bar** (`commands[]`) → **classic dashboards** (opt-in)
 → **app module + sitemap** → **generative pages** (each page's `.tsx` was generated in Phase 1.5;
 the build uploads each `pages[]` page via `pac model genpage upload`, no `--add-to-sitemap`; then
@@ -538,27 +611,33 @@ child view id. Each step emits `[n/total]`.
   designer-grade FormXML/FetchXML/sitemap by reusing the designer's own serializers, and writes via
   the Web API using an `az`-token HttpClient. No relay, no designer tab.
 - **Dedicated unmanaged solution per app** (review / teardown). **`--publish` gates the final
-  *bulk* publish** of the app's entity + app customizations (a `PublishXml` per entity + the app). It
+  *bulk* publish** of the app's entity + app customizations (one `PublishXml` for every entity and the
+  app, which also carries the default-view enrichment's publish, deferred to it). It
   does **not** suppress the small **targeted** publishes that edit/finalize paths must run so the change
   takes effect — reconciling an existing form or view, wiring form events, placing quick-views,
   re-syncing an existing app's sitemap, and finalizing the sitemap after generative pages each publish
   that one artifact (an unpublished edit to a live artifact is invisible). A fresh build without
   `--publish` still leaves new tables/columns/relationships staged-but-unpublished in the solution.
-- **Idempotent — but ADDITIVE, not yet full desired-state convergence.** Existing
+- **Idempotent — but not full desired-state convergence.** Existing
   solution/tables/columns/relationships/views/charts/forms/commands/dashboards are detected and
   **reused**, so re-runs and existing-table envs work without collisions. **The caveat for EDITS:** a
-  rebuild is *additive* — it creates what's missing but does **not** re-apply changes to an artifact
-  that already exists (a changed column type, a removed view column — `reconcileView` only *adds* —
-  an edited form/command/dashboard), and never removes an artifact you dropped from the spec. **To
-  apply a structural edit, `teardown --apply` then rebuild fresh.** `--verify` catches this: it
-  checks **content** (a view's column set, relationship + command existence), so an unapplied edit
-  surfaces as a loud `verify FAIL`, not a false pass. Full in-place convergence is tracked in
-  `docs/app-builder-capabilities.md`.
+  rebuild never removes an artifact you dropped from the spec, and re-applies only part of an edit to
+  one that already exists. A **form** converges its fields (added; for an explicit layout, dropped ones
+  pruned — see `prune: false` below), column counts and spans. A **view** only *adds* columns: a
+  column removed from the spec, or a new column order, does **not** apply, and neither do its filters
+  or sort. A changed column type, and an edited command or dashboard, are not re-applied at all; an
+  existing chart takes only a changed description.
+  **To apply one of those edits, change it in Maker, or `teardown --apply` then rebuild fresh.**
+  `--verify` catches what is **missing** — a spec view column, filter condition or sort key (authored
+  sort keys must also keep their order), a relationship, command or dashboard — as a loud
+  `verify FAIL`. It tolerates **extra** deployed content, so a view column, filter or sort key you
+  removed from the spec still passes, just as one a maker added by hand does.
 - Not in scope (later): **conditional** command visibility (Power-Fx-only), **titled
   command groups** (from-scratch — needs an SDK-synthesized parent row), lookup/associated views,
   multi-area sitemaps, **column-level (field) security**, and **access teams / hierarchy security**
   (both tracked SDK follow-ups). The security surface today is role-per-persona plus per-form role
-  assignment, and both of those ship.
+  assignment, and both of those ship. Also out of scope: the BPF knobs the spec gate rejects
+  (cross-entity stages, branching, stage actions).
 - **Environment-gated (may not work where you are running):**
   - **Business rules** (`businessRules[]`). The SDK writes a rule through the bound
     `CreateProcessWithWfomJson` member — the same one the modern business-rule designer uses — and
@@ -569,6 +648,8 @@ child view id. Each step emits `[n/total]`.
     edge case. The build **skips** the rules, warns once naming the
     member, and builds everything else normally, so an app is never left half-created. If rules are
     essential, verify the environment first.
+    **Business process flows are NOT affected by this gate** — a BPF is written as an ordinary
+    `workflows` row through the SDK's generic artifact surface, with no bound member involved.
 - Supported: the full data model — all column types, **AutoNumber primary**, global choices, status
   reasons, alternate keys, **N:N + junction-with-payload**; **`required` reconciled on existing
   columns** (an explicit `required` converges on rebuild; an omitted one never demotes);
@@ -581,7 +662,9 @@ child view id. Each step emits `[n/total]`.
   (`forms[].quickViews[]`); **per-form security roles** (`forms[].securityRoles` — name the
   `personas[]` this form is offered to, or `everyone: true`; applied after the roles exist. A form
   with no assignment is visible to **every** role, so this **restricts** a form rather than granting
-  it); Choice-column charts; **business rules** (`businessRules[]` — authored as the modern workflow
+  it); **which form a table opens with** (`forms[].isDefault` / `entities[].mainFormOrder` set the
+  table's Main Form Set order, on existing tables too — a user's remembered form still opens first for
+  that user; see app-spec-schema.md); Choice-column charts; **business rules** (`businessRules[]` — authored as the modern workflow
   object model and activated; see the environment gate above); **security roles** (`personas[]` — one role per
   persona sized from its jobs-to-be-done, with app access so the app opens for non-admins);
   **dashboards** (`dashboards[]` — chart/list/iframe/webresource tiles) + **dashboard sitemap
@@ -592,5 +675,7 @@ child view id. Each step emits `[n/total]`.
   **custom grid rendering** (`entities[].columns[].visualization` — radial dial / line chart /
   heat map / star rating, preview); web resources + form JS event handlers; sample data with
   **multi-parent `$parents`** + **`statusReason`**. See [`docs/app-builder-capabilities.md`](../../docs/app-builder-capabilities.md) and
-  [`references/app-spec-schema.md`](../../references/app-spec-schema.md) — author from that **single**
-  doc; you should not need to read the SDK, lint, or engine to write a spec.
+  [`references/app-spec-schema.md`](../../references/app-spec-schema.md) (plus
+  [`app-spec-schema-advanced.md`](../../references/app-spec-schema-advanced.md) for the conditional
+  fields it points at) — author from those docs; you should not need to read the SDK, lint, or
+  engine to write a spec.

@@ -9,14 +9,18 @@ const { spawnSync } = require('node:child_process');
 
 const {
   createTelemetryContext,
+  emitAppInsightsSelection,
   emitCheckpoint: emitCheckpointEvent,
   emitSkillStarted,
 } = require('../lib/mobile-telemetry');
 const {
   emitCheckpoint: emitCheckpointCommand,
   parseCheckpointPayload,
+  runCommand,
 } = require('../emit-telemetry-checkpoint');
 const { ensureAppInstanceId, findAppInstanceId } = require('../lib/app-identity');
+const { TRACKED_SKILL_NAMES } = require('../lib/mobileapp-hook-utils');
+const { readProcessScope } = require('../lib/mobile-telemetry-session');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
 const TELEMETRY_CLI = path.join(
@@ -27,6 +31,16 @@ const TELEMETRY_CLI = path.join(
 );
 const BUNDLED_TELEMETRY_LIB = path.join(PLUGIN_ROOT, 'scripts', 'lib', 'telemetry', 'lib');
 const SHARED_TELEMETRY_LIB = path.resolve(PLUGIN_ROOT, '..', '..', 'shared', 'telemetry', 'lib');
+const CHECKPOINT_EXEMPT_SKILLS = new Set(['telemetry']);
+const VAGUE_CHECKPOINT_NAMES = new Set([
+  'app_ready',
+  'data_model',
+  'planning',
+  'prerequisites',
+  'scaffold',
+  'screens',
+  'template_gate',
+]);
 
 function tempConfig(config) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mobile-telemetry-'));
@@ -125,6 +139,40 @@ test('provisioned context uses host session and isolated config paths', () => {
   assert.equal(context.eventStreamName, 'MobileAppsTestEvent');
 });
 
+test('Windows session lookup requests only identity fields within the hook deadline', () => {
+  let command;
+  const scope = readProcessScope({
+    platform: 'win32',
+    parentPid: 300,
+    exec: (executable, args, options) => {
+      command = { executable, args, options };
+      return JSON.stringify([
+        { ProcessId: 300, ParentProcessId: 200, CreationDate: '/Date(1788850001000)/', Name: 'cmd.exe' },
+        { ProcessId: 200, ParentProcessId: 100, CreationDate: '/Date(1788850000000)/', Name: 'C:\\Program Files\\nodejs\\node.exe' },
+      ]);
+    },
+  });
+
+  assert.equal(scope, '200:/Date(1788850000000)/');
+  assert.equal(command.executable, 'powershell.exe');
+  assert.ok(command.args.includes('-NoProfile'));
+  assert.ok(command.args.includes('-NonInteractive'));
+  assert.match(command.args.at(-1), /Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate,Name/);
+  assert.doesNotMatch(command.args.at(-1), /CommandLine|ExecutablePath/);
+  assert.ok(command.options.timeout >= 5000 && command.options.timeout < 10000,
+    'allow bounded PowerShell startup time while staying below the ten-second hook deadline');
+});
+
+test('Windows session lookup remains fail-open when process metadata is unavailable', () => {
+  for (const code of ['ETIMEDOUT', 'ENOENT']) {
+    assert.equal(readProcessScope({
+      platform: 'win32',
+      exec: () => { throw Object.assign(new Error('Process metadata unavailable'), { code }); },
+    }), '');
+  }
+  assert.equal(readProcessScope({ platform: 'win32', exec: () => '{incomplete' }), '');
+});
+
 test('nested Copilot call resolves to its owning root session', (t) => {
   const rootSessionId = 'e58e3db3-8361-4516-ac4b-6b143c22100a';
   const nestedSessionId = 'call_ayAuxKIYLLOtpejidbHsMAmu';
@@ -212,6 +260,44 @@ test('started event is allowlisted and carries no user, tenant, prompt, or path 
   }
 });
 
+test('Application Insights prompt selections emit only the approved choice', (t) => {
+  const context = contextFor(provisioned);
+  for (const selection of ['enabled', 'disabled']) {
+    let captured;
+    const event = emitAppInsightsSelection(context, selection, {
+      emit: (value) => { captured = value; },
+      readAiAgent: () => ({}),
+      correlationId: 'correlation-1',
+      cwd: tempProject(t),
+    });
+    assert.equal(captured, event);
+    assert.equal(event.data.eventName, 'app_insights_selection');
+    assert.equal(event.data.skillName, 'setup-app-insights');
+    assert.deepEqual(event.data.eventInfo, {
+      appInstanceId: null,
+      appInsightsSelection: selection,
+      invocationSource: 'prompt',
+    });
+  }
+});
+
+test('Application Insights selection honors an explicit invocation source', (t) => {
+  const context = contextFor(provisioned);
+  const event = emitAppInsightsSelection(context, 'enabled', {
+    emit: () => {},
+    readAiAgent: () => ({}),
+    correlationId: 'correlation-1',
+    cwd: tempProject(t),
+    source: 'pretool',
+  });
+  assert.equal(event.data.eventName, 'app_insights_selection');
+  assert.deepEqual(event.data.eventInfo, {
+    appInstanceId: null,
+    appInsightsSelection: 'enabled',
+    invocationSource: 'pretool',
+  });
+});
+
 test('checkpoint payload accepts only tracked skills and static snake_case fields', () => {
   assert.deepEqual(
     parseCheckpointPayload('create-mobile-app|planning|completed|with_dataverse'),
@@ -276,6 +362,46 @@ test('checkpoint command emits directly and remains fail-open', () => {
   }), null);
 });
 
+test('tracked checkpoint context skips host process discovery', () => {
+  let contextOptions;
+  const result = emitCheckpointCommand(
+    'create-mobile-app|gather_app_requirements|started',
+    {
+      cwd: '/private-project',
+      runId: '11111111-1111-4111-8111-111111111111',
+      parentSpanId: '22222222-2222-4222-8222-222222222222',
+      createTelemetryContext: (_payload, options) => {
+        contextOptions = options;
+        return null;
+      },
+    },
+  );
+  assert.equal(result, null);
+  assert.equal(contextOptions.cwd, '/private-project');
+  assert.equal(contextOptions.readProcessScope(), '');
+});
+
+test('tracked lifecycle CLI skips host process discovery', () => {
+  let contextOptions;
+  const result = runCommand([
+    'create-mobile-app|gather_app_requirements|started',
+    '--run-id',
+    '11111111-1111-4111-8111-111111111111',
+    '--parent-span-id',
+    '22222222-2222-4222-8222-222222222222',
+    '--project-root',
+    '/private-project',
+  ], {
+    createTelemetryContext: (_payload, options) => {
+      contextOptions = options;
+      return null;
+    },
+  });
+  assert.deepEqual(result, { status: 'disabled' });
+  assert.equal(contextOptions.cwd, '/private-project');
+  assert.equal(contextOptions.readProcessScope(), '');
+});
+
 test('checkpoint event carries only static checkpoint enrichment', (t) => {
   const context = contextFor(provisioned);
   const event = emitCheckpointEvent(context, {
@@ -304,20 +430,125 @@ test('checkpoint event carries only static checkpoint enrichment', (t) => {
   }
 });
 
-test('create-mobile-app uses the single direct checkpoint command at seven boundaries', () => {
+test('shared instructions own checkpoint execution and lifecycle rules', () => {
+  const shared = fs.readFileSync(path.join(PLUGIN_ROOT, 'shared', 'shared-instructions.md'), 'utf8');
+  const checkpointSection = shared.match(/## Workflow Checkpoints\r?\n([\s\S]*?)(?=\r?\n---)/)?.[1];
+  assert.ok(checkpointSection, 'shared instructions must define the checkpoint policy');
+  assert.match(checkpointSection, /frontmatter `name`/);
+  assert.match(checkpointSection, /--begin "<skill-name>"/);
+  assert.match(checkpointSection, /--finish <completed\|failed\|blocked\|cancelled>/);
+  assert.match(checkpointSection, /run-with-telemetry\.sh/);
+  assert.match(checkpointSection, /--execute "<skill-name>\|<checkpoint-name>"/);
+  assert.match(checkpointSection, /Support ID: <runId>/);
+  for (const state of [
+    'started',
+    'completed',
+    'failed',
+    'blocked',
+    'cancelled',
+    'skipped',
+    'needs_context',
+  ]) {
+    assert.ok(checkpointSection.includes(`\`${state}\``), `shared policy must explain ${state}`);
+  }
+  assert.match(checkpointSection, /only `skipped` without `started`/);
+  assert.match(
+    checkpointSection,
+    /author-written `snake_case` values of at most\s+64 characters/,
+  );
+  assert.match(checkpointSection, /Never include prompts, raw errors,\s+paths, names, URLs, record contents, command output, or runtime payloads/);
+  assert.match(checkpointSection, /fail-open/);
+  assert.match(checkpointSection, /missing terminal event remains incomplete/);
+  assert.match(checkpointSection, /do not append `\|\| true`/);
+});
+
+test('create-mobile-app uses precise checkpoint names at major workflow boundaries', () => {
   const shared = fs.readFileSync(path.join(PLUGIN_ROOT, 'shared', 'shared-instructions.md'), 'utf8');
   const workflow = fs.readFileSync(
     path.join(PLUGIN_ROOT, 'skills', 'create-mobile-app', 'SKILL.md'),
     'utf8',
   );
 
-  assert.match(shared, /node "\$\{CLAUDE_SKILL_DIR\}\/\.\.\/\.\.\/scripts\/emit-telemetry-checkpoint\.js"/);
+  assert.match(shared, /node "\$\{PLUGIN_ROOT\}\/scripts\/emit-telemetry-checkpoint\.js"/);
+  assert.doesNotMatch(shared, /node "\$\{CLAUDE_SKILL_DIR\}/);
   assert.doesNotMatch(shared, /trigger-telemetry/);
   assert.deepEqual(
     [...workflow.matchAll(/\*\*Telemetry checkpoint: `([^`]+)`\*\*/g)]
       .map((match) => match[1]),
-    ['template_gate', 'prerequisites', 'planning', 'scaffold', 'data_model', 'screens', 'app_ready'],
+    [
+      'validate_fresh_template',
+      'validate_development_toolchain',
+      'gather_app_requirements',
+      'plan_app_architecture',
+      'select_app_environment',
+      'prepare_template_files',
+      'initialize_power_apps_project',
+      'validate_scaffold_typescript',
+      'configure_native_authentication',
+      'apply_dataverse_data_model',
+      'configure_native_capabilities',
+      'install_approved_javascript_dependencies',
+      'generate_connector_data_sources',
+      'wire_app_navigation',
+      'generate_shared_code_and_screen_skeletons',
+      'build_and_validate_screens',
+      'validate_screen_design_quality',
+      'launch_metro_dev_server',
+    ],
   );
+});
+
+test('every tracked operational skill has precise checkpoint markers', () => {
+  for (const skillName of TRACKED_SKILL_NAMES) {
+    const workflow = fs.readFileSync(
+      path.join(PLUGIN_ROOT, 'skills', skillName, 'SKILL.md'),
+      'utf8',
+    );
+    const matches = [...workflow.matchAll(/\*\*Telemetry checkpoint: `([^`]+)`\*\*/g)];
+
+    if (CHECKPOINT_EXEMPT_SKILLS.has(skillName)) {
+      assert.deepEqual(matches, [], `${skillName} must remain checkpoint-free`);
+      continue;
+    }
+
+    assert.ok(matches.length > 0, `${skillName} must define at least one checkpoint`);
+    assert.match(workflow.slice(0, matches[0].index),
+      /\[[^\]]+\]\((?:\.\.\/\.\.\/|\$\{PLUGIN_ROOT\}\/)shared\/shared-instructions\.md\)/,
+      `${skillName} must reference shared instructions before its first checkpoint`);
+    assert.doesNotMatch(workflow, /\*\*Checkpoint execution:\*\*|emit-telemetry-checkpoint\.js/,
+      `${skillName} must inherit checkpoint execution from shared instructions`);
+    const names = matches.map((match) => match[1]);
+    assert.equal(new Set(names).size, names.length, `${skillName} checkpoint names must be unique`);
+
+    for (const match of matches) {
+      const checkpointName = match[1];
+      assert.equal(
+        VAGUE_CHECKPOINT_NAMES.has(checkpointName),
+        false,
+        `${skillName} uses vague checkpoint name ${checkpointName}`,
+      );
+      assert.doesNotMatch(
+        checkpointName,
+        /_(?:started|completed|skipped|failed)$/,
+        `${skillName} checkpoint names must not contain lifecycle state`,
+      );
+      assert.ok(
+        parseCheckpointPayload(`${skillName}|${checkpointName}|started`),
+        `${skillName} uses invalid checkpoint name ${checkpointName}`,
+      );
+
+      const precedingLine = workflow
+        .slice(0, match.index)
+        .trimEnd()
+        .split(/\r?\n/)
+        .at(-1);
+      assert.match(
+        precedingLine,
+        /^#{2,4}\s+\S/,
+        `${skillName}:${checkpointName} must appear directly below a heading`,
+      );
+    }
+  }
 });
 
 test('app instance id is minted once and reused by later skill runs', (t) => {
@@ -379,6 +610,25 @@ test('events outside a project carry no app identity', (t) => {
   assert.equal(findAppInstanceId(tempProject(t)), '');
 });
 
+test('event identity initialization leaves missing or invalid project files untouched', (t) => {
+  const context = contextFor(provisioned);
+  const emitFrom = (cwd) => emitSkillStarted(context, invocation, {
+    emit: () => {},
+    readAiAgent: () => ({}),
+    cwd,
+  }).data;
+
+  for (const contents of [null, '{ invalid json', '{}']) {
+    const project = tempProject(t);
+    const filePath = path.join(project, 'app.json');
+    if (contents !== null) fs.writeFileSync(filePath, contents);
+    assert.equal(emitFrom(project).eventInfo.appInstanceId, null);
+    assert.equal(fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : null, contents);
+  }
+  assert.equal(emitFrom('').eventInfo.appInstanceId, null);
+  assert.equal(emitFrom(undefined).eventInfo.appInstanceId, null);
+});
+
 test('a hand-edited app identity is ignored rather than emitted', (t) => {
   const project = tempProject(t);
   fs.writeFileSync(
@@ -396,7 +646,7 @@ test('a hand-edited app identity is ignored rather than emitted', (t) => {
   assert.equal(findAppInstanceId(project), '');
 });
 
-test('two apps in one session emit distinct app identities', (t) => {
+test('first events generate distinct app identities and later events reuse them', (t) => {
   const context = contextFor(provisioned);
   const emitFrom = (project) => emitSkillStarted(context, invocation, {
     emit: () => {},
@@ -413,10 +663,14 @@ test('two apps in one session emit distinct app identities', (t) => {
   const projectB = tempProject(t);
   fs.writeFileSync(path.join(projectA, 'app.json'), JSON.stringify({ expo: {} }));
   fs.writeFileSync(path.join(projectB, 'app.json'), JSON.stringify({ expo: {} }));
-  ensureAppInstanceId(projectA);
-  ensureAppInstanceId(projectB);
   const a = emitFrom(projectA);
   const b = emitFrom(projectB);
+  assert.match(a.eventInfo.appInstanceId, /^[0-9a-f-]{36}$/);
+  assert.match(b.eventInfo.appInstanceId, /^[0-9a-f-]{36}$/);
+  assert.equal(findAppInstanceId(projectA), a.eventInfo.appInstanceId);
+  assert.equal(findAppInstanceId(projectB), b.eventInfo.appInstanceId);
+  assert.equal(emitFrom(projectA).eventInfo.appInstanceId, a.eventInfo.appInstanceId);
+  assert.equal(emitFrom(projectB).eventInfo.appInstanceId, b.eventInfo.appInstanceId);
   assert.notEqual(a.eventInfo.appInstanceId, b.eventInfo.appInstanceId);
   assert.equal(a.sessionId, b.sessionId);
 });
@@ -453,8 +707,10 @@ test('Mobile control wrapper updates preference with accurate disclosure', (t) =
   });
   assert.equal(status.status, 0);
   assert.match(status.stdout, /Telemetry \(mobile-app\): ON/);
-  assert.match(status.stdout, /does not record PAC CLI version/);
-  assert.match(status.stdout, /organization or Entra tenant IDs/);
+  assert.match(status.stdout, /event\/run\/span IDs/);
+  assert.match(status.stdout, /verified environment, tenant, and Dataverse organization/);
+  assert.match(status.stdout, /does not collect an\s+Entra user\/object ID, Dataverse user ID, username, or email address/);
+  assert.match(status.stdout, /No business records, file contents, emails, tokens, or raw errors/);
   assert.doesNotMatch(status.stdout, /when PAC is signed in/);
 
   const off = spawnSync(process.execPath, [TELEMETRY_CLI, '--action', 'off'], {

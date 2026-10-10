@@ -25,24 +25,42 @@ Comprehensive rules for generating generative page code. Read this file during c
 17. **No full-viewport modal scrims; prefer non-modal or in-page panels**: A default `<Dialog>` is `modalType="modal"` — it draws a `position: fixed` backdrop and traps focus across the whole window, which in the designer blankets the agent panel and locks the user out (they can't even ask the agent to remove it). Default dialogs to `modalType="non-modal"` **and** pass `mountNode`, or use an in-page absolutely-positioned panel. The page root must establish a containing block (`position: relative` + `contain: layout`) so even a fixed-position overlay is clipped to the page. Never size overlays to the viewport. See **Special Patterns > Dialogs and Overlays**.
 18. **Never nest a `<Dialog>` inside another `<Dialog>`**: Stacked modal scrims and nested focus traps make dialogs impossible to dismiss reliably. Render sibling dialogs as separate top-level surfaces switched by state, never one `<Dialog>` as a child of another's JSX.
 19. **All hooks above every early return — no conditional hook calls**: Detail/record pages crash with **minified React error #310** ("rendered more/fewer hooks than the previous render") on the *first* open of a record, then work on the second click. Cause: a hook — usually a `useMemo` deriving chart points or display rows from loaded data — sits *below* a loading/empty early return (`if (data.loading) return <Spinner/>`). On the first render data is still loading, the component early-returns and never reaches that `useMemo` (fewer hooks); when data arrives it renders past the return and calls the extra hook → the hook count differs between renders → #310. The "works the second time" intermittency (the cached render skips the loading branch) is the signature of this bug. **Fix:** place every `useMemo`/`useState`/`useEffect`/`useCallback` **above all early returns**, and make derived memos tolerate not-yet-loaded data (read from an always-initialized value, e.g. `data.rows ?? []`). Early returns are fine — they just must come *after* the last hook call. This is the React rules of hooks: never call a hook below a conditional `return`.
+20. **Never put `...` alone on a line**: Write the spread/rest token and its operand together (`...rows`, not `...` followed by `rows` on the next line).
+21. **End final type-argument statements with `;`**: If the file's last statement ends in a type argument list (`Page<string>`, `Array<Row>`), terminate it with a semicolon.
 
 ---
 
 ## Supported Libraries
 
-Only these libraries are available. Do NOT use any other library.
+Only the generated `package.json` dependencies below are available. Do NOT use
+any other library. `scripts/lib/supported-dependencies.js` is the source of
+truth for names, versions, and feature gates; this example is validated against
+that module by `scripts/tests/supported-dependencies-docs.test.js`.
 
+```json
+{
+  "dependencies": {
+    "react": "17.0.2",
+    "react-dom": "17.0.2",
+    "@fluentui/react-components": "^9.54.0",
+    "@fluentui/react-icons": "2.0.326",
+    "d3": "^7.8.5",
+    "@fluentui/react-datepicker-compat": "^0.4.50",
+    "@fluentui/react-timepicker-compat": "^0.2.40"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/react": "^17.0.80",
+    "@types/react-dom": "^17.0.25",
+    "@types/d3": "^7.4.3"
+  }
+}
 ```
-"react": "^17.0.2"
-"uuid": "^9.0.1"
-"@fluentui/react-icons": "^2.0.292"
-"@fluentui/react-calendar-compat": "^0.2.2"
-"@fluentui/react-components": "^9.46.4"
-"@fluentui/react-datepicker-compat": "^0.5.0"
-"@fluentui/react-timepicker-compat": "^0.3.0"
-"@fluentui/react-theme": "^9.1.24"
-"d3": "^7.9.0"
-```
+
+Feature-gated packages are installed only when the generator receives the
+matching flag: `charts` adds `d3` and `@types/d3`, `datepicker` adds
+`@fluentui/react-datepicker-compat`, and `timepicker` adds
+`@fluentui/react-timepicker-compat`.
 
 **CRITICAL**: DatePicker must be imported from `@fluentui/react-datepicker-compat` and TimePicker from `@fluentui/react-timepicker-compat` (NOT from `@fluentui/react-components`)
 
@@ -360,12 +378,31 @@ xrm.Navigation.navigateTo({
 
 **Must be quoted, and it is the pageId.** The build's single structural resolver only rewrites a
 `PAGEREF_<token>` that appears as the **double-quoted `pageId:` value of a `pageType:"generative"`
-`navigateTo` call**. Always emit it exactly there — never single-quoted, back-ticked, concatenated,
-or as a decoy string elsewhere (the pre-deploy scan **rejects** a malformed nav ref and any parity
-mismatch). In `app-builder` mode every `PAGEREF_<key>` you emit must have a matching `navigatesTo`
-entry in the page's spec, and every declared `navigatesTo.targetKey` must appear as a real nav
-pageId in the source (the build enforces exact parity, and verification confirms each edge resolves
-to the actual target).
+`navigateTo` call** — the value is exactly that one string literal, with nothing after it but the
+`,` or `}` that ends the property (a plain cast — `as const`, `as Name`, `satisfies Name`, with `Name` a plain or dotted
+identifier — may follow the literal and is left as written; a generic, a union or a string-literal type may not). The options
+object has to be **written inline in the call**: an object built in a variable and passed by name is not recognised, and
+its token halts the build as stray. **Write the plain form, `navigateTo({ … })` or
+`Xrm.Navigation.navigateTo({ … })`.** A parenthesised callee, `(navigateTo)({ … })`, is read only where a call can
+start — at the start of a statement or after `;` `{` `(` `[` `,` `:`, a ternary `?`, an operator ending in `=`, `=>`,
+`&&`, `||` or `??` — and never after a name or keyword, `)`, `]`, `.`, `}`, `!`, `>`, a quote or a back-tick, because
+there the parentheses are an argument list for some other function (`factory!(navigateTo)({ … })`,
+``tag`x`(navigateTo)({ … })``); the token in one halts the build as stray. Always emit it exactly there — never single-quoted, back-ticked,
+concatenated, followed by an expression (`"PAGEREF_x".slice(8)`, `&& other`,
+`("PAGEREF_x" as const).slice(1)`), in a
+`pageType` that is not the plain literal, in a call spelled some way the resolver does not read, or
+as a decoy string elsewhere (the pre-deploy scan **rejects** a malformed nav ref, any `PAGEREF_`
+token that is not a resolvable nav pageId — **no comment may hold one**: a `//` comment, a block comment, a trailing comment
+(`navigateTo({ … }); // PAGEREF_x`) and a JSX `{/* PAGEREF_x */}` are all refused, so write the comment without the token — and any
+parity mismatch, and reports the page, line and column). Also keep the code before a navigation call unambiguous: the checker has
+no parser, so where it cannot tell a division from a regex, or a comparison from an element — a `/` or `<` right after a `}`
+(write `({ … }) / 2`, not `{ … } / 2`), after a `)` whose `(` is far back, after a word that can be a keyword or a name (`of`,
+`type`, `get`, `as` …), after a `>`, or on a later line than the operand before it (`type Value = number` then a regex line);
+an identifier written with a `\u` escape — it does not trust a `PAGEREF_` token at or after that spot, or a `navigateTo` call
+whose object or arguments reach it. Put the operand in parentheses, end the statement with `;`, or write the navigation call above it. In `app-builder` mode every `PAGEREF_<key>` you emit must have a
+matching `navigatesTo` entry in the page's spec, and every declared `navigatesTo.targetKey` must
+appear as a real nav pageId in the source (the build enforces exact parity, and verification
+confirms each edge resolves to the actual target).
 
 **Every `PAGEREF_` target page must be sitemap-placed.** <a id="PAGEREF_sitemap_placement"></a>
 A page referenced by a `PAGEREF_` placeholder must have a matching `page` subarea in the
@@ -421,6 +458,7 @@ Recurring CSS bugs that type-check and compile but render wrong. Check for these
 2. **Concatenated `makeStyles` classes lose status/warning colors to a shorthand-vs-longhand collision.** ``className={`${base} ${warning}`}`` (plain template string, not `mergeClasses`) where `base` sets a shorthand `border:` / `backgroundColor: "transparent"` and `warning` sets the longhand `borderColor` / `backgroundColor` — Griffel's atomic output plus the shorthand-vs-longhand cascade lets the base win, so the amber bg/border/text silently fall back to neutral. Fix: apply the status colors **inline** (`style={{ backgroundColor: tokens.colorStatusWarningBackground1, borderColor: tokens.colorStatusWarningBorder1 }}` — inline wins) or use `mergeClasses` instead of string concatenation.
 3. **`tokens.fontFamilyNumeric` is Bahnschrift, not Segoe UI.** Using it for tabular numbers (counts, %, ranks, dates) renders those digits in Bahnschrift — visibly mismatched against Segoe UI everywhere else. Fix: use `tokens.fontFamilyBase` and keep `fontVariantNumeric: "tabular-nums"` for aligned digits.
 4. **Gradient hero with white text: `colorPalette*Background2/3` tokens are light tints, not dark.** A gradient built from e.g. `colorPalettePurpleBackground3` / `colorPaletteTealBackground2` with `color: colorNeutralForegroundOnBrand` (white) renders white-on-light → unreadable; those `Background2/3` palette tokens are pale. Fix: build the gradient from the dark, saturated `colorPalette*Foreground2` stops (e.g. `colorPalettePurpleForeground2`, `colorPaletteTealForeground2`), which are dark enough for white text to pass AA.
+5. **`borderWidth` is an unsupported Griffel shorthand.** It passes TypeScript and `pac model genpage transpile`, then logs `@griffel/react: unsupported shorthand CSS property "borderWidth"` at runtime. Use all four explicit longhands (`borderTopWidth`, `borderRightWidth`, `borderBottomWidth`, `borderLeftWidth`) instead. Grep the finished page with `['"]?borderWidth['"]?\s*:` before deployment so quoted and whitespace-separated property syntax is caught too.
 
 ### Data Fetching: the host double-mount, de-dupe, and caching
 
@@ -604,7 +642,7 @@ required patterns and the binding contract.
 
 ### Custom API DataAPI (optional — only when the plan has Custom API Bindings)
 
-When the plan's `## Custom API Bindings` is non-empty, the page may invoke Dataverse
+When the plan's `## Custom API Bindings` contains a binding table, the page may invoke Dataverse
 **Custom APIs** (server-side plug-in logic) on the signed-in user's own token. A Custom
 API of kind **Action** (may mutate) is called with `dataApi.executeAction`; a **Function**
 (read-only) with `dataApi.executeFunction`; `dataApi.listBoundActions` enumerates the

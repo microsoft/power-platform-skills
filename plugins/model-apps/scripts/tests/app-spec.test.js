@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
-const { validateAppSpec, columnTypeMap, relationshipFor, lookupColumnsFor, childRelationshipsFor, relationshipSchemaName, manyToManySchemaName, resolveSampleRecords, migrateAppSpec, quickCreateEnabledFor } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
+const { validateAppSpec, columnTypeMap, relationshipFor, lookupColumnsFor, childRelationshipsFor, relationshipSchemaName, manyToManySchemaName, resolveSampleRecords, migrateAppSpec, quickCreateEnabledFor, dashboardNameKey } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
 
 const sample = JSON.parse(
   fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.project-tracker.json'), 'utf8')
@@ -442,12 +442,110 @@ test('validateAppSpec rejects a command with no function', () => {
 
 test('validateAppSpec accepts a dashboard with chart + list tiles on declared view/chart', () => {
   const ok = cloneDesk();
+  // The chart and its view must be on the SAME table (a mismatch cross-wires the tile, #586 item 3).
+  const chart = ok.charts[0];
+  const view = ok.views.find((v) => v.entity === chart.entity);
   ok.dashboards = [{ name: 'Ops', tiles: [
-    { type: 'chart', chart: ok.charts[0].name, view: ok.views[0].name },
+    { type: 'chart', chart: chart.name, view: view.name },
     { type: 'list', view: ok.views[0].name, name: 'List' },
   ] }];
   const r = validateAppSpec(ok);
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+// #586 item 3: view and chart names are unique only PER TABLE, and the build resolves both on the
+// tile's table. Same names across tables are legitimate; a tile that mixes tables, or cannot say
+// which table it means, is not.
+test('validateAppSpec accepts same-named charts on two tables when each tile stays on one table', () => {
+  const ok = cloneDesk();
+  const ticketChart = ok.charts.find((c) => c.entity === 'new_ticket');
+  ok.charts.push({ ...ticketChart, entity: 'new_customer', groupBy: 'new_segment' }); // same name, other table
+  ok.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', chart: ticketChart.name, view: 'Active Tickets' }] }];
+  const r = validateAppSpec(ok);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test("validateAppSpec rejects a chart tile whose chart is declared on a different table than its view", () => {
+  const bad = cloneDesk();
+  const ticketChart = bad.charts.find((c) => c.entity === 'new_ticket');
+  bad.dashboards = [{ name: 'Ops', tiles: [{ type: 'chart', chart: ticketChart.name, view: 'Active Customers' }] }];
+  const r = validateAppSpec(bad);
+  assert.ok(r.errors.some((e) => /chart tile shows new_customer .* is declared on new_ticket/.test(e)), JSON.stringify(r.errors));
+});
+
+test('validateAppSpec requires a tile to name its table when its view name exists on more than one', () => {
+  const spec = cloneDesk();
+  const customerView = spec.views.find((v) => v.entity === 'new_customer');
+  spec.views.push({ ...customerView, name: 'Active Tickets' }); // now "Active Tickets" exists on two tables
+  spec.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Tickets', name: 'List' }] }];
+  const ambiguous = validateAppSpec(spec);
+  assert.ok(ambiguous.errors.some((e) => /declared on more than one table .* set the tile's entity/.test(e)), JSON.stringify(ambiguous.errors));
+  spec.dashboards[0].tiles[0].entity = 'new_ticket';
+  const pinned = validateAppSpec(spec);
+  assert.strictEqual(pinned.ok, true, JSON.stringify(pinned.errors));
+});
+
+test("validateAppSpec rejects a tile whose entity does not declare the view it names", () => {
+  const bad = cloneDesk();
+  bad.dashboards = [{ name: 'Ops', tiles: [{ type: 'list', view: 'Active Customers', entity: 'new_ticket', name: 'List' }] }];
+  const r = validateAppSpec(bad);
+  assert.ok(r.errors.some((e) => /names view 'Active Customers' on new_ticket, but that view is declared on new_customer/.test(e)), JSON.stringify(r.errors));
+});
+
+// #586 item 4: a sitemap subarea and the build find a dashboard by NAME, through a Dataverse filter
+// that ignores case, most accents and trailing spaces, so two such names collapse into one dashboard
+// and the other leaves the nav.
+test('validateAppSpec rejects two dashboards whose names Dataverse would treat as one', () => {
+  const bad = cloneDesk();
+  const tile = { type: 'list', view: bad.views[0].name, name: 'List' };
+  for (const [first, second] of [['Overview', 'OVERVIEW '], ['Café', 'CAFE'], ['Overview', 'Overview']]) {
+    bad.dashboards = [{ name: first, tiles: [tile] }, { name: second, tiles: [tile] }];
+    const r = validateAppSpec(bad);
+    assert.ok(r.errors.some((e) => e.includes(`dashboard '${second}': has the same name as dashboard '${first}'`)), `${first} / ${second}: ${JSON.stringify(r.errors)}`);
+  }
+  // Differences the server keeps must stay legal: a leading space, and a vowel sign (a letter, not an accent).
+  for (const [first, second] of [['Overview', 'Pipeline'], ['Overview', ' Overview'], ['कार', 'कर']]) {
+    bad.dashboards = [{ name: first, tiles: [tile] }, { name: second, tiles: [tile] }];
+    assert.strictEqual(validateAppSpec(bad).ok, true, `${JSON.stringify(first)} / ${JSON.stringify(second)} are distinct`);
+  }
+});
+
+// Every pair below was written to a live English environment and read back with `eq`; `server` is what
+// Dataverse answered. The key must agree, except where it deliberately folds MORE (a false rejection
+// is loud and fixed by a rename; a missed collision silently drops a dashboard).
+test('dashboardNameKey folds exactly what the server was measured to ignore', () => {
+  const MEASURED = [
+    ['Alpha', 'ALPHA', true], ['Café', 'Cafe', true], ['Résumé', 'Re\u0301sume\u0301', true],
+    ['Bravo', 'Bravo ', true], ['Charlie ', 'Charlie', true], [' Delta', 'Delta', false],
+    ['Echo\u00a0', 'Echo', false], ['Foxtrot\t', 'Foxtrot', false], ['कार', 'कर', false], ['กิน', 'กน', false],
+    ['ばす', 'はす', true], ['مُحَمَّد', 'محمد', false], ['йод', 'иод', false], ['ёж', 'еж', true], ['Жук', 'ЖУК', true],
+    ['Straße', 'Strasse', true], ['Ｇolf', 'Golf', true], ['Æther', 'AEther', true], ['ﬁle', 'file', true],
+    ['Άλφα', 'Αλφα', true], ['Việt', 'Viet', true], ['שָׁלוֹם', 'שלום', true], ['Tăng', 'Tang', true],
+    ['Øre', 'Ore', true], ['Łódź', 'Lodz', true], ['Đà', 'Da', true], ['Œuvre', 'Oeuvre', true],
+    ['İstanbul', 'Istanbul', true], ['ｶﾅ', 'カナ', true], ['カナ', 'かな', true], ['λόγος', 'λόγοσ', true],
+    ['عـلم', 'علم', true], ['क़', 'क', true],
+  ];
+  for (const [a, b, server] of MEASURED) {
+    assert.strictEqual(dashboardNameKey(a) === dashboardNameKey(b), server, `${JSON.stringify(a)} vs ${JSON.stringify(b)}: the server says ${server ? 'equal' : 'distinct'}`);
+  }
+  // The one accepted over-fold: the server keeps a decomposed Hangul syllable distinct from its
+  // precomposed form, which no keyboard produces for a dashboard name.
+  assert.strictEqual(dashboardNameKey('한'), dashboardNameKey('\u1112\u1161\u11ab'));
+  assert.notStrictEqual(dashboardNameKey('Sales Overview'), dashboardNameKey('SalesOverview'), 'inner space still counts');
+  assert.strictEqual(dashboardNameKey(undefined), '');
+});
+
+// A column with no schemaName is reported by name. The sample-data gate resolves Choice values through
+// the loader's helpers, which used to key every Choice/MultiChoice column by `schemaName.toLowerCase()`
+// and threw a TypeError instead — taking validate, verify and even a teardown dry-run down with it.
+test('validateAppSpec reports a Choice column with no schemaName instead of crashing on its sample data', () => {
+  const s = cloneDesk();
+  const e = s.entities[0];
+  e.columns = [...(e.columns || []), { displayName: 'Tags', type: 'MultiChoice' }, { displayName: 'Tier', type: 'Choice', options: ['A', 'B'] }];
+  s.sampleData = { [e.schemaName]: [{ [e.primaryAttribute.schemaName]: 'One' }] };
+  let r;
+  assert.doesNotThrow(() => { r = validateAppSpec(s); });
+  assert.ok(r.errors.some((m) => /a column is missing schemaName/.test(m)), JSON.stringify(r.errors));
 });
 
 test('validateAppSpec accepts id-passthrough dashboard tiles (viewId/visualizationId + entity, no declared view/chart)', () => {
@@ -606,6 +704,68 @@ test('#1 a valid $parent.match that resolves to a real parent row still passes',
   // The stock desk sample binds tickets to a real customer row — must remain valid.
   const r = validateAppSpec(cloneDesk());
   assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+// --- #544: self-referencing sample data, validated at LINT time -------------------------------
+// The build halting partway through sample-data — after other data is already written — is the
+// worst outcome, so the rules the seeder enforces at runtime are all gated here first.
+function selfRefDesk() {
+  const s = cloneDesk();
+  s.entities.push({ schemaName: 'new_org', displayName: 'Org', pluralName: 'Orgs', primaryAttribute: { schemaName: 'new_name', displayName: 'Name' }, columns: [] });
+  s.relationships.push({ type: 'OneToMany', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_ParentOrgId', displayName: 'Parent Org' } });
+  s.sampleData.new_org = [
+    { new_name: 'Root' },
+    { new_name: 'Child', $parent: { entity: 'new_org', match: { new_name: 'Root' } } },
+  ];
+  return s;
+}
+
+test('#544 a self-referencing $parent hierarchy is VALID (the seeder creates it in waves)', () => {
+  const r = validateAppSpec(selfRefDesk());
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+test('#544 a self-reference cycle is rejected at lint time, naming the record indices', () => {
+  const s = selfRefDesk();
+  s.sampleData.new_org[0].$parent = { entity: 'new_org', match: { new_name: 'Child' } };
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /\$parent cycle/.test(e) && /0, 1/.test(e)), JSON.stringify(r.errors));
+});
+
+test('#544 a row that is its own parent is rejected as a cycle', () => {
+  const s = selfRefDesk();
+  s.sampleData.new_org = [{ new_name: 'Loop', $parent: { entity: 'new_org', match: { new_name: 'Loop' } } }];
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /\$parent cycle/.test(e)), JSON.stringify(r.errors));
+});
+
+test('#544 TWO relationships for one pair make a $parent ambiguous unless it names the lookup', () => {
+  const s = selfRefDesk();
+  // A second 1:N on the same pair derives the same schema name. The ambiguity under test is the
+  // $parent bind, so this one carries an explicit name — otherwise the collision gate rejects it first.
+  s.relationships.push({ type: 'OneToMany', schemaName: 'new_org_group_ancestor', referenced: 'new_org', referencing: 'new_org', lookup: { schemaName: 'new_GroupAncestorId', displayName: 'Group Ancestor' } });
+  const ambiguous = validateAppSpec(s);
+  assert.strictEqual(ambiguous.ok, false);
+  assert.ok(ambiguous.errors.some((e) => /ambiguous/.test(e) && /new_ParentOrgId/.test(e) && /new_GroupAncestorId/.test(e)), JSON.stringify(ambiguous.errors));
+
+  s.sampleData.new_org[1].$parent.lookup = 'new_GroupAncestorId';
+  const named = validateAppSpec(s);
+  assert.strictEqual(named.ok, true, JSON.stringify(named.errors));
+});
+
+test('#544 a $parent.lookup that names no relationship lists the valid ones', () => {
+  const s = selfRefDesk();
+  s.sampleData.new_org[1].$parent.lookup = 'new_NotARelationship';
+  const r = validateAppSpec(s);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /new_NotARelationship/.test(e) && /new_ParentOrgId/.test(e)), JSON.stringify(r.errors));
+});
+
+test('#544 a cross-entity $parent is unaffected by the self-reference checks', () => {
+  // The stock desk binds tickets to customers; no self-reference exists anywhere in it.
+  assert.strictEqual(validateAppSpec(cloneDesk()).ok, true);
 });
 
 test('#1 (hardening) a non-array $parents is rejected (it diverges from the seeder otherwise)', () => {
@@ -934,6 +1094,19 @@ test('validateAppSpec REJECTS a non-GUID pages[].pageId', () => {
   assert.ok(!validateAppSpec(emptySpec, { profile: 'deploy' }).ok, 'empty pageId is rejected');
 });
 
+// pages[].model is the id a download writes back and the build sends to pac's `--model`, so it is a short token.
+test('validateAppSpec ACCEPTS a model id and REJECTS anything that is not one', () => {
+  const withModel = (model) => v2PagesSpec([{ page: 'overview', title: 'Overview' }, { page: 'order-detail', title: 'Order Detail' }], { model });
+  for (const good of ['gpt-4.1', 'gpt-5-mini', 'org/model:v2_1', 'claude-3-5-sonnet@20240620', 'model+tuned', 'm'.repeat(100)]) {
+    const r = validateAppSpec(withModel(good), { profile: 'deploy' });
+    assert.ok(r.ok, `${good}: ${JSON.stringify(r.errors)}`);
+  }
+  for (const bad of ['', ' gpt-4.1', 'gpt 4.1', '-gpt', 'gpt"4', 'm'.repeat(101), 41, null]) {
+    const r = validateAppSpec(withModel(bad), { profile: 'deploy' });
+    assert.ok(r.errors.some((e) => /page 'overview': model must be a model id such as 'gpt-4\.1'/.test(e)), `${JSON.stringify(bad)}: ${JSON.stringify(r.errors)}`);
+  }
+});
+
 // --- entities[].quickCreate (Allow quick create table flag) --------------------------------------
 function quickCreateSpec(entityExtra, forms) {
   return {
@@ -1071,4 +1244,219 @@ test('validateAppSpec detects whitespace-distinct persona names as duplicates (S
     { persona: '  Agent  ', jobs: [{ name: 'b', privileges: [{ entity: 'pt_task', access: ['read'] }] }] },
   ]));
   assert.ok(!r.ok && r.errors.some((e) => /duplicate persona name/.test(e)), JSON.stringify(r.errors));
+});
+
+// --- views[]: a column reference must be a STRING (#525) ---------------------------------------
+//
+// `viewDef` maps every entry with `String(name).toLowerCase()`, so a non-string is not rejected —
+// it is STRINGIFIED. An object becomes the literal `[object object]`, which reaches the view's
+// fetchxml and is refused by the platform with an opaque metadata error, mid-build, after the
+// solution and tables already exist.
+//
+// The damage outlives the run: the savedquery row is created carrying that fetchxml, and every
+// later read of it also fails, so the next build dies at the same step. Dataverse reports the row
+// as system-defined and refuses to delete it, so recovering means tearing the table down.
+//
+// `{ "name": "..." }` is not a wild guess either — it is exactly the shape `forms[]` uses for its
+// fields, so an author moving between the two surfaces writes it naturally.
+const viewSpec = (view) => {
+  const s = cloneDesk();
+  s.views = [Object.assign({ entity: 'new_customer', name: 'Active Customers' }, view)];
+  return s;
+};
+const viewErrors = (view) => (validateAppSpec(viewSpec(view)).errors || []);
+
+test('validateAppSpec rejects a non-string entry in views[].columns (#525)', () => {
+  for (const bad of [{ name: 'new_name' }, 42, null, ['new_name'], true]) {
+    const errs = viewErrors({ columns: ['new_name', bad] });
+    assert.ok(
+      errs.some((e) => /columns/.test(e) && /string/.test(e)),
+      `${JSON.stringify(bad)} must be rejected as a column; got ${JSON.stringify(errs)}`
+    );
+    // The message has to name the view, or an author with a dozen views cannot act on it.
+    assert.ok(errs.some((e) => /Active Customers/.test(e)), `the error must name the view; got ${JSON.stringify(errs)}`);
+  }
+});
+
+test('validateAppSpec rejects a blank column name, which fetchxml cannot express either', () => {
+  for (const bad of ['', '   ']) {
+    const errs = viewErrors({ columns: [bad] });
+    assert.ok(errs.some((e) => /columns/.test(e)), `${JSON.stringify(bad)} must be rejected; got ${JSON.stringify(errs)}`);
+  }
+});
+
+test('validateAppSpec rejects a non-string sort/filter attribute for the same reason', () => {
+  // `viewDef` stringifies these two the same way (`String(s.attr)` / `String(f.attr)`), so they
+  // carry the identical failure and were fixed together rather than one at a time.
+  const sortErrs = viewErrors({ columns: ['new_name'], sort: [{ attr: { name: 'new_name' }, dir: 'asc' }] });
+  assert.ok(sortErrs.some((e) => /sort/.test(e) && /string/.test(e)), `got ${JSON.stringify(sortErrs)}`);
+  const filterErrs = viewErrors({ columns: ['new_name'], filters: [{ attr: { name: 'new_name' }, op: 'eq', value: 'x' }] });
+  assert.ok(filterErrs.some((e) => /filter/.test(e) && /string/.test(e)), `got ${JSON.stringify(filterErrs)}`);
+});
+
+test('validateAppSpec still accepts a well-formed view (the guard adds no false positive)', () => {
+  const r = validateAppSpec(viewSpec({ columns: ['new_name', 'new_segment'], sort: [{ attr: 'new_name', dir: 'asc' }], filters: [{ attr: 'new_segment', op: 'eq', value: 'SMB' }] }));
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  // Omitted collections must stay optional — the primary name column is substituted downstream.
+  assert.strictEqual(validateAppSpec(viewSpec({})).ok, true);
+});
+
+test('the whole shipped sample set still validates (no regression from the views guard)', () => {
+  for (const s of [sample, desk]) {
+    const r = validateAppSpec(s);
+    assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+  }
+});
+
+// --- an entity reference is a METADATA NAME, so it must be a string too (#525's sibling) ---------
+//
+// `String([["new_ticket"]])` is `"new_ticket"`, so a one-element nested array passed every
+// entity-membership check and then threw a RAW TypeError deep in the build, where the engine calls
+// `.toLowerCase()` on the array itself. These are valid JSON, so they reach the CLI from a spec file
+// — unlike a Symbol or a throwing getter, which cannot survive JSON.
+test('a nested-array entity reference is a structured error, not a late TypeError', () => {
+  const NESTED = [['new_ticket']];
+  const cases = [
+    ['chart', (s) => { s.charts = [{ name: 'C', entity: NESTED, chartType: 'Column', groupBy: 'new_priority' }]; }],
+    ['form subgrid childEntity', (s) => { s.forms = [{ entity: 'new_customer', name: 'F', subgrids: [{ childEntity: NESTED }] }]; }],
+    ['sitemap subArea', (s) => { s.appShell.areas[0].groups[0].subAreas.push({ entity: NESTED, title: 'X' }); }],
+    ['dashboard chart tile', (s) => { s.dashboards = [{ name: 'D', tiles: [{ type: 'chart', viewId: '11111111-1111-1111-1111-111111111111', visualizationId: '22222222-2222-2222-2222-222222222222', entity: NESTED }] }]; }],
+    ['dashboard list tile', (s) => { s.dashboards = [{ name: 'D2', tiles: [{ type: 'list', viewId: '11111111-1111-1111-1111-111111111111', entity: NESTED }] }]; }],
+  ];
+  for (const [label, mutate] of cases) {
+    const spec = cloneDesk();
+    mutate(spec);
+    let res;
+    assert.doesNotThrow(() => { res = validateAppSpec(spec, { profile: 'plan' }); },
+      `${label}: validation must not throw on a JSON-representable wrong type`);
+    assert.strictEqual(res.ok, false, `${label}: must be rejected`);
+    assert.ok((res.errors || []).some((e) => /must be a table name \(a string\)/.test(e)),
+      `${label}: expected a table-name type error; got ${JSON.stringify(res.errors)}`);
+  }
+});
+
+test('the value describer cannot itself throw (BigInt / a throwing getter)', () => {
+  // A validator that crashes while formatting its own error message is worse than one that misses
+  // the case: the caller gets a stack trace instead of a finding.
+  for (const [label, bad] of [
+    ['BigInt', 10n],
+    ['throwing getter', Object.defineProperty({}, 'toJSON', { get() { throw new Error('nope'); } })],
+  ]) {
+    const spec = cloneDesk();
+    spec.views = [{ entity: 'new_customer', name: 'V', columns: [bad] }];
+    let res;
+    assert.doesNotThrow(() => { res = validateAppSpec(spec, { profile: 'plan' }); }, `${label} must not crash the validator`);
+    assert.strictEqual(res.ok, false, `${label} must still be rejected`);
+  }
+});
+
+// --- AB#6686426: default-form selection must be deterministic --------------------------------------
+//
+// Promotion used to run INSIDE the concurrent per-form build, so every Main form on an owned custom
+// table promoted itself and the LAST to finish won. Which form a table opened with therefore depended
+// on completion order — an alternate read-only or OnSave-blocked form could silently become the
+// default. Promotion is now ONE serialized pass after every form exists, choosing an explicit
+// `isDefault` first and otherwise the first Main form in spec order.
+
+const deskWithForms = (forms) => { const s = cloneDesk(); s.forms = forms; return s; };
+const mainForm = (name, over = {}) => ({
+  entity: desk.entities[0].schemaName, name, formType: 'Main',
+  sections: [{ label: 'General', columns: [desk.entities[0].primaryAttribute.schemaName] }], ...over,
+});
+
+test('AB#6686426: isDefault must be a boolean', () => {
+  const r = validateAppSpec(deskWithForms([mainForm('A', { isDefault: 'yes' })]), { profile: 'plan' });
+  assert.strictEqual(r.ok, false);
+  assert.match((r.errors || []).join(' | '), /isDefault must be a boolean/);
+});
+
+test('AB#6686426: two Main forms cannot both claim isDefault', () => {
+  const r = validateAppSpec(deskWithForms([mainForm('A', { isDefault: true }), mainForm('B', { isDefault: true })]), { profile: 'plan' });
+  assert.strictEqual(r.ok, false);
+  assert.match((r.errors || []).join(' | '), /exactly one form can be the table's default/);
+});
+
+test('AB#6686426: isDefault on a NON-Main form is rejected — only Main forms are promoted', () => {
+  const r = validateAppSpec(deskWithForms([mainForm('QC', { formType: 'QuickCreate', isDefault: true })]), { profile: 'plan' });
+  assert.strictEqual(r.ok, false);
+  assert.match((r.errors || []).join(' | '), /only meaningful on a Main form/);
+});
+
+test('AB#6686426: one isDefault among several Main forms is valid', () => {
+  const r = validateAppSpec(deskWithForms([mainForm('A'), mainForm('B', { isDefault: true }), mainForm('C')]), { profile: 'plan' });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+// #583 Gap 1 — an app's scope is defined as much by what it deliberately leaves out as by what it
+// includes, and the exclusions are what let a reviewer tell two apps over the same tables apart.
+// Nothing recorded them, so they lived only in the authoring conversation.
+//
+// `excludes[]` is DOCUMENTARY, like `jobs[].surfaces`: personaRoleSpecFor() projects explicit fields
+// only, so it can never reach the SDK and be silently discarded there — the failure class #583 Gap 3
+// describes for `aiDescription`.
+function personaSpec(persona) {
+  return {
+    schemaVersion: 2,
+    solution: { uniqueName: 'contoso', publisherPrefix: 'contoso' },
+    app: { name: 'Contoso' },
+    entities: [{ schemaName: 'contoso_order', primaryAttribute: { schemaName: 'contoso_name' }, columns: [] }],
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Main', subAreas: [] }] }] },
+    personas: [Object.assign({
+      persona: 'Dispatcher',
+      jobs: [{ name: 'Assign work', surfaces: ['Active Work'], privileges: [{ entity: 'contoso_order', access: ['read'] }] }],
+    }, persona)],
+  };
+}
+
+test('#583 a persona may record deliberate exclusions, and a malformed one is rejected', () => {
+  const ok = validateAppSpec(personaSpec({ excludes: ['Approving budgets — handled in the Finance app'] }), { profile: 'plan' });
+  assert.strictEqual(ok.ok, true, JSON.stringify(ok.errors));
+
+  // A persona with no excludes is unaffected — this cannot break an existing spec.
+  assert.strictEqual(validateAppSpec(personaSpec({}), { profile: 'plan' }).ok, true);
+
+  const notArray = validateAppSpec(personaSpec({ excludes: 'Approving budgets' }), { profile: 'plan' });
+  assert.ok(notArray.errors.some((e) => /excludes must be an array of strings/.test(e)),
+    `a bare string must be rejected, not treated as a one-item list; got ${JSON.stringify(notArray.errors)}`);
+
+  for (const bad of [[''], ['   '], [42], [null]]) {
+    const r = validateAppSpec(personaSpec({ excludes: bad }), { profile: 'plan' });
+    assert.ok(r.errors.some((e) => /each excludes\[\] entry must be a non-empty string/.test(e)),
+      `${JSON.stringify(bad)} must be rejected — a blank exclusion documents nothing`);
+  }
+});
+
+// --- a sample ROW must be a real record object ---------------------------------------------------
+// The seeder spreads each row into a column map, and JS spreads a non-object into something
+// plausible rather than failing, so these reached Dataverse as garbage instead of being rejected
+// (MEASURED): null throws a raw TypeError; "abc" becomes { "0":"a","1":"b","2":"c" }; 42 and true
+// become {}; ["x"] becomes { "0":"x" }. The sample-data phase runs AFTER tables, forms and views
+// are deployed, so without this gate a typo halts the build halfway and leaves artifacts behind.
+test('a non-object sample row is rejected at the gate, with its index and type named', () => {
+  const spec = {
+    schemaVersion: 2,
+    solution: { uniqueName: 'c', publisherPrefix: 'co' },
+    app: { name: 'C' },
+    entities: [{ schemaName: 'co_order', primaryAttribute: { schemaName: 'co_name' }, columns: [] }],
+    sampleData: { co_order: [null, 'abc', 42, true, ['x']] },
+  };
+  const v = validateAppSpec(spec, { profile: 'plan' });
+  const hits = (v.errors || []).filter((e) => /sampleData\['co_order'\]\[\d+\]/.test(e));
+  assert.strictEqual(hits.length, 5, `every bad row must be named; got ${JSON.stringify(v.errors)}`);
+  assert.ok(hits.some((e) => /\[0\].*got null/.test(e)), 'null is named as null, not as object');
+  assert.ok(hits.some((e) => /\[1\].*got string/.test(e)));
+  assert.ok(hits.some((e) => /\[4\].*got an array/.test(e)), 'typeof [] is object, so it needs its own wording');
+});
+
+test('ordinary sample rows still validate (the gate must not reject real data)', () => {
+  const spec = {
+    schemaVersion: 2,
+    solution: { uniqueName: 'c', publisherPrefix: 'co' },
+    app: { name: 'C' },
+    entities: [{ schemaName: 'co_order', primaryAttribute: { schemaName: 'co_name' }, columns: [] }],
+    sampleData: { co_order: [{ co_name: 'First' }, { co_name: 'Second' }] },
+  };
+  const v = validateAppSpec(spec, { profile: 'plan' });
+  const hits = (v.errors || []).filter((e) => /sampleData/.test(e));
+  assert.deepStrictEqual(hits, [], `valid rows must pass; got ${JSON.stringify(hits)}`);
 });

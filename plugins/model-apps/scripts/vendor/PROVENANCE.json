@@ -1,14 +1,14 @@
 {
-  "commit": "5dcb83986fb7b396b2c033089ab89a199665a830",
-  "subject": "loc(copilot-studio): add catalogues for 12 new locales (additions-only)",
+  "commit": "8930278fa2da1ebb761496d4ef5a8079da9bc5fc",
+  "subject": "cds-maker-sdk: languages, app form lists, genPage type, header token, publish perf (combined)",
   "dirtySdkPackage": 0,
-  "libBuiltAt": "2026-08-31T21:41:17.872Z",
-  "newestSrcAt": "2026-08-31T21:40:14.316Z",
+  "libBuiltAt": "2026-10-01T17:02:15.216Z",
+  "newestSrcAt": "2026-10-01T16:35:27.021Z",
   "libIsStale": false,
   "nostub": false,
   "esbuildVersion": "0.28.1",
-  "nodeVersion": "v22.13.1",
-  "builtAt": "2026-08-31T21:41:40.924Z",
-  "bundleSha256": "2d459dec4bad316c468a05ce9d21f13eef48984a483b0aaa29d3f627213db0f5",
-  "bundleBytes": 682531
+  "nodeVersion": "v20.20.2",
+  "builtAt": "2026-10-01T17:03:29.974Z",
+  "bundleSha256": "d06d95be213156070a1b89027881cc72e228aead217ccca94160177760fde8c1",
+  "bundleBytes": 843285
 }

@@ -25,7 +25,12 @@
 const SCOPE_DEPTH = { user: 'Basic', businessUnit: 'Local', parentChild: 'Deep', organization: 'Global' };
 const DEPTH_RANK = { basic: 1, local: 2, deep: 3, global: 4 };
 // App Spec access token -> Dataverse PrivilegeType, again mirroring the SDK.
-const ACCESS_TYPE = { read: 'Read', create: 'Create', write: 'Write', delete: 'Delete', append: 'Append', appendTo: 'AppendTo', assign: 'Assign', share: 'Share' };
+// KEYS ARE LOWERCASE because the lookup lowercases (`ACCESS_TYPE[d.access.toLowerCase()]`). The
+// camelCase `appendTo` spelling the App Spec uses therefore has to appear here as `appendto`; keying
+// it `appendTo` made the lookup return undefined and reported every declared appendTo privilege as
+// "'<entity>' exposes no 'appendTo' privilege" — a false failure on a correctly granted role, which
+// is the cry-wolf outcome this whole check exists to avoid.
+const ACCESS_TYPE = { read: 'Read', create: 'Create', write: 'Write', delete: 'Delete', append: 'Append', appendto: 'AppendTo', assign: 'Assign', share: 'Share' };
 
 const rankOf = (depth) => DEPTH_RANK[String(depth == null ? '' : depth).trim().toLowerCase()] || 0;
 

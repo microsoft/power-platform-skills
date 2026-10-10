@@ -6,6 +6,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { readerFor, appIdFor } = require('../verify-model-app.js');
+const { verifySpec } = require('../lib/verify-spec.js');
+const { validateFlagsFromParsed } = require('./helpers/fake-auth.js');
 
 const GP_OVERVIEW = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
 const GP_DETAIL   = '5c0a4889-45fd-46ea-91a8-ff876914d644';
@@ -154,14 +156,22 @@ test('readerFor base readers normalize exact identities for tables, relationship
     queryRecords: async () => [],
     fetchEntityMetadata: async (logical) => {
       calls.push({ method: 'fetchEntityMetadata', logical });
-      return {
-        Relationships: [
-          { SchemaName: 'new_Parent_Child' },
-          { schemaName: 'new_lower' },
-          { name: 'new_named' },
-          {},
-        ],
-      };
+      return { Relationships: [] };
+    },
+    dataverse: {
+      get: async (p) => {
+        calls.push({ method: 'dataverse.get', path: p });
+        if (p.includes('/ManyToOneRelationships')) {
+          return { status: 200, body: { value: [
+            { SchemaName: 'new_Parent_Child', ReferencedEntity: 'new_parent', ReferencingAttribute: 'new_parentid' },
+            { SchemaName: 'new_lower', ReferencedEntity: 'new_other', ReferencingAttribute: 'new_otherid' },
+          ] } };
+        }
+        if (p.includes('/ManyToManyRelationships')) {
+          return { status: 200, body: { value: [{ SchemaName: 'new_named', Entity1LogicalName: 'new_child', Entity2LogicalName: 'new_tag' }] } };
+        }
+        return { status: 200, body: { value: [] } };
+      },
     },
     resolveArtifact: async (kind, identity) => {
       calls.push({ method: 'resolveArtifact', kind, identity });
@@ -176,13 +186,55 @@ test('readerFor base readers normalize exact identities for tables, relationship
 
   assert.deepStrictEqual(await reader.findTable('NEW_ACCOUNT'), { logicalName: 'NEW_ACCOUNT' });
   assert.deepStrictEqual(await reader.findColumns('new_account'), [{ logicalName: 'new_account_name' }]);
-  assert.deepStrictEqual(await reader.entityRelationships('NEW_CHILD'), ['new_parent_child', 'new_lower', 'new_named']);
+  const relRows = await reader.entityRelationships('NEW_CHILD');
+  assert.deepStrictEqual(relRows.map((r) => r.schemaName), ['new_Parent_Child', 'new_lower', 'new_named']);
+  assert.strictEqual(relRows[0].referencingEntity, 'new_child', 'the queried table is the referencing end of a ManyToOne row');
   assert.strictEqual(await reader.commandBar('NEW_ACCOUNT'), true);
   assert.deepStrictEqual(await reader.retrieveSetting('NLGridSearchSetting'), { value: '2' });
-  assert.ok(calls.some((c) => c.method === 'findTables' && c.logical === 'new_account'));
-  assert.ok(calls.some((c) => c.method === 'fetchEntityMetadata' && c.logical === 'new_child'));
+  assert.ok(calls.some((c) => c.method === 'findTables'));
+  assert.ok(calls.some((c) => c.method === 'dataverse.get' && /ManyToOneRelationships/.test(c.path)));
   assert.ok(calls.some((c) => c.method === 'resolveArtifact' && c.identity.entity === 'new_account'));
   assert.ok(calls.some((c) => c.method === 'retrieveSetting' && c.opts && Object.keys(c.opts).length === 0));
+});
+
+test('readerFor + verifySpec reads deployed fetchxml and systemform.isdefault through the real reader seam', async () => {
+  const calls = [];
+  const sdk = {
+    findTables: async () => [],
+    findColumns: async () => [],
+    queryRecords: async (set, opts) => {
+      calls.push({ set, opts });
+      if (set === 'savedquery') {
+        return [{
+          savedqueryid: 'view-1',
+          layoutxml: '<grid><row><cell name="new_subject"/></row></grid>',
+          fetchxml: '<fetch><entity name="new_ticket"><filter><condition attribute="ownerid" operator="eq-userid"/></filter></entity></fetch>',
+        }];
+      }
+      if (set === 'systemform') return [{ formid: 'form-1', isdefault: false }];
+      return [];
+    },
+    fetchEntityMetadata: async () => ({ Relationships: [] }),
+    resolveArtifact: async () => [],
+    retrieveSetting: async () => null,
+  };
+  const spec = {
+    solution: { publisherPrefix: 'new' },
+    app: { name: 'Support Desk', uniqueName: 'new_supportdesk' },
+    entities: [{ schemaName: 'new_ticket', columns: [] }], charts: [], appShell: { areas: [] },
+    views: [{ entity: 'new_ticket', name: 'My Tickets', columns: ['new_subject'], activeOnly: false, filters: [{ attr: 'modifiedon', op: 'this-week' }] }],
+    forms: [{ entity: 'new_ticket', name: 'Main', formType: 'Main', isDefault: true }],
+  };
+
+  const r = await verifySpec(spec, readerFor(sdk, 'new_supportdesk', {}));
+
+  assert.ok(r.missing.some((m) => m.kind === 'view-filters' && /modifiedon this-week/.test(m.detail)), 'the real reader must surface fetchxml to the filter oracle');
+  assert.ok(r.missing.some((m) => m.kind === 'form-default' && /isdefault is false/.test(m.detail)), 'the real reader must surface systemform.isdefault to the default-form oracle');
+  const viewQuery = calls.find((c) => c.set === 'savedquery');
+  assert.ok(viewQuery.opts.select.includes('fetchxml'), 'view reads must request savedquery.fetchxml');
+  const formDefaultQuery = calls.find((c) => c.set === 'systemform' && /formid eq form-1/.test(c.opts.filter));
+  assert.ok(formDefaultQuery, 'default-form proof must read the deployed form row by id');
+  assert.ok(formDefaultQuery.opts.select.includes('isdefault'), 'default-form proof must request systemform.isdefault');
 });
 
 test('appIdFor returns the deployed app id or undefined when the app is already gone', async () => {
@@ -199,14 +251,74 @@ test('appIdFor returns the deployed app id or undefined when the app is already 
   assert.ok(filters.every((f) => /uniquename eq '/.test(f)), 'app lookup stays name-scoped');
 });
 
-function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResult = { ok: true, checks: [], missing: [] }, sdkThrows = null, invokeAsMain = false }) {
+test('readerFor.appRoleIds reads the deployed appmoduleroles_association rows', async () => {
+  const calls = [];
+  const sdk = {
+    queryRecords: async (set, opts) => {
+      calls.push({ set, opts });
+      if (set === 'appmodule') return [{ appmoduleid: 'app-id-1' }];
+      return [];
+    },
+    findTables: async () => [],
+    findColumns: async () => [],
+    dataverse: {
+      get: async (url) => {
+        calls.push({ url });
+        return {
+          status: 200,
+          headers: {},
+          body: { value: [{ roleid: 'role-agent' }, { roleid: 'ROLE-MANAGER' }] },
+        };
+      },
+    },
+  };
+
+  const res = await readerFor(sdk, 'contoso_app', {}).appRoleIds();
+
+  assert.strictEqual(res.ok, true);
+  assert.deepStrictEqual(res.roleIds, ['role-agent', 'role-manager']);
+  assert.ok(calls.some((c) => c.url && /appmodules\(app-id-1\)\/appmoduleroles_association/.test(c.url)), 'must read the actual app-role association navigation property');
+});
+
+test('readerFor.appRoleIds fails closed when the association rows cannot be read', async () => {
+  const sdk = {
+    queryRecords: async (set) => (set === 'appmodule' ? [{ appmoduleid: 'app-id-1' }] : []),
+    findTables: async () => [],
+    findColumns: async () => [],
+    dataverse: { get: async () => ({ status: 403, headers: {}, body: { error: { message: 'forbidden' } } }) },
+  };
+
+  const res = await readerFor(sdk, 'contoso_app', {}).appRoleIds();
+
+  assert.strictEqual(res.ok, false);
+  assert.match(res.reason, /403/);
+});
+
+function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResult = { ok: true, checks: [], missing: [] }, sdkThrows = null, invokeAsMain = false, specObject = null, realGates = false, sdkFactory = null }) {
   const scriptPath = path.join(__dirname, '..', 'verify-model-app.js');
   const source = `${fs.readFileSync(scriptPath, 'utf8')}\nmodule.exports.__mainForTest = main;\n`;
   const events = [];
   const stderr = [];
   const mod = { exports: {} };
+  const made = new Set();
   const fakeFs = {
-    mkdirSync: (dir, opts) => events.push({ type: 'mkdirSync', dir, opts }),
+    mkdirSync: (dir, opts) => { made.add(dir); events.push({ type: 'mkdirSync', dir, opts }); },
+    // The workspace check inspects the final component, then creates a missing directory and
+    // inspects it again. A double that only records mkdir would throw here and hide the call.
+    lstatSync: (dir) => {
+      if (!made.has(dir)) {
+        const err = new Error('ENOENT');
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return { isSymbolicLink: () => false, isDirectory: () => true, isFile: () => false };
+    },
+    readlinkSync: () => {
+      const err = new Error('EINVAL');
+      err.code = 'EINVAL';
+      throw err;
+    },
+    realpathSync: Object.assign((p) => p, { native: (p) => p }),
   };
   const customRequire = (id) => {
     if (id === 'node:fs') return fakeFs;
@@ -214,17 +326,20 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
     if (id === './lib/dataverse-auth.js') {
       return {
         parseArgs: () => parseResult,
+        validateFlags: validateFlagsFromParsed(() => parseResult.flags),
         readJsonArg: (arg) => {
           events.push({ type: 'readJsonArg', arg });
-          return { app: { name: 'Support Desk' }, solution: { publisherPrefix: 'new' } };
+          return specObject || { app: { name: 'Support Desk' }, solution: { publisherPrefix: 'new' } };
         },
         emitResult: (ok, payload) => events.push({ type: 'emitResult', ok, payload }),
+        // Pure, so the real one — the CLI uses it to identify the environment's baseline.
+        dataverseOrigin: require('../lib/dataverse-auth.js').dataverseOrigin,
       };
     }
     if (id === './lib/sdk-http-client.js') {
       return { createAzHttpClient: (env) => ({ env }) };
     }
-    if (id === './lib/verify-spec.js') {
+    if (!realGates && id === './lib/verify-spec.js') {
       return {
         verifySpec: async (spec, read) => {
           events.push({ type: 'verifySpec', spec, hasReader: typeof read.findTable === 'function' });
@@ -235,7 +350,7 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
     if (id === './lib/sdk-build.js') {
       return { appUniqueName: () => 'new_supportdesk' };
     }
-    if (id === './lib/app-spec.js') {
+    if (!realGates && id === './lib/app-spec.js') {
       return {
         validateAppSpec: () => validateResult,
         migrateAppSpec: (spec) => {
@@ -263,10 +378,15 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
       };
     }
     if (id === './vendor/cds-maker-sdk.cjs') {
-      return {
+        return {
+          // The CLI builds its store explicitly via the /node adapter now, so the mocked bundle
+          // must expose it too. The marker carries the root so the assertions below can still
+          // check WHERE the throwaway workspace was placed.
+          createNodeWorkspaceStorage: (root) => ({ __mockWorkspaceRoot: root }),
         createMakerSdk: (cfg) => {
           events.push({ type: 'createMakerSdk', cfg });
           if (sdkThrows) throw sdkThrows;
+          if (sdkFactory) return sdkFactory(cfg);
           return {
             initWorkspace: () => events.push({ type: 'initWorkspace' }),
             findTables: async () => [],
@@ -386,7 +506,57 @@ test('verify CLI accepts a positional spec, uses the default workspace, and prin
   assert.match(stderr, /✓ verify PASS \(1\/1 present\)/);
   assert.strictEqual(emitted.ok, true);
   assert.deepStrictEqual(emitted.payload.missing, []);
-  assert.ok(harness.events.some((e) => e.type === 'createMakerSdk' && e.cfg.workspacePath === path.join(__dirname, '..', '..', 'samples', '.maker-workspace')));
+  assert.ok(harness.events.some((e) => e.type === 'createMakerSdk' && e.cfg.workspaceStorage.__mockWorkspaceRoot === path.join(__dirname, '..', '..', 'samples', '.maker-workspace')));
+});
+
+test('verify CLI still verifies an older colliding spec and names the holder', async () => {
+  // Dropping relationshipCollisions: 'warn' makes validateAppSpec refuse this spec before any
+  // read. The relationship line is the proof verification actually ran.
+  const specObject = {
+    solution: { uniqueName: 'Contoso', publisherPrefix: 'contoso' },
+    app: { name: 'Projects', uniqueName: 'contoso_projects' },
+    entities: [
+      { schemaName: 'contoso_project', displayName: 'Project', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' } },
+      { schemaName: 'contoso_task', displayName: 'Task', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' } },
+    ],
+    relationships: [
+      { type: 'OneToMany', referenced: 'contoso_project', referencing: 'contoso_task', lookup: { schemaName: 'contoso_ProjectId', displayName: 'Project' } },
+      { type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_task' },
+    ],
+  };
+  const harness = loadVerifyCli({
+    parseResult: { positional: [], flags: { env: 'https://contoso.crm.dynamics.com', spec: '@app-spec.json', workspace: 'D:\\Projects\\_temp\\verify-collision' } },
+    realGates: true,
+    specObject,
+    sdkFactory: () => ({
+      initWorkspace: async () => {},
+      findTables: async () => [{ logicalName: 'contoso_project' }, { logicalName: 'contoso_task' }],
+      findColumns: async () => [{ logicalName: 'contoso_name' }],
+      queryRecords: async () => [],
+      fetchEntityMetadata: async () => ({ Relationships: [] }),
+      resolveArtifact: async () => [],
+      retrieveSetting: async () => null,
+      dataverse: {
+        get: async (p) => {
+          if (String(p).includes('RelationshipType')) {
+            return { status: 200, body: { '@odata.type': '#Microsoft.Dynamics.CRM.OneToManyRelationshipMetadata', SchemaName: 'contoso_project_contoso_task', RelationshipType: 'OneToManyRelationship' } };
+          }
+          if (String(p).includes('OneToManyRelationshipMetadata')) {
+            return { status: 200, body: { SchemaName: 'contoso_project_contoso_task', ReferencedEntity: 'contoso_project', ReferencingEntity: 'contoso_task', ReferencingAttribute: 'contoso_projectid' } };
+          }
+          return { status: 200, body: { value: [] } };
+        },
+      },
+    }),
+  });
+
+  await harness.main();
+  const stderr = harness.stderr.join('');
+  const emitted = harness.events.find((e) => e.type === 'emitResult');
+  assert.match(stderr, /WARNING:.*both use the schema name 'contoso_project_contoso_task'/);
+  assert.match(stderr, /exists as 1:N contoso_project -> contoso_task \(lookup contoso_projectid\), not as the declared N:N/);
+  assert.ok(emitted && Array.isArray(emitted.payload.missing), 'a validation refusal returns errors and never a missing list');
+  assert.ok(emitted.payload.missing.some((m) => /not as the declared N:N/.test(m)), JSON.stringify(emitted.payload));
 });
 
 test('verify CLI entrypoint converts SDK startup errors into emitResult failures', async () => {
@@ -410,77 +580,94 @@ test('verify CLI entrypoint converts SDK startup errors into emitResult failures
 
 // ── entityPrivileges reader ──────────────────────────────────────────────────────────────────────
 // These tests exist because the original role-privileges tests injected a FAKE `entityPrivileges`
-// into verifySpec, which meant the real reader was never executed by any test. It shipped building a
-// RELATIVE url (`/EntityDefinitions(...)`). `createAzHttpClient` is the raw transport the SDK drives,
-// so it takes FULL request urls and validates them with `new URL(url)` for its same-origin guard — a
-// relative path throws there. verify-spec catches that per entity, so the failure was silent: every
-// entity would have reported "privileges unreadable" and the check would have failed on every live
-// run. A reader is only as tested as its narrowest untested seam.
+// into verifySpec, which meant the real reader was never executed by any test. That is how it shipped
+// building a RELATIVE url against a transport that requires absolute ones — a failure verify-spec
+// catches per entity, so every entity would silently have reported "privileges unreadable". A reader
+// is only as tested as its narrowest untested seam, which is why the last test here drives the REAL
+// vendored bundle rather than a hand-written SDK stub.
+//
+// The reader now goes through the SDK's `getEntityPrivileges` instead of a raw Web API call, so the
+// url-shape tests that used to live here are gone with the url they tested. What replaces them is the
+// SHAPE ADAPTATION and the fail-closed behaviour, which is what verify-spec actually depends on.
 
-test('entityPrivileges builds an ABSOLUTE url with the /api/data prefix', async () => {
+test('entityPrivileges maps the SDK camelCase rows onto the PascalCase shape the comparison reads', async () => {
+  // lib/role-privileges.js speaks Dataverse's wire vocabulary (`PrivilegeType`), which is also what
+  // the role WRITE payload uses. The SDK returns its own camelCase view. If this mapping were
+  // dropped, `ACCESS_TYPE[...] === x.PrivilegeType` would compare against undefined for every row and
+  // report every declared privilege as missing — a total, silent false failure.
   const seen = [];
-  const httpClient = { get: async (url) => { seen.push(url); return { status: 200, body: { Privileges: [{ PrivilegeId: 'p1', Name: 'prvReadAccount' }] } }; } };
-  const read = readerFor(stubSdk(), 'app', { httpClient, envUrl: 'https://contoso.crm.dynamics.com' });
+  const sdk = stubSdk();
+  sdk.getEntityPrivileges = async (logical) => {
+    seen.push(logical);
+    return [{ name: 'prvReadAccount', privilegeId: 'p1', privilegeType: 'Read', access: 'read', scopes: ['user', 'organization'] }];
+  };
+  const read = readerFor(sdk, 'app', {});
 
   const privs = await read.entityPrivileges('Account');
 
-  assert.strictEqual(seen.length, 1);
-  assert.strictEqual(
-    seen[0],
-    "https://contoso.crm.dynamics.com/api/data/v9.2/EntityDefinitions(LogicalName='account')?$select=LogicalName,Privileges",
-  );
-  assert.deepStrictEqual(privs, [{ PrivilegeId: 'p1', Name: 'prvReadAccount' }]);
+  assert.deepStrictEqual(seen, ['account'], 'the logical name is lower-cased, as Dataverse stores it');
+  assert.deepStrictEqual(privs, [{ Name: 'prvReadAccount', PrivilegeId: 'p1', PrivilegeType: 'Read' }]);
 });
 
-test('entityPrivileges survives the REAL createAzHttpClient same-origin guard', async () => {
-  // The regression test that matters: drive the reader through the actual transport rather than a
-  // hand-written stub, so the url has to satisfy the same guard it failed in production.
-  const { createAzHttpClient } = require('../lib/sdk-http-client.js');
-  const requests = [];
-  const request = async (o) => {
-    requests.push(o);
-    return { statusCode: 200, headers: {}, body: JSON.stringify({ Privileges: [{ PrivilegeId: 'p9' }] }) };
+test('entityPrivileges PROPAGATES a throw rather than returning an empty grant', async () => {
+  // The SDK throws for a table that exposes no privileges (unknown or non-securable). Swallowing that
+  // into `[]` would read as "this table exposes nothing", which passes the subset comparison
+  // vacuously — the exact false PASS the check exists to prevent. verify-spec wraps each call in a
+  // try/catch and leaves the entity ABSENT from its map, which `compareRolePrivileges` reports as a
+  // finding. So the fail-closed behaviour depends on this throw reaching it.
+  const sdk = stubSdk();
+  sdk.getEntityPrivileges = async () => { throw new Error('no privileges for co_missing'); };
+  const read = readerFor(sdk, 'app', {});
+  await assert.rejects(read.entityPrivileges('co_missing'), /no privileges for co_missing/);
+});
+
+test('entityPrivileges is ALWAYS wired now that the SDK carries the read', async () => {
+  // It used to be conditional on a raw httpClient + org url, and ABSENT when either was missing, so
+  // verify-spec skipped the role-privileges check entirely. With the read on the SDK there is no such
+  // condition left: the reader exists whenever the SDK does. Asserted so a future refactor cannot
+  // quietly reintroduce a silent skip — an absent reader disables a security check without saying so.
+  assert.strictEqual(typeof readerFor(stubSdk(), 'app', {}).entityPrivileges, 'function');
+});
+
+test('entityPrivileges REAL BUNDLE: the SDK method exists and returns the shape the mapping expects', async () => {
+  // The seam that matters. A hand-written SDK stub proves only that the mapping is self-consistent;
+  // it would stay green if `getEntityPrivileges` were renamed or dropped by a re-vendor, or if it
+  // returned a different shape. Drive the actual bundle over a fake Dataverse instead.
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'entpriv-real-'));
+  const urls = [];
+  const httpClient = {
+    get: async (url) => {
+      urls.push(url);
+      return {
+        status: 200,
+        headers: {},
+        body: {
+          LogicalName: 'co_ticket',
+          Privileges: [
+            { Name: 'prvReadco_ticket', PrivilegeId: 'p9', PrivilegeType: 'Read', CanBeBasic: true, CanBeGlobal: true },
+            { Name: 'prvCreateco_ticket', PrivilegeId: 'p10', PrivilegeType: 'Create', CanBeBasic: false, CanBeGlobal: true },
+          ],
+        },
+      };
+    },
+    post: async () => ({ status: 204, headers: {}, body: {} }),
+    patch: async () => ({ status: 204, headers: {}, body: {} }),
+    delete: async () => ({ status: 204, headers: {}, body: {} }),
+    put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const httpClient = createAzHttpClient('https://contoso.crm.dynamics.com', { getToken: () => 'TOK', request });
-  const read = readerFor(stubSdk(), 'app', { httpClient, envUrl: 'https://contoso.crm.dynamics.com' });
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
 
-  const privs = await read.entityPrivileges('co_ticket');
+  const privs = await readerFor(sdk, 'app', {}).entityPrivileges('CO_Ticket');
 
-  assert.deepStrictEqual(privs, [{ PrivilegeId: 'p9' }]);
-  assert.strictEqual(requests.length, 1, 'the request must reach the transport, not be rejected by the guard');
-});
-
-test('entityPrivileges tolerates a trailing slash on the org url', async () => {
-  const seen = [];
-  const httpClient = { get: async (url) => { seen.push(url); return { status: 200, body: { Privileges: [] } }; } };
-  const read = readerFor(stubSdk(), 'app', { httpClient, envUrl: 'https://contoso.crm.dynamics.com/' });
-  await read.entityPrivileges('account');
-  assert.ok(!seen[0].includes('.com//api'), `double slash in ${seen[0]}`);
-});
-
-test('entityPrivileges escapes a quote in the logical name', async () => {
-  // odataLit doubles a single quote; without it the OData path literal would be malformed.
-  const seen = [];
-  const httpClient = { get: async (url) => { seen.push(url); return { status: 200, body: { Privileges: [] } }; } };
-  const read = readerFor(stubSdk(), 'app', { httpClient, envUrl: 'https://contoso.crm.dynamics.com' });
-  await read.entityPrivileges("o'brien");
-  assert.match(seen[0], /LogicalName='o''brien'/);
-});
-
-test('entityPrivileges returns null on a non-2xx rather than an empty grant', async () => {
-  // null is the fail-closed signal: verify-spec reports it as a finding. An empty array would read
-  // as "this table exposes no privileges" and could pass the subset comparison vacuously.
-  const httpClient = { get: async () => ({ status: 404, body: {} }) };
-  const read = readerFor(stubSdk(), 'app', { httpClient, envUrl: 'https://contoso.crm.dynamics.com' });
-  assert.strictEqual(await read.entityPrivileges('account'), null);
-});
-
-test('entityPrivileges is ABSENT (not broken) when the client or org url is missing', async () => {
-  // verify-spec skips role-privileges unless both readers are functions, so an unwired reader must
-  // not exist at all. A present-but-throwing reader would report a false failure on every entity.
-  assert.strictEqual(typeof readerFor(stubSdk(), 'app', {}).entityPrivileges, 'undefined');
-  assert.strictEqual(typeof readerFor(stubSdk(), 'app', { httpClient: { get: async () => ({}) } }).entityPrivileges, 'undefined');
-  assert.strictEqual(typeof readerFor(stubSdk(), 'app', { envUrl: 'https://contoso.crm.dynamics.com' }).entityPrivileges, 'undefined');
+  assert.deepStrictEqual(privs, [
+    { Name: 'prvReadco_ticket', PrivilegeId: 'p9', PrivilegeType: 'Read' },
+    { Name: 'prvCreateco_ticket', PrivilegeId: 'p10', PrivilegeType: 'Create' },
+  ], 'the bundle must still return { name, privilegeId, privilegeType } rows');
+  assert.ok(urls.some((u) => /EntityDefinitions\(LogicalName='co_ticket'\)/.test(u)),
+    `the SDK must query the entity by logical name; saw ${JSON.stringify(urls)}`);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('rolePrivileges paginates and never caps with top', async () => {
@@ -493,7 +680,7 @@ test('rolePrivileges paginates and never caps with top', async () => {
   const calls = [];
   const sdk = stubSdk();
   sdk.queryRecords = async (set, options) => { calls.push({ set, options }); return []; };
-  const read = readerFor(sdk, 'app', { httpClient: { get: async () => ({ status: 200, body: {} }) }, envUrl: 'https://contoso.crm.dynamics.com' });
+  const read = readerFor(sdk, 'app', {});
 
   await read.rolePrivileges('00000000-0000-0000-0000-000000000001');
 
@@ -501,4 +688,414 @@ test('rolePrivileges paginates and never caps with top', async () => {
   assert.ok(q, 'expected a roleprivileges query');
   assert.strictEqual(q.options.paginate, true, 'must follow @odata.nextLink to completion');
   assert.strictEqual('top' in q.options, false, 'must NOT cap with top -- Dataverse treats it as a hard cap and drops nextLink');
+});
+
+// ---------------------------------------------------------------------------
+// appEntityComponents(): the app's TABLE (type-1) components.
+//
+// These drive the REAL reader through readerFor(), not a hand-fed fake handed to verify-spec — the
+// consumer tests in verify-spec.test.js prove the CHECK, these prove the Dataverse plumbing it
+// depends on (the componenttype filter, pagination, resolution direction and failure modes).
+// ---------------------------------------------------------------------------
+
+const META = { new_order: 'aaaa0000-0000-0000-0000-000000000001', new_line: 'aaaa0000-0000-0000-0000-000000000002', entity: 'eeee0000-0000-0000-0000-00000000000e' };
+
+// `componentIds` are the type-1 rows the app carries. `calls` records every query/metadata read.
+function componentsSdk({ componentIds = [], calls = [], resolve = META, noApp = false } = {}) {
+  return {
+    queryRecords: async (set, opts) => {
+      calls.push({ set, opts });
+      if (noApp) return [];
+      if (set === 'appmodule') return [{ appmoduleid: 'app-uuid-1', appmoduleidunique: 'uid-1' }];
+      if (set === 'appmodulecomponent') return componentIds.map((id) => ({ objectid: id, componenttype: 1 }));
+      return [];
+    },
+    findTables: async () => [],
+    findColumns: async () => [],
+    dataverse: {
+      get: async (url) => {
+        calls.push({ url });
+        const m = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(url);
+        const logical = m && m[1];
+        if (typeof resolve === 'function') return resolve(logical);
+        const id = resolve[logical];
+        return id ? { status: 200, headers: {}, body: { MetadataId: id } } : { status: 404, headers: {}, body: null };
+      },
+    },
+  };
+}
+const readerWith = (sdk) => readerFor(sdk, 'contoso_app', { workspaceDir: os.tmpdir() });
+
+test('appEntityComponents(): filters componenttype 1 and PAGINATES rather than capping with top', async () => {
+  // `top` is a HARD cap in Dataverse and suppresses @odata.nextLink, so a capped page truncates
+  // silently — and for a MEMBERSHIP check a row that fell off the end reads as NOT PRESENT, i.e.
+  // verify would report a correctly built app as broken. The same trap was already found live on
+  // roleprivileges in this file. It would also hide the `entity` placeholder rows this check exists
+  // to find, since those are exactly what accumulates in a corrupted app.
+  const calls = [];
+  const sdk = componentsSdk({ componentIds: [META.new_order], calls });
+  await readerWith(sdk).appEntityComponents(['new_order']);
+  const q = calls.find((c) => c.set === 'appmodulecomponent');
+  assert.ok(q, 'the component query must run');
+  assert.match(q.opts.filter, /componenttype eq 1/);
+  assert.strictEqual(q.opts.paginate, true, 'must paginate to completion');
+  assert.strictEqual(q.opts.top, undefined, 'must NOT cap with top — a truncated page reads as "missing"');
+});
+
+test('appEntityComponents(): reports present vs absent for the WANTED tables', async () => {
+  const sdk = componentsSdk({ componentIds: [META.new_order] });
+  const r = await readerWith(sdk).appEntityComponents(['new_order', 'new_line']);
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.present, ['new_order']);
+  assert.strictEqual(r.placeholder, false);
+});
+
+test('appEntityComponents(): detects an `entity` placeholder component', async () => {
+  const sdk = componentsSdk({ componentIds: [META.new_order, META.entity] });
+  const r = await readerWith(sdk).appEntityComponents(['new_order']);
+  assert.strictEqual(r.placeholder, true, 'a component pointing at the `entity` metadata table must be reported');
+  assert.deepStrictEqual(r.present, ['new_order'], 'and the real table is still present');
+});
+
+test('appEntityComponents(): cost is bounded by the WANTED set, not by the component count', async () => {
+  // Resolving every COMPONENT instead would scale with the app and reintroduce the need for a cap.
+  const many = Array.from({ length: 300 }, (_, i) => `bbbb0000-0000-0000-0000-${String(i).padStart(12, '0')}`);
+  const calls = [];
+  const sdk = componentsSdk({ componentIds: many.concat(META.new_order), calls });
+  const r = await readerWith(sdk).appEntityComponents(['new_order']);
+  const metadataReads = calls.filter((c) => c.url).length;
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.present, ['new_order']);
+  // one per wanted table + one for the `entity` placeholder probe
+  assert.strictEqual(metadataReads, 2, `expected 2 metadata reads for 301 components, got ${metadataReads}`);
+});
+
+test('appEntityComponents(): a wanted table that does not exist is ABSENT, not a read failure', async () => {
+  // A 404 means the table is not in the environment at all, which the separate entity-existence
+  // check already reports. Failing the whole answer would mask it behind an unrelated error.
+  const sdk = componentsSdk({ componentIds: [META.new_order] });
+  const r = await readerWith(sdk).appEntityComponents(['new_order', 'new_ghost']);
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.present, ['new_order']);
+});
+
+test('appEntityComponents(): a non-404 resolution error fails closed and names the TABLE, not a GUID', async () => {
+  const sdk = componentsSdk({ componentIds: [META.new_order], resolve: (logical) => (logical === 'new_line' ? { status: 403, headers: {}, body: null } : { status: 200, headers: {}, body: { MetadataId: META[logical] } }) });
+  const r = await readerWith(sdk).appEntityComponents(['new_order', 'new_line']);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /new_line/, 'the reason must name the table so an operator can act on it');
+  assert.match(r.reason, /403/);
+});
+
+test('appEntityComponents(): an unresolvable app fails closed', async () => {
+  const r = await readerWith(componentsSdk({ noApp: true })).appEntityComponents(['new_order']);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.reason, /contoso_app/);
+});
+
+test('appEntityComponents(): an app with NO table components answers ok with nothing present', async () => {
+  // This is the reported defect itself (a sitemap naming tables the app does not contain), not a
+  // read failure — and it cannot mask a permissions problem, because the sitemap is read from the
+  // same appmodulecomponent table and would fail visibly first.
+  const r = await readerWith(componentsSdk({ componentIds: [] })).appEntityComponents(['new_order']);
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.present, []);
+});
+
+test('appEntityComponents(): memoized per wanted-set — one live read per verify run', async () => {
+  const calls = [];
+  const reader = readerWith(componentsSdk({ componentIds: [META.new_order], calls }));
+  await reader.appEntityComponents(['new_order']);
+  await reader.appEntityComponents(['new_order']);
+  assert.strictEqual(calls.filter((c) => c.set === 'appmodulecomponent').length, 1, 'the component query must not repeat');
+});
+test('appEntityComponents(): matches an objectid whose CASING differs from the resolved MetadataId', async () => {
+  // Dataverse does not guarantee that a component `objectid` and the table's `MetadataId` come back
+  // in the same casing, and a GUID is case-insensitive. Comparing raw strings would report a
+  // correctly pinned table as MISSING — a false red build on a healthy app.
+  const sdk = componentsSdk({ componentIds: [META.new_order.toUpperCase()] });
+  const r = await readerWith(sdk).appEntityComponents(['new_order']);
+  assert.strictEqual(r.ok, true);
+  assert.deepStrictEqual(r.present, ['new_order'], 'an upper-cased objectid must still match');
+});
+// The dashboard oracle through the REAL reader seam: `dashboardComponents` is implemented here with
+// the SDK's own deserializer (fetch, then read the artifact), so a stub-only test would prove nothing
+// about the reader verify actually runs with.
+// A dashboard the SDK returns no artifact for, or a component list that is not a list, is not "no tiles": verify
+// reports it unverified. Converting it to an empty list passed the check having read nothing.
+test('readerFor + verifySpec: a dashboard whose artifact cannot be read is unverified, never passed', async () => {
+  for (const [what, art] of [['no artifact', null], ['a malformed component list', { components: { chart: 1 } }]]) {
+    const sdk = {
+      findTables: async () => [],
+      findColumns: async () => [],
+      queryRecords: async (set) => (set === 'systemform' ? [{ formid: 'dash-1', formxml: '<form/>' }] : []),
+      listArtifacts: async () => [],
+      dataverse: { get: async () => ({ status: 200, body: { formxml: '<form/>', '@odata.etag': 'W/"1"' } }) },
+      fetchArtifact: async () => {},
+      getArtifact: async () => art,
+      fetchEntityMetadata: async () => ({ Relationships: [] }),
+      resolveArtifact: async () => [],
+      retrieveSetting: async () => null,
+    };
+    const spec = { solution: { publisherPrefix: 'new' }, app: { name: 'Support Desk', uniqueName: 'new_supportdesk' }, entities: [], appShell: { areas: [] },
+      dashboards: [{ name: 'Ops', tiles: [{ type: 'chart', name: 'By Priority', entity: 'new_ticket', viewId: 'v', visualizationId: 'c' }] }] };
+    const r = await verifySpec(spec, readerFor(sdk, 'new_supportdesk', {}));
+    const chk = r.checks.find((c) => c.kind === 'dashboard');
+    assert.strictEqual(chk.present, false, what);
+    assert.match(chk.detail, new RegExp(`its tiles could not be read \\(the SDK returned ${what}`), what);
+  }
+});
+
+// verify checks what users see: the PUBLISHED dashboard. The SDK's read is the unpublished draft, and verify runs
+// in the build's workspace, whose copy can hold unpushed edits — so a fix saved but not published, or never
+// pushed, passed while users still saw the broken dashboard. Either is now unverified. So is a draft saved and put
+// back while the tiles were read: that leaves the FormXML as it was, but not the draft's token.
+test('readerFor + verifySpec: a dashboard whose draft or workspace copy is not what is published is unverified', async () => {
+  const spec = { solution: { publisherPrefix: 'new' }, app: { name: 'Support Desk', uniqueName: 'new_supportdesk' }, entities: [], appShell: { areas: [] },
+    dashboards: [{ name: 'Ops', tiles: [{ type: 'chart', name: 'By Priority', entity: 'new_ticket', viewId: 'v', visualizationId: 'c' }] }] };
+  const fetches = [];
+  // `later` answers the reads made AFTER the fetch: the dashboard changing while it is being read. `laterVersion` is
+  // the draft's token then: a draft saved and put back leaves the FormXML as it was, but not its token.
+  const sdkWith = ({ draftXml = '<form/>', dirty = false, draftStatus = 200, later = null, version = 'W/"1"', laterVersion = null } = {}) => {
+    let reads = 0;
+    const xml = () => (later && reads > 2 ? later : '<form/>');
+    return {
+    findTables: async () => [],
+    findColumns: async () => [],
+    queryRecords: async (set, o) => {
+      // The published row carries its own token, which a write to the draft does not move.
+      if (set === 'systemform' && o && o.select && o.select.includes('formxml')) { reads += 1; return [{ formid: 'dash-1', formxml: xml(), '@odata.etag': 'W/"9"' }]; }
+      if (set === 'systemform') return [{ formid: 'dash-1', formxml: '<form/>' }];
+      if (set === 'savedqueryvisualization') return [{ primaryentitytypecode: 'new_ticket' }];
+      if (set === 'savedquery') return [{ returnedtypecode: 'new_ticket' }];
+      return [];
+    },
+    listArtifacts: async (type) => (type === 'dashboard' ? [{ type, id: 'dash-1', isDirty: dirty }] : []),
+    dataverse: { get: async (url) => {
+      assert.strictEqual(url, '/systemforms(dash-1)/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml');
+      reads += 1;
+      const token = laterVersion && reads > 2 ? laterVersion : version;
+      return { status: draftStatus, body: { formxml: later && reads > 2 ? later : draftXml, ...(token === null ? {} : { '@odata.etag': token }) } };
+    } },
+    fetchArtifact: async (type, id, o) => { fetches.push(o); },
+    getArtifact: async () => ({ components: [{ type: 'chart', name: 'By Priority', parameters: {
+      TargetEntityType: 'new_ticket', ViewId: '{11111111-1111-1111-1111-111111111111}', VisualizationId: '{22222222-2222-2222-2222-222222222222}' } }] }),
+    fetchEntityMetadata: async () => ({ Relationships: [] }),
+    resolveArtifact: async () => [],
+    retrieveSetting: async () => null,
+    };
+  };
+  const check = async (sdk) => (await verifySpec(spec, readerFor(sdk, 'new_supportdesk', {}))).checks.find((c) => c.kind === 'dashboard');
+  for (const [what, opts, detail] of [
+    ['an unpublished draft', { draftXml: '<form><changed/></form>' }, /dashboard dash-1 has changes that are not published — publish it, then verify/],
+    ['a draft that cannot be read', { draftStatus: 503 }, /the draft of dashboard dash-1 could not be read \(HTTP 503\)/],
+    ['a dashboard that changed while it was read', { later: '<form><changed/></form>' }, /dashboard dash-1 changed while it was being read — verify again/],
+    ['a draft saved and put back while it was read', { laterVersion: 'W/"3"' }, /dashboard dash-1 changed while it was being read — verify again/],
+    ['a draft read with no version', { version: null }, /the version of dashboard dash-1 could not be read/],
+  ]) {
+    const chk = await check(sdkWith(opts));
+    assert.strictEqual(chk.present, false, what);
+    assert.match(chk.detail, detail, what);
+  }
+  // CONTROL: published, with nothing pending — the tiles are read and checked.
+  const ok = await check(sdkWith());
+  assert.strictEqual(ok.present, true, ok.detail);
+  // With an isolated reader the tiles come from IT — a throwaway workspace — and never from the build's copy, which
+  // may hold unpushed edits (the main SDK here would answer cross-wired tiles and is never asked), and it is disposed.
+  const main = sdkWith();
+  main.fetchArtifact = async () => { throw new Error('the build workspace must not be read for tiles'); };
+  main.getArtifact = async () => ({ components: [{ type: 'chart', name: 'By Priority', parameters: { TargetEntityType: 'new_customer' } }] });
+  const iso = sdkWith();
+  let disposed = 0;
+  const isolated = await verifySpec(spec, readerFor(main, 'new_supportdesk', { isolatedReader: async () => ({ sdk: iso, dispose: () => { disposed += 1; } }) }));
+  const chk = isolated.checks.find((c) => c.kind === 'dashboard');
+  assert.strictEqual(chk.present, true, chk.detail);
+  assert.strictEqual(disposed, 1, 'the throwaway workspace is disposed after the read');
+});
+
+// A client per isolated read ran `az account get-access-token` once per dashboard. One client serves every read of a
+// run — the run's own when it is given — while each read still gets a fresh SDK in its own throwaway workspace.
+test('isolatedReaderFor shares one HTTP client across reads, each with a fresh SDK', async () => {
+  const { isolatedReaderFor } = require('../verify-model-app.js');
+  const client = { request: async () => { throw new Error('no request is made'); } };
+  let made = 0;
+  const makeClient = () => { made += 1; return client; };
+  const read = isolatedReaderFor('https://contoso.crm.dynamics.com', { makeClient });
+  const a = await read();
+  const b = await read();
+  assert.strictEqual(made, 1, 'one client for the run');
+  assert.notStrictEqual(a.sdk, b.sdk, 'a fresh SDK per read');
+  a.dispose();
+  b.dispose();
+  const own = await isolatedReaderFor('https://contoso.crm.dynamics.com', { httpClient: client, makeClient })();
+  own.dispose();
+  assert.strictEqual(made, 1, 'with the run\u2019s own client, none is made');
+});
+
+test('readerFor + verifySpec: a cross-wired dashboard chart tile fails verify through the real reader seam', async () => {
+  const calls = [];
+  const sdk = {
+    findTables: async () => [],
+    findColumns: async () => [],
+    queryRecords: async (set, opts) => {
+      if (set === 'systemform') return [{ formid: 'dash-1', formxml: '<form/>' }];
+      if (set === 'savedqueryvisualization') return [{ primaryentitytypecode: 'new_customer' }];
+      if (set === 'savedquery') return [{ returnedtypecode: 'new_ticket' }];
+      return [];
+    },
+    listArtifacts: async () => [],
+    dataverse: { get: async () => ({ status: 200, body: { formxml: '<form/>', '@odata.etag': 'W/"1"' } }) },
+    fetchArtifact: async (type, id) => { calls.push(['fetchArtifact', type, id]); },
+    getArtifact: async (type, id) => {
+      calls.push(['getArtifact', type, id]);
+      return { components: [{ type: 'chart', name: 'By Priority', parameters: {
+        TargetEntityType: 'new_ticket', ViewId: '{11111111-1111-1111-1111-111111111111}', VisualizationId: '{22222222-2222-2222-2222-222222222222}' } }] };
+    },
+    fetchEntityMetadata: async () => ({ Relationships: [] }),
+    resolveArtifact: async () => [],
+    retrieveSetting: async () => null,
+  };
+  const spec = { solution: { publisherPrefix: 'new' }, app: { name: 'Support Desk', uniqueName: 'new_supportdesk' }, entities: [], appShell: { areas: [] },
+    dashboards: [{ name: 'Ops', tiles: [{ type: 'chart', name: 'By Priority', entity: 'new_ticket', viewId: 'v', visualizationId: 'c' }] }] };
+  const r = await verifySpec(spec, readerFor(sdk, 'new_supportdesk', {}));
+  const chk = r.checks.find((c) => c.kind === 'dashboard');
+  assert.ok(chk, 'a dashboard check must be produced');
+  assert.strictEqual(chk.present, false);
+  assert.match(chk.detail, /shows new_ticket, but its chart belongs to new_customer/);
+  assert.deepStrictEqual(calls, [['fetchArtifact', 'dashboard', 'dash-1'], ['getArtifact', 'dashboard', 'dash-1']], 'the tiles come from the SDK artifact of THAT dashboard');
+});
+
+test('readerFor + verifySpec reads isdefault and formxml once per verify, and re-reads on the next', async () => {
+  const calls = [];
+  const xml = '<form><tabs><tab name="tab_main"><columns><column width="100%"><sections><section name="sec_main"><rows><row><cell><control datafieldname="contoso_name" /></cell></row></rows></section></sections></column></columns></tab></tabs></form>';
+  const sdk = {
+    findTables: async () => [{ logicalName: 'contoso_task' }],
+    findColumns: async () => [{ logicalName: 'contoso_name' }],
+    queryRecords: async (set, opts) => {
+      calls.push({ set, opts });
+      if (set !== 'systemform') return [];
+      if (opts && opts.filter && /name eq/.test(opts.filter)) return [{ formid: 'form-1' }];
+      if (opts && opts.filter && /formid eq form-1/.test(opts.filter)) {
+        return [{ formid: 'form-1', name: 'Main', objecttypecode: 'contoso_task', type: 2, isdefault: true, formxml: xml }];
+      }
+      return [];
+    },
+    dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
+  };
+  const spec = {
+    solution: { uniqueName: 'Contoso', publisherPrefix: 'contoso' },
+    app: { name: 'Projects', uniqueName: 'contoso_projects' },
+    entities: [{ schemaName: 'contoso_task', primaryAttribute: { schemaName: 'contoso_name' }, columns: [] }],
+    views: [], charts: [], appShell: { areas: [] },
+    forms: [{
+      entity: 'contoso_task', name: 'Main', formType: 'Main', isDefault: true,
+      tabs: [{ name: 'tab_main', label: 'Main', columns: [{ width: '100%', sections: [{ name: 'sec_main', label: 'Main', fields: ['contoso_name'] }] }] }],
+    }],
+  };
+  const reader = readerFor(sdk, 'contoso_projects', {});
+  const byId = () => calls.filter((c) => c.set === 'systemform' && c.opts && /formid eq /.test(c.opts.filter || ''));
+  const first = await verifySpec(spec, reader);
+  assert.ok(first.checks.some((c) => c.kind === 'form-default' && c.present), JSON.stringify(first.missing));
+  assert.ok(first.checks.some((c) => c.kind === 'form-topology' && c.present), JSON.stringify(first.missing));
+  assert.strictEqual(byId().length, 1, `default and layout must share one row read: ${JSON.stringify(byId())}`);
+  assert.ok(byId()[0].opts.select.includes('isdefault') && byId()[0].opts.select.includes('formxml'));
+  await verifySpec(spec, reader);
+  assert.strictEqual(byId().length, 2, 'a second verify on the same reader must re-read the row');
+});
+
+test('readerFor memoizes findTables once per verify run', async () => {
+  let calls = 0;
+  const sdk = {
+    findTables: async () => { calls += 1; return [{ logicalName: 'contoso_project' }, { logicalName: 'contoso_task' }, { logicalName: 'account' }]; },
+    findColumns: async () => [],
+    queryRecords: async () => [],
+    dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
+  };
+  const reader = readerFor(sdk, 'contoso_app', {});
+  assert.deepStrictEqual(await reader.findTable('CONTOSO_PROJECT'), { logicalName: 'contoso_project' });
+  assert.deepStrictEqual(await reader.findTable('contoso_task'), { logicalName: 'contoso_task' });
+  assert.strictEqual(await reader.findTable('missing'), null);
+  assert.strictEqual(calls, 1, 'three findTable calls must share one catalog scan');
+});
+
+test('a reused reader sees a table created after the first verify pass', async () => {
+  let tables = [];
+  let scans = 0;
+  const sdk = {
+    findTables: async () => { scans += 1; return tables.slice(); },
+    findColumns: async () => [],
+    queryRecords: async () => [],
+    dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
+  };
+  const spec = {
+    solution: { publisherPrefix: 'contoso' },
+    app: { name: 'Projects', uniqueName: 'contoso_projects' },
+    entities: [{ schemaName: 'contoso_task', primaryAttribute: { schemaName: 'contoso_name' } }],
+    views: [], charts: [], forms: [], appShell: { areas: [] },
+  };
+  const reader = readerFor(sdk, 'contoso_projects', {});
+  const first = await verifySpec(spec, reader);
+  assert.strictEqual(first.checks.find((c) => c.kind === 'entity').present, false);
+  tables = [{ logicalName: 'contoso_task' }];
+  const second = await verifySpec(spec, reader);
+  assert.strictEqual(second.checks.find((c) => c.kind === 'entity').present, true, 'the catalog memo must not outlive one verify pass');
+  assert.ok(scans >= 2);
+});
+
+test('a rejected catalog read does not poison the next verify pass', async () => {
+  let fail = true;
+  const sdk = {
+    findTables: async () => {
+      if (fail) throw new Error('catalog down');
+      return [{ logicalName: 'contoso_task' }];
+    },
+    findColumns: async () => [],
+    queryRecords: async () => [],
+    dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
+  };
+  const spec = {
+    solution: { publisherPrefix: 'contoso' },
+    app: { name: 'Projects', uniqueName: 'contoso_projects' },
+    entities: [{ schemaName: 'contoso_task', primaryAttribute: { schemaName: 'contoso_name' } }],
+    views: [], charts: [], forms: [], appShell: { areas: [] },
+  };
+  const reader = readerFor(sdk, 'contoso_projects', {});
+  await assert.rejects(() => verifySpec(spec, reader), /catalog down/);
+  fail = false;
+  const second = await verifySpec(spec, reader);
+  assert.strictEqual(second.checks.find((c) => c.kind === 'entity').present, true);
+});
+
+test('readerFor + verifySpec names the 1:N that holds an N:N schema name', async () => {
+  const sdk = {
+    findTables: async () => [],
+    findColumns: async () => [],
+    queryRecords: async () => [],
+    fetchEntityMetadata: async () => ({ Relationships: [] }),
+    resolveArtifact: async () => [],
+    retrieveSetting: async () => null,
+    dataverse: {
+      get: async (p) => {
+        if (p.includes('RelationshipType')) {
+          return { status: 200, body: { '@odata.type': '#Microsoft.Dynamics.CRM.OneToManyRelationshipMetadata', SchemaName: 'contoso_project_contoso_task', RelationshipType: 'OneToManyRelationship' } };
+        }
+        if (p.includes('OneToManyRelationshipMetadata')) {
+          return { status: 200, body: { SchemaName: 'contoso_project_contoso_task', ReferencedEntity: 'contoso_project', ReferencingEntity: 'contoso_task', ReferencingAttribute: 'contoso_projectid' } };
+        }
+        return { status: 200, body: { value: [] } };
+      },
+    },
+  };
+  const spec = {
+    solution: { uniqueName: 'Contoso', publisherPrefix: 'contoso' },
+    app: { name: 'Projects', uniqueName: 'contoso_projects' },
+    entities: [{ schemaName: 'contoso_project', primaryAttribute: { schemaName: 'contoso_name' } }],
+    views: [], charts: [], forms: [], appShell: { areas: [] },
+    relationships: [{ type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_task' }],
+  };
+  const r = await verifySpec(spec, readerFor(sdk, 'contoso_projects', {}));
+  const rc = r.checks.find((c) => c.kind === 'relationship');
+  assert.ok(rc, 'the real reader must check the relationship');
+  assert.strictEqual(rc.present, false);
+  assert.match(rc.detail, /exists as 1:N contoso_project -> contoso_task \(lookup contoso_projectid\), not as the declared N:N/);
 });

@@ -2,9 +2,11 @@
 name: open-wrap-url
 description: Use when the user wants to open the Power Apps Wrap page for an app ID in the active environment.
 user-invocable: true
-allowed-tools: Bash
+allowed-tools: Read, Bash
 model: haiku
 ---
+
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.
 
 **📋 Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** — read first.
 
@@ -26,6 +28,8 @@ This skill delegates URL construction and browser open behavior to `scripts/open
 
 ### Step 1 — Resolve app ID + env ID
 
+**Telemetry checkpoint: `resolve_wrap_target`**
+
 Both arguments are required:
 
 - `--app-id <app-id>`
@@ -38,6 +42,8 @@ Optional host selector:
 If either value is missing in `$ARGUMENTS`, ask once for the missing value(s). If still missing, STOP.
 
 ### Step 2 — Open Wrap URL
+
+**Telemetry checkpoint: `open_power_apps_wrap`**
 
 Run from the plugin root (or any app root):
 

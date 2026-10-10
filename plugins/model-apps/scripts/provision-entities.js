@@ -12,31 +12,47 @@ const { validateProvisionInput } = require('./lib/provision-input.js');
 const { makeRunner, provisionSolution, provisionDataModel, provisionSampleData } = require('./lib/entity-provision.js');
 const { quickCreateEnabledFor, normalizeLanguageCode } = require('./lib/app-spec.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
-const { parseArgs, readAliasedFlag, readJsonArg, emitResult, readProvisionedLanguages } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, readProvisionedLanguages } = require('./lib/dataverse-auth.js');
 
 // Construct the SDK against the vendored bundle + an az-token HttpClient. Two clients:
 //   sdk          — carries solutionUniqueName (metadata + record writes auto-join the
 //                  solution via the MSCRM.SolutionUniqueName header).
 //   provision    — header-less; used for discovery reads (findTables/findColumns/
 //                  fetchEntityMetadata/queryRecords).
-function makeSdk(env, input) {
-  const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
+async function makeSdk(env, input) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
   const httpClient = createAzHttpClient(env);
   const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-'));
   const provisionTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-'));
-  const sdk = createMakerSdk({
-    workspacePath: sdkTempDir,
-    instanceUrl: env,
-    httpClient,
-    solutionUniqueName: input.solution && input.solution.uniqueName,
-  });
-  sdk.initWorkspace();
-  const provision = createMakerSdk({ workspacePath: provisionTempDir, instanceUrl: env, httpClient });
-  provision.initWorkspace();
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
     fs.rmSync(provisionTempDir, { recursive: true, force: true });
   };
+  // Everything fallible after the directories exist runs INSIDE this guard, because the caller's
+  // `finally { cleanup() }` only becomes reachable once this function RETURNS — so anything that
+  // throws before the return strands both temp directories for the life of the machine.
+  //
+  // That deliberately includes the `createMakerSdk` CONSTRUCTORS, not just `initWorkspace`: the
+  // constructor now builds the injected-storage adapter (`createNodeWorkspaceStorage`), so it
+  // touches the filesystem and can fail on its own. Guarding only the init left the first
+  // construction outside the net. Matches provision-solution.js and ai-preflight.js, which already
+  // keep construction inside their protected region for this exact reason.
+  let sdk;
+  let provision;
+  try {
+    sdk = createMakerSdk({
+      workspaceStorage: createNodeWorkspaceStorage(sdkTempDir),
+      instanceUrl: env,
+      httpClient,
+      solutionUniqueName: input.solution && input.solution.uniqueName,
+    });
+    await sdk.initWorkspace();
+    provision = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(provisionTempDir), instanceUrl: env, httpClient });
+    await provision.initWorkspace();
+  } catch (err) {
+    cleanup();
+    throw err;
+  }
   return { sdk, provision, cleanup };
 }
 
@@ -275,26 +291,27 @@ async function provisionEntities(input, opts = {}, deps = {}) {
 }
 
 async function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
-  // parseArgs represents a value-less flag as boolean true. These are value-bearing flags, so
-  // coerce bare `--env` / `--input` to missing and let the usage guard produce the same clear error
-  // as an omitted value instead of passing a boolean into auth or path resolution.
-  const env = typeof flags.env === 'string' ? flags.env : undefined;
-  const inputArg = (typeof flags.input === 'string' ? flags.input : undefined) || (typeof positional[0] === 'string' ? positional[0] : undefined);
-  
-  if (!env || !inputArg || flags.input === true) {
-    process.stderr.write(
-      'Usage: node provision-entities.js --env <url> --input @<path> [--apply] [--sample-data] [--language-code|--languageCode <lcid>]\n'
-    );
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE = 'Usage: node provision-entities.js --env <url> --input @<path> [--apply] [--sample-data] [--language-code|--languageCode <lcid>]';
+  // A value-less `--language-code` must never fall through to the org default, and an unknown flag
+  // must never be dropped while swallowing the token after it.
+  const flagError = validateFlags(argv, {
+    known: ['env', 'input', 'apply', 'sample-data', 'language-code', 'languageCode'],
+    needValue: ['env', 'input', 'language-code', 'languageCode'],
+  });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
     process.exit(1);
   }
-  // A value-less `--language-code` is a usage error, never a silent fall-through to the org default.
-  const valuelessLang = ['language-code', 'languageCode'].find((k) => flags[k] === true);
-  if (valuelessLang) {
-    process.stderr.write(`✗ --${valuelessLang} requires a value.\n`);
+  const env = flags.env;
+  const inputArg = flags.input || positional[0];
+
+  if (!env || !inputArg) {
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
-  
+
   const inputPath = path.resolve(typeof inputArg === 'string' && inputArg.startsWith('@') ? inputArg.slice(1) : inputArg);
   const input = readJsonArg('@' + inputPath);
   
@@ -315,7 +332,7 @@ async function main() {
   };
   
   // Construct SDK clients (offline until first call)
-  const { sdk, provision, cleanup } = makeSdk(env, input);
+  const { sdk, provision, cleanup } = await makeSdk(env, input);
 
   let r;
   try {

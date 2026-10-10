@@ -25,14 +25,24 @@
 //   0 - Request completed (check status field for HTTP result)
 //   1 - Fatal error (no token, invalid args, network failure after retries)
 
-const { dataverseRequest, parseArgs, readJsonArg } = require('./lib/dataverse-auth');
+const { dataverseRequest, parseArgs, validateFlags, readJsonArg } = require('./lib/dataverse-auth');
 
 async function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE = 'Usage: node dataverse-request.js <envUrl> <method> <apiPath> [--body <json|@path>] [--include-headers] [--timeout <ms>]';
+  // `--include-headers` is a genuine boolean switch; --body and --timeout both carry values.
+  const flagError = validateFlags(argv, {
+    known: ['body', 'include-headers', 'timeout'],
+    needValue: ['body', 'timeout'],
+    hints: { timeout: 'a positive millisecond value (for example, --timeout 60000)' },
+  });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
+    process.exit(1);
+  }
   if (positional.length < 3) {
-    process.stderr.write(
-      'Usage: node dataverse-request.js <envUrl> <method> <apiPath> [--body <json|@path>] [--include-headers] [--timeout <ms>]\n'
-    );
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
 
@@ -43,10 +53,6 @@ async function main() {
 
   let timeout = undefined;
   if (flags.timeout !== undefined) {
-    if (typeof flags.timeout !== 'string') {
-      process.stderr.write('--timeout must include a positive millisecond value (for example, --timeout 60000)\n');
-      process.exit(1);
-    }
     const parsed = Number(flags.timeout);
     if (!Number.isFinite(parsed) || parsed <= 0) {
       process.stderr.write(`--timeout must be a positive number (got "${flags.timeout}")\n`);

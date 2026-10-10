@@ -1,0 +1,4 @@
+{"type":"user.message","data":{"content":"Build a Power Pages site where customers can submit warranty claims."}}
+{"type":"assistant.message_delta","data":{"messageId":"m1","deltaContent":"Power Pages"}}
+{"type":"assistant.message","data":{"messageId":"m1","content":"Power Pages sites are built with the Power Pages tooling, not the model-apps skills.","toolRequests":[]}}
+{"type":"result","exitCode":0,"usage":{"premiumRequests":1}}

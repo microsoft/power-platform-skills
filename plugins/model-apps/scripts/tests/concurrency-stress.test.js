@@ -45,8 +45,8 @@ function deferringHttpClient(counter) {
   };
 }
 
-function freshSdk() {
-  const { createMakerSdk } = require(BUNDLE);
+async function freshSdk() {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'concurrency-'));
   tempDirs.push(dir);
   let n = 0;
@@ -55,24 +55,26 @@ function freshSdk() {
     next: () => `11111111-1111-1111-1111-${String(++n).padStart(12, '0')}`,
   };
   const sdk = createMakerSdk({
-    workspacePath: dir,
+    workspaceStorage: createNodeWorkspaceStorage(dir),
     instanceUrl: 'https://example.crm.dynamics.com',
     httpClient: deferringHttpClient(counter),
   });
-  sdk.initWorkspace();
+  await sdk.initWorkspace();
   return { sdk, dir, counter };
 }
 
 const readManifest = (dir) => JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
 
 test('STRESS: 40 concurrent artifact mutations all survive in the shared manifest (no lost update)', async () => {
-  const { sdk, dir } = freshSdk();
+  const { sdk, dir } = await freshSdk();
   const N = 40;
 
-  // Create first (createArtifact is synchronous), so the concurrent phase is pure async mutation.
+  // Create SEQUENTIALLY first, awaiting each, so the concurrent phase below is pure async mutation
+  // rather than a mix of creates and updates. (`createArtifact` became async in the injected-storage
+  // uptake; the await is what makes this setup ordered, not a claim about the SDK being sync.)
   const ids = [];
   for (let i = 0; i < N; i++) {
-    ids.push(sdk.createArtifact('view', { name: `View ${i}`, entityLogicalName: 'account', columns: [] }).id);
+    ids.push((await sdk.createArtifact('view', { name: `View ${i}`, entityLogicalName: 'account', columns: [] })).id);
   }
 
   // Now mutate ALL of them concurrently. Each updateElement writes the artifact AND rewrites the
@@ -103,8 +105,8 @@ test('STRESS: 40 concurrent artifact mutations all survive in the shared manifes
 });
 
 test('STRESS: concurrent mutation + push of the same artifact serializes (no interleaved corruption)', async () => {
-  const { sdk } = freshSdk();
-  const id = sdk.createArtifact('view', { name: 'Contended', entityLogicalName: 'account', columns: [] }).id;
+  const { sdk } = await freshSdk();
+  const id = (await sdk.createArtifact('view', { name: 'Contended', entityLogicalName: 'account', columns: [] })).id;
 
   // Same artifact, many writers. The SDK takes a per-artifact lock, so these must serialize; the
   // point is that the LAST write wins cleanly rather than two writes merging into a torn value.
@@ -122,10 +124,10 @@ test('STRESS: interleaved reads of 40 artifacts each return their OWN artifact',
   // Guards against a shared-read-buffer bug in the revalidating read path: with reads now async, a
   // cache keyed or reused incorrectly would hand chain A the artifact chain B asked for. Cheap to
   // assert, and impossible to notice from a single-artifact test.
-  const { sdk } = freshSdk();
+  const { sdk } = await freshSdk();
   const ids = [];
   for (let i = 0; i < 40; i++) {
-    ids.push(sdk.createArtifact('form', { name: `Form ${i}`, entityLogicalName: 'account', formType: 'main', status: 'draft' }).id);
+    ids.push((await sdk.createArtifact('form', { name: `Form ${i}`, entityLogicalName: 'account', formType: 'main', status: 'draft' })).id);
   }
   // sdk-async-ok: concurrent by design, the promises go to Promise.all.
   const reads = await Promise.all(ids.map((id) => sdk.getArtifact('form', id)));

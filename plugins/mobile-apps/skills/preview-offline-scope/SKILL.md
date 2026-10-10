@@ -17,6 +17,14 @@ Useful before:
 - `/assign-offline-profile` (so users don't get surprised by data caps)
 - `/edit-offline-profile` to gauge impact of a column-list change
 
+Before any project read or command, apply
+[app-working-directory.md](${PLUGIN_ROOT}/shared/references/app-working-directory.md).
+Resolve one absolute `working_dir` for this direct invocation, or require the
+owner's root for a child. Keep all shell calls, file reads, and retries on that
+root and the same resolved environment/tenant. Read
+`<working_dir>/offline-profile.json`; a supplied profile ID must match the
+snapshot before verification. Missing or conflicting context is `NEEDS_CONTEXT`.
+
 ## Workflow
 
 1. Verify project + locate profile → 2. Run verify (drift check) → 3. Per-table row counts → 4. Cache-size estimate → 5. Report
@@ -25,23 +33,37 @@ Useful before:
 
 ### Step 1 — Verify project + locate profile
 
-Same as `/edit-offline-profile` Step 1. Read profileId from `offline-profile.json` or `$ARGUMENTS --profile-id`. Do not read profile metadata from `power.config.json`; it is owned by `npx power-apps init`.
+Same as `/edit-offline-profile` Step 1. Read profileId from `offline-profile.json` or `$ARGUMENTS --profile-id`. Do not read profile metadata from `power.config.json`; it is owned by `pa app init`.
 
 ```bash
-test -f power.config.json
-node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+environment_id=$(node -p "require('./power.config.json').environmentId || ''") || {
+  echo "BLOCKED: unreadable power.config.json" >&2; exit 1;
+}
+if [ -z "$environment_id" ]; then
+  echo "NEEDS_CONTEXT: selected app has no environmentId" >&2; exit 1;
+fi
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$environment_id" --no-cache --require-tenant
 ```
+
+Capture `<envUrl>` and `<tenantId>` and require them to match any owner identity.
+Pass that tenant explicitly on verification, row counts, identity reads, and retries.
 
 ### Step 2 — Run verify
 
+**Telemetry checkpoint: `verify_offline_profile_snapshot`**
+
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/verify-offline-profile.js" <envUrl> \
-  --project-root "$(pwd)"
+  --project-root '<working_dir>' --tenant-id "<tenantId>"
 ```
 
 If `status: drift`, surface the drift list verbatim. The estimate that follows is still meaningful but flag that the live profile diverges from `offline-profile.json` — recommend re-running `/setup-offline-profile` or `/edit-offline-profile` to reconcile.
 
 ### Step 3 — Per-table row counts (with scope-applied filter)
+
+**Telemetry checkpoint: `count_offline_profile_rows`**
 
 For each table in the profile, run a `count` query that applies the same filter the runtime would use:
 
@@ -53,18 +75,21 @@ For each table in the profile, run a `count` query that applies the same filter 
 | 2 + bu | recordsownedbymybusinessunit=true | `?$count=true&$top=0&$filter=_owningbusinessunit_value eq <current-bu-id>` |
 | 0 (Related only) | n/a | Can't estimate independently — depends on parents. Report `~depends on parent counts`. |
 
-For current-user/current-BU filters, resolve identity only inside this skill by calling Dataverse `WhoAmI` through `scripts/dataverse-request.js` against the resolved `<envUrl>`. If that call fails, report the affected scope as `unknown — current user/BU unavailable` instead of blocking the whole preview. Do not expect `scripts/resolve-environment.js` or `auth.config.json.environment` to provide `UserId` / `BusinessUnitId`.
+For current-user/current-BU filters, resolve identity only inside this skill by calling Dataverse `WhoAmI` through `scripts/dataverse-request.js` against the resolved `<envUrl>` with `--tenant-id "<tenantId>"` from the same guarded root. If that call fails, report the affected scope as `unknown — current user/BU unavailable` instead of blocking the whole preview. Do not expect `scripts/resolve-environment.js` or `auth.config.json.environment` to provide `UserId` / `BusinessUnitId`.
 
 For each table:
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
-  "<entitysetname>?\$count=true&\$top=0&<scope-filter>"
+  "<entitysetname>?\$count=true&\$top=0&<scope-filter>" --tenant-id "<tenantId>"
 ```
 
 Cap at 5000 (Dataverse non-aggregate count cap). When the result is exactly 5000, prefix with `≥` in the report.
 
 ### Step 4 — Cache-size estimate
+
+**Telemetry checkpoint: `estimate_offline_cache_size`**
 
 Rough byte-per-row heuristics (configurable; replace with measured values once we have a real sync benchmark):
 

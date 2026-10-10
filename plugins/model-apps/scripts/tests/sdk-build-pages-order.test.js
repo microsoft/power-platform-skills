@@ -15,6 +15,8 @@ const APP_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 const SELF_UNIQUE_VALUE = 'c0ffee00-0000-4000-8000-00000000dddd';
 const SELF_SITEMAP_ID = '5111e0f2-0000-4000-8000-0000000000aa';
 const EMPTY_SITEMAP_XML = '<SiteMap><Area><Group></Group></Area></SiteMap>';
+const OVERVIEW_ID = '11111111-0000-4000-8000-000000000001';
+const DETAIL_ID = '22222222-0000-4000-8000-000000000002';
 
 // Stateful harness: enumerate() reflects pages a create appended; the manifest webresource persists in
 // `store`/`manifestB64`; uploads are recorded in the shared `calls` sequence log.
@@ -38,6 +40,7 @@ function harness() {
       }
       if (e === 'solution') return [];
       if (e === 'webresource') { if (/_pagemanifest'/.test(filter)) return manifestB64 ? [{ webresourceid: 'wr-m', content: manifestB64 }] : []; return []; }
+      if (e === 'uxagentproject') return live.filter((p) => filter.includes(p.pageId)).map((p) => ({ uxagentprojectid: p.pageId, name: p.name }));
       if (e === 'systemform') return [];
       if (e === 'savedquery') return [{ savedqueryid: 'defview-x', isdefault: true }];
       return [{ publisherid: 'pub-1' }];
@@ -65,7 +68,7 @@ function harness() {
     // EXISTENCE reflects pages a create appended to `live` (env-wide, Task 2).
     enumerateEnv: async () => ({ ok: true, ids: live.map((p) => String(p.pageId).toLowerCase()), pages: live.slice() }),
     upload: async (o) => {
-      const pageId = o.pageId || `gp-${String(o.name).toLowerCase()}`;
+      const pageId = o.pageId || (o.name === 'Detail' ? DETAIL_ID : OVERVIEW_ID);
       genpageCli.uploads.push({ name: o.name, requestedId: o.pageId, resolvedId: pageId });
       calls.push({ name: 'upload', args: [o.name] });
       if (!o.pageId && !live.some((p) => p.name === o.name)) live.push({ pageId, name: o.name });
@@ -114,20 +117,21 @@ test('SEQUENCE: uploads → per-create manifest persist → sitemap finalize; no
 
 test('RESTART-CONVERGENCE: a halt directly after the FIRST page CREATE re-runs with NO duplicate create (C5)', async () => {
   const { appDir, spec } = twoPageApp();
+  const workspaceDir = path.join(appDir, '.maker-workspace');
   try {
     const h = harness();
     let n = 0;
     const realUpload = h.genpageCli.upload;
     h.genpageCli.upload = async (o) => { n += 1; if (n === 2) throw new Error('crash directly after the first page create'); return realUpload(o); };
-    await assert.rejects(runSdkBuild(spec, { sdk: h.sdk, apply: true, env: 'https://x', appDir, genpageCli: h.genpageCli, phases: PHASES }));
+    await assert.rejects(runSdkBuild(spec, { sdk: h.sdk, apply: true, env: 'https://x', appDir, workspaceDir, genpageCli: h.genpageCli, phases: PHASES }));
     const created1 = h.genpageCli.uploads.filter((u) => !u.requestedId);
     assert.strictEqual(created1.length, 1, 'exactly ONE create landed before the crash; the manifest was persisted right after it');
     const firstName = created1[0].name; // 'Detail' (the absent nav target minted first)
-    // Re-run the FULL build. Enumeration + the persisted manifest bind the created page → it is only
+    // Re-run the FULL build. The local creation receipt and manifest bind the created page -> it is only
     // UPDATEd this run, and the un-created page is created once. No duplicate of the first page.
     h.genpageCli.upload = realUpload;
     const before = h.genpageCli.uploads.length;
-    await runSdkBuild(spec, { sdk: h.sdk, apply: true, env: 'https://x', appDir, genpageCli: h.genpageCli, phases: PHASES });
+    await runSdkBuild(spec, { sdk: h.sdk, apply: true, env: 'https://x', appDir, workspaceDir, genpageCli: h.genpageCli, phases: PHASES });
     const run2 = h.genpageCli.uploads.slice(before);
     assert.ok(run2.filter((u) => u.name === firstName).every((u) => !!u.requestedId), 'the already-created page is only UPDATEd in run 2 (seeded from the persisted manifest + enumeration)');
     assert.strictEqual(h.live.filter((p) => p.name === firstName).length, 1, 'the first page exists exactly once — no duplicate');

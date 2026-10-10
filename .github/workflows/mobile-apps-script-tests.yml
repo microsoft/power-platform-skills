@@ -5,8 +5,7 @@ name: mobile-apps-script-tests
 
 on:
     pull_request:
-        branches:
-            - main
+        # Cover stacked PRs too; the path filter keeps this workflow plugin-scoped.
         paths:
             - "plugins/mobile-apps/**"
             - ".github/workflows/mobile-apps-script-tests.yml"
@@ -29,12 +28,16 @@ jobs:
                     - 22
         steps:
             - name: checkout
-              uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
             - name: setup-node
-              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+              uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
               with:
                   node-version: ${{ matrix.node }}
+
+            - name: syntax-check-mobile-template
+              shell: bash
+              run: node --check plugins/mobile-apps/template/metro.config.js
 
             - name: run-mobile-apps-script-tests
               shell: bash
@@ -48,10 +51,10 @@ jobs:
             POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: "1"
         steps:
             - name: checkout
-              uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
             - name: setup-node
-              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+              uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
               with:
                   node-version: 22
 
@@ -82,6 +85,13 @@ jobs:
                   node - <<'NODE'
                   const fs = require('fs');
                   const files = {
+                    'power.config.json': `${JSON.stringify({
+                      environmentId: '',
+                      appId: '',
+                      appDisplayName: 'Template Quality Probe',
+                      databaseReferences: {},
+                      connectionReferences: {},
+                    }, null, 2)}\n`,
                     'src/components/AliasProbe.ts': 'export const componentAliasProbe = 1;\n',
                     'src/native/aliasProbe.ts': 'export const nativeAliasProbe = 2;\n',
                     'src/generated/services/AliasProbe.ts': 'export const generatedAliasProbe = 3;\n',
@@ -98,7 +108,7 @@ jobs:
                     fs.writeFileSync(file, content);
                   }
                   NODE
-                  npx tsc --noEmit
+                  npm run predev
                   node ../scripts/validate-mobile-files.js \
                     --project-root . \
                     --all-source

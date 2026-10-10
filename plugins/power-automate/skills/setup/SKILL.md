@@ -2,7 +2,7 @@
 name: setup
 description: Set up Power Automate CLI prerequisites. Use when the user is new, something isn't working, or they need help getting started.
 user-invocable: true
-allowed-tools: Bash, Read, Write, Glob, Grep, AskUserQuestion, mcp__flowagent__list_environments, mcp__flowagent__set_current_env, mcp__flowagent__get_current_env, mcp__flowagent__resolve_environment, mcp__flowagent__list_flows, mcp__flowagent__get_flow, mcp__flowagent__create_flow, mcp__flowagent__update_flow, mcp__flowagent__edit_flow, mcp__flowagent__copy_flow, mcp__flowagent__publish_flow, mcp__flowagent__disable_flow, mcp__flowagent__delete_flow, mcp__flowagent__run_flow, mcp__flowagent__get_run_history, mcp__flowagent__get_run_details, mcp__flowagent__get_run_actions, mcp__flowagent__get_run_action_repetitions, mcp__flowagent__cancel_run, mcp__flowagent__cancel_all_runs, mcp__flowagent__resubmit_run, mcp__flowagent__diagnose_run, mcp__flowagent__list_connections, mcp__flowagent__list_connectors, mcp__flowagent__get_connector, mcp__flowagent__search_operations, mcp__flowagent__get_operation_details, mcp__flowagent__pick_or_create_connection, mcp__flowagent__resolve_refs, mcp__flowagent__resolve_params, mcp__flowagent__scaffold_flow, mcp__flowagent__list_templates, mcp__flowagent__validate_flow, mcp__flowagent__preflight_flow, mcp__flowagent__smoke_test, mcp__flowagent__get_expression_help, mcp__flowagent__list_desktop_flows, mcp__flowagent__list_machine_groups, mcp__flowagent__run_desktop_flow, mcp__flowagent__get_flow_context, mcp__flowagent__set_current_flow, mcp__flowagent__clear_current_flow, mcp__flowagent__invoke_operation, mcp__flowagent__get_past_trigger_inputs, mcp__flowagent__test_connection, mcp__flowagent__fix_connection, mcp__flowagent__delete_connection, mcp__flowagent__preview_update, mcp__flowagent__get_backup, mcp__flowagent__list_backups, mcp__flowagent__restore_backup, mcp__flowagent__list_trigger_emulators
+allowed-tools: Bash, Read, Write, Glob, Grep, AskUserQuestion, mcp__flowagent__list_environments, mcp__flowagent__set_current_env, mcp__flowagent__get_current_env, mcp__flowagent__resolve_environment, mcp__flowagent__list_flows, mcp__flowagent__get_flow, mcp__flowagent__create_flow, mcp__flowagent__update_flow, mcp__flowagent__edit_flow, mcp__flowagent__copy_flow, mcp__flowagent__publish_flow, mcp__flowagent__disable_flow, mcp__flowagent__delete_flow, mcp__flowagent__run_flow, mcp__flowagent__get_run_history, mcp__flowagent__get_run_details, mcp__flowagent__get_run_actions, mcp__flowagent__get_run_action_repetitions, mcp__flowagent__cancel_run, mcp__flowagent__cancel_all_runs, mcp__flowagent__resubmit_run, mcp__flowagent__diagnose_run, mcp__flowagent__list_connections, mcp__flowagent__list_connectors, mcp__flowagent__get_connector, mcp__flowagent__search_operations, mcp__flowagent__get_operation_details, mcp__flowagent__pick_or_create_connection, mcp__flowagent__resolve_refs, mcp__flowagent__resolve_params, mcp__flowagent__scaffold_flow, mcp__flowagent__list_templates, mcp__flowagent__validate_flow, mcp__flowagent__preflight_flow, mcp__flowagent__smoke_test, mcp__flowagent__get_expression_help, mcp__flowagent__list_desktop_flows, mcp__flowagent__list_machine_groups, mcp__flowagent__run_desktop_flow, mcp__flowagent__get_flow_context, mcp__flowagent__set_current_flow, mcp__flowagent__clear_current_flow, mcp__flowagent__invoke_operation, mcp__flowagent__get_past_trigger_inputs, mcp__flowagent__test_connection, mcp__flowagent__fix_connection, mcp__flowagent__delete_connection, mcp__flowagent__preview_update, mcp__flowagent__get_backup, mcp__flowagent__list_backups, mcp__flowagent__restore_backup, mcp__flowagent__list_trigger_emulators, mcp__flowagent__whoami, mcp__flowagent__doctor, mcp__flowagent__reconnect, mcp__flowagent__list_accounts, mcp__flowagent__switch_account
 model: opus
 ---
 
@@ -65,10 +65,15 @@ az cloud show --query name -o tsv
 | `AzureCloud` (commercial) | `https://service.flow.microsoft.com` |
 | `AzureCloud` + GCC tenant | `https://gov.service.flow.microsoft.us` |
 | `AzureUSGovernment` (GCC High) | `https://high.service.flow.microsoft.us` |
-| `AzureUSGovernment` (DoD) | `https://dod.service.flow.microsoft.us` |
+| `AzureUSGovernment` (DoD) | Operator-verified `PA_FLOW_RESOURCE` value required; no built-in audience |
 
 `az cloud show` cannot distinguish commercial from GCC, or GCC High from DoD —
 for those, set `PA_CLOUD=gcc` / `PA_CLOUD=dod` explicitly.
+
+DoD endpoint hosts use `appsplatform.us`, but that does not establish the token
+audience (App ID URI). With `PA_CLOUD=dod`, FlowAgent requires an explicit,
+operator-verified `PA_FLOW_RESOURCE` and fails configuration otherwise. Do not
+copy a guessed audience from a hostname; obtain the correct value for the tenant.
 
 Then request a token for the matching resource, e.g. for commercial:
 ```bash
@@ -79,10 +84,59 @@ detection with `PA_CLOUD=commercial|gcc|gcchigh|dod`.
 - **If it works**: Move on.
 - **If it fails with "AADSTS"**: The user's account may not have Power Automate access. Tell them: "Your Azure account doesn't seem to have access to Power Automate. Check with your IT admin that you have a Power Automate license."
 - **If it fails with other errors**: Show the error and suggest they contact IT support.
-- **If they're on a sovereign cloud and connection-management commands fail**: the
-  PAC CLI app registration isn't preauthorized in those tenants. They need to
-  register their own Azure AD app with Power Platform Connectivity scopes and set
-  `PA_CLIENT_ID=<app-id>`. Flow management (list/create/run) works without it.
+- **If they're on a sovereign cloud and connection-management commands fail**: keep
+  the original error and inspect its code. `AADSTS650057` can indicate an invalid
+  resource or missing app authorization; `AADSTS65001` can require admin consent.
+  An app-not-found or consent failure may require an appropriately authorized
+  public-client registration and `PA_CLIENT_ID=<app-id>`. Network, tenant-selection
+  and expired-session errors need different remediation. Do not infer missing
+  preauthorization from the cloud name or classify every other code as unrelated.
+
+## Signing in to a specific account
+
+Connection management authenticates separately from `az` — it uses its own MSAL
+session with its own on-disk token cache, so `az login` / `az account set` do
+**not** switch the account it uses.
+
+Three tools cover this:
+
+| Tool | Use it to |
+|---|---|
+| `list_accounts` | See the cached-account inventory, `effectiveConnectivityIdentity`, and `nextSignIn` settings. Inactive tenant caches do not count as identity mismatches. Acquires no token. |
+| `switch_account` | Save a preferred `username`, or omit it to clear the preference. Check `preferencePersisted` and `nextSignIn`: environment overrides still apply. |
+| `whoami` / `doctor` | Compare the effective Connectivity username and tenant with Azure CLI, including different users in the same tenant. |
+
+**When a connection tool fails with `ServiceToServiceEnvironmentNotFound`**,
+check identity before assuming the environment is missing. `list_accounts`
+distinguishes the effective account from historical cached accounts. A different
+username or tenant on the effective account indicates a mismatch; an unused
+tenant's cache alone does not. `switch_account` clears the cached sign-in and
+records the preferred username for reauthentication. It does not prove that
+the subsequent sign-in succeeded or that environment permissions are correct.
+
+`switch_account` does not change the Azure CLI identity. `az` is yours to set;
+where the two disagree, the tool says so rather than silently re-pointing one.
+`reconnect` keeps a recorded preference — it drops credentials, and the
+preference is a stated intent rather than a credential.
+It waits for pending token acquisition and cache cleanup, then clears in-memory
+tokens for all Azure CLI resources as well as Connectivity. A cleanup failure
+is an error, not a completed switch: fix the cache access problem and retry.
+Do not continue under the assumption that credentials changed when reset failed.
+
+On interactive sign-in FlowAgent forces the account picker by default, so the
+browser's currently-signed-in account is never used silently. Two overrides:
+
+| Variable | Effect |
+|---|---|
+| `PA_LOGIN_HINT=<upn>` | Pre-select that account. Suppresses the picker, since the account is already targeted. |
+| `PA_NO_ACCOUNT_PICKER=1` | Restore plain browser SSO. For single-account users who don't want the extra click. |
+
+Precedence, most specific first: `PA_LOGIN_HINT`, then a `switch_account`
+preference, then `PA_NO_ACCOUNT_PICKER`, then the picker.
+For example, `switch_account` with username B still targets A if
+`PA_LOGIN_HINT=A` is set. Omitting the username clears only the stored preference;
+it does not override `PA_LOGIN_HINT` or `PA_NO_ACCOUNT_PICKER`. The response
+reports the effective settings instead of promising a picker in those cases.
 
 ## Step 4: Check the FlowAgent tools are wired
 

@@ -5,13 +5,13 @@ const path = require('node:path');
 const { PHASES, STAGES, phasesForStage, stagePhasesOrResolve } = require(path.join(__dirname, '..', 'lib', 'stages.js'));
 const { resolvePhases } = require(path.join(__dirname, '..', 'lib', 'sdk-build.js'));
 
-test('PHASES is the canonical 15-phase ordered list', () => {
-  assert.deepStrictEqual(PHASES, ['solution', 'data-model', 'sample-data', 'web-resources', 'views', 'charts', 'forms', 'business-rules', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'security', 'publish']);
+test('PHASES is the canonical 16-phase ordered list', () => {
+  assert.deepStrictEqual(PHASES, ['solution', 'data-model', 'sample-data', 'web-resources', 'views', 'charts', 'forms', 'business-rules', 'business-process-flows', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'security', 'publish']);
 });
 
 test('STAGES map groups contiguous phase ranges', () => {
   assert.deepStrictEqual(STAGES.data, ['solution', 'data-model', 'sample-data']);
-  assert.deepStrictEqual(STAGES.ui, ['web-resources', 'views', 'charts', 'forms', 'business-rules', 'commands', 'dashboards']);
+  assert.deepStrictEqual(STAGES.ui, ['web-resources', 'views', 'charts', 'forms', 'business-rules', 'business-process-flows', 'commands', 'dashboards']);
   assert.deepStrictEqual(STAGES.app, ['app-shell', 'pages', 'ai-features', 'security']);
   assert.deepStrictEqual(STAGES.publish, ['publish']);
   // Every stage phase is a real engine phase, and the four stages tile PHASES with no gaps/overlaps.
@@ -29,7 +29,7 @@ test('stagePhasesOrResolve: --stage wins; conflicting selectors throw', () => {
 });
 
 test('stagePhasesOrResolve without --stage delegates to resolvePhases', () => {
-  assert.deepStrictEqual(stagePhasesOrResolve({ from: 'forms' }), ['forms', 'business-rules', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'security', 'publish']);
+  assert.deepStrictEqual(stagePhasesOrResolve({ from: 'forms' }), ['forms', 'business-rules', 'business-process-flows', 'commands', 'dashboards', 'app-shell', 'pages', 'ai-features', 'security', 'publish']);
 });
 
 test('resolvePhases rejects an unknown phase instead of silently ignoring it', () => {

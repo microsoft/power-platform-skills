@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { runPreflight } = require('../ai-preflight.js');
+const { validateFlagsFromParsed } = require('./helpers/fake-auth.js');
 
 test('runPreflight lists features and produces admin actions for disabled ones', () => {
   const readiness = {
@@ -23,11 +24,11 @@ test('runPreflight lists features and produces admin actions for disabled ones',
 
 test('runPreflight returns no admin actions when all features are enabled', () => {
   const readiness = {
-    formFill: { enabled: true, setting: 'FormFillBarUXEnabled', value: '1' },
+    formFill: { enabled: true, setting: 'FormFillBarUXEnabled', value: '2' },
     nlSearch: { enabled: true, setting: 'EnableNLGridSearch', value: 'true' },
     nlChart: { enabled: true, setting: 'NLChartVisualizationSetting', value: 'true' },
     summaries: { enabled: true, setting: 'EnableFormInsights', value: 'true' },
-    m365: { enabled: true, setting: 'm365copilotmodelappenabled', value: '1' },
+    m365: { enabled: true, setting: 'm365copilotmodelappenabled', value: '2' },
   };
   const r = runPreflight(readiness);
   assert.strictEqual(r.features.length, 5);
@@ -36,11 +37,11 @@ test('runPreflight returns no admin actions when all features are enabled', () =
 
 test('runPreflight summaries admin action mentions AI insight cards', () => {
   const readiness = {
-    formFill: { enabled: true, setting: 'FormFillBarUXEnabled', value: '1' },
+    formFill: { enabled: true, setting: 'FormFillBarUXEnabled', value: '2' },
     nlSearch: { enabled: true, setting: 'EnableNLGridSearch', value: 'true' },
     nlChart: { enabled: true, setting: 'NLChartVisualizationSetting', value: 'true' },
     summaries: { enabled: false, setting: 'EnableFormInsights', value: 'false' },
-    m365: { enabled: true, setting: 'm365copilotmodelappenabled', value: '1' },
+    m365: { enabled: true, setting: 'm365copilotmodelappenabled', value: '2' },
   };
   const r = runPreflight(readiness);
   assert.strictEqual(r.adminActions.length, 1);
@@ -53,7 +54,7 @@ test('runPreflight features include feature name, enabled flag, and setting', ()
     nlSearch: { enabled: true, setting: 'EnableNLGridSearch', value: 'true' },
     nlChart: { enabled: true, setting: 'NLChartVisualizationSetting', value: 'true' },
     summaries: { enabled: true, setting: 'EnableFormInsights', value: 'true' },
-    m365: { enabled: true, setting: 'm365copilotmodelappenabled', value: '1' },
+    m365: { enabled: true, setting: 'm365copilotmodelappenabled', value: '2' },
   };
   const r = runPreflight(readiness);
   const ff = r.features.find((f) => f.feature === 'formFill');
@@ -88,6 +89,7 @@ function loadPreflightCli({ parseResult, readiness, sdkThrows = null }) {
     if (id === './lib/dataverse-auth.js') {
       return {
         parseArgs: () => parseResult,
+        validateFlags: validateFlagsFromParsed(() => parseResult.flags),
         emitResult: (ok, payload) => events.push({ type: 'emitResult', ok, payload }),
       };
     }
@@ -98,7 +100,11 @@ function loadPreflightCli({ parseResult, readiness, sdkThrows = null }) {
     if (id === 'node:os') return { tmpdir: () => 'D:\\Projects\\power-platform-skills-sdk\\.test-workspace' };
     if (id === 'node:path') return path;
     if (id === './vendor/cds-maker-sdk.cjs') {
-      return {
+        return {
+          // The CLI builds its store explicitly via the /node adapter now, so the mocked bundle
+          // must expose it too. The marker carries the root so the assertions below can still
+          // check WHERE the throwaway workspace was placed.
+          createNodeWorkspaceStorage: (root) => ({ __mockWorkspaceRoot: root }),
         createMakerSdk: (cfg) => {
           events.push({ type: 'createMakerSdk', cfg });
           if (sdkThrows) throw sdkThrows;
@@ -176,7 +182,7 @@ test('ai-preflight CLI passes the app scope, prints admin actions, emits the rep
 
 test('ai-preflight CLI reports all-enabled status without admin actions', async () => {
   const readiness = {
-    formFill: { enabled: true, setting: 'FormFillBarUXEnabled', value: '1' },
+    formFill: { enabled: true, setting: 'FormFillBarUXEnabled', value: '2' },
   };
   const harness = loadPreflightCli({
     parseResult: { flags: { env: 'https://org.example' } },
@@ -319,10 +325,102 @@ test('a codec DISABLED value is off, not on', () => {
   assert.strictEqual(settingIsOn('1', 'formFill'), false, "'1' is DISABLED for the form-fill family");
   assert.strictEqual(settingIsOn('2', 'formFill'), true, "'2' is ENABLED");
   assert.strictEqual(settingIsOn('0', 'formFill'), undefined, "'0' is the platform default, not off");
-  // A feature with no codec keeps the plain numeric convention.
-  assert.strictEqual(settingIsOn('1', 'nlSearch'), true);
+  // AB#6714731: NL grid search and M365 use the same 0 Default / 1 Off / 2 On dropdown, so `1` is
+  // Off there too. Reading it as on is how every build's "enable NL search" (which wrote `1`) was
+  // reported, and verified, as enabled.
+  assert.strictEqual(settingIsOn('1', 'nlSearch'), false, "'1' is Off for NL grid search");
   assert.strictEqual(settingIsOn('2', 'nlSearch'), true);
-  assert.strictEqual(settingIsOn('0', 'nlSearch'), false);
+  assert.strictEqual(settingIsOn('0', 'nlSearch'), undefined, "'0' is Default for NL grid search, not off");
+  assert.strictEqual(settingIsOn('1', 'm365'), false, "'1' is Off for M365");
+  assert.strictEqual(settingIsOn('2', 'm365'), true);
+  assert.strictEqual(settingIsOn('0', 'm365'), undefined);
+  // NL charts order the same three states differently: 0 = Off, 1 = Auto (its default), 2 = On.
+  assert.strictEqual(settingIsOn('0', 'nlChart'), false, "'0' is Off for NL charts");
+  assert.strictEqual(settingIsOn('1', 'nlChart'), undefined, "'1' is Auto for NL charts: the platform decides");
+  assert.strictEqual(settingIsOn('2', 'nlChart'), true);
   // And with no feature key at all, the old convention still applies for existing callers.
   assert.strictEqual(settingIsOn('1'), true);
+});
+
+test("NL charts' Auto ('1') is reported as the platform default, and its Off ('0') is not", () => {
+  // The preflight's "platform default" explanation is keyed on each setting's OWN default, so a
+  // hard-coded '0' would call chart Off "the platform decides" and chart Auto an unrecognised value.
+  const readiness = { nlChart: { enabled: false, setting: 'NLChartVisualizationSetting', value: 'false' } };
+  const auto = runPreflight(readiness, { nlChart: { value: '1', scope: 'default', on: undefined } }).features[0];
+  assert.strictEqual(auto.effectiveDefault, true, 'Auto is the chart setting\u2019s platform default');
+  assert.ok(!auto.effectiveIndeterminate);
+  const off = runPreflight(readiness, { nlChart: { value: '0', scope: 'app', on: false } }).features[0];
+  assert.ok(!off.effectiveDefault, "'0' is Off for charts, not the platform default");
+  assert.ok(!off.effectiveIndeterminate, 'Off is a definite state, not an unrecognised value');
+  // For grid search the same '0' IS the platform default.
+  const nl = runPreflight({ nlSearch: { enabled: false, setting: 'EnableNLGridSearch', value: 'false' } },
+    { nlSearch: { value: '0', scope: 'default', on: undefined } }).features[0];
+  assert.strictEqual(nl.effectiveDefault, true);
+});
+
+test('a readiness gate that IS the feature\u2019s own setting is read with the feature\u2019s scale', () => {
+  // M365's readiness gate is `m365copilotmodelappenabled` itself, and the vendored SDK reads any
+  // non-zero value there as enabled — so an app switched Off (`1`) was reported ✓ with no admin action.
+  const readiness = { m365: { enabled: true, setting: 'm365copilotmodelappenabled', value: '1' } };
+  const r = runPreflight(readiness);
+  assert.strictEqual(r.features[0].enabled, false, "'1' is Off for M365, whatever the SDK's reading says");
+  assert.strictEqual(r.adminActions.length, 1);
+  assert.match(r.adminActions[0], /M365 Copilot integration/);
+  assert.strictEqual(runPreflight({ m365: { enabled: false, setting: 'm365copilotmodelappenabled', value: '2' } }).features[0].enabled, true);
+  // A gate that is a DIFFERENT row (a boolean org switch) keeps the SDK's reading untouched.
+  const nl = runPreflight({ nlSearch: { enabled: true, setting: 'EnableNLGridSearch', value: '1' } });
+  assert.strictEqual(nl.features[0].enabled, true);
+  assert.strictEqual(nl.adminActions.length, 0);
+});
+
+test('encodeAiFlags hands the SDK each setting\u2019s own value (AB#6714731)', () => {
+  const { encodeAiFlags, resolveAiFlags } = require('../lib/ai-app-settings.js');
+  // A default AI build: form fill, grid search and charts On; M365 left at its platform default.
+  assert.deepStrictEqual(encodeAiFlags(resolveAiFlags({ ai: {} })), { formFill: '2', nlSearch: '2', nlChart: '2', m365: '0' });
+  // Off differs by setting; an explicit integer is the caller's own value and passes through.
+  assert.deepStrictEqual(encodeAiFlags({ nlSearch: false, nlChart: false, m365: false, formFillFiles: false }),
+    { nlSearch: '1', nlChart: '0', m365: '1', formFillFiles: '1' });
+  assert.deepStrictEqual(encodeAiFlags({ nlChart: 1, m365: 2, formFill: 0 }), { nlChart: '1', m365: '2', formFill: '0' });
+  assert.strictEqual(encodeAiFlags(null), null, 'a spec that opts out of ai writes nothing');
+});
+
+test('sameSettingValue reads a Boolean spelling as the feature\u2019s own On/Off', () => {
+  const { sameSettingValue } = require('../lib/ai-app-settings.js');
+  assert.strictEqual(sameSettingValue('true', '2', 'nlSearch'), true);
+  assert.strictEqual(sameSettingValue('true', '1', 'nlSearch'), false, "'1' is Off for grid search, so 'true' must not match it");
+  assert.strictEqual(sameSettingValue('false', '1', 'm365'), true);
+  assert.strictEqual(sameSettingValue('false', '0', 'nlChart'), true, "'0' is Off for charts");
+  assert.strictEqual(sameSettingValue(' 2 ', '2', 'formFill'), true);
+  // Without a feature, the generic '1'/'0' reading still applies.
+  assert.strictEqual(sameSettingValue('true', '1'), true);
+});
+
+test('an invalid ai.appFeatures value names that setting\u2019s own platform default', () => {
+  const { validateAppSpec } = require('../lib/app-spec.js');
+  const base = { solution: { uniqueName: 'S', publisherPrefix: 'new' }, app: { name: 'A' }, entities: [] };
+  const errs = (features) => validateAppSpec({ ...base, ai: { appFeatures: features } }).errors || [];
+  assert.ok(errs({ nlSearch: 'on' }).some((e) => /ai\.appFeatures\.nlSearch: .*or 0 to leave it to the platform default/.test(e)));
+  // For charts 0 is Off; the platform default is 1 (Auto).
+  assert.ok(errs({ nlChart: 'on' }).some((e) => /ai\.appFeatures\.nlChart: .*or 1 to leave it to the platform default/.test(e)));
+});
+
+// Each verdict the readiness report can print (featureLine). "Not enabled" is not one state: a feature
+// can be in effect through a setting the readiness gate does not read, deferred to the platform, or
+// hold a value this plugin does not recognise — and printing ✗ for any of them would assert something
+// the preflight cannot see.
+test('featureLine prints one of four verdicts, in that precedence, and falls back to the feature key', () => {
+  const { featureLine } = require('../ai-preflight.js');
+  assert.strictEqual(featureLine({ feature: 'nlSearch', setting: 'NLGridSearchSetting', enabled: false, inEffect: true, effectiveScope: 'app', effectiveValue: '2' }),
+    '  ✓ Natural language search (NLGridSearchSetting) — in effect via the app setting (value "2"), though the readiness gate reads off\n');
+  assert.strictEqual(featureLine({ feature: 'nlChart', setting: 'NLChartDataVisualizationSetting', enabled: false, effectiveDefault: true, effectiveValue: '1' }),
+    '  ? Natural language charts (NLChartDataVisualizationSetting) — set to the platform default ("1"), so whether it runs is decided by the platform, not by this environment\n');
+  assert.strictEqual(featureLine({ feature: 'm365', setting: 'm365copilotmodelappenabled', enabled: false, effectiveIndeterminate: true, effectiveValue: '7' }),
+    '  ? M365 Copilot integration (m365copilotmodelappenabled) — holds an unrecognised value ("7"), so its state cannot be determined from here\n');
+  assert.strictEqual(featureLine({ feature: 'formFill', setting: 'FormFillBarUXEnabled', enabled: true }), '  ✓ Form fill assist toolbar (FormFillBarUXEnabled)\n');
+  assert.strictEqual(featureLine({ feature: 'formFill', setting: 'FormFillBarUXEnabled', enabled: false }), '  ✗ Form fill assist toolbar (FormFillBarUXEnabled)\n');
+  assert.strictEqual(featureLine({ feature: 'somethingNew', setting: 'X', enabled: true }), '  ✓ somethingNew (X)\n');
+  // In effect wins over "platform default"; an enabled gate does not hide that the setting defers.
+  assert.match(featureLine({ feature: 'nlSearch', setting: 'S', enabled: false, inEffect: true, effectiveDefault: true, effectiveScope: 'organization', effectiveValue: '0' }), /^ {2}✓ .*in effect via the organization setting/);
+  assert.match(featureLine({ feature: 'nlSearch', setting: 'S', enabled: true, effectiveDefault: true, effectiveValue: '0' }), /^ {2}\? .*platform default/);
+  assert.match(featureLine({ feature: 'nlSearch', setting: 'S', enabled: true, inEffect: true, effectiveValue: '2' }), /^ {2}✓ Natural language search \(S\)\n$/, 'in effect AND enabled is the plain ✓');
 });

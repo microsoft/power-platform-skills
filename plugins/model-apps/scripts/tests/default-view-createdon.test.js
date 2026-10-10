@@ -40,8 +40,8 @@ const STOCK_VIEW = {
     '<cell name="new_name" width="300"/><cell name="createdon" width="150"/></row></grid>',
 };
 
-function freshSdk(capture) {
-  const { createMakerSdk } = require(BUNDLE);
+async function freshSdk(capture) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'view7-'));
   tempDirs.push(dir);
   const httpClient = {
@@ -56,8 +56,8 @@ function freshSdk(capture) {
     delete: async () => ({ status: 204, headers: {}, body: {} }),
     put: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = createMakerSdk({ workspacePath: dir, instanceUrl: 'https://example.crm.dynamics.com', httpClient });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://example.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
   return sdk;
 }
 
@@ -74,7 +74,7 @@ test('#7 enriching a default view REPLACES the stock createdon column (dropped f
   assert.ok(!cols.includes('createdon'), 'our column set never contains createdon');
 
   const capture = [];
-  const sdk = freshSdk(capture);
+  const sdk = await freshSdk(capture);
   const id = STOCK_VIEW.savedqueryid;
   // Exactly what provision.enrichDefaultViews does: fetch the live view, replace /columns, push.
   await sdk.fetchArtifact('view', id);

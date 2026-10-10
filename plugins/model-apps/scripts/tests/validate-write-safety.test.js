@@ -16,6 +16,33 @@ function runHook(payload, env) {
   return { status: res.status, stderr: res.stderr || '' };
 }
 
+function runHookWithSplitStdin(payload, splitNeedle) {
+  return new Promise((resolve, reject) => {
+    const child = require('node:child_process').spawn(process.execPath, [HOOK], {
+      env: { ...process.env },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const stdout = [];
+    const stderr = [];
+    child.stdout.on('data', (chunk) => stdout.push(chunk));
+    child.stderr.on('data', (chunk) => stderr.push(chunk));
+    child.on('error', reject);
+    child.on('close', (status) => {
+      resolve({
+        status,
+        stdout: Buffer.concat(stdout).toString('utf8'),
+        stderr: Buffer.concat(stderr).toString('utf8'),
+      });
+    });
+    const bytes = Buffer.from(JSON.stringify(payload), 'utf8');
+    const needle = Buffer.from(splitNeedle, 'utf8');
+    const at = bytes.indexOf(needle);
+    assert.notEqual(at, -1, 'payload must contain the split needle');
+    child.stdin.write(bytes.subarray(0, at + 1));
+    setImmediate(() => child.stdin.end(bytes.subarray(at + 1)));
+  });
+}
+
 let cwd;
 test.beforeEach(() => {
   cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-ws-'));
@@ -141,6 +168,69 @@ test('MODEL_APPS_DISABLE_HOOKS=1 disables the guard (exit 0 for an outside write
   const outside = path.join(path.parse(cwd).root, 'model-apps-guard-evil', 'evil.ts');
   const payload = { tool_name: 'Write', tool_input: { file_path: outside, content: 'x' }, cwd };
   assert.equal(runHook(payload, { MODEL_APPS_DISABLE_HOOKS: '1' }).status, 0);
+});
+
+test('MODEL_APPS_DISABLE_HOOKS=1 exits 0 even when skill discovery would throw', () => {
+  const preload = path.join(__dirname, 'hook-readdir-throw-preload.js');
+  fs.writeFileSync(preload, [
+    "const fs = require('node:fs');",
+    'const real = fs.readdirSync;',
+    "fs.readdirSync = function patched(p, ...args) {",
+    "  if (String(p).includes('plugins' + require('node:path').sep + 'model-apps' + require('node:path').sep + 'skills')) {",
+    "    const err = new Error('EACCES: permission denied, scandir skills');",
+    "    err.code = 'EACCES';",
+    "    throw err;",
+    '  }',
+    '  return real.call(this, p, ...args);',
+    '};',
+  ].join('\n'));
+  try {
+    const outside = path.join(path.parse(cwd).root, 'model-apps-guard-evil', 'evil.ts');
+    const payload = { tool_name: 'Write', tool_input: { file_path: outside, content: 'x' }, cwd };
+    const res = spawnSync(process.execPath, ['-r', preload, HOOK], {
+      input: JSON.stringify(payload),
+      encoding: 'utf8',
+      env: { ...process.env, MODEL_APPS_DISABLE_HOOKS: '1' },
+    });
+    assert.equal(res.status, 0, res.stderr);
+  } finally {
+    fs.rmSync(preload, { force: true });
+  }
+});
+
+test('write-safety guard: an unreadable skills folder cannot crash the ENABLED hook', () => {
+  // The hook needs only the stdin reader, not skill discovery. Loading discovery would scan the skills
+  // folder at require time, so an EACCES there would crash the hook even though it never uses it.
+  const preload = path.join(__dirname, 'hook-readdir-throw-preload-enabled.js');
+  fs.writeFileSync(preload, [
+    "const fs = require('node:fs');",
+    'const real = fs.readdirSync;',
+    "fs.readdirSync = function patched(p, ...args) {",
+    "  if (String(p).includes('plugins' + require('node:path').sep + 'model-apps' + require('node:path').sep + 'skills')) {",
+    "    const err = new Error('EACCES: permission denied, scandir skills');",
+    "    err.code = 'EACCES';",
+    "    throw err;",
+    '  }',
+    '  return real.call(this, p, ...args);',
+    '};',
+  ].join('\n'));
+  try {
+    const env = { ...process.env };
+    delete env.MODEL_APPS_DISABLE_HOOKS;
+    const res = spawnSync(process.execPath, ['-r', preload, HOOK], { input: 'not json', encoding: 'utf8', env });
+    assert.equal(res.status, 0, res.stderr);
+  } finally {
+    fs.rmSync(preload, { force: true });
+  }
+});
+
+test('hook stdin decoding preserves multibyte paths split across pipe chunks', async () => {
+  const outside = path.join(path.parse(cwd).root, 'model-apps-guard-東京', 'evil.ts');
+  const payload = { tool_name: 'Write', tool_input: { file_path: outside, content: 'x' }, cwd };
+  const { status, stderr } = await runHookWithSplitStdin(payload, '東京');
+  assert.equal(status, 1);
+  assert.match(stderr, /outside your project folder/);
+  assert.match(stderr, new RegExp(outside.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
 test('unparseable stdin does not block (exit 0)', () => {

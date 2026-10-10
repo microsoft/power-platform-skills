@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { annotateContentHashes, pageContentPath } = require('../lib/content-hash.js');
+const { annotateContentHashes, pageContentPath, pageSourceFileErrors } = require('../lib/content-hash.js');
 const { diffPhases } = require('../lib/phase-diff.js');
 
 // A minimal spec with one implemented tsx page + one contentPath web resource + one inline web resource.
@@ -116,4 +116,30 @@ test('pageContentPath: resolves tsx/legacy sources and returns null for intent/b
   assert.strictEqual(pageContentPath({ source: { kind: 'intent' } }), null);
   assert.strictEqual(pageContentPath({ source: { kind: 'tsx', codeFile: '   ' } }), null,
     'a whitespace-only codeFile is treated as absent by normalizePageSource');
+});
+
+test('pageSourceFileErrors: missing implemented page blocks while intent pages are ignored', () => {
+  const errors = pageSourceFileErrors(spec(), 'C:\\app', (absolutePath) =>
+    absolutePath.replace(/\\/g, '/').endsWith('/wr/styles.css'),
+  );
+  assert.deepStrictEqual(errors, [
+    "page 'overview': codeFile 'pages/overview.tsx' does not exist or is not a file",
+  ]);
+});
+
+test('pageSourceFileErrors: an existing implemented page passes', () => {
+  assert.deepStrictEqual(pageSourceFileErrors(spec(), 'C:\\app', () => true), []);
+});
+
+test('pageSourceFileErrors: a lexically confined link resolving outside the workspace is rejected', () => {
+  const errors = pageSourceFileErrors(spec(), 'C:\\app', {
+    isFile: () => true,
+    realpath: (absolutePath) =>
+      absolutePath.replace(/\\/g, '/').endsWith('/pages/overview.tsx')
+        ? 'C:\\outside\\overview.tsx'
+        : 'C:\\app',
+  });
+  assert.deepStrictEqual(errors, [
+    "page 'overview': codeFile 'pages/overview.tsx' resolves outside the workspace",
+  ]);
 });

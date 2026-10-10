@@ -42,18 +42,25 @@ const AI_APP_SETTING = {
 
 // ON/OFF values are NOT uniform across these settings, and `1` is not universally "on".
 //
-// MIRRORS the SDK's `SETTING_CODEC` (api/AiApi.ts), which cites the first-party admin UI:
-//     FormFillBarUXEnabled / formPredictEnabled / smart-paste-on-by-default:
-//        0 = default (defer to flighting)   1 = DISABLED   2 = ENABLED
-// So the obvious `true -> '1'` mapping writes DISABLED for every one of them, and `0` means
-// "platform default", which is NOT the same as off. Settings absent from this table keep the plain
-// numeric convention ('1' on, '0' off) — deliberately, because their semantics are not evidenced
-// the same way.
+// Each value is taken from the platform's own settings UI — the maker designer's tri-state dropdown
+// and the admin center's feature settings — which is the only first-party statement of what the
+// stored numbers mean:
+//   FormFillBarUXEnabled, NLGridSearchSetting, m365copilotmodelappenabled — and the rest of the
+//   form-fill family — use the shared tri-state dropdown: 0 = Default, 1 = Off, 2 = On.
+//   NLChartDataVisualizationSetting is ordered differently: 0 = Off, 1 = Auto, 2 = On, and its
+//   setting definition's default value is 1.
+// So the obvious `true -> '1'` writes Off for grid search and M365, and only Auto for charts —
+// which is what every build wrote until AB#6714731, while `--verify` agreed, because it expected
+// the same wrong values. `platformDefault` is the value that defers to the platform; it is neither
+// on nor off, and it differs by setting.
 const AI_SETTING_CODEC = {
-  formFill: { enabled: '2', disabled: '1' },
-  formFillSuggestions: { enabled: '2', disabled: '1' },
-  formFillSmartPaste: { enabled: '2', disabled: '1' },
-  formFillFiles: { enabled: '2', disabled: '1' },
+  formFill: { enabled: '2', disabled: '1', platformDefault: '0' },
+  formFillSuggestions: { enabled: '2', disabled: '1', platformDefault: '0' },
+  formFillSmartPaste: { enabled: '2', disabled: '1', platformDefault: '0' },
+  formFillFiles: { enabled: '2', disabled: '1', platformDefault: '0' },
+  nlSearch: { enabled: '2', disabled: '1', platformDefault: '0' },
+  nlChart: { enabled: '2', disabled: '0', platformDefault: '1' },
+  m365: { enabled: '2', disabled: '1', platformDefault: '0' },
 };
 
 // Derived, never hand-maintained: the validator's allow-list IS the set of features we can write.
@@ -64,10 +71,34 @@ const AI_FEATURE_KEYS = new Set(Object.keys(AI_APP_SETTING));
 // same bound turns a mid-build abort into an up-front spec error naming the offending field.
 const AI_FEATURE_MAX_VALUE = 1000000;
 
-// What the build requests when a spec opts into `ai` without naming a feature. `m365` is off by
-// default because it surfaces the app inside M365 Copilot, which is a deliberate choice rather
-// than a sensible default.
-const DEFAULT_APP_FEATURES = { formFill: true, nlSearch: true, nlChart: true, m365: false };
+// What the build requests when a spec opts into `ai` without naming a feature. `m365` is not turned
+// on by default, because it surfaces the app inside M365 Copilot, which is a deliberate choice rather
+// than a sensible default. Nor is it forced off: it gets `0` (Default), the app-scope value every
+// default build has written. That is still an override — the app gets the platform's default, not
+// the environment's value — and an explicit `false` writes Off instead.
+const DEFAULT_APP_FEATURES = { formFill: true, nlSearch: true, nlChart: true, m365: 0 };
+
+/**
+ * Does this spec opt into AI at all?
+ *
+ * The ONE predicate the build, the verifier and teardown must all use. `selectSummaryTables` does
+ * NOT decide this: handed a spec with no `ai` block it reads `summaries` as `{}`, which means
+ * "default auto", and returns every entity carrying a descriptive column. That is correct for what
+ * it is — a candidate selector — but it is not an opt-in test, and treating it as one has now gone
+ * wrong twice in two different files:
+ *   * teardown gated on `spec.ai.summaries` and planned NOTHING for a spec carrying only
+ *     `ai.appFeatures`, so the row summary the build created blocked the table delete;
+ *   * verify gated on nothing at all, so a spec with NO `ai` block failed with
+ *     "ai.summaries requests a row summary for 'x'" for a summary nobody requested and the build
+ *     never created — a false FAIL on the build's own exit code, for most specs.
+ * Both were the same mistake in opposite directions. Asking here, once, is what stops a third.
+ *
+ * `null` is treated as opting out alongside `undefined`: it is what a JSON caller produces for
+ * "no AI", and the build has always read it that way.
+ */
+function specOptsIntoAi(spec) {
+  return !!spec && spec.ai !== undefined && spec.ai !== null;
+}
 
 /**
  * The EXACT flag set the build writes for a spec — and therefore the exact set verify must
@@ -75,7 +106,7 @@ const DEFAULT_APP_FEATURES = { formFill: true, nlSearch: true, nlChart: true, m3
  * Returns null when the spec opts out of `ai` entirely (no features are written, none are checked).
  */
 function resolveAiFlags(spec) {
-  if (!spec || spec.ai === undefined || spec.ai === null) return null;
+  if (!specOptsIntoAi(spec)) return null;
   const flags = Object.assign({}, DEFAULT_APP_FEATURES, spec.ai.appFeatures || {});
   // Drop keys the SDK has no setting for: it ignores them, so verifying them would invent a
   // permanent failure for a spec the validator already reports on.
@@ -87,14 +118,12 @@ function resolveAiFlags(spec) {
 /**
  * Normalize a requested flag to the string the setting actually stores.
  *
- * `true`/`false` are ergonomic spellings, but what they MEAN is per setting: for the AI form-fill
- * family on is `'2'` and off is `'1'` (`'0'` is the platform default, not off), while everything else
- * keeps the plain `'1'`/`'0'` convention. Any explicit integer is used verbatim.
+ * `true`/`false` are ergonomic spellings, but what they MEAN is per setting (see AI_SETTING_CODEC):
+ * on is `'2'` for every feature, while off is `'1'` for most and `'0'` for `nlChart`. Any explicit
+ * integer is used verbatim.
  *
- * `feature` is required for a codec-governed setting. Without it a boolean maps to `'1'`, which for
- * the form-fill family means DISABLED — and since the build writes through the SDK (which applies
- * the codec), a verifier using the wrong spelling reports a correctly-applied feature as missing.
- * That mismatch is the reason this takes a feature at all.
+ * `feature` is required. Without it a boolean falls back to the plain `'1'`/`'0'`, which is wrong for
+ * every setting here — a verifier using that spelling reports a correctly-applied feature as missing.
  */
 function featureWantValue(requested, feature) {
   if (typeof requested !== 'boolean') return String(requested).trim();
@@ -104,20 +133,74 @@ function featureWantValue(requested, feature) {
 }
 
 /**
+ * The flags the build hands `setAppAiFeatures`, with every boolean already encoded to the value the
+ * setting stores. The SDK passes an explicit value through unchanged, but maps a boolean through its
+ * own codec, which (as of the vendored bundle) covers only the form-fill family and writes `'1'` for
+ * `true` everywhere else. Encoding here keeps what is written, and what `--verify` expects, in one
+ * table: this module's.
+ */
+function encodeAiFlags(flags) {
+  if (!flags) return flags;
+  const out = {};
+  for (const [feature, requested] of Object.entries(flags)) out[feature] = featureWantValue(requested, feature);
+  return out;
+}
+
+/**
+ * Move the SDK's `skipped` verdicts that are not ENABLES to `notPersisted`, rewriting their reasons.
+ *
+ * `skipped` means "no override appeared, and the feature's org gate reads off", and its reason tells
+ * an admin to enable the feature "before this app can turn the feature on". The vendored SDK only
+ * reaches for the gate when it thinks the request enables the feature — and it decides that with a
+ * codec that knows only the form-fill family, so any non-zero value counts. A correctly encoded Off
+ * for grid search or M365 (`'1'`) therefore came back telling the admin to switch the feature ON.
+ * A gate that governs turning a feature on cannot explain why a request that does not turn it on was
+ * not stored, so that request is simply not persisted.
+ *
+ * `encodedFlags` is what the build sent (see encodeAiFlags). Mutates and returns `result`.
+ */
+function rebucketNonEnablingSkips(result, encodedFlags) {
+  if (!result || !Array.isArray(result.skipped) || !result.skipped.length) return result;
+  const enables = (feature) => {
+    const codec = AI_SETTING_CODEC[feature];
+    // A feature this module has no codec for keeps the SDK's verdict: there is no table to say otherwise.
+    return !codec || String(encodedFlags && encodedFlags[feature]).trim() === codec.enabled;
+  };
+  const moved = result.skipped.filter((f) => !enables(f));
+  if (!moved.length) return result;
+  result.skipped = result.skipped.filter(enables);
+  result.notPersisted = [...(Array.isArray(result.notPersisted) ? result.notPersisted : []), ...moved];
+  for (const o of result.outcomes || []) {
+    if (!o || !moved.includes(o.feature)) continue;
+    const value = o.requestedValue !== undefined ? o.requestedValue : encodedFlags[o.feature];
+    o.status = 'notPersisted';
+    o.reason = `the write reported success but no app-scope override holding '${value}' was observed for '${o.setting || AI_APP_SETTING[o.feature]}' (Dataverse can accept an app-scope write without storing it); the feature's org gate reads off, but it governs turning the feature on, which this request does not`;
+  }
+  return result;
+}
+
+/**
  * Compare a stored setting value against a requested one.
  *
  * Deliberately NOT dependent on the setting's `dataType`. A Dataverse Boolean setting (dataType 2)
- * reports `'true'`/`'false'` rather than `'1'`/`'0'`, so the two spellings must be reconciled — but
+ * reports `'true'`/`'false'` rather than a number, so the two spellings must be reconciled — but
  * branching on a dataType read makes the comparison depend on a SECOND request that can fail
  * independently, which silently turned a correctly-applied feature into a FAIL when that read
  * errored. Normalizing both sides unconditionally is a no-op for the numeric values these settings
- * actually store (live: the override rows hold '1'/'0'), while still accepting the boolean
+ * actually store (live: the override rows hold '0'/'1'/'2'), while still accepting the boolean
  * spelling — so it is strictly safer and has no hidden dependency.
+ *
+ * Pass `feature` whenever it is known: a Boolean spelling then means that feature's own on/off
+ * value. Without it, `'true'`/`'false'` fall back to `'1'`/`'0'` — which for every per-app AI setting
+ * would equate `'true'` with Off.
  */
-function sameSettingValue(a, b) {
+function sameSettingValue(a, b, feature) {
+  const codec = feature && AI_SETTING_CODEC[feature];
   const onOff = (v) => {
     const s = String(v === undefined || v === null ? '' : v).trim().toLowerCase();
-    return s === 'true' ? '1' : s === 'false' ? '0' : s;
+    if (s === 'true') return codec ? codec.enabled : '1';
+    if (s === 'false') return codec ? codec.disabled : '0';
+    return s;
   };
   return onOff(a) === onOff(b);
 }
@@ -244,10 +327,11 @@ async function effectiveSettingValue(read, appModuleId, setting) {
  * Is a setting value "on" FOR THIS FEATURE?
  *
  * Values are stored as STRINGS ("0"/"1"/"2"/"true"/"false"), so plain JS truthiness is wrong twice
- * over — it calls "0" true and "false" true. Worse, the numeric meaning is not uniform: for the
- * AI form-fill family `1` means DISABLED and `2` means ENABLED, so a "non-zero is on" rule reports a
- * deliberately disabled feature as running. `0` there means "platform default" (defer to flighting),
- * which is genuinely UNKNOWN rather than off — reporting it as off overstates what we know.
+ * over — it calls "0" true and "false" true. Worse, the numeric meaning is not uniform: for most of
+ * these settings `1` means Off and `2` means On, and for `nlChart` `0` is Off and `1` is Auto, so a
+ * "non-zero is on" rule reports a deliberately disabled feature as running. A setting's platform
+ * default (Default, or Auto for charts) defers to the platform, which is genuinely UNKNOWN rather
+ * than off — reporting it as off overstates what we know.
  *
  * `feature` is optional so existing callers keep the plain numeric convention; pass it whenever the
  * feature is known, which is every caller inside this plugin.
@@ -261,7 +345,7 @@ function settingIsOn(value, feature) {
   if (codec) {
     if (s === codec.enabled) return true;
     if (s === codec.disabled) return false;
-    // '0' = platform default: not a claim either way.
+    // The platform default (Default, or Auto for charts): not a claim either way.
     return undefined;
   }
   const n = Number(s);
@@ -269,11 +353,19 @@ function settingIsOn(value, feature) {
 }
 
 /**
- * Normalize a GUID for use as an UNQUOTED OData lookup comparand. Dataverse returns bare GUIDs, but
- * a caller-supplied id can arrive `{braced}` (the form `normalizeGuid` also accepts); interpolating
- * that raw produces `_x_value eq {0000…}`, a malformed filter that 400s and — because the proof
- * fails closed — reports every feature as unprovable. Stripping braces keeps a legitimate id
- * working; anything else is passed through so a genuinely bad id still fails loudly.
+ * Normalize a GUID before it is interpolated into a Dataverse request. Dataverse returns bare GUIDs,
+ * but a caller-supplied id can arrive `{braced}` (the form `normalizeGuid` also accepts).
+ *
+ * This previously documented itself as the thing that keeps the `$filter` valid — that a braced
+ * comparand "400s". MEASURED against a live environment, that is not what the server does: a braced
+ * GUID in a `$filter` comparand is ACCEPTED and returns the right row (200), quoted or unquoted, on
+ * both a primary-key column and a lookup `_value` column. The shape that genuinely rejects braces is
+ * the URL KEY SEGMENT — `workflows({0000…})` returns 400 where `workflows(0000…)` succeeds.
+ *
+ * So normalize for the two reasons that hold: an id is also used as a plain string KEY for
+ * comparison (a Map join, a Set membership test), where a formatting difference is a SILENT miss
+ * rather than an error; and an id normalized here stays safe if it is later moved into a key
+ * segment. Anything that is not a brace passes through, so a genuinely bad id still fails loudly.
  */
 function odataGuid(id) {
   return String(id === undefined || id === null ? '' : id).replace(/[{}]/g, '');
@@ -285,8 +377,11 @@ module.exports = {
   AI_FEATURE_KEYS,
   AI_FEATURE_MAX_VALUE,
   DEFAULT_APP_FEATURES,
+  specOptsIntoAi,
   resolveAiFlags,
   featureWantValue,
+  encodeAiFlags,
+  rebucketNonEnablingSkips,
   sameSettingValue,
   resolveAppModuleId,
   proveAppOverride,

@@ -10,26 +10,57 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const os = require('node:os');
+const { parseArgs, validateFlags, readJsonArg, emitResult, dataverseOrigin } = require('./lib/dataverse-auth.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { verifySpec } = require('./lib/verify-spec.js');
+const { readBaseline } = require('./lib/deployed-baseline.js');
 const { appUniqueName } = require('./lib/sdk-build.js');
 const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
+const { readRelationshipsOf, findRelationshipHolder } = require('./lib/relationship-metadata.js');
 const { odataLit } = require('./lib/odata.js');
 const { makeGenpageCli } = require('./lib/genpage-cli.js');
+const { assertSafeOutputDir } = require('./lib/safe-fs.js');
 const { depthFromMask } = require('./lib/role-privileges.js');
+const { appEntityComponentsFor, appMainFormsFor, appComponentRows } = require('./lib/app-components.js');
 
-function makeProvision(env, workspaceDir) {
-  const { createMakerSdk } = require('./vendor/cds-maker-sdk.cjs');
-  const httpClient = createAzHttpClient(env);
-  fs.mkdirSync(workspaceDir, { recursive: true });
-  const sdk = createMakerSdk({ workspacePath: workspaceDir, instanceUrl: env, httpClient });
-  sdk.initWorkspace();
-  // The httpClient is returned alongside the SDK because one read has no SDK surface: the role
-  // privilege check needs `EntityDefinitions(...)?$select=Privileges`, and `fetchEntityMetadata`
-  // projects that field away (see the `entityPrivileges` reader below). The caller must also pass
-  // the org URL to `readerFor` — this client takes FULL absolute request URLs, not paths.
-  return { sdk, httpClient };
+// A throwaway SDK workspace for ONE dashboard read (readerFor's dashboardComponents), deleted after it. The tiles
+// verify checks must be the server's: read through the build's own workspace, a copy holding unpushed edits — or
+// one another writer changed mid-read — was what got verified, and a forced refresh there could discard a
+// concurrent writer's edit. A fresh workspace has no local copy to read, discard or race with, and a fresh SDK no
+// cached read to hand back. One per read, not per run: a second read of the same dashboard must not come from
+// the first one's cache. The HTTP client — and with it the Azure CLI token — is shared: `opts.httpClient` (the
+// run's own), else one made on the first read. A client per read ran `az account get-access-token` once per
+// dashboard. `opts.makeClient` is a test seam.
+function isolatedReaderFor(env, opts = {}) {
+  let client = opts.httpClient || null;
+  const makeClient = opts.makeClient || createAzHttpClient;
+  return async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-dashboard-'));
+    try {
+      const sdk = await makeProvision(env, dir, client || (client = makeClient(env)));
+      return { sdk, dispose: () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ } } };
+    } catch (e) {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
+      throw e;
+    }
+  };
+}
+
+async function makeProvision(env, workspaceDir, httpClient = createAzHttpClient(env)) {
+  // A link at the workspace root would make the SDK storage follow it. Refuse before the
+  // factory runs. An explicit real directory is created if missing, then re-checked.
+  // The module's own fs, not a second copy: a caller that replaced fs must see the same create.
+  assertSafeOutputDir(workspaceDir, { create: true, fs });
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
+  await sdk.initWorkspace();
+  // Only the SDK is returned. The raw `httpClient` used to come back with it because the role
+  // privilege check had no SDK surface to read `EntityDefinitions(...)?$select=Privileges`; the
+  // vendored bundle now exposes `getEntityPrivileges`, so that escape hatch is gone. Handing the
+  // raw transport back with no caller is worse than useless — it advertises a bypass of the SDK
+  // that this file deliberately no longer takes.
+  return sdk;
 }
 
 // Resolve the app's sitemap XML: appmodule (by unique name) -> appmodulecomponents (type 62) ->
@@ -38,7 +69,7 @@ async function sitemapXmlFor(sdk, appUnique) {
   const apps = await sdk.queryRecords('appmodule', { select: ['appmoduleid', 'appmoduleidunique'], filter: `uniquename eq '${odataLit(appUnique)}'`, top: 1 });
   const app = apps && apps[0];
   if (!app) return '';
-  const comps = await sdk.queryRecords('appmodulecomponent', { select: ['objectid', 'componenttype'], filter: `_appmoduleidunique_value eq ${app.appmoduleidunique} and componenttype eq 62`, top: 1 });
+  const comps = await appComponentRows(sdk, app.appmoduleidunique, 62, { top: 1 });
   const smId = comps && comps[0] && comps[0].objectid;
   if (!smId) return '';
   const sms = await sdk.queryRecords('sitemap', { select: ['sitemapxml'], filter: `sitemapid eq ${smId}`, top: 1 });
@@ -49,6 +80,30 @@ async function sitemapXmlFor(sdk, appUnique) {
 async function appIdFor(sdk, appUnique) {
   const rows = await sdk.queryRecords('appmodule', { select: ['appmoduleid'], filter: `uniquename eq '${odataLit(appUnique)}'`, top: 1 });
   return rows && rows[0] && rows[0].appmoduleid;
+}
+
+async function appRoleIdsFor(sdk, appUnique) {
+  try {
+    const appId = await appIdFor(sdk, appUnique);
+    if (!appId) return { ok: false, reason: `app '${appUnique}' could not be resolved` };
+    if (!sdk.dataverse || typeof sdk.dataverse.get !== 'function') return { ok: false, reason: 'SDK dataverse reader is unavailable' };
+    // The SDK has associate/disassociate helpers for `appmoduleroles_association`, but no modeled
+    // read for that N:N membership. Read the relationship navigation property directly so verify
+    // proves the deployed app<->role rows the model-driven app launcher uses, rather than inferring
+    // access from role existence or from the build result.
+    // See appmodule relationships: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/appmodule
+    const res = await sdk.dataverse.get(`/appmodules(${appId})/appmoduleroles_association?$select=roleid`);
+    if (!res || res.status < 200 || res.status >= 300) return { ok: false, reason: `HTTP ${res && res.status}` };
+    return {
+      ok: true,
+      roleIds: ((res.body && res.body.value) || [])
+        .map((r) => r && r.roleid)
+        .filter(Boolean)
+        .map((id) => String(id).toLowerCase()),
+    };
+  } catch (err) {
+    return { ok: false, reason: (err && err.message) ? String(err.message).slice(0, 200) : 'read failed' };
+  }
 }
 
 function readerFor(sdk, appUnique, opts) {
@@ -65,32 +120,71 @@ function readerFor(sdk, appUnique, opts) {
   // Memoize fetchSitemap: both sitemapXml and sitemapPageIds share one live query (Imp7 — one snapshot).
   let sitemapP;
   const memoSitemap = () => (sitemapP || (sitemapP = _fetchSitemap(sdk, appUnique)));
+  // Memoized app TABLE components — one live read per verify run, keyed by the wanted-table set.
+  const appComponentsP = new Map();
+  const appMainFormsP = new Map();
+  // The user running verify, read once: servedMainForms asks the platform what THIS user is served. The id
+  // is interpolated into the function's `User` alias, so only a canonical GUID is accepted.
+  let callerIdP;
+  const callerId = () => (callerIdP || (callerIdP = (async () => {
+    const who = await sdk.dataverse.get('/WhoAmI');
+    const id = who && who.status >= 200 && who.status < 300 && who.body ? String(who.body.UserId || '').replace(/[{}]/g, '').toLowerCase() : '';
+    if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(id)) throw new Error(`WhoAmI returned no user id (HTTP ${who && who.status})`);
+    return id;
+  })()));
 
   // Per-id page code cache. Downloads by specific id on demand rather than pulling all pages at once
   // (the old all-pages downloadP). Each id gets its own output dir to avoid directory collision.
   const codeById = new Map();
 
+  // One catalog scan per verification pass, not per reader. A reader is reused across verifies;
+  // keeping the first scan would report a table created between passes as missing, and a rejected
+  // scan would fail every later pass. verifySpec calls beginVerificationPass at the start of each.
+  let catalogP;
+  const beginVerificationPass = () => { catalogP = null; };
+  const catalog = () => {
+    if (!catalogP) {
+      catalogP = Promise.resolve().then(() => sdk.findTables('')).catch((err) => {
+        catalogP = null;
+        throw err;
+      });
+    }
+    return catalogP;
+  };
+
+
   const base = {
-    findTable: async (logical) => { const l = String(logical).toLowerCase(); const t = await sdk.findTables(l); return (t || []).find((x) => String(x.logicalName).toLowerCase() === l) || null; },
+    // findTables scans the whole EntityDefinitions catalog and filters client-side, so one
+    // unfiltered read serves every findTable in this verify run. Caching a filtered page would
+    // hide a later table whose name does not contain the first query.
+    beginVerificationPass,
+    findTable: async (logical) => {
+      const l = String(logical).toLowerCase();
+      const tables = await catalog();
+      return (tables || []).find((x) => String(x.logicalName).toLowerCase() === l) || null;
+    },
     findColumns: async (logical) => sdk.findColumns(logical),
     // Grid data visualization (preview) for one column. Passed straight through — including the raw
     // 404 the SDK emits on an environment where the preview is not provisioned, which verify-spec
     // interprets (it must stay distinguishable from the legitimate 'None' answer).
     columnVisualization: async (logical, columnLogical) => sdk.getColumnVisualization(String(logical).toLowerCase(), String(columnLogical).toLowerCase()),
     queryRecords: (set, o) => sdk.queryRecords(set, o),
-    // entityRelationships(childLogical): the relationship SCHEMA NAMES defined on a child entity, for the
-    // content-verify relationship-existence check. Best-effort — a metadata read failure yields [] so the
-    // check simply can't confirm (never a false pass: [] => the declared relationship reads as missing,
-    // which is the fail-closed direction for a read-only reconcile). Reads OneToMany + ManyToMany schema
-    // names from the entity metadata (the shape download's fetchEntityMetadata already returns).
+    // entityRelationships(childLogical): detailed rows for the relationship check. ManyToOne is
+    // the 1:N seen from the child; ManyToMany is read from entity1. A failed read throws so
+    // verify-spec's catch turns it into an empty list — fail closed, same as before.
     entityRelationships: async (childLogical) => {
-      const meta = await sdk.fetchEntityMetadata(String(childLogical).toLowerCase());
-      const rels = (meta && (meta.relationships || meta.Relationships)) || [];
-      return rels
-        .map((r) => r && (r.schemaName || r.SchemaName || r.name))
-        .filter(Boolean)
-        .map((n) => String(n).toLowerCase());
+      const client = sdk.dataverse;
+      if (!client || typeof client.get !== 'function') throw new Error('relationship metadata client is not available');
+      const logical = String(childLogical).toLowerCase();
+      const manyToOne = await readRelationshipsOf(client, logical, 'ManyToOne');
+      if (!manyToOne.ok) throw new Error(manyToOne.error || `HTTP ${manyToOne.status}`);
+      const manyToMany = await readRelationshipsOf(client, logical, 'ManyToMany');
+      if (!manyToMany.ok) throw new Error(manyToMany.error || `HTTP ${manyToMany.status}`);
+      return [...manyToOne.rows, ...manyToMany.rows];
     },
+    // Used when the typed collection on one side cannot see the holder (a 1:N is not in the
+    // parent's ManyToMany list). The SchemaName key is case-sensitive; the helper falls back.
+    relationshipHolder: async (schemaName, candidates) => findRelationshipHolder(sdk.dataverse, schemaName, { candidates }),
     // commandBar(entity): truthy when a command bar (appaction set) exists for the entity — the identity
     // the build/teardown use (resolveArtifact('command', { entity })). Best-effort — a resolve failure
     // reads as absent (fail-closed for a read-only check).
@@ -133,56 +227,172 @@ function readerFor(sdk, appUnique, opts) {
     // feature and reports the read failure as a not-present check, which is the fail-closed direction —
     // a verify that cannot prove a feature is in effect must not claim it is.
     retrieveSetting: async (name, opts) => sdk.retrieveSetting(name, opts || {}),
+    // isdefault and formxml are two proofs of the same published systemform row. verifySpec asks
+    // for both, so one select replaces the two GETs the verify trace counted. Not cached on the
+    // reader: the same reader is reused across verifies, and the row can change between them.
+    // verifySpec memoizes the promise for a single pass. The dashboard published/draft bracket
+    // stays its own read.
+    formRow: async (_entity, formId) => {
+      const rows = await sdk.queryRecords('systemform', {
+        select: ['formid', 'isdefault', 'formxml'],
+        filter: `formid eq ${formId}`,
+        top: 1,
+      });
+      const row = rows && rows[0];
+      if (!row) return null;
+      return { isDefault: row.isdefault === true, formxml: row.formxml || null };
+    },
+    // formDefaultState(entity, formId): a Main form's actual default flag. Kept for a reader that
+    // is asked for the flag alone. Errors propagate as a fail-closed finding.
+    // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/systemform
+    formDefaultState: async (_entity, formId) => {
+      const rows = await sdk.queryRecords('systemform', {
+        select: ['formid', 'isdefault'],
+        filter: `formid eq ${formId}`,
+        top: 1,
+      });
+      const row = rows && rows[0];
+      return row ? { isDefault: row.isdefault === true } : null;
+    },
+    // formTopology(entity, formId): the deployed FormXml, so verify can prove the LAYOUT and not just
+    // that a form row exists. Errors propagate to verify-spec, which reports the read failure as a
+    // not-present check — a layout nobody could read is unverified, not correct. A direct call
+    // always re-reads: a later verify on this reader must see a row that changed after the last one.
+    formTopology: async (_entity, formId) => {
+      const rows = await sdk.queryRecords('systemform', {
+        select: ['formid', 'formxml'],
+        filter: `formid eq ${formId}`,
+        top: 1,
+      });
+      const row = rows && rows[0];
+      return (row && row.formxml) || null;
+    },
+    // servedMainForms(entity): the Main forms the platform serves the user running verify for a table,
+    // first to last — the order a user without a remembered form opens them in (AB#6736948). The public
+    // RetrieveFilteredForms function is the platform's own answer to "which forms may this user open,
+    // in which order": it applies each form's security roles and <DisplayConditions Order>. It returns
+    // ids only, e.g.
+    //   { "value": [ { "@odata.type": "#Microsoft.Dynamics.CRM.systemform", "formid": "<guid>" }, … ] }
+    // so the names come from one systemform read. Each entry is { id, name }. Errors propagate: verify
+    // reports an order it could not read as not verified.
+    // See: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/retrievefilteredforms
+    servedMainForms: async (entity) => {
+      const logical = String(entity).toLowerCase();
+      const userId = await callerId();
+      const res = await sdk.dataverse.get(`/systemforms/Microsoft.Dynamics.CRM.RetrieveFilteredForms(EntityLogicalName=@e,FormType=@t,User=@u)?@e='${odataLit(logical)}'&@t=2&@u={'@odata.id':'systemusers(${userId})'}`);
+      // `dataverse.get` RESOLVES on a non-2xx, so the status is checked explicitly.
+      if (!res || res.status < 200 || res.status >= 300) throw new Error(`RetrieveFilteredForms returned HTTP ${res && res.status}`);
+      const bare = (id) => String(id || '').replace(/[{}]/g, '').toLowerCase();
+      const ids = ((res.body && res.body.value) || []).map((r) => bare(r && r.formid)).filter(Boolean);
+      const rows = await sdk.queryRecords('systemform', { select: ['formid', 'name'], filter: `objecttypecode eq '${odataLit(logical)}' and type eq 2`, top: 250 });
+      const nameOf = new Map((rows || []).map((r) => [bare(r.formid), String(r.name || '')]));
+      return ids.map((id) => ({ id, name: nameOf.get(id) || id }));
+    },
+    // dashboardComponents(dashboardId): the deployed dashboard's tiles, parsed by the SDK's own
+    // dashboard deserializer — the path download already reads them through — so verify sees each
+    // tile's TargetEntityType / ViewId / VisualizationId exactly as a rebuild would, instead of
+    // regex-parsing FormXML a second way. Errors propagate: verify reports unreadable tiles as
+    // unverified, never as correct.
+    //
+    // What is checked must be what users see: the PUBLISHED dashboard. The SDK's dashboard read is the
+    // unpublished draft (RetrieveUnpublished), and verify runs in the build's workspace, where a plain fetch
+    // keeps a copy holding unpushed edits while the server has not moved — so a fix saved in Maker but not
+    // published, or never pushed at all, passed while users still saw the broken dashboard. The deserializer
+    // is kept (download reads tiles through it, and a second FormXML parser would drift from it), and the
+    // read is refused unless it IS the published dashboard: the server's draft FormXML is the published row's —
+    // both before AND after the fetch the tiles come from (checked only after it, a draft the fetch had cached
+    // and a maker then discarded passed, while the published dashboard was broken throughout). The fetch goes into
+    // a throwaway workspace (opts.isolatedReader — isolatedReaderFor), never the build's, whose copy may hold
+    // unpushed edits or be written by another process mid-read. Callers without one (tests) read through `sdk`.
+    //
+    // Equal FormXML before and after does not prove the fetch between them read it: a draft saved and then put
+    // back (A, then B, then A again) leaves both checks reading A while the fetch read B, and B's tiles passed. So
+    // each check also takes the draft's `@odata.etag`, which RetrieveUnpublished returns in the body and which
+    // moves on every write to the draft, even one that restores its content (live-measured; the SDK guards its own
+    // form writes on the same token). The same token before and after means nothing was written in between, so
+    // the fetch read the document both checks compared with the published row. A read with no token is refused,
+    // like one with no FormXML.
+    // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/retrieveunpublished
+    // and https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/perform-conditional-operations-using-web-api
+    dashboardComponents: async (dashboardId) => {
+      const publishedDashboard = async () => {
+        const [row] = (await sdk.queryRecords('systemform', { select: ['formid', 'formxml'], filter: `formid eq ${dashboardId}`, top: 1 })) || [];
+        const draft = await sdk.dataverse.get(`/systemforms(${dashboardId})/Microsoft.Dynamics.CRM.RetrieveUnpublished()?$select=formxml`);
+        // `dataverse.get` RESOLVES on a non-2xx, so the status is checked explicitly.
+        if (!draft || draft.status < 200 || draft.status >= 300) throw new Error(`the draft of dashboard ${dashboardId} could not be read (HTTP ${draft && draft.status})`);
+        const draftXml = draft.body && draft.body.formxml;
+        if (!row || typeof row.formxml !== 'string' || typeof draftXml !== 'string') throw new Error(`the FormXML of dashboard ${dashboardId} could not be read`);
+        if (draftXml !== row.formxml) throw new Error(`dashboard ${dashboardId} has changes that are not published — publish it, then verify`);
+        const version = draft.body['@odata.etag'];
+        if (typeof version !== 'string' || version === '') throw new Error(`the version of dashboard ${dashboardId} could not be read`);
+        return { xml: row.formxml, version };
+      };
+      const before = await publishedDashboard();
+      const reader = opts.isolatedReader ? await opts.isolatedReader() : { sdk, dispose: () => {} };
+      let art;
+      try {
+        await reader.sdk.fetchArtifact('dashboard', dashboardId);
+        art = await reader.sdk.getArtifact('dashboard', dashboardId);
+      } finally {
+        reader.dispose();
+      }
+      const after = await publishedDashboard();
+      if (after.xml !== before.xml || after.version !== before.version) throw new Error(`dashboard ${dashboardId} changed while it was being read — verify again`);
+      // No artifact, or a component list that is not a list, is not "no tiles": throw, so verify reports the
+      // dashboard unverified instead of passing a check that read nothing. An artifact with no list at all
+      // has no tiles, as download-model-app.js reads it.
+      if (!art || (art.components !== undefined && !Array.isArray(art.components))) {
+        throw new Error(`the SDK returned ${art ? 'a malformed component list' : 'no artifact'} for dashboard ${dashboardId}`);
+      }
+      return art.components || [];
+    },
     // sitemapXml (string, fail-closed '') for entity/icon hasElement checks — from the discriminated sitemap
     // read. Returning '' on failure suppresses entity/icon checks without aborting the whole verify.
     sitemapXml: async () => { const r = await memoSitemap(); return r.ok ? r.xml : ''; },
+    // The app's TABLE components, so verify can tell "the sitemap shows this table" from
+    // "the app module actually contains it". Memoized per wanted-set — one live read per verify run.
+    appEntityComponents: (wanted) => {
+      const key = (wanted || []).join(',');
+      if (!appComponentsP.has(key)) appComponentsP.set(key, appEntityComponentsFor(sdk, appUnique, wanted));
+      return appComponentsP.get(key);
+    },
+    appMainForms: (unique, tables) => {
+      const key = JSON.stringify([unique, tables]);
+      if (!appMainFormsP.has(key)) appMainFormsP.set(key, appMainFormsFor(sdk, unique || appUnique, tables));
+      return appMainFormsP.get(key);
+    },
+    appRoleIds: () => appRoleIdsFor(sdk, appUnique),
   };
 
   // entityPrivileges(logical): the privilege set a table exposes, as [{ PrivilegeId, PrivilegeType, ... }].
-  // Read from the SAME source the SDK resolves against when it WRITES the role —
-  // `EntityDefinitions(LogicalName='x')?$select=Privileges` — so the comparison cannot disagree with
-  // the write about which PrivilegeId means "Read on account".
+  // Read through the SDK's `getEntityPrivileges`, which resolves the SAME source the SDK uses when it
+  // WRITES a role, so the comparison cannot disagree with the write about which PrivilegeId means
+  // "Read on account".
   //
-  // Deliberately NOT `sdk.fetchEntityMetadata`: that returns a PROJECTED, camelCased shape
-  // ({logicalName, displayName, entitySetName, attributes, relationships}) which drops `Privileges`
-  // entirely, so routing through it would silently report every privilege as unreadable.
+  // This used to be a raw `httpClient` read of `EntityDefinitions(LogicalName='x')?$select=Privileges`,
+  // because the SDK had no privilege READ at all — it could create and delete roles but never see what
+  // a table exposes — and `fetchEntityMetadata` PROJECTS `Privileges` away permanently by design (its
+  // `$select` never asks for them, and it is a disk-cached best-effort projection, the wrong contract
+  // for a security read). That escape hatch is now retired: the vendored bundle carries the dedicated
+  // method, which is the condition AGENTS.md set for making this switch.
   //
-  // The projection's omission is PERMANENT by design — its `$select` never asks for `Privileges`,
-  // and the SDK pins that with a guardrail test asserting the projection must not surface them even
-  // when the server returns them. That projection is disk-cached and documents its enrichments as
-  // best-effort, which is the wrong contract for a security read. Verified against the vendored
-  // bundle: feeding it a response that DOES carry `Privileges` still yields a projection without them.
+  // Two shape differences the mapping below absorbs:
+  //  * The SDK returns camelCase `{ name, privilegeId, privilegeType, access?, scopes }`; the pure
+  //    comparison in lib/role-privileges.js reads Dataverse's PascalCase `{ Name, PrivilegeId,
+  //    PrivilegeType }`, which is also what the eventual `ReplacePrivilegesRole` payload speaks. The
+  //    comparison keeps the wire vocabulary and the adaptation happens here, at the seam.
+  //  * The SDK THROWS for a table that exposes no privileges (an unknown or non-securable table is an
+  //    error, not an answer) where the raw read returned null. verify-spec wraps every call site in a
+  //    try/catch and reports an unreadable entity as a FINDING, so both land in the same fail-closed
+  //    place — an absent privilege set is never read as "nothing missing".
   //
-  // TODO: the SDK is gaining a dedicated `getEntityPrivileges(logicalName)` — the privilege READ it
-  // previously lacked (it could create/delete roles but never read what a table exposes). Switch to
-  // it once the vendored bundle carries it, and drop this raw read. Note the SDK returns camelCased
-  // `{ name, privilegeId, privilegeType }` and throws when a table exposes none, where this returns
-  // PascalCase rows and `null`; `compareRolePrivileges` reads the PascalCase shape today, and
-  // verify-spec already treats a throw as a per-entity finding, so the swap is a mapping change plus
-  // a bundle bump — not a behaviour change.
-  //
-  // The URL must be ABSOLUTE and carry the `/api/data/v9.2` prefix. `createAzHttpClient` is the raw
-  // transport the SDK drives, so it receives full request URLs and enforces a same-origin check by
-  // parsing the argument with `new URL(url)` — a relative path throws there ("Refusing to send the
-  // Dataverse token to a non-absolute URL") rather than resolving against the org. That failure is
-  // caught per-entity in verify-spec, so a relative URL would not crash: it would silently report
-  // EVERY entity's privileges as unreadable and fail the role-privileges check on every live run.
-  //
-  // Wired only when BOTH the org URL and the raw client are available. When they are not, the reader
-  // is ABSENT rather than broken, which makes verify-spec skip the role-privileges check entirely
-  // (it requires both `rolePrivileges` and `entityPrivileges` to be functions) instead of reporting a
-  // false failure.
-  if (opts.httpClient && opts.envUrl) {
-    const apiRoot = `${String(opts.envUrl).replace(/\/+$/, '')}/api/data/v9.2`;
-    // Returns null on any non-2xx — verify-spec turns that into a finding rather than a pass.
-    base.entityPrivileges = async (logical) => {
-      const name = String(logical).toLowerCase();
-      const url = `${apiRoot}/EntityDefinitions(LogicalName='${odataLit(name)}')?$select=LogicalName,Privileges`;
-      const res = await opts.httpClient.get(url);
-      if (!res || res.status < 200 || res.status >= 300) return null;
-      return (res.body && res.body.Privileges) || null;
-    };
-  }
+  // Still conditional on a wired SDK for the same reason as before: when the reader cannot be built
+  // it must be ABSENT rather than broken, so verify-spec skips the role-privileges check entirely
+  // (it requires both `rolePrivileges` and `entityPrivileges`) instead of reporting a false failure.
+  base.entityPrivileges = async (logical) => {
+    const rows = await sdk.getEntityPrivileges(String(logical).toLowerCase());
+    return (rows || []).map((p) => ({ Name: p.name, PrivilegeId: p.privilegeId, PrivilegeType: p.privilegeType }));
+  };
 
   // Only expose page-authority readers when a genpageCli is wired — absent it, verifySpec fails closed
   // for a page-bearing spec (Imp7/C6: missing methods → unableToRun).
@@ -225,47 +435,75 @@ function readerFor(sdk, appUnique, opts) {
       const key = String(pageId).toLowerCase();
       if (codeById.has(key)) return codeById.get(key);
       const id = await appId();
-      // Per-id output dir so parallel/sequential calls for different ids don't clobber each other.
-      const outDir = path.join(workspaceDir, 'verify-pages', key);
-      fs.rmSync(outDir, { recursive: true, force: true });
-      fs.mkdirSync(outDir, { recursive: true });
-      // Fail-closed: genpageCli.download throws on pac exit != 0 (design §13.1).
-      await genpageCli.download({ appId: id, outputDir: outDir, pageIds: [pageId] });
-      // pac writes to <outDir>/<pageId>/page.tsx; scan subdirs to be case-tolerant (pac may differ in casing).
-      let code = '';
-      for (const entry of fs.readdirSync(outDir)) {
-        const tsx = path.join(outDir, entry, 'page.tsx');
-        if (fs.existsSync(tsx)) { code = fs.readFileSync(tsx, 'utf8'); break; }
+      // A fixed name under the workspace (verify-pages/<id>) is a place a link can be left.
+      // pac follows links, and removing that name would delete through the link. The download
+      // therefore goes to a private temp directory this call creates and always removes.
+      const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-page-'));
+      try {
+        // Fail-closed: genpageCli.download throws on pac exit != 0 (design §13.1).
+        await genpageCli.download({ appId: id, outputDir: outDir, pageIds: [pageId] });
+        // pac writes to <outDir>/<pageId>/page.tsx; scan subdirs to be case-tolerant (pac may differ in casing).
+        let code = '';
+        for (const entry of fs.readdirSync(outDir)) {
+          const tsx = path.join(outDir, entry, 'page.tsx');
+          if (fs.existsSync(tsx)) { code = fs.readFileSync(tsx, 'utf8'); break; }
+        }
+        codeById.set(key, code);
+        return code;
+      } finally {
+        try { fs.rmSync(outDir, { recursive: true, force: true }); } catch { /* leave the temp dir */ }
       }
-      codeById.set(key, code);
-      return code;
     };
   }
   return base;
 }
 
 async function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
-  // parseArgs sets a value-less flag to boolean `true`; treat those as missing so a bare
-  // `--env`/`--spec`/`--workspace` fails with the usage message instead of crashing later in
-  // createAzHttpClient / path.resolve / fs.mkdirSync when a boolean value reaches them.
-  const env = typeof flags.env === 'string' ? flags.env : undefined;
-  const specArg = typeof flags.spec === 'string' ? flags.spec : positional[0];
-  const workspaceArg = typeof flags.workspace === 'string' ? flags.workspace : undefined;
-  if (!env || !specArg || flags.workspace === true) {
-    process.stderr.write('Usage: node verify-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--workspace <dir>]\n');
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE = 'Usage: node verify-model-app.js --env <url> --spec @<app-folder>/app-spec.json [--workspace <dir>]';
+  // Reject an unknown or value-less flag before any network work: an unrecognised flag is dropped
+  // by parseArgs AND swallows the token after it, so `--workspce x` would silently verify against
+  // the default workspace and report drift the caller cannot explain.
+  const flagError = validateFlags(argv, { known: ['env', 'spec', 'workspace'], needValue: ['env', 'spec', 'workspace'] });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
+    process.exit(1);
+  }
+  // Each is now either absent or a non-empty string, so a boolean can no longer reach
+  // createAzHttpClient / path.resolve / fs.mkdirSync.
+  const env = flags.env;
+  const specArg = flags.spec || positional[0];
+  const workspaceArg = flags.workspace;
+  if (!env || !specArg) {
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
   const specPath = path.resolve(specArg.startsWith('@') ? specArg.slice(1) : specArg);
   const spec = migrateAppSpec(readJsonArg('@' + specPath));
   // Validate the spec up front (consistent with teardown) so malformed input yields a structured
   // error instead of a later throw when dereferencing spec.entities / schemaName.
-  const v = validateAppSpec(spec, { profile: 'deploy' });
+  // 'warn' is verify-only. A spec built before the collision gate must still be verifiable; the
+  // endpoint check below names the holder. Every other entry point keeps the error.
+  const v = validateAppSpec(spec, { profile: 'deploy', relationshipCollisions: 'warn' });
   if (!v.ok) { emitResult(false, { ok: false, errors: v.errors }); return; }
+  for (const w of v.warnings || []) process.stderr.write(`WARNING: ${w}\n`);
   const workspaceDir = workspaceArg || path.join(path.dirname(specPath), '.maker-workspace');
-  const { sdk, httpClient } = makeProvision(env, workspaceDir);
+  // Before the SDK. A link planted as the workspace root is refused here so the factory
+  // is never called; a real directory is allowed.
+  try {
+    assertSafeOutputDir(workspaceDir, { create: true, fs });
+  } catch (err) {
+    emitResult(false, err instanceof Error ? err : new Error(String(err)));
+    return;
+  }
+  const httpClient = createAzHttpClient(env);
+  const sdk = await makeProvision(env, workspaceDir, httpClient);
   const genpageCli = makeGenpageCli(env);
-  const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec), { genpageCli, workspaceDir, httpClient, envUrl: env }));
+  // The spec's baseline for this environment and app, when the workspace has one: an icon the build
+  // kept because it was changed in the designer since then is not a failure (AB#6726727).
+  const baselineSpec = readBaseline(workspaceDir, { environment: dataverseOrigin(env), appUniqueName: appUniqueName(spec) }) || undefined;
+  const r = await verifySpec(spec, readerFor(sdk, appUniqueName(spec), { genpageCli, workspaceDir, isolatedReader: isolatedReaderFor(env, { httpClient }) }), { baselineSpec });
   // Show `detail` on a failing check. Without it a READ that failed (throttling, auth expiry, a 5xx)
   // is indistinguishable from an artifact that is genuinely absent — verifySpec records the cause
   // but the operator saw only "✗ view: Active Orders" and would chase a phantom deployment drift.
@@ -280,4 +518,4 @@ if (require.main === module) {
   main().catch((err) => emitResult(false, err));
 }
 
-module.exports = { sitemapXmlFor, readerFor, appIdFor };
+module.exports = { sitemapXmlFor, readerFor, appIdFor, appRoleIdsFor, isolatedReaderFor };

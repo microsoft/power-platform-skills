@@ -23,6 +23,7 @@ Integrate Power Pages Web API into a code site's frontend. This skill orchestrat
 - **Permissions require deployment**: The `.powerpages-site` folder must exist before table permissions and site settings can be configured. Integration code can be written without it, but permissions cannot.
 - **AI-only read mode is opt-in**: When invoked by another skill (e.g. `/add-ai-webapi`) with the `[AI-READ-ONLY]` sentinel in `$ARGUMENTS`, the flow produces read-only code and hardens the settings/permissions for AI summarization reads. See Phase 1.6 for the contract. Human invocations never trigger this mode.
 - **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
+- **Preserve site integrity**: Before an agent changes mock-backed or data-driven UI, read `${PLUGIN_ROOT}/references/site-modification-integrity.md`; localize every new visible state when a manifest exists and keep the component bidirectional and expansion-safe.
 
 > **Prerequisites:**
 >
@@ -561,6 +562,19 @@ git commit -m "Add table permissions and Web API site settings for [table names]
 ```
 
 **Output**: Table permissions and site settings created, verified, and (in normal mode) committed
+
+### 6.6 Final site-integrity gate
+
+After all integration source changes, permission/settings work, and build verification are
+complete, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every blocking error before presenting completion or asking to deploy. Inspect and report
+review findings in both directions and with expanded content. Rerun this gate after any later
+source change.
 
 ---
 

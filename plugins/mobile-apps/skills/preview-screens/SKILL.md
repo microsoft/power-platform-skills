@@ -6,6 +6,8 @@ allowed-tools: Read, Write, Glob, Grep, Bash
 model: sonnet
 ---
 
+> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.
+
 **Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** — read first.
 
 # Preview Screens
@@ -20,7 +22,7 @@ Generates a self-contained HTML file that renders every screen in the app as a p
 
 ## When NOT to use
 
-- To run the actual app → use `npx expo start`
+- To run the actual app → use `npm run dev`
 - To modify screens → use `/edit-app`; `screen-builder` is an internal agent invoked by orchestrator skills
 
 ## Workflow
@@ -53,6 +55,8 @@ Grep pattern="^# " path="<working_dir>/memory-bank.md"
 Fallback: read `name` from `package.json`.
 
 ### Step 2 — Discover screens
+
+**Telemetry checkpoint: `discover_app_screens`**
 
 Find all TSX files under the app directory:
 
@@ -113,6 +117,8 @@ If found, read it and extract any custom color tokens (look for `tokens: { color
 
 ### Step 4 — Read and convert each screen
 
+**Telemetry checkpoint: `render_screen_preview_frames`**
+
 **Print before starting:**
 > "→ Reading + converting <N> screens to HTML/CSS (one print per screen as I go)."
 
@@ -157,6 +163,8 @@ If the project has custom brand tokens (from Step 3), add them to the `:root` CS
 
 ### Step 6 — Write the file
 
+**Telemetry checkpoint: `write_screen_preview_document`**
+
 ```text
 Write file_path="<working_dir>/preview.html"
 ```
@@ -171,12 +179,14 @@ Print confirmation:
 
 ### Step 7 — Open in browser
 
+**Telemetry checkpoint: `open_screen_preview`**
+
 **Do NOT prompt.** The `visual_companion` flag in `<working_dir>/memory-bank.md` already encodes the answer; asking again is redundant. The flag is set by `/design-system` (Step 6.75) during project creation, or defaults to `yes` if `/design-system` was not run.
 
 Read the flag and act:
 
 ```bash
-grep -E "^visual_companion:[[:space:]]*(yes|no)" "<working_dir>/memory-bank.md" 2>/dev/null
+grep -E "^visual_companion:[[:space:]]*(yes|no)" '<working_dir>/memory-bank.md' 2>/dev/null
 ```
 
 | Flag | Action |
@@ -195,13 +205,17 @@ grep -E "^visual_companion:[[:space:]]*(yes|no)" "<working_dir>/memory-bank.md" 
 Then try OS-appropriate openers in sequence and fall back to printing the link if none work:
 
 ```bash
-open "<working_dir>/preview.html" 2>/dev/null \
-  || xdg-open "<working_dir>/preview.html" 2>/dev/null \
-  || powershell.exe -NoProfile -Command "Start-Process '<working_dir>\preview.html'" 2>/dev/null \
-  || echo "Could not auto-open. Open this URL in your browser: file://<working_dir>/preview.html"
+open '<working_dir>/preview.html' 2>/dev/null \
+  || xdg-open '<working_dir>/preview.html' 2>/dev/null \
+  || MOBILE_APP_PREVIEW_PATH='<working_dir>/preview.html' \
+     powershell.exe -NoProfile -Command 'Start-Process -FilePath $env:MOBILE_APP_PREVIEW_PATH' 2>/dev/null \
+  || printf '%s\n' 'Could not auto-open. Open this URL in your browser: file://<working_dir>/preview.html'
 ```
 
-`open` is macOS-only; the chain covers Linux (`xdg-open`) and Windows / WSL (`powershell.exe Start-Process`). On headless / SSH sessions all three fail silently and the user just opens the link they were already given.
+`open` is macOS-only; the chain also tries Linux (`xdg-open`) and Windows
+(`powershell.exe Start-Process`). The Windows path is passed as data, not
+PowerShell source. On headless or unsupported cross-host sessions, report the
+failed launch and manual link instead of claiming the browser opened.
 
 ---
 

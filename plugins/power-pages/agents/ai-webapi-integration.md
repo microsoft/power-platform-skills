@@ -40,6 +40,11 @@ wire into UI, no duplicate helpers). The Microsoft-shipped support-case Copilot 
 configuration of Data Summarization (specific entity set, `$select`/`$expand`, and prompt
 identifier), not a third endpoint.
 
+Before changing any page or component, read
+`${PLUGIN_ROOT}/references/site-modification-integrity.md`. Localize summary labels, loading,
+empty, error, citation, and remediation states across every configured locale, and keep the
+resulting UI bidirectional and safe for text expansion.
+
 ## Reference docs
 
 Read these first — they have the authoritative API shapes, headers, request bodies, and error
@@ -921,6 +926,18 @@ Grep: "function getCsrfToken|const getCsrfToken" in src/**/*.{ts,tsx,js,jsx,vue,
 
 If more than one definition exists, consolidate — keep the original and delete the new one, updating
 the summarization service to import it.
+
+### 6.5 Final site-integrity gate
+
+After all integration source changes, header checks, and the build are complete, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every blocking error before returning completion to the orchestrator. Inspect and report review
+findings in both directions and with expanded content. Rerun this gate after any later source
+change.
 
 ---
 

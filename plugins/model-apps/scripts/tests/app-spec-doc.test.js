@@ -107,6 +107,16 @@ function unescapedPipeCount(row) {
   return n;
 }
 
+test('the routing description is shown beside the tile text, and only when the spec sets one (#583)', () => {
+  const spec = realisticSpec();
+  assert.ok(!renderAppSpecDoc(spec, {}).includes('Routing description'));
+  spec.app.aiDescription = 'Support work. Prefer My Tickets for your own assigned items.';
+  const md = renderAppSpecDoc(spec, {});
+  const at = md.indexOf('**Routing description:** Support work. Prefer My Tickets for your own assigned items.');
+  assert.ok(at > md.indexOf(spec.app.description), 'after the tile description');
+  assert.ok(at < md.indexOf('## Environment'), 'in the overview, before the first section');
+});
+
 test('renders every expected section heading in document order', () => {
   const md = renderAppSpecDoc(realisticSpec(), { envUrl: 'https://x.crm.dynamics.com' });
   const expected = [
@@ -572,4 +582,27 @@ test('sitemap area/group/subarea depictions render, and entity subareas defer to
   // An entity subarea's nav glyph comes from the TABLE's icon, so describing it here would show the
   // reviewer a depiction that is not the one actually rendered.
   assert.match(md, /Projects .*— icon: the table's own/);
+});
+
+// #583 Gap 1 — the exclusions are rendered BESIDE the traceability table so scope is reviewed
+// rather than assumed. A reviewer cannot approve an omission they were never shown, and two apps
+// built over the same tables are told apart by what each one declines to do.
+test('#583 deliberate persona exclusions are rendered into the design document', () => {
+  const spec = realisticSpec();
+  const first = spec.personas[0];
+  first.excludes = ['Approving budgets — handled in the Finance app', 'Editing customer master data'];
+  const md = renderAppSpecDoc(spec);
+
+  assert.match(md, /Deliberately out of scope/, 'the section must exist');
+  for (const x of first.excludes) {
+    assert.ok(md.includes(x), `the exclusion ${JSON.stringify(x)} must be shown verbatim`);
+  }
+  assert.ok(md.indexOf('Deliberately out of scope') > md.indexOf('| Persona |'),
+    'exclusions belong beside the traceability table, not before it');
+
+  // A spec that records none must not grow an empty heading — an empty section reads as
+  // "nothing is out of scope", which is a different claim from "this was not captured".
+  const none = realisticSpec();
+  for (const p of none.personas) delete p.excludes;
+  assert.doesNotMatch(renderAppSpecDoc(none), /Deliberately out of scope/);
 });

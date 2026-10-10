@@ -1,0 +1,55 @@
+<form>
+  <tabs>
+    <tab name="tab_intake" visible="true" expanded="true">
+      <labels><label description="Intake" languagecode="1033"/></labels>
+      <columns><column width="100%"><sections>
+        <section name="section_intake" columns="1" visible="true" showlabel="true">
+          <labels><label description="Intake" languagecode="1033"/></labels>
+          <rows><row><cell><control datafieldname="cnt_approved"/></cell></row></rows>
+        </section>
+      </sections></column></columns>
+    </tab>
+    <tab name="tab_details" visible="true" expanded="true">
+      <labels><label description="Details" languagecode="1033"/></labels>
+      <columns>
+        <column width="50%"><sections>
+          <section name="section_quickview" columns="1" visible="true" showlabel="true">
+            <labels><label description="Project Snapshot" languagecode="1033"/></labels>
+            <rows><row><cell id="quickview_cell" visible="false">
+              <control id="project_quickview" classid="{5C5600E0-1D6E-4205-A272-BE80DA87FD42}" datafieldname="cnt_projectid" disabled="true">
+                <parameters><QuickForms><QuickFormIds><QuickFormId entityname="cnt_project">00000000-0000-0000-0000-000000000703</QuickFormId></QuickFormIds></QuickForms><ControlMode>Edit</ControlMode></parameters>
+              </control>
+            </cell></row></rows>
+          </section>
+          <section name="section_notes" columns="1" visible="false" showlabel="true">
+            <labels><label description="Notes" languagecode="1033"/></labels>
+            <rows><row><cell visible="false" rowspan="2"><control datafieldname="cnt_notes"/></cell></row></rows>
+          </section>
+          <section name="section_execution" columns="11" visible="true" showlabel="false">
+            <labels><label description="Execution" languagecode="1033"/></labels>
+            <rows>
+              <row><cell colspan="2"><control datafieldname="cnt_title"/></cell></row>
+              <row><cell><control datafieldname="cnt_status"/></cell><cell><control datafieldname="cnt_reviewer" disabled="true"/></cell></row>
+            </rows>
+          </section>
+        </sections></column>
+        <column width="50%"><sections>
+          <section name="section_context" columns="1" visible="true" showlabel="true">
+            <labels><label description="Context" languagecode="1033"/></labels>
+            <rows><row><cell id="lookup_cell" visible="false"><control id="project_lookup" datafieldname="cnt_projectid" disabled="true"/></cell></row></rows>
+          </section>
+        </sections></column>
+      </columns>
+    </tab>
+    <tab name="tab_admin" visible="false" expanded="false">
+      <labels><label description="Administration" languagecode="1033"/></labels>
+      <columns><column width="100%"><sections>
+        <section name="section_admin" columns="1" visible="true" showlabel="false">
+          <labels><label description="Administration" languagecode="1033"/></labels>
+          <rows/>
+        </section>
+      </sections></column></columns>
+    </tab>
+  </tabs>
+  <DisplayConditions Order="0" FallbackForm="true"><Everyone/></DisplayConditions>
+</form>

@@ -89,6 +89,16 @@ test('prompt detection accepts Copilot manual skill-context wrappers', () => {
   );
 });
 
+test('prompt detection accepts the observed interactive Copilot invocation prefix', () => {
+  const prefix = 'The user explicitly invoked the "/mobile-app:create-mobile-app" skill. Follow its instructions now.\n\n';
+  const wrapper = '<skill-context name="create-mobile-app">\nredacted instructions';
+  assert.equal(getTrackedSkillFromPrompt(prefix + wrapper), 'create-mobile-app');
+  assert.equal(getTrackedSkillFromPrompt(prefix.replace('mobile-app:', '') + wrapper), 'create-mobile-app');
+  assert.equal(getTrackedSkillFromPrompt(prefix + '<skill-context name="deploy">'), null);
+  assert.equal(getTrackedSkillFromPrompt(prefix.replace('mobile-app:', 'other-plugin:') + wrapper), null);
+  assert.equal(getTrackedSkillFromPrompt('please read this: ' + prefix + wrapper), null);
+});
+
 test('reads known host tool-input field variants', () => {
   assert.equal(getTrackedSkillFromToolInput({ skill: 'deploy' }), 'deploy');
   assert.equal(getTrackedSkillFromToolInput({ skill_name: 'mobile-app:debug-app' }), 'debug-app');

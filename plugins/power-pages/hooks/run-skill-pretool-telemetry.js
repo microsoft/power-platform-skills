@@ -9,7 +9,7 @@ const crypto = require("node:crypto");
 const PLUGIN_ROOT = path.resolve(__dirname, "..");
 const TELEMETRY_DIR = path.join(PLUGIN_ROOT, "scripts", "lib", "telemetry");
 
-let emitSpawn, eventsLib, sessionLib, pacAuthLib, agentInfoLib, resolverLoader;
+let emitSpawn, eventsLib, sessionLib, pacAuthLib, agentInfoLib, resolverLoader, invocationState;
 try {
   emitSpawn = require(path.join(TELEMETRY_DIR, "lib", "emit-spawn"));
   eventsLib = require(path.join(TELEMETRY_DIR, "lib", "events"));
@@ -17,6 +17,7 @@ try {
   pacAuthLib = require(path.join(TELEMETRY_DIR, "lib", "pac-auth"));
   agentInfoLib = require(path.join(TELEMETRY_DIR, "lib", "agent-info"));
   resolverLoader = require(path.join(TELEMETRY_DIR, "lib", "resolver-loader"));
+  invocationState = require(path.join(TELEMETRY_DIR, "invocation-state"));
 } catch {
   process.exit(0);
 }
@@ -122,6 +123,23 @@ function readStdin() {
   }
   if (!provisioned) process.exit(0);
 
+  const resolvedSessionId = sessionLib.getSessionId(
+    sessionLib.resolveHostSessionId(parsed)
+  );
+  // The skill resolves its actual project root after this hook runs. Record a
+  // path-free pending start now; the first project-aware telemetry call binds
+  // it only when that pending invocation is unambiguous.
+  if (skillName === "create-site" || skillName === "add-localization") {
+    try {
+      invocationState.recordPendingStart(
+        skillName,
+        resolvedSessionId
+      );
+    } catch {
+      // Correlation state is best-effort and must never block the skill start.
+    }
+  }
+
   const correlation_id = crypto.randomUUID();
 
   const configDir = process.env.POWER_PLATFORM_SKILLS_CONFIG_DIR || "";
@@ -164,7 +182,7 @@ function readStdin() {
   const fields = {
     pluginName: "power-pages",
     pluginVersion: readPluginVersion(),
-    sessionId: sessionLib.getSessionId(sessionLib.resolveHostSessionId(parsed)),
+    sessionId: resolvedSessionId,
     correlationId: correlation_id,
     osName: osFriendlyName(process.platform),
     osVersion: os.release(),

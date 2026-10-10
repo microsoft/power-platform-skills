@@ -2,6 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const { validateAppSpec } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
+const { buildSeedGroup } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
 
 function base() {
   return {
@@ -195,4 +196,702 @@ test('app.newLook must be a boolean', () => {
   }
   // Absent is fine — the new look is opt-in.
   assert.strictEqual(validateAppSpec(base(), { profile: 'plan' }).ok, true);
+});
+
+// #583: the routing description. A non-empty string up to the column's 1,048,576-character maximum.
+// Blank is refused rather than written: absent means "leave the deployed value alone", so an empty
+// string is the one value that could blank a description nobody asked to remove.
+test('app.aiDescription is a non-empty string within the column maximum', () => {
+  const withValue = (v) => { const s = base(); s.app.aiDescription = v; return validateAppSpec(s, { profile: 'plan' }); };
+  const ok = withValue('Dispatch work. Prefer My Work for your own assigned items.');
+  assert.strictEqual(ok.ok, true, JSON.stringify(ok.errors));
+  assert.strictEqual(withValue('x'.repeat(1048576)).ok, true, 'exactly the maximum is accepted');
+  for (const [v, re] of [
+    [42, /app.aiDescription must be a string/],
+    ['', /app.aiDescription must not be blank/],
+    ['   ', /app.aiDescription must not be blank/],
+    ['x'.repeat(1048577), /app.aiDescription is 1048577 characters \(max 1048576\)/],
+  ]) {
+    const r = withValue(v);
+    assert.strictEqual(r.ok, false, String(v).slice(0, 20));
+    assert.ok(r.errors.some((e) => re.test(e)), JSON.stringify(r.errors));
+  }
+  assert.strictEqual(validateAppSpec(base(), { profile: 'plan' }).ok, true, 'absent is fine');
+  assert.strictEqual(withValue(null).ok, true, 'null reads as absent, like an omitted key');
+});
+
+// ---------------------------------------------------------------------------------------------
+// #537 — entities[] had no allow-list, so a key with no reader validated clean and was dropped.
+//
+// The two that motivated this are `languageCode` and `localizedLabels`: the natural ways to ask for
+// a per-table or multi-language label. Both were accepted and silently ignored, so an author asking
+// for one table in Spanish got a SUCCESSFUL build with the request gone. These pin the loud failure
+// AND the alternative each error names, because an error that does not say what to write instead
+// just moves the dead end.
+// ---------------------------------------------------------------------------------------------
+
+test('#537: entities[].languageCode is rejected and names the spec-level languageCode', () => {
+  for (const profile of ['plan', 'deploy']) {
+    const s = base();
+    s.entities[0].languageCode = 3082;
+    const r = validateAppSpec(s, { profile });
+    const hit = (r.errors || []).find((e) => /unknown key 'languageCode'/.test(e));
+    assert.ok(hit, `${profile}: ` + JSON.stringify(r.errors));
+    // Naming the supported alternative is the point of the error, not a nicety.
+    assert.match(hit, /spec-level `languageCode`/);
+    assert.match(hit, /build-wide, not per-table/);
+  }
+});
+
+test('#537: entities[].localizedLabels is rejected, and names the shape that DOES work', () => {
+  // The key stays rejected after 2.7.0 added multi-language labels — but for a different reason, and
+  // the message had to change with it. A localized label is an LCID map on the label FIELD; a
+  // separate per-table block cannot address a Choice OPTION or a lookup's display name without
+  // inventing a parallel addressing scheme. So "not supported" became "write it here instead",
+  // which is the whole point of rejecting a key rather than dropping it.
+  for (const profile of ['plan', 'deploy']) {
+    const s = base();
+    s.entities[0].localizedLabels = { 3082: 'Cliente', 1033: 'Customer' };
+    const r = validateAppSpec(s, { profile });
+    const hit = (r.errors || []).find((e) => /unknown key 'localizedLabels'/.test(e));
+    assert.ok(hit, `${profile}: ` + JSON.stringify(r.errors));
+    assert.match(hit, /LCID map on the label FIELD/, hit);
+    assert.doesNotMatch(hit, /not supported/, `2.7.0 supports multi-language labels; the hint must not deny it: ${hit}`);
+  }
+
+  // And the shape it points at must actually validate, or the error sends the author into a wall.
+  const ok = base();
+  ok.entities[0].displayName = { 1033: 'Customer', 3082: 'Cliente' };
+  ok.entities[0].pluralName = { 1033: 'Customers', 3082: 'Clientes' };
+  assert.strictEqual(validateAppSpec(ok, { profile: 'plan' }).ok, true,
+    JSON.stringify(validateAppSpec(ok, { profile: 'plan' }).errors));
+});
+
+test('#537: a misspelled entity key fails loudly instead of being dropped', () => {
+  const s = base();
+  s.entities[0].pluralname = 'Orders'; // real key is `pluralName`
+  const r = validateAppSpec(s, { profile: 'plan' });
+  const hit = (r.errors || []).find((e) => /unknown key 'pluralname'/.test(e));
+  assert.ok(hit, JSON.stringify(r.errors));
+  assert.match(hit, /allowed: .*pluralName/); // the allowed list is what makes the typo obvious
+});
+
+// The counterpart that matters most: an allow-list that is too NARROW silently breaks valid specs,
+// which is a worse failure than the one being fixed. Every key the build reads must still validate.
+test('#537: every supported entity key still validates clean', () => {
+  const s = base();
+  s.webResources = [
+    { name: 'contoso_i', displayName: 'I', type: 'svg', content: '<svg/>' },
+    { name: 'contoso_p', displayName: 'P', type: 'png', contentBase64: 'AA==' },
+  ];
+  Object.assign(s.entities[0], {
+    displayName: 'Order', pluralName: 'Orders', description: 'An order.',
+    hasNotes: true, quickCreate: true, existing: false, enrichDefaultViews: true,
+    vectorIcon: 'contoso_i', iconDescription: 'a box', icon: 'contoso_p',
+    statusReasons: [], alternateKeys: [],
+  });
+  const r = validateAppSpec(s, { profile: 'plan' });
+  assert.strictEqual(r.ok, true, JSON.stringify(r.errors));
+});
+
+// A malformed entity must not be re-described as a key problem: Object.keys('x') is ['0'], which
+// would report a bogus "unknown key '0'" on top of the real shape error.
+test('#537: a non-object entity does not produce a bogus index key error', () => {
+  const s = base();
+  s.entities.push('contoso_ghost');
+  const r = validateAppSpec(s, { profile: 'plan' });
+  assert.ok(!(r.errors || []).some((e) => /unknown key '\d+'/.test(e)), JSON.stringify(r.errors));
+});
+
+// The bare "must be a positive integer LCID" named the mistake but not the fix, and a language TAG
+// is the likeliest thing an author writes. A tag is deliberately NOT accepted as an alias: es-ES is
+// 3082 (international sort) or 1034 (traditional), and guessing wrong would not fail — it would
+// build every label in the wrong language.
+test('#537: the languageCode error names an LCID and rejects a language tag', () => {
+  const s = base();
+  s.languageCode = 'es-ES';
+  const r = validateAppSpec(s, { profile: 'plan' });
+  const hit = (r.errors || []).find((e) => /languageCode must be a positive integer LCID/.test(e));
+  assert.ok(hit, JSON.stringify(r.errors));
+  assert.match(hit, /1033 \(en-US\)/);      // a concrete value to copy
+  assert.match(hit, /not a language tag/);
+  assert.match(hit, /"es-ES"/);              // echoes what was actually written
+
+  // The supported spelling still passes, in both profiles.
+  for (const profile of ['plan', 'deploy']) {
+    const ok = base();
+    ok.languageCode = 3082;
+    assert.strictEqual(validateAppSpec(ok, { profile }).ok, true, JSON.stringify(validateAppSpec(ok, { profile }).errors));
+  }
+});
+
+// The hint lookup is keyed by a name that comes from the SPEC, so an inherited Object.prototype
+// member must not become part of the message. Before the map was made prototype-less, a table with
+// a `constructor` key reported: unknown key 'constructor'function Object() { [native code] }
+test('#537: an entity key that collides with Object.prototype does not leak a native function', () => {
+  const s = base();
+  s.entities[0].constructor = 1;
+  s.entities[0].toString = 2;
+  const r = validateAppSpec(s, { profile: 'plan' });
+  const hits = (r.errors || []).filter((e) => /unknown key/.test(e));
+  assert.strictEqual(hits.length, 2, JSON.stringify(r.errors));
+  for (const h of hits) assert.ok(!/native code/.test(h), h);
+});
+
+// A validator's contract is to RETURN problems, not throw them. Both of these threw before the
+// guards went in: Object.prototype.toString throws on a revoked Proxy, and an entity Proxy whose
+// ownKeys trap throws escaped straight through the new key loop.
+test('#537: exotic values become validation errors, not raw crashes', () => {
+  const revoked = Proxy.revocable({}, {});
+  revoked.revoke();
+
+  const s = base();
+  s.languageCode = revoked.proxy;
+  const r = validateAppSpec(s, { profile: 'plan' });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /languageCode must be a positive integer LCID/.test(e)), JSON.stringify(r.errors));
+
+  const s2 = base();
+  s2.entities.push(new Proxy({ schemaName: 'contoso_ghost' }, { ownKeys() { throw new Error('trap'); } }));
+  const r2 = validateAppSpec(s2, { profile: 'plan' });
+  assert.strictEqual(r2.ok, false);
+  assert.ok(r2.errors.some((e) => /could not be inspected/.test(e)), JSON.stringify(r2.errors));
+});
+
+// #631: the appShell key allow-list is guarded the same way — a node whose keys cannot be enumerated
+// is an error naming it, never a crash out of the validator.
+test('#631: an appShell node whose keys cannot be enumerated becomes a validation error, not a crash', () => {
+  const s = base();
+  s.appShell = { areas: [new Proxy({ label: 'Main', groups: [] }, { ownKeys() { throw new Error('trap'); } })] };
+  const r = validateAppSpec(s, { profile: 'plan' });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /could not be inspected: enumerating its keys threw/.test(e)), JSON.stringify(r.errors));
+});
+
+// --- review follow-ups on the #537 entity-key allow-list ----------------------------------------
+
+test('#537 review: an unknown key on an entity with NO schemaName does not say "entity undefined"', () => {
+  // The unknown-key message interpolates the entity's schemaName, which is validated AFTERWARDS. A
+  // malformed entity therefore produced `entity undefined: unknown key ...` alongside the real
+  // `entity.schemaName is required` — two errors for one problem, one of them naming a table that
+  // does not exist. The label must degrade to something stable instead.
+  const r = validateAppSpec({
+    solution: { uniqueName: 'S', displayName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A', description: '' },
+    entities: [{ languageCode: 3082, primaryAttribute: { schemaName: 'new_n', displayName: 'N' } }],
+    appShell: { areas: [] },
+  }, { profile: 'plan' });
+  const msg = (r.errors || []).join(' | ');
+  assert.match(msg, /unknown key 'languageCode'/, 'the unknown key must still be reported');
+  assert.doesNotMatch(msg, /entity undefined/, `no "entity undefined" label: ${msg}`);
+});
+
+test('#537 review follow-up: a NON-STRING schemaName is an error, not a crash', () => {
+  // Found while reproducing the review comment above. `!e.schemaName` only tested truthiness, so
+  // `42`, `{}`, `[]` and `true` passed it and the very next line called `.toLowerCase()` on them —
+  // `validateAppSpec` THREW a raw TypeError instead of returning findings. That is the one outcome
+  // this function must never produce: the caller loses every problem collected so far, not just
+  // this one. Reachable from any hand- or model-authored JSON file, which is how specs arrive.
+  //
+  // Verified against `origin/main` before the fix: it threw for every non-string below.
+  const spec = (schemaName) => ({
+    solution: { uniqueName: 'S', displayName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A', description: '' },
+    entities: [{ ...(schemaName === undefined ? {} : { schemaName }), displayName: 'T', primaryAttribute: { schemaName: 'new_n', displayName: 'N' }, columns: [] }],
+    appShell: { areas: [] },
+  });
+
+  for (const bad of [42, {}, [], true, '   ']) {
+    let r;
+    assert.doesNotThrow(() => { r = validateAppSpec(spec(bad), { profile: 'plan' }); },
+      `a schemaName of ${JSON.stringify(bad)} must be REPORTED, not thrown`);
+    assert.strictEqual(r.ok, false);
+    assert.ok((r.errors || []).some((e) => /schemaName must be a non-empty string/.test(e)),
+      `${JSON.stringify(bad)} -> ${JSON.stringify(r.errors)}`);
+  }
+
+  // An ABSENT value keeps the original wording — it is the common case, and "is required" is the
+  // right thing to say about a value nobody supplied. Saying "must be a non-empty string" to
+  // someone who wrote nothing would be worse, not better.
+  for (const absent of [undefined, null, '']) {
+    const r = validateAppSpec(spec(absent), { profile: 'plan' });
+    assert.ok((r.errors || []).some((e) => /^entity\.schemaName is required$/.test(e)),
+      `${JSON.stringify(absent)} -> ${JSON.stringify(r.errors)}`);
+  }
+
+  // Counterfactual: a valid name still validates clean, so the tightening did not simply reject
+  // everything.
+  assert.strictEqual(validateAppSpec(spec('new_ticket'), { profile: 'plan' }).ok, true);
+});
+
+// STILL NOT FIXED, and deliberately so: `validateAppSpec` throws if reading `e.schemaName` ITSELF
+// throws — a getter or a Proxy trap. The read at the schemaName check is wrapped, but ~19 later
+// sites interpolate `e.schemaName` directly and any one of them re-triggers the trap, so a guard
+// only at the first site would buy nothing while implying the case was handled. Fixing it properly
+// means resolving the name ONCE into a local and threading it through every site, which is its own
+// change with its own tests. Unlike the non-string case above, this shape cannot come from
+// `JSON.parse` — only a programmatic caller can build it — so it is not on any real input path.
+
+// --- explicit form layout: unknown/unserializable keys (#575 follow-on) ---
+// tabs[]/sections[] had NO allow-list, so an invented key validated clean and vanished. Several
+// plausible keys are also accepted by the SDK normalizers and then dropped by its serializer.
+
+function withForm(tabs) {
+  const s = base();
+  s.entities[0].columns = [{ schemaName: 'contoso_amount', type: 'Text' }];
+  s.forms = [{ entity: 'contoso_order', name: 'Order', layout: 'explicit', tabs }];
+  return s;
+}
+const errsFor = (tabs) => validateAppSpec(withForm(tabs), { profile: 'plan' }).errors;
+
+test('form layout: an unknown key on a tab, section or field entry is rejected', () => {
+  assert.ok(errsFor([{ label: 'G', bogusTabKey: 1, sections: [{ label: 'S', fields: [] }] }])
+    .some((e) => /unknown key \x27bogusTabKey\x27 on tab/.test(e)), 'tab key');
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', bogusSectionKey: 1, fields: [] }] }])
+    .some((e) => /unknown key \x27bogusSectionKey\x27 on tab .* section/.test(e)), 'section key');
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', fields: [{ name: 'contoso_amount', bogusFieldKey: 1 }] }] }])
+    .some((e) => /unknown key \x27bogusFieldKey\x27 on tab .* field/.test(e)), 'field entry key');
+});
+
+test('form layout: keys the SDK serializer DROPS are rejected with the real mechanism named', () => {
+  // Measured against the vendored bundle: a tab serializes only name/expanded/visible + label.
+  const tabShowLabel = errsFor([{ label: 'G', showLabel: true, sections: [{ label: 'S', fields: [] }] }]);
+  assert.ok(tabShowLabel.some((e) => /unknown key \x27showLabel\x27 on tab/.test(e)));
+  assert.ok(tabShowLabel.some((e) => /a TAB has no label toggle in FormXml/.test(e)), 'names what to use instead');
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', labelPosition: 'Top', fields: [] }] }])
+    .some((e) => /unknown key \x27labelPosition\x27 on tab .* section/.test(e)));
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', locked: true, fields: [] }] }])
+    .some((e) => /unknown key \x27locked\x27/.test(e)));
+});
+
+test('form layout: a tab cannot declare both sections and columns', () => {
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'A', fields: [] }], columns: [{ sections: [{ label: 'B', fields: [] }] }] }])
+    .some((e) => /declares both \x27sections\x27 and \x27columns\x27/.test(e)));
+});
+
+// `columns` is an INTEGER grid width on a section but an ARRAY of form-columns on a tab. A non-array
+// tab `columns` used to validate clean and then be dropped by the compiler (which reads
+// `Array.isArray(t.columns)`), so `"columns": 2` on a tab silently shipped a one-column form — the
+// exact silent no-op this allow-list exists to end, on the schema's most confusable key. The
+// "declares both" rule above cannot catch it: that too requires Array.isArray.
+// A cell that spans DOWN reserves its column in the rows beneath it, and FormXml fills a row's cells
+// left to right with no way to skip a reserved slot. Measured on the stock account/contact Main
+// forms: every section using rowspan puts it on the LAST cell, precisely because nothing can be
+// positioned beside it.
+test('form layout: a rowspan is rejected unless it is the last field in its section', () => {
+  const bad = errsFor([{ label: 'G', sections: [{ label: 'S', columns: 2, fields: [{ name: 'a', rowspan: 2 }, 'b'] }] }]);
+  assert.ok(bad.some((e) => /rowspan 2 but is not the last field in its section/.test(e)), `expected a rowspan placement error; got ${JSON.stringify(bad)}`);
+
+  const ok = errsFor([{ label: 'G', sections: [{ label: 'S', columns: 2, fields: ['b', { name: 'a', rowspan: 2 }] }] }]);
+  assert.ok(!ok.some((e) => /rowspan/.test(e)), `a terminal rowspan must stay valid; got ${JSON.stringify(ok)}`);
+});
+
+// formSectionsOf treats a non-array `sections` as absent, so a typo silently dropped the whole
+// form-column's layout instead of failing.
+test('form layout: a non-array sections inside a form-column is rejected', () => {
+  const errs = errsFor([{ label: 'G', columns: [{ width: '50%', sections: {} }] }]);
+  assert.ok(errs.some((e) => /non-array 'sections'/.test(e)), `expected a non-array sections error; got ${JSON.stringify(errs)}`);
+});
+
+// The compiler dereferences every tab/column/section entry. Tabs and sections had partial pre-existing
+// guards; a malformed FORM-COLUMN was entirely unguarded and reached compileFormIntent, which reads
+// `c.width`/`c.sections`, as a raw TypeError.
+test('form layout: a non-object tab, form-column or section is rejected, not dereferenced', () => {
+  assert.ok(errsFor([null]).some((e) => /tabs\[0\] must be an object/.test(e)), 'a null tab is rejected');
+  assert.ok(errsFor(['nope']).some((e) => /tab #1 must be an object/.test(e)), 'a primitive tab is rejected');
+  assert.ok(errsFor([{ label: 'G', sections: [null] }]).some((e) => /sections\[0\] must be an object/.test(e)), 'a null section is rejected');
+  // The gap this closes:
+  assert.ok(errsFor([{ label: 'G', columns: [null] }]).some((e) => /column #1 must be an object, got null/.test(e)), 'a null form-column is rejected');
+  assert.ok(errsFor([{ label: 'G', columns: ['x'] }]).some((e) => /column #1 must be an object/.test(e)), 'a primitive form-column is rejected');
+});
+
+// compileFormIntent only truth-tests these (`!== false`), so a STRING "false" compiles as true and
+// deploys the opposite of what was authored.
+test('form layout: expanded / visible / showLabel must be real booleans', () => {
+  assert.ok(errsFor([{ label: 'G', expanded: 'false', sections: [{ label: 'S', fields: [] }] }])
+    .some((e) => /has expanded 'false' — it must be true or false/.test(e)));
+  assert.ok(errsFor([{ label: 'G', visible: 0, sections: [{ label: 'S', fields: [] }] }])
+    .some((e) => /has visible '0'/.test(e)));
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', showLabel: 'false', fields: [] }] }])
+    .some((e) => /has showLabel 'false'/.test(e)));
+  // A real boolean still passes.
+  assert.ok(!errsFor([{ label: 'G', expanded: false, sections: [{ label: 'S', showLabel: true, fields: [] }] }])
+    .some((e) => /must be true or false/.test(e)));
+});
+
+// A name is the container's IDENTITY on a rebuild — the topology reconcile matches deployed
+// containers by name and keys its placement targets by name — so duplicates make two authored
+// declarations resolve to the same deployed container.
+test('form layout: duplicate tab or section names are rejected (a name is identity on rebuild)', () => {
+  assert.ok(errsFor([
+    { name: 'tab_a', label: 'A', sections: [{ label: 'S1', fields: [] }] },
+    { name: 'TAB_A', label: 'B', sections: [{ label: 'S2', fields: [] }] },
+  ]).some((e) => /reuses the tab name 'TAB_A'/.test(e)), 'duplicate tab names are caught case-insensitively');
+
+  assert.ok(errsFor([{ label: 'G', sections: [
+    { name: 'sec_x', label: 'S1', fields: [] },
+    { name: 'sec_x', label: 'S2', fields: [] },
+  ] }]).some((e) => /reuses the section name 'sec_x'/.test(e)));
+});
+
+test('form layout: a tab columns that is a NUMBER is rejected and points at the section key', () => {
+  const errs = errsFor([{ label: 'G', columns: 2, sections: [{ label: 'S', fields: [] }] }]);
+  assert.ok(errs.some((e) => /has columns \x272\x27/.test(e)), `expected a tab-columns error; got ${JSON.stringify(errs)}`);
+  assert.ok(errs.some((e) => /put \x27columns\x27: 2 on the section instead/.test(e)), 'the message must name the fix');
+});
+
+test('form layout: out-of-range spans, section columns and column widths are rejected', () => {
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', columns: 9, fields: [] }] }])
+    .some((e) => /may span 1 to 4 columns/.test(e)), 'section columns');
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', fields: [{ name: 'contoso_amount', colspan: 0 }] }] }])
+    .some((e) => /has colspan \x270\x27/.test(e)), 'colspan 0');
+  assert.ok(errsFor([{ label: 'G', sections: [{ label: 'S', fields: [{ name: 'contoso_amount', rowspan: 1.5 }] }] }])
+    .some((e) => /has rowspan \x271.5\x27/.test(e)), 'fractional rowspan');
+  assert.ok(errsFor([{ label: 'G', columns: [{ width: '60px', sections: [{ label: 'S', fields: [] }] }] }])
+    .some((e) => /width \x2760px\x27 .* must be a percentage/.test(e)), 'non-percentage width');
+});
+
+test('form layout: a valid explicit layout with spans and multi-column tabs passes clean', () => {
+  const errs = errsFor([{ name: 'tab_g', label: 'G', expanded: false, visible: true, columns: [
+    { width: '60%', sections: [{ name: 's1', label: 'S1', columns: 2, showLabel: true, visible: true, fields: [{ name: 'contoso_amount', colspan: 2 }] }] },
+    { width: '40%', sections: [{ name: 's2', label: 'S2', columns: 1, fields: ['contoso_name'] }] },
+  ] }]);
+  assert.deepStrictEqual(errs.filter((e) => /unknown key|must be a percentage|may span|has colspan|has rowspan/.test(e)), []);
+});
+
+// A field placed twice on one form is a CREATE-vs-REBUILD divergence, not a cosmetic slip: the
+// compiler emits one cell per entry, so a fresh build deploys two cells, while every reconcile path
+// keys placement by logical name and takes the first (`declaredSectionByField`, `findFieldCellPointer`,
+// and `formFieldLogicals`, which de-duplicates). The second cell would appear on create and vanish on
+// the next build. MEASURED before this gate existed: the same spec compiled to 2 bound cells while
+// declaredSectionByField resolved the field to the first section only.
+test('form layout: a field placed twice is rejected, because create and rebuild would disagree', () => {
+  const mk = (secA, secB) => {
+    const s = base();
+    s.entities[0].columns = [{ schemaName: 'contoso_amount', displayName: 'Amount', type: 'Decimal' }];
+    s.forms = [{ entity: 'contoso_order', layout: 'explicit', tabs: [{ label: 'General', sections: [
+      { label: 'A', name: 'sec_a', fields: secA },
+      { label: 'B', name: 'sec_b', fields: secB },
+    ] }] }];
+    return s;
+  };
+  const dupErrors = (s) => validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /places field/.test(e));
+
+  assert.strictEqual(dupErrors(mk(['contoso_name', 'contoso_amount'], ['contoso_name'])).length, 1,
+    'the same field in two sections must be rejected');
+  assert.strictEqual(dupErrors(mk(['contoso_name', 'contoso_name'], ['contoso_amount'])).length, 1,
+    'the same field twice in ONE section must be rejected too');
+  // Dataverse logical names are case-insensitive, so a casing difference is the same cell.
+  assert.strictEqual(dupErrors(mk([{ name: 'contoso_name' }], [{ name: 'CONTOSO_NAME' }])).length, 1,
+    'duplicate detection must be case-insensitive and must see field-entry objects');
+  assert.strictEqual(dupErrors(mk(['contoso_name'], [{ name: 'contoso_name' }])).length, 1,
+    'a string entry and an object entry naming the same field are still one field twice');
+
+  // The gate must not fire on an ordinary form — that would make every explicit layout unbuildable.
+  assert.deepStrictEqual(dupErrors(mk(['contoso_name'], ['contoso_amount'])), [],
+    'distinct fields must stay valid');
+
+  // Identity is per FORM, so two forms on the same table may each place the same column.
+  const twoForms = mk(['contoso_name'], ['contoso_amount']);
+  twoForms.forms.push({ entity: 'contoso_order', name: 'Second', layout: 'explicit', tabs: [{ label: 'General', sections: [
+    { label: 'A', name: 'other_a', fields: ['contoso_name'] },
+  ] }] });
+  assert.deepStrictEqual(dupErrors(twoForms), [], 'a second form may place the same field');
+});
+
+// The gate exists only to move the loader's refusal earlier, so the two must agree EXACTLY. The
+// loader keys on `JSON.stringify([typeof v, v])`, so `1` and `'1'` are distinct rows; a plain
+// `String(...)` key here made them collide and rejected, at author time, a spec that builds. Both
+// sides now call the shared `sampleKeyIdentity`, so they cannot drift apart again.
+test('sampleData: duplicate detection keys values exactly the way the loader does', () => {
+  const withKey = (rows) => {
+    const s = base();
+    s.entities[0].columns = [{ schemaName: 'contoso_code', displayName: 'Code', type: 'Text' }];
+    s.entities[0].alternateKeys = [{ name: 'k', columns: ['contoso_code'] }];
+    s.sampleData = { contoso_order: rows };
+    return validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /duplicate contoso_code/.test(e));
+  };
+
+  assert.deepStrictEqual(withKey([{ contoso_name: 'A', contoso_code: 1 }, { contoso_name: 'B', contoso_code: '1' }]), [],
+    'the loader treats 1 and "1" as distinct, so this gate must not reject them');
+  assert.strictEqual(withKey([{ contoso_name: 'A', contoso_code: '1' }, { contoso_name: 'B', contoso_code: '1' }]).length, 1,
+    'two identical strings are still a duplicate');
+  assert.strictEqual(withKey([{ contoso_name: 'A', contoso_code: 1 }, { contoso_name: 'B', contoso_code: 1 }]).length, 1,
+    'and so are two identical numbers');
+});
+
+// #586 item 2: the loader looks for duplicates only AFTER resolveSampleRecords has turned every Choice
+// value into its option integer, so a label, its other-language alias and the raw integer are ONE key
+// there. The gate compared the values as authored, passed the spec, and the seed then refused it —
+// after tables, forms and views were already deployed. The gate must see what the loader sees, so this
+// checks the two against each other rather than against a hand-written expectation.
+test('sampleData: duplicate detection compares Choice values as the options they resolve to', () => {
+  const withChoiceKey = (rows) => {
+    const s = base();
+    s.entities[0].columns = [{ schemaName: 'contoso_code', displayName: 'Code', type: 'Choice',
+      options: [{ 1033: 'Open', 1036: 'Ouvert' }, { 1033: 'Closed', 1036: 'Fermé' }] }];
+    s.entities[0].alternateKeys = [{ name: 'k', columns: ['contoso_code'] }];
+    s.sampleData = { contoso_order: rows };
+    return s;
+  };
+  const gateSays = (s) => validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /duplicate contoso_code/.test(e));
+  const loaderSays = (s) => {
+    try { buildSeedGroup({ spec: s, e: s.entities[0], records: s.sampleData.contoso_order, statusReasonValues: {} }); return null; } catch (e) { return e.message; }
+  };
+  const cases = [
+    ['a label and its other-language alias', ['Open', 'Ouvert'], true],
+    ['a label and the raw option integer', ['Open', 100000000], true],
+    ['an alias and the raw option integer', ['Ouvert', 100000000], true],
+    ['two different options, in two languages', ['Open', 'Fermé'], false],
+  ];
+  for (const [what, [first, second], dup] of cases) {
+    const s = withChoiceKey([{ contoso_name: 'A', contoso_code: first }, { contoso_name: 'B', contoso_code: second }]);
+    const loader = loaderSays(s);
+    assert.strictEqual(Boolean(loader), dup, `precondition — the loader ${dup ? 'refuses' : 'accepts'} ${what}: ${loader}`);
+    assert.strictEqual(gateSays(s).length, dup ? 1 : 0, `${what}: the gate must agree with the loader; got ${JSON.stringify(gateSays(s))}`);
+  }
+  // The author wrote neither side as an integer, so the message names what they DID write.
+  const [msg] = gateSays(withChoiceKey([{ contoso_name: 'A', contoso_code: 'Open' }, { contoso_name: 'B', contoso_code: 'Ouvert' }]));
+  assert.match(msg, /'Ouvert'/);
+  assert.match(msg, /same option as 'Open'/);
+});
+
+// A generated fallback name is a REAL identity, not a placeholder: the reconcile matches a deployed
+// container by name. So an unnamed section and an explicit `name: "section_0_0"` are the same
+// container to every rebuild path, while create emits two. MEASURED before this gate: the compiled
+// intent carried two sections both named `section_0_0`, and declaredSectionByField routed both
+// sections' fields to that one target. Uniqueness is therefore checked on the EFFECTIVE name.
+test('form layout: an explicit name that collides with a generated one is rejected', () => {
+  const form = (tabs) => { const s = base(); s.entities[0].columns = [{ schemaName: 'contoso_amount', displayName: 'Amt', type: 'Decimal' }]; s.forms = [{ entity: 'contoso_order', layout: 'explicit', tabs }]; return s; };
+  const nameErrors = (s) => validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /reuses the (tab|section) name/.test(e));
+
+  const secCollision = form([{ label: 'G', sections: [
+    { label: 'A', fields: ['contoso_name'] },                              // unnamed -> section_0_0
+    { label: 'B', name: 'section_0_0', fields: ['contoso_amount'] },       // explicit, same identity
+  ] }]);
+  assert.strictEqual(nameErrors(secCollision).length, 1, 'an unnamed section and an explicit section_0_0 are one container');
+  assert.match(nameErrors(secCollision)[0], /generated name/, 'the message must explain where the other name came from');
+
+  const tabCollision = form([
+    { label: 'A', sections: [{ label: 'S', name: 's1', fields: ['contoso_name'] }] },      // unnamed -> tab_0
+    { label: 'B', name: 'tab_0', sections: [{ label: 'T', name: 's2', fields: ['contoso_amount'] }] },
+  ]);
+  assert.strictEqual(nameErrors(tabCollision).length, 1, 'tabs collide the same way');
+
+  // The generated section name carries its FORM-COLUMN index for ci > 0, so the gate has to walk
+  // columns rather than the flattened section list to compute it.
+  const multiColumn = form([{ label: 'G', columns: [
+    { width: '50%', sections: [{ label: 'L', name: 'section_0_1_0', fields: ['contoso_name'] }] },
+    { width: '50%', sections: [{ label: 'R', fields: ['contoso_amount'] }] },   // -> section_0_1_0
+  ] }]);
+  assert.strictEqual(nameErrors(multiColumn).length, 1, 'a collision with a column-scoped generated name must be caught');
+
+  // Ordinary multi-column layouts generate distinct names and must stay valid.
+  const ok = form([{ label: 'G', columns: [
+    { width: '50%', sections: [{ label: 'L', fields: ['contoso_name'] }] },
+    { width: '50%', sections: [{ label: 'R', fields: ['contoso_amount'] }] },
+  ] }]);
+  assert.deepStrictEqual(nameErrors(ok), [], 'unnamed sections in different form-columns are distinct');
+});
+
+// Reserving the generated namespace instead would break the round trip: a DOWNLOADED spec carries
+// the real deployed names, which for an app this compiler built are exactly the generated ones. They
+// must stay valid when they are the only declaration of that container.
+test('form layout: a downloaded spec that names its containers explicitly stays valid', () => {
+  const s = base();
+  s.entities[0].columns = [{ schemaName: 'contoso_amount', displayName: 'Amt', type: 'Decimal' }];
+  s.forms = [{ entity: 'contoso_order', layout: 'explicit', tabs: [
+    { label: 'General', name: 'tab_0', sections: [
+      { label: 'A', name: 'section_0_0', fields: ['contoso_name'] },
+      { label: 'B', name: 'section_0_1', fields: ['contoso_amount'] },
+    ] },
+  ] }];
+  assert.deepStrictEqual(
+    validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /reuses the (tab|section) name/.test(e)),
+    [], 'round-tripping a built app must not be rejected by its own generated names');
+});
+
+// An explicit layout that supplies no structure used to pass `validateAppSpec` — and that is the
+// gate that matters, because `build-model-app.js` runs the validator and never the standalone lint.
+// MEASURED before this check, every one with `validate.ok === true`: `tabs: []` compiled to 0 tabs /
+// 0 sections / 0 bound cells, and a tab with empty `sections`/`columns` compiled to 1 tab and 0
+// sections — every declared field silently dropped. With notes enabled, `tabs: []` did not even
+// fail cleanly: the compiler threw `Cannot read properties of undefined (reading 'columns')`.
+test('form layout: an explicit layout with no place to put a field is rejected', () => {
+  const form = (tabs) => {
+    const s = base();
+    s.entities[0].columns = [{ schemaName: 'contoso_amount', displayName: 'Amt', type: 'Decimal' }];
+    s.forms = [{ entity: 'contoso_order', layout: 'explicit', tabs }];
+    return s;
+  };
+  const emptyErrors = (s) => validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /no tabs|has no sections/.test(e));
+
+  assert.strictEqual(emptyErrors(form([])).length, 1, 'tabs: [] declares no structure at all');
+  assert.strictEqual(emptyErrors(form([{ label: 'G', sections: [] }])).length, 1, 'a tab with no sections has nowhere to place a field');
+  assert.strictEqual(emptyErrors(form([{ label: 'G', columns: [] }])).length, 1, 'nor does a tab with no form-columns');
+  assert.strictEqual(emptyErrors(form([{ label: 'G', columns: [{ width: '100%', sections: [] }] }])).length, 1,
+    'nor one whose only form-column is empty');
+
+  // The emptiness test is on the FLATTENED section list, so an empty form-column BESIDE a populated
+  // one is still a legitimate layout — checking `t.sections` alone would have reported every
+  // multi-column tab as empty, the same silent disagreement in the other direction.
+  assert.deepStrictEqual(emptyErrors(form([{ label: 'G', columns: [
+    { width: '50%', sections: [] },
+    { width: '50%', sections: [{ label: 'S', fields: ['contoso_name'] }] },
+  ] }])), [], 'an empty form-column beside a populated one is allowed');
+
+  // A section with no fields is NOT rejected: a section may legitimately carry only a sub-grid or a
+  // quick-view, neither of which is declared in `fields[]`.
+  assert.deepStrictEqual(emptyErrors(form([{ label: 'G', sections: [{ label: 'S', fields: [] }] }])), [],
+    'an empty section is legal — it may host a sub-grid or quick-view');
+
+  assert.deepStrictEqual(emptyErrors(form([{ label: 'G', sections: [{ label: 'S', fields: ['contoso_name'] }] }])), [],
+    'an ordinary layout stays valid');
+});
+
+// The seeder refuses to use a duplicated primary name as `matchOn` (Dataverse could resolve or
+// deduplicate the wrong row). That refusal happens in the sample-data phase — after tables, forms and
+// views are already deployed — so ordinary sample data used to validate clean and then stop the build
+// halfway. The gate mirrors chooseMatchOn exactly, including both of its escape hatches.
+test('sampleData: duplicate primary-name values are rejected at author time, not mid-build', () => {
+  const dup = base();
+  dup.sampleData = { contoso_order: [{ contoso_name: 'Printer issue' }, { contoso_name: 'Printer issue' }] };
+  assert.ok(validateAppSpec(dup, { profile: 'plan' }).errors.some((e) => /duplicate contoso_name value 'Printer issue'/.test(e)));
+
+  const unique = base();
+  unique.sampleData = { contoso_order: [{ contoso_name: 'A' }, { contoso_name: 'B' }] };
+  assert.ok(!validateAppSpec(unique, { profile: 'plan' }).errors.some((e) => /duplicate contoso_name/.test(e)), 'unique names must stay valid');
+
+  // A single-column alternate key is enforced-unique by Dataverse, so it is what matchOn uses and
+  // the primary name never comes into it.
+  const keyed = base();
+  keyed.entities[0].alternateKeys = [{ name: 'k', columns: ['contoso_code'] }];
+  keyed.sampleData = { contoso_order: [{ contoso_name: 'X', contoso_code: '1' }, { contoso_name: 'X', contoso_code: '2' }] };
+  assert.ok(!validateAppSpec(keyed, { profile: 'plan' }).errors.some((e) => /duplicate contoso_name/.test(e)), 'a safe alternate key makes the primary irrelevant');
+
+  // A safe alternate key is what matchOn USES, so duplicates in it break the same way — and used to
+  // pass this gate and fail during sample-data provisioning instead.
+  const dupKey = base();
+  dupKey.entities[0].alternateKeys = [{ name: 'k', columns: ['contoso_code'] }];
+  dupKey.sampleData = { contoso_order: [{ contoso_name: 'A', contoso_code: 'DUP' }, { contoso_name: 'B', contoso_code: 'DUP' }] };
+  assert.ok(validateAppSpec(dupKey, { profile: 'plan' }).errors.some((e) => /duplicate contoso_code value 'DUP'/.test(e)),
+    'duplicates in the alternate key that matchOn selects must be caught at author time');
+
+  // A partially/entirely empty primary means matchOn is omitted altogether, so there is no wrong-row
+  // resolve to guard against.
+  const empty = base();
+  empty.sampleData = { contoso_order: [{ contoso_name: '' }, { contoso_name: '' }] };
+  assert.ok(!validateAppSpec(empty, { profile: 'plan' }).errors.some((e) => /duplicate contoso_name/.test(e)));
+});
+
+test('sampleData: _seedKey is rejected because it reaches Dataverse as an unknown attribute', () => {
+  const s = base();
+  s.sampleData = { contoso_order: [{ contoso_name: 'A', _seedKey: 'order-1' }] };
+  const errs = validateAppSpec(s, { profile: 'plan' }).errors;
+  assert.ok(errs.some((e) => /_seedKey. is not a supported sample-record key/.test(e)));
+  assert.ok(errs.some((e) => /single-column alternate key/.test(e)), 'points at the real mechanism');
+});
+
+// A multi-column tab nests its sections inside columns[]. Every raw-spec reader must see them, or
+// section-level validation silently stops running for exactly the richer layouts it should police.
+test('form layout: sections nested in columns[] are still validated', () => {
+  const badKey = errsFor([{ label: 'G', columns: [{ width: '50%', sections: [{ label: 'S', locked: true, fields: [] }] }] }]);
+  assert.ok(badKey.some((e) => /unknown key .locked./.test(e)), `nested section keys must be checked; got ${JSON.stringify(badKey)}`);
+  const badCols = errsFor([{ label: 'G', columns: [{ width: '50%', sections: [{ label: 'S', columns: 9, fields: [] }] }] }]);
+  assert.ok(badCols.some((e) => /may span 1 to 4 columns/.test(e)), 'nested section column counts must be checked');
+  const badSpan = errsFor([{ label: 'G', columns: [{ width: '50%', sections: [{ label: 'S', fields: [{ name: 'contoso_amount', colspan: 0 }] }] }] }]);
+  assert.ok(badSpan.some((e) => /has colspan .0./.test(e)), 'nested field spans must be checked');
+});
+
+test('form layout: a non-array fields inside columns[] is caught, not thrown on', () => {
+  const s = base();
+  s.entities[0].columns = [{ schemaName: 'contoso_amount', type: 'Text' }];
+  s.forms = [{ entity: 'contoso_order', name: 'O', layout: 'explicit',
+    tabs: [{ label: 'G', columns: [{ width: '100%', sections: [{ label: 'S', fields: 'contoso_amount' }] }] }] }];
+  // A string is ITERABLE, so a naive per-entry loop would walk its characters instead of failing.
+  const errs = validateAppSpec(s, { profile: 'plan' }).errors;
+  assert.ok(errs.some((e) => /fields must be an array/.test(e)), `got ${JSON.stringify(errs)}`);
+});
+
+// --- #584 item 5: the minimumPluginVersion capability gate --------------------------------------
+//
+// ⚠ This gate protects FORWARD only, and the test records that honestly because it is easy to
+// over-claim. MEASURED against the shipped 2.8.0 validator: an unknown top-level key,
+// `schemaVersion: 3` and `schemaVersion: 99` are ALL accepted with ok:true, because it validates
+// none of them. No marker can make an already-released consumer reject a spec. What this buys is a
+// machine-checkable requirement from here on, inherited by every future consumer.
+test('minimumPluginVersion refuses a spec that needs a newer plugin than the one running', () => {
+  const { version } = require('../../.plugin/plugin.json');
+  const bump = (v, by) => { const p = String(v).split('.').map((n) => parseInt(n, 10) || 0); p[0] += by; return p.join('.'); };
+  const spec = (v) => Object.assign(base(), v === undefined ? {} : { minimumPluginVersion: v });
+  const gateErrors = (s) => validateAppSpec(s, { profile: 'plan' }).errors.filter((e) => /requires model-apps|minimumPluginVersion/.test(e));
+
+  assert.deepStrictEqual(gateErrors(spec(undefined)), [], 'a spec that declares no requirement is unaffected');
+  assert.deepStrictEqual(gateErrors(spec(version)), [], 'the exact running version satisfies the requirement');
+  assert.deepStrictEqual(gateErrors(spec(bump(version, -1))), [], 'an older requirement is satisfied');
+
+  const tooNew = gateErrors(spec(bump(version, 1)));
+  assert.strictEqual(tooNew.length, 1, `a newer requirement must be refused; got ${JSON.stringify(tooNew)}`);
+  assert.match(tooNew[0], new RegExp(`requires model-apps ${bump(version, 1).replace(/\./g, '\\.')}`), 'the message names the required version');
+  assert.match(tooNew[0], new RegExp(`running plugin is ${String(version).replace(/\./g, '\\.')}`), 'and the version actually running');
+  assert.match(tooNew[0], /upgrade the plugin/, 'and tells the author to upgrade rather than delete the line');
+
+  // Pre-release and build-metadata suffixes compare on the release CORE. A first attempt split on
+  // dots BEFORE stripping the suffix, which turned `2.8.0-beta.1` into
+  // [2,8,0,1] — so the running release compared as OLDER than its own pre-release and refused to
+  // build. A dotted suffix is the case a single-token `-beta` test cannot catch.
+  for (const suffix of ['-beta', '-beta.1', '+build.1', '-rc.2']) {
+    assert.deepStrictEqual(gateErrors(spec(`${version}${suffix}`)), [],
+      `a '${suffix}' requirement is satisfied by the corresponding release — comparing the core is the safe direction`);
+  }
+
+  // A malformed value is rejected on its own terms rather than silently treated as 0.0.0, which
+  // would make every requirement vacuously satisfied.
+  const bad = gateErrors(spec('next'));
+  assert.strictEqual(bad.length, 1);
+  assert.match(bad[0], /dotted version string/);
+  // The grammar is ANCHORED, and the anchoring is the point. The reviewer caught a prefix-only
+  // pattern: `2..9` matched on its leading `2` alone, and compareVersions' `parseInt(n, 10) || 0`
+  // then turned the empty component into 0 and enforced **2.0.9** — a DIFFERENT floor than the
+  // author wrote, with no error at all. The evident intent `2.9` IS refused by this plugin, so the
+  // typo silently inverted the outcome. Trailing junk is the same class (`2.9.0garbage` -> 2.9.0).
+  for (const malformed of ['2..9', '2.9.0garbage', '2.9.0 ', ' 2.9.0', '2.', '.9', '2.9.0-', '1.2.3++x']) {
+    const e = gateErrors(spec(malformed));
+    assert.strictEqual(e.length, 1, `${JSON.stringify(malformed)} must be refused, got ${JSON.stringify(e)}`);
+    assert.match(e[0], /dotted version string/,
+      `${JSON.stringify(malformed)} must be reported as malformed rather than compared as a version`);
+  }
+
+  // …while every shape an author legitimately writes still passes the grammar. A version that is
+  // merely NEWER than this plugin is a different outcome from one that is malformed, so accept
+  // either "no error" or the too-new refusal here — this asserts well-formedness, not the floor.
+  for (const good of ['2', '2.9', '2.9.0', '2.9.0.1', '2.9.0-beta.1', '2.9.0+build.1']) {
+    const e = gateErrors(spec(good));
+    assert.ok(e.length === 0 || /requires model-apps/.test(e[0]),
+      `${JSON.stringify(good)} must be accepted as well-formed, got ${JSON.stringify(e)}`);
+  }
+
+  // FAIL CLOSED when this plugin cannot read its own version. A first attempt downgraded
+  // that to a warning, which let an incompatible install reach the write path with the
+  // requirement neither satisfied nor overridden. Driven by making BOTH manifest reads throw.
+  const fs = require('node:fs');
+  const realRead = fs.readFileSync;
+  delete require.cache[require.resolve('../lib/app-spec.js')];
+  fs.readFileSync = function (p, ...rest) {
+    if (String(p).includes('plugin.json')) { const e = new Error('EACCES'); e.code = 'EACCES'; throw e; }
+    return realRead.call(this, p, ...rest);
+  };
+  try {
+    const isolated = require('../lib/app-spec.js');
+    const r = isolated.validateAppSpec(Object.assign(base(), { minimumPluginVersion: '99.0.0' }), { profile: 'plan' });
+    assert.strictEqual(r.ok, false, 'an unreadable manifest must not satisfy a declared minimum');
+    assert.ok(r.errors.some((e) => /could not be read/.test(e)),
+      `the refusal must say the version was unreadable; got ${JSON.stringify(r.errors)}`);
+    // …and a spec that declares NO minimum is unaffected, so this cannot break an existing spec.
+    assert.strictEqual(isolated.validateAppSpec(base(), { profile: 'plan' }).ok, true,
+      'a spec with no minimumPluginVersion must still validate when the manifest is unreadable');
+  } finally {
+    fs.readFileSync = realRead;
+    delete require.cache[require.resolve('../lib/app-spec.js')];
+  }
 });

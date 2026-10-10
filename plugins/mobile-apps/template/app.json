@@ -2,7 +2,8 @@
   "expo": {
     "extra": {
       "telemetry": {
-        "appInstanceId": null
+        "appInstanceId": null,
+        "cluster": null
       },
       "appInsightsConfig": {
         "enabled": false,

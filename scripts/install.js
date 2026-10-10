@@ -6,8 +6,13 @@
  * the Open Plugins marketplace and install plugins for Claude Code and GitHub Copilot.
  *
  * Usage:
- *   node scripts/install.js                                              (from local clone)
+ *   node scripts/install.js [--include-dataverse]                        (from local clone)
  *   curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js | node
+ *   curl -fsSL https://raw.githubusercontent.com/microsoft/power-platform-skills/main/scripts/install.js | node - --include-dataverse
+ *
+ * Options:
+ *   --include-dataverse   Also install the dataverse plugin (maintained in microsoft/Dataverse-skills)
+ *   -h, --help            Show this help
  */
 
 const { execSync } = require("child_process");
@@ -22,6 +27,17 @@ const MARKETPLACE_NAME = "power-platform-skills";
 const GITHUB_RAW = `https://raw.githubusercontent.com/${REPO}/main`;
 const HOME = os.homedir();
 
+// Marketplace plugins that are installed only when their flag is passed. dataverse is
+// maintained in microsoft/Dataverse-skills, and many users already install it from that
+// repository's own marketplace; installing it here by default would load its skills twice.
+const OPT_IN_PLUGINS = { dataverse: "--include-dataverse" };
+
+const USAGE = `Usage: node install.js [--include-dataverse]
+
+Options:
+  --include-dataverse   Also install the dataverse plugin (maintained in microsoft/Dataverse-skills)
+  -h, --help            Show this help`;
+
 // ── Colors (disabled when output is piped) ────────────────────
 const tty = process.stdout.isTTY;
 const bold = (s) => (tty ? `\x1b[1m${s}\x1b[0m` : s);
@@ -34,6 +50,41 @@ const warn = (msg) => console.log(`  ${yellow("!")} ${msg}`);
 const fail = (msg) => console.log(`  ${red("✗")} ${msg}`);
 const header = (msg) => console.log(`\n${bold(msg)}`);
 const info = (msg) => console.log(`  ${msg}`);
+
+// ── Arguments ─────────────────────────────────────────────────
+// `process.argv` differs by launch mode, and the script's own arguments start at index 2
+// whenever any are present:
+//   node scripts/install.js --include-dataverse  -> [node, /abs/install.js, "--include-dataverse"]
+//   curl ... | node - --include-dataverse         -> [node, "-", "--include-dataverse"]
+//   curl ... | node                               -> [node]
+// Unknown arguments fail instead of being ignored, so a typo cannot silently drop a plugin.
+function parseArgs(args) {
+  const options = { help: false, includedOptIn: new Set() };
+  const optInByFlag = new Map(Object.entries(OPT_IN_PLUGINS).map(([plugin, flag]) => [flag, plugin]));
+  for (const arg of args) {
+    if (arg === "-h" || arg === "--help") {
+      options.help = true;
+    } else if (optInByFlag.has(arg)) {
+      options.includedOptIn.add(optInByFlag.get(arg));
+    } else {
+      throw new Error(`Unknown argument '${arg}'.\n\n${USAGE}`);
+    }
+  }
+  return options;
+}
+
+function selectPlugins(pluginNames, includedOptIn) {
+  const selected = [];
+  const skipped = [];
+  for (const name of pluginNames) {
+    if (Object.prototype.hasOwnProperty.call(OPT_IN_PLUGINS, name) && !includedOptIn.has(name)) {
+      skipped.push(name);
+    } else {
+      selected.push(name);
+    }
+  }
+  return { selected, skipped };
+}
 
 // ── Helpers ───────────────────────────────────────────────────
 function hasCommand(cmd) {
@@ -117,7 +168,9 @@ function enableAutoUpdate(configFile, getMarketplaces) {
 
 // ── Marketplace loader ────────────────────────────────────────
 async function loadMarketplace() {
-  const scriptDir = process.argv[1] ? path.dirname(path.resolve(process.argv[1])) : process.cwd();
+  // `node -` (piped with arguments) sets argv[1] to "-", which is not a script path.
+  const scriptPath = process.argv[1] && process.argv[1] !== "-" ? process.argv[1] : null;
+  const scriptDir = scriptPath ? path.dirname(path.resolve(scriptPath)) : process.cwd();
   // Script lives in scripts/, so the repo root is one level up
   const repoRoot = path.resolve(scriptDir, "..");
   const roots = [...new Set([repoRoot, process.cwd()])];
@@ -259,6 +312,12 @@ function installCopilot(plugins) {
 
 // ── Main ──────────────────────────────────────────────────────
 async function main() {
+  const options = parseArgs(process.argv.slice(2));
+  if (options.help) {
+    console.log(USAGE);
+    return;
+  }
+
   console.log("");
   console.log(bold("Power Platform Skills — Installer"));
   console.log("──────────────────────────────────");
@@ -404,11 +463,18 @@ async function main() {
   header("Reading marketplace");
 
   const manifest = await loadMarketplace();
-  const plugins = manifest.plugins.map((p) => p.name);
+  const { selected: plugins, skipped } = selectPlugins(
+    manifest.plugins.map((p) => p.name),
+    options.includedOptIn
+  );
 
   console.log(`  Marketplace : ${manifest.name}`);
   console.log("  Plugins     :");
   for (const p of plugins) console.log(`    - ${p}`);
+  for (const p of skipped) info(`Skipping ${p} (pass ${OPT_IN_PLUGINS[p]} to install it)`);
+  for (const p of options.includedOptIn) {
+    if (!plugins.includes(p)) warn(`${OPT_IN_PLUGINS[p]} was passed, but ${p} is not in the marketplace`);
+  }
 
   if (plugins.length === 0) {
     warn("No plugins found in the marketplace.");
@@ -432,7 +498,15 @@ async function main() {
   console.log("");
 }
 
-main().catch((err) => {
-  fail(`Installation failed: ${err.message}`);
-  process.exit(1);
-});
+// Run when executed directly. Piped input (`curl ... | node`) leaves require.main undefined,
+// so checking only `require.main === module` would make the one-line installer do nothing.
+// Match the stdin module id instead of a missing require.main: `node -e "require(...)"` also
+// leaves require.main undefined, and must import the helpers without starting an install.
+if (require.main === module || module.id === "[stdin]") {
+  main().catch((err) => {
+    fail(`Installation failed: ${err.message}`);
+    process.exit(1);
+  });
+}
+
+module.exports = { parseArgs, selectPlugins, OPT_IN_PLUGINS };

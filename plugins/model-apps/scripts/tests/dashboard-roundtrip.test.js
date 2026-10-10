@@ -30,8 +30,8 @@ const DASH_ID = '33333333-3333-3333-3333-333333333333';
 const dirs = [];
 test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
 
-function harness() {
-  const { createMakerSdk } = require(BUNDLE);
+async function harness() {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dash-478-'));
   dirs.push(dir);
   const store = {};
@@ -55,8 +55,8 @@ function harness() {
     put: async () => ({ status: 204, headers: {}, body: {} }),
     delete: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = createMakerSdk({ workspacePath: dir, instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
   return { sdk, store };
 }
 
@@ -73,8 +73,8 @@ const TILES = {
 
 for (const [label, tile] of Object.entries(TILES)) {
   test(`REAL BUNDLE: a dashboard with a ${label} survives serialize -> deserialize`, async () => {
-    const { sdk, store } = harness();
-    const art = sdk.createArtifact('dashboard', { name: 'Field Ops' });
+    const { sdk, store } = await harness();
+    const art = await sdk.createArtifact('dashboard', { name: 'Field Ops' });
     await sdk.addElement('dashboard', art.id, '/components', tile);
     await sdk.pushArtifact('dashboard', art.id);
 

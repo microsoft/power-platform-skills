@@ -229,11 +229,13 @@ const MAN_2 = {
     { key: 'order-detail', name: 'Order Detail', pageId: GP_D },
   ],
 };
+const STORED_NAMES = new Map([[GP_O, 'Overview'], [GP_D, 'Order Detail']]);
+const CREATED_IDS = new Map([['overview', new Set([GP_O])], ['order-detail', new Set([GP_D])]]);
 
 // (f) manifest id ∈ existenceIds → reuse (C1) — case-insensitive match
 test('reconcilePageIds: manifest id ∈ existence → reuse (C1)', () => {
   const pages = [{ key: 'overview', name: 'Overview' }, { key: 'order-detail', name: 'Order Detail' }];
-  const { keyToId, absentKeys, conflicts } = reconcilePageIds(pages, MAN_2, [GP_O.toUpperCase(), GP_D], []);
+  const { keyToId, absentKeys, conflicts } = reconcilePageIds(pages, MAN_2, [GP_O.toUpperCase(), GP_D], [], STORED_NAMES, CREATED_IDS);
   assert.strictEqual(keyToId.get('overview'), GP_O);
   assert.strictEqual(keyToId.get('order-detail'), GP_D);
   assert.deepStrictEqual(absentKeys, []);
@@ -243,7 +245,7 @@ test('reconcilePageIds: manifest id ∈ existence → reuse (C1)', () => {
 // Crash-safety (C1): manifest id ∈ existence but NOT yet in sitemap (finalizer died) → reuse, not re-create
 test('reconcilePageIds: crash-safety — manifest id in existence but not in sitemap → reused (C1)', () => {
   const { keyToId, absentKeys } = reconcilePageIds(
-    [{ key: 'overview', name: 'Overview' }], MAN_2, [GP_O], [],
+    [{ key: 'overview', name: 'Overview' }], MAN_2, [GP_O], [], STORED_NAMES, CREATED_IDS,
   );
   assert.strictEqual(keyToId.get('overview'), GP_O, 'reused from existence — not re-created');
   assert.deepStrictEqual(absentKeys, []);
@@ -279,14 +281,14 @@ test('reconcilePageIds: spec pageId ∈ sitemapIds → binds (edit-snapshot adop
 test('reconcilePageIds: spec pageId === manifest id → binds (manifest agreement, C3)', () => {
   const { keyToId, conflicts } = reconcilePageIds(
     [{ key: 'overview', name: 'Overview', pageId: GP_O }],
-    MAN_2, [GP_O], [],
+    MAN_2, [GP_O], [], STORED_NAMES, CREATED_IDS,
   );
   assert.strictEqual(keyToId.get('overview'), GP_O);
   assert.deepStrictEqual(conflicts, []);
 });
 
 // (c) spec pageId ∈ existence but NOT in sitemap, != stale manifest id → unprovenanced → NOT bound
-test('reconcilePageIds: unprovenanced spec pageId (∈ existence, not in sitemap, != stale manId) → NOT bound, falls to absent', () => {
+test('reconcilePageIds: a live unproven spec pageId halts rather than falling to absent', () => {
   const STRAY = 'aabbccdd-1234-4567-89ab-ccddeeff0011';
   // GP_D is the manifest id for 'overview' in MAN_STALE; it is stale (not in existenceIds).
   // STRAY is live env-wide but is NOT in this app's sitemap and != GP_D → unprovenanced.
@@ -296,8 +298,8 @@ test('reconcilePageIds: unprovenanced spec pageId (∈ existence, not in sitemap
     MAN_STALE, [STRAY], [],
   );
   assert.notStrictEqual(keyToId.get('overview'), STRAY, 'stray id must NOT be bound');
-  assert.deepStrictEqual(absentKeys, ['overview'], 'falls to absent — manifest id is also stale');
-  assert.deepStrictEqual(conflicts, []);
+  assert.deepStrictEqual(absentKeys, [], 'a live unproven id cannot be hidden by recreating the page');
+  assert.strictEqual(conflicts[0].reason, 'unproven-manifest-id');
 });
 
 // Stale spec pageId (not in existenceIds) falls through to the manifest
@@ -305,7 +307,7 @@ test('reconcilePageIds: stale spec pageId (not in existence) falls through to ma
   const STALE = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
   const { keyToId } = reconcilePageIds(
     [{ key: 'overview', name: 'Overview', pageId: STALE }],
-    MAN_2, [GP_O], [],
+    MAN_2, [GP_O], [], STORED_NAMES, CREATED_IDS,
   );
   assert.strictEqual(keyToId.get('overview'), GP_O, 'manifest id wins when spec id is stale');
 });

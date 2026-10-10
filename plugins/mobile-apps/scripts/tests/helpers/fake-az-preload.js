@@ -1,15 +1,9 @@
 'use strict';
 
-const childProcess = require('node:child_process');
 const fs = require('node:fs');
+const azureCli = require('../../lib/azure-cli');
 
-const originalExecFileSync = childProcess.execFileSync;
-
-childProcess.execFileSync = function fakeAzExecFileSync(command, args, options) {
-  if (command !== 'az') {
-    return originalExecFileSync.call(this, command, args, options);
-  }
-
+azureCli.runAzureCli = function fakeAzureCli(args) {
   const cliArgs = Array.isArray(args) ? args : [];
   if (process.env.FAKE_AZ_LOG) {
     fs.appendFileSync(process.env.FAKE_AZ_LOG, `${cliArgs.join(' ')}\n`);

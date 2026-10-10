@@ -236,8 +236,8 @@ test('app.description may be empty (legacy shape) but a new surface may not', ()
 const dirs = [];
 test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
 
-function sdkWithCapture() {
-  const { createMakerSdk } = require(BUNDLE);
+async function sdkWithCapture() {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'desc-'));
   dirs.push(dir);
   const writes = [];
@@ -252,8 +252,8 @@ function sdkWithCapture() {
     put: async () => ({ status: 204, headers: {}, body: {} }),
     delete: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = createMakerSdk({ workspacePath: dir, instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
   return { sdk, writes };
 }
 
@@ -267,13 +267,30 @@ test('REAL BUNDLE: description survives to the wire for every artifact we set it
     chart: { name: 'C', description: MARK, entityLogicalName: 'account', chartType: 'Column', isDefault: false, series: [{ field: 'name', aggregate: 'count' }], categories: [{ field: 'name' }] },
     form: { name: 'F', description: MARK, entityLogicalName: 'account', formType: 'main', status: 'draft' },
     dashboard: { name: 'D', description: MARK },
-    businessRule: { name: 'BR', description: MARK, entityLogicalName: 'account', scope: 'Entity', status: 'Draft' },
+    // ⚠ This rule must be COMPLETE — one condition and one action. It used to be a bare
+    // `{ name, description, entityLogicalName, scope, status }`, which worked only because the SDK
+    // would happily push a rule with no clauses and no actions. It no longer will: the designer's
+    // completeness validator runs on every save, so a skeleton rule is refused and NOTHING reaches
+    // the wire — making this test fail for a reason that has nothing to do with descriptions.
+    //
+    // The distinction matters: that was FIXTURE damage, not product damage. A rule the designer
+    // itself would refuse to save is not a case this test ever meant to cover.
+    businessRule: businessRuleDef({
+      name: 'BR', description: MARK, entity: 'account',
+      conditions: [{ field: 'name', operator: 'Equals', value: 'x', dataType: 'String' }],
+      actions: [{ type: 'SetVisibility', field: 'name', visible: false }],
+    }),
     app: { name: 'A', uniqueName: 'cr_descapp', description: MARK, iconWebResourceId: '11111111-1111-1111-1111-111111111111' },
   };
   for (const [type, def] of Object.entries(cases)) {
-    const { sdk, writes } = sdkWithCapture();
-    const art = sdk.createArtifact(type, def);
+    const { sdk, writes } = await sdkWithCapture();
+    const art = await sdk.createArtifact(type, def);
     assert.strictEqual(art.description, MARK, `${type}: the typed surface keeps description`);
+    // A business rule carries its condition tree through the generic element surface, not the
+    // create payload — mirroring how the build authors one.
+    if (type === 'businessRule') {
+      await sdk.updateElement('businessRule', art.id, '/rootCondition', def.rootCondition);
+    }
     // The push may fail late (the fake client returns no usable id); the write we care about has
     // already been recorded by then, so the outcome of the push is deliberately not asserted.
     try { await sdk.pushArtifact(type, art.id); } catch { /* payload already captured */ }
@@ -283,11 +300,11 @@ test('REAL BUNDLE: description survives to the wire for every artifact we set it
 
 // ------------------------------------------------------------------ 5. the two deliberate exclusions
 
-test('REAL BUNDLE: a command does NOT accept a description — so the build never sends one', () => {
+test('REAL BUNDLE: a command does NOT accept a description — so the build never sends one', async () => {
   // Pins why `commands[]` is absent from everything above. If a future bundle adds it, this fails
   // and the omission gets revisited on purpose instead of staying an unexplained gap.
-  const { sdk } = sdkWithCapture();
-  const art = sdk.createArtifact('command', { name: 'CMD', description: 'ignored', entityLogicalName: 'account', buttons: [] });
+  const { sdk } = await sdkWithCapture();
+  const art = await sdk.createArtifact('command', { name: 'CMD', description: 'ignored', entityLogicalName: 'account', buttons: [] });
   assert.ok(!('description' in art), 'the command surface drops description; wiring one would be inert');
 });
 
@@ -301,7 +318,7 @@ test('REAL BUNDLE: a view accepts /description as an updateElement pointer, and 
   // A re-vendor that changed either would otherwise go green. AGENTS.md treats re-vendoring as a
   // normal operation, so this is pinned here rather than assumed.
   const ID = '33333333-3333-3333-3333-333333333333';
-  const { createMakerSdk } = require(BUNDLE);
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'view496-'));
   dirs.push(dir);
   const writes = [];
@@ -315,7 +332,7 @@ test('REAL BUNDLE: a view accepts /description as an updateElement pointer, and 
       + '<row name="result" id="new_itemid"><cell name="new_name" width="150"/></row></grid>',
   };
   const sdk = createMakerSdk({
-    workspacePath: dir,
+    workspaceStorage: createNodeWorkspaceStorage(dir),
     instanceUrl: 'https://contoso.crm.dynamics.com',
     httpClient: {
       get: async (url) => (/savedqueries\(/.test(String(url))
@@ -327,7 +344,7 @@ test('REAL BUNDLE: a view accepts /description as an updateElement pointer, and 
       delete: async () => ({ status: 204, headers: {}, body: {} }),
     },
   });
-  sdk.initWorkspace();
+  await sdk.initWorkspace();
 
   await sdk.fetchArtifact('view', ID);
   const fetched = await sdk.getArtifact('view', ID);
@@ -342,23 +359,80 @@ test('REAL BUNDLE: a view accepts /description as an updateElement pointer, and 
   assert.strictEqual(patch.body.description, 'Authored text.');
 });
 
-test('a persona NEVER sends a description — it would break the SDK ownership guard', () => {
-  // The bundle builds its role payload as
-  //     { name, description: SDK_ROLE_MARKER, 'businessunitid@odata.bind': ... }
-  // and gates reuse on
-  //     d.ismanaged !== true && (d.description ?? '') === SDK_ROLE_MARKER
-  // so a role carrying an author's prose is treated as somebody else's role and the SDK THROWS
-  // ("already exists ... and was not created by the SDK; refusing to modify or assign it").
-  // Teardown and verify re-implement the same marker check, so all three would disagree at once.
+const AUTHOR_PROSE = 'Handles field work orders end to end.';
+
+// A real-bundle SDK wired just far enough for `createPersonaRole` to reach its `/roles` write.
+// Two stubs are load-bearing and were both found by measuring:
+//   * the root business unit is resolved with `_parentbusinessunitid_value eq null`;
+//   * each entity's privilege must have a DISTINCT PrivilegeId, or the SDK refuses the role with
+//     "share the Dataverse privilege ... but request different scopes" (the persona's own table is
+//     user-scoped while the injected `appmodule` read is organization-scoped).
+async function roleSdk() {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'role-'));
+  dirs.push(dir);
+  const calls = [];
+  const sdk = createMakerSdk({
+    workspaceStorage: createNodeWorkspaceStorage(dir),
+    instanceUrl: 'https://contoso.crm.dynamics.com',
+    httpClient: {
+      get: async (url) => {
+        calls.push({ verb: 'GET', url: String(url) });
+        if (/businessunits/i.test(url)) return { status: 200, headers: {}, body: { value: [{ businessunitid: '00000000-0000-0000-0000-0000000000b1' }] } };
+        // e.g. EntityDefinitions(LogicalName='new_ticket')?$select=LogicalName,Privileges
+        const ed = /EntityDefinitions\(LogicalName='([^']+)'\)/.exec(String(url));
+        if (ed) {
+          const logical = ed[1];
+          const pid = logical === 'appmodule' ? '33333333-3333-3333-3333-333333333333' : '11111111-1111-1111-1111-111111111111';
+          return { status: 200, headers: {}, body: { LogicalName: logical, Privileges: [{ PrivilegeId: pid, Name: `prvRead${logical}`, PrivilegeType: 'Read', CanBeBasic: true, CanBeLocal: true, CanBeDeep: true, CanBeGlobal: true }] } };
+        }
+        return { status: 200, headers: {}, body: { value: [] } };  // no existing role -> create path
+      },
+      post: async (url, body) => { calls.push({ verb: 'POST', url: String(url), body }); return { status: 204, headers: { 'odata-entityid': 'https://x/roles(22222222-2222-2222-2222-222222222222)' }, body: {} }; },
+      patch: async (url, body) => { calls.push({ verb: 'PATCH', url: String(url), body }); return { status: 204, headers: {}, body: {} }; },
+      put: async () => ({ status: 204, headers: {}, body: {} }),
+      delete: async () => ({ status: 204, headers: {}, body: {} }),
+    },
+  });
+  await sdk.initWorkspace();
+  return { sdk, calls };
+}
+
+test('a persona NEVER sends a description — it would break the SDK ownership guard', async () => {
+  // The bundle builds its role payload with its OWN marker as the description, and gates reuse on
+  // an exact match of that marker, so a role carrying an author's prose is treated as somebody
+  // else's role and the SDK THROWS ("already exists ... and was not created by the SDK; refusing to
+  // modify or assign it"). Teardown and verify re-implement the same marker check, so all three
+  // would disagree at once.
   const spec = personaRoleSpecFor({
-    persona: 'Agent', description: 'should be ignored',
+    persona: 'Field Agent', description: AUTHOR_PROSE,
     jobs: [{ name: 'Job', privileges: [{ entity: 'new_ticket', access: ['read'], scope: 'user' }] }],
   });
   assert.ok(!('description' in spec), 'persona description must not be forwarded to createPersonaRole');
 
-  const bundle = fs.readFileSync(BUNDLE, 'utf8');
-  assert.ok(
-    bundle.includes('description:It.SDK_ROLE_MARKER'),
-    'the bundle still hardcodes the marker as the role description — if this changes, revisit the exclusion'
-  );
+  // Proven against the REAL bundle by observing the wire, not by grepping it. The previous version
+  // of this guard asserted the literal `description:It.SDK_ROLE_MARKER`, where `It` is a namespace
+  // alias the MINIFIER assigns — it became `Pt` on the next re-vendor and the test failed for a
+  // reason that had nothing to do with the behaviour it was protecting. Drive the call instead.
+  const { sdk, calls } = await roleSdk();
+  await sdk.createPersonaRole(spec);
+
+  const create = calls.find((c) => c.verb === 'POST' && /\/roles$/.test(String(c.url)));
+  assert.ok(create, `the role create must POST /roles; got ${JSON.stringify(calls.map((c) => `${c.verb} ${c.url}`))}`);
+  assert.strictEqual(typeof create.body.description, 'string');
+  assert.ok(create.body.description.length > 0,
+    'the SDK still stamps a description of its own — if it stops, the exclusion below has no purpose and must be revisited');
+  assert.match(create.body.description, /cds-maker-sdk/,
+    `the description must be the SDK's ownership marker; got ${JSON.stringify(create.body.description)}`);
+
+  // The decisive half: the author's prose reaches NOTHING on the wire.
+  assert.strictEqual(JSON.stringify(calls).includes(AUTHOR_PROSE), false,
+    'an author-supplied persona description must never reach the role write');
+
+  // And the ownership gate really does read `description` back, which is why sending prose would
+  // make the SDK disown its own role.
+  const reuseQuery = calls.find((c) => c.verb === 'GET' && /\/roles\?/.test(String(c.url)));
+  assert.ok(reuseQuery, 'the SDK must look for an existing role before creating one');
+  assert.match(decodeURIComponent(String(reuseQuery.url)), /\$select=[^&]*description/,
+    'the reuse gate selects description — that is the field the marker defends');
 });

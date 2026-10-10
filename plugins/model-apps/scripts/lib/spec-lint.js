@@ -2,16 +2,81 @@
 // Pure App Spec guardrail. Returns { ok, errors, warnings }. errors block the plan
 // gate; warnings teach. Bakes in the modeling lessons hit live — notably the
 // relationship schema-name vs lookup-name collision Dataverse rejects.
-const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens, isPlatformIconRef } = require('./app-spec.js');
+const { relationshipSchemaName, relationshipFor, invalidChoiceSampleTokens, isPlatformIconRef, labelText, appMembershipWarnings } = require('./app-spec.js');
+const { compileFormIntent, formFieldLogicals, NON_FORM_RENDERABLE_TYPES } = require('./artifact-intent.js');
 const { normalizeSpecShape } = require('./spec-shape.js');
 const { resolveSurfaces, unresolvedSurfaceMessage } = require('./surface-resolver.js');
+const { nearestName } = require('./nearest-name.js');
+const { isAppSourcePath } = require('./app-source-path.js');
 
 const CHOICE_OPTION_WARN = 12;
 const SEQNUM_RE = /\{SEQNUM(:\d+)?\}/i;
 // FetchXML operators that take no <value> (so a filter may omit value/values).
-const NO_VALUE_OPS = new Set(['null', 'not-null', 'eq-userid', 'ne-userid', 'eq-useroruserteams', 'eq-userteams',
+//
+// The list is the documented value-less ConditionOperator set, NOT a curated subset: an operator
+// missing here makes the lint demand a value the operator must not carry and reject a correct spec
+// (#546 — `eq-businessid` / `ne-businessid`, the business-unit equivalents of `eq-userid` /
+// `ne-userid`, which are the natural way to express "rows owned by my business unit"). The reverse
+// error matters too, so do not add a value-TAKING operator here: that would silently stop the lint
+// catching a missing value and push the failure to the platform at build time.
+//
+// Every name below is copied verbatim from the documented operator table, and the test pins them
+// against an INDEPENDENT literal list — iterating this set to test itself cannot catch a typo in it,
+// and a typo reintroduces exactly the #546 false positive.
+// https://learn.microsoft.com/en-us/power-apps/developer/data-platform/fetchxml/reference/operators
+const NO_VALUE_OPS = new Set(['null', 'not-null',
+  // current-user / current-business-unit context
+  'eq-userid', 'ne-userid', 'eq-useroruserteams', 'eq-userteams', 'eq-useroruserhierarchy',
+  'eq-useroruserhierarchyandteams', 'eq-businessid', 'ne-businessid', 'eq-userlanguage',
+  // relative date
   'today', 'yesterday', 'tomorrow', 'this-week', 'last-week', 'next-week', 'this-month', 'last-month', 'next-month',
-  'this-year', 'last-year', 'next-year', 'this-fiscal-year', 'last-seven-days', 'next-seven-days']);
+  'this-year', 'last-year', 'next-year', 'last-seven-days', 'next-seven-days',
+  // relative fiscal period
+  'this-fiscal-year', 'last-fiscal-year', 'next-fiscal-year',
+  'this-fiscal-period', 'last-fiscal-period', 'next-fiscal-period']);
+
+// Every operator the condition table documents, value-less ones included. Transcribed in the doc
+// table's own alphabetical order so it can be diffed against the source by eye.
+//
+// WHY this exists: without it, a typo'd operator fell through to the missing-value check and was
+// reported as `needs a value` — advice that is not merely unhelpful but WRONG. The author adds a
+// value, the lint goes green, and Dataverse rejects the operator at build time. That is the same
+// shape as the #546 false positive, with an extra step. Mirrors how business-rule operators are
+// already validated (see BUSINESS_RULE_OPERATORS in app-spec.js, which also offers a near match).
+//
+// An unknown operator is a WARNING, not an error, and that is the direct lesson of #546: an
+// INCOMPLETE list here would reject a correct spec, which is worse than letting a rare unknown
+// operator through to a build-time failure that at least names it. `--strict` still fails on it.
+// https://learn.microsoft.com/en-us/power-apps/developer/data-platform/fetchxml/reference/operators
+const KNOWN_FILTER_OPS = new Set([
+  'above', 'begins-with', 'between', 'contain-values', 'ends-with', 'eq', 'eq-businessid',
+  'eq-or-above', 'eq-or-under', 'eq-userid', 'eq-userlanguage', 'eq-useroruserhierarchy',
+  'eq-useroruserhierarchyandteams', 'eq-useroruserteams', 'eq-userteams', 'ge', 'gt', 'in',
+  'in-fiscal-period', 'in-fiscal-period-and-year', 'in-fiscal-year',
+  'in-or-after-fiscal-period-and-year', 'in-or-before-fiscal-period-and-year', 'last-fiscal-period',
+  'last-fiscal-year', 'last-month', 'last-seven-days', 'last-week', 'last-x-days',
+  'last-x-fiscal-periods', 'last-x-fiscal-years', 'last-x-hours', 'last-x-months', 'last-x-weeks',
+  'last-x-years', 'last-year', 'le', 'like', 'lt', 'ne', 'ne-businessid', 'ne-userid', 'neq',
+  'next-fiscal-period', 'next-fiscal-year', 'next-month', 'next-seven-days', 'next-week',
+  'next-x-days', 'next-x-fiscal-periods', 'next-x-fiscal-years', 'next-x-hours', 'next-x-months',
+  'next-x-weeks', 'next-x-years', 'next-year', 'not-begin-with', 'not-between',
+  'not-contain-values', 'not-end-with', 'not-in', 'not-like', 'not-null', 'not-under', 'null',
+  'olderthan-x-days', 'olderthan-x-hours', 'olderthan-x-minutes', 'olderthan-x-months',
+  'olderthan-x-weeks', 'olderthan-x-years', 'on', 'on-or-after', 'on-or-before',
+  'this-fiscal-period', 'this-fiscal-year', 'this-month', 'this-week', 'this-year', 'today',
+  'tomorrow', 'under', 'yesterday',
+]);
+
+// Cheap near-match for the "did you mean" hint, in the same spirit as the business-rule operator
+// check. Catches the two mistakes that actually happen: wrong case (`EQ-USERID`) and a single
+// dropped/extra/substituted character (`eq-useroruserteam`, `eq-businesid`).
+//
+// Shares the matcher with the CLI unknown-flag check (dataverse-auth.js): both answer the same
+// question against a closed vocabulary, and a second copy would be free to drift into disagreeing
+// about what counts as a near miss.
+function nearestFilterOp(op) {
+  return nearestName(op, KNOWN_FILTER_OPS);
+}
 
 function lintAppSpec(spec) {
   const errors = [];
@@ -29,6 +94,7 @@ function lintAppSpec(spec) {
   const shape = normalizeSpecShape(spec);
   for (const m of shape.errors) E(m);
   spec = shape.spec;
+  warnings.push(...appMembershipWarnings(spec));
 
   const prefix = spec.solution && spec.solution.publisherPrefix;
   const entityNames = new Set();
@@ -47,6 +113,8 @@ function lintAppSpec(spec) {
     if (!wr.name) E('A webResource is missing a name');
     if (!WEB_RESOURCE_KINDS.has(lc(wr.type || 'js'))) E(`webResource '${wr.name}' has unknown type '${wr.type}'`);
     if (wr.content === undefined && wr.contentBase64 === undefined && !wr.contentPath) E(`webResource '${wr.name}' needs content, contentBase64, or contentPath`);
+    // Same precedence as the build (webResourceOpts): a contentPath behind inline content is never read.
+    if (wr.content === undefined && wr.contentBase64 === undefined && wr.contentPath !== undefined && !isAppSourcePath(wr.contentPath)) E(`webResource '${wr.name}': contentPath must be an app-folder-confined relative path (no parent escape, rooted or drive path, or alternate stream)`);
     if (lc(wr.type || 'js') === 'js' && wr.name && !lc(wr.name).endsWith('.js')) W(`web resource '${wr.name}' is a script but its name doesn't end in .js — Dataverse convention expects the extension`);
     if (prefix && wr.name && !lc(wr.name).startsWith(lc(prefix) + '_')) W(`web resource '${wr.name}' does not use the solution prefix '${prefix}_'`);
   }
@@ -95,12 +163,24 @@ function lintAppSpec(spec) {
     }
   }
 
+  // An explicit foreign-prefix name 400s on create. A downloaded relationship marked existing
+  // already has that name in this environment, so lint warns instead of refusing the download's
+  // own output. A rebuild can reuse it only where it already exists.
+  const foreignRelationshipName = (rel, publisherPrefix, error, warn) => {
+    const name = rel.schemaName;
+    const kind = rel.type === 'ManyToMany' ? 'N:N relationship schema name' : 'Relationship schema name';
+    if (rel.existing === true) {
+      warn(`${kind} '${name}' does not start with this solution's publisher prefix '${publisherPrefix}_'. It is adopted from the environment (existing: true); a rebuild can reuse it only where that relationship already exists. A new environment cannot create that name under this publisher.`);
+      return;
+    }
+    error(`${kind} '${name}' must start with the publisher prefix '${publisherPrefix}_' (Dataverse rejects an unprefixed relationship name); omit schemaName to auto-generate a valid one`);
+  };
   for (const r of spec.relationships || []) {
     if (r.type === 'ManyToMany') {
       if (!entityNames.has(lc(r.entity1))) E(`N:N relationship references unknown entity '${r.entity1}'`);
       if (!entityNames.has(lc(r.entity2))) E(`N:N relationship references unknown entity '${r.entity2}'`);
       if (prefix && r.schemaName && !lc(r.schemaName).startsWith(lc(prefix) + '_')) {
-        E(`N:N relationship schema name '${r.schemaName}' must start with the publisher prefix '${prefix}_' (Dataverse rejects an unprefixed relationship name); omit schemaName to auto-generate a valid one`);
+        foreignRelationshipName(r, prefix, E, W);
       }
       continue;
     }
@@ -122,7 +202,7 @@ function lintAppSpec(spec) {
     // name is auto-prefixed (incl. relationships to standard tables like systemuser/account), but an
     // EXPLICIT rel.schemaName is honored verbatim — so catch an explicit name that would 400 at build.
     if (prefix && r.schemaName && !lc(r.schemaName).startsWith(lc(prefix) + '_')) {
-      E(`Relationship schema name '${r.schemaName}' must start with the publisher prefix '${prefix}_' (Dataverse rejects an unprefixed relationship name); omit schemaName to auto-generate a valid one`);
+      foreignRelationshipName(r, prefix, E, W);
     }
   }
 
@@ -142,7 +222,46 @@ function lintAppSpec(spec) {
     if (isExplicit) {
       if (!Array.isArray(f.tabs) || f.tabs.length === 0) E(`Form ${f.entity} uses an explicit layout but declares no tabs — add at least one tab with a section, or use layout:'auto'`);
       else for (const t of f.tabs) {
-        if (!Array.isArray(t.sections) || t.sections.length === 0) E(`Form ${f.entity} explicit tab '${t.label || t.name || ''}' has no sections — add at least one section with fields`);
+        // A malformed entry (`tabs: [null]`, a string, an array) would throw from this linter rather
+        // than be reported as a lint error — the validator rejects it, but the standalone lint has to
+        // survive the same input.
+        if (!t || typeof t !== 'object' || Array.isArray(t)) {
+          E(`Form ${f.entity} has a tab entry that is not an object — each tab must be { label, sections|columns }`);
+          continue;
+        }
+        // A tab holds sections either directly (the single-full-width-column shorthand) or inside
+        // `columns[]` (the multi-column form). Checking only `t.sections` reported every
+        // multi-column tab as empty, which is the exact silent-disagreement this lint exists to
+        // prevent — the compiler and validator both accept the `columns[]` shape.
+        const sections = Array.isArray(t.columns)
+          ? t.columns.flatMap((c) => (c && Array.isArray(c.sections) ? c.sections : []))
+          : t.sections;
+        if (!Array.isArray(sections) || sections.length === 0) E(`Form ${f.entity} explicit tab '${t.label || t.name || ''}' has no sections — add at least one section with fields`);
+      }
+    }
+    // Under an AUTO layout the build writes a `readOnly` / `hidden` flag only on a field the layout
+    // places — the primary column, the table's declared columns and its parent lookups — so a flag on any
+    // other field (a stock column on an existing form, say) is never applied, and `--verify` does not
+    // prove it. The placed set is the compiler's own, the list the build reconciles.
+    if (!isExplicit && f.fieldOptions && typeof f.fieldOptions === 'object' && !Array.isArray(f.fieldOptions)) {
+      let placed = null;
+      try { placed = new Set(formFieldLogicals(compileFormIntent(spec, f))); } catch { /* a malformed form is the validator's to report */ }
+      for (const [key, opt] of Object.entries(placed ? f.fieldOptions : {})) {
+        const flags = [opt && opt.readOnly === true && 'readOnly', opt && opt.hidden === true && 'hidden'].filter(Boolean);
+        if (!flags.length || placed.has(lc(key))) continue;
+        // Why the field is off the form decides the advice. A DECLARED column the layout still leaves off is
+        // either a type with no form control at all (BigInt — validation explains it) or a type the auto
+        // layout simply does not place (a Customer column, say), which an explicit layout can list.
+        const ent = arrOf(spec.entities).find((e) => e && lc(e.schemaName) === lc(f.entity));
+        const col = ent && arrOf(ent.columns).find((c) => c && lc(c.schemaName) === lc(key));
+        const what = `Form ${f.entity} '${f.name || ''}': fieldOptions['${key}'] sets ${flags.join(' and ')}`;
+        if (col && NON_FORM_RENDERABLE_TYPES.has(col.type)) {
+          W(`${what} on a ${col.type} column, which has no form control, so the auto layout leaves it off the form and the build never applies it.`);
+        } else if (col) {
+          W(`${what} on a ${col.type} column, a type the auto layout does not place, so the build never applies it. List '${key}' in an explicit layout to place it (prune: false keeps the rest of the form).`);
+        } else {
+          W(`${what} on a field the auto layout does not place — it places the primary column, the table's declared columns and its parent lookups — so the build never applies it. Declare '${key}' as a column, or list it in an explicit layout (prune: false keeps the rest of the form).`);
+        }
       }
     }
     for (const sg of f.subgrids || []) {
@@ -169,7 +288,7 @@ function lintAppSpec(spec) {
       if (!qv || !qv.lookup) { E(`Form ${f.entity} has a quickView missing lookup (the lookup column logical name)`); continue; }
       if (!qv.targetEntity || !entityNames.has(lc(qv.targetEntity))) E(`Form ${f.entity} quickView references unknown targetEntity '${qv.targetEntity}'`);
       // Resolve by (name, targetEntity) preferring the QuickView so a same-named Main on the target entity
-      // doesn't shadow it (order-dependent otherwise; Sol review).
+      // doesn't shadow it (order-dependent otherwise).
       const qvCandidates = qv.form ? (spec.forms || []).filter((x) => x.name === qv.form && lc(x.entity) === lc(qv.targetEntity)) : [];
       const qf = qvCandidates.find((x) => (x.formType || 'Main') === 'QuickView') || qvCandidates[0];
       if (!qf) E(`Form ${f.entity} quickView references form '${qv.form}' (a QuickView on '${qv.targetEntity}') not found in forms[]`);
@@ -204,6 +323,16 @@ function lintAppSpec(spec) {
   }
 
   // Dashboards — chart/list tiles must reference a declared chart/view; webresource a web resource.
+  //
+  // ID PASSTHROUGH: a tile from a downloaded/round-tripped app carries the deployed view/chart ids
+  // (+ target entity) instead of names, binding to artifacts that ALREADY exist rather than to
+  // anything the spec declares. `validateAppSpec` (app-spec.js, "ID-passthrough tiles") and the
+  // build (sdk-build.js `dashboardTileOpts`, "ID passthrough (round-tripped dashboards)") have both
+  // always accepted that form, and `download-model-app.js readDashboards` deliberately emits it —
+  // this lint was the only stage that did not know about it, so a freshly downloaded spec failed
+  // its OWN structural lint. Because such a tile has no `chart`/`view` key at all, the old check
+  // also interpolated `undefined` into the message and reported a chart literally named
+  // 'undefined'. See #572.
   const DASH_TILE_TYPES = new Set(['chart', 'list', 'iframe', 'webresource']);
   const viewNames = new Set((spec.views || []).map((v) => lc(v.name)));
   const chartNames = new Set((spec.charts || []).map((c) => lc(c.name)));
@@ -212,8 +341,29 @@ function lintAppSpec(spec) {
     if (!(d.tiles && d.tiles.length)) W(`Dashboard '${d.name}' has no tiles`);
     for (const t of d.tiles || []) {
       if (!DASH_TILE_TYPES.has(t.type)) { E(`Dashboard '${d.name}' has a tile with invalid type '${t.type}' (chart/list/iframe/webresource)`); continue; }
-      if (t.type === 'chart' && (!t.chart || !chartNames.has(lc(t.chart)))) E(`Dashboard '${d.name}' chart tile references unknown chart '${t.chart}'`);
-      if ((t.type === 'chart' || t.type === 'list') && (!t.view || !viewNames.has(lc(t.view)))) E(`Dashboard '${d.name}' ${t.type} tile references unknown view '${t.view}'`);
+      // `visualizationId` identifies a CHART; it means nothing on a list tile. One shared id test let
+      // a list tile carrying a stray visualizationId take the id path and skip the viewId requirement
+      // altogether, so the tile deployed with no view to list.
+      const byId = t.type === 'chart' ? (t.viewId || t.visualizationId) : t.viewId;
+      if (t.type === 'chart') {
+        if (byId) {
+          // A chart tile renders a visualization over a view, so BOTH halves are load-bearing: a
+          // visualizationId alone has no data to plot, and a viewId alone has nothing to plot with.
+          if (!t.viewId) E(`Dashboard '${d.name}' chart tile with visualizationId also needs viewId`);
+          if (!t.visualizationId) E(`Dashboard '${d.name}' id-based chart tile with viewId also needs visualizationId`);
+          if (!t.entity) E(`Dashboard '${d.name}' id-based chart tile needs entity`);
+        } else {
+          if (!t.chart) E(`Dashboard '${d.name}' chart tile needs a chart (by name) or viewId+visualizationId (id passthrough)`);
+          else if (!chartNames.has(lc(t.chart))) E(`Dashboard '${d.name}' chart tile references unknown chart '${t.chart}'`);
+          if (!t.view) E(`Dashboard '${d.name}' chart tile needs a view (by name) or viewId+visualizationId (id passthrough)`);
+          else if (!viewNames.has(lc(t.view))) E(`Dashboard '${d.name}' chart tile references unknown view '${t.view}'`);
+        }
+      } else if (t.type === 'list') {
+        if (byId) {
+          if (!t.entity) E(`Dashboard '${d.name}' id-based list tile needs entity`);
+        } else if (!t.view) E(`Dashboard '${d.name}' list tile needs a view (by name) or a viewId (id passthrough)`);
+        else if (!viewNames.has(lc(t.view))) E(`Dashboard '${d.name}' list tile references unknown view '${t.view}'`);
+      }
       if (t.type === 'iframe' && !t.url) E(`Dashboard '${d.name}' iframe tile needs a url`);
       if (t.type === 'webresource' && (!t.webResource || !webResourceNames.has(lc(t.webResource)))) E(`Dashboard '${d.name}' webresource tile references undeclared web resource '${t.webResource}'`);
     }
@@ -237,6 +387,12 @@ function lintAppSpec(spec) {
   for (const p of spec.pages || []) {
     for (const ds of p.dataSources || []) {
       if (!entityLowerSet.has(lc(ds))) W(`Page '${p.name}' data source '${ds}' isn't a declared entity — ok if it's a standard table, otherwise a likely typo`);
+    }
+    // pac stores each ASCII `"` in a page's name as `\"` on the page's own record, and changes nothing else
+    // (live-measured). A warning, not an error: the navigation shows the subarea's `title`, which the build
+    // writes as given. (The standalone genpage upload refuses such a name — there pac writes the title too.)
+    if (typeof p.name === 'string' && p.name.includes('"')) {
+      W(`Page '${p.name}': pac stores each ASCII double quote (") in a page's name as \\" on the page's own record — use typographic quotes (“ ”) or an apostrophe instead`);
     }
   }
   // The sitemap `VectorIcon` attribute must be an SVG path (e.g. /_imgs/TableIconsFluentV9/x.svg) or
@@ -286,7 +442,7 @@ function lintAppSpec(spec) {
     // author picks a distinct name (or knowingly customizes the stock default).
     const ve = (spec.entities || []).find((x) => lc(x.schemaName) === lc(v.entity));
     if (ve && v.name) {
-      const plural = ve.pluralName || `${ve.displayName || ve.schemaName}s`;
+      const plural = labelText(ve.pluralName, spec && spec.languageCode) || `${labelText(ve.displayName, spec && spec.languageCode) || ve.schemaName}s`;
       if (lc(v.name) === `active ${lc(plural)}` || lc(v.name) === `inactive ${lc(plural)}`) {
         W(`View '${v.name}' has the same name as ${ve.schemaName}'s stock default view — it will MERGE onto that default (columns are unioned and the stock "Created On" is kept, but its filters/sort are ignored). Use a distinct name to author a separate view.`);
       }
@@ -294,9 +450,47 @@ function lintAppSpec(spec) {
     for (const f of v.filters || []) {
       if (!f.attr) { E(`View '${v.name}' has a filter without an attr`); continue; }
       const op = f.op || 'eq';
-      if (op === 'in' || op === 'not-in') {
+      if (!KNOWN_FILTER_OPS.has(op)) {
+        // Reported INSTEAD of the missing-value check below, never alongside it: `needs a value` is
+        // wrong advice for an operator that does not exist, and acting on it produces a spec that
+        // lints clean and then fails at the platform.
+        const near = nearestFilterOp(op);
+        W(`View '${v.name}' filter on '${f.attr}' uses '${op}', which is not a documented FetchXML condition operator${near ? ` — did you mean '${near}'?` : ''}. Dataverse will reject it when the view is built.`);
+      } else if (op === 'in' || op === 'not-in') {
         if (!(Array.isArray(f.values) && f.values.length)) E(`View '${v.name}' filter on '${f.attr}' uses ${op} but has no values[]`);
-      } else if (!NO_VALUE_OPS.has(op) && f.value === undefined) {
+      } else if (NO_VALUE_OPS.has(op)) {
+        // A value on a value-less operator is a WARNING, not an error, and the distinction was
+        // settled by measurement rather than assumption. Probed live against Dataverse Web API:
+        //   eq-businessid value="00000000-0000-0000-0000-000000000000"  -> HTTP 200, 1 row
+        //   eq-businessid (no value)                                    -> HTTP 200, 1 row
+        //   this-year     value="1999"                                  -> HTTP 200, 1 row
+        //   this-year     (no value)                                    -> HTTP 200, 1 row
+        // The platform neither rejects the condition nor honours the value — it IGNORES it. So
+        // erroring would block specs that build and run correctly today, while staying silent
+        // leaves a filter that does not do what its `value` says. The author almost always meant
+        // a value-TAKING operator (`eq` against a specific business unit) — hence the advice.
+        //
+        // Note this deliberately differs from the business-rule operator check in app-spec.js,
+        // which ERRORS on the same shape. That is a different engine: a business rule is compiled
+        // client-side, where the stray value is not harmless.
+        //
+        // The operator set spans several unrelated semantics (`null`/`not-null` test presence,
+        // `eq-userlanguage` matches the user's language, the relative-date ones match a period), so
+        // the message deliberately says only that the value has no effect — asserting a particular
+        // match semantics would be wrong for most of the set.
+        //
+        // `value` and `values` are called out separately because they are dropped at different
+        // points, and a message that named the wrong one would send the author to the wrong place:
+        // `value` is forwarded into the condition and discarded by Dataverse (sdk-build.js emits it
+        // for any non-in/not-in operator), whereas `values` is only ever read by the in/not-in
+        // branch, so it never reaches the platform at all.
+        if (f.value !== undefined) {
+          W(`View '${v.name}' filter on '${f.attr}' uses the value-less operator '${op}' but also carries a value — it is sent to Dataverse and ignored there, so it has no effect on what the filter matches. Drop the value, or use a value-taking operator (e.g. 'eq') if you meant to match a specific row.`);
+        }
+        if (f.values !== undefined) {
+          W(`View '${v.name}' filter on '${f.attr}' uses the value-less operator '${op}' but also carries values[] — values[] is only read by the 'in'/'not-in' operators, so it is dropped when the view is built. Drop it, or use 'in' if you meant to match a list.`);
+        }
+      } else if (f.value === undefined) {
         E(`View '${v.name}' filter on '${f.attr}' (${op}) needs a value`);
       }
     }
@@ -364,9 +558,14 @@ function lintAppSpec(spec) {
     }
   }
 
-  dupWarn((spec.views || []).map((v) => v.name), 'view', W);
-  dupWarn((spec.charts || []).map((c) => c.name), 'chart', W);
-  dupWarn((spec.forms || []).map((f) => f.name).filter(Boolean), 'form', W);
+  // Views, charts and forms belong to a TABLE, and the build finds each by its table and name (a form also
+  // by its type) — so one name on two tables is two artifacts, not a duplicate; a dashboard tile that
+  // could mean either is refused by validation until it names its table. Only a repeat on ONE table
+  // collides. Warning on the name alone flagged the supported same-named-charts-on-two-tables shape.
+  const forms = (spec.forms || []).filter((f) => f && f.name);
+  dupWarn(spec.views || [], 'view', W, (v) => `${lc(v.entity)}|${lc(v.name)}`);
+  dupWarn(spec.charts || [], 'chart', W, (c) => `${lc(c.entity)}|${lc(c.name)}`);
+  dupWarn(forms, 'form', W, (f) => `${lc(f.entity)}|${lc(f.formType || 'Main')}|${lc(f.name)}`);
 
   // Design-completeness warnings. These are WARNINGS, never errors: a spec without personas or pages
   // is still buildable, and the author may have good reason. They exist because all three were steps
@@ -412,13 +611,24 @@ function lintAppSpec(spec) {
   return { ok: errors.length === 0, errors, warnings };
 }
 
-function dupWarn(names, kind, W) {
+function dupWarn(items, kind, W, keyOf) {
   const seen = new Set();
-  for (const n of names) {
-    const k = String(n || '').toLowerCase();
-    if (k && seen.has(k)) W(`Duplicate ${kind} name: ${n}`);
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || !item.name) continue;
+    const k = keyOf(item);
+    if (seen.has(k)) W(`Duplicate ${kind} name on ${item.entity || '?'}: ${item.name}`);
     seen.add(k);
   }
 }
 
-module.exports = { lintAppSpec };
+// The operator sets are exported FROZEN — as arrays, not the live Sets. The module-level Set is
+// shared by every in-process consumer through the require cache, so handing out the instance would
+// let one caller's `.add()`/`.delete()` silently change lint behaviour for everything else.
+// Exported so the regression test can compare them against an independent, doc-derived literal list
+// in BOTH directions — a missing/typo'd entry reintroduces the #546 false positive, and an extra
+// (value-taking) entry silently disables the missing-value check.
+module.exports = {
+  lintAppSpec,
+  NO_VALUE_OPS: Object.freeze([...NO_VALUE_OPS]),
+  KNOWN_FILTER_OPS: Object.freeze([...KNOWN_FILTER_OPS]),
+};

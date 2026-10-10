@@ -99,6 +99,10 @@ test('production path rules are explicit and exclude tests, fixtures, generated,
     'plugins/power-pages/skills/example/scripts/validate-example.js',
     'plugins/power-pages/skills/example/scripts/validate-example.mjs',
     'plugins/power-pages/scripts/tool.cjs',
+    'plugins/model-apps/hooks/hook.js',
+    'plugins/model-apps/scripts/tool.js',
+    'plugins/model-apps/scripts/lib/process-runner.js',
+    'plugins/model-apps/scripts/_vendor-build/build.js',
   ];
   const rejected = [
     'plugins/power-pages/scripts/tests/tool.test.js',
@@ -108,6 +112,9 @@ test('production path rules are explicit and exclude tests, fixtures, generated,
     'plugins/power-pages/skills/example/assets/tool.js',
     'plugins/power-pages/skills/example/references/tool.js',
     'plugins/power-pages/scripts/tool.json',
+    'plugins/model-apps/scripts/tests/tool.test.js',
+    'plugins/model-apps/scripts/vendor/cds-maker-sdk.cjs',
+    'plugins/model-apps/skills/example/scripts/tool.js',
   ];
 
   for (const filePath of accepted) assert.equal(shouldScan(filePath), true, filePath);
@@ -166,6 +173,24 @@ test('audited exceptions require exact path, rule, callee, and call and fail on 
   assert.deepEqual(drifted.audited, []);
 });
 
+// Why model-apps is in scope: its Windows CLI calls once ran through `shell: true`, which joins the
+// arguments unquoted for cmd.exe. The scan must keep that from coming back in any form.
+test('model-apps production code cannot start a shell or a cmd.exe line of its own', () => {
+  const filePath = 'plugins/model-apps/scripts/lib/example.js';
+  const shellTrue = [
+    "const { execFileSync } = require('node:child_process');",
+    "execFileSync('az', ['account', 'get-access-token', '--resource', envUrl], { shell: process.platform === 'win32' });",
+    '',
+  ].join('\n');
+  assert.deepEqual(analyzeSource(shellTrue, filePath).map((f) => f.rule), ['ambiguous-shell-option']);
+  const execString = [
+    "const { execSync } = require('child_process');",
+    'execSync(`az account get-access-token --resource ${envUrl}`);',
+    '',
+  ].join('\n');
+  assert.deepEqual(analyzeSource(execString, filePath).map((f) => f.rule), ['dynamic-shell-command']);
+  assert.equal(shouldScan(filePath), true);
+});
 test('audited exception schema requires a review reason', () => {
   assert.throws(
     () => validateExceptions([{
@@ -179,11 +204,20 @@ test('audited exception schema requires a review reason', () => {
   );
 });
 
-test('repository-wide audit is clean with no audited exceptions', () => {
+test('repository-wide audit is clean, and the only audited exceptions are the process runner and the telemetry library', () => {
   const result = auditRepository(REPOSITORY_ROOT);
   assert.deepEqual(result.findings, []);
-  assert.deepEqual(AUDITED_EXCEPTIONS, []);
-  assert.deepEqual(result.audited, []);
+  const runner = AUDITED_EXCEPTIONS.filter((e) => e.path === 'plugins/model-apps/scripts/lib/process-runner.js');
+  assert.equal(runner.length, 8, 'the runner: four child_process calls, two rules each');
+  const telemetry = AUDITED_EXCEPTIONS.filter((e) => /\/scripts\/lib\/telemetry\/lib\/native-exec\.js$/.test(e.path));
+  assert.deepEqual(telemetry.map((e) => e.path).sort(), [
+    'plugins/model-apps/scripts/lib/telemetry/lib/native-exec.js',
+    'plugins/power-pages/scripts/lib/telemetry/lib/native-exec.js',
+  ], 'the shared telemetry library: its one resolved-path call, in each scanned copy');
+  assert.ok(telemetry.every((e) => e.rule === 'nonconstant-executable'), 'the telemetry call keeps shell:false provable');
+  assert.equal(AUDITED_EXCEPTIONS.length, runner.length + telemetry.length, 'nothing else is excepted');
+  assert.deepEqual(result.audited, AUDITED_EXCEPTIONS);
+  assert.ok(result.files.includes('plugins/model-apps/scripts/lib/dataverse-auth.js'), 'model-apps scripts are in scope');
   assert.ok(result.files.length > 100, 'expected a repository-wide production scan');
 });
 
@@ -193,6 +227,7 @@ test('CLI audit emits actionable diagnostics and succeeds for the repository', (
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.doesNotMatch(result.stdout, /^AUDITED /m);
-  assert.match(result.stdout, /validation passed \(\d+ production files, 0 audited exceptions\)/);
+  assert.equal((result.stdout.match(/^AUDITED plugins\/model-apps\/scripts\/lib\/process-runner\.js /gm) || []).length, 8);
+  assert.equal((result.stdout.match(/^AUDITED plugins\/[a-z-]+\/scripts\/lib\/telemetry\/lib\/native-exec\.js /gm) || []).length, 2);
+  assert.match(result.stdout, /validation passed \(\d+ production files, 10 audited exceptions\)/);
 });

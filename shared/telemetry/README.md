@@ -6,11 +6,18 @@ Canonical source for 1DS telemetry used by plugins in this repo. Each adopting p
 
 Zero npm dependencies. Node stdlib only.
 
+For the repository-level user disclosure, see [Telemetry](../../README.md#telemetry).
+
 ---
 
 ## What it does
 
-`skill_started` usage telemetry over the 1DS Common Schema 4.0 envelope. A detached dispatcher child resolves the destination iKey + collector URL (env override → plugin `resolver.js` → static key in `ikey.json`), then POSTs the event; the hook that emitted it returns before the POST happens.
+Usage telemetry over the 1DS Common Schema 4.0 envelope. All
+adopters emit `skill_started`; plugins may also emit allowlisted configuration,
+validation, and completion events. A detached dispatcher child resolves the
+destination iKey + collector URL (env override → plugin `resolver.js` → static
+key in `ikey.json`), then POSTs the event; the process that emitted it returns
+before the POST happens.
 
 ```
 hook (~5ms when disabled, ~3-5s otherwise — incl. when the user opted out)
@@ -48,6 +55,19 @@ so a user can hand over one self-contained file per problem. Session directories
 older than 14 days are pruned best-effort whenever a new session starts, and an
 individual session log is rotated to `events.<stamp>.old` if it ever exceeds 10 MB.
 
+### Current adopters
+
+The committed `disabled` value in each plugin's `ikey.json` determines whether
+that plugin currently emits telemetry. A user command or environment-variable
+choice cannot override `disabled: true`.
+
+| Plugin | Committed state | Current behavior | Plugin-specific fields |
+|---|---|---|---|
+| Power Pages | `disabled: false` | Enabled and default-on for transmission. Organization-based geo routing selects a regional collector; without an organization ID, the configured US default is used. Events are written to the local mirror even after a user transmission opt-out. | `eventInfo.aadObjectId` when PAC exposes the signed-in user's Entra object ID; `eventInfo.framework` when the Power Pages code-site framework can be determined; `eventInfo.auditPermissions` (aggregate, identity-free) on the `audit-permissions` completion event. |
+| Mobile Apps | `disabled: false` | Enabled and default-on for transmission. Its project environment selects the regional collector. Until that cluster is resolved, events remain in the local mirror and are not transmitted. | `eventInfo.invocationSource`; random per-project `eventInfo.appInstanceId` (or `null` outside a prepared project); optional validated checkpoint `eventInfo.additionalInfo`; and `eventInfo.appInsightsSelection`. |
+| Model Apps | `disabled: false` | Enabled and default-on for transmission. A public-cloud organization is geo-routed to the US or EU collector (US default only without an organization ID; an organization whose geo cannot be determined is not transmitted); a sovereign or internal PAC cloud is routed from the cloud stamp alone, never to a public collector; an unrecognized cloud, or a signed-in organization with no cloud, is not transmitted. Events are written to the local mirror even after a user transmission opt-out. | No signed-in user object ID. The base event can include `orgId` and `tenantId` when PAC is signed in. |
+| Power Automate | `disabled: false` | Enabled and default-on for transmission. Its resolver returns a destination only for public cloud, so sovereign-cloud events stay in the local mirror. Organization-based geo routing selects the US or EU collector; without an organization ID, the configured US default is used. Events are written to the local mirror even after a user transmission opt-out. | `eventInfo.aadObjectId` when PAC exposes the signed-in user's Entra object ID. The plugin's bundled MCP server and CLI emit on the same stream and additionally record `outcome`, `durationMs`, `errorClass`, and `errorCode`, a random per-invocation `correlationId` and per-process `sessionId`, and `envId`/`envLocation`/`envRegion`. Error messages are never recorded. |
+
 ### Custom routing (the resolver contract)
 
 The destination iKey/collector is **not** hard-coded, and the shared library is
@@ -60,8 +80,17 @@ module.exports = {
   async resolve({ event, cfg, cloud, configDir }) { /* ... */ },
   // optional sync fast-gate so hooks skip the ~3-5s pac shellout when unprovisioned.
   isProvisioned(cfg) { return true; },
+  // optional: reshape the wire envelope for a tenant that ingests a different schema.
+  // `data` is the already-sanitized allowlisted payload. Throwing or returning nothing
+  // sends nothing (fail closed); the local mirror is unaffected.
+  formatEnvelope({ eventName, time, data, iKey, eventStreamName }) { /* ... */ },
 };
 ```
+
+Model Apps uses `formatEnvelope` to send the Power Apps client `event` shape
+(`app_Name`, `clientType: "ModelAppsAIPlugin"`, `event_Name`, `session_Id`, and the
+remaining fields as a `customDimensions` JSON string) because its tenants ingest only
+the `event` stream.
 
 The dispatcher discovers it by convention (a `resolver.js` sibling of `ikey.json`)
 and resolves the destination by precedence: env override (test seam) →
@@ -70,6 +99,11 @@ The power-pages plugin ships a `resolver.js` that does Artemis geo + cloud-stamp
 region routing; that implementation lives entirely in
 `plugins/power-pages/scripts/lib/telemetry/region/` — the shared library knows
 nothing about it.
+
+Mobile Apps also owns its routing implementation. Its custom dispatcher and
+resolver select a configured regional collector from the prepared project's
+resolved Power Platform environment. If no valid project cluster is available,
+the sanitized event remains in the local mirror and transmission is deferred.
 
 ## What is sent
 
@@ -85,36 +119,93 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 
 **PAC + agent (when available, otherwise omitted):**
 
-- `orgId`, `tenantId` — Dataverse org GUID and Entra tenant GUID, read from `pac auth who` if the user is signed in (`orgId` is passed to the plugin resolver — power-pages uses it for Artemis region routing)
+- `orgId`, `tenantId` — Dataverse org GUID and Entra tenant GUID, read from `pac auth who` if the user is signed in. Power Pages and Power Automate hooks use `orgId` for organization-based region routing; Model Apps can include both fields. Mobile Apps excludes both and routes from its prepared project environment instead. Power Automate core MCP/CLI events can include a tenant GUID from `FLOWAGENT_TENANT_ID`, but not an organization ID.
 - `pacCliVersion` — semver from `pac --version`
 - `aiAgentName`, `aiAgentVersion` — host AI agent detected via env in the hook process before the detached dispatcher is spawned. Claude Code (`CLAUDECODE=1`) reports `Claude Code` with the version read from its installed `package.json` via `CLAUDE_CODE_EXECPATH`; that `package.json` only exists for npm-global installs, so when it can't be read (e.g. the native installer's standalone binary) the version falls back to the dotted semver parsed out of `AI_AGENT` (`claude-code_<maj>-<min>-<patch>_agent`), which Claude Code sets regardless of install method. GitHub Copilot CLI (`COPILOT_CLI=1`) reports `Copilot CLI` with the version from `COPILOT_CLI_BINARY_VERSION` or `COPILOT_CLI_VERSION`. Codex, OpenCode, Hermes, and OpenClaw are detected from their agent-specific env flags/version variables (`CODEX_*`, `OPENCODE_*`, `HERMES_*`, `OPENCLAW_*`) or from `AI_AGENT` when it includes a recognizable agent name. Explicit `AI_AGENT_NAME` / `AI_AGENT_VERSION` env vars override detection (used for testing); when `AI_AGENT_NAME` is set but `AI_AGENT_VERSION` is empty, the version is backfilled from whichever detector matches.
 
 **Per-event:**
 
 - `skillName` (on every event)
-- `eventInfo` — caller-supplied JSON object (dynamic Kusto column). Power Pages populates it with:
+- `eventInfo` — caller-supplied JSON object (dynamic Kusto column). Approved plugin schemas are:
+
+  **Power Pages**
 
   - `aadObjectId` — the signed-in user's stable Entra ID / AAD directory object ID, parsed from `pac auth who`, when available. Omitted when `pac auth who` does not surface an object ID.
   - `framework` — the SPA framework of the Power Pages **code site** the skill is running against, drawn from the closed set `react`, `vue`, `angular`, `astro`. Omitted unless the working directory resolves to a site with a `powerpages.config.json`.
+  - `auditPermissions` — present only on the `audit_permissions_run_completed` event, emitted once per `audit-permissions` run when it produces its HTML report or reaches a controlled failure. It is built by a deterministic allowlist-only emitter (`plugins/power-pages/scripts/emit-audit-permissions-telemetry.js`) and must pass a closed outbound gate (`plugins/power-pages/scripts/lib/audit-telemetry-gate.js`) immediately before dispatch; raw report values are never copied into it. Every string is a fixed enum value or a random UUID v4, and every number is a bounded count, score, or version.
+    - Always: `schemaVersion` (`1`), `auditRunId` (random per-run UUID v4, not derived from any site, user, or environment value), and `reportGenerated` (boolean).
+    - Success (`outcome: success`, `reportGenerated: true`, recorded only after the final HTML report passes semantic validation): `scoringStatus` (`complete` | `partial`), `verdict` (`safe_to_go` | `needs_revision` | `not_scored`), `majorIssueCount`, `minorIssueCount`, `totalIssueCount`, `categories` (`overExposure`, `underExposure`, `correctness`, each `{ major, minor }`), `dimensions` (`intentCoverage`, `privilegeCalibration`, `scopeCorrectness`, `roleCompleteness`, `tableCoverage`, `anonymousAccessHygiene`, `dataModelAlignment`, `internalConsistency`, `securityPosture`, each `{ major, minor }`), `majorRootCauses` (`permissions`, `mixed`, `dataModel`, `webApiCode`, `webApiSettings`, each a count), and, when scoring is complete, `scores` (`overExposure`, `underExposure`, `correctness`, each 1–5).
+    - Failure (`outcome: failure`, `reportGenerated: false`): `failureStage` only, one of `site_verification`, `configuration_gathering`, `schema_validation`, `relationship_discovery`, `audit_checks`, `scoring`, `root_cause_attribution`, `report_rendering`, `report_validation`, `metrics_validation`, or `unknown_controlled_failure`.
+
+    The completion event also carries the top-level `outcome` and `durationMs` fields. It deliberately omits `orgId`, `tenantId`, `aadObjectId`, and `framework`, so it routes to the configured default region, and it never includes site, environment, table, role, permission, path, finding, or report text.
 
   Each key is omitted independently when its source is unavailable; `eventInfo` itself is omitted only when every key would be absent.
 
-  On the wire it is sent as a JSON **string** (re-serialized by `emit-dispatcher.js`, not the local mirror) because the tenant-side field mapping flattens `data.<key>` to a single `data_<key>` leaf and does not recurse into nested objects. The Kusto side must `parse_json()` / `todynamic()` it back into a dynamic value.
+  **Power Automate**
 
-  `FIELD_TYPES` enforces only that `eventInfo` is a structured JSON value; it does **not** enforce nested keys. Callers **MUST** restrict it to the documented schema. The approved nested fields are currently Power Pages `aadObjectId` (string) and `framework` (string, restricted to the closed set above — it describes the scaffold a site was built from, is shared by every site built from that scaffold, and therefore identifies no user, project, or site). Callers **MUST NOT** add other personal data, prompts, project or site identifiers, paths, URLs, credentials, or arbitrary caller payloads. Any proposed expansion requires review and approval, plus updates to this privacy disclosure, the documented event schema, and tests before code emits the new field.
+  - Hook `aadObjectId` — the signed-in user's Entra object ID, when PAC exposes it.
+  - Its separate core MCP/CLI event schema records tool/command identity,
+    outcome, duration, error class/code, random session/correlation IDs,
+    system/agent versions and environment GUID/location/region. Core events
+    do not carry organization or Entra user object IDs. See the plugin's
+    [bundled telemetry guide](../../plugins/power-automate/references/telemetry.md)
+    for the separate routing and log-retention rules.
+
+  **Mobile Apps**
+
+  - `invocationSource` — one of `prompt`, `pretool`, or `checkpoint`.
+  - `appInstanceId` — a random per-project UUID, or `null` outside a prepared project.
+  - `additionalInfo` — optional author-defined checkpoint metadata, restricted to `snake_case` and at most 64 characters.
+  - `appInsightsSelection` — `enabled` or `disabled`, emitted by the `/setup-app-insights` skill.
+
+  Mobile Apps does not add Dataverse organization or tenant IDs, or an Entra user object ID.
+
+  The shared dispatcher used by Power Pages and Model Apps sends `eventInfo` as a JSON **string** (re-serialized by `emit-dispatcher.js`, not the local mirror) because the tenant-side field mapping flattens `data.<key>` to a single `data_<key>` leaf and does not recurse into nested objects. The Kusto side must `parse_json()` / `todynamic()` it back into a dynamic value. The Mobile Apps custom dispatcher serializes the sanitized event fields into the Power Apps `event` stream's `customDimensions`; its local mirror also keeps the structured object.
+
+  `FIELD_TYPES` enforces only that `eventInfo` is a structured JSON value; it does **not** enforce nested keys. Callers **MUST** restrict it to the documented schemas above. Power Pages `framework` is restricted to its closed set and describes only the scaffold, not a user, project, or site. Mobile Apps `appInstanceId` is randomly generated and is not derived from an app name, environment, tenant, organization, or user. Callers **MUST NOT** add other personal data, prompts, project or site identifiers, paths, URLs, credentials, or arbitrary caller payloads. Any proposed expansion requires review and approval, plus updates to this privacy disclosure, the documented event schema, and tests before code emits the new field.
 
   `emitSkillStartedFromPrompt(promptText, opts)` accepts an optional `opts.eventInfo` so a plugin can contribute its own approved keys from the `UserPromptSubmit` hook. It takes either a plain object or a **thunk** returning one; the thunk is preferred, and is invoked only *after* the slash-command, `disabled`, and `isProvisioned` gates pass — that hook fires on every user prompt, so any real work (filesystem probing, shellouts) must not run on untracked prompts. A thunk that throws contributes nothing and never blocks the event. Non-object values (including arrays) are ignored.
 
+Power Pages additionally emits:
+
+- `skill_configured` for approved `create-site` and `add-localization`
+  configuration. Create-site records framework, canonical content locale,
+  fixed purpose/audience categories, and whether the choice came from the
+  initial request or a prompt. Localization records framework, operation,
+  invocation source, existing-setup flag, mode, canonical default/added/resulting
+  locales, package name/version/selection/verification, and `agent` versus
+  `blank` translation population.
+- `localization_package_validation` for each package-validation attempt. It
+  records intended canonical locales, package/mode selection, validation
+  status, prerelease/unverified flags, and stable failure codes. Raw npm errors,
+  exception messages, and evidence URLs are never included.
+- `skill_completed` only for Power Pages `add-localization`. It records outcome,
+  duration, a stable error class on failure, validation outcome, readiness
+  status, configured/unavailable locale counts, and translation method.
+
+Locale telemetry strips private-use (`-x-*`) and extension sequences before
+emission. Private-use-only identifiers are dropped.
+
 ## What is NEVER sent
 
-File paths, cwd, env vars, site names, Dataverse URLs, stack traces, `err.message` text, skill arguments, tool inputs, prompt text, usernames, hostnames.
+File paths, cwd, env vars, site names, site descriptions, page/route/component
+names, free-text requirements, Dataverse URLs, stack traces, `err.message` text,
+raw npm errors, evidence URLs, skill arguments, tool inputs, prompt text,
+usernames, hostnames, or private-use locale subtags.
 
 The dispatcher runs a defense-in-depth allowlist filter against `FIELD_TYPES` before serializing, so any top-level field that bypasses the builders is dropped before it reaches the wire. This filter does not inspect nested `eventInfo` keys; the caller restriction above is part of the telemetry contract.
 
 ## Privacy posture
 
-- **Default-on.** Usage telemetry is enabled by default. No first-run prompt.
-- **Identifiers.** When PAC is signed in, events can include the Dataverse organization GUID (`orgId`), Entra tenant GUID (`tenantId`), and, for Power Pages, the signed-in user's Entra object ID (`eventInfo.aadObjectId`). The local diagnostic mirror retains the same fields.
+- **Shipped state is per plugin.** The committed `ikey.json` controls whether a
+  plugin is enabled or hard-disabled; see [Current adopters](#current-adopters).
+  A hard-disabled plugin produces no network or local telemetry side effects.
+- **Enabled plugins are default-on for transmission.** There is no first-run
+  prompt. A plugin that ships `disabled: true` remains hard-off regardless of a
+  user's saved telemetry choice.
+- **Identifiers.** Power Pages and Power Automate hooks, and Model Apps, can include the Dataverse organization GUID (`orgId`) and Entra tenant GUID (`tenantId`) when PAC is signed in. Power Pages and Power Automate hooks can also include the signed-in user's Entra object ID (`eventInfo.aadObjectId`) when PAC exposes it. Power Automate core MCP/CLI events can include a tenant GUID and environment GUID/location/region, but not organization or Entra user object IDs. Mobile Apps excludes all three identity fields. The local diagnostic mirror retains the same fields as the event produced by each plugin.
+- **Authenticated scenario.** When an adopter has the authentication or project-environment context required by its routing implementation, the resolved cloud and geo select the corresponding configured regional collector. Depending on the adopter's documented schema, the transmitted event may include End User Pseudonymous Information (EUPI) or Organization Identifiable Information (OII).
+- **Unauthenticated or unresolved scenario.** Hook identity fields derived from PAC are absent when PAC provides no authentication context. Power Automate core tenant metadata, if supplied separately, does not depend on PAC. Destination behavior when routing context is unavailable is adopter-specific: configurations with a default region use that configured destination, while configurations that require a resolved project cluster retain the event in the local mirror and do not transmit it until a valid cluster is available. Power Automate hooks additionally require positively identified public cloud; its core events require a recognized environment location and positively identified commercial cloud. The event can still contain the allowlisted operational and system metadata and separately documented non-identity plugin-specific fields.
 - **Opt out of transmission** via `/<plugin>:telemetry off` (per-user, per-plugin). This writes `telemetry[<plugin>] = "off"` into `~/.power-platform-skills/config.json` and stops the network POST to the collector — **nothing leaves the machine** — but the local diagnostic mirror (a per-session `events.jsonl`) is still written so the user/developer can see exactly what would have been sent. It is therefore an opt-out of *transmission*, not of local logging. CI/headless can opt out by writing that file directly. Re-enable with `/<plugin>:telemetry on`.
 - **Opt out for automation** via the per-plugin opt-out env var
   `POWER_PLATFORM_SKILLS_TELEMETRY_<PLUGIN>_OPTOUT` (e.g.
@@ -136,7 +227,7 @@ The `disabled` flag is checked at every layer that could perform user-facing wor
 shared/telemetry/
 ├─ ikey.json                 # placeholder template config (each plugin keeps its own real ikey.json)
 ├─ lib/
-│  ├─ events.js              # FIELD_TYPES allowlist + buildSkillStarted
+│  ├─ events.js              # FIELD_TYPES allowlist + event builders
 │  ├─ emit-spawn.js          # fireAndForget — spawn detached dispatcher
 │  ├─ emit-dispatcher.js     # detached child — kill switches, opt-out, destination resolve (resolver.js or static key), sanitize, POST
 │  ├─ emit-from-prompt.js    # UserPromptSubmit hook helper — detect slash command + emit skill_started
@@ -149,7 +240,7 @@ shared/telemetry/
 │  ├─ prompt-detector.js     # parses `/plugin:skill` slash commands from prompt text
 │  ├─ scrubber.js            # legacy text-scrubbing helper (unused by default — kept for callers that need it)
 │  └─ local-log.js           # appends every emitted event to ~/.power-platform-skills/telemetry/<plugin>/sessions/<sessionId>/events.jsonl (irrespective of iKey), with 14-day session retention and a 10 MB per-session rollover
-└─ tests/                    # node:test coverage for every module above
+└─ tests/                    # node:test coverage for every module above; CI: .github/workflows/shared-telemetry-tests.yml
 ```
 
 ---

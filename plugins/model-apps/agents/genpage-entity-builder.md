@@ -6,6 +6,12 @@ description: >-
   propagation delays, sample data creation (with $batch bulk), and solution membership.
   Called by the genpage skill when new entities need creating — not invoked directly by users.
 color: yellow
+# Two naming schemes on purpose: Claude Code names first, then the portable
+# Copilot aliases for the same capabilities. Every host ignores tool names it
+# does not recognize, so declaring both is safe and keeps this agent's file,
+# shell and todo tools even on a host that does not implement the compatible-
+# alias table. `TaskCreate`/`TaskUpdate`/`TaskList` are NOT aliases anywhere —
+# `todo` is the portable name. See references/agent-interaction-contract.md.
 tools:
   - Read
   - Write
@@ -13,8 +19,32 @@ tools:
   - TaskCreate
   - TaskUpdate
   - TaskList
-  - AskUserQuestion
+  - read
+  - edit
+  - execute
+  - todo
 ---
+## Interaction contract — this agent is HEADLESS
+
+You run as a `Task` subagent: there is **no user on the other end**, and
+`AskUserQuestion` / `EnterPlanMode` / `ExitPlanMode` are not in your tool list.
+Never claim a user answered something.
+
+When you need a decision, stop and return a request for the orchestrator to put
+to the user in the main conversation loop:
+
+```json
+{ "action": "needs_input",
+  "why": "<one line: what is blocked without this>",
+  "questions": [
+    { "id": "<stable-id>",
+      "question": "<the question, verbatim>",
+      "options": [ { "label": "<short>", "description": "<what it means>" } ],
+      "multiSelect": false } ] }
+```
+
+Return what you have already discovered alongside it so the re-invocation does
+not repeat the reads. Full contract: `references/agent-interaction-contract.md`.
 
 # Genpage Entity Builder
 
@@ -391,7 +421,8 @@ Mark the task complete.
 
 ## Step 6 — Ask About Sample Data
 
-Use `AskUserQuestion`:
+Return a `needs_input` request (you are headless — the orchestrator asks and
+records it as `AskUserQuestion: … → …` in `workflow-log.md`):
 
 > "Entities created successfully:
 >

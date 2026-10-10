@@ -251,7 +251,8 @@ persistence is therefore **foundational**, and the mechanism is **decided** (not
   environment-specific and can be stale after import to another env, so they are **reconciled against
   the fail-closed current-app enumeration** (§9) before use — the manifest keeps `key ↔ name`
   durable (so a display-name change never orphans a page), while the *deployed* id is confirmed live
-  each run.
+  each run. An off-sitemap id additionally needs a local CREATE receipt for this app/key/id and a
+  corroborating stored name; a remote manifest or matching name alone never authorizes reuse.
 - **Canonical symbolic source is retained** in the working dir / app-spec sidecar (the `.tsx` with
   `PAGEREF_<key>`); the resolved deployment derivative is never written back over it.
 - **Download reconstructs keys** from the manifest and **reverse-normalizes** sibling page-GUID
@@ -299,12 +300,12 @@ Reuse `/genpage`'s navigation contract (`references/rules.md` 299–356): naviga
 **Source stays symbolic.** Code-gen emits `PAGEREF_<page-key>` and the **canonical `.tsx` is never
 mutated** with a GUID (mutation would bake environment-specific ids into source and break
 cross-env deploy / recreate — reviewer C4, SDK **T5** opaque-identity). Because `genpageCli.upload`
-takes a **file path**, not in-memory content (`genpage-cli.js:77-86`), the resolver writes a
+takes a **file path**, not in-memory content (`genpage-cli.js`, `upload()`), the resolver writes a
 **staging file** (a deployment copy adjacent to `RuntimeTypes.ts`); the canonical source is left
 untouched.
 
 **Deployment protocol (safe recovery — new Critical from R2).** `listPages` currently turns any PAC
-failure into `[]` (`genpage-cli.js:67-70`), which the engine treats as "no pages" — risking
+failure into `[]` (`genpage-cli.js`, `listPages()`), which the engine treats as "no pages" — risking
 duplicates and orphans. The `app` stage instead:
 
 1. **Enumerate fail-closed** — page listing retries and **distinguishes failure from empty**; a
@@ -347,9 +348,9 @@ the model-driven shell today. Scope honestly:
 Consent is mode-aware; **autopilot mode is also eval mode** (both non-interactive).
 
 **The problem the first draft missed:** `--allow-destructive` was not tied to any real diff, and
-`--non-interactive` on the CLI cannot gate main-loop questions. Meanwhile updates already remove
-content — collision is warning-only (`build-model-app.js:111-119`), explicit-form fields are
-pruned (`sdk-build.js:690-725`), and the sitemap is fully replaced (`:995-1007`); teardown is
+`--non-interactive` on the CLI cannot gate main-loop questions. Meanwhile updates already removed
+content — collision was warning-only (`build-model-app.js:111-119`), explicit-form fields were
+pruned (`sdk-build.js:690-725`), and the sitemap was fully replaced (`:995-1007`); teardown was
 gated by `--apply` alone (`teardown-model-app.js:62-95`).
 
 **The fix — a read-only operation-diff planner (`op-diff.js`, new pure module):**
@@ -370,8 +371,12 @@ gated by `--apply` alone (`teardown-model-app.js:62-95`).
 - **Hard gate + TOCTOU:** any destructive op without `--allow-destructive` **halts before writes**
   (incl. teardown). Recompute the diff **immediately before apply** so a state change between plan
   and apply can't slip through.
-- **Approval binding:** bound to **env/app identity + spec hash + op hash**; not replayable against a
-  different target.
+- **Approval binding:** a refused apply records the exact removals it listed in
+  `.maker-workspace/destructive-approval.json` (each form's fields, the sitemap targets, and the run
+  that wrote it). The approved re-run removes only those and halts, naming the new ones, if anything
+  else would now be removed. An approved run rewrites or consumes the record only if it found it at
+  its start or wrote it, so a concurrent build cannot consume it; a new refusal replaces it with the list
+  that refusal showed, and a halt naming new removals refreshes it with the full current list.
 - **Env var suppresses questions only** — never grants destructive authority; `--allow-destructive`
   is always explicit, even in autopilot.
 
@@ -530,7 +535,11 @@ This is the canonical spec for the multi-deliverable build.
 v1 wires exactly ONE convergent shape end-to-end: **page-content re-upload** (a `.tsx` byte edit to an
 existing page). Everything else — view-append, sitemap, form, or any data-model/AI/chart/command/
 dashboard/web-resource change — routes to a **full build** (always safe; a full build converges the first
-four and additive-SKIPS the rest, which then incur sticky debt). The user-facing contract:
+four and additive-SKIPS the rest, which then incur sticky debt).
+For forms, convergence is limited to the [form-layout contract](../references/app-spec-schema.md);
+it does **not** include reordering existing fields from a changed `fields` list.
+
+The user-facing contract:
 - **`--changed-only` bootstraps its baseline from a FRESH build.** The eligible baseline is written only
   when the app did **not** exist when the run started (a first `--apply --changed-only`). Running the
   first build with a plain `--apply` (no snapshot) and *then* `--changed-only` yields an **ineligible**
@@ -545,8 +554,26 @@ four and additive-SKIPS the rest, which then incur sticky debt). The user-facing
 ## Deferred to follow-ups (v1 does NOT implement; tracked in the capabilities doc)
 Pre-mutation live page-content drift verifier; `expectedSitemap` population + pre/post sitemap projection
 equality (sitemap fast shape unwired in v1); a `clearDebtMatching` production caller (v1 clears debt only
-via teardown+rebuild); unifying `contentPath` confinement between hashing and the build; view/form/sitemap
-fast submodes. None are reachable on the v1 pages-only fast path.
+via teardown+rebuild); view/form/sitemap fast submodes. None are reachable on the v1 pages-only fast path.
+
+Page `codeFile` and web-resource `contentPath` reads share one app-folder resolver for hashing and
+deployment: only relative, regular files inside the app folder are accepted; source symlinks and
+junctions are refused. Canonical spelling changes such as Windows 8.3 aliases are allowed when
+component link checks and canonical containment succeed.
+
+Off-sitemap page recovery requires a local CREATE receipt, not a remote manifest/name match.
+The workspace's `page-ownership.created.<hash>.json` records bind app unique name, page key, id and
+an opaque fingerprint of the normalized target environment origin, without storing its URL,
+after an acknowledged create and before placement. Local teardown records preserve verified ownership
+before the app is removed; pending page deletions keep those records and the manifest/solution across
+retries, including page-less retries. Uncertain CLI creates report candidates for explicit user
+resolution instead of updating one automatically. Form-only references are not scanned.
+There is one environment-bound receipt format. Unknown versions, malformed or unreadable records
+halt with the filename and guidance rather than silently losing identity. Foreign-environment records
+never authorize a current-target operation or get consumed there.
+Workspace clearing refuses all unconsumed ownership records, naming each file and its retirement
+condition (page deletion or confirmed absence), and checking both before
+atomic isolation and before removal; a late record keeps the isolated folder for explicit recovery.
 
 ## Why this is hard
 `/app-builder`'s build engine is **ADDITIVE, not convergent**: existing chart/command/dashboard defs and
@@ -586,13 +613,53 @@ ONLY after effective success (apply+verify).
 
 ## Eligibility state machine (durable, fail-closed)
 - **INVALIDATE (→false) before any write** of every full/unsupported/fast apply and teardown; abort if
-  the invalidation write fails.
+  the invalidation write fails. A `--changed-only` invalidate is **fenced** to the generation its
+  decision was read at: a snapshot tombstoned, rewritten or deleted since that read aborts the run
+  before it writes anything. A run that read **no** snapshot (a first build) **claims** one instead — an
+  ineligible, debt-free placeholder written under the lease only while there is still none — so its
+  baseline write has a generation to be fenced by; a claim refused because a snapshot appeared aborts
+  the run the same way.
 - **debt** accrues on any unsupported change/removal; `eligible:true` requires empty debt; debt clears
   ONLY by proven-fresh recreation (artifact absent before build) or an exact verifier — never by a plain
   full rebuild that re-skips a stale artifact.
 - **teardown TOMBSTONE**: teardown writes `eligible:false` + `teardown-in-progress` debt BEFORE deleting
   anything, and deletes the envelope ONLY after teardown success + verified live absence; a partial/
-  crashed teardown leaves the tombstone (so a surviving artifact can't be rebaselined).
+  crashed teardown leaves the tombstone (so a surviving artifact can't be rebaselined). The tombstone
+  also **rotates the generation** — without that, a run that read the snapshot first still matched it
+  and re-blessed its stale view over the tombstone — and a teardown that cannot write it **deletes
+  nothing**. The CAS write takes the workspace lease itself, so a tombstone cannot land between its
+  compare and its write. A workspace with **no** snapshot gets a fresh tombstone too (creating the folder
+  if needed, and removing it again after a clean teardown): with none, a first build's baseline write
+  expected "none", nothing ever changed that, and the build blessed the app the teardown was deleting.
+  The tombstone **lists every teardown in flight** (id, pid, start time), and every teardown that
+  finishes removes its own entry, under the lease (retried briefly if another writer holds it): one
+  that failed or threw keeps the tombstone. After a clean teardown the snapshot is deleted when the last
+  live entry goes — whatever it has become by then — and until then it stays tombstoned, its generation
+  rotated, fencing the deletes still running. A `--changed-only` build that reads a tombstone listing a
+  teardown still running refuses to build until it finishes (the no-identity fallback included, which
+  writes no snapshot and so reads the workspace again before it builds, refusing when the generation moved
+  during identity discovery). A
+  running teardown refreshes its entry every minute, and an entry whose process is gone, or that has not
+  been seen for five minutes, no longer counts — so a killed teardown's entry stops blocking within
+  minutes, even under a reused pid. `--clear-workspace` leaves a workspace whose fence is still held. A
+  workspace lease is reclaimed only from a DEAD holder — or, for a lock with no readable token, one older
+  than five minutes — never from a live one however old: a holder paused mid-write would commit its stale
+  view over the fence on resuming. It is reclaimed by one writer only (an exclusive claim file, itself
+  abandoned only once its claimer is dead, and a re-check of the lock); a reclaim that fails after its
+  write releases what it wrote. An old lease whose holder's pid is alive names the file to delete, in case
+  that pid was reused.
+- **overlap**: a `--changed-only` run whose generation moved while it built, or whose baseline write
+  another writer refused, reports failure whatever its build returned, and **invalidates** whatever
+  snapshot it then finds (fenced to the generation it read, retried briefly): a baseline another writer
+  blessed meanwhile would certify a state this run may since have changed. When every attempt is refused,
+  the lease held by a live writer or a snapshot there that cannot be read (only a provably absent one
+  leaves nothing to distrust), the refusal is recorded in a **distrust marker**
+  (`<workspace>/apply-snapshot.distrust.<id>.json`, one file per refusal), written beside the snapshot and
+  outside the lease. The next `--changed-only` run builds in full however eligible the snapshot reads; a
+  full build that lands its baseline deletes the markers it found at its start, by name, never one written
+  since; the last clean teardown deletes them all with the snapshot. An unreadable marker still counts. A
+  marker is only ever created or deleted, never moved or rewritten, so a concurrent reader always sees
+  every other run's.
 
 ## Projection/verifier framework (`scripts/lib/projection.js` — deliverable #1, DONE)
 Pure, id-free, normalized projections that serve as the EXACT post-apply verifiers (static classification

@@ -18,38 +18,13 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseArgs, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
+const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const { migrateAppSpec } = require('./lib/app-spec.js');
 const { pageKey, pageFile } = require('./lib/page-plan.js');
-const { navReferencedKeys, navMalformedRefs, navTargetParity } = require('./lib/pageref-resolver.js');
-const { hasDefaultExport, hasUnbalancedBrackets } = require('./lib/source-literals.js');
-
-// A generated page must be a real React module. We deliberately do NOT typecheck here (the plugin
-// ships with no dependencies, so there is no TS parser to call, and typechecking is the build's
-// job) — this is the structural gate that catches the realistic worker failures: an empty file, a
-// truncated write, or prose returned instead of code.
-//
-// Every check runs over literal-blanked source (see lib/source-literals.js). A substring search —
-// even one over pageref-resolver's stripNonCode, which deliberately PRESERVES ordinary string
-// bodies — accepted prose that merely MENTIONS an export:
-//   /* export default */                                -> promoted
-//   const prose = "export default GeneratedComponent";   -> promoted
-// Promotion is sticky (the page is then marked implemented and skipped on the next run), so a
-// fail-open here corrupts the state the user would otherwise retry from.
-function structuralProblems(code) {
-  const out = [];
-  if (!code.trim()) return ['file is empty'];
-  if (!hasDefaultExport(code)) {
-    out.push('no real `export default` (or `export { X as default }`) — the host cannot mount the page');
-  }
-  if (hasUnbalancedBrackets(code)) {
-    out.push('unbalanced brackets — the file looks truncated');
-  }
-  // A worker that answers in prose usually still opens a fence; a real .tsx never contains one.
-  // Both CommonMark fence markers count.
-  if (/^\s*(```|~~~)/m.test(code)) out.push('contains a markdown code fence — the worker returned prose, not a module');
-  return out;
-}
+const { navReferencedKeys, navMalformedRefs, navTargetParity, strayPageRefs, describePageRefLocations, pageRefAdvice, frontierNote, PAGEREF_RULE } = require('./lib/pageref-resolver.js');
+// The structural gate (empty, truncated, prose, elided) is shared with genpage-worker-output.js, so a
+// page one gate refuses the other refuses too. See lib/page-structure.js for each check and why.
+const { pageStructureProblems: structuralProblems } = require('./lib/page-structure.js');
 
 function validatePage(page, absWorkingDir) {
   const key = pageKey(page);
@@ -73,23 +48,40 @@ function validatePage(page, absWorkingDir) {
   // HALTs on a malformed PAGEREF or a nav parity mismatch, so catching it here keeps the failure
   // in Phase 1.5 where the page can simply be regenerated.
   const malformed = navMalformedRefs(code);
-  if (malformed.length) problems.push(`malformed nav pageref(s): ${malformed.join(', ')} (must be a double-quoted "PAGEREF_<key>" literal)`);
+  if (malformed.length) problems.push(`malformed nav pageref(s): ${malformed.join(', ')} (must be a double-quoted "PAGEREF_<key>" literal; ${PAGEREF_RULE})`);
 
   const declared = (page.navigatesTo || []).map((n) => (typeof n === 'string' ? n : n && n.targetKey)).filter(Boolean);
   const { declaredNotReferenced, referencedNotDeclared } = navTargetParity(declared, navReferencedKeys(code));
-  if (declaredNotReferenced.length) problems.push(`navigatesTo declares ${declaredNotReferenced.join(', ')} but the code never navigates there`);
+  // A PAGEREF_ token that is not the pageId of a recognised call is never rewritten, so the page would ship it as literal
+  // text. The build refuses it too; here it can be fixed by regenerating the page, and the report says where it is.
+  const stray = strayPageRefs(code);
+  // A call the lexer cannot see is "absent" here, which sends the author looking for a call that is plainly there. A hidden call's token
+  // lies after the guess, and the report of the token below names it; only when no token does is the guess named on this line.
+  const hidden = declaredNotReferenced.length && !stray.some((r) => r.frontier) ? frontierNote(code) : '';
+  if (declaredNotReferenced.length) problems.push(`navigatesTo declares ${declaredNotReferenced.join(', ')} but the code never navigates there${hidden ? ` — ${hidden}` : ''}`);
   if (referencedNotDeclared.length) problems.push(`code navigates to ${referencedNotDeclared.join(', ')} which is not in navigatesTo`);
+
+  if (stray.length) problems.push(`PAGEREF_ token(s) no navigation rewrite will resolve: ${describePageRefLocations(stray)} (${pageRefAdvice(stray)})`);
 
   return { key, file, problems };
 }
 
 function main() {
-  const { positional, flags } = parseArgs(process.argv.slice(2));
-  const str = (v) => (typeof v === 'string' ? v : undefined);
-  const specArg = str(flags.spec) || (typeof positional[0] === 'string' ? positional[0] : undefined);
-  const workingDir = str(flags['working-dir']);
+  const argv = process.argv.slice(2);
+  const { positional, flags } = parseArgs(argv);
+  const USAGE = 'Usage: node scripts/promote-intent-pages.js --spec @<app-folder>/app-spec.json --working-dir <dir>';
+  const flagError = validateFlags(argv, {
+    known: ['spec', 'working-dir'],
+    needValue: ['spec', 'working-dir'],
+  });
+  if (flagError) {
+    process.stderr.write(`✗ ${flagError}\n${USAGE}\n`);
+    process.exit(1);
+  }
+  const specArg = flags.spec || positional[0];
+  const workingDir = flags['working-dir'];
   if (!specArg || !workingDir) {
-    process.stderr.write('Usage: node scripts/promote-intent-pages.js --spec @<app-folder>/app-spec.json --working-dir <dir>\n');
+    process.stderr.write(USAGE + '\n');
     process.exit(1);
   }
 

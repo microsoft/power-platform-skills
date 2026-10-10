@@ -2,7 +2,7 @@
 
 > **Status: v3 — extended to non-ALM skills.** v2 introduced the marker/lint design and catalogued the 12 ALM skills (§6.1–§6.12). v3 extends coverage to the 12 non-ALM skills (§6.13–§6.24), flips lint severity from warn-only to hard-fail across the plugin, and updates `AGENTS.md` so any new skill must add its gates here in the same PR.
 >
-> **Scope: all power-pages skills.** §6 enumerates every `AskUserQuestion` across the 24 user-invocable skills (12 ALM + 12 non-ALM). `report-issue` is a cross-plugin shared workflow — its wrapper SKILL.md contains no prompts (the workflow file at `shared/skills/report-issue/report-issue-workflow.md` lives outside the per-plugin lint scope) and is excluded from this catalog.
+> **Scope: all power-pages skills.** §6 enumerates every `AskUserQuestion` across the catalogued user-invocable skills. `report-issue` is a cross-plugin shared workflow — its wrapper SKILL.md contains no prompts (the workflow file at `shared/skills/report-issue/report-issue-workflow.md` lives outside the per-plugin lint scope) and is excluded from this catalog.
 >
 > **Markers applied across all SKILL.md files.** Each gate has both a machine-readable `<!-- gate: ID | category=X | cancel-leaves=Y -->` HTML comment and a human-readable `> 🚦 **Gate (...)**` block. Each pure data-gathering prompt has a `<!-- not-a-gate: <reason> -->` comment.
 >
@@ -176,6 +176,8 @@ Required, normalized vocabulary:
 | Value | Meaning |
 |---|---|
 | `nothing` | Clean exit. No Dataverse write, no filesystem write, no state change anywhere. |
+| `rendered-plan` | A human-readable HTML plan remains under `docs/`; no implementation files, dependencies, or external state changed. |
+| `localized-site-files` | Localization changes remain in the site files but are not deployed. |
 | `validated-stage-run` | A `deploymentstageruns` row remains on the host in validated-but-not-deployed state. |
 | `partial-manifest` | `.solution-manifest.json` written but not all components added to Dataverse. |
 | `partial-solution` | Some components added to Dataverse via `AddSolutionComponent` before Cancel. |
@@ -468,7 +470,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 
 ---
 
-### 6.13 `create-site` (21 calls: 14 gates + 7 not-a-gates)
+### 6.13 `create-site` (24 calls: 15 gates + 9 not-a-gates)
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
@@ -476,6 +478,7 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | `create-site:1.5.creation-path` | not-a-gate | - | 1.5 | Route preference before catalog fetch; no project directory, Dataverse write, or durable skill state exists | - |
 | `create-site:1.5.template-choice` | not-a-gate | — | 1.5 | Read-only route selection after template preview; only disposable temp preview files exist, with no project directory, Dataverse write, or durable skill state | — |
 | `create-site:1.5.from-scratch-setup` | not-a-gate | — | 1.5 | Deferred framework and directory data-gathering before any scaffold files are written | — |
+| `create-site:1.5.content-language` | not-a-gate | — | 1.5 | *"Which language should the site content use?"* — offers the Dataverse organization base language as Suggested when available, then validates the single SPA content locale for the from-scratch path; Dataverse and Power Pages system messages remain English | — |
 | `create-site:1.5.confirm-environment` | gate | consent | 1.5 | Target environment resolved from PAC/Azure auth — confirm before any environment preflight or import mutation | template-cache |
 | `create-site:1.5.unblock-js` | gate | consent | 1.5 | Target environment blocks `.js` in `blockedattachments` — remove only `js` before uploading website code | attachment-block-modified |
 | `create-site:1.5.language-requirement` | not-a-gate | - | 1.5 | Route selection after blocking template-declared Dataverse language preflight; no override option exists and no org mutation has happened | - |
@@ -489,10 +492,12 @@ When **removing** a gate, also remove its catalog row in the same PR.
 | `create-site:1.5.reinstall-unknown` | gate | consent | 1.5 | Installed-state detection failed for one discovered solution — confirm whether to import it anyway, start from scratch, or stop; fires per matching solution iteration | template-cache |
 | `create-site:1.5.import-failed` | gate | progress | 1.5 | Import failed or partial — choose retry, from-scratch fallback, or stop; fires per failed solution iteration | partial-unmanaged-template-import |
 | `create-site:1.5.seed-currency` | not-a-gate | - | 1.5 | Read-only seed planning found financial rows — choose an existing active currency with unchanged amounts or skip sample data before background writes | - |
-| `create-site:3.requirements` | gate | plan | 3 | *"Which features? / Aesthetic / Mood"* — three sub-prompts sharing this gate; shape the rendered Phase 4 plan | nothing |
-| `create-site:4.7.plan-approval` | gate | plan | 4.7 | HTML plan rendered — *"Approve and start building / I'd like to make changes"* | nothing |
+| `create-site:3.requirements` | gate | plan | 3 | *"Which features? / Aesthetic / Mood / Brand"* - four sub-prompts sharing this gate, plus a free-text brand follow-up (website URL, or colors and logo) when the user has a brand to match; shape the rendered Phase 4 plan | nothing |
+| `create-site:4.7.plan-approval` | gate | plan | 4.7 | Localized HTML plan rendered with agent verification separated from maker review — *"Approve and start building / I'd like to make changes"* | nothing |
+| `create-site:5.7.critique-blocked` | gate | progress | 5.7 | A critical design gate still fails after three critique rounds - *"Keep fixing / Continue and record it as a known issue / Stop here"* | nothing |
+| `create-site:5.8.localization` | not-a-gate | — | 5.8 | *"Would you like to add more languages now?"* — selects whether to enter the child localization workflow after implementation and design critique; the child workflow preserves the detected document locale as its source/default and its Phase 3 gate approves every localization write | — |
 | `create-site:7.review` | gate | plan | 7 | Live site ready — *"Would you like any changes?"* | nothing |
-| `create-site:8.deploy` | gate | plan | 8 | *"Deploy now (Recommended) / Skip for now"* — invokes `/deploy-site` on Yes | nothing |
+| `create-site:8.deploy` | gate | plan | 8 | *"Deploy now (Recommended) / Skip for now"* — invokes `/deploy-site` on Yes; when `SAMPLE CONTENT` placeholders remain, they are listed first, the question names the count, and Skip becomes the recommended option | nothing |
 
 Template-path note: when Phase 1.5 selects and installs a template, the workflow stops after activation/live preview and does **not** enter the from-scratch Phase 4 plan approval or Phase 8 deploy prompt. Those gates fire only on the from-scratch branch.
 
@@ -613,7 +618,7 @@ Template-path note: when Phase 1.5 selects and installs a template, the workflow
 
 | ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
 |---|---|---|---|---|---|
-| `audit-permissions:6.fix-offer` | gate | plan | 6 | Audit complete — *"Would you like me to fix any of these issues? Yes / No"* — declining leaves the audit report untouched; accepting routes to the table-permissions-architect agent | nothing |
+| `audit-permissions:6.fix-offer` | gate | plan | 8 | Audit complete — *"Would you like me to fix any of these issues? Yes / No"* — declining leaves the audit report untouched; accepting routes to the table-permissions-architect agent | nothing |
 
 ---
 
@@ -731,6 +736,40 @@ Reviews traditional and SPA sites for deprecated Web API wildcard fields setting
 | `migrate-webapi-selectall:7.smoke-test` | gate | progress | 7 | Approves the listed read-path smoke test against the deployed site. Write, file, and image paths are never issued. | deployed migration unverified |
 
 ---
+
+### 6.33 `exceptional-web-design` (2 calls / 2 sub-prompts)
+
+Read-only design review of an existing site from a URL or a project folder. It runs nothing in the project and writes nothing to it, so no prompt can leave state behind and none is a gate.
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| Step 1 site prompt | sub-prompt | — | 1 | *"Which site should I review?"* - asked only when the request names no URL and no `powerpages.config.json` is found. Data-gathering. | nothing |
+| Step 2 URL prompt | sub-prompt | — | 2 | Folder without a URL - *"I'll paste a URL / Review the code only"*. Asks where the site runs (the deployed site, or a dev server the user starts); the skill starts nothing. Data-gathering. | nothing |
+
+---
+
+### 6.34 `add-localization` (12 calls)
+
+Adds or extends localization for React, Vue, Angular, and Astro code-site SPAs.
+Most prompts gather validated configuration before the Phase 3 plan gate.
+
+| ID | Kind | Category | Phase | Trigger / question | Cancel leaves |
+|---|---|---|---|---|---|
+| `add-localization:1.framework` | not-a-gate | — | 1 | Conflicting framework evidence — choose an evidence-backed candidate or stop for manual framework-configuration repair | — |
+| `add-localization:1.existing-action` | not-a-gate | — | 1 | Existing setup — add languages, repair/reconfigure, or stop | — |
+| `add-localization:2.languages` | not-a-gate | — | 2.1 | Enter locales; invalid tags are rejected and canonicalization/duplicates are shown | — |
+| `add-localization:2.default` | not-a-gate | — | 2.2 | Select exactly one validated default locale when required | — |
+| `add-localization:2.mode` | not-a-gate | — | 2.3 | Angular only — official static localization or runtime Transloco | — |
+| `add-localization:2.package` | not-a-gate | — | 2.4 | Use recommendation, propose a validated alternative, or cancel | — |
+| `add-localization:2.prerelease` | not-a-gate | — | 2.4 | Explicitly acknowledge an npm prerelease before it may enter the plan | — |
+| `add-localization:2.license-review` | not-a-gate | — | 2.4 | Use the recommendation, explicitly accept the reported package license, or cancel | — |
+| `add-localization:2.translation` | not-a-gate | — | 2.5 | Agent-generated translations, blank targets, or cancel | — |
+| `add-localization:3.plan-approval` | gate | plan | 3 | Review the opened source-language `docs/add-localization-plan*.html`, then approve the exact package/mode/locale/file delta before installation or edits | rendered-plan |
+| `add-localization:7.review` | gate | plan | 7 | Accept verified localization or request revisions | localized-site-files |
+| `add-localization:8.deploy` | gate | plan | 8 | Direct invocation only — deploy now or skip; create-site child invocation suppresses this prompt | localized-site-files |
+
+---
+
 ### Cross-plugin shared skills — out of catalog scope
 
 `report-issue` — Its prompts are cross-plugin, not power-pages-specific, so they are not catalogued here. If the shared workflow is ever governed by per-plugin approval-gate linting, add a `report-issue:*` section to this catalog.

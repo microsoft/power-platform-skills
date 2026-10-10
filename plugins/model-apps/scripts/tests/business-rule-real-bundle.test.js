@@ -41,8 +41,8 @@ const fs = require('node:fs');
 const BUNDLE = path.resolve(__dirname, '..', 'vendor', 'cds-maker-sdk.cjs');
 const dirs = [];
 
-function sdkWithCapture() {
-  const { createMakerSdk } = require(BUNDLE);
+async function sdkWithCapture() {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'br-'));
   dirs.push(dir);
   const writes = [];
@@ -56,16 +56,16 @@ function sdkWithCapture() {
     put: async () => ({ status: 204, headers: {}, body: {} }),
     delete: async () => ({ status: 204, headers: {}, body: {} }),
   };
-  const sdk = createMakerSdk({ workspacePath: dir, instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
-  sdk.initWorkspace();
+  const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(dir), instanceUrl: 'https://contoso.crm.dynamics.com', httpClient });
+  await sdk.initWorkspace();
   return { sdk, writes };
 }
 
 // "IF account.name equals 'x' THEN hide fax" — the smallest rule that is actually meaningful.
 // A rule with a null rootCondition is what the server rejected live, so the fixture is deliberately
 // a complete one: condition + clause + a true-branch action.
-function authorRule(sdk) {
-  const art = sdk.createArtifact('businessRule', {
+async function authorRule(sdk) {
+  const art = await sdk.createArtifact('businessRule', {
     name: 'Contract Rule', entityLogicalName: 'account', scope: 'Entity', status: 'Draft',
   });
   return { art, condition: {
@@ -82,8 +82,8 @@ test('REAL BUNDLE: a business rule is authored through the generic artifact life
   // There is no dedicated business-rule API on MakerSdkApi — it is createArtifact -> updateElement
   // -> pushArtifact, like every other artifact. Pinning that is what tells a future implementer
   // which surface to build against.
-  const { sdk } = sdkWithCapture();
-  const { art, condition } = authorRule(sdk);
+  const { sdk } = await sdkWithCapture();
+  const { art, condition } = await authorRule(sdk);
   assert.ok(art && art.id, 'createArtifact returns an artifact with an id');
   assert.deepStrictEqual(
     Object.keys(art).sort(),
@@ -101,8 +101,8 @@ test('REAL BUNDLE: a business rule is authored through the generic artifact life
 test('REAL BUNDLE: the push targets the BOUND CreateProcessWithWfomJson action', async () => {
   // The boundness matters twice over: it is why an unbound probe 404s and proves nothing, and a
   // re-vendor that switched to an unbound or renamed endpoint would silently 404 at build time.
-  const { sdk, writes } = sdkWithCapture();
-  const { art, condition } = authorRule(sdk);
+  const { sdk, writes } = await sdkWithCapture();
+  const { art, condition } = await authorRule(sdk);
   await sdk.updateElement('businessRule', art.id, '/rootCondition', condition);
   await sdk.pushArtifact('businessRule', art.id);
 
@@ -118,8 +118,8 @@ test('REAL BUNDLE: the SDK compiles typed input into server WfomJson (not a pass
   // The whole value of the typed surface is that a caller writes a condition tree and the SDK emits
   // the server's workflow-object-model JSON. If it ever became a passthrough, callers would have to
   // hand-write WfomJson — a silent, very expensive contract change.
-  const { sdk, writes } = sdkWithCapture();
-  const { art, condition } = authorRule(sdk);
+  const { sdk, writes } = await sdkWithCapture();
+  const { art, condition } = await authorRule(sdk);
   await sdk.updateElement('businessRule', art.id, '/rootCondition', condition);
   await sdk.pushArtifact('businessRule', art.id);
 
@@ -155,8 +155,8 @@ test('REAL BUNDLE: the SDK compiles typed input into server WfomJson (not a pass
 test('REAL BUNDLE: an invalid condition is rejected at authoring time, not at the server', async () => {
   // Local validation is what turns "HTTP 400: An unexpected error occurred" — which is exactly what
   // the server returns for a malformed rule — into an actionable message. Verify it actually fires.
-  const { sdk } = sdkWithCapture();
-  const { art } = authorRule(sdk);
+  const { sdk } = await sdkWithCapture();
+  const { art } = await authorRule(sdk);
   await assert.rejects(
     async () => await sdk.updateElement('businessRule', art.id, '/rootCondition', {
       id: 'c1', displayName: '', logic: 'XOR', clauses: [], trueBranch: [], falseBranch: [],

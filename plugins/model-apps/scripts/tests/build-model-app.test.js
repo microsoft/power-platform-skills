@@ -6,7 +6,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
-const { buildModelApp, isTransientHalt, discoverOpDiffState, parseLanguageCode } = require(path.join(__dirname, '..', 'build-model-app.js'));
+const { buildModelApp, isTransientHalt, discoverOpDiffState, parseLanguageCode, assertSnapshotInvalidated } = require(path.join(__dirname, '..', 'build-model-app.js'));
 const { resolveLanguageCode } = require(path.join(__dirname, '..', 'lib', 'entity-provision.js'));
 const { validateAppSpec, normalizeLanguageCode } = require(path.join(__dirname, '..', 'lib', 'app-spec.js'));
 const { readProvisionedLanguages } = require(path.join(__dirname, '..', 'lib', 'dataverse-auth.js'));
@@ -69,6 +69,20 @@ test('rejects an invalid spec before any build', async () => {
   assert.strictEqual(r.ok, false);
   assert.ok(Array.isArray(r.errors) && r.errors.length);
   assert.strictEqual(calls.length, 0, 'no SDK writes on a bad spec');
+});
+
+// The web-resources phase reads contentPath files after the solution and tables are written, so a
+// missing source must be caught here, with the page sources, before the first SDK call.
+test('a web resource whose contentPath file is missing halts before any SDK call', async (t) => {
+  const { sdk, calls } = mockSdk();
+  const appDir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'contoso-wr-source-'));
+  t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
+  const spec = jclone(desk);
+  spec.webResources = [...(spec.webResources || []), { name: 'new_missing.js', displayName: 'Missing', type: 'js', contentPath: 'scripts/missing.js' }];
+  const r = await buildModelApp(spec, { apply: true, env: 'https://x', appDir }, { sdk });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.errors.some((e) => /^webResource 'new_missing\.js': contentPath 'scripts\/missing\.js' does not exist or is not a file/.test(e)), JSON.stringify(r.errors));
+  assert.strictEqual(calls.length, 0, 'no SDK writes before the source check');
 });
 
 test('dry-run returns the plan and never touches the SDK', async () => {
@@ -280,10 +294,106 @@ test('isTransientHalt classifies lock/timeout/429/503 as transient, others not',
   assert.ok(isTransientHalt({ message: 'Microsoft.Crm.ObjectModel.CustomizationLockException: ...' }));
   assert.ok(isTransientHalt({ cause: { message: 'SQL timeout expired' } }));
   assert.ok(isTransientHalt({ message: 'More than one concurrent Delete requests detected' }));
+  // A SQL deadlock victim was rolled back, so running the idempotent build again is safe — captured live.
+  assert.ok(isTransientHalt({ message: 'HTTP 500 from https://contoso.crm.dynamics.com/api/data/v9.0/workflows(1):  Sql error: Generic SQL error. CRM ErrorCode: -2147204784 Sql ErrorCode: -2146232060 Sql Number: 1205' }));
+  assert.ok(!isTransientHalt({ message: 'Sql error: Generic SQL error. Sql Number: 547' }), 'another SQL error is not a deadlock');
+  assert.ok(!isTransientHalt({ transient: false, message: 'Sql Number: 1205' }), 'an explicit non-transient still wins');
   // recoverable is a re-runnable-phase flag, NOT a transient signal — must not trigger a retry alone.
   assert.ok(!isTransientHalt({ recoverable: true }));
   assert.ok(!isTransientHalt({ message: 'validation failed', cause: { statusCode: 400 } }));
   assert.ok(!isTransientHalt(null));
+  // An error that declares itself non-transient is never retried, whatever status or text it quotes: a
+  // dashboard left outside the app's solution would be silently reused by the retry.
+  assert.ok(!isTransientHalt({ message: 'x', cause: { transient: false, statusCode: 429, message: 'CustomizationLockException … try again later' } }));
+  assert.ok(!isTransientHalt({ transient: false, cause: { statusCode: 503 } }));
+});
+
+// Live-captured shape, renamed onto the support-desk sample: a view pushed moments after the build created the
+// relationship whose lookup the view names. `new_CustomerId` is declared with mixed case; Dataverse reports the
+// logical (lower-case) name.
+const LAG_MESSAGE = "HTTP 400 from https://contoso.crm.dynamics.com/api/data/v9.0/savedqueries?$select=savedqueryid: The column, fetchxml, has invalid fetch.  Error : 'new_ticket' entity doesn't contain attribute with Name = 'new_customerid' and NameMapping = 'Logical' (look up";
+
+test('isTransientHalt: a missing-attribute fetch error is transient only for a column the spec creates', () => {
+  const spec = desk;
+  const err = (message) => ({ message, cause: { statusCode: 400 } });
+  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE), { spec }), true, 'a relationship lookup the spec declares (case differs)');
+  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE)), false, 'without the spec nothing proves the column is ours');
+  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("'new_customerid'", "'new_typo'")), { spec }), false, 'an undeclared column is an authoring error');
+  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("'new_ticket'", "'new_comment'")), { spec }), false, 'declared on another table only');
+  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("'new_customerid'", "'new_priority'")), { spec }), true, 'a declared column');
+  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("'new_customerid'", "'new_name'")), { spec }), true, 'the primary name column');
+  assert.strictEqual(isTransientHalt(err(LAG_MESSAGE.replace("doesn't", 'doesn\u2019t')), { spec }), true, 'a typographic apostrophe');
+  assert.strictEqual(isTransientHalt({ message: 'view "Tickets" failed', cause: { statusCode: 400, message: LAG_MESSAGE } }, { spec }), true, 'the Dataverse text in the cause');
+  assert.strictEqual(isTransientHalt({ transient: false, message: LAG_MESSAGE }, { spec }), false, 'an explicit non-transient still wins');
+  assert.strictEqual(isTransientHalt(err('The column, fetchxml, has invalid fetch.'), { spec }), false, 'another fetch error');
+});
+
+test('isTransientHalt: only attributes the build materializes ride the lag retry', () => {
+  const err = (message) => ({ message, cause: { statusCode: 400 } });
+  const lag = (table, column) => err(LAG_MESSAGE.replace("'new_ticket'", `'${table}'`).replace("'new_customerid'", `'${column}'`));
+  const spec = {
+    entities: [
+      { schemaName: 'new_asset', existing: true, primaryAttribute: { schemaName: 'new_title' },
+        columns: [{ schemaName: 'new_OwnerRef', type: 'Lookup' }, { schemaName: 'new_points', type: 'Integer' }] },
+      { schemaName: 'new_site', primaryAttribute: { schemaName: 'new_name' }, columns: [] },
+    ],
+    relationships: [],
+  };
+  // Provisioning skips a standalone Lookup entry (a lookup is the side effect of a relationship), so a view
+  // naming one is an authoring error, not lag. `existing: true` marks ownership, not presence: a downloaded
+  // spec rebuilt into another environment still creates that table WITH its primary column.
+  assert.strictEqual(isTransientHalt(lag('new_asset', 'new_ownerref'), { spec }), false, 'a Lookup entry in columns[]');
+  assert.strictEqual(isTransientHalt(lag('new_asset', 'new_title'), { spec }), true, 'the primary attribute of a table marked existing');
+  assert.strictEqual(isTransientHalt(lag('new_asset', 'new_points'), { spec }), true, 'a scalar column the build adds to an existing table');
+  assert.strictEqual(isTransientHalt(lag('new_site', 'new_name'), { spec }), true, 'the primary attribute created with a new table');
+});
+
+test('transient auto-retry: a view rejected for a lookup the build just created is retried, then succeeds', async () => {
+  const { sdk, calls } = mockSdk();
+  let failed = 0;
+  const push = sdk.pushArtifact;
+  sdk.pushArtifact = async (type, ...rest) => {
+    if (type === 'view' && failed === 0) { failed += 1; const e = new Error(LAG_MESSAGE); e.statusCode = 400; throw e; }
+    return push(type, ...rest);
+  };
+  const events = [];
+  const journal = { path: 'x', record: (e) => events.push(e), close: () => {} };
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, journal });
+  assert.strictEqual(failed, 1, 'the view push failed once');
+  assert.strictEqual(r.ok, true, 'the retry completed the build');
+  assert.ok(events.some((e) => e.status === 'retry'), 'the retry was journaled');
+  assert.ok(calls.some((c) => c[0] === 'createSolution'), 'the build ran');
+});
+
+test('transient auto-retry: a view rejected for a column the spec never declared halts at once', async () => {
+  const { sdk } = mockSdk();
+  const push = sdk.pushArtifact;
+  sdk.pushArtifact = async (type, ...rest) => {
+    if (type === 'view') { const e = new Error(LAG_MESSAGE.replace("'new_customerid'", "'new_typo'")); e.statusCode = 400; throw e; }
+    return push(type, ...rest);
+  };
+  const events = [];
+  const journal = { path: 'x', record: (e) => events.push(e), close: () => {} };
+  await assert.rejects(buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, journal }));
+  assert.ok(!events.some((e) => e.status === 'retry'), 'no retry for a column nobody declared');
+});
+
+test('transient auto-retry: a declared column that never appears exhausts the retries and surfaces the original error', async () => {
+  // The lag clause must not loop: maxRetries (3 on --apply) bounds it to four attempts, and the halt that ends the
+  // run still carries Dataverse's own words so the operator can see which column never became visible.
+  const { sdk } = mockSdk();
+  const push = sdk.pushArtifact;
+  sdk.pushArtifact = async (type, ...rest) => {
+    if (type === 'view') { const e = new Error(LAG_MESSAGE); e.statusCode = 400; throw e; }
+    return push(type, ...rest);
+  };
+  const events = [];
+  const journal = { path: 'x', record: (e) => events.push(e), close: () => {} };
+  await assert.rejects(
+    buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, journal }),
+    (err) => /entity doesn't contain attribute with Name = 'new_customerid'/.test(String((err && err.message) || '') + String((err && err.cause && err.cause.message) || '')),
+  );
+  assert.strictEqual(events.filter((e) => e.status === 'retry').length, 3, 'three retries, then the halt');
 });
 
 test('transient auto-retry: a transient halt is retried and then succeeds', async () => {
@@ -310,6 +420,99 @@ test('transient auto-retry: a non-transient halt is NOT retried', async () => {
   assert.strictEqual(attempts, 1, 'no retry on a non-transient error');
 });
 
+// With --publish the build defers its default-view enrichment's publish to its final phase
+// (sdk-build.js, 4b), so a build that halts before that phase still owes it. The CLI pays it only once
+// no retry follows: a transient halt is retried at once, and the retry saves the views again and owes
+// their publish again — a publish sent into that throttling would only fail the same way.
+function owingSdk() {
+  const { sdk, calls } = mockSdk();
+  // The mock answers every query with a publisher row, which the form lookup would read as an existing
+  // (id-less) form and republish; a fresh org has none of the sample's forms.
+  const query = sdk.queryRecords;
+  sdk.queryRecords = async (entity, ...rest) => (entity === 'systemform' ? [] : query(entity, ...rest));
+  sdk.enrichDefaultViews = async (logical, cols, o = {}) => {
+    calls.push(['enrichDefaultViews', logical, o]);
+    const updated = [`defview-${logical}`];
+    if (o.publish !== false) return { updated };
+    return { updated, results: [], pendingPublish: [{ scope: { envelope: 'entity', entityLogicalName: logical }, artifacts: [{ type: 'view', id: `defview-${logical}` }] }] };
+  };
+  sdk.publishArtifacts = async (targets) => { calls.push(['publishArtifacts', targets]); return targets.map(({ type, id }) => ({ type, id, shipped: true, publish: { kind: 'verified' } })); };
+  const publishOne = sdk.publishArtifact;
+  sdk.publishArtifact = async (type, id) => { calls.push(['publishArtifact', type, id]); return publishOne(type, id); };
+  return { sdk, calls };
+}
+
+test('a build that halts before its publish phase publishes the default views it enriched, once, after the last retry', async () => {
+  const { sdk, calls } = owingSdk();
+  let retried = false;
+  const create = sdk.createArtifact;
+  sdk.createArtifact = (t, def) => {
+    if (t !== 'app') return create(t, def);
+    calls.push(['attempt']);
+    throw new Error(retried ? 'bad request' : 'CustomizationLockException: try again later');
+  };
+  const journal = { path: 'x', record: (e) => { if (e.status === 'retry') { retried = true; calls.push(['retry']); } }, close: () => {} };
+  await assert.rejects(buildModelApp(desk, { apply: true, publish: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, journal }), /bad request/);
+  const at = (name) => calls.findIndex((c) => c[0] === name);
+  const publishes = calls.filter((c) => c[0] === 'publishArtifacts' || c[0] === 'publishArtifact');
+  assert.strictEqual(calls.filter((c) => c[0] === 'attempt').length, 2, 'one transient retry, then the final halt');
+  assert.strictEqual(publishes.length, 1, `one publish, after the final halt: ${JSON.stringify(publishes)}`);
+  assert.ok(at('retry') < at('publishArtifacts'), 'nothing was published for the retried attempt');
+  const enriched = calls.slice(at('retry')).filter((c) => c[0] === 'enrichDefaultViews' && c[2].publish === false).map((c) => c[1]);
+  assert.ok(enriched.length >= 2, `the retry deferred its enrichment publishes: ${enriched}`);
+  assert.deepStrictEqual(publishes[0][1], enriched.map((l) => ({ type: 'view', id: `defview-${l}` })), 'exactly the tables the final attempt enriched');
+});
+
+test('a final halt whose owed publish fails too warns, and still reports the halt', async () => {
+  const { sdk } = owingSdk();
+  sdk.publishArtifacts = async () => { throw new Error('envelope refused'); };
+  sdk.publishArtifact = async () => { throw new Error('publish down'); };
+  const create = sdk.createArtifact;
+  sdk.createArtifact = (t, def) => { if (t === 'app') throw new Error('bad request'); return create(t, def); };
+  const warnings = [];
+  await assert.rejects(buildModelApp(desk, { apply: true, publish: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, warn: (m) => warnings.push(m) }), /bad request/);
+  const failed = warnings.filter((w) => /^the build stopped before its publish phase; publish view defview-\w+ FAILED: publish down/.test(w));
+  assert.strictEqual(failed.length, 3, `each enriched table is still attempted, and reported: ${warnings.join('\n')}`);
+});
+
+test('without --publish a halted build owes nothing: the enrichment published itself', async () => {
+  const { sdk, calls } = owingSdk();
+  const create = sdk.createArtifact;
+  sdk.createArtifact = (t, def) => { if (t === 'app') throw new Error('bad request'); return create(t, def); };
+  await assert.rejects(buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk }), /bad request/);
+  assert.ok(calls.some((c) => c[0] === 'enrichDefaultViews'), 'the enrichment ran');
+  assert.ok(calls.filter((c) => c[0] === 'enrichDefaultViews').every((c) => c[2].publish !== false), 'not deferred');
+  assert.deepStrictEqual(calls.filter((c) => c[0] === 'publishArtifacts' || c[0] === 'publishArtifact'), []);
+});
+
+// Every attempt re-runs every phase, but a later one can halt before the enrichment an earlier one did, so
+// what each failed attempt owed is kept until a publish phase pays it, and the final halt settles all of it.
+const quietState = { collision: { appExists: false, solutionExists: false }, forms: [], sitemap: null };
+const owing = (message, owedPublishes, owedPaid) => Object.defineProperties(new Error(message), {
+  ...(owedPublishes ? { owedPublishes: { value: owedPublishes } } : {}),
+  ...(owedPaid !== undefined ? { owedPaid: { value: owedPaid } } : {}),
+});
+const TRANSIENT = 'CustomizationLockException: try again later';
+async function haltAfter(attempts) {
+  const { sdk, calls } = owingSdk();
+  let n = 0;
+  const runBuild = async () => { throw attempts[n++]; };
+  await assert.rejects(buildModelApp(desk, { apply: true, publish: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, runBuild, discoverOpDiffState: async () => quietState }), /bad request/);
+  assert.strictEqual(n, attempts.length, 'every attempt ran');
+  return calls.filter((c) => c[0] === 'publishArtifacts' || c[0] === 'publishArtifact');
+}
+
+test('an earlier attempt\u2019s owed publishes are settled when a later attempt halts before its own enrichment', async () => {
+  const publishes = await haltAfter([owing(TRANSIENT, [['view', 'defview-a'], ['view', 'defview-b']]), owing('bad request')]);
+  assert.deepStrictEqual(publishes.map((c) => c[1].map((t) => t.id)), [['defview-a', 'defview-b']]);
+});
+
+test('a later attempt whose publish phase ran pays what an earlier one owed, and a debt owed twice is published once', async () => {
+  assert.deepStrictEqual(await haltAfter([owing(TRANSIENT, [['view', 'defview-a']]), owing('bad request', [], true)]), [], 'nothing left to settle');
+  const twice = await haltAfter([owing(TRANSIENT, [['view', 'defview-a'], ['view', 'defview-b']]), owing('bad request', [['view', 'defview-b'], ['view', 'defview-a']])]);
+  assert.deepStrictEqual(twice.map((c) => c[1].map((t) => t.id)), [['defview-a', 'defview-b']]);
+});
+
 test('transient auto-retry: no retries in dry-run', async () => {
   const { sdk } = mockSdk();
   const r = await buildModelApp(desk, { apply: false, env: 'https://x' }, { sdk });
@@ -319,6 +522,37 @@ test('transient auto-retry: no retries in dry-run', async () => {
 // Minimal explicit-layout form fixtures for the destructive gate (match formFieldLogicals' walk).
 const cell = (fn) => ({ control: { fieldName: fn } });
 const formOf = (fields) => ({ tabs: [{ columns: [{ sections: [{ rows: fields.map((f) => ({ cells: [cell(f)] })) }] }] }] });
+
+function makeTestWorkspace(name) {
+  const dir = path.join(__dirname, '.tmp-prune-approvals', `${name}-${process.pid}-${Date.now()}`);
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function cleanupTestWorkspace(dir) {
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+function approvalRecordPath(workspaceDir) {
+  return path.join(workspaceDir, 'destructive-approval.json');
+}
+
+function readApprovalRecord(workspaceDir) {
+  return JSON.parse(fs.readFileSync(approvalRecordPath(workspaceDir), 'utf8'));
+}
+
+function writeApprovalRecord(workspaceDir, record) {
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  fs.writeFileSync(approvalRecordPath(workspaceDir), JSON.stringify(record, null, 2) + '\n', 'utf8');
+}
+
+function successfulRunBuild(capture) {
+  return async (spec, runOpts) => {
+    if (capture) capture.push(runOpts);
+    return { ok: true, created: {}, skipped: { layout: [] } };
+  };
+}
 
 test('envTruthy: only 1/true (case-insensitive) count as set', () => {
   const { envTruthy } = require(path.join(__dirname, '..', 'build-model-app.js'));
@@ -357,6 +591,512 @@ test('destructive gate: build halts on a form-field removal without --allow-dest
   assert.strictEqual(r.ok, false);
   assert.ok(r.errors.some((e) => /allow-destructive/.test(e) && /new_priority/.test(e)), 'names the field it would remove');
   assert.ok(!calls.some((c) => c[0] === 'createSolution'), 'halted before any write');
+});
+
+test('destructive gate: prune:false form removal is not refused and reaches runBuild', async () => {
+  const { sdk } = mockSdk();
+  const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __prune: false, __primaryField: 'new_name' });
+  const deployedForm = formOf(['new_name', 'new_priority']);
+  const state = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm, def }], sitemap: null };
+  const runOpts = [];
+  const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => state, runBuild: successfulRunBuild(runOpts) });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(runOpts.length, 1, 'runBuild was reached');
+});
+
+test('destructive gate: refusal writes the approval record without changing the refusal message', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('refusal-record');
+  try {
+    const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
+    const deployedForm = formOf(['new_name', 'new_priority']);
+    const state = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm, def }], sitemap: { deployedTargets: ['entity:new_customer', 'entity:new_ticket'], wantTargets: ['entity:new_customer'] } };
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, workspaceDir }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => state, runBuild: successfulRunBuild() });
+    assert.strictEqual(r.ok, false);
+    assert.ok(r.errors.some((e) => e.includes('refusing 2 destructive operation(s) without --allow-destructive:\n  • form "Ticket" (new_ticket) — removes field(s): new_priority\n  • app sitemap — drops navigation target(s): entity:new_ticket')), 'refusal text stays the maker-facing list');
+    const record = readApprovalRecord(workspaceDir);
+    assert.strictEqual(record.schemaVersion, 1);
+    assert.deepStrictEqual(record.formRemovals, { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } });
+    assert.deepStrictEqual(record.sitemapRemovals, ['entity:new_ticket']);
+    assert.match(record.generatedAt, /^\d{4}-\d{2}-\d{2}T/);
+    // The run id makes two builds' records differ even when they list the same removals in the same
+    // millisecond, which is what lets a build tell its own record from another's by content.
+    assert.match(record.runId, /^[0-9a-f-]{36}$/);
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: approved unchanged removals proceed with an authorized map and consume the record', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('approved-unchanged');
+  try {
+    writeApprovalRecord(workspaceDir, { schemaVersion: 1, generatedAt: '2026-01-01T00:00:00.000Z', formRemovals: { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } }, sitemapRemovals: [] });
+    const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
+    const deployedForm = formOf(['new_name', 'new_priority']);
+    const state = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm, def }], sitemap: null };
+    const runOpts = [];
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => state, runBuild: successfulRunBuild(runOpts) });
+    assert.strictEqual(r.ok, true);
+    assert.ok(runOpts[0].authorizedFormRemovals instanceof Map, 'authorized removals are passed to the engine');
+    assert.deepStrictEqual([...runOpts[0].authorizedFormRemovals.get('form-1')], ['new_priority']);
+    assert.strictEqual(fs.existsSync(approvalRecordPath(workspaceDir)), false, 'record consumed only after success');
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: a newly discovered field removal after approval halts and refreshes the record', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('new-field');
+  try {
+    writeApprovalRecord(workspaceDir, { schemaVersion: 1, generatedAt: '2026-01-01T00:00:00.000Z', formRemovals: { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } }, sitemapRemovals: [] });
+    const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
+    const deployedForm = formOf(['new_name', 'new_priority', 'new_newmakerfield']);
+    const state = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm, def }], sitemap: null };
+    let ran = false;
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => state, runBuild: async () => { ran = true; return { ok: true }; } });
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(ran, false, 'halted before runBuild');
+    assert.ok(r.errors.some((e) => /new_newmakerfield/.test(e) && !/new_priority/.test(e)), 'only the new field is listed');
+    assert.deepStrictEqual(readApprovalRecord(workspaceDir).formRemovals['form-1'].fields, ['new_priority', 'new_newmakerfield']);
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: a newly discovered sitemap drop after approval halts and refreshes the record', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('new-sitemap');
+  try {
+    writeApprovalRecord(workspaceDir, { schemaVersion: 1, generatedAt: '2026-01-01T00:00:00.000Z', formRemovals: {}, sitemapRemovals: ['entity:new_ticket'] });
+    const state = { collision: { appExists: true, appUnique: 'new_supportdesk' }, forms: [], sitemap: { deployedTargets: ['entity:new_customer', 'entity:new_ticket', 'url:https://contoso.example/help'], wantTargets: ['entity:new_customer'] } };
+    let ran = false;
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => state, runBuild: async () => { ran = true; return { ok: true }; } });
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(ran, false, 'halted before runBuild');
+    assert.ok(r.errors.some((e) => /url:https:\/\/contoso\.example\/help/.test(e) && !/entity:new_ticket/.test(e)), 'only the new sitemap drop is listed');
+    assert.deepStrictEqual(readApprovalRecord(workspaceDir).sitemapRemovals, ['entity:new_ticket', 'url:https://contoso.example/help']);
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: an unreadable approval record fails closed', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('bad-record');
+  try {
+    fs.writeFileSync(approvalRecordPath(workspaceDir), '{not json', 'utf8');
+    const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
+    const state = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm: formOf(['new_name', 'new_priority']), def }], sitemap: null };
+    let ran = false;
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => state, runBuild: async () => { ran = true; return { ok: true }; } });
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(ran, false, 'halted before runBuild');
+    assert.ok(r.errors.some((e) => /destructive-approval\.json/.test(e) && /delete it|re-run without --allow-destructive/.test(e)));
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: --allow-destructive without a record proceeds but still fences this run', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('no-record');
+  try {
+    const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
+    const deployedForm = formOf(['new_name', 'new_priority']);
+    const state = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm, def }], sitemap: null };
+    const runOpts = [];
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => state, runBuild: successfulRunBuild(runOpts) });
+    assert.strictEqual(r.ok, true);
+    assert.deepStrictEqual([...runOpts[0].authorizedFormRemovals.get('form-1')], ['new_priority']);
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: a successful apply that kept an unauthorized field preserves a prior approval record', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('kept-field-prior-record');
+  try {
+    writeApprovalRecord(workspaceDir, { schemaVersion: 1, generatedAt: '2026-01-01T00:00:00.000Z', formRemovals: { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } }, sitemapRemovals: [] });
+    const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
+    const approvedState = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm: formOf(['new_name', 'new_priority']), def }], sitemap: null };
+    const logs = [];
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk,
+      provisionSdk: sdk,
+      discoverOpDiffState: async () => approvedState,
+      log: (m) => logs.push(m),
+      runBuild: async () => ({ ok: true, created: {}, skipped: { layout: [], unauthorizedRemovals: [{ formId: 'form-1', form: 'Ticket', field: 'new_midrun' }] } }),
+    });
+    assert.strictEqual(r.ok, true);
+    assert.deepStrictEqual(readApprovalRecord(workspaceDir).formRemovals, { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } });
+    assert.ok(logs.some((l) => /new_midrun/.test(l) && /next run will ask/.test(l)), 'log names the kept field and next review');
+
+    const laterState = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm: formOf(['new_name', 'new_priority', 'new_midrun']), def }], sitemap: null };
+    let ran = false;
+    const rerun = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => laterState, runBuild: async () => { ran = true; return { ok: true }; } });
+    assert.strictEqual(rerun.ok, false);
+    assert.strictEqual(ran, false, 'next run halts before writes');
+    assert.ok(rerun.errors.some((e) => /new_midrun/.test(e) && !/new_priority/.test(e)), 'only the kept field is newly listed');
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: a successful blanket apply that kept an unauthorized field creates an approval record', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('kept-field-blanket');
+  try {
+    const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
+    const approvedState = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm: formOf(['new_name', 'new_priority']), def }], sitemap: null };
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk,
+      provisionSdk: sdk,
+      discoverOpDiffState: async () => approvedState,
+      runBuild: async () => ({ ok: true, created: {}, skipped: { layout: [], unauthorizedRemovals: [{ formId: 'form-1', form: 'Ticket', field: 'new_midrun' }] } }),
+    });
+    assert.strictEqual(r.ok, true);
+    assert.deepStrictEqual(readApprovalRecord(workspaceDir).formRemovals, { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } });
+
+    const laterState = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm: formOf(['new_name', 'new_priority', 'new_midrun']), def }], sitemap: null };
+    let ran = false;
+    const rerun = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => laterState, runBuild: async () => { ran = true; return { ok: true }; } });
+    assert.strictEqual(rerun.ok, false);
+    assert.strictEqual(ran, false, 'next run halts before writes');
+    assert.ok(rerun.errors.some((e) => /new_midrun/.test(e) && !/new_priority/.test(e)), 'the kept field is shown before it can be removed');
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: a failed blanket apply leaves the gate-time approval record for the next run', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('failed-blanket-record');
+  try {
+    const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
+    const approvedState = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm: formOf(['new_name', 'new_priority']), def }], sitemap: null };
+    await assert.rejects(buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk,
+      provisionSdk: sdk,
+      discoverOpDiffState: async () => approvedState,
+      runBuild: async () => { throw new Error('forms failed after keeping new_midrun'); },
+    }), /forms failed/);
+    assert.deepStrictEqual(readApprovalRecord(workspaceDir).formRemovals, { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } });
+
+    const laterState = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm: formOf(['new_name', 'new_priority', 'new_midrun']), def }], sitemap: null };
+    let ran = false;
+    const rerun = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => laterState, runBuild: async () => { ran = true; return { ok: true }; } });
+    assert.strictEqual(rerun.ok, false);
+    assert.strictEqual(ran, false, 'next run halts before writes');
+    assert.ok(rerun.errors.some((e) => /new_midrun/.test(e) && !/new_priority/.test(e)), 'newly live field is shown before it can be removed');
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: retry keeps the same gate-time form fence when a later form id appears', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('retry-new-form-id');
+  try {
+    const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
+    const state = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm: formOf(['new_name', 'new_priority']), def }], sitemap: null };
+    let attempts = 0;
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk,
+      provisionSdk: sdk,
+      discoverOpDiffState: async () => state,
+      runBuild: async (spec, runOpts) => {
+        attempts += 1;
+        assert.ok(runOpts.authorizedFormRemovals instanceof Map, 'the retry receives the gate-time fence');
+        assert.deepStrictEqual([...runOpts.authorizedFormRemovals.keys()], ['form-1']);
+        if (attempts === 1) {
+          const err = new Error('HTTP 503 while publishing after creating a form');
+          err.statusCode = 503;
+          throw err;
+        }
+        return { ok: true, created: {}, skipped: { layout: [], unauthorizedRemovals: [{ formId: 'form-2', form: 'Ticket', field: 'new_midretry' }] } };
+      },
+    });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(attempts, 2, 'transient retry ran');
+    assert.deepStrictEqual(readApprovalRecord(workspaceDir).formRemovals, { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } });
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: a data-stage apply does not consume an approval record', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('partial-keeps-record');
+  try {
+    writeApprovalRecord(workspaceDir, { schemaVersion: 1, generatedAt: '2026-01-01T00:00:00.000Z', formRemovals: { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } }, sitemapRemovals: [] });
+    const def = Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
+    const approvedState = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm: formOf(['new_name', 'new_priority']), def }], sitemap: null };
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir, phases: ['solution', 'data-model', 'sample-data'] }, {
+      sdk, provisionSdk: sdk, discoverOpDiffState: async () => approvedState, runBuild: successfulRunBuild(),
+    });
+    assert.strictEqual(r.ok, true);
+    assert.deepStrictEqual(readApprovalRecord(workspaceDir).formRemovals['form-1'].fields, ['new_priority']);
+
+    const laterState = { collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm: formOf(['new_name', 'new_priority', 'new_midrun']), def }], sitemap: null };
+    let ran = false;
+    const rerun = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, { sdk, provisionSdk: sdk, discoverOpDiffState: async () => laterState, runBuild: async () => { ran = true; return { ok: true }; } });
+    assert.strictEqual(rerun.ok, false);
+    assert.strictEqual(ran, false, 'full run halts before writes');
+    assert.ok(rerun.errors.some((e) => /new_midrun/.test(e) && !/new_priority/.test(e)), 'new field is still reviewed after the partial run');
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+// --- The record binds the run that showed it, and only that run consumes it ------------------------
+const ticketState = (fields, def) => ({ collision: { appExists: false, solutionExists: false }, forms: [{ formId: 'form-1', label: 'form "Ticket" (new_ticket)', deployedForm: formOf(fields), def }], sitemap: null });
+const ticketDef = () => Object.assign(formOf(['new_name']), { __explicitLayout: true, __primaryField: 'new_name' });
+// Another build's record, as that build would write it, with its own run id.
+const OTHER_RECORD = JSON.stringify({ schemaVersion: 1, generatedAt: '2026-01-02T00:00:00.000Z', runId: 'another-build', formRemovals: { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } }, sitemapRemovals: [] }, null, 2) + '\n';
+const rawRecord = (dir) => fs.readFileSync(approvalRecordPath(dir), 'utf8');
+
+test('destructive gate: a failed approved apply with nothing to remove still binds the retry to that empty list', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('failed-empty-list');
+  try {
+    const def = ticketDef();
+    await assert.rejects(buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk, provisionSdk: sdk, discoverOpDiffState: async () => ticketState(['new_name'], def),
+      runBuild: async () => { throw new Error('app-shell failed after the forms phase kept new_midrun'); },
+    }), /app-shell failed/);
+    const recorded = readApprovalRecord(workspaceDir);
+    assert.deepStrictEqual([recorded.formRemovals, recorded.sitemapRemovals], [{}, []], 'the empty gate-time list is recorded before any write');
+
+    let ran = false;
+    const rerun = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk, provisionSdk: sdk, discoverOpDiffState: async () => ticketState(['new_name', 'new_midrun'], def), runBuild: async () => { ran = true; return { ok: true }; },
+    });
+    assert.strictEqual(rerun.ok, false);
+    assert.strictEqual(ran, false, 'the retry halts before writes');
+    assert.ok(rerun.errors.some((e) => /new_midrun/.test(e)), 'the field the failed run kept is shown before it can be removed');
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: a successful approved apply with nothing to remove leaves no record behind', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('empty-list-consumed');
+  try {
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk, provisionSdk: sdk, discoverOpDiffState: async () => ticketState(['new_name'], ticketDef()), runBuild: successfulRunBuild(),
+    });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(fs.existsSync(approvalRecordPath(workspaceDir)), false);
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: an approved data-stage apply with nothing to remove writes no record', async () => {
+  // The data stage runs no prune pass, so it can keep nothing, and an empty record would only make the
+  // next full apply ask again about removals nobody was ever shown.
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('data-stage-empty');
+  try {
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir, phases: ['solution', 'data-model', 'sample-data'] }, {
+      sdk, provisionSdk: sdk, discoverOpDiffState: async () => ticketState(['new_name'], ticketDef()), runBuild: successfulRunBuild(),
+    });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(fs.existsSync(approvalRecordPath(workspaceDir)), false);
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: a successful plain apply consumes the record it started with', async () => {
+  // A maker who was refused, then changed the spec so that nothing is removed, rebuilds without
+  // --allow-destructive. The old list no longer describes anything, so it goes.
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('plain-consumes-seen');
+  try {
+    writeApprovalRecord(workspaceDir, { schemaVersion: 1, generatedAt: '2026-01-01T00:00:00.000Z', formRemovals: { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } }, sitemapRemovals: [] });
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, workspaceDir }, {
+      sdk, provisionSdk: sdk, discoverOpDiffState: async () => ticketState(['new_name'], ticketDef()), runBuild: successfulRunBuild(),
+    });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(fs.existsSync(approvalRecordPath(workspaceDir)), false);
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: a finishing build leaves a record another build wrote while it ran', async () => {
+  // Two builds share a workspace. This one started with nothing to remove; meanwhile another build,
+  // with an edited spec, refused and recorded its list. Consuming that record would leave the other
+  // build's approved re-run bound to nothing.
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('other-build-record');
+  try {
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, workspaceDir }, {
+      sdk, provisionSdk: sdk, discoverOpDiffState: async () => ticketState(['new_name'], ticketDef()),
+      runBuild: async () => { fs.writeFileSync(approvalRecordPath(workspaceDir), OTHER_RECORD, 'utf8'); return { ok: true, created: {}, skipped: { layout: [] } }; },
+    });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(rawRecord(workspaceDir), OTHER_RECORD, "the other build's record is left exactly as written");
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: a finishing build that kept a field does not overwrite a record another build wrote', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('kept-other-record');
+  try {
+    const logs = [];
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk, provisionSdk: sdk, log: (m) => logs.push(m), discoverOpDiffState: async () => ticketState(['new_name', 'new_priority'], ticketDef()),
+      runBuild: async () => {
+        fs.writeFileSync(approvalRecordPath(workspaceDir), OTHER_RECORD, 'utf8');
+        return { ok: true, created: {}, skipped: { layout: [], unauthorizedRemovals: [{ formId: 'form-1', form: 'Ticket', field: 'new_midrun' }] } };
+      },
+    });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(rawRecord(workspaceDir), OTHER_RECORD, "the other build's record is not replaced");
+    assert.ok(logs.some((l) => /another build/.test(l)), 'the log says why the record was left alone');
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: an approved build halts before any write when the record changed after it was read', async () => {
+  // This build compared its removals with the record it read. If another build replaces that record
+  // before this one persists its own, the comparison no longer means anything.
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('record-changed');
+  try {
+    writeApprovalRecord(workspaceDir, { schemaVersion: 1, generatedAt: '2026-01-01T00:00:00.000Z', formRemovals: { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } }, sitemapRemovals: [] });
+    let ran = false;
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk, provisionSdk: sdk,
+      discoverOpDiffState: async () => { fs.writeFileSync(approvalRecordPath(workspaceDir), OTHER_RECORD, 'utf8'); return ticketState(['new_name', 'new_priority'], ticketDef()); },
+      runBuild: async () => { ran = true; return { ok: true }; },
+    });
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(ran, false, 'nothing is written');
+    assert.ok(r.errors.some((e) => /changed while this build was starting/.test(e)), JSON.stringify(r.errors));
+    assert.strictEqual(rawRecord(workspaceDir), OTHER_RECORD);
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: a record the build cannot lock is left in place, and an approved build halts', async () => {
+  // The record's check and change happen under the workspace lease. A lease another writer holds
+  // (the test holds it here) means the record may be changing under this build.
+  const { acquireLease, releaseLease } = require('../lib/apply-snapshot-store.js');
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('lease-held');
+  const lease = acquireLease(workspaceDir);
+  assert.strictEqual(lease.ok, true);
+  try {
+    writeApprovalRecord(workspaceDir, { schemaVersion: 1, generatedAt: '2026-01-01T00:00:00.000Z', formRemovals: { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } }, sitemapRemovals: [] });
+    const before = rawRecord(workspaceDir);
+    const logs = [];
+    const plain = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, workspaceDir }, {
+      sdk, provisionSdk: sdk, sleep: async () => {}, log: (m) => logs.push(m), discoverOpDiffState: async () => ticketState(['new_name'], ticketDef()), runBuild: successfulRunBuild(),
+    });
+    assert.strictEqual(plain.ok, true, 'the build itself still succeeds');
+    assert.strictEqual(rawRecord(workspaceDir), before, 'the record is not consumed without the lease');
+    assert.ok(logs.some((l) => /could not lock/.test(l)), 'the log says the record was left');
+
+    let ran = false;
+    const approved = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk, provisionSdk: sdk, sleep: async () => {}, discoverOpDiffState: async () => ticketState(['new_name', 'new_priority'], ticketDef()), runBuild: async () => { ran = true; return { ok: true }; },
+    });
+    assert.strictEqual(approved.ok, false);
+    assert.strictEqual(ran, false, 'an approved build does not mutate without recording what it may remove');
+    assert.ok(approved.errors.some((e) => /could not lock the workspace/.test(e)), JSON.stringify(approved.errors));
+    assert.strictEqual(rawRecord(workspaceDir), before);
+  } finally {
+    releaseLease(lease);
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+// Fail on one file only, for the duration of `fn`: the build's other reads and writes are real.
+async function withFsFault(method, isTarget, code, fn) {
+  const original = fs[method];
+  fs[method] = function faulty(target, ...rest) {
+    if (isTarget(String(target), ...rest)) { const err = new Error(`${code}: injected on ${path.basename(String(target))}`); err.code = code; throw err; }
+    return original.call(this, target, ...rest);
+  };
+  try { return await fn(); } finally { fs[method] = original; }
+}
+const isApprovalFile = (p) => path.basename(p) === 'destructive-approval.json';
+
+test('destructive gate: a record that cannot be read is never consumed, even when it was unreadable at the start too', async () => {
+  // Two unreadable reads say nothing about whether the file is the same one: it may have been replaced
+  // in between. Only a record whose bytes this build read and matched is its to consume.
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('unreadable-record');
+  try {
+    writeApprovalRecord(workspaceDir, { schemaVersion: 1, generatedAt: '2026-01-01T00:00:00.000Z', formRemovals: {}, sitemapRemovals: [] });
+    const logs = [];
+    const r = await withFsFault('readFileSync', isApprovalFile, 'EACCES', () => buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, workspaceDir }, {
+      sdk, provisionSdk: sdk, log: (m) => logs.push(m), discoverOpDiffState: async () => ticketState(['new_name'], ticketDef()), runBuild: successfulRunBuild(),
+    }));
+    assert.strictEqual(r.ok, true, 'a plain build is not stopped by an unreadable record');
+    assert.strictEqual(fs.existsSync(approvalRecordPath(workspaceDir)), true, 'the unreadable record is left');
+    assert.ok(logs.some((l) => /could not be read/.test(l)), 'the log says why it was left');
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: an approved build halts when the record becomes unreadable before its list is recorded', async () => {
+  // Read fine at the start (and compared), unreadable by the time this build would replace it: what is
+  // on disk may no longer be what it compared with, and it must not be written over blind.
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('record-turns-unreadable');
+  const original = fs.readFileSync;
+  let fault = false;
+  fs.readFileSync = function faulty(target, ...rest) {
+    if (fault && isApprovalFile(String(target))) { const err = new Error('EACCES: injected'); err.code = 'EACCES'; throw err; }
+    return original.call(this, target, ...rest);
+  };
+  try {
+    writeApprovalRecord(workspaceDir, { schemaVersion: 1, generatedAt: '2026-01-01T00:00:00.000Z', formRemovals: { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } }, sitemapRemovals: [] });
+    const before = original.call(fs, approvalRecordPath(workspaceDir), 'utf8');
+    let ran = false;
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk, provisionSdk: sdk,
+      discoverOpDiffState: async () => { fault = true; return ticketState(['new_name', 'new_priority'], ticketDef()); },
+      runBuild: async () => { ran = true; return { ok: true }; },
+    });
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(ran, false, 'nothing runs unbound');
+    assert.ok(r.errors.some((e) => /could not be read while this build was starting/.test(e)), JSON.stringify(r.errors));
+    fs.readFileSync = original;
+    assert.strictEqual(fs.readFileSync(approvalRecordPath(workspaceDir), 'utf8'), before, 'the record is not written over');
+  } finally {
+    fs.readFileSync = original;
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
+test('destructive gate: an approved build halts before any write when its list cannot be recorded', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('record-write-fails');
+  try {
+    let ran = false;
+    const r = await withFsFault('renameSync', (from, to) => isApprovalFile(String(to)), 'ENOSPC', () => buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk, provisionSdk: sdk, discoverOpDiffState: async () => ticketState(['new_name', 'new_priority'], ticketDef()), runBuild: async () => { ran = true; return { ok: true }; },
+    }));
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(ran, false, 'nothing runs unbound');
+    assert.ok(r.errors.some((e) => /could not record what this run may remove/.test(e) && /ENOSPC/.test(e)), JSON.stringify(r.errors));
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
 });
 
 test('destructive gate: --allow-destructive lets the same build proceed', async () => {
@@ -400,6 +1140,27 @@ test('safety gate: --allow-destructive lets a build proceed even when discovery 
   assert.ok(calls.some((c) => c[0] === 'createSolution'), 'proceeded into the build');
 });
 
+test('safety gate: an existing approval record plus discovery failure halts even with --allow-destructive', async () => {
+  const { sdk } = mockSdk();
+  const workspaceDir = makeTestWorkspace('record-discovery-failure');
+  try {
+    writeApprovalRecord(workspaceDir, { schemaVersion: 1, generatedAt: '2026-01-01T00:00:00.000Z', formRemovals: { 'form-1': { label: 'form "Ticket" (new_ticket)', fields: ['new_priority'] } }, sitemapRemovals: [] });
+    let ran = false;
+    const r = await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0, allowDestructive: true, workspaceDir }, {
+      sdk,
+      provisionSdk: sdk,
+      discoverOpDiffState: async () => { throw new Error('429 transient'); },
+      runBuild: async () => { ran = true; return { ok: true }; },
+    });
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(ran, false, 'halted before runBuild');
+    assert.ok(r.errors.some((e) => /cannot be compared with the approved list|live removals/i.test(e)));
+    assert.deepStrictEqual(readApprovalRecord(workspaceDir).formRemovals['form-1'].fields, ['new_priority']);
+  } finally {
+    cleanupTestWorkspace(workspaceDir);
+  }
+});
+
 test('collision preflight: warns and journals when the app already exists', async () => {
   const { sdk } = mockSdk();
   sdk.queryRecords = async (set) => (set === 'appmodule' ? [{ appmoduleid: 'app-x' }] : set === 'solution' ? [] : [{ publisherid: 'pub-1' }]);
@@ -416,6 +1177,24 @@ test('collision preflight: silent when nothing collides', async () => {
   const logs = [];
   await buildModelApp(desk, { apply: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, log: (m) => logs.push(m) });
   assert.ok(!logs.some((l) => /already exist/.test(l)), 'no false-positive collision warning');
+});
+
+test('discoverOpDiffState skips deployed form reads when prune:false means nothing can be removed', async () => {
+  const provision = {
+    queryRecords: async (set) => (set === 'solution' || set === 'appmodule' ? [] : [{ publisherid: 'pub-1' }]),
+    findArtifact: async () => { throw new Error('should not resolve a prune:false form'); },
+    fetchArtifact: async () => { throw new Error('should not fetch a prune:false form'); },
+    getArtifact: async () => { throw new Error('should not read a prune:false form'); },
+  };
+  const spec = {
+    solution: { uniqueName: 'S', publisherPrefix: 'new' },
+    app: { name: 'A' },
+    entities: [{ schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [] }],
+    forms: [{ entity: 'new_ticket', name: 'Ticket', layout: 'explicit', prune: false, tabs: [{ sections: [{ fields: ['new_name'] }] }] }],
+    appShell: { areas: [] },
+  };
+  const state = await discoverOpDiffState(spec, provision);
+  assert.deepStrictEqual(state.forms, []);
 });
 
 test('discoverOpDiffState resolves an explicit-layout form by (entity, name, TYPE) — no name-ambiguity halt on same-named Main/QuickView/Card', async () => {
@@ -555,13 +1334,19 @@ test('unableToRun is propagated from verifySpec into r.verify (RECONCILIATION 1)
 });
 
 // -- verify wiring -----------------------------------------------------------------------------
-// Asserted against SOURCE because the wiring lives inside main(), which is not exported, and the
-// failure mode is SILENT: verify-spec skips role-privileges unless BOTH readers are present, so
-// omitting httpClient/envUrl made --apply --verify report a clean PASS having never checked what
-// any persona role actually grants. Found live -- the standalone verifier ran 10 checks against the
-// same app where the build inline verify ran 8. A behavioural test would need a live SDK; this pins
-// the exact regression at zero cost.
-test('build --verify wires the role-privilege readers (httpClient + envUrl)', () => {
+// The failure mode being guarded is SILENT: verify-spec skips the role-privileges check unless BOTH
+// `rolePrivileges` and `entityPrivileges` readers are present, so a build that under-wires them
+// reports a clean `--apply --verify` PASS having never checked what any persona role actually grants.
+// Found live — the standalone verifier ran 10 checks against the same app where the build's inline
+// verify ran 8.
+//
+// This used to assert that the wiring line mentioned `httpClient` and `envUrl`, which the
+// `entityPrivileges` reader needed to compose its own absolute `EntityDefinitions(...)` request. That
+// read now goes through the SDK's `getEntityPrivileges`, so those two arguments are gone — and a test
+// pinned to them would have failed for a change that STRENGTHENED what it guards. The assertions
+// below are re-pointed at the invariant rather than the mechanism: build the reader from the exact
+// options the build passes and check that neither privilege reader is missing.
+test('build --verify wires readers that verify-spec will NOT skip role-privileges over', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
   // Matched on the wiring, not the exact arity: the deps.verify lambda gained a second parameter so
   // the build can hand verify the artifacts this ENVIRONMENT could not host (an environment-gated
@@ -569,20 +1354,63 @@ test('build --verify wires the role-privilege readers (httpClient + envUrl)', ()
   // for a change that did not touch what it is actually guarding.
   const call = src.split(/\r?\n/).find((l) => /verify: \([^)]*\) => verifySpec/.test(l));
   assert.ok(call, 'expected the deps.verify wiring line');
-  assert.match(call, /httpClient/, 'entityPrivileges needs the raw client');
-  assert.match(call, /envUrl: env/, 'entityPrivileges needs the org url to build an absolute request');
-  // And the second argument must actually be forwarded, or the environment-skip list is silently
+  assert.match(call, /readerFor\(provisionSdk,/, 'verify must read through the provisioning SDK');
+  // The second argument must actually be forwarded, or the environment-skip list is silently
   // dropped and verify keeps failing on rules the build already reported it could not create.
   assert.match(call, /verifySpec\(\s*s\s*,[\s\S]*\)\s*,\s*verifyOpts\s*\)/,
     'the caller-supplied verify options must reach verifySpec');
+
+  // The substantive half: the option bag on that line, fed to the real `readerFor`, must yield BOTH
+  // privilege readers. A source match alone would keep passing if `entityPrivileges` were made
+  // conditional again on something the build does not supply.
+  const optsSrc = /readerFor\(provisionSdk,[^,]+,\s*(\{[^}]*\})\s*\)/.exec(call);
+  assert.ok(optsSrc, `could not extract the readerFor options from: ${call}`);
+  // Shorthand-aware: `{ genpageCli: makeGenpageCli(env), workspaceDir }` carries one `key:` and one
+  // SHORTHAND key. A colon-only pattern silently saw just `genpageCli`, which made the assertion
+  // below weaker than it looks — it would have kept passing for an option bag that had lost
+  // `workspaceDir` entirely. Match a name followed by `:`, `,` or `}`.
+  const optKeys = [...optsSrc[1].matchAll(/([A-Za-z_$][\w$]*)\s*(?::|[,}])/g)].map((m) => m[1]);
+  assert.ok(optKeys.includes('workspaceDir') && optKeys.includes('genpageCli'),
+    `expected both readerFor options to be extracted, got ${JSON.stringify(optKeys)}`);
+  const { readerFor } = require('../verify-model-app.js');
+  // A bare object is enough: every base reader is a lazy closure, so this asserts PRESENCE, which is
+  // exactly what verify-spec's method-presence gate tests.
+  const reader = readerFor({}, 'contoso_app', Object.fromEntries(optKeys.map((k) => [k, k === 'workspaceDir' ? __dirname : {}])));
+  for (const name of ['rolePrivileges', 'entityPrivileges']) {
+    assert.strictEqual(typeof reader[name], 'function',
+      `verify-spec silently skips role-privileges without '${name}'; the build's options are ${JSON.stringify(optKeys)}`);
+  }
 });
 
-test('makeSdk returns the httpClient so the caller can wire verify', () => {
-  // Returning the SAME instance rather than constructing a second one keeps token acquisition and
-  // retry state shared; a second client would re-acquire a token per verify run.
+test('makeSdk\u2019s return shape and main\u2019s destructure stay in agreement', () => {
+  // A mismatch here is silent: destructuring a key the factory stopped returning yields `undefined`,
+  // and the first symptom is a TypeError deep in an apply run. Compared as SETS rather than pinned to
+  // a specific key list, so this keeps guarding the invariant as the shape legitimately changes — it
+  // previously asserted the literal `{ sdk, provisionSdk, httpClient, cleanup }`, and `httpClient` was
+  // removed when the raw-client escape hatch was retired in favour of `sdk.getEntityPrivileges`.
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
-  assert.match(src, /return \{ sdk, provisionSdk, httpClient, cleanup \}/, 'makeSdk must expose httpClient');
-  assert.match(src, /const \{ sdk, provisionSdk, httpClient, cleanup \} = makeSdk\(/, 'main must destructure it');
+  const returned = /return \{ ([^}]*) \};/.exec(src.slice(src.indexOf('function makeSdk')));
+  assert.ok(returned, 'expected makeSdk to return an object literal');
+  // `await` is optional in the pattern: `makeSdk` became async when the SDK's workspace calls did,
+  // and this guard is about the KEY SETS agreeing, not about how the promise is unwrapped.
+  const destructured = /const \{ ([^}]*) \} = (?:await\s+)?makeSdk\(/.exec(src);
+  assert.ok(destructured, 'expected main to destructure makeSdk()');
+  const names = (s) => s.split(',').map((x) => x.trim()).filter(Boolean).sort();
+  assert.deepStrictEqual(names(destructured[1]), names(returned[1]),
+    'main destructures keys makeSdk does not return (or ignores ones it does)');
+});
+
+// The build's verify read each dashboard through an isolated reader made with no client, so it created one of its
+// own — and a second Azure CLI token acquisition — beside the build's. makeSdk builds the reader around its own
+// client, and the verify wiring uses that reader.
+test('the build verifies dashboards through makeSdk\u2019s isolated reader, sharing the build\u2019s client', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
+  const body = src.slice(src.indexOf('async function makeSdk'), src.indexOf('return { sdk, provisionSdk'));
+  assert.match(body, /const httpClient = createAzHttpClient\(env\);/);
+  assert.match(body, /isolatedReaderFor\(env, \{ httpClient \}\)/, 'the reader is made around the build\u2019s own client');
+  const wiring = src.slice(src.indexOf('verify: (s, verifyOpts) =>'));
+  assert.match(wiring.slice(0, wiring.indexOf('\n')), /isolatedReader \}/, 'verify takes the reader makeSdk returned');
+  assert.strictEqual((src.match(/isolatedReaderFor\(/g) || []).length, 1, 'no second reader, and so no second client, is made');
 });
 
 // #447 follow-up: an LCID reaches Dataverse as a label LanguageCode, so a value that merely SURVIVES
@@ -1163,7 +1991,7 @@ test('the verify options carry the ACTUAL phase list, not a constant', () => {
   // Asserted on the SOURCE because the value has to be the caller's own `opts.phases`: a test that
   // merely passes a phase list through would still accept `phases: PHASES`.
   const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
-  assert.match(src, /deps\.verify\(spec, \{ environmentSkipped: r\.skipped, phases: opts\.phases \}\)/,
+  assert.match(src, /deps\.verify\(spec, \{ environmentSkipped: r\.skipped, phases: opts\.phases(, baselineSpec: opts\.baselineSpec)? \}\)/,
     'verify must receive the invocation\'s OWN phases — a constant re-breaks the --changed-only fast path');
 });
 
@@ -1215,4 +2043,350 @@ test('a phase-skipped check is narrated DIFFERENTLY from an environment-gated on
   assert.doesNotMatch(cap.logs.join('\n'), /not applicable on this environment/,
     'and must NOT blame the environment, which is working fine');
   assert.deepStrictEqual(r.verify.phaseSkipped, ['business-rule:new_ticket.Lock notes']);
+});
+
+// #587 item 3 — a plain `--apply` called invalidateSnapshot but DISCARDED its `{ ok, reason }`
+// result and swallowed any throw, under a "never block a build" rationale. That is not cosmetic:
+// the snapshot is what a later `--changed-only` run trusts to decide what it may SKIP, so an
+// eligible snapshot surviving a full apply lets that run certify pre-apply state and skip work this
+// apply just made necessary. Halting costs a retry; continuing costs a silently incomplete deploy.
+//
+// The first version of this test was SOURCE-LEVEL, and an adversarial review proved it worthless:
+// both `if (false && …)` and a catch manufacturing `{ ok: true }` left all 74 tests green. The
+// guard is now an exported function, so it is tested by BEHAVIOUR instead.
+test('#587 the snapshot guard refuses every outcome that is not a definite success', () => {
+  const calls = [];
+  const storeReturning = (value) => ({
+    invalidateSnapshot: (dir) => { calls.push(dir); if (typeof value === 'function') return value(); return value; },
+  });
+
+  // The only accepted outcome, including the "nothing to invalidate" case an ordinary first build
+  // produces — so this is not a blanket refusal.
+  assert.deepStrictEqual(
+    assertSnapshotInvalidated(storeReturning({ ok: true, generation: 'g1' }), 'WS'),
+    { ok: true, generation: 'g1' });
+  assert.deepStrictEqual(
+    assertSnapshotInvalidated(storeReturning({ ok: true, reason: 'no snapshot to invalidate', generation: null }), 'WS').ok,
+    true);
+  assert.deepStrictEqual(calls, ['WS', 'WS'], 'the workspace dir must be passed through');
+
+  // Everything else must halt BEFORE the mutation engine runs.
+  for (const [label, value] of [
+    ['lease contention', { ok: false, reason: 'workspace lease held by pid 123' }],
+    ['a thrown error', () => { throw new Error('EACCES: permission denied'); }],
+    ['undefined', undefined],
+    ['null', null],
+    ['a malformed return', { status: 'fine' }],
+    ['ok as a truthy non-true', { ok: 'yes' }],
+  ]) {
+    assert.throws(
+      () => assertSnapshotInvalidated(storeReturning(value), 'WS'),
+      /refusing to apply/,
+      `${label} must halt the apply`);
+  }
+
+  // The reason reaches the operator — "it failed" without saying why is not actionable when the
+  // realistic cause is another run holding the lease.
+  assert.throws(
+    () => assertSnapshotInvalidated(storeReturning({ ok: false, reason: 'workspace lease held by pid 123' }), 'WS'),
+    /workspace lease held by pid 123/);
+});
+
+// …and the WIRING, which a behavioural test of the function alone cannot cover: main() must
+// actually call it, and only when applying.
+test('#587 a plain --apply calls the snapshot guard before building', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'build-model-app.js'), 'utf8');
+  const i = src.indexOf('r = await buildModelApp(spec, opts, deps);');
+  assert.ok(i > -1, 'the build call must still be findable for this check to mean anything');
+  const before = src.slice(Math.max(0, i - 1500), i);
+  assert.match(before, /if \(opts\.apply\) assertSnapshotInvalidated\(applySnapshotStore, workspaceDir\);/,
+    'the guard must run, gated on apply, immediately before the mutation engine');
+});
+
+test('main changed-only full-fast-noop cycle uses the real flow', async () => {
+  const os = require('node:os');
+  const { loadCli } = require('./helpers/cli-harness.js');
+  const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
+  const snapshotStore = require('../lib/apply-snapshot-store.js');
+  const { sha256 } = require('../lib/hash.js');
+  const { makeGenpageCli } = require('../lib/genpage-cli.js');
+  const scriptsDir = path.join(__dirname, '..');
+  const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'main-changed-only-'));
+  const workspaceDir = path.join(appDir, '.maker-workspace');
+  const specPath = path.join(appDir, 'app-spec.json');
+  const env = 'https://contoso.crm.dynamics.com';
+  const orgId = '11111111-0000-4000-8000-000000000001';
+  const appIds = ['22222222-0000-4000-8000-000000000001', '22222222-0000-4000-8000-000000000002', '22222222-0000-4000-8000-000000000003'];
+  const appUniqueValue = '33333333-0000-4000-8000-000000000001';
+  const sitemapId = '44444444-0000-4000-8000-000000000001';
+  const pageIds = {
+    Overview: '55555555-0000-4000-8000-000000000001',
+    Detail: '55555555-0000-4000-8000-000000000002',
+  };
+  const spec = {
+    ...pageBearingSpec(),
+    solution: { uniqueName: 'ChangedOnlySln', publisherPrefix: 'contoso' },
+    app: { name: 'Renamed App', uniqueName: 'contoso_liveidentity' },
+    entities: [{ schemaName: 'contoso_item', primaryAttribute: { schemaName: 'contoso_name' }, columns: [] }],
+    pages: [
+      { key: 'overview', name: 'Overview', navigatesTo: [{ targetKey: 'detail' }], source: { kind: 'tsx', codeFile: 'overview.tsx' } },
+      { key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'detail.tsx' } },
+    ],
+    appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: [{ page: 'overview' }, { page: 'detail' }] }] }] },
+  };
+  const state = { orgId, app: null, creates: 0, table: null, resources: new Map(), pages: new Map(), failDownload: false };
+  const { sdk } = makeSimpleMockSdk();
+  const writes = [];
+  const uploads = [];
+  const whoAmI = [];
+  const sdkTempDirs = [];
+  const uploadTempDirs = [];
+  const createArtifact = sdk.createArtifact;
+  sdk.createArtifact = (type, def) => {
+    if (type !== 'app') return createArtifact(type, def);
+    state.app = { ...jclone(def), id: appIds[state.creates++] };
+    return jclone(state.app);
+  };
+  sdk.initWorkspace = async () => {};
+  sdk.listArtifacts = async () => state.app ? [{ id: state.app.id, isDirty: false }] : [];
+  sdk.findArtifact = async (type, identity) => {
+    assert.strictEqual(type, 'app');
+    assert.strictEqual(identity.uniqueName, spec.app.uniqueName, 'rebuild resolves the immutable app name');
+    return state.app && state.app.id;
+  };
+  sdk.fetchArtifact = async (type, id) => {
+    assert.strictEqual(type, 'app');
+    assert.strictEqual(id, state.app.id);
+    return jclone(state.app);
+  };
+  sdk.getArtifact = async (type, id) => {
+    assert.strictEqual(type, 'app');
+    assert.strictEqual(id, state.app.id);
+    return jclone(state.app);
+  };
+  sdk.updateElement = async (type, id, pointer, value) => {
+    assert.strictEqual(type, 'app');
+    assert.strictEqual(id, state.app.id);
+    jpSet(state.app, pointer, jclone(value));
+    return jclone(state.app);
+  };
+  sdk.createTable = async (o) => {
+    state.table = { logicalName: o.schemaName.toLowerCase(), entitySetName: `${o.schemaName.toLowerCase()}s`, isCustom: true };
+    return state.table;
+  };
+  sdk.findTables = async () => state.table ? [state.table] : [];
+  sdk.findColumns = async () => [{ logicalName: 'contoso_name' }];
+  sdk.createWebResource = async (o) => {
+    const row = { webresourceid: `wr-${state.resources.size + 1}`, name: o.name, content: Buffer.from(o.content || '', 'utf8').toString('base64') };
+    state.resources.set(o.name, row);
+    return { id: row.webresourceid, name: row.name };
+  };
+  sdk.updateWebResource = async (id, o) => {
+    const row = [...state.resources.values()].find((r) => r.webresourceid === id);
+    assert.ok(row, `web resource ${id} exists`);
+    row.content = Buffer.from(o.content, 'utf8').toString('base64');
+  };
+  sdk.dataverse = { get: async (url) => {
+    assert.match(url, /^\/EntityDefinitions\(LogicalName='/);
+    return state.table && !url.includes("LogicalName='entity'")
+      ? { status: 200, body: { LogicalName: state.table.logicalName, EntitySetName: state.table.entitySetName } }
+      : { status: 404, body: {} };
+  } };
+  sdk.queryRecords = async (set, o = {}) => {
+    const filter = o.filter || '';
+    if (set === 'appmodule') {
+      if (filter) assert.strictEqual(filter, `uniquename eq '${spec.app.uniqueName}'`);
+      return state.app ? [{ appmoduleid: state.app.id, appmoduleidunique: appUniqueValue, uniquename: spec.app.uniqueName }] : [];
+    }
+    if (set === 'appmodulecomponent') {
+      assert.match(filter, new RegExp(`_appmoduleidunique_value eq ${appUniqueValue}`));
+      return /componenttype eq 62/.test(filter) ? [{ objectid: sitemapId, componenttype: 62 }] : [];
+    }
+    if (set === 'sitemap') {
+      if (/sitemapnameunique eq/.test(filter)) return [{ sitemapid: sitemapId }];
+      assert.strictEqual(filter, `sitemapid eq ${sitemapId}`);
+      // Render the page membership from the real engine's app definition, not from the desired spec.
+      const subareas = state.app.siteMap.areas.flatMap((a) => a.groups.flatMap((g) => g.subAreas || []));
+      return [{ sitemapxml: `<SiteMap><Area><Group>${subareas.filter((s) => s.genPageId).map((s) => `<SubArea GenPageId="${s.genPageId}"/>`).join('')}</Group></Area></SiteMap>` }];
+    }
+    if (set === 'webresource') {
+      const name = (filter.match(/name eq '([^']+)'/) || [])[1];
+      const row = state.resources.get(name);
+      return row ? [row] : [];
+    }
+    if (set === 'uxagentproject') {
+      return [...state.pages.values()].filter((p) => filter.includes(`uxagentprojectid eq ${p.pageId.toLowerCase()}`))
+        .map((p) => ({ uxagentprojectid: p.pageId, name: p.name }));
+    }
+    if (set === 'publisher') return [{ publisherid: 'publisher-1' }];
+    return [];
+  };
+  for (const method of Object.keys(sdk).filter((name) => /^(create|update|push|publish|add|remove|set|enrich|seed)/.test(name))) {
+    const original = sdk[method];
+    sdk[method] = (...args) => { writes.push({ method, args }); return original(...args); };
+  }
+  const pacRun = async (args) => {
+    const value = (flag) => args[args.indexOf(flag) + 1];
+    assert.deepStrictEqual(args.slice(0, 2), ['model', 'genpage']);
+    assert.strictEqual(value('--environment'), env);
+    if (args[2] === 'list') {
+      const pages = [...state.pages.values()];
+      return { status: 0, stdout: `Found ${pages.length} generated page(s):\nPage ID                              Name          Published\n`
+        + pages.map((p) => `${p.pageId} ${p.name.padEnd(14)}-\n`).join(''), stderr: '' };
+    }
+    assert.strictEqual(value('--app-id'), state.app.id, 'PAC is scoped to the app resolved by main');
+    if (args[2] === 'upload') {
+      const name = value('--name');
+      const pageId = args.includes('--page-id') ? value('--page-id') : pageIds[name];
+      const code = fs.readFileSync(value('--code-file'), 'utf8');
+      uploads.push({ name, pageId, requestedId: args.includes('--page-id') ? value('--page-id') : null, code });
+      uploadTempDirs.push(path.dirname(value('--prompt-file')));
+      state.pages.set(pageId, { pageId, name, code });
+      return { status: 0, stdout: `Page ID: ${pageId}`, stderr: '' };
+    }
+    assert.strictEqual(args[2], 'download', 'no other PAC command is allowed');
+    if (state.failDownload) return { status: 1, stdout: '', stderr: 'offline verification download failed' };
+    for (const pageId of value('--page-id').split(',')) {
+      const dir = path.join(value('--output-directory'), pageId);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'page.tsx'), state.pages.get(pageId).code, 'utf8');
+    }
+    return { status: 0, stdout: '', stderr: '' };
+  };
+  const genpageModule = { ...require('../lib/genpage-cli.js'), makeGenpageCli: (url) => {
+    assert.strictEqual(url, env);
+    return makeGenpageCli(url, { run: pacRun, attempts: 1, request: async () => { throw new Error('unexpected Dataverse page request'); } });
+  } };
+  // Only transport/SDK construction is fake: main, buildModelApp, engine, verifier, flow and snapshot
+  // store remain real. Loading the engine with the PAC seam avoids replacing the build with a stub.
+  const engine = loadCli(path.join(scriptsDir, 'lib', 'sdk-build.js'), { requires: { './genpage-cli.js': genpageModule } }).exports;
+  const previousPath = process.env.PATH;
+  process.env.PATH = path.dirname(process.execPath);
+  const assertCleaned = () => {
+    for (const dir of [...sdkTempDirs, ...uploadTempDirs]) assert.strictEqual(fs.existsSync(dir), false, `temporary workspace removed: ${dir}`);
+    assert.strictEqual(fs.existsSync(snapshotStore.leasePath(workspaceDir)), false, 'snapshot lease released');
+    const staging = path.join(workspaceDir, '.pageref-deploy');
+    assert.ok(!fs.existsSync(staging) || fs.readdirSync(staging).length === 0, 'page staging removed');
+  };
+  const runMain = async (exitCode = 0) => {
+    writes.length = uploads.length = 0;
+    const authCli = loadCli(path.join(scriptsDir, 'lib', 'dataverse-auth.js'));
+    const auth = {
+      ...authCli.exports,
+      preflightAuth: async (url, opts) => {
+        assert.strictEqual(url, env);
+        // The build only uses the verdict, so it must not pay the success-path `az account show`.
+        assert.strictEqual(opts && opts.identityOnSuccess, false);
+        return { ok: true };
+      },
+      readOrgLanguageCode: async (url) => { assert.strictEqual(url, env); return 1033; },
+      dataverseRequest: async (...args) => {
+        assert.deepStrictEqual(args, [env, 'GET', 'WhoAmI']);
+        whoAmI.push(state.orgId);
+        return { status: 200, data: { OrganizationId: state.orgId } };
+      },
+      emitResult: (ok, result) => { assertCleaned(); authCli.exports.emitResult(ok, result); },
+    };
+    const entityProvision = loadCli(path.join(scriptsDir, 'lib', 'entity-provision.js'), { requires: { './dataverse-auth.js': auth } }).exports;
+    const cli = loadCli(path.join(scriptsDir, 'build-model-app.js'), {
+      argv: ['--env', env, '--spec', '@' + specPath, '--apply', '--changed-only'],
+      env: { PATH: path.dirname(process.execPath), POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' },
+      requires: {
+        './lib/dataverse-auth.js': auth,
+        './lib/entity-provision.js': entityProvision,
+        './lib/sdk-build.js': engine,
+        './lib/genpage-cli.js': genpageModule,
+        './lib/sdk-http-client.js': { createAzHttpClient: () => ({}), SQL_DEADLOCK_VICTIM: /Sql Number: 1205/ },
+        './vendor/cds-maker-sdk.cjs': {
+          createNodeWorkspaceStorage: (dir) => { if (dir !== workspaceDir) sdkTempDirs.push(dir); return { dir }; },
+          createMakerSdk: (o) => { assert.strictEqual(o.instanceUrl, env); assert.strictEqual(o.languageCode, 1033); return sdk; },
+        },
+      },
+    });
+    await assert.rejects(cli.main(), (e) => e.exitCode === exitCode, cli.stderrText());
+    assert.strictEqual(authCli.exitCode, exitCode, 'the real emitter uses effective build/verify success');
+    assertCleaned();
+    return JSON.parse(authCli.stdoutText());
+  };
+  try {
+    const overviewCode = 'export default function Overview(){ Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_detail" }); return null; }';
+    fs.writeFileSync(specPath, JSON.stringify(spec), 'utf8');
+    fs.writeFileSync(path.join(appDir, 'overview.tsx'), overviewCode, 'utf8');
+    fs.writeFileSync(path.join(appDir, 'detail.tsx'), 'export default function Detail(){ return null; }', 'utf8');
+    const full = await runMain();
+    assert.strictEqual(full.ok, true);
+    assert.strictEqual(full.verify.ok, true);
+    assert.strictEqual(full.changedOnly.decision, 'full');
+    assert.deepStrictEqual(uploads.map((u) => u.name).sort(), ['Detail', 'Overview']);
+    assert.ok(writes.some((w) => w.method === 'createTable'), 'first apply runs the data model');
+    const baseline = snapshotStore.readSnapshot(workspaceDir);
+    assert.strictEqual(baseline.eligible, true, 'a verified fresh full apply establishes eligibility');
+    assert.strictEqual(baseline.orgId, orgId);
+    assert.strictEqual(baseline.envUrl, env);
+    assert.strictEqual(baseline.appUniqueName, spec.app.uniqueName);
+    assert.strictEqual(baseline.appId, appIds[0]);
+    assert.deepStrictEqual(baseline.debt, []);
+    assert.deepStrictEqual(Object.keys(baseline.artifacts.pages).sort(), ['detail', 'overview']);
+    assert.strictEqual(baseline.artifacts.pages.detail.pageId, pageIds.Detail);
+    assert.strictEqual(whoAmI.length, 2, 'main resolves fresh identity before and after the full build');
+
+    const changedCode = overviewCode.replace('return null;', 'const revised = true; return null;');
+    const deployedCode = changedCode.replace('"PAGEREF_detail"', JSON.stringify(pageIds.Detail));
+    fs.writeFileSync(path.join(appDir, 'overview.tsx'), changedCode, 'utf8');
+    const fast = await runMain();
+    assert.strictEqual(fast.ok, true);
+    assert.strictEqual(fast.changedOnly.decision, 'fast');
+    assert.strictEqual(fast.verify.ok, true);
+    assert.deepStrictEqual(fast.changedOnly.pageKeys, ['overview']);
+    assert.deepStrictEqual(uploads, [{ name: 'Overview', pageId: pageIds.Overview, requestedId: pageIds.Overview, code: deployedCode }]);
+    assert.ok(writes.every((w) => w.method === 'updateWebResource' || (w.method === 'addSolutionComponent' && w.args[0].componentType === 61)),
+      `fast apply writes only the page manifest, never the data model or sitemap: ${JSON.stringify(writes)}`);
+    const eligible = snapshotStore.readSnapshot(workspaceDir);
+    assert.strictEqual(eligible.eligible, true);
+    assert.notStrictEqual(eligible.generation, baseline.generation);
+    assert.strictEqual(eligible.artifacts.pages.overview.sourceSha, sha256(changedCode));
+    assert.strictEqual(eligible.artifacts.pages.overview.deployedSha, sha256(deployedCode), 'snapshot records the actual nav-resolved upload, not the canonical source hash');
+    assert.deepStrictEqual(eligible.artifacts.pages.detail, baseline.artifacts.pages.detail, 'unchanged page identity and hashes survive');
+
+    const snapshotBytes = fs.readFileSync(snapshotStore.snapshotPath(workspaceDir));
+    const noop = await runMain();
+    assert.strictEqual(noop.ok, true);
+    assert.strictEqual(noop.noop, true);
+    assert.strictEqual(noop.changedOnly.decision, 'noop');
+    assert.deepStrictEqual(writes, [], 'NOOP makes no SDK writes');
+    assert.deepStrictEqual(uploads, [], 'NOOP makes no PAC writes');
+    assert.deepStrictEqual(fs.readFileSync(snapshotStore.snapshotPath(workspaceDir)), snapshotBytes, 'NOOP leaves the snapshot byte-identical');
+
+    fs.writeFileSync(path.join(appDir, 'overview.tsx'), changedCode + '\n', 'utf8');
+    state.failDownload = true;
+    const failedVerify = await runMain(1);
+    assert.strictEqual(failedVerify.ok, true, 'the upload succeeded, but verification did not');
+    assert.strictEqual(failedVerify.changedOnly.decision, 'fast');
+    assert.strictEqual(failedVerify.verify.ok, false);
+    assert.ok(failedVerify.verify.missing.some((m) => /offline verification download failed/.test(m)));
+    assert.strictEqual(snapshotStore.readSnapshot(workspaceDir).eligible, false, 'failed verification cannot re-bless the baseline');
+    state.failDownload = false;
+    fs.writeFileSync(path.join(appDir, 'overview.tsx'), changedCode, 'utf8');
+
+    for (const identity of ['foreign-org', 'foreign-app', 'deleted']) {
+      snapshotStore.writeSnapshotAtomic(workspaceDir, eligible);
+      state.orgId = identity === 'foreign-org' ? '11111111-0000-4000-8000-000000000002' : orgId;
+      if (identity === 'foreign-app') state.app.id = appIds[2];
+      if (identity === 'deleted') state.app = null;
+      const fallback = await runMain();
+      assert.strictEqual(fallback.ok, true);
+      assert.strictEqual(fallback.changedOnly.decision, 'full', `${identity} identity cannot NOOP`);
+      assert.strictEqual(fallback.verify.ok, true);
+      assert.match(fallback.changedOnly.reason, identity === 'foreign-org' ? /orgId/ : identity === 'foreign-app' ? /appId/ : /app not found live/);
+      assert.deepStrictEqual(uploads.map((u) => u.name).sort(), ['Detail', 'Overview'], 'identity fallback runs all pages');
+      assert.ok(writes.some((w) => w.method === 'updateElement' && w.args[2] === '/siteMap'), 'identity fallback performs a full sitemap build');
+      assert.strictEqual(fallback.created.app, identity === 'foreign-org' ? appIds[0] : identity === 'foreign-app' ? appIds[2] : appIds[1]);
+      assert.strictEqual(snapshotStore.readSnapshot(workspaceDir).eligible, identity === 'deleted', 'only the proven fresh replacement is eligible');
+    }
+  } finally {
+    process.env.PATH = previousPath;
+    for (const dir of [...sdkTempDirs, ...uploadTempDirs]) fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(appDir, { recursive: true, force: true });
+  }
+  assert.strictEqual(fs.existsSync(appDir), false, 'the test removes its durable temporary state too');
 });

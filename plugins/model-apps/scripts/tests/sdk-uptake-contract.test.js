@@ -21,14 +21,14 @@ const dirs = [];
 // Offline SDK whose POST handler the test supplies, so a server fault can be simulated exactly.
 // GET answers an empty collection: that is what an org with no image web resource looks like, which
 // is precisely the state the icon contract below is about.
-function sdkWith({ post, get, del } = {}) {
-  const { createMakerSdk } = require(BUNDLE);
+async function sdkWith({ post, get, del } = {}) {
+  const { createMakerSdk, createNodeWorkspaceStorage } = require(BUNDLE);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'uptake-'));
   dirs.push(dir);
   const calls = [];
   const ok204 = { status: 204, headers: { 'odata-entityid': 'https://x/workflows(55555555-5555-5555-5555-555555555555)' }, body: {} };
   const sdk = createMakerSdk({
-    workspacePath: dir,
+    workspaceStorage: createNodeWorkspaceStorage(dir),
     instanceUrl: 'https://contoso.crm.dynamics.com',
     httpClient: {
       get: async (url) => { calls.push({ verb: 'GET', url }); return (get && get(url)) || { status: 200, headers: {}, body: { value: [] } }; },
@@ -38,7 +38,7 @@ function sdkWith({ post, get, del } = {}) {
       delete: async (url) => { calls.push({ verb: 'DELETE', url }); return (del && del(url)) || { status: 204, headers: {}, body: {} }; },
     },
   });
-  sdk.initWorkspace();
+  await sdk.initWorkspace();
   return { sdk, calls };
 }
 
@@ -47,7 +47,7 @@ test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: 
 // The smallest complete business rule, authored the way the build authors one: create the artifact,
 // set the condition tree through the generic element surface, push. Shared by the #482 tests below.
 async function authorDupGuard(sdk) {
-  const art = sdk.createArtifact('businessRule', {
+  const art = await sdk.createArtifact('businessRule', {
     name: 'Dup Guard', entityLogicalName: 'account', scope: 'Entity', status: 'Draft',
   });
   await sdk.updateElement('businessRule', art.id, '/rootCondition', {
@@ -70,8 +70,8 @@ test('REAL BUNDLE: creating an app with no icon and no image web resource fails 
   // `appDef` passes `iconWebResourceId`), so this pins a boundary we depend on NOT crossing. If a
   // future bundle silently restored the old fallback, an app could again be created pointing at a
   // JavaScript file.
-  const { sdk } = sdkWith();
-  const app = sdk.createArtifact('app', { name: 'No Icon App', uniqueName: 'cr_noiconapp' });
+  const { sdk } = await sdkWith();
+  const app = await sdk.createArtifact('app', { name: 'No Icon App', uniqueName: 'cr_noiconapp' });
   await assert.rejects(
     () => sdk.pushArtifact('app', app.id),
     (err) => {
@@ -87,8 +87,8 @@ test('REAL BUNDLE: an explicit iconWebResourceId is used verbatim and skips disc
   // ignored it would silently re-introduce the cross-solution managed-icon dependency the plugin
   // generates its own SVG to avoid.
   const ICON = '11111111-2222-3333-4444-555555555555';
-  const { sdk, calls } = sdkWith();
-  const app = sdk.createArtifact('app', { name: 'Icon App', uniqueName: 'cr_iconapp', iconWebResourceId: ICON });
+  const { sdk, calls } = await sdkWith();
+  const app = await sdk.createArtifact('app', { name: 'Icon App', uniqueName: 'cr_iconapp', iconWebResourceId: ICON });
   await sdk.pushArtifact('app', app.id);
   const write = calls.find((c) => c.verb === 'POST' && c.body && c.body.webresourceid);
   assert.ok(write, 'the appmodule write carries a webresourceid; urls: ' + JSON.stringify(calls.map((c) => c.url)));
@@ -108,8 +108,8 @@ const BR_ENTITY = 'lvz_ticket';
 // go in `clauses` and actions in `trueBranch`. Passing `operator`/`lhs`/`rhs`/`thenActions` (a very
 // natural guess) merges those keys onto the node, the compiler ignores them, and you get a rule with
 // an EMPTY condition that still creates 204 — a wrong artifact behind a success. Pinned below.
-function authorRule(sdk) {
-  const art = sdk.createArtifact('businessRule', {
+async function authorRule(sdk) {
+  const art = await sdk.createArtifact('businessRule', {
     name: 'Hide notes when closed', entityLogicalName: BR_ENTITY, scope: 'Entity', status: 'Active',
   });
   return art;
@@ -122,8 +122,8 @@ const CONDITION = {
 };
 
 test('REAL BUNDLE: a business rule goes through the SUPPORTED bound member first', async () => {
-  const { sdk, calls } = sdkWith();
-  const art = authorRule(sdk);
+  const { sdk, calls } = await sdkWith();
+  const art = await authorRule(sdk);
   await sdk.updateElement('businessRule', art.id, '/rootCondition', CONDITION);
   const res = await sdk.pushArtifact('businessRule', art.id);
   assert.strictEqual(res.saved, true);
@@ -155,12 +155,12 @@ test('REAL BUNDLE: a qualifying 400 no longer falls back — it throws, and writ
   // Pinned here because the failure mode of losing this is invisible: a re-vendored bundle that
   // resurrected the fallback would make every one of these pushes "succeed" again, with narrowed
   // rules nobody asked for.
-  const { sdk, calls } = sdkWith({
+  const { sdk, calls } = await sdkWith({
     post: (url) => (/WithWfomJson/i.test(url)
       ? { status: 400, headers: {}, body: { error: { code: '0x80040216', message: 'System failure in WorkflowService' } } }
       : undefined),
   });
-  const art = authorRule(sdk);
+  const art = await authorRule(sdk);
   await sdk.updateElement('businessRule', art.id, '/rootCondition', CONDITION);
   await assert.rejects(() => sdk.pushArtifact('businessRule', art.id), 'the 400 must propagate, not be papered over');
 
@@ -182,12 +182,12 @@ test('REAL BUNDLE: a NON-qualifying failure must NOT fall back (a second write c
   // that into a build halt. Asserting "throws" for it would have been asserting the wrong contract.
   const THROWS = [[401, null], [403, null], [429, null], [500, null], [400, '0x80040265']];
   for (const [status, code] of THROWS) {
-    const { sdk, calls } = sdkWith({
+    const { sdk, calls } = await sdkWith({
       post: (url) => (/WithWfomJson/i.test(url)
         ? { status, headers: {}, body: { error: { code: code || '0x0', message: 'unrelated' } } }
         : undefined),
     });
-    const art = authorRule(sdk);
+    const art = await authorRule(sdk);
     await sdk.updateElement('businessRule', art.id, '/rootCondition', CONDITION);
     await assert.rejects(() => sdk.pushArtifact('businessRule', art.id), `HTTP ${status} must propagate`);
     assert.strictEqual(
@@ -196,10 +196,10 @@ test('REAL BUNDLE: a NON-qualifying failure must NOT fall back (a second write c
   }
 
   // 412: reported by value, still no second write.
-  const { sdk, calls } = sdkWith({
+  const { sdk, calls } = await sdkWith({
     post: (url) => (/WithWfomJson/i.test(url) ? { status: 412, headers: {}, body: {} } : undefined),
   });
-  const art = authorRule(sdk);
+  const art = await authorRule(sdk);
   await sdk.updateElement('businessRule', art.id, '/rootCondition', CONDITION);
   const res = await sdk.pushArtifact('businessRule', art.id);
   assert.strictEqual(res.saved, false, 'a version conflict is reported by value, not swallowed');
@@ -211,7 +211,7 @@ test('REAL BUNDLE: a NON-qualifying failure must NOT fall back (a second write c
 test('REAL BUNDLE: a 404 on the bound member is refused with a STABLE, matchable code', async () => {
   // The plugin degrades gracefully on an environment that does not declare the member (it skips the
   // rules and builds the rest of the app rather than halting 90% of the way through). That branch is
-  // selected by `err.code`, so the code is a contract, not an implementation detail.
+  // selected by the error's `code`, so the code is a contract, not an implementation detail.
   //
   // It must NOT be selected by `err.name`: the bundle is minified, so the class name is a
   // rebuild-unstable two-letter string that also happens to be the shared base error. Matching it
@@ -219,46 +219,71 @@ test('REAL BUNDLE: a 404 on the bound member is refused with a STABLE, matchable
   //
   // MEASURED live: `$metadata` on a real environment (16.5 MB) does not mention the member, and every
   // POST to it answers 404. The SDK's own message reports 18 of 20 environments in the same state.
-  const { sdk, calls } = sdkWith({
+  //
+  // ⚠ HOW it is refused CHANGED, and the change was invisible to every mock-based test in the suite.
+  // The SDK used to THROW here; it now treats the preview rollout as a reported no-op and RESOLVES
+  // with `saved: false` carrying the same code, so a `pushAll` can carry on with the other artifacts.
+  // `saved` staying FALSE is the load-bearing half — "skipped" must never read as "written". The
+  // plugin reads the code off the CAUSE CHAIN so both shapes reach the same skip; asserting only
+  // one of them here is what let the by-value form turn into a build halt on most environments.
+  const { sdk, calls } = await sdkWith({
     post: (url) => (/WithWfomJson/i.test(url) ? { status: 404, headers: {}, body: {} } : undefined),
   });
-  const art = authorRule(sdk);
+  const art = await authorRule(sdk);
   await sdk.updateElement('businessRule', art.id, '/rootCondition', CONDITION);
 
-  const err = await sdk.pushArtifact('businessRule', art.id).then(() => null, (e) => e);
-  assert.ok(err, 'an undeclared member must be refused, not silently substituted');
+  const res = await sdk.pushArtifact('businessRule', art.id).then((r) => r, (e) => ({ threw: e }));
+  // Accept EITHER shape deliberately: a bundle that goes back to throwing must not fail this guard,
+  // because the plugin still handles it. What may never happen is a reported SUCCESS.
+  const err = res.threw || res.error;
+  assert.ok(err, `an undeclared member must be refused, not silently substituted; got ${JSON.stringify(res)}`);
+  if (!res.threw) {
+    assert.strictEqual(res.saved, false, 'a no-op must never be reported as a write that committed');
+    assert.strictEqual(res.shipped, false, 'nor as live');
+  }
   assert.strictEqual(err.code, 'BUSINESS_RULE_API_UNAVAILABLE',
     `the plugin branches on this exact code; got ${JSON.stringify(err.code)}`);
-  assert.match(err.message, /does not expose/i, 'the message must name the cause for the operator');
+  assert.match(err.message, /not enabled on this environment|does not expose/i,
+    'the message must name the cause for the operator');
   assert.strictEqual(calls.some((c) => c.verb === 'POST' && /\/workflows$/.test(String(c.url))), false,
     'and nothing else may be written in its place');
 });
 
-test('REAL BUNDLE: a wrongly-shaped condition produces an EMPTY rule rather than erroring', async () => {
-  // Recorded because it cost real time and would cost it again. `operator`/`lhs`/`rhs`/`thenActions`
-  // is the natural guess at the shape; `updateElement` merges those keys onto the node, the
-  // serializer ignores them, and the push SUCCEEDS with a workflow object model that mentions none of
-  // the author's columns.
+test('REAL BUNDLE: a wrongly-shaped condition is now REFUSED at push, closing the empty-rule trap', async () => {
+  // ⚠ THIS TEST WAS INVERTED DELIBERATELY. It used to assert the opposite — that the push SUCCEEDS
+  // and writes a rule mentioning none of the author's columns ("the push succeeds — that is the
+  // trap"). That was an accurate record of the SDK's old behaviour and it cost real time to find:
+  // `operator`/`lhs`/`rhs`/`thenActions` is the natural guess at the shape, `updateElement` merged
+  // those keys onto the node, the serializer ignored them, and the result was HTTP 204 for a rule
+  // that could never fire.
   //
-  // So a caller CANNOT rely on an error to tell them the shape is wrong. The plugin's App Spec
-  // validation exists precisely because of this: it checks `conditions`/`actions` itself before
-  // anything is pushed.
-  const { sdk, calls } = sdkWith();
-  const art = authorRule(sdk);
+  // The SDK now runs the business-rule designer's own completeness validator on EVERY save, so the
+  // trap is closed at the source: the push is refused and the operator is told which clause and
+  // action are missing. Keeping the old assertion would pin the SDK to the defect.
+  const { sdk, calls } = await sdkWith();
+  const art = await authorRule(sdk);
   await sdk.updateElement('businessRule', art.id, '/rootCondition', {
     operator: 'Equal',
     lhs: { type: 'Field', attributeLogicalName: 'lvz_status' },
     rhs: { type: 'Value', value: 'Closed' },
     thenActions: [{ type: 'SetVisibility', attributeLogicalName: 'lvz_notes', visible: false }],
   });
-  const res = await sdk.pushArtifact('businessRule', art.id);
-  assert.strictEqual(res.saved, true, 'the push succeeds — that is the trap');
 
+  await assert.rejects(
+    sdk.pushArtifact('businessRule', art.id),
+    (err) => {
+      assert.match(err.message, /Validation failed/i, `expected a validation refusal; got: ${err.message}`);
+      // The operator must be told WHAT is missing, not merely that something is.
+      assert.match(err.message, /clause/i, 'the message names the missing clause');
+      assert.match(err.message, /action/i, 'the message names the missing action');
+      return true;
+    }
+  );
+
+  // The decisive assertion: nothing reached the wire. A refusal that still wrote the rule would be
+  // worse than the old trap, because it would report failure AND leave the artifact behind.
   const bound = calls.find((c) => c.verb === 'POST' && /CreateProcessWithWfomJson/i.test(String(c.url)));
-  assert.ok(bound, 'a rule is still written');
-  const wfom = String(bound.body.WfomJson);
-  assert.doesNotMatch(wfom, /lvz_status/, 'the guessed shape contributes NO condition');
-  assert.doesNotMatch(wfom, /lvz_notes/, 'and NO action');
+  assert.strictEqual(bound, undefined, 'the incomplete rule is never written');
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -324,7 +349,7 @@ test('REAL BUNDLE: AI_APP_SETTING matches the SDK per-app setting map exactly', 
 //
 // https://github.com/microsoft/power-platform-skills/issues/482
 test('REAL BUNDLE: the happy path writes the rule EXACTLY once', async () => {
-  const { sdk, calls } = sdkWith();
+  const { sdk, calls } = await sdkWith();
   const res = await authorDupGuard(sdk);
   assert.strictEqual(res.saved, true);
 
@@ -338,9 +363,15 @@ test('REAL BUNDLE: no failure of the bound member produces a second write', asyn
   // fallback, so they are the two that would resurrect the duplicate. The rest are included because
   // "nothing else writes twice either" is the actual invariant, and a partial check would let a
   // narrower fallback back in unnoticed.
+  //
+  // The invariant is NO SECOND WRITE — deliberately not "throws". How each failure is SURFACED is a
+  // separate contract (pinned above) and it is not uniform: the 404 preview gate is reported by
+  // value, everything else throws. Conflating the two is what made this test fail on an uptake that
+  // changed only the reporting shape, while the duplicate-write invariant it exists to protect was
+  // never at risk.
   const FAILURES = [
     [400, '0x80040216'],  // committed-then-faulted: the exact #482 trigger
-    [404, null],          // member not declared on this environment
+    [404, null],          // member not declared on this environment -> reported BY VALUE
     [400, '0x80040265'],  // an unrelated 400
     [401, null],
     [403, null],
@@ -348,12 +379,18 @@ test('REAL BUNDLE: no failure of the bound member produces a second write', asyn
     [500, null],
   ];
   for (const [status, code] of FAILURES) {
-    const { sdk, calls } = sdkWith({
+    const { sdk, calls } = await sdkWith({
       post: (url) => (/CreateProcessWithWfomJson/i.test(url)
         ? { status, headers: {}, body: code ? { error: { code, message: 'fault' } } : {} }
         : undefined),
     });
-    await assert.rejects(() => authorDupGuard(sdk), `HTTP ${status} ${code || ''} must surface, not be absorbed`);
+    const outcome = await authorDupGuard(sdk).then((r) => r, (e) => ({ threw: e }));
+    // Whichever way it is surfaced, it must NOT be a success.
+    const failed = Boolean(outcome.threw) || outcome.saved === false;
+    assert.ok(failed,
+      `HTTP ${status} ${code || ''} must surface, not be absorbed; got ${JSON.stringify(outcome)}`);
+    assert.ok(outcome.threw || outcome.error,
+      `HTTP ${status} ${code || ''} must carry the cause either way`);
 
     // The decisive assertion: no classic row, and no retry of the member either. Either one would be
     // a second rule on the table for a single authored rule.

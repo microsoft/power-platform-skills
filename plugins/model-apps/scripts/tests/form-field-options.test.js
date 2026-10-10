@@ -178,8 +178,27 @@ test('an inline entry OVERRIDES the form-level fieldOptions default for the same
 });
 
 test('normalizeFieldEntry lower-cases both name and anchor (every downstream compare is lower-case)', () => {
-  assert.deepStrictEqual(normalizeFieldEntry('New_Name'), { name: 'new_name', readOnly: false, hidden: false, after: undefined });
-  assert.deepStrictEqual(normalizeFieldEntry({ name: 'New_B', after: 'New_A' }), { name: 'new_b', readOnly: false, hidden: false, after: 'new_a' });
+  assert.deepStrictEqual(normalizeFieldEntry('New_Name'), { name: 'new_name', readOnly: false, hidden: false, after: undefined, colspan: undefined, rowspan: undefined });
+  assert.deepStrictEqual(normalizeFieldEntry({ name: 'New_B', after: 'New_A' }), { name: 'new_b', readOnly: false, hidden: false, after: 'new_a', colspan: undefined, rowspan: undefined });
+});
+
+test('normalizeFieldEntry keeps an explicit span, including 1, and drops only omission', () => {
+  // An explicit `colspan: 1` is the author CLAIMING the default, which is different from saying
+  // nothing. The old rule folded both to undefined, so a reset from 2 to 1 was unrepresentable and
+  // the deployed cell kept its old span — live-reproduced across two applies.
+  assert.strictEqual(normalizeFieldEntry({ name: 'a', colspan: 1 }).colspan, 1);
+  assert.strictEqual(normalizeFieldEntry({ name: 'a', rowspan: 1 }).rowspan, 1);
+  assert.strictEqual(normalizeFieldEntry({ name: 'a', colspan: 2 }).colspan, 2);
+  assert.strictEqual(normalizeFieldEntry({ name: 'a', rowspan: 3 }).rowspan, 3);
+  // Omission stays omission — this is what keeps an ordinary cell from overwriting a span widened
+  // by hand in the designer.
+  assert.strictEqual(normalizeFieldEntry({ name: 'a' }).colspan, undefined);
+  assert.strictEqual(normalizeFieldEntry('a').colspan, undefined);
+  // Non-numeric, fractional and nonsensical values must not reach the serializer as-is.
+  assert.strictEqual(normalizeFieldEntry({ name: 'a', colspan: 'wide' }).colspan, undefined);
+  assert.strictEqual(normalizeFieldEntry({ name: 'a', colspan: 0 }).colspan, undefined);
+  assert.strictEqual(normalizeFieldEntry({ name: 'a', colspan: -2 }).colspan, undefined);
+  assert.strictEqual(normalizeFieldEntry({ name: 'a', colspan: 2.7 }).colspan, 2);
 });
 
 test('fieldOptionsMap ignores a non-object entry rather than throwing on a half-typed spec', () => {
@@ -375,6 +394,41 @@ test('validation rejects hidden:false for the same reason', () => {
 test('validation rejects a non-boolean flag rather than coercing it ("false" is truthy)', () => {
   const spec = specWithBigInt({ fieldOptions: { new_points: { readOnly: 'true' } } });
   assert.ok(errsFor(spec).some((e) => /readOnly must be a boolean/.test(e)));
+});
+
+// A form-level span reaches the compiler through mergeFieldOptions exactly as an inline one does, so
+// it must meet the same rules. Before, a bad value was dropped in silence, and a form-level rowspan
+// skipped the trailing rule entirely: under an auto layout `{ new_points: { rowspan: 2 } }` compiled
+// a reservation directly above the next field.
+test('validation checks a fieldOptions span the way it checks an inline one', () => {
+  for (const bad of [0, -1, 1.5, 'abc', '2']) {
+    const errs = errsFor(specWithBigInt({ fieldOptions: { new_points: { colspan: bad } } }));
+    assert.ok(errs.some((e) => /fieldOptions\['new_points'\] has colspan .* whole number/.test(e)), `colspan ${JSON.stringify(bad)}: ${errs.join(' | ')}`);
+  }
+  for (const good of [1, 2, 4]) {
+    assert.deepStrictEqual(errsFor(specWithBigInt({ fieldOptions: { new_points: { colspan: good } } })), [], `colspan ${good}`);
+  }
+});
+
+test('validation rejects a form-level rowspan above 1 under either layout, and still allows rowspan 1', () => {
+  const auto = specWithBigInt({ fieldOptions: { new_points: { rowspan: 2 } } });
+  const explicit = specWithBigInt({
+    layout: 'explicit',
+    fieldOptions: { new_points: { rowspan: 2 } },
+    tabs: [{ label: 'G', sections: [{ columns: 2, fields: ['new_name', 'new_points', 'new_duedate'] }] }],
+  });
+  for (const [lbl, spec] of [['auto', auto], ['explicit', explicit]]) {
+    const errs = errsFor(spec);
+    assert.ok(errs.some((e) => /sets rowspan 2, which only an explicit layout can place safely/.test(e) && /"name": "new_points", "rowspan": 2/.test(e)), `${lbl}: ${errs.join(' | ')}`);
+  }
+  // rowspan 1 is the explicit "narrow back" claim and places nothing beneath the cell.
+  assert.deepStrictEqual(errsFor(specWithBigInt({ fieldOptions: { new_points: { rowspan: 1 } } })), []);
+  // The inline route stays open for the one safe position — the LAST field of a section.
+  const inlineLast = specWithBigInt({
+    layout: 'explicit',
+    tabs: [{ label: 'G', sections: [{ columns: 2, fields: ['new_name', 'new_duedate', { name: 'new_points', rowspan: 2 }] }] }],
+  });
+  assert.deepStrictEqual(errsFor(inlineLast), []);
 });
 
 test('validation rejects `after` inside an explicit tabs layout — two competing orderings', () => {
