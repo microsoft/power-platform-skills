@@ -84,7 +84,7 @@ test('fuzz (TypeScript parser): "<Name>(…)" that neither an arrow nor a colon 
   const stats = runSignatureFuzz({ ts, opens: opensTypeParameters, children: elementChildren, scale });
   t.diagnostic(`parameter lists with neither an arrow nor a colon after them, each as a type and as an element: ${stats.programs} programs, ${stats.valid} valid to TypeScript`);
   t.diagnostic(`as a type, ${stats.signature.valid} valid: code for certain ${stats.signature.code} (${(100 * stats.signature.code / stats.signature.valid).toFixed(1)}%), a guess ${stats.signature.guess}, an element ${stats.signature.element}`);
-  t.diagnostic(`as an element, ${stats.element.valid} valid: an element for certain ${stats.element.element} (${(100 * stats.element.element / stats.element.valid).toFixed(1)}%), a guess ${stats.element.guess}, code ${stats.element.code}; elements with nothing the reading may be unable to read ${stats.precise.valid}, guessed ${stats.precise.guessed.length}`);
+  t.diagnostic(`as an element, ${stats.element.valid} valid: an element for certain ${stats.element.element} (${(100 * stats.element.element / stats.element.valid).toFixed(1)}%), a guess ${stats.element.guess}, code ${stats.element.code}; elements with nothing the reading may be unable to read ${stats.precise.valid} (${stats.precise.prose} of prose with comments and paths), guessed ${stats.precise.guessed.length}`);
   t.diagnostic(`elements that TypeScript rejects, which the lexer reads as code: ${stats.failing}; unsound ${stats.unsound.length}, unsupported ${stats.unjustified.length}`);
   assert.deepStrictEqual(stats.unsound.slice(0, 5).map((u) => ({ kind: u.kind, code: visible(u.code) })), [], 'a type that TypeScript parses read as an element, or an element that it parses read as code, for certain');
   assert.deepStrictEqual(stats.unjustified.slice(0, 5).map((u) => ({ why: u.why, code: visible(u.code) })), [], 'an element read as failing that TypeScript does not reject, or not where the lexer says');
@@ -94,6 +94,8 @@ test('fuzz (TypeScript parser): "<Name>(…)" that neither an arrow nor a colon 
   assert.ok(stats.element.valid >= 8000 * scale && stats.element.element >= 6500 * scale && stats.element.guess >= 300 * scale, `${stats.element.valid} elements were valid, ${stats.element.element} read as elements and ${stats.element.guess} guessed`);
   assert.ok(stats.failing >= 2000 * scale, `${stats.failing} elements that fail were read as code`);
   assert.ok(stats.precise.valid >= 2800 * scale, `${stats.precise.valid} elements with nothing to hide were valid`);
+  // ... among them the prose with a comment in it and a path on a later line, which only an element compiles with and which must stay certain (the lines that the reading of a type's members reads).
+  assert.ok(stats.precise.prose >= 500 * scale, `${stats.precise.prose} elements of prose with comments and paths were valid`);
   // The rule keeps what it can decide: nearly every valid type that does not hold a closing tag in a string, a template or a comment is code for certain.
   assert.ok(stats.signature.code >= 0.8 * stats.signature.valid, `${stats.signature.code} of ${stats.signature.valid} valid types were read as code`);
 });

@@ -1758,13 +1758,21 @@ rejected a complete page saved with CRLF endings.
   generated page may use them, and they are accepted in one place only. A parenthesised **callee** must wrap
   exactly the callee (`navigateTo` or a member chain ending in it: `(Xrm.Navigation.navigateTo)(…)`) AND its `(`
   must follow a token on an **allowlist** — the start of the source; `;` `{` `(` `[` `,` `:`; a ternary `?`;
-  an operator ending in `=` (`=` `==` `===` `!=` `!==` `+=` `<=` `>=` …); `=>`; `&&` `||` `??`. It is an
+  an operator ending in `=` (`=` `==` `===` `!=` `!==` `+=` `<=` `>=` …); `=>`; `&&` `||` `??`; and the keyword
+  `return` (`return (navigateTo)({ … })`) on the line of the `(` — a line break between them makes `return;` a
+  statement of its own — as the whole word (white space, the start of the source or one of `;` `{` `)` `:` right
+  before it, so no `xreturn` and no `\u0061return`; `}` is not one, because `\u{61}return` ends in it) and not
+  after a `.` (a member named `return`). It is an
   allowlist because the tokens that END a callable operand are many and easy to miss — `!` (a non-null
   assertion), `>` (a generic instantiation), a back-tick (a tagged template), `}` (a function expression, which
   a block's `}` cannot be told from), a name or keyword, `)`, `]`, `.`, `?.`, `++` — and each makes
   `(navigateTo)(…)` an argument list: `factory!(navigateTo)(…)`, `factory<unknown>(navigateTo)(…)`,
   ``tag`x`(navigateTo)(…)`` and `function () { return f; }(navigateTo)(…)` hand the object to whatever
-  `factory`, `tag` or the function returns. (A denylist of those tokens missed four of them.) A callee group at
+  `factory`, `tag` or the function returns. (A denylist of those tokens missed four of them.) `await` and
+  `yield` are **not** on it, although `await (navigateTo)(…)` is a navigation in an async function: outside
+  one — and in an arrow that is not async, inside an async function — `await` is a name, and the object goes
+  to what `await(navigateTo)` returns; the lexer cannot tell where it stands (the oracle test
+  in `pageref-resolver.test.js` holds TypeScript's reading and the execution of both). A callee group at
   the start of a template expression, after its opening back-tick, is refused for the same reason. A
   parenthesised **argument** is closed straight after the object (type-only casts may precede the `)`), and the
   argument must then end at a `,` or the call's `)`: `navigateTo(({ … }))` is a call;
@@ -1842,7 +1850,9 @@ rejected a complete page saved with CRLF endings.
   `<T extends /` opens type parameters, whose constraint is read as an expression where it starts no type
   (`parseTypeParameter`), here a regex — `let f: <T extends />;…[/]/>(a: T) => T` is a function type — and the lexer
   does not always know which of the two it is in, so `extends` and a `/` is the guess `generic`, read as the element
-  (`/=` is another token, and type parameters in both). A lexer that searched for a parameter list and a later `=>` took the
+  (`/=` is another token, and type parameters in both) — unless the regex that the `/` would begin does not end on its line,
+  which no type-parameter list has (TS1161: TypeScript's scanner ends a regex at a line break, `regexEnd`), so `<Flag extends />`
+  with no other `/` after it on the line is the element's for certain. A lexer that searched for a parameter list and a later `=>` took the
   JSX text `(a): Title` in `isVisible(<div data-active={e}>(a): Title</div>) ? (() => /navigateTo(…)/.test(t)) : …`
   for parameters, and read the regex after the next arrow as code: a call, whose token was rewritten. Three
   things go beyond the three-token rule, and a test checks each against TypeScript's parser when
@@ -1982,6 +1992,20 @@ rejected a complete page saved with CRLF endings.
   it reads no `/`, `<` or back-tick (no regex, no JSX, no template: every quote is a string and every parenthesis code), so `<span>(@username)</span>` and
   `<p>(x = 5)</p>` are read as before; once it reads one, the expression may hold a `)` of its own — a regex's, JSX text's, a nested template's — and
   with no arrow after the `)` it found, the list is the guess (`interface I { <T>(a = /[)]/); m: '</T>…' }` ended the list at the `)` in the regex's class).
+  Three things are read exactly instead, because TypeScript reads each one way (`initializerReading` and the scan's loop), and none of them needs a parser:
+  the first token of the first default, where it is a `/` — nothing is there to divide, so it begins a regex, which ends at its own `/` on its line (`(a = /x/)`,
+  `(a = /[)]/)`; a line break before the closing `/` is TS1161, and no program that parses has it) — or a `<` that the arrow rule above leaves an element, which is read to its
+  closing tag (`(a = <b>c</b>)`); a `/` after a name or a number, which divides in an expression (`(a = b/(c))`, `(score = 3/5)`), unless a `{` has been read, which may open a function body, where a
+  statement starts and a `/` after a `)` may begin a regex; and a template with no `${`, which holds only its own text. The `=` must be an initializer's, so no `<` stands before it (it may be a
+  type parameter's `=` default, where a `<` opens a function type); an `=` that `</` follows is no default in any signature or function type (TS1109, TS1110), so `(Tip: use <code>=</code>)` is the
+  element's alone. A second default, a regex or an element that is not a default's first token (`(a = f(/x/))`, `(a = <b>c</b> / 2)`), a `/` after a bracket, a `)` or a comment of either kind, and a template
+  with a `${` stay the guess. A comment is trivia to TypeScript, so after one the last token is the one before it, and a `/` after one is a regex or a division by that token: a block comment ends in a `/`, which is no
+  word (`1 + /* c */ /[)]/`), and a line comment ends in whatever its text does — a name, a number, a `$` — which is no operand: in `a = 1 + // fallback` and a line break, `/[)]/)` is a regex whose `)` is not the
+  one that ends the list, and a scan that took the `/` for a division ended the list there and read the string of the type after it as code. The scan of a list does not find its comments one by one, so a `/` after a comment of either
+  kind is the guess there (`slashFollowsAnOperand`); the reading of the text after a signature opens its comments itself and judges a `/` by the token before them (below) — the same misread hid the closing tag of
+  `interface I { <T>(x); m(a = 1 + // c` LF `/[</T>;navigateTo(…)//]/): void }` in a regex, and read what followed as code. The character before a line break is in a line
+  comment only if a `//` stands before it on its line (`lineMayEndInComment`), so a `/` after a name or a number on a line that holds no `//` still divides (on a line of its own after a comment's line, too); the `//` of a
+  string, which a line may begin inside of, is not told from a comment, nor is a line that begins beyond the window: each is the guess too, the safe side.
   A list that can hold no parameters is
   the element's alone, with a `:` after it or without: its first token a number, a string, a template, a `#` or an operator
   (`<li>(1): First</li>`) is TS1003 in every signature and function type (`parameterListMayStart`; a character beyond ASCII and a
@@ -1998,7 +2022,11 @@ rejected a complete page saved with CRLF endings.
   type after `is` is read the same way (`this field` fails, `this is string` does not); a type reference's first type argument is read the same way
   (`see<a href` fails at `href`); a name after a generic function type's first type parameter is TS1005 unless the first word is a modifier, which
   TypeScript parses there whatever it is (`<private x>`); and a type that is one name and a `,` lets the next parameter be read as the first was
-  (`(Type: string, <a href="/x">docs</a>)` fails at the `<`). Tests measure the classes over every keyword TypeScript has, every keyword before every
+  (`(Type: string, <a href="/x">docs</a>)` fails at the `<`). Four more types fail at their own second token, each measured over every keyword after it: a number
+  literal and a name that is not a conditional's `extends` (`(Size: 10 MB max, <a href="/x">upgrade</a>)`: TS1005; the number may be negative or have a fraction, and white space or a comment follows it);
+  an object type whose first member is a name and then a `.` or an operator no member has (`(Name: {user.name}, <a href={profile}>edit</a>)`: TS1131, a line break and a comment
+  before it as well; a `.` and a digit is a numeric name, so it is no failure); `new`, which a `(` or a `<` must follow (`(Mode: new <a href="/x">beta</a>)`, and after the `<` the type parameters are read
+  as above); and `import`, which a `(` must follow (`(Hint: import <a href="/x">docs</a>)`). Tests measure the classes over every keyword TypeScript has, every keyword before every
   other one, and every two-word type start and second parameter with the endings that could complete it. One place settles even those: **directly after the head of a type alias, `type Name =` at a
   statement start** (after any `export` and `declare`), where `type Name` — two names side by side — cannot be
   an expression, so a `<` is a function type's type parameters, for certain, whatever follows it
@@ -2018,7 +2046,14 @@ rejected a complete page saved with CRLF endings.
   U+0085, U+00A0 or the like). Where anything else follows on the line — a name, a `<`, a `(`, a `{`, a comment with
   no line break — no signature stands there and it is an element, for certain, and so it is where a closing tag
   follows (`</` is one token in a `.tsx` file): `<b>(optional)</b>`, `<p>({t("label")})</p>`,
-  `<span>(total: {count})</span>` are decided by that token alone. *Where the member may end there, the text after
+  `<span>(total: {count})</span>` are decided by that token alone. **Where no member of a type can begin at the head, there
+  is no signature at all**: right after an `=` or a compound assignment (`+=`, `||=`, …), an `=>`, a `(`, a `[` or a `:`
+  (`NO_MEMBER_BEFORE`) a call or construct signature, a method and an index signature cannot stand, and a function type needs the `=>` that
+  this shape lacks, so `<Name>(…)` that neither `=>` nor `:` follows is an element, for certain, whatever its text holds (`const help = <p>(optional);` and
+  a line break, then `foo( // note` and a line break, then `/docs</p>;`). After a `,`, a `;`, a `{`, a `}`, a `)`, a `?` or a keyword a member may begin — `return <T>(x)` is a method named `return`,
+  `m? <T>(x)` is a method with an optional mark, and TypeScript parses both, so neither a keyword nor a `?` is in the set — and the text is read as
+  follows. (The set was measured against TypeScript's parser over every place a token can stand: no program has type parameters with no
+  arrow and no `:` after a token of it, and a program has them after each token the rule reads that is left out: `source-literals.test.js`.) *Where the member may end there, the text after
   `<Name>` is read as the children of an element up to its closing tag*, as (3) reads it up to an arrow (`readChildren`
   with a closing name): the nested elements are followed, each closed by its own closing tag, a nested tag's attribute
   containers and spreads are skipped, and an expression container that holds strings and balanced braces is skipped
@@ -2033,13 +2068,49 @@ rejected a complete page saved with CRLF endings.
   reading too, no type reads `</` as code, and the element is the only reading: certain (`<b>(optional)</b>`, `<span>(total: {count})</span>`,
   `<p>({t("label")})</p>`, nested children). What opens one: a back-tick (a template with a `${`, which opens code that is not read, may), a `//` or a `/*`,
   a `/` that no word or number stands before and that so may start a regex (a keyword that an expression follows is no such word: `return`, `typeof`, and
-  `implements`, whose heritage clause takes one, as in a computed name `[class C implements /…/ {}]`), and a quote that starts a string closing on its line and
+  `implements`, whose heritage clause takes one, as in a computed name `[class C implements /…/ {}]`; and a `/` after the comments that the text opened is judged by the token before them, which a type reads as trivia:
+  `b // c` and a line break, then `/d`, divides, and `1 + // c` and a line break, then `/[</T>…]/`, does not — and a `)` or `]` before the `/` divides, since a regex follows a `)` only after the head of a statement, which has a block, whose braces
+  are not read: `slashFollowsAnOperand`), and a quote that starts a string closing on its line and
   covers the closing tag (a quote right after a word that is no keyword, an apostrophe or an inch mark, opens none; a keyword is a reserved word, a contextual one,
-  or a modifier, which TypeScript takes before a quoted member name: `public'…'`). Where the text up to the first
-  such opener cannot be the members of a type, though — two names on a line, a name and a `/`, a name and a quote (`<p>(a), see https://x.y</p>`: TS1005 in a type),
-  a template or a regex where a member would begin (``<p>(a); `x ${y} </p>``: TS1131; after a member's colon a template is a type and stays possible) —
-  no type holds the closing tag in anything, nothing that follows can hide it, and it is an element (`typeMembersFail`; a word that may be a modifier or any other
-  character leaves it undecided). Where one is open at the closing tag, or the reading cannot say (a container or a tag it
+  or a modifier, which TypeScript takes before a quoted member name: `public'…'`). A nested tag is an element's or, to a type, something else: the type arguments of a name (`Array<b>`), a comparison (`a<b>c`), the type parameters of
+  a signature or of a method (`<b>(y): T`, `<U extends A>(y): T`, `m<b>(y)`), where the text after its `>` is code and what looks like its closing tag is inside a string, a template or a comment that the text opened before it. So a
+  string, a template or a comment that the text of a nested element opens — and the run of comments that a `/` is judged by — and that is still open at the closing tag of that element is read **both ways** (`scanChildren`, run
+  twice by `readChildren`): as an element, where it ends there and the code goes on after the closing tag (`m(a = <b>'x</b> + '</T>…')`: the string that holds the closing tag begins after the element; `m(a = <b>x // y</b> +` and a line
+  break, then `/[</T>…]/`: the regex does), and as code, where it goes on past it (`m: Array<b> = '</b>' + '</T>…'`, `<b>(y): '</b>'; q: '</T>…'`): the closing tag of the head is hidden if either reading hides it. A tag that no type has
+  (`tagMayBeCode`) is an element to every reading: there is only the first, the region is cut at its closing tag, and its text is JSX text, which opens nothing (`jsxText`: a URL, an apostrophe or a back-tick in the text of a link is
+  text). That is a tag in which every word has a value (`<a href="/x">`; and `<button type="button">`, `<label for="x">`, `<Link as="span">`, where the word that has a value is an attribute's even when it spells a keyword: the only `=`
+  in a list of type parameters is a default, which its name owns; and one whose attributes stand each on a line of their own, as a formatter lays a tag out, has every `=` on the line of its word), an attribute that `extends` does not introduce (`<b d>`), a dotted name with an attribute, and a fragment where no empty list can stand. **Every other tag may be code,
+  by the words in it**: a keyword of TypeScript's, other than `extends`, in a word that has no value is a modifier of a type parameter (`<public U>`, `<in out U>`, `<readonly U>`: `parseTypeParameter` takes them all, and only the checker
+  objects), an operator of a comparison or a tagged template with type arguments (`x <a in b> y`, `x <typeof U> …`, `x <new b> …`, `x <A.B as T> …`), or a type operator in type arguments (`Array<keyof X>`) — and so is a dotted or dashed word
+  that has one — **or by the lines it takes**: a line break between a word and its `=` (`href` and a line break, then `="/x"`), or before a `get` or a `set` that has a value (`get="/x"`). A line break ends a member of a type, so where the tag stands
+  in one, `m: A = x <a` ends its initializer at the break, `href` is a member of its own, and `="/x"> '</a>' + '</T>…'` is that member's initializer, with the string that holds the closing tag in it (a name and a `=` on one line are no member,
+  TS1131, but `get` and `set` begin one before the parser looks at what follows, so `get="/x"` on a line of its own is a property with an initializer: `isTypeMemberStart`). And a fragment is an empty list of type parameters or arguments right after a name,
+  a `)`, a `]`, a `}`, a `!`, a quote, a number or a `.` (`f(x)<> || …`, `a[0]<>`, `'s'<>`, `{}<>`, `1.<>`: the parser accepts an empty list there and the checker
+  rejects it) or right before a `(` or a back-tick (`<>(y)`, `m<>(y)`, `` x <>`t` ``), and after a line break when the line before it may end in a comment, whose last character may be any (`f // note:` and a line break, then `<> || …` is `f<> || …`:
+  `lineMayEndInComment`) (`fragmentMayBeList`); after a `,`, a `;`, an operator or nothing, on a line that has no comment before it, it is a fragment, for certain. The keywords are TypeScript's own list (`TS_KEYWORDS`), and the
+  sweeps draw their tags from every keyword it has, joined to names, dots, dashes and values, **including the tags the rule calls no code** — a rule that is wrong about a word can only be met that way (`nestedTagPages`; the sweep of
+  the valued keywords keeps the precision of the rest). A tag that a type may have and an element may too (`<b>`, `<U extends A>`, `<A.B>`, `<public U>`) is read both ways, and a tag that is not read leaves it possible; two such places
+  in one text are taken for hidden, as the second reading depends on the choice made at the first. A place is a region that the text of a nested element opened and that is still open at that element's closing tag, **told by where the region starts**,
+  not by where it ends: two `//` comments on one line, each opened in the text of an element of its own (`m(a = <b>//</b> - <i>//</i> ??` and a template that starts on the next line), end at the same line break and are two places (`skipFrom`; `nestedPairPages`). A tag inside a string, a template or a
+  comment that the type's own text opens is no element's to the type (`'a <b>' + \`</b>\` + '</T>…'` holds `<b>` and `</b>` in two literals): it opens and closes in the element reading and counts for nothing in the depth
+  that those rules use (a ghost, `realDepth`); and a tag inside a region that the text of a nested element opened is a ghost in the reading where that element is code, which pairs the quotes after it as a type does
+  (`m: Array<b> = '<>' + '</>' + '</b></T>…'`: the element reading cuts the second string at `</>`, the type reads three strings), so where one stands the text is read both ways too (`tagged`). Where the text up to such an opener cannot be the members of a type, though — two names on a line,
+  a name and a `/`, a sign, a `.` or a quote (`<p>(a), see https://x.y</p>`, `<p>(a); well-known // c </p>`, `<p>(a), it's // c </p>`: TS1005 in a type), a `:` after a type
+  (`Docs: https://x.y`), a `/` where a type must follow a `:` (`https://x.y` and a line break, then `/b`: TS1110), a template or a regex where a member would begin (``<p>(a); `x ${y} </p>``: TS1131;
+  after a member's colon a template is a type and stays possible) —
+  no type holds the closing tag in anything, nothing that follows can hide it, and it is an element (`typeMembersFail`, asked at each opener from where it stopped, through the comments between them). It is a small
+  reader of where a member is — its start, a name, a `:`, a type, an initializer; the next line of a name and the next line of a type are different places (`PROSE_*`) — and what it reads is TypeScript's: a number is one name by
+  the scanner's rule (`1e-5`, `.5`, `0x1F`; a hex, octal or binary literal ends at its last digit, so `0x1Fin` is `0x1F` and the operator `in`, where a word right after a decimal literal is TS1351), a keyword is a name where a member begins
+  unless it may be a modifier (which a `:` after it makes a name too), a word after a `.`, `typeof` or `infer` is a name, whatever it spells (`A.new`, `typeof new`, `infer keyof`; but `typeof import` is an import type, whose `(` has no line-break rule: `typeof import` and a line break, then `('./m')`, is a type, `typeofImport`), after `keyof`, `readonly` or `unique` it is a type, of which a
+  keyword is the name (`keyof new`), and a word that starts a type a word may follow (`asserts b`) is not read; a word written with an escape (`a\u0061b` is ONE name) is not read; a `(…)` or `[…]` that closes is one thing (a signature's parameters,
+  a computed name, a parenthesised type, an array), `<T>` is type parameters only where a parameter list follows, a type goes on with `.`, `|` and `&`, and two operands of an initializer side by side are an error unless a keyword is one
+  of them. A name or a keyword that a `(` follows opens a parameter list, whose first parameters are read as a head's are (`parameterListMayStart`, `parameterSyntaxFails`): a `/` right after the `(` and its comments is TS1138, a number,
+  a string or an operator there is TS1003, and two names are TS1005 — so `foo( // note` and a line break, then `/docs` is no type's, and neither is `m(see docs) // note` (the `(` of an import type is no parameter list, and is not read as one: `typeof import`). A name, a number, a string or a signature with a `=` right after it on its line
+  is no member (TS1131; TS1005 after a signature): the initializer that a property signature may have — the parser accepts it and the checker rejects it — follows a `?`, a type, a computed name, `get` or `set`, or a line break
+  (`m? = 1`, `m: A = 1`, `[m] = 1`), and `m = 1` is TS1131. A `[`, a name and a `,` or a `:` are an index signature for certain (`isUnambiguouslyIndexSignature`) — unless `get` or `set` stands before the `[`, which then begins an accessor's computed name,
+  an expression that a regex may hold (`get [a, /[</T>…]/]()`: `parseContextualModifier` takes the keyword first, whatever its line) — and neither a parameter nor a type starts with a `/` (TS1138, TS1110):
+  `[ a, // note` and a line break, then `/path` is no type's, where `[ // note` and a `/` is a computed name that a regex may follow, and neither is `Total: [ // note` and a line break, then `/docs`, where the `[` after a `:` opens a tuple. Each place has the characters that fail there, **measured over every ASCII character against TypeScript's parser**, and the sweeps in `tests/source-literals.test.js` put every claim back to TypeScript. What it cannot
+  follow — a `[` that nothing closes on its line, an initializer after a `?`, a type or a computed name, a conditional type, an expression, a decorator, a `{` — leaves the rest undecided, and the closing tag may be hidden there. Where one is open at the closing tag, or the reading cannot say (a container or a tag it
   does not read, a window of 2,000 characters, a spent budget), both programs compile and the text up to the decision
   is the same: the guess `generic`, and the element is read. A type of *k* signatures reads the rest of the type for
   each, up to the window, so a pass has a budget of characters to read (`READING_BUDGET_PER_CHAR` for each character of
@@ -2062,7 +2133,7 @@ rejected a complete page saved with CRLF endings.
   | `jsx-type-arguments` | a JSX element whose type arguments hold a string, template, object or function type: TypeScript's rules apply there and the tag is scanned by a JSX attribute's | `<Component<"quote\"\<LF>/*"> …/>` |
   | `jsx-attribute` | a JSX attribute value whose quote does not follow its `=` at once (white space or a comment stands between them) and whose text holds a backslash: TypeScript scans it as a JavaScript string, with escapes, and other compilers as a JSX string, with none, so the two end it at different quotes and read different calls after it | `<C x= '\'/>;navigateTo(…);//' />` |
   | `jsx-open` | a `<` where an element may start that is not read as one (a space after it, or a name beyond ASCII: in code, in JSX text and as an attribute's value), or a closing tag that holds anything but trivia, comments and a name (dotted, or namespaced) before its `>`, so that where it ends is not known | `< div>x</div>`, `<A x=< B/>>…</A>`, `<A></A b>` |
-  | `generic` | `<Name>` and a parameter list followed by `:`, which is the call signature of a type or JSX text that starts with a parenthesis (both compile; a list that can hold no parameters, `<li>(1): First</li>`, is the element's alone); or one followed by no return type, where a string, a template, a comment or a regex after it could hold its closing tag, or its text cannot be read to the end of an element, or the pass's budget of readings is spent (a signature with no return type is otherwise code, for certain, and JSX text that starts with a parenthesis an element: `callSignatureOrElement`); or a parameter list too long to scan (2,000 characters), or one with no arrow after it in which something may start an expression (`expressionMayStart`: an `=`, a `[` other than `[]`, an `@`, `import`, `extends` before what starts no type, and `get` or `set` before an accessor's name) and a `/`, a `<` or a back-tick follows, or a template whose substitutions do not close or hold a `<` after an expression start (`templateSkipIsWhole`), or `<T extends` and a `/` (an element where an expression starts, type parameters with a regex constraint in a type) — except directly after `type Name =`, where it is certainly a type. A `=>` after the list is a generic function type for certain when the element reading of the text up to the arrow cannot parse (`elementFailsAt`: a `>` or `}` in the text, a container that starts with a name, a number or a quoted name and a colon, two names, a bracket, a call or a quoted name and a call and a colon, a `<` and a character that cannot start a tag, …), and a guess, read as a type, when it may: the arrow inside the attribute string of a nested tag (TypeScript scans a JSX attribute string with no escapes), a closing tag, a fragment, a spread, a comment, an attribute value that does not follow its `=` at once, a character beyond ASCII where a token could start or end in a tag, or a container that holds a brace, a quote, a back-tick, a `/`, a backslash or a `<` and none of the shapes `elementFailsAt` knows; a `<` followed by `await` or `yield`, which are identifiers or not by the function around them | `interface I { <T>(x: T): T }`, `interface I { <T>(x); m: '</T>' }`, `<span>(required): Name</span>`, `<p>(a), b/c</p>`, `const f: <T>({ a = {} }: P) => T = g`, `const f: <T>(x: { 'a'?(y: T): T }) => T = g`, `async function p() { <await extends X>t</await> }` |
+  | `generic` | `<Name>` and a parameter list followed by `:`, which is the call signature of a type or JSX text that starts with a parenthesis (both compile; a list that can hold no parameters, `<li>(1): First</li>`, is the element's alone); or one followed by no return type, where a string, a template, a comment or a regex after it could hold its closing tag, or its text cannot be read to the end of an element, or the pass's budget of readings is spent (a signature with no return type is otherwise code, for certain, and JSX text that starts with a parenthesis an element: `callSignatureOrElement`); or a parameter list too long to scan (2,000 characters), or one with no arrow after it in which something may start an expression (`expressionMayStart`: an `=`, a `[` other than `[]`, an `@`, `import`, `extends` before what starts no type, and `get` or `set` before an accessor's name) and a `/`, a `<` or a back-tick follows that the scan does not read exactly (a first default's regex or element, a `/` after a name or a number that is no line comment's last word, a template with no `${`: `initializerReading`), or a template whose substitutions do not close or hold a `<` after an expression start (`templateSkipIsWhole`), or `<T extends` and a `/` that begins a regex which its line ends (an element where an expression starts, type parameters with a regex constraint in a type) — except directly after `type Name =`, where it is certainly a type. A `=>` after the list is a generic function type for certain when the element reading of the text up to the arrow cannot parse (`elementFailsAt`: a `>` or `}` in the text, a container that starts with a name, a number or a quoted name and a colon, two names, a bracket, a call or a quoted name and a call and a colon, a `<` and a character that cannot start a tag, …), and a guess, read as a type, when it may: the arrow inside the attribute string of a nested tag (TypeScript scans a JSX attribute string with no escapes), a closing tag, a fragment, a spread, a comment, an attribute value that does not follow its `=` at once, a character beyond ASCII where a token could start or end in a tag, or a container that holds a brace, a quote, a back-tick, a `/`, a backslash or a `<` and none of the shapes `elementFailsAt` knows; a `<` followed by `await` or `yield`, which are identifiers or not by the function around them | `interface I { <T>(x: T): T }`, `interface I { <T>(x); m: '</T>' }`, `<span>(required): Name</span>`, `<p>(a), b/c</p>`, `const f: <T>({ a = {} }: P) => T = g`, `const f: <T>(x: { 'a'?(y: T): T }) => T = g`, `async function p() { <await extends X>t</await> }` |
   | `fallback` | a quote with no closing quote on its line, read as an ordinary character; a `/` after a character that begins nothing in code | `const a = 'unterminated`, `# / 2 / 3` |
 
   Names alone in a tag's type arguments (`<DataGridRow<Row>`, `<Select<string | number>`) are certain: the scan
@@ -2099,8 +2170,23 @@ rejected a complete page saved with CRLF endings.
   with members or an element stands, followed by every ending that ends a member or goes on to another, and by a decoy —
   a string, a template, a comment or a regex that holds the closing tag of its head and the text of a call, and a type that
   holds the closing tag in a string as the text of a call signature's parameter, in a member name quoted after `public`, or in
-  a regex after `implements`)
-  — each read token by token against TypeScript's parser — and a differential fuzz
+  a regex after `implements`), a label and a list that no signature has (`(Size: 10 MB max, <a>…</a>)`, an object type that is none,
+  `new`, `import`, an `=` and a closing tag: TypeScript rejects each in a call signature, a construct signature and a function type,
+  and the element is certain) and a parameter list whose default is a regex, an element, a template or a division (read exactly where the
+  scan can say where the list ends, a guess for the rest, and never a misread token), a regex or a division after a line comment (one that ends in a name, a number, a `$`,
+  a letter beyond ASCII or a sign, and every line break TypeScript has, in the scan of a list, behind `>=`, `in` and the other tokens that leave a `<` undecided, and in the reading of the text after a signature), JSX text of several lines with a `//` in one and a
+  `/` at the start of a later one (a URL on a line of its own, a label and a URL, a name and a note, with `;`, `,` and a line break after the `)`: read for certain wherever no type has the text, and the lines of every class that no type has —
+  a bracket, a quote, a tag, an operator, a number, a modifier, a postfix, a line that goes on over a line break or after a type — are certain too; a closing tag in the comment, in an element and as the members of a type, a guess; and
+  the same lines in an expression of a type, where a regex after the comment may hold the closing tag), a member named by a number with a signed exponent (`1e-5` is one name), the text of a nested element in a default value or
+  a computed name (what it opens ends with it, unless the element may be code), a literal that holds the tags of an element (in one string, or `<b>` in one and `</b>` in the next), the text of a nested element drawn from quotes, back-ticks,
+  comment openers and tags, a nested tag that no element has (type arguments, a comparison, the type parameters of a signature or a method, in front of a string that holds its closing tag: read both ways, and
+  the closing tag of the head hidden) — drawn from every keyword TypeScript has, joined to names, dots, dashes and values, spread over lines (a line break of every kind before an `=` or a valued `get`; a formatter's layout), with fragments after every operand, after a comment of every ending and before a parenthesis, **the tags that the rule calls no code included**
+  (`nestedTagPages`) — two or three nested elements whose texts open regions that end at one place (`nestedPairPages`), a keyword that is the name of an attribute with a value (certain: nothing is refused),
+  strings and elements that hold fragments, tags with attributes and closing tags after such a tag (the quotes pair differently in the two readings), links and other tags with attributes in a
+  hint (certain: their text is text), and a parenthesised callee after `return`
+  — each read token by token against TypeScript's parser — and every claim of `typeMembersFail` that a text is no type's members, put to TypeScript's parser (every text of up to three tokens of a vocabulary of the pieces of a
+  member and what is rejected there, seeded draws of more, runs of valid members mutated at one or two places, every keyword of TypeScript in each place a word may stand, after each of the words that start a type or a member, after a `.`,
+  `typeof`, `infer`, `keyof`, `readonly` and `unique`, and a number of every spelling with a word, a quote or a `/` right after it, a `/` after every operand that ends in a bracket, import types and accessor names of every spelling, and tuples: `tests/helpers/type-member-texts.js`) — and a differential fuzz
   (`tests/jsx-element-reading.test.js`; `JSX_FUZZ_SCALE` multiplies it) checks every verdict of the element
   reading of a head and of a function type against it, and puts the text after a parameter list that neither an arrow
   nor a colon follows into a type and into an element, where TypeScript says which parse: a type that parses is never
@@ -2120,8 +2206,15 @@ rejected a complete page saved with CRLF endings.
   programs share the text up to the decision and compile differently, shown by a pair in the test — and a page
   in no class, or a class that no page meets, fails it. Where `BASE_LIB_PATH` points at the `scripts/lib` of an
   earlier lexer, the pages are read by that one too, and the test counts what each resolves and the data each
-  rewrites. When a change makes the lexer refuse a shape it resolved, this is where it shows: add the shape to
-  the generator, and either fix the rule or record the class with the pair that justifies it.
+  rewrites. What that asks of the base depends on it: one from before the lexer was hardened misreads shapes the
+  corpus holds, and the net must see at least 100 of its decoys rewritten (and none of this lexer's); the previous
+  release reads every page of the corpus right, so it rewrites none and nothing is demanded of its count — the
+  comparison is then the pages this lexer resolves and the base does not (at least 100), and the pages it refuses that
+  the base resolves, of which there must be none: a page that 2.13.0 resolved and this lexer refuses is a regression, and the test fails on it. When a change makes the lexer refuse a shape it resolved, this is where it shows: add the shape to
+  the generator, and fix the rule. **The oracle tests skip themselves where the variable is not set** (`TYPESCRIPT_ORACLE_PATH`, `BABEL_ORACLE_PATH`, `BASE_LIB_PATH`) **and fail where it is set and the package or the lexer cannot be loaded**
+  (`tests/helpers/typescript-oracle.js` throws), so a wrong path or a renamed file cannot turn the job green without running them. The CI job `test-model-apps-lexer-oracles` (`.github/workflows/model-apps-script-tests.yml`) installs
+  TypeScript 5.8.3 and `@babel/parser` 7.29.7 under `$RUNNER_TEMP` — outside the plugin, which ships no dependency, with `--ignore-scripts`, at exact versions — fetches the lexer of the 2.13.0 release by its commit hash, sets
+  the three variables, and runs `node scripts/run-tests.js`. A new TypeScript release can change what a sweep judges: raise the pin in the same change, and run the sweeps.
 - **The residual net does not depend on the lexer, and has no exemption.** After forward resolution the
   RESOLVED source is read again — the copy can read differently from the source, because each token became a
   longer page id, which can move a `(` out of the look-behind — as plain text: any `PAGEREF_` token left in it
@@ -2216,7 +2309,11 @@ Residual limits, accepted deliberately:
   the `<` and the `>` is a list of types); a generic call signature with a return type in an object type, which is JSX
   text that starts with a parenthesis and a colon in an expression, a call signature with no return type whose type holds
   its own closing tag in a string, a template or a comment, which is an element that ends there, and JSX text that starts with a parenthesis and then holds a `//`, a `/*` or a
-  template after a separator, which is the comment or the template of a type's members that holds the closing tag (`generic`); and a `/` on a later line than its operand
+  template after a separator, which is the comment or the template of a type's members that holds the closing tag, and JSX text that starts with a parenthesis and holds a default whose
+  regex, element, division or template the scan does not read (`(a = f(/x/))`, `(a = <b>c</b> / 2)`, ``(a = `${b}`)``: the `)` it finds may be one of that expression's), and a `/` that a line comment stands before
+  (`(a = 1 + // c` and a line break, then `/[)]/)`: the comment may end in a word, and the regex is no division), and JSX text of lines with a `//` in one and a `/` at the
+  start of a later one, where the members of a type could hold the closing tag in the comment (the next bullet), and
+  `<T extends />` with another `/` after it on its line (`generic`); and a `/` on a later line than its operand
   (`newline`). A `/` or `<` that follows a `/` is no class of its own: where the lexer read the regex (flags included), the element or
   the division itself, it knows what ended there (`ends` in `lexInto`), and the page resolves — and so does a cast it proves (`castKeywordIsCertain`). What stays the `angle` guess among casts is a limit of the walk back over the type, not a place where two programs share
   their text — TypeScript reads each of these one way: a type that begins with `keyof`, `typeof`, `unique` or `readonly`, or is parenthesised; a `>>` that touches a cast's closer (`x as A<B>> / 2`); a chain past `CAST_CHAIN_LIMIT`; and, as the `newline` guess, a line break after a cast type that ends in a name or a `]`.
@@ -2224,6 +2321,33 @@ Residual limits, accepted deliberately:
   is the same kind of place (`operator`: `a >= <T extends X>(y: T): T</T>` is an element,
   `let x: A<number>= <T extends X>(y: T): T => y` an arrow); no generated page has it, so a pair of programs stands
   for it. Each says which it is and what to change in the report, and nearly every other page that compiles resolves.
+- **JSX text of lines, one with a `//` in it and a later one that starts with a `/`, is read for certain wherever no type has the text, and is a guess where the reading of a type's members cannot show it.** `<p>(a);` and a line break,
+  then `https://contoso.com`, a line break and `/docs`, is the text of an element, and the same text could be the members of a type — a name, a `:`, a comment, then a `/` where a type must be, which no type has (TS1110). The lexer
+  reads the text after a signature's `)` as those members (`typeMembersFail`, above), and a `/` after the comments that the text opened follows the token before them (`slashFollowsAnOperand`), so a URL, a label and a URL, a name
+  and a note, and every line of the classes below resolve: a line that begins with a bracket, a quote, a tag or an operator (`(x) // c`, `[x] https://x.y`, `'x': https://x.y`, `<b/> // c`, `|| // c`), has a number for its name
+  or ends in a postfix (`1.5 https://x.y`, `x! // c`, `f() // c`, `x = 1 https://x.y`), starts with a modifier (`readonly https://x.y`, `in // note`, `default // note`: where a member begins these are names, and a `/` after one is
+  TS1131), or goes on over a line break or after a type (`m` and a line break, then `&"x"`; `a: A.B, // c`). The base took the last word of the comment for the token before the `/`, which is right for these pages and wrong for others
+  (the misreads that this lexer refuses). **Where a member of a type may begin at the head, a few lines are still refused after the guess `generic`, though only the element compiles, and the base may have resolved them**: a line
+  whose last token before the `//` is a `[` that nothing closes on its line (`[ // note` and a line break, then `/path`), an initializer's `=` after a `?`, a type, a computed name or in a parameter list (`m? = // note`,
+  `m: A = // note`, `f(a = // note`, `[ x = // note`), or an operator in such an expression (`m: A = b + // note`). A regex may begin at the `/` of the next line, and the closing tag may be inside it; both programs compile
+  (the pairs of `valid-page-differential.test.js` are the proof), and 2.13.0 takes the word that ends the comment for the token before the `/`, which resolves the page of the element and rewrites the data of the other. Their
+  shape cannot be told apart without a parser: `return <p>(a);` and a line break, then `[ // note`, is the same text in an interface that has a method named `return` and in a function that returns an element, and `return <T>(x)` and
+  `m? <T>(x)` are why no place that a member may begin is excluded (above). A line that ends in a `[` after a `:` or a type is none of them, since a tuple's or an indexed access's first type is no `/` (`Total: [ // note`: TS1110), and is certain
+  in every place. A rule over the regex that the next line's `/` would open could win more of these pages back — where it ends at the closing tag's own `/` (or the regex does not close on its line) and what follows the tag cannot be an operand, only the element compiles — and no rule reads that
+  today. After an `=`, a `(`, a `[`, a `:` or an `=>` the same lines are certain (`NO_MEMBER_BEFORE`),
+  and these lines are certain in every place: a name, a keyword or a signature and a `(` that is not closed on its line (`foo( // note`, `if ( // c`, `m(see docs) // c`: TS1138 at the `/`, TS1003 or TS1005 in the list), and a name, a number, a
+  string or a signature with a `=` right after it on its line (`x = // note`, `1.5 = 1 // c`: TS1131). What the reading does not follow — a conditional type, an expression, a decorator, a `{` — leaves the type undecided, and the
+  page is refused only where an opener after it (a `/` after an operator or an open bracket, a quote, a back-tick) could hold the closing tag. `valid-page-differential.test.js` with `BASE_LIB_PATH` fails on a page of its corpus that
+  2.13.0 resolves and this lexer refuses, and it reports how many pages of the member-position lines 2.13.0 resolves (they are not in that corpus: they are the class above). Put the call before the text, or write the line with one name before the `//`.
+- **Shapes of type parameters among a type's members are read as the element they are not, exactly as 2.13.0 reads them** (the same output in 2.13.0 and in this lexer, measured over every keyword TypeScript has): type parameters
+  that start with a modifier — a variance modifier (`<in U>(y): void`, `<out U>`, `<in out U>`, also with no return type) or one that only the checker rejects (`<public U>(y): void`, `private`, `protected`, `readonly`, `static`, `abstract`,
+  `async`, `declare`, `override`, `accessor`) — and an empty list (`<>(y): void`, `new <>(y)`), wherever a member of an interface or an object type begins (a page is refused at an earlier call signature that was guessed at; a `const` is refused too, a guess); and a method named by `delete`,
+  `typeof`, `void` or `instanceof` (`delete<U>(y): void`, `typeof<U>()`), where the other 79 keywords are refused. A `<` after a keyword, or a head that starts with a reserved word, a modifier or `>`, is the tag of an element to the lexer, and a type reads it
+  as type parameters. Where a string, a template or a comment later in the same type holds a closing tag with the name, a `;` and the text of a navigation call (`<in U>(y): void; a: '</U>;navigateTo(…);//'`), the element ends there and the call
+  in the string is read as code and rewritten. Where nothing closes the element, the rest of the page is its text, which is read as code where it has a container: a typed API interface (`interface Api { list<T>(): Promise<T[]>; delete<T>(url: string): Promise<T>; }`)
+  followed by a handler builds as it should, since the handler's container is code in the swallowed text, and a `{…navigateTo({ pageType: "generative", pageId: "PAGEREF_x" })…}` in a later comment or template literal is
+  rewritten, though it is data — so this is not a failure that is always loud. No page in the committed corpus has these shapes, and telling a type's members from an expression is what the lexer has no parser to do. (The same words in a
+  *nested* tag, `m(p = x <a in b> '</a>' + '</T>…')` or `m: Array<keyof X>`, are read both ways: `tagMayBeCode`.)
 - **A JSX attribute string after trivia is a guess when its text holds a backslash** (`jsx-attribute`): TypeScript
   reads a quote that does not follow its `=` at once as a JavaScript string, with escapes, and Babel and esbuild
   read a JSX string with none, so a page whose string ends at different quotes in the two does different things

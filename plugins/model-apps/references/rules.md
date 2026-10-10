@@ -385,7 +385,8 @@ object has to be **written inline in the call**: an object built in a variable a
 its token halts the build as stray. **Write the plain form, `navigateTo({ … })` or
 `Xrm.Navigation.navigateTo({ … })`.** A parenthesised callee, `(navigateTo)({ … })`, is read only where a call can
 start — at the start of a statement or after `;` `{` `(` `[` `,` `:`, a ternary `?`, an operator ending in `=`, `=>`,
-`&&`, `||` or `??` — and never after a name or keyword, `)`, `]`, `.`, `}`, `!`, `>`, a quote or a back-tick, because
+`&&`, `||` or `??`, or the keyword `return` on the same line (`return (navigateTo)({ … })`; not `await` or `yield`) — and never
+after a name or any other keyword, `)`, `]`, `.`, `}`, `!`, `>`, a quote or a back-tick, because
 there the parentheses are an argument list for some other function (`factory!(navigateTo)({ … })`,
 ``tag`x`(navigateTo)({ … })``); the token in one halts the build as stray. Always emit it exactly there — never single-quoted, back-ticked,
 concatenated, followed by an expression (`"PAGEREF_x".slice(8)`, `&& other`,

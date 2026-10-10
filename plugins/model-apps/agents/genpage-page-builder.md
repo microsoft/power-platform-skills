@@ -397,6 +397,7 @@ export default GeneratedComponent;
   is not recognised, so the token in it halts the build as stray. **Write the plain form,
   `navigateTo({ … })`** — a parenthesised callee, `(navigateTo)({ … })`, is read only at the start of a
   statement or after `;` `{` `(` `[` `,` `:` a ternary `?`, an operator ending in `=`, `=>`, `&&`, `||` or `??`,
+  or the keyword `return` on the same line (`return (navigateTo)({ … })`; not `await` or `yield`),
   and any other spelling (`factory!(navigateTo)({ … })`) halts as stray. A `PAGEREF_` token may appear
   nowhere but that double-quoted `pageId` literal — **not in a comment of any kind**: a `//` comment, a
   block comment, a trailing comment (`navigateTo({ … }); // PAGEREF_x`) and a JSX `{/* PAGEREF_x */}` all halt
