@@ -615,7 +615,8 @@ function mirrorHostResolutionSnapshot(planData, projectRoot) {
     const tmp = targetPath + '.tmp';
     fs.writeFileSync(tmp, content);
     fs.renameSync(tmp, targetPath);
-  } catch {
+  } catch (err) {
+    if (process.env.DEBUG) console.error(`[ALM Refresh] Failed to mirror host resolution snapshot:`, err);
     // Best-effort.
   }
 }
@@ -647,7 +648,8 @@ function patchSizeEstimatePublisherFields(projectRoot, fields) {
     const tmp = estPath + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(est, null, 2));
     fs.renameSync(tmp, estPath);
-  } catch {
+  } catch (err) {
+    if (process.env.DEBUG) console.error(`[ALM Refresh] Failed to patch size estimate publisher fields:`, err);
     // Best-effort.
   }
 }
@@ -665,7 +667,8 @@ function mirrorEnvVarsSnapshot(projectRoot) {
     const tmp = almEnvVarsPath + '.tmp';
     fs.writeFileSync(tmp, content);
     fs.renameSync(tmp, almEnvVarsPath);
-  } catch {
+  } catch (err) {
+    if (process.env.DEBUG) console.error(`[ALM Refresh] Failed to mirror env vars snapshot:`, err);
     // Best-effort — don't break the broader refresh on a mirror failure.
   }
 }
@@ -725,7 +728,8 @@ function refreshSetupSolution(planData, projectRoot) {
         const siteName = manifest.siteName || (planData && planData.SITE_NAME);
         patchSizeEstimatePublisherFields(projectRoot, { publisherPrefix, siteName });
       }
-    } catch {
+    } catch (err) {
+      if (process.env.DEBUG) console.error(`[ALM Refresh] Failed to read manifest for publisher prefix:`, err);
       // Best-effort — no-op if the manifest is missing or malformed.
     }
   }
