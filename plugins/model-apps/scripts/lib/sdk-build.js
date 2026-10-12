@@ -5771,7 +5771,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           const codeFile = writeStagingFile(stagingDir, key, isNav ? deployment.get(key) : scannedBytes.get(key));
           // `model` rides along because pac stores whatever `--model` an upload sends: re-uploading without it
           // wiped a deployed page's model id to "". A downloaded spec carries it (pages[].model).
-          // `caller: 'build'` only words the advice for an UPDATE that timed out (genpage-cli.js): the build keeps no base marker, and every page's `codeFile` is a staging copy deleted when the build ends.
+          // `caller: 'build'` only words the advice for an UPDATE that timed out or failed (genpage-cli.js lookFirst): the build keeps no base marker, and every page's `codeFile` is a staging copy deleted when the build ends.
           const up = await genpageCli.upload({ appId: result.created.app, pageId: requestedId, codeFile, name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources, model: p.model, caller: 'build' });
           if (!requestedId) recordCreate(p, up.pageId);
           // I7: an UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at

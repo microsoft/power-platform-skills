@@ -343,7 +343,10 @@ function makeGenpageCli(env, deps = {}) {
   //                    dedupe on, and a later download's prompt.txt then holds the duplicate). And it goes out minutes after the caller's own checks —
   //                    genpage-upload.js compares the page with its base marker once, before it calls upload() — so it can overwrite a change the maker saved in
   //                    between. The call is reported as timed out and as one that MAY HAVE LANDED, and a re-run goes back through the caller's own guards. What the
-  //                    message sends the reader to look at depends on the caller (upload()'s `caller`): see the timed-out UPDATE branch there.
+  //                    message sends the reader to look at depends on the caller (upload()'s `caller`): see lookFirst there.
+  //                    An update that FAILS is not sent again either, for the same reason: a non-zero exit, or an exit 0 with no Page ID, can come anywhere in that
+  //                    sequence — in the publish, after everything else is written. Only a failure pac reports for its own arguments or input files (isDeterministic),
+  //                    with no Page ID printed, is an ordinary one: pac checks those before it sends anything, so nothing can have landed.
   //   upload, CREATE   an UNCERTAIN create, and never run again: it may have created the page, may be creating it, or may never have started. A Page ID pac had
   //                    already printed names the page it created, whether it then stalled or failed; otherwise the env-wide id diff reports any page that is already
   //                    visible; and a page that is not visible YET proves nothing, because a second create is exactly how a duplicate is made. Each error that ends
@@ -529,8 +532,9 @@ function makeGenpageCli(env, deps = {}) {
   }
 
   return {
-    // Create (no pageId) or update (with pageId) a page's content. Returns { pageId }. Retries transient
-    // pac failures — never one that TIMED OUT (the policy at the top of makeGenpageCli). On an UNCERTAIN CREATE (non-zero, or zero-exit with no Page ID) resolves via a
+    // Create (no pageId) or update (with pageId) a page's content. Returns { pageId }. Retries a CREATE
+    // that failed outright and left nothing behind — never an UPDATE that pac may have started (any failure but a refusal of its arguments), and never anything that
+    // TIMED OUT (the policy at the top of makeGenpageCli). On an UNCERTAIN CREATE (non-zero, or zero-exit with no Page ID) resolves via a
     // STRICT ENV-WIDE before/after id diff: the env-wide id set
     // is snapshotted BEFORE the first CREATE so the diff reveals exactly which id appeared.
     //   a Page ID pac printed → that page was created, whether the call then stalled or failed: report it and stop (a create is never run again)
@@ -539,7 +543,7 @@ function makeGenpageCli(env, deps = {}) {
     // Names and dates describe candidates, never establish identity. Read failures also stop,
     // with the candidate id retained in the diagnostic. No uncertain result changes the command to UPDATE.
     // `caller` is 'build' when the App Spec build (lib/sdk-build.js) is the one uploading, and anything else for the standalone upload script: it only changes the advice
-    // given for an UPDATE that timed out (below), never what is sent or when. `sourceFile` is the file the caller knows the page as when `codeFile` is a copy of it — the
+    // given for an UPDATE that timed out or failed (lookFirst, below), never what is sent or when. `sourceFile` is the file the caller knows the page as when `codeFile` is a copy of it — the
     // upload script sends pac a copy of the bytes it checked, removed once pac answers — and is the file that advice names; pac only ever reads `codeFile`.
     async upload({ appId, pageId, codeFile, sourceFile, compiledCodeFile, name, prompt, agentMessage, dataSources,
       addToSitemap, model, connectors, actions, caller }) {
@@ -609,6 +613,22 @@ function makeGenpageCli(env, deps = {}) {
         // safely attribute a later uncertain result — halt to prevent a blind duplicate.
         let beforeIds = null;
         const label = name || '(unnamed)';
+        // What to look at before anything is sent again, for an UPDATE that MAY HAVE LANDED (one that timed out, or failed). What is deployed decides what happens next, and
+        // which look works depends on who is asking:
+        //   the upload script   compares the page with the base marker it keeps beside the code file, and a re-run goes back through that comparison — the
+        //                       file it names is `sourceFile`, the one the marker belongs to, not the copy pac read;
+        //   the build           keeps no base marker, so `genpage-base.js check` could only say "unknown" about what is deployed, and its `--file` would be
+        //                       the staging copy the build deletes when it ends (every page is sent from one) — the advised command would fail on a missing file. It is
+        //                       told to read the deployed page with the download it already uses (the `pac model genpage download` that verify-model-app.js and
+        //                       download-model-app.js run), and that running the build again sends this page once more to the same id, with what that costs.
+        // `how` names the send that stopped: 'stalled' or 'failed'.
+        const lookFirst = (id, how) => (caller === 'build'
+          ? `First see what is deployed: pac model genpage download --environment ${env} --app-id ${appId} --page-id ${id} --output-directory <folder>, then read the page.tsx in the folder under <folder> that is named for the page id `
+            + '(pac writes the id in its own letter case, so look for it without regard to case; a page that links to another shows that page\'s id where its source in the app folder has a PAGEREF_ name). '
+            + `Then run the build again: it sends this page once more, to the same page id, so nothing new is created — but if the ${how} send did land, the page's history now records its prompt a second time, `
+            + 'and anything saved to the page in Maker since is replaced by the app folder\'s version. Look first if either matters.'
+          : `First see what is deployed: node scripts/genpage-base.js check --env ${env} --app-id ${appId} --page-id ${id} --file ${argText(sourceFile || codeFile)} ("contentSame": true means the update landed; "deployed": "unchanged" means it did not). `
+            + 'Then re-run the upload: its own checks decide whether it may go ahead.');
         for (let i = 0; i < attempts; i += 1) {
           if (!pid && beforeIds === null) {
             const before = await enumerateEnv(run);
@@ -621,28 +641,15 @@ function makeGenpageCli(env, deps = {}) {
           }
           const r = await once(pid);
           // An UPDATE that timed out is not sent again, and is not told as an ordinary failure: it may have landed (the policy at the top of makeGenpageCli). What
-          // is deployed decides what happens next, so the message sends the reader to look — and which look works depends on who is asking:
-          //   the upload script   compares the page with the base marker it keeps beside the code file, and a re-run goes back through that comparison — the
-          //                       file it names is `sourceFile`, the one the marker belongs to, not the copy pac read;
-          //   the build           keeps no base marker, so `genpage-base.js check` could only say "unknown" about what is deployed, and its `--file` would be
-          //                       the staging copy the build deletes when it ends (every page is sent from one) — the advised command would fail on a missing file. It is
-          //                       told to read the deployed page with the download it already uses (the `pac model genpage download` that verify-model-app.js and
-          //                       download-model-app.js run), and that running the build again sends this page once more to the same id, with what that costs.
+          // is deployed decides what happens next, so the message sends the reader to look (lookFirst).
           if (r.timedOut && pid) {
-            const next = caller === 'build'
-              ? `First see what is deployed: pac model genpage download --environment ${env} --app-id ${appId} --page-id ${pid} --output-directory <folder>, then read the page.tsx in the folder under <folder> that is named for the page id `
-                + '(pac writes the id in its own letter case, so look for it without regard to case; a page that links to another shows that page\'s id where its source in the app folder has a PAGEREF_ name). '
-                + 'Then run the build again: it sends this page once more, to the same page id, so nothing new is created — but if the stalled send did land, the page\'s history now records its prompt a second time, '
-                + 'and anything saved to the page in Maker since is replaced by the app folder\'s version. Look first if either matters.'
-              : `First see what is deployed: node scripts/genpage-base.js check --env ${env} --app-id ${appId} --page-id ${pid} --file ${argText(sourceFile || codeFile)} ("contentSame": true means the update landed; "deployed": "unchanged" means it did not). `
-                + 'Then re-run the upload: its own checks decide whether it may go ahead.';
             throw neverRetriedError(
               `pac genpage upload for '${label}' ${stoppedAfter(r)} — the UPDATE of page ${pid} MAY HAVE LANDED: `
               + (parsePageId(r.stdout)
                 ? 'pac had printed the Page ID, which it does once the page and its messages are written, so the stall came while it was publishing. '
                 : 'pac writes the page, then records the prompt and the agent message, then publishes, so the stall can have come after any of those with nothing reported. ')
               + 'It was NOT sent again: a second send can record the prompt twice, and would overwrite a change made to the page since. '
-              + `${next}${allowLonger(r)}`
+              + `${lookFirst(pid, 'stalled')}${allowLonger(r)}`
             );
           }
           if (r.status === 0) {
@@ -652,8 +659,9 @@ function makeGenpageCli(env, deps = {}) {
               // the pid we used. A mismatch
               // means pac silently operated on a different page — halt rather than let a wrong record persist.
               // Case-insensitive: PAC can normalize GUID casing across writes.
+              // `transient: false`: the send did something, so the build's own re-run of a halt it takes for transient (the page's name is in the text) must not repeat it.
               if (pid && id.toLowerCase() !== pid.toLowerCase()) {
-                throw new Error(
+                throw neverRetriedError(
                   `pac genpage upload for '${name || '(unnamed)'}': UPDATE returned an unexpected Page ID (got ${id}, expected ${pid}) — refusing to persist a mismatched update`
                 );
               }
@@ -739,6 +747,22 @@ function makeGenpageCli(env, deps = {}) {
             throw neverRetriedError(
               `pac genpage upload failed for '${name || '(unnamed)'}': ${lastErr}`
               + (pid ? ` — the UPDATE of page ${pid} may have landed before it was ended, and it was NOT sent again: look at the page before running it again` : '')
+            );
+          }
+          // An UPDATE that FAILED is not sent again either — not by this loop, and not by the build's own re-run (`transient: false`) — unless pac refused its arguments or
+          // input files (isDeterministic, on a non-zero exit, with no Page ID printed), which it checks before it sends anything. Any other failure, a non-zero exit or an exit 0
+          // with no Page ID, can come after pac wrote the page and recorded the prompt and the agent message — in the publish — so a second send would record them again and
+          // can overwrite a change saved in between, as after a stall (the policy at the top of makeGenpageCli). A Page ID pac printed proves that much was written whatever its
+          // error says: after it, pac's only step is the publish, whose error carries the server's own text, and that text can read like a refused file. Only a CREATE that
+          // failed outright and left nothing behind reaches the retry below.
+          if (pid && (r.status === 0 || parsePageId(r.stdout) || !isDeterministic(lastErr))) {
+            throw neverRetriedError(
+              `pac genpage upload for '${label}' failed (${lastErr}) — the UPDATE of page ${pid} MAY HAVE LANDED: `
+              + (parsePageId(r.stdout)
+                ? 'pac had printed the Page ID, which it does once the page and its messages are written, so the failure came while it was publishing. '
+                : 'pac writes the page, then records the prompt and the agent message, then publishes, so the failure can have come after any of those. ')
+              + 'It was NOT sent again: a second send can record the prompt twice, and would overwrite a change made to the page since. '
+              + lookFirst(pid, 'failed')
             );
           }
           if (isDeterministic(lastErr)) break;

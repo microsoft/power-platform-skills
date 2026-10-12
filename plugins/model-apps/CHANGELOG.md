@@ -70,11 +70,13 @@ used to, builds send fewer requests, and verify, download and `check-auth` do mo
   build creates them one by one, with a warning that says why; a request refused because the table is still busy (HTTP
   429) is sent again first, and one whose answer was lost is checked against the table before anything is created again.
   A verify that fails ends any `pac` run it started and removes its temporary download folder.
-- **Generative-page `pac` calls are time-bounded, and a timed-out upload is never sent again.** A `pac model genpage`
+- **Generative-page `pac` calls are time-bounded, and a page upload whose outcome is unknown is not retried.** A `pac model genpage`
   call (list, download, upload) that outlives its budget (`POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS`) is stopped together
   with everything it started — on Linux and macOS each process only after its start time is read again, which makes ending an
   unrelated process that took over the id of one that exited far less likely (not impossible). A timed-out update says it may
-  have landed and how to check; a timed-out create says the page may exist, or that it was created as `<id>` when `pac`
+  have landed and how to check; so does an update that fails, which is no longer retried — `pac` can fail while publishing,
+  after it has written the page and recorded its prompt, so a retry could record the prompt a second time — unless `pac`
+  refused its own arguments or files. A timed-out create says the page may exist, or that it was created as `<id>` when `pac`
   printed the id, and how to finish it. A create whose outcome is not known to be nothing — it timed out, failed after
   `pac` printed its id, or left a page in the listing — is never sent again, not even by the build's own retry of a
   transient failure; a create that failed outright and left nothing behind is retried as before.

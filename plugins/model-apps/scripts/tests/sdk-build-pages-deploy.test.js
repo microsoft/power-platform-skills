@@ -1192,6 +1192,48 @@ test('deploy: a pac timeout during an UPDATE stops the build with the build\'s a
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
+// The same for an UPDATE that FAILS rather than stalls: pac can fail in the publish after it wrote the page and recorded its prompt, so the build sends it once — not again in the
+// upload's own loop, and not by its re-run of a halt it takes for transient (the pac words here, "try again later", would read as one without the marker) — and gives its own advice.
+test('deploy: a pac failure during an UPDATE stops the build with the build\'s advice, sends nothing again, and the next build converges with one page per name', async () => {
+  const { makeGenpageCli } = require('../lib/genpage-cli.js');
+  const { isTransientHalt } = require('../build-model-app.js');
+  const { appDir, spec } = makeTwoPageApp();
+  try {
+    const live = [{ pageId: OVERVIEW_ID, name: 'Overview' }, { pageId: DETAIL_ID, name: 'Detail' }];
+    const manifest = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: OVERVIEW_ID }, { key: 'detail', name: 'Detail', pageId: DETAIL_ID }] }), 'utf8').toString('base64');
+    const listing = `Connected as tester@contoso.com\nRetrieving generated pages...\nFound ${live.length} generated page(s):\n\n${'Page ID'.padEnd(37)}${'Name'.padEnd(9)}Published\n${live.map((p) => `${p.pageId} ${p.name.padEnd(8)} -`).join('\n')}\n`;
+    const pacCalls = [];
+    let fail = true;
+    const run = async (args) => {
+      pacCalls.push(args);
+      if (args[2] === 'list') return { status: 0, stdout: listing, stderr: '' };
+      const id = args[args.indexOf('--page-id') + 1];
+      if (fail) return { status: 1, stdout: `Page ID: ${id}\r\nPublishing...\r\n`, stderr: 'Error: The service is busy, try again later.' };
+      return { status: 0, stdout: `Page ID: ${id}`, stderr: '' };
+    };
+    const genpageCli = makeGenpageCli('https://x', { run, sleep: async () => {} });
+    const make = () => mockSdk({ pageManifest: manifest, liveSitemapXml: pageSitemap([OVERVIEW_ID, DETAIL_ID]), pageRows: live.map((p) => ({ uxagentprojectid: p.pageId, name: p.name })) }).sdk;
+    await assert.rejects(runSdkBuild(spec, { sdk: make(), apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES }), (e) => {
+      assert.strictEqual(e.phase, 'pages');
+      assert.match(e.message, /failed \(Error: The service is busy, try again later\.\) — the UPDATE of page 11111111-0000-4000-8000-000000000001 MAY HAVE LANDED: pac had printed the Page ID/);
+      assert.match(e.message, /First see what is deployed: pac model genpage download --environment https:\/\/x --app-id [^ ]+ --page-id 11111111-0000-4000-8000-000000000001 --output-directory <folder>/);
+      assert.match(e.message, /Then run the build again: it sends this page once more, to the same page id, so nothing new is created — but if the failed send did land/);
+      assert.doesNotMatch(e.message, /genpage-base\.js|\.pageref-deploy|re-run the upload/, 'no advice the build cannot follow: no check on a staging copy it deletes');
+      assert.strictEqual(isTransientHalt(e), false, 'the build does not retry it by itself');
+      return true;
+    });
+    const uploads = pacCalls.filter((a) => a[2] === 'upload');
+    assert.strictEqual(uploads.length, 1, 'one send: the update that failed is not sent again, and the next page was never started');
+    // The next normal build: the same pages, the same ids — one page per name, nothing created.
+    fail = false;
+    pacCalls.length = 0;
+    await runSdkBuild(spec, { sdk: make(), apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES });
+    const sent = pacCalls.filter((a) => a[2] === 'upload');
+    assert.strictEqual(sent.length, 2, 'both pages are sent');
+    assert.deepStrictEqual(sent.map((a) => a[a.indexOf('--page-id') + 1]).sort(), [OVERVIEW_ID, DETAIL_ID].sort(), 'each to the id it already has: updates, and no create');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
 test('deploy: a page with the same names only in a comment, a string or an inline style is not refused, and a spec of clean pages builds as it did', async () => {
   const { appDir, spec } = makeTwoPageApp();
   try {
