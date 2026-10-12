@@ -1649,3 +1649,61 @@ test('deploy: a page that was created but whose local receipt cannot be saved ha
     assert.strictEqual(isTransientHalt(halt, { spec }), false);
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
+
+// The pages scan reads each page ONCE, and checks and hashes those bytes; every upload then sends a staging copy of them, never the canonical file.
+// A page saved again while the build runs — after the scan, before its own upload — must not ship unchecked, nor be recorded as what was sent.
+// Overview links to Detail and Notes, so both are minted first (the create-absent-first step); Help links nowhere and goes up last. While the
+// first page goes up, Notes and Help are saved with a key Griffel drops.
+test('deploy: every page is uploaded from a staging copy of the bytes the scan read — a save to a page during the build does not ship', async () => {
+  const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pages-deploy-'));
+  try {
+    const original = {
+      notes: 'export default function Notes(){ return null; }',
+      help: 'export default function Help(){ return null; }',
+    };
+    fs.writeFileSync(path.join(appDir, 'overview.tsx'), `export default function Overview(){ ${NAV('detail')} ${NAV('notes')} return null; }`, 'utf8');
+    fs.writeFileSync(path.join(appDir, 'detail.tsx'), 'export default function Detail(){ return null; }', 'utf8');
+    fs.writeFileSync(path.join(appDir, 'notes.tsx'), original.notes, 'utf8');
+    fs.writeFileSync(path.join(appDir, 'help.tsx'), original.help, 'utf8');
+    const spec = {
+      schemaVersion: 2,
+      solution: { uniqueName: 'PgDeploy', displayName: 'Pg', publisherPrefix: 'contoso' },
+      app: { name: 'Deploy App' },
+      entities: [{ schemaName: 'contoso_item', displayName: 'Item', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] }],
+      pages: [
+        { key: 'overview', name: 'Overview', navigatesTo: [{ targetKey: 'detail' }, { targetKey: 'notes' }], source: { kind: 'tsx', codeFile: 'overview.tsx' } },
+        { key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'detail.tsx' } },
+        { key: 'notes', name: 'Notes', source: { kind: 'tsx', codeFile: 'notes.tsx' } },
+        { key: 'help', name: 'Help', source: { kind: 'tsx', codeFile: 'help.tsx' } },
+      ],
+      appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: ['overview', 'detail', 'notes', 'help'].map((page) => ({ page, title: page })) }] }] },
+    };
+    const saved = "import { makeStyles } from '@fluentui/react-components';\nconst useStyles = makeStyles({ root: { borderWidth: '1px' } });\nexport default function Saved(){ return null; }";
+    const ids = { Overview: OVERVIEW_ID, Detail: DETAIL_ID, Notes: '33333333-0000-4000-8000-000000000003', Help: '44444444-0000-4000-8000-000000000004' };
+    const uploads = [];
+    const genpageCli = {
+      enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }),
+      upload: async (o) => {
+        uploads.push({ name: o.name, codeFile: o.codeFile, content: fs.readFileSync(o.codeFile, 'utf8') });
+        if (uploads.length === 1) {
+          fs.writeFileSync(path.join(appDir, 'notes.tsx'), saved, 'utf8');
+          fs.writeFileSync(path.join(appDir, 'help.tsx'), saved, 'utf8');
+        }
+        return { pageId: o.pageId || ids[o.name] };
+      },
+    };
+    const { sdk } = mockSdk();
+    const r = await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES });
+    assert.deepStrictEqual(uploads.map((u) => u.name), ['Detail', 'Notes', 'Overview', 'Help'], 'the link targets are minted first, then the rest go up, each once');
+    const by = Object.fromEntries(uploads.map((u) => [u.name, u]));
+    assert.strictEqual(by.Notes.content, original.notes, 'a minted target sends what the scan read, not the later save');
+    assert.strictEqual(by.Help.content, original.help, 'a page that links nowhere sends what the scan read, not the later save');
+    const stagingRoot = path.join(appDir, '.maker-workspace', '.pageref-deploy');
+    for (const u of uploads) assert.ok(u.codeFile.startsWith(stagingRoot), `${u.name}: a staging copy, not the canonical file (${u.codeFile})`);
+    assert.ok(!fs.existsSync(stagingRoot) || fs.readdirSync(stagingRoot).length === 0, 'and the copies are removed when the build ends');
+    // What the build records as sent is what it sent: the source hash the next build compares with, and (for a page sent in the upload step) the deployed hash.
+    for (const key of ['notes', 'help']) assert.strictEqual(r.created.pageSourceShas[key], sha256(original[key]), `${key}: source hash`);
+    assert.strictEqual(r.created.pageDeployedShas.help, sha256(original.help), 'help: deployed hash');
+    assert.strictEqual(fs.readFileSync(path.join(appDir, 'help.tsx'), 'utf8'), saved, 'the canonical file keeps the save, for the next build to check');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});

@@ -1670,8 +1670,20 @@ test('the check an UPDATE that timed out points to is a whole command, and keeps
   await assert.rejects(cli.upload({ appId: 'app-1', pageId: GUID, codeFile: 'out/overview.tsx', name: 'Overview' }), /--file out\/overview\.tsx \("contentSame"/, 'a path without a space is shown as it is');
 });
 
-// The build is a different caller: it writes no base marker, so `genpage-base.js check` could only answer "unknown" about what is deployed, and for a navigation page the code file it
-// hands pac is a STAGING copy that the build deletes when it ends — so the command the standalone script is told to run fails on a missing file. The build's message sends the reader
+// The upload script sends pac a COPY of the bytes it checked (removed once pac answers) and passes the file the caller named as `sourceFile`: the check the message points to is
+// about that file — the one its base marker belongs to — never the copy, which is gone by the time anyone reads the message.
+test('the check an UPDATE that timed out points to names the caller\'s file (sourceFile), never the copy pac read', async () => {
+  const cli = makeGenpageCli('https://contoso.crm.dynamics.com', { run: async () => timedOutRun(600000, 'pac model genpage upload'), sleep: async () => {} });
+  const copy = 'C:\\Users\\Dev User\\AppData\\Local\\Temp\\genpage-code-x1y2z3\\overview.tsx';
+  await assert.rejects(cli.upload({ appId: 'app-1', pageId: GUID, codeFile: copy, sourceFile: 'C:\\Users\\Dev User\\pages\\overview.tsx', name: 'Overview' }), (e) => {
+    assert.match(e.message, /--file "C:\\Users\\Dev User\\pages\\overview\.tsx" \("contentSame"/);
+    assert.ok(!e.message.includes('genpage-code-'), 'the copy is not named');
+    return true;
+  });
+});
+
+// The build is a different caller: it writes no base marker, so `genpage-base.js check` could only answer "unknown" about what is deployed, and the code file it hands pac — for
+// every page — is a STAGING copy that the build deletes when it ends, so the command the standalone script is told to run fails on a missing file. The build's message sends the reader
 // to the deployed page through the download the build already uses, and says what running the build again does (sdk-build.js passes `caller: 'build'`).
 test('an UPDATE that times out under the BUILD is told to read the deployed page with pac\'s download and to run the build again — never to check a file the build deletes', async () => {
   const seen = [];

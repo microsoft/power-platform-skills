@@ -539,8 +539,9 @@ function makeGenpageCli(env, deps = {}) {
     // Names and dates describe candidates, never establish identity. Read failures also stop,
     // with the candidate id retained in the diagnostic. No uncertain result changes the command to UPDATE.
     // `caller` is 'build' when the App Spec build (lib/sdk-build.js) is the one uploading, and anything else for the standalone upload script: it only changes the advice
-    // given for an UPDATE that timed out (below), never what is sent or when.
-    async upload({ appId, pageId, codeFile, compiledCodeFile, name, prompt, agentMessage, dataSources,
+    // given for an UPDATE that timed out (below), never what is sent or when. `sourceFile` is the file the caller knows the page as when `codeFile` is a copy of it — the
+    // upload script sends pac a copy of the bytes it checked, removed once pac answers — and is the file that advice names; pac only ever reads `codeFile`.
+    async upload({ appId, pageId, codeFile, sourceFile, compiledCodeFile, name, prompt, agentMessage, dataSources,
       addToSitemap, model, connectors, actions, caller }) {
       // Every pac run of this upload — its snapshots and listings included — is made with the one `run`, so an abort() that lands
       // while the upload pauses between attempts starts nothing more (see runForCall).
@@ -621,9 +622,10 @@ function makeGenpageCli(env, deps = {}) {
           const r = await once(pid);
           // An UPDATE that timed out is not sent again, and is not told as an ordinary failure: it may have landed (the policy at the top of makeGenpageCli). What
           // is deployed decides what happens next, so the message sends the reader to look — and which look works depends on who is asking:
-          //   the upload script   compares the page with the base marker it keeps beside the code file, and a re-run goes back through that comparison;
-          //   the build           keeps no base marker, so `genpage-base.js check` could only say "unknown" about what is deployed, and for a navigation page its
-          //                       `--file` would be the staging copy the build deletes when it ends — the advised command would fail on a missing file. It is
+          //   the upload script   compares the page with the base marker it keeps beside the code file, and a re-run goes back through that comparison — the
+          //                       file it names is `sourceFile`, the one the marker belongs to, not the copy pac read;
+          //   the build           keeps no base marker, so `genpage-base.js check` could only say "unknown" about what is deployed, and its `--file` would be
+          //                       the staging copy the build deletes when it ends (every page is sent from one) — the advised command would fail on a missing file. It is
           //                       told to read the deployed page with the download it already uses (the `pac model genpage download` that verify-model-app.js and
           //                       download-model-app.js run), and that running the build again sends this page once more to the same id, with what that costs.
           if (r.timedOut && pid) {
@@ -632,7 +634,7 @@ function makeGenpageCli(env, deps = {}) {
                 + '(pac writes the id in its own letter case, so look for it without regard to case; a page that links to another shows that page\'s id where its source in the app folder has a PAGEREF_ name). '
                 + 'Then run the build again: it sends this page once more, to the same page id, so nothing new is created — but if the stalled send did land, the page\'s history now records its prompt a second time, '
                 + 'and anything saved to the page in Maker since is replaced by the app folder\'s version. Look first if either matters.'
-              : `First see what is deployed: node scripts/genpage-base.js check --env ${env} --app-id ${appId} --page-id ${pid} --file ${argText(codeFile)} ("contentSame": true means the update landed; "deployed": "unchanged" means it did not). `
+              : `First see what is deployed: node scripts/genpage-base.js check --env ${env} --app-id ${appId} --page-id ${pid} --file ${argText(sourceFile || codeFile)} ("contentSame": true means the update landed; "deployed": "unchanged" means it did not). `
                 + 'Then re-run the upload: its own checks decide whether it may go ahead.';
             throw neverRetriedError(
               `pac genpage upload for '${label}' ${stoppedAfter(r)} — the UPDATE of page ${pid} MAY HAVE LANDED: `

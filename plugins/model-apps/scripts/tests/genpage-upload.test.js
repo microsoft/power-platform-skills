@@ -31,29 +31,33 @@ function tmp() {
 }
 
 // What a capturing download writes as page.tsx, and what a dummy `--code-file` is replaced with.
-// Legacy update tests named `c.tsx` / `p.tsx` without a base marker. An update now refuses that
-// (`no-base`) and, on success, would write a marker next to the dummy path in this directory.
-// Those tests still prove their own rule; the replacement only supplies the base they now need.
+// Legacy tests name `c.tsx` / `p.tsx` / `page.tsx` / `CODE.tsx`, which are no files. The upload reads the
+// code file once, before anything else, and sends pac a copy of those bytes, so a name that is no file now
+// stops it there: every dummy becomes a real file holding the live page. An update without a base marker is
+// refused (`no-base`), so an update's dummy also gets the marker it needs — those tests still prove their own
+// rule; the replacement only supplies the file and the base they now need.
 const LIVE_PAGE = 'export default function Page() { return null; }\n';
 const DUMMY_CODE = new Set(['p.tsx', 'c.tsx', 'page.tsx', 'CODE.tsx']);
 function maybeBase(argv, deps) {
-  if (!argv || (deps && deps.skipBase)) return argv;
+  if (!argv) return argv;
   const fileIdx = argv.indexOf('--code-file');
   const pageIdx = argv.indexOf('--page-id');
-  if (fileIdx < 0 || pageIdx < 0) return argv;
+  if (fileIdx < 0) return argv;
   const current = argv[fileIdx + 1];
   if (!DUMMY_CODE.has(current)) return argv;
   const file = path.join(tmp(), 'page.tsx');
   fs.writeFileSync(file, LIVE_PAGE);
   const appIdx = argv.indexOf('--app-id');
-  writeMarker(file, {
-    version: 1,
-    pageId: argv[pageIdx + 1],
-    appId: appIdx >= 0 ? argv[appIdx + 1] : 'app',
-    deployedSha256: pageHash(LIVE_PAGE),
-    localSha256: pageHash(LIVE_PAGE),
-    source: 'download',
-  });
+  if (pageIdx >= 0 && !(deps && deps.skipBase)) {
+    writeMarker(file, {
+      version: 1,
+      pageId: argv[pageIdx + 1],
+      appId: appIdx >= 0 ? argv[appIdx + 1] : 'app',
+      deployedSha256: pageHash(LIVE_PAGE),
+      localSha256: pageHash(LIVE_PAGE),
+      source: 'download',
+    });
+  }
   const next = argv.slice();
   next[fileIdx + 1] = file;
   return next;
@@ -523,16 +527,22 @@ test('main forwards every option through the real wrapper to the pac invocation,
   const d = tmp();
   const pf = path.join(d, 'prompt.txt');
   fs.writeFileSync(pf, 'the approved prompt', 'utf8');
+  const codeFile = path.join(d, 'CODE.tsx');
+  fs.writeFileSync(codeFile, LIVE_PAGE, 'utf8');
 
   const seen = [];
   // The wrapper deletes its temp dir in a `finally`, so the prompt file cannot be read after
-  // upload() returns. Capture the contents DURING the invocation instead.
+  // upload() returns. Capture the contents DURING the invocation instead — the code file too, which
+  // is a copy of the checked bytes that is removed once pac has answered.
   let promptOnDisk = null;
+  let codeOnDisk = null;
   const factory = (env) => makeGenpageCli(env, {
     run: async (args) => {
       seen.push(args);
       const i = args.indexOf('--prompt-file');
       if (i !== -1) promptOnDisk = fs.readFileSync(args[i + 1], 'utf8');
+      const c = args.indexOf('--code-file');
+      if (c !== -1) codeOnDisk = fs.readFileSync(args[c + 1], 'utf8');
       if (args.includes('list')) return { status: 0, stdout: 'Found 0 generated page(s):\n', stderr: '' };
       return { status: 0, stdout: 'Page ID: 13ecbc57-a3a4-4132-b0a2-a6c6b12691e8', stderr: '' };
     },
@@ -541,7 +551,7 @@ test('main forwards every option through the real wrapper to the pac invocation,
 
   const r = await new Promise((resolve) => {
     main([
-      '--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'APPID-1', '--code-file', 'CODE.tsx',
+      '--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'APPID-1', '--code-file', codeFile,
       '--name', 'NamedPage', '--data-sources', 'account,contact',
       '--model', 'MODEL-9', '--connectors', 'CONN.json', '--actions', 'ACT.json',
       '--prompt-file', pf, '--agent-message', 'msg', '--add-to-sitemap',
@@ -556,7 +566,11 @@ test('main forwards every option through the real wrapper to the pac invocation,
   // EXACT pairs. A dropped flag or a swapped value fails here, which is what the old tests missed.
   assert.strictEqual(valueOf('--environment'), 'https://contoso.crm.dynamics.com/');
   assert.strictEqual(valueOf('--app-id'), 'APPID-1');
-  assert.strictEqual(valueOf('--code-file'), 'CODE.tsx');
+  // The code file pac reads is a copy of the checked bytes, under the file's own name, not the file itself.
+  assert.notStrictEqual(valueOf('--code-file'), codeFile);
+  assert.strictEqual(path.basename(valueOf('--code-file')), 'CODE.tsx');
+  assert.strictEqual(codeOnDisk, LIVE_PAGE);
+  assert.ok(!fs.existsSync(valueOf('--code-file')), 'the copy is gone once the upload has answered');
   assert.strictEqual(valueOf('--name'), 'NamedPage');
   assert.strictEqual(valueOf('--data-sources'), 'account,contact');
   assert.strictEqual(valueOf('--model'), 'MODEL-9');
@@ -623,6 +637,7 @@ test('implicit update metadata reaches real wrapper argv', async () => {
     const requests = [];
     const probeDirs = [];
     const uploadDirs = [];
+    const stageDirs = [];
     const pacInvocation = winPac(`C:\\pac\\${installation}`);
     const factory = (url) => makeGenpageCli(url, {
       pacInvocation,
@@ -656,6 +671,12 @@ test('implicit update metadata reaches real wrapper argv', async () => {
         dirs.push(uploadDirs[uploadDirs.length - 1]);
         assert.strictEqual(fs.readFileSync(valueOf('--prompt-file'), 'utf8'), 'Fix the sort handler');
         assert.strictEqual(fs.readFileSync(valueOf('--agent-message-file'), 'utf8'), 'Preserve page metadata');
+        // pac reads a copy of the bytes that were checked, under the file's own name, in a folder of its own.
+        stageDirs.push(path.dirname(valueOf('--code-file')));
+        dirs.push(stageDirs[stageDirs.length - 1]);
+        assert.notStrictEqual(valueOf('--code-file'), codeFile);
+        assert.strictEqual(path.basename(valueOf('--code-file')), 'page.tsx');
+        assert.strictEqual(fs.readFileSync(valueOf('--code-file'), 'utf8'), fs.readFileSync(codeFile, 'utf8'));
         return { status: 0, stdout: `Page ID: ${id}`, stderr: '' };
       },
       sleep: async () => {},
@@ -671,7 +692,7 @@ test('implicit update metadata reaches real wrapper argv', async () => {
       '--prompt', 'Fix the sort handler', '--agent-message', 'Preserve page metadata'], {
       makeGenpageCli: factory,
       emit: (ok, payload) => {
-        cleanupAtEmit = [...probeDirs, ...uploadDirs].map((dir) => fs.existsSync(dir));
+        cleanupAtEmit = [...probeDirs, ...uploadDirs, ...stageDirs].map((dir) => fs.existsSync(dir));
         result = { ok, payload };
       },
     });
@@ -692,7 +713,7 @@ test('implicit update metadata reaches real wrapper argv', async () => {
     assert.strictEqual(valueOf('--environment'), env);
     assert.strictEqual(valueOf('--app-id'), appId);
     assert.strictEqual(valueOf('--page-id'), id);
-    assert.strictEqual(valueOf('--code-file'), codeFile);
+    assert.strictEqual(path.basename(valueOf('--code-file')), 'page.tsx', 'a copy of the checked file, under its own name');
     assert.strictEqual(valueOf('--model'), 'gpt-4.1');
     assert.strictEqual(valueOf('--data-sources'), 'contoso_ticket,contoso_asset');
     for (const flag of ['--connectors', '--actions', '--add-to-sitemap']) assert.ok(!args.includes(flag), flag);
@@ -714,8 +735,8 @@ test('implicit update metadata reaches real wrapper argv', async () => {
       assert.ok(invocation.args[4].includes('--data-sources contoso_ticket,contoso_asset'));
       assert.strictEqual(invocation.options.windowsVerbatimArguments, true);
     }
-    assert.deepStrictEqual([probeDirs.length, uploadDirs.length], [2, 1], 'the update probes once, then re-reads the stored page to record its hash');
-    assert.deepStrictEqual(cleanupAtEmit, [false, false, false], 'every temp directory is gone before the emitter can exit');
+    assert.deepStrictEqual([probeDirs.length, uploadDirs.length, stageDirs.length], [2, 1, 1], 'the update probes once, then re-reads the stored page to record its hash');
+    assert.deepStrictEqual(cleanupAtEmit, [false, false, false, false], 'every temp directory is gone before the emitter can exit');
   }
 });
 
@@ -925,13 +946,16 @@ test('an update that omits --model re-sends the page\'s current model; an explic
   assert.strictEqual(odd.calls[0].model, undefined);
   assert.match(oddRun.payload.warnings[0], /config\.json model is number, not a string/);
 
-  // A create has no current model to keep.
+  // A create has no current model to keep: nothing is downloaded before the upload (the one download after it re-reads the stored page to record its base).
   const created = capturingCli({ liveModel: 'gpt-4.1' });
+  const createFactory = created.factory;
+  let downloadsBeforeUpload = null;
+  created.factory = () => { const c = createFactory(); const upload = c.upload; c.upload = async (o) => { downloadsBeforeUpload = created.downloads.length; return upload(o); }; return c; };
   const createRun = await new Promise((resolve) => {
     main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx', '--prompt', 'p', '--agent-message', 'm'],
       { makeGenpageCli: created.factory, emit: (ok, payload) => resolve({ ok, payload }) });
   });
-  assert.deepStrictEqual([createRun.ok, created.downloads.length, created.calls[0].model], [true, 0, undefined]);
+  assert.deepStrictEqual([createRun.ok, downloadsBeforeUpload, created.calls[0].model], [true, 0, undefined]);
 });
 
 // pac stores every ASCII `"` in a page name as `\"` — in the page row and in the navigation title it writes —
@@ -1074,10 +1098,12 @@ test('an unreadable current binding list refuses the update rather than unbindin
 
 test('a CREATE never probes for bindings (there is nothing to preserve)', async () => {
   let probed = false;
+  let uploaded = false;
   const seen = [];
   const factory = () => ({
-    download: async () => { probed = true; return true; },
-    upload: async (o) => { seen.push(o); return { pageId: '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8' }; },
+    // The one download a create makes comes after the upload, to record its base: only one before it would be a probe.
+    download: async () => { if (!uploaded) probed = true; return true; },
+    upload: async (o) => { uploaded = true; seen.push(o); return { pageId: '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8' }; },
   });
   const r = await new Promise((resolve) => {
     main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', 'a1', '--code-file', 'c.tsx',
@@ -2064,11 +2090,14 @@ test('a page that is clean — longhands, or the same names in a string, a comme
     assert.strictEqual(r.ok, true, `${what}: ${JSON.stringify(r.payload)}`);
     assert.strictEqual(cli.calls.length, 1, what);
   }
-  // A file the script cannot read is not this check's to report: the upload — pac, which cannot read it either — reports a missing file as it always did.
+  // A file the script cannot read is refused before anything runs: the upload reads the page once, checks those bytes and sends pac a copy of them,
+  // so there is nothing to check or send — and a file that appears later must not go up unchecked.
   const missing = capturingCli();
-  const r = await runMain(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', path.join(tmp(), 'absent.tsx'), '--name', 'N', '--prompt', 'p', '--agent-message', 'm'], missing);
-  assert.strictEqual(r.ok, true);
-  assert.strictEqual(missing.calls.length, 1, 'the upload is attempted, and left to fail there');
+  const absent = path.join(tmp(), 'absent.tsx');
+  const r = await runMain(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', absent, '--name', 'N', '--prompt', 'p', '--agent-message', 'm'], missing);
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /^--code-file could not be read: .*ENOENT/);
+  assert.deepStrictEqual([missing.calls.length, missing.downloads.length], [0, 0], 'nothing is listed, downloaded or uploaded');
 });
 
 test('a call the checker cannot read for certain is refused too, and one that lies before the lexer\'s first guess is read as usual', async () => {
@@ -2133,4 +2162,90 @@ test('an UPDATE of an unreadable page that IS the deployed page only warns; one 
   assert.strictEqual(edited.r.payload.code, 'griffel-shorthand');
   assert.ok(edited.r.payload.error.startsWith(`${edited.file} has makeStyles calls the Griffel check could not read`), edited.r.payload.error);
   assert.strictEqual(edited.cli.calls.length, 0);
+});
+
+// ── What pac is sent is what was checked ────────────────────────────────────────────────────────────────────────────────────────────
+// The upload reads the page once and checks those bytes, but pac reads the code file itself — after an update's listing and download, seconds
+// later. A save in between would ship bytes nothing here checked, so pac is sent a copy of the checked bytes, and the base marker records them.
+// And JavaScript passed with --compiled-code-file would be deployed instead of the checked TypeScript, so that flag is refused.
+
+test('--compiled-code-file is refused before anything runs: the JavaScript in it would be deployed without the Griffel check', async () => {
+  const file = divCode(DIV_TEXT);
+  const compiled = path.join(path.dirname(file), 'page.js');
+  fs.writeFileSync(compiled, 'const s = (0, rc.makeStyles)({ root: { borderWidth: "1px" } });\n');
+  const cli = untouchableCli();
+  for (const extra of [[], ['--page-id', DIV_PAGE]]) {
+    const r = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file, '--compiled-code-file', compiled,
+      '--name', 'N', '--prompt', 'p', '--agent-message', 'm', ...extra], cli);
+    assert.strictEqual(r.ok, false, JSON.stringify(extra));
+    assert.match(r.payload.error, /^--compiled-code-file is not accepted: the Griffel check reads the TypeScript in --code-file/);
+  }
+  assert.strictEqual(cli.made.n, 0, 'nothing is listed, downloaded or uploaded');
+});
+
+test('a create sends pac a copy of the bytes that were checked: a save to the file after the check does not ship, and the marker records what was sent', async () => {
+  const file = divCode(DIV_TEXT);
+  const seen = [];
+  const cli = {
+    factory: () => ({
+      upload: async (o) => {
+        // The file is saved again, with a key Griffel drops, between the check and pac's read.
+        fs.writeFileSync(file, GRIFFEL_BAD);
+        seen.push({ codeFile: o.codeFile, sourceFile: o.sourceFile, sent: fs.readFileSync(o.codeFile, 'utf8') });
+        return { pageId: '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8' };
+      },
+      download: async ({ outputDir, pageIds }) => { for (const pid of pageIds || []) writeProbe(outputDir, pid, { page: DIV_TEXT }); },
+    }),
+  };
+  const r = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file, '--name', 'N', '--prompt', 'p', '--agent-message', 'm'], cli);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.strictEqual(seen.length, 1);
+  assert.strictEqual(seen[0].sent, DIV_TEXT, 'the checked bytes, not the later save');
+  assert.notStrictEqual(seen[0].codeFile, file);
+  assert.strictEqual(path.basename(seen[0].codeFile), 'page.tsx', 'under the file\'s own name, so pac compiles it as it would the file');
+  assert.strictEqual(seen[0].sourceFile, file, 'the file the caller named, for the upload\'s own messages');
+  assert.ok(!fs.existsSync(path.dirname(seen[0].codeFile)), 'the copy is removed once pac has answered');
+  // The marker is the caller's file's, and records the hash of what was sent — so a later check sees the save as the local change it is.
+  const marker = readMarker(file);
+  assert.strictEqual(marker.localSha256, pageHash(DIV_TEXT));
+  assert.strictEqual(marker.source, 'upload');
+});
+
+test('an update sends pac the checked bytes even when the file is saved while the listing and download run', async () => {
+  const file = divCode(DIV_TEXT);
+  seedBase(file);
+  const sent = [];
+  const inner = divFactory();
+  const cli = {
+    factory: () => {
+      const real = inner.factory();
+      return {
+        ...real,
+        // The save lands while the update lists the environment, after the Griffel check and before the base check and the upload.
+        enumerateEnvironment: async () => { fs.writeFileSync(file, GRIFFEL_BAD); return real.enumerateEnvironment(); },
+        upload: async (o) => { sent.push(fs.readFileSync(o.codeFile, 'utf8')); return real.upload(o); },
+      };
+    },
+  };
+  const r = await divRun(UPDATE_ARGS(file), cli);
+  assert.strictEqual(r.ok, true, JSON.stringify(r.payload));
+  assert.deepStrictEqual(sent, [DIV_TEXT], 'the bytes the Griffel check and the comparison with the deployed page were made on');
+  assert.strictEqual(readMarker(file).localSha256, pageHash(DIV_TEXT));
+});
+
+test('the copy pac was sent is removed when the upload fails, before the failure is reported', async () => {
+  const file = divCode(DIV_TEXT);
+  let staged = null;
+  let stagedAtEmit = null;
+  const cli = { factory: () => ({ upload: async (o) => { staged = o.codeFile; throw new Error('pac exploded'); } }) };
+  const r = await new Promise((resolve, reject) => {
+    main(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', file, '--name', 'N', '--prompt', 'p', '--agent-message', 'm'], {
+      makeGenpageCli: cli.factory,
+      emit: (ok, payload) => { stagedAtEmit = staged && fs.existsSync(path.dirname(staged)); resolve({ ok, payload }); },
+    }).catch(reject);
+  });
+  assert.strictEqual(r.ok, false);
+  assert.match(r.payload.error, /pac exploded/);
+  assert.ok(staged, 'the upload was given a copy');
+  assert.strictEqual(stagedAtEmit, false, 'gone before the emitter can end the process');
 });

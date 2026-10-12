@@ -1106,11 +1106,14 @@ function appHasCrossPageNav(spec) {
   return ((spec && spec.pages) || []).some((p) => (p.navigatesTo || []).length > 0);
 }
 
-// Write a RESOLVED deployment copy of a page's .tsx into the run-scoped staging dir — NEVER over the
-// canonical source (a GUID baked into canonical breaks cross-env recreate; design §9 / SDK T5). pac
-// genpage upload takes a file PATH, so resolved bytes must exist on disk. The dir is created per RUN
-// under <workspace>/.pageref-deploy/<runId>/ and removed in a finally (never leave env GUIDs on disk,
-// no sanitized-name cross-run collision). The key is sanitized to a safe filename.
+// Write the copy of a page's .tsx that pac uploads into the run-scoped staging dir — NEVER over the canonical
+// source. Every page is sent from one. A navigation page's copy has its PAGEREF_ tokens resolved (a GUID baked
+// into canonical breaks cross-env recreate; design §9 / SDK T5); every other page's copy is the bytes the pages
+// scan read and checked, so a save to the canonical file while the build runs cannot ship unchecked, and the
+// source hash the build records is the one of what it sent. pac genpage upload takes a file PATH, so the bytes
+// must exist on disk. The dir is created per RUN under <workspace>/.pageref-deploy/<runId>/ and removed in a
+// finally (never leave env GUIDs on disk, no sanitized-name cross-run collision). The key is sanitized to a safe
+// filename. `code` is a string, or the Buffer the scan read (written byte for byte).
 function writeStagingFile(stagingDir, key, code) {
   fs.mkdirSync(stagingDir, { recursive: true });
   const file = path.join(stagingDir, `${String(key).replace(/[^A-Za-z0-9_-]/g, '_')}.tsx`);
@@ -5656,8 +5659,12 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // The baseline (deployed-baseline.js) used to hash the files again when the build ENDED, so a page saved while the build ran was recorded as applied: the next build then found the
       // source it was about to send "unchanged" and let a key it never checked through with a warning.
       const scannedSha = new Map();
+      // The bytes themselves, as the scan read them: every upload below sends a staging copy of these (writeStagingFile), never the canonical file, which may have been
+      // saved again since — the checks above and the hash recorded for the page are then about exactly what was sent.
+      const scannedBytes = new Map();
       for (const p of implemented) {
         const bytes = fs.readFileSync(canonicalPath(p));
+        scannedBytes.set(keyOf(p), bytes);
         const sourceSha = sha256(bytes);
         scannedSha.set(keyOf(p), sourceSha);
         const code = bytes.toString('utf8');
@@ -5713,7 +5720,7 @@ async function runSdkBuildPhases(spec, opts, owed) {
           for (const p of implemented) {
             const key = keyOf(p);
             if (keyToId.has(key) || !navTargets.has(key)) continue; // only ABSENT targets need pre-minting
-            const up = await genpageCli.upload({ appId: result.created.app, codeFile: canonicalPath(p), name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources, model: p.model, caller: 'build' });
+            const up = await genpageCli.upload({ appId: result.created.app, codeFile: writeStagingFile(stagingDir, key, scannedBytes.get(key)), name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources, model: p.model, caller: 'build' });
             recordCreate(p, up.pageId);
             keyToId.set(key, up.pageId);
             result.created.pages[key] = up.pageId;
@@ -5758,13 +5765,13 @@ async function runSdkBuildPhases(spec, opts, owed) {
           const requestedId = keyToId.get(key);
           // Capture the EXACT bytes we upload so the caller can record a MEASURED deployedSha (a nav source's
           // deployed bytes differ from its canonical source — PAGEREF_ is resolved to GUIDs — so deployedSha
-          // must never be assumed equal to the source hash). For a non-nav page the deployed bytes ARE the
-          // canonical file content.
-          const deployedBytes = isNav ? deployment.get(key) : fs.readFileSync(canonicalPath(p), 'utf8');
-          const codeFile = isNav ? writeStagingFile(stagingDir, key, deployment.get(key)) : canonicalPath(p);
+          // must never be assumed equal to the source hash). For a non-nav page they are the bytes the scan read
+          // and checked, which its staging copy holds — not a new read of the canonical file, saved again maybe.
+          const deployedBytes = isNav ? deployment.get(key) : sourceByKey.get(key);
+          const codeFile = writeStagingFile(stagingDir, key, isNav ? deployment.get(key) : scannedBytes.get(key));
           // `model` rides along because pac stores whatever `--model` an upload sends: re-uploading without it
           // wiped a deployed page's model id to "". A downloaded spec carries it (pages[].model).
-          // `caller: 'build'` only words the advice for an UPDATE that timed out (genpage-cli.js): the build keeps no base marker, and a navigation page's `codeFile` is a staging copy deleted when the build ends.
+          // `caller: 'build'` only words the advice for an UPDATE that timed out (genpage-cli.js): the build keeps no base marker, and every page's `codeFile` is a staging copy deleted when the build ends.
           const up = await genpageCli.upload({ appId: result.created.app, pageId: requestedId, codeFile, name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources, model: p.model, caller: 'build' });
           if (!requestedId) recordCreate(p, up.pageId);
           // I7: an UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at

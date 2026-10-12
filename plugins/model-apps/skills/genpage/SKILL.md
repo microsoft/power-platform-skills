@@ -1006,7 +1006,9 @@ did not already have (below). The result is `"code":"griffel-shorthand"`, with e
 and what each way out does in `error` (and the same list in `problems`). That is the same check as
 `check-griffel-styles.js`, held at the one place every upload passes, so a page that skipped the earlier gate still cannot
 ship a key it added without its border. Fix the page and run the upload again; no flag skips it, and
-`--overwrite-deployed` does not.
+`--overwrite-deployed` does not. The upload sends `pac` a copy of the bytes it checked, so a change saved to the file after
+the upload started is not sent — run the upload again to send it. It does not take `--compiled-code-file`: `pac` compiles the
+checked file itself.
 
 An update is held to what it **adds**. A page deployed before this check existed can already carry such a key — the old
 `borderWidth` grep never caught `borderColor` under `:hover` — and it renders without it today. The script downloads the
