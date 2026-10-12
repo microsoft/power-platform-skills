@@ -30,6 +30,11 @@ folder alone does not start a workflow. For each actionable request:
    Do not restart routing once a matching skill is running, including explicit
    invocations and approved children; let that skill own its workflow.
 
+Do not add a separate approval prompt just to choose or load a matching skill
+for a clear request. Keep the workflow's existing scope/cost gates, including
+the full-app integration choice below. Explicit skill invocation is not blanket
+permission for the operations it can perform.
+
 The table lists common examples, not an exhaustive list or closed allowlist.
 Future or custom skills advertised by the host can match without a table entry.
 If multiple workflows fit but differ in scope, ask before choosing; do not invoke
@@ -56,6 +61,28 @@ opt-in installation flow below; never install or enable skills automatically.
 
 Keep a small app-owned fix small. Do not route explanations, typo fixes, or
 bounded bug fixes through full app planning.
+
+## Keep operation approvals separate from routing
+
+These boundaries apply to every selected workflow, including future/custom skills:
+
+- Confirm the exact target and proposed scope before cloud/data mutations,
+  dependency or plugin installation/enabling, native builds/runs, destructive
+  actions, or deployment. Reuse explicit approval already given for that same
+  operation and scope; changed targets or expanded scope need renewed approval.
+- Dataverse work must use a matching data-workflow skill and its existing
+  app-root, environment, schema, and generated-service checks. Bind the absolute
+  app root, validate the selected environment and tenant, and inspect existing
+  inventory for reuse before proposing changes. Show the exact schema, record,
+  connection, or app-binding changes and obtain the workflow's mutation approval
+  before writing. If the target is missing or conflicting, stop and clarify;
+  never guess or silently switch the environment.
+- Read-only discovery, selecting a skill, and choosing full integration do not
+  approve writes. Honor `--plan-only`. Never fabricate `approved_scope`, approval
+  receipts, or caller context from automatic routing or an old plan.
+- An approved child retains its current owner, target, and scope without asking
+  again. Cancellation, dismissal, or unclear consent stops the pending operation;
+  never default to approval.
 
 ## Identify the app state first
 
@@ -183,6 +210,11 @@ not app changes, cloud mutations, builds, or deployment.
 If declined, do not repeatedly prompt. Continue only already-approved, bounded
 app-owned work that does not require a missing skill. Otherwise explain the
 blocked step and stop instead of silently recreating its workflow.
+
+If a required data-workflow skill is unavailable or cannot load, do not replace
+it with a generic editor or ad-hoc CLI/HTTP mutations. Dataverse work remains
+blocked until the required workflow and prerequisites are available, even when
+the user approved installing the plugin.
 
 ## Respect code ownership
 

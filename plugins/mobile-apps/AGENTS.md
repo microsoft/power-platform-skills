@@ -140,6 +140,10 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     than merely recommend it after required entry consent. Preserve exact
     namespaces, invocation restrictions, current owners, and all approval gates;
     do not route every request through `/edit-app`.
+    Selection needs no extra invocation-approval prompt, but Dataverse and other
+    consequential actions keep their target/scope checks and mutation approvals.
+    Never fabricate approval context or substitute ad-hoc mutations for an
+    unavailable domain workflow.
 
 ## Telemetry
 

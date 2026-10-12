@@ -133,6 +133,8 @@ test('app guidance selects any matching advertised skill without requiring slash
   assert.match(guidance, /multiple workflows fit but differ in scope, ask before choosing/);
   assert.match(guidance, /If none matches, continue only authorized bounded work/);
   assert.match(guidance, /never install or enable skills automatically/);
+  assert.match(guidance, /Do not add a separate approval prompt just to choose or load a matching skill/);
+  assert.match(guidance, /Keep the workflow's existing scope\/cost gates/);
   assert.match(shared, /host-advertised skill descriptions/);
   assert.match(shared, /Future or custom advertised workflows remain eligible/);
   assert.match(shared, /Invoke a matching skill\s+instead of merely recommending its command, after required entry consent/);
@@ -141,6 +143,38 @@ test('app guidance selects any matching advertised skill without requiring slash
   assert.match(shared, /re-dispatch an approved\s+child from its current owner/);
   assert.match(pluginGuidance, /Natural-language routing is not a fixed skill list/);
   assert.match(pluginGuidance, /including future\/custom workflows not in the example table/);
+});
+
+test('automatic skill invocation is not Dataverse mutation or installation approval', () => {
+  const approvals = section(
+    templateGuidance,
+    '## Keep operation approvals separate from routing',
+    '## Identify the app state first',
+  );
+  assert.match(approvals, /every selected workflow, including future\/custom skills/);
+  assert.match(approvals, /Confirm the exact target and proposed scope before cloud\/data mutations/);
+  assert.match(approvals, /changed targets or expanded scope need renewed approval/);
+  assert.match(approvals, /Dataverse work must use a matching data-workflow skill/);
+  assert.match(approvals, /validate the selected environment and tenant/);
+  assert.match(approvals, /inventory for reuse before proposing changes/);
+  assert.match(approvals, /exact schema, record,\s+connection, or app-binding changes/);
+  assert.match(approvals, /mutation approval\s+before writing/);
+  assert.match(approvals, /target is missing or conflicting, stop and clarify/);
+  assert.match(approvals, /Honor `--plan-only`/);
+  assert.match(approvals, /Never fabricate `approved_scope`, approval\s+receipts, or caller context/);
+  assert.match(approvals, /Cancellation, dismissal, or unclear consent stops the pending operation/);
+  const unavailable = section(templateGuidance, '## If skills are unavailable', '## Respect code ownership');
+  assert.match(unavailable, /required data-workflow skill is unavailable or cannot load/);
+  assert.match(unavailable, /do not replace\s+it with a generic editor or ad-hoc CLI\/HTTP mutations/);
+  assert.match(unavailable, /blocked until the required workflow and prerequisites are available/);
+  assert.match(shared, /Do not add a separate approval prompt just to select or load a matching skill/);
+  assert.match(shared, /Automatic routing never creates `approved_scope`, approval\s+receipts, or caller context/);
+  const dataScope = section(shared, '## Data-source invocation scope', '## Version Check');
+  assert.match(dataScope, /Dataverse work requires a matching data-workflow skill/);
+  assert.match(dataScope, /before obtaining mutation approval/);
+  assert.match(dataScope, /Missing\/conflicting\s+target context requires clarification/);
+  assert.match(dataScope, /never substitute a generic editor or ad-hoc\s+CLI\/HTTP mutations/);
+  assert.match(dataScope, /Installation approval is not approval of Dataverse changes/);
 });
 
 test('fresh starters do not enter the existing-app edit workflow', () => {

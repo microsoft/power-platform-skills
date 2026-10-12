@@ -23,9 +23,19 @@ name/namespace and respect invocation restrictions. Invoke a matching skill
 instead of merely recommending its command, after required entry consent.
 An already-running matching skill owns its workflow; do not invoke it again.
 Do not force unrelated intents through `/edit-app` or re-dispatch an approved
-child from its current owner. Unclear scope
-requires clarification; missing skills are not permission to install or enable
+child from its current owner. Unclear scope requires clarification; missing
+skills are not permission to install or enable
 plugins automatically. The classification and approval gates below still apply.
+
+Do not add a separate approval prompt just to select or load a matching skill
+for a clear request. Preserve existing workflow-entry scope/cost gates before
+costly planning. Automatic routing never creates `approved_scope`, approval
+receipts, or caller context; forward only the current approvals actually given.
+Read-only discovery and skill invocation are not mutation consent. Confirm
+cloud/data changes, installations, native builds/runs, and deployment through
+the owning workflow's operation gates; reuse current approval only for the same
+target and scope. Cancellation, dismissal, or unclear consent never authorizes
+the pending operation.
 
 The standard plugin-update notification remains first. Classify the current
 request from supplied intent, caller context, and minimal local app markers
@@ -60,6 +70,15 @@ change/new binding, retained-source refresh, retirement, or sample seeding.
 An existing plan or inventory is context, not permission to replay every row.
 Standalone implementation-only calls keep the data workflow's own approval and
 validation gates; the full-integration entry choice delegates to `/edit-app`.
+
+Dataverse work requires a matching data-workflow skill with the app-root,
+environment/tenant, schema, and generated-service checks below. Use the selected
+target and existing inventory; show the exact proposed schema, record, connection,
+or app-binding changes before obtaining mutation approval. Missing/conflicting
+target context requires clarification, not a guessed or silently switched
+environment. If a required skill is unavailable or cannot load, stop that work
+and offer the approved setup path; never substitute a generic editor or ad-hoc
+CLI/HTTP mutations. Installation approval is not approval of Dataverse changes.
 
 For every data child handoff, including routers and retries, pass
 `MOBILE_APP_ORCHESTRATING=1`, the owning `orchestrator`, absolute `working_dir`,

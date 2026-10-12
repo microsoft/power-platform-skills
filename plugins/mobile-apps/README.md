@@ -185,6 +185,15 @@ before installation or enabling. Opening the folder alone starts nothing, and
 `edit-app` is not the default for every request. Existing approval gates and
 fresh-template safeguards still apply.
 
+There is no extra approval just to select or load a clearly matching skill.
+Approvals cover the work: integration scope/cost, Dataverse schema/data changes,
+installations, native builds, and deployment. Dataverse workflows validate the
+app root and selected environment/tenant, inspect existing inventory, and show
+the proposed changes before mutation approval. Missing skills or unresolved
+targets block that work instead of falling back to ad-hoc commands. Approval to
+install a plugin never authorizes its Dataverse changes; current approvals are
+reused only for the same target and scope.
+
 Five typical flows:
 
 ### 1. Create a new app from a one-liner
