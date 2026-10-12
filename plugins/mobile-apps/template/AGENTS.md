@@ -5,11 +5,37 @@ customer feature code in `app/` and app-owned `src/` files. Read
 [CUSTOMIZATION.md](CUSTOMIZATION.md) before changing root configuration.
 Microsoft packages are consumed dependencies, not part of this app's source.
 
-## Choose an available mobile-app skill
+## Route natural-language requests to available skills
 
 Check the skills advertised by the current agent host. Do not search private
 plugin caches, assume a plugin is installed, or invent skill invocations.
 Use a matching available skill and its workflow rather than duplicating it here.
+
+Users do not need to type a slash command or know a skill name. Opening the
+folder alone does not start a workflow. For each actionable request:
+
+1. Match the original intent and app state against advertised skill descriptions
+   and supported scope. Prefer the most specific matching workflow, not
+   `edit-app` for every request. Honor an explicitly requested available skill
+   within its supported scope.
+2. Use the exact advertised skill name and namespace and respect its invocation
+   restrictions. Hidden implementation helpers stay owned by their entry skill;
+   do not invoke them directly.
+3. Apply the app-state, integration-choice, and approval rules below. Once the
+   route is clear and required entry consent is captured, invoke the matching
+   skill through the host's skill mechanism. Do not merely suggest its command
+   or ask the user to repeat the request.
+4. Forward the original request, resolved `working_dir` when applicable, supplied
+   answers, and current approval/owner context. Routing is not mutation consent.
+   Do not restart routing once a matching skill is running, including explicit
+   invocations and approved children; let that skill own its workflow.
+
+The table lists common examples, not an exhaustive list or closed allowlist.
+Future or custom skills advertised by the host can match without a table entry.
+If multiple workflows fit but differ in scope, ask before choosing; do not invoke
+several speculatively. If none matches, continue only authorized bounded work or
+explain the missing workflow. For an unavailable mobile-app workflow, follow the
+opt-in installation flow below; never install or enable skills automatically.
 
 | Intent | Skill |
 | --- | --- |
@@ -51,8 +77,10 @@ caller context first; creation can already have a plan without being finished.
 
 ## Trigger edit-app for existing-app feature work
 
-When the user asks in natural language to add, remove, redesign, or integrate a
-feature in this existing generated app, use the advertised `edit-app` workflow.
+For mobile-app feature work in an existing generated app that requires full
+integration, use the advertised `edit-app` workflow. Specific matching entry
+skills retain their own routing; do not force other intents or custom workflows
+through `edit-app`.
 Do not merely suggest that the user run it, ask them to repeat the request, or
 send them through `create-mobile-app`.
 

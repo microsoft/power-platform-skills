@@ -15,6 +15,18 @@ For native or data-source feature work, bind the invocation through
 [app-working-directory.md](references/app-working-directory.md) before reading
 even the minimal local app markers. A child's launch directory is not its app root.
 
+Natural-language requests do not require a slash command. App-level routing
+matches intent and app state against host-advertised skill descriptions and
+supported scope; the template's intent table is examples, not a closed allowlist.
+Future or custom advertised workflows remain eligible. Use the exact advertised
+name/namespace and respect invocation restrictions. Invoke a matching skill
+instead of merely recommending its command, after required entry consent.
+An already-running matching skill owns its workflow; do not invoke it again.
+Do not force unrelated intents through `/edit-app` or re-dispatch an approved
+child from its current owner. Unclear scope
+requires clarification; missing skills are not permission to install or enable
+plugins automatically. The classification and approval gates below still apply.
+
 The standard plugin-update notification remains first. Classify the current
 request from supplied intent, caller context, and minimal local app markers
 before operational toolchain/auth checks, metadata discovery, or planners:

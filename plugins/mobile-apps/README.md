@@ -171,7 +171,21 @@ Expected: ~6 prompts (wizard + gates), then ~5 minutes of scaffolding, table cre
 
 ## Quick examples
 
-The plugin is conversational — you describe what you want and the skill drives the rest. Five typical flows:
+The plugin is conversational: slash commands are optional when the agent host
+loads the app guidance and advertises the matching skills. Describe the task
+naturally, such as "Add signature capture", "Connect a data source", or "Upgrade
+this app's dependencies". The agent selects the most specific matching skill by
+description and supported scope, then invokes it after any required entry
+consent rather than asking you to repeat the prompt as a command.
+
+The intent table in the generated app guidance is examples, not a closed
+allowlist. Future or custom skills advertised by your host are eligible too.
+An ambiguous scope prompts clarification; a missing plugin requires approval
+before installation or enabling. Opening the folder alone starts nothing, and
+`edit-app` is not the default for every request. Existing approval gates and
+fresh-template safeguards still apply.
+
+Five typical flows:
 
 ### 1. Create a new app from a one-liner
 

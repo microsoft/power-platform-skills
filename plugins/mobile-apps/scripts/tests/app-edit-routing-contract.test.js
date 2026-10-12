@@ -110,6 +110,39 @@ test('direct requests preserve intent and do not infer implementation-only work'
   assert.match(routing, /UI integration was intentionally\nnot performed/);
 });
 
+test('app guidance selects any matching advertised skill without requiring slash commands', () => {
+  const guidance = section(
+    templateGuidance,
+    '## Route natural-language requests to available skills',
+    '## Identify the app state first',
+  );
+  assert.match(guidance, /do not need to type a slash command/);
+  assert.match(guidance, /folder alone does not start a workflow/);
+  assert.match(guidance, /app state against advertised skill descriptions/);
+  assert.match(guidance, /most specific matching workflow/);
+  assert.match(guidance, /exact advertised skill name and namespace/);
+  assert.match(guidance, /respect its invocation\s+restrictions/);
+  assert.match(guidance, /Hidden implementation helpers[\s\S]*do not invoke them directly/);
+  assert.match(guidance, /required entry consent is captured, invoke the matching\s+skill/);
+  assert.match(guidance, /Do not merely suggest its command/);
+  assert.match(guidance, /Forward the original request[\s\S]*`working_dir`/);
+  assert.match(guidance, /Do not restart routing once a matching skill is running/);
+  assert.match(guidance, /invocations and approved children; let that skill own its workflow/);
+  assert.match(guidance, /not an exhaustive list or closed allowlist/);
+  assert.match(guidance, /Future or custom skills advertised by the host can match without a table entry/);
+  assert.match(guidance, /multiple workflows fit but differ in scope, ask before choosing/);
+  assert.match(guidance, /If none matches, continue only authorized bounded work/);
+  assert.match(guidance, /never install or enable skills automatically/);
+  assert.match(shared, /host-advertised skill descriptions/);
+  assert.match(shared, /Future or custom advertised workflows remain eligible/);
+  assert.match(shared, /Invoke a matching skill\s+instead of merely recommending its command, after required entry consent/);
+  assert.match(shared, /do not force unrelated intents through `\/edit-app`/i);
+  assert.match(shared, /already-running matching skill owns its workflow; do not invoke it again/);
+  assert.match(shared, /re-dispatch an approved\s+child from its current owner/);
+  assert.match(pluginGuidance, /Natural-language routing is not a fixed skill list/);
+  assert.match(pluginGuidance, /including future\/custom workflows not in the example table/);
+});
+
 test('fresh starters do not enter the existing-app edit workflow', () => {
   const state = section(
     templateGuidance,
@@ -138,6 +171,7 @@ test('template guidance invokes edit-app after explicit existing-app integration
     '## Trigger debug-app for reported issues',
   );
   assert.match(editing, /use the advertised `edit-app` workflow/);
+  assert.match(editing, /do not force other intents or custom workflows\s+through `edit-app`/);
   assert.match(editing, /Do not merely suggest that the user run it/);
   assert.match(editing, /Native-control prompts[\s\S]*`add-native` entry point and its shared routing/);
   assert.match(editing, /approved child context; it does not\s+restart the entry-choice gate/);

@@ -134,6 +134,12 @@ Do not add preparation rewrites for `scheme`, `package`, `bundleIdentifier`, `sr
     cover newly added skills automatically. These static checks verify the
     instruction contract, not model compliance; do not claim smaller-model or
     host reliability without agent-run evidence.
+25. **Natural-language routing is not a fixed skill list** — App guidance selects
+    the most specific host-advertised skill by description and supported scope,
+    including future/custom workflows not in the example table. Invoke rather
+    than merely recommend it after required entry consent. Preserve exact
+    namespaces, invocation restrictions, current owners, and all approval gates;
+    do not route every request through `/edit-app`.
 
 ## Telemetry
 
