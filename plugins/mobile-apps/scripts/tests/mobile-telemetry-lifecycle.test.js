@@ -752,6 +752,7 @@ test('run lock serializes parent completion and retry creation across processes'
   fs.writeFileSync(traceFs, `
 const fs = require('node:fs');
 const path = require('node:path');
+const failures = [];
 for (const operation of ['linkSync', 'rmSync', 'statSync', 'readFileSync']) {
   const original = fs[operation];
   fs[operation] = function (...args) {
@@ -759,15 +760,18 @@ for (const operation of ['linkSync', 'rmSync', 'statSync', 'readFileSync']) {
       return original.apply(this, args);
     } catch (error) {
       if (typeof args[0] === 'string') {
-        process.stderr.write(JSON.stringify({
+        failures.push({
           operation, code: error.code, file: path.basename(args[0]),
           target: typeof args[1] === 'string' && operation === 'linkSync' ? path.basename(args[1]) : undefined,
-        }) + '\\n');
+        });
       }
       throw error;
     }
   };
 }
+process.on('exit', () => {
+  for (const failure of failures) process.stderr.write(JSON.stringify(failure) + '\\n');
+});
 `);
   fs.mkdirSync(configDir, { recursive: true });
   fs.writeFileSync(ikeyPath, JSON.stringify(provisioned));
@@ -828,7 +832,7 @@ for (const operation of ['linkSync', 'rmSync', 'statSync', 'readFileSync']) {
     );
   }
 
-  for (let retryTrial = 0; retryTrial < 8; retryTrial += 1) {
+  for (let retryTrial = 0; retryTrial < 32; retryTrial += 1) {
     const spanType = retryTrial % 2 === 0 ? 'skill' : 'checkpoint';
     const root = lifecycle.beginSpan({
       projectRoot, configDir, skillName: 'create-mobile-app',
