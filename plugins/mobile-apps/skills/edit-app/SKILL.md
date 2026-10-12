@@ -1,6 +1,6 @@
 ---
 name: edit-app
-description: "Use when the user wants to iterate on an existing generated Power Apps mobile app after /create-mobile-app: update Application Insights configuration, the plan, data model, native capabilities, design, screens, generated app code, and preview without restarting the full project flow."
+description: "Use when the user wants to iterate on an existing generated Power Apps mobile app after /create-mobile-app: update Application Insights configuration, the plan, data model, native capabilities, design, screens, generated app code, and preview without restarting the full project flow. Natural-language triggers include 'the app already exists', 'edit my app', 'change this screen', and 'add a feature to this app'."
 user-invocable: true
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Task, Skill
 model: opus

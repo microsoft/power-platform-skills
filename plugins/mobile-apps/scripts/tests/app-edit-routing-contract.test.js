@@ -13,6 +13,8 @@ const skill = (name) => read(`skills/${name}/SKILL.md`);
 const shared = read('shared/shared-instructions.md');
 const routing = read('shared/references/app-edit-routing.md');
 const removal = read('shared/references/data-source-removal.md');
+const pluginGuidance = read('AGENTS.md');
+const templateGuidance = read('template/AGENTS.md');
 const edit = skill('edit-app');
 const create = skill('create-mobile-app');
 const pluginCheck = '> **Plugin check**: Run `node "${PLUGIN_ROOT}/scripts/check-version.js"` - if it outputs a message, show it to the user before proceeding.';
@@ -106,6 +108,85 @@ test('direct requests preserve intent and do not infer implementation-only work'
   assert.match(routing, /Do not infer this mode merely because the user did not mention screens/);
   assert.match(routing, /Do not re-scaffold over the app/);
   assert.match(routing, /UI integration was intentionally\nnot performed/);
+});
+
+test('fresh starters do not enter the existing-app edit workflow', () => {
+  const state = section(
+    templateGuidance,
+    '## Identify the app state first',
+    '## Trigger edit-app for existing-app feature work',
+  );
+  assert.match(state, /minimal local markers/);
+  assert.match(state, /Honor current approved create\/edit\s+caller context first/);
+  assert.match(state, /Confirmed fresh starter[\s\S]*do not invoke `edit-app`/);
+  assert.match(state, /native-control request uses the available `add-native`/);
+  assert.match(state, /standalone prerequisites and approval gates/);
+  assert.match(state, /Do not\s+silently widen it to full app creation/);
+  assert.match(state, /missing\s+plan does not make the app fresh/);
+  assert.match(state, /ask to restore the plan or approve bounded/);
+  assert.match(state, /Unclear state or intent[\s\S]*ask before choosing/);
+  const direct = section(routing, '## Direct requests', '## Orchestrated calls');
+  assert.match(direct, /confirmed fresh starter stays with `\/add-native`/);
+  assert.match(direct, /do not invoke `\/edit-app` or silently start full app creation/);
+  assert.match(direct, /Current approved create\/edit children retain their owner/);
+});
+
+test('template guidance invokes edit-app after explicit existing-app integration consent', () => {
+  const editing = section(
+    templateGuidance,
+    '## Trigger edit-app for existing-app feature work',
+    '## Trigger debug-app for reported issues',
+  );
+  assert.match(editing, /use the advertised `edit-app` workflow/);
+  assert.match(editing, /Do not merely suggest that the user run it/);
+  assert.match(editing, /Native-control prompts[\s\S]*`add-native` entry point and its shared routing/);
+  assert.match(editing, /approved child context; it does not\s+restart the entry-choice gate/);
+  assert.match(editing, /before loading or invoking `edit-app`/);
+  assert.match(editing, /\*\*Full app integration\*\*[\s\S]*invoke the available `edit-app` skill/);
+  assert.match(editing, /original request[\s\S]*absolute app root as `working_dir`[\s\S]*`entry_choice: full-integration`/);
+  assert.match(editing, /\*\*Implementation only\*\*[\s\S]*do not invoke `edit-app`/);
+  assert.match(editing, /\*\*Cancel\*\*[\s\S]*stop without loading `edit-app` or changing files/);
+  assert.match(editing, /direct `edit-app` invocation needs no mode question/);
+  assert.match(editing, /reported runtime or build problems to `debug-app`/);
+  assert.match(editing, /dependency\/template\nupgrades to `check-updates`/);
+  assert.match(editing, /genuinely new apps to `create-mobile-app`/);
+});
+
+test('edit-app metadata recognizes natural existing-app requests', () => {
+  const description = edit.match(/^description:\s*"([^"]+)"$/m)?.[1];
+  assert.ok(description, 'edit-app needs a single-line routing description');
+  for (const trigger of [
+    'the app already exists',
+    'edit my app',
+    'change this screen',
+    'add a feature to this app',
+  ]) {
+    assert.match(description, new RegExp(trigger));
+  }
+});
+
+test('plugin maintenance guidance preserves natural existing-app routing', () => {
+  assert.match(pluginGuidance, /Natural-language\n\s+existing-app feature requests preserve the original prompt and invoke/);
+  assert.match(pluginGuidance, /`\/edit-app` after full-integration consent/);
+  assert.match(pluginGuidance, /never merely suggest the command/);
+  assert.match(pluginGuidance, /never merely suggest the command[\s\S]*`\/create-mobile-app`/);
+});
+
+test('create-mobile-app redirects existing-app change requests without re-scaffolding', () => {
+  const freshMode = section(
+    create,
+    '## Fresh-template working-directory mode',
+    '## TypeScript Gate Policy',
+  );
+  assert.match(freshMode, /Already-created app[\s\S]*never re-scaffold it/);
+  assert.match(freshMode, /Do not send\s+an existing-app edit request to a new folder/);
+  assert.match(freshMode, /Missing generated markers alone do\s+not prove freshness/);
+  assert.match(freshMode, /preserve the original request and execute the shared existing-app entry routing/);
+  assert.match(freshMode, /invoke `\/edit-app` only after \*\*Full app integration\*\*/);
+  assert.match(freshMode, /Do not merely suggest `\/edit-app` or ask the user to repeat/);
+  assert.match(freshMode, /original request, absolute `working_dir`, and\s+`entry_choice: full-integration`/);
+  assert.match(freshMode, /Reported\s+problems still route to `\/debug-app`/);
+  assert.match(freshMode, /dependency\/template upgrades route to\s+`\/check-updates`/);
 });
 
 test('the entry choice precedes costly work and requires explicit integration consent', () => {

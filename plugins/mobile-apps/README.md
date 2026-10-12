@@ -281,7 +281,29 @@ separate approval. Cloud-flow integration is not supported.
 > /report-issue                  # copy-paste-ready GitHub issue body
 ```
 
-Use `/edit-app` for post-generation improvements. It first inspects the existing app and asks only for missing intent details (which screen, table, scanned field, launch point, brand source, etc.). Then it updates `native-app-plan.md` when the request changes the plan, applies the generated app edits, runs the relevant verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. You do not need to manually run `npm run generate-schemas`, `npx --no-install tsc --noEmit`, or `/preview-screens` after each edit unless you are doing diagnostics outside the skill.
+Use `/edit-app` for post-generation improvements. Users can invoke it directly
+or ask naturally, for example, "This app already exists; add an asset detail
+screen." For a natural-language existing-app feature request, the generated app
+guidance asks whether the user wants **Implementation only**, **Full app
+integration**, or **Cancel**. Full integration invokes `/edit-app` with the
+original request; it does not merely recommend the command or ask the user to
+repeat the prompt. Reported failures still go to `/debug-app`, dependency or
+template upgrades go to `/check-updates`, and small app-owned fixes remain
+small.
+
+A fresh starter is not an already-generated app. Native-control requests such
+as "Add signature capture" use `/add-native` and its standalone prerequisites;
+they do not automatically start `/edit-app` or full app creation. An existing
+app with a missing plan is not considered fresh and must not be re-scaffolded.
+
+`/edit-app` first inspects the existing app and asks only for missing intent
+details (which screen, table, scanned field, launch point, brand source, etc.).
+Then it updates `native-app-plan.md` when the request changes the plan, applies
+the generated app edits, runs the relevant verification, updates
+`memory-bank.md`, and regenerates `preview.html` when UI changed. You do not
+need to manually run `npm run generate-schemas`,
+`npx --no-install tsc --noEmit`, or `/preview-screens` after each edit unless
+you are doing diagnostics outside the skill.
 
 Common follow-ups:
 

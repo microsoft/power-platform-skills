@@ -41,7 +41,11 @@ and summary.
 
 This skill assumes the user already has a **fresh** `microsoft/power-platform-skills/plugins/mobile-apps/template#main` template materialized with `degit` in the target working directory and has already run `npm install` there. The skill turns that fresh template into an app; it does not clone, degit, or copy a template itself.
 
-**Fresh template required.** If the working directory is not a template, or if it already looks like an app created by this skill, STOP and tell the user to materialize a fresh `microsoft/power-platform-skills/plugins/mobile-apps/template#main` template with `degit` into a new folder, run `npm install`, then rerun `/create-mobile-app --working-dir <fresh-template-dir>`.
+**Fresh template required for creation.** If the working directory is not a fresh
+template, STOP creation and follow the state-specific routing below. Do not send
+an existing-app edit request to a new folder. Missing generated markers alone do
+not prove freshness: if the template is customized or its state is unclear, ask
+before proceeding. Only a request for a new app requires a fresh template folder.
 
 Use these markers:
 
@@ -49,10 +53,19 @@ Use these markers:
 |---|---|---|
 | Fresh template | `package.json`, `app.config.js`, `auth.config.json`, `tamagui.config.ts` exist; `node_modules/expo` exists; `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, and generated Dataverse services are absent | Proceed. |
 | Template not installed | Fresh-template files exist but `node_modules/expo` is absent | STOP: ask user to run `npm install` in the template folder, then rerun. Do not provision ADO npm tokens here. |
-| Already-created app | `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts` exists | STOP: this is not a fresh create target. Ask user to materialize a fresh template folder with `degit`. |
+| Already-created app | `memory-bank.md`, `native-app-plan.md`, `.datamodel-manifest.json`, or `src/generated/services/*.ts` exists | STOP: never re-scaffold it. If the request changes this app, preserve the original request and execute the shared existing-app entry routing; invoke `/edit-app` only after **Full app integration**. If the user wants a separate new app, ask for a fresh template folder. |
 | Not template | Required template files are missing | STOP: ask user to materialize `microsoft/power-platform-skills/plugins/mobile-apps/template#main` into the working directory with `degit` and run `npm install`. |
 
 This gate is intentionally simple: `/create-mobile-app` creates a new app from a fresh template. It does not adopt, repair, resume, or overwrite an already-created app.
+
+An already-created app is a routing boundary, not a reason to discard the
+user's edit request. Do not merely suggest `/edit-app` or ask the user to repeat
+the request. For a current-app feature request, execute
+[app-edit-routing.md](../../shared/references/app-edit-routing.md), then invoke
+`/edit-app` with the original request, absolute `working_dir`, and
+`entry_choice: full-integration` only when that choice is approved. Reported
+problems still route to `/debug-app`; dependency/template upgrades route to
+`/check-updates`.
 
 ---
 

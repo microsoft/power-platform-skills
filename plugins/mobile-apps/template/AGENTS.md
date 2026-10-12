@@ -29,13 +29,59 @@ Use a matching available skill and its workflow rather than duplicating it here.
 | Report a plugin or Microsoft native-package problem | `report-issue` |
 
 Keep a small app-owned fix small. Do not route explanations, typo fixes, or
-bounded bug fixes through full app planning. For an existing-app feature whose
-integration scope is undecided, ask through the host's question tool before
-loading planners, discovering cloud metadata, or generating previews:
-**Implementation only**, **Full app integration**, or **Cancel**.
-Explain that full integration takes more time and cost. Reuse a choice already
-made for this request; an approved create/edit child call must not ask again or
-start another orchestration. An integration choice does not approve mutations.
+bounded bug fixes through full app planning.
+
+## Identify the app state first
+
+Resolve the absolute app root and inspect only minimal local markers:
+`package.json`, `native-app-plan.md`, `memory-bank.md`, `.datamodel-manifest.json`,
+and generated services. The shipped starter routes and this guidance alone do
+not prove that an app has been generated. Honor current approved create/edit
+caller context first; creation can already have a plan without being finished.
+
+- **Confirmed fresh starter** — do not invoke `edit-app` merely because the
+  template is open. A native-control request uses the available `add-native`
+  entry point with its standalone prerequisites and approval gates. Do not
+  silently widen it to full app creation.
+- **Existing or customized app** — use the existing-app routing below. A missing
+  plan does not make the app fresh; ask to restore the plan or approve bounded
+  implementation-only work rather than re-scaffolding it.
+- **Unclear state or intent** — ask before choosing creation or editing. Do not
+  infer a fresh starter solely from missing generated markers.
+
+## Trigger edit-app for existing-app feature work
+
+When the user asks in natural language to add, remove, redesign, or integrate a
+feature in this existing generated app, use the advertised `edit-app` workflow.
+Do not merely suggest that the user run it, ask them to repeat the request, or
+send them through `create-mobile-app`.
+
+Native-control prompts such as "Add signature capture" use the available
+`add-native` entry point and its shared routing. Full integration enters
+`edit-app`, which calls `add-native` with approved child context; it does not
+restart the entry-choice gate.
+
+For an existing-app feature whose integration scope is undecided, ask through
+the host's question tool before loading or invoking `edit-app`, loading planners,
+discovering cloud metadata, scanning the whole app, or generating previews:
+**Implementation only**, **Full app integration**, or **Cancel**. Explain that
+full integration takes more time and cost.
+
+- **Full app integration** — invoke the available `edit-app` skill and pass the
+  original request, resolved absolute app root as `working_dir`, and
+  `entry_choice: full-integration`. Do not ask the user to restate intent or
+  repeat the mode question.
+- **Implementation only** — do not invoke `edit-app`; use the matching bounded
+  app-owned or leaf-skill workflow within the approved scope.
+- **Cancel** — stop without loading `edit-app` or changing files.
+
+A direct `edit-app` invocation needs no mode question, but it still keeps its
+impact, plan, and mutation approval gates. Reuse a choice already made for the
+current request; an approved create/edit child call must not ask again or start
+another orchestration. An integration choice does not approve mutations.
+
+Route reported runtime or build problems to `debug-app`, dependency/template
+upgrades to `check-updates`, and genuinely new apps to `create-mobile-app`.
 
 ## Trigger debug-app for reported issues
 
