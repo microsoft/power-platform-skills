@@ -239,7 +239,10 @@ Per-project notebook persisted at `<working_dir>/memory-bank.md`. Every skill MU
 1. **Read it at start** — locate at `<working_dir>/memory-bank.md`. If present, parse Project facts, Power Platform context, Data model, Connectors, Screens, Build history. Inform the user what was found.
 2. **Skip work already done** — if a step is marked complete, ask whether to redo or move on. If invoked from another skill that already updated the bank, skip the summary.
 3. **Update at end** — append to the relevant section after a successful step. Use ISO dates. One-line entries. Never delete — mark `~~superseded~~`.
-4. **Resume on failure** — if a previous run died partway, the bank is the only record of where. Resume from the first incomplete step rather than re-running everything.
+4. **Resume on explicit continuation** — use the bank and the owning workflow's
+   saved progress only when the user requests continuation of that unfinished
+   workflow. Follow its resume gate and verify the current phase; bank presence
+   alone is not resume intent. Existing-app edits must not resume creation.
 
 If the bank doesn't exist yet, `/create-mobile-app` is responsible for copying the template (`${PLUGIN_ROOT}/shared/memory-bank.md`) into the working directory at Step 6 (right after `pa app init` succeeds).
 

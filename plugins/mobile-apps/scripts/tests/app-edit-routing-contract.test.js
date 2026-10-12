@@ -27,6 +27,45 @@ function section(text, start, end) {
   return text.slice(startIndex, endIndex);
 }
 
+function creationStateRow(content, state) {
+  const routing = section(content, '## Fresh-template working-directory mode', '## TypeScript Gate Policy');
+  const row = routing.split('\n').find(line => line.startsWith(`| ${state} |`));
+  assert.ok(row, `Missing creation state: ${state}`);
+  const [, , detection, action] = row.split('|').map(cell => cell.trim());
+  return { row, detection, action };
+}
+
+function assertCreationStateRouting(content) {
+  const fresh = creationStateRow(content, 'Fresh template');
+  assert.match(fresh.detection, /Confirmed new-app intent/);
+  assert.match(fresh.detection, /confirmed uncustomized starter/);
+  assert.match(fresh.action, /only when every condition is satisfied/);
+  assert.match(fresh.detection, /approved creation plan and its planning artifacts are allowed/);
+
+  const existing = creationStateRow(content, 'Already-created app');
+  assert.match(existing.detection, /Existing-app intent or confirmed app customizations/);
+  assert.match(existing.detection, /even when generated markers are missing/);
+  assert.doesNotMatch(existing.detection, /native-app-plan\.md/);
+  const continuation = creationStateRow(content, 'Creation continuation');
+  assert.match(continuation.detection, /Explicit creation-continuation intent/);
+  assert.match(continuation.detection, /not a request to edit an existing app/);
+  assert.match(continuation.action, /matching unfinished creation progress/);
+
+  const entry = section(content, '### Step 0 ', '### Step 1 ');
+  assert.match(entry, /Apply the state-routing table above once/);
+  assert.match(entry, /Classify the original request before\s+considering a creation resume/);
+  const handoff = entry.indexOf('**Existing-app changes leave this skill before resume handling.**');
+  const resume = entry.indexOf('#### Creation continuation');
+  assert.ok(handoff >= 0 && resume > handoff, 'Existing-app handoff must precede resume handling');
+  assert.match(entry, /return without entering Step 1 or modifying creation progress/);
+  assert.match(entry, /Pre-initialization creation may have an approved plan and saved planning\s+progress without a memory bank/);
+  assert.match(entry, /Completed creation[\s\S]*no unfinished creation to resume/);
+  assert.match(entry, /Missing or conflicting progress[\s\S]*then stop/);
+  assert.match(entry, /Reopen the build plan only after continuation approval/);
+  assert.doesNotMatch(entry, /\*\*Bank absent\*\*.*fresh project|highest-numbered completed step|The bank is the only resume mechanism/);
+  assert.doesNotMatch(entry, /If any already-created-app marker[\s\S]*STOP and tell the user to materialize a fresh template/);
+}
+
 for (const [name, ending] of [['LF', '\n'], ['CRLF', '\r\n']]) {
   test(`Markdown reader preserves the same contracts with ${name} line endings`, (t) => {
     const file = 'shared/references/app-edit-routing.md';
@@ -255,6 +294,36 @@ test('create-mobile-app redirects existing-app change requests without re-scaffo
   assert.match(freshMode, /original request, absolute `working_dir`, and\s+`entry_choice: full-integration`/);
   assert.match(freshMode, /Reported\s+problems still route to `\/debug-app`/);
   assert.match(freshMode, /dependency\/template upgrades route to\s+`\/check-updates`/);
+  assertCreationStateRouting(create);
+});
+
+test('creation routing rejects marker-only freshness and contradictory resume rules', () => {
+  const fresh = creationStateRow(create, 'Fresh template');
+  const existing = creationStateRow(create, 'Already-created app');
+  const mutations = [
+    ['fresh without new-app intent', create.replace(fresh.row, fresh.row.replace('Confirmed new-app intent and ', ''))],
+    ['fresh without customization confirmation', create.replace(fresh.row, fresh.row.replace('a confirmed uncustomized starter', 'a directory'))],
+    ['plan alone treated as materialization', create.replace(existing.row, existing.row.replace('`memory-bank.md`', '`native-app-plan.md`, `memory-bank.md`'))],
+    ['bank absence treated as fresh', create.replace('#### Fresh run', '#### Fresh run\n\n- **Bank absent** -> fresh project. Continue to Step 1.')],
+    ['bank presence chooses arbitrary resume', create.replace('#### Creation continuation', '#### Creation continuation\n\nIdentify the highest-numbered completed step and resume it.')],
+    ['old re-scaffold fallback returns', create.replace('#### Fresh run', '#### Fresh run\n\nIf any already-created-app marker exists, STOP and tell the user to materialize a fresh template.')],
+    ['Step 0 no longer uses the shared decision', create.replace('Apply the state-routing table above once.', 'Run a separate freshness decision after checking the bank.')],
+  ];
+  for (const [name, mutated] of mutations) {
+    assert.notEqual(mutated, create, `${name}: mutation must change the source`);
+    assert.throws(() => assertCreationStateRouting(mutated), name);
+  }
+});
+
+test('creation progress is not resumed or mutated for existing-app routing exits', () => {
+  const protocol = section(create, '## Build documentation protocol', '### Step 0 ');
+  assert.match(protocol, /after Step 0 selects fresh creation or an approved\s+creation continuation/);
+  assert.match(protocol, /does not create, reopen, or reset the\s+creation plan or change its phase status/);
+  assert.match(protocol, /Step 0 routing exits leave existing creation history untouched/);
+  const memory = section(shared, '## Memory Bank', '## Preferred Environment');
+  assert.match(memory, /Resume on explicit continuation/);
+  assert.match(memory, /bank presence\s+alone is not resume intent/);
+  assert.match(memory, /Existing-app edits must not resume creation/);
 });
 
 test('the entry choice precedes costly work and requires explicit integration consent', () => {

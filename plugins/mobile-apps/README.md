@@ -167,7 +167,13 @@ After the prereq sanity check passes:
 > /create-mobile-app build me a small notes app
 ```
 
-Expected: ~6 prompts (wizard + gates), then ~5 minutes of scaffolding, table creation, and parallel screen builds. End state: a working Notes app with a project-local Metro session ready to scan and debug. If anything fails, the [memory bank](#glossary) remembers where you left off — re-run the same command and it resumes.
+Expected: ~6 prompts (wizard + gates), then ~5 minutes of scaffolding, table creation, and parallel screen builds. End state: a working Notes app with a project-local Metro session ready to scan and debug.
+
+If creation stops, explicitly ask to continue that creation. The skill checks
+the [memory bank](#glossary), saved build-plan progress, and current artifacts,
+then confirms the unfinished phase. A plan written before app initialization
+is not a completed app. Opening an existing app or asking for a feature change
+does not automatically resume creation, even if a memory bank exists.
 
 ## Quick examples
 
