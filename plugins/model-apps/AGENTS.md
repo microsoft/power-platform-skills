@@ -1482,6 +1482,7 @@ scripts/
     source-literals.js         ← TSX lexer (code/comment/string/template/regex/JSX) — see "Known limits" below
     sdk-teardown.js            ← app-builder teardown engine (planTeardown is pure)
     sdk-http-client.js         ← az-token HttpClient for the vendored SDK
+    typescript-compiler.js     ← loads the vendored TypeScript 5.8.3 compiler (vendor/typescript/) for the SDK's page compile: lazily, once, only after its bytes match PROVENANCE.json
     spec-lint.js / app-spec.js ← App Spec guardrail lint + validation
     lookup-labels.js           ← a lookup column's default label, environment-facing half: the parent table's label read, the old-default repair's column-label read (one per child table) (the pure rule is `lookupLabelFor`, app-spec.js); `lookup-cell-labels.js` repairs the form cell
     view-filter-labels.js      ← resolves a view filter's Choice labels against the environment's option metadata; the build's pre-flight (skipped for a spec with a localized label) and views-phase gate, the dry run, verify and lint all use it
@@ -1524,7 +1525,8 @@ scripts/
     utf8-stream.js             ← reads a hook's stdin as UTF-8 without splitting a multibyte character across pipe chunks
     telemetry/                 ← Bundled 1DS telemetry: ikey.json (this plugin's per-region keys) + resolver.js + region/ (copy of power-pages' router) + lib/ (copy of shared/telemetry/lib)
   vendor/cds-maker-sdk.cjs     ← headless vendored SDK bundle (rebuilt via _vendor-build/)
-  _vendor-build/               ← esbuild vendoring tooling (build.js + pinned deps)
+  vendor/typescript/           ← the TypeScript 5.8.3 compiler the SDK compiles generative pages with (brotli; PROVENANCE.json; licenses)
+  _vendor-build/               ← esbuild vendoring tooling (build.js + build-typescript.js + pinned deps)
   tests/                       ← node --test coverage for the scripts + hooks
 hooks/                         ← Lifecycle hooks
   hooks.json                   ← Hook registrations (closed schema — documentation lives in README.md)
@@ -2624,6 +2626,31 @@ Only the SDK `src/` is committed in the SDK repo (`lib/` is gitignored). A type-
 edit produces a byte-identical `lib/*.js`, so the bundle only needs rebuilding when SDK **runtime**
 changes. **Never patch the bundle** to work around an SDK defect: the next re-vendor silently
 reverts it and the hash in `PROVENANCE.json` stops matching. Fix it upstream and re-vendor.
+
+**The TypeScript compiler the SDK compiles generative pages with is vendored too** —
+`scripts/vendor/typescript/` (`typescript.min.js.br`, its `LICENSE.txt` and `ThirdPartyNoticeText.txt`, and
+`PROVENANCE.json`), loaded by `scripts/lib/typescript-compiler.js` and passed to the SDK as
+`MakerSdkOptions.typescript`. The SDK compiles a page's source itself on every push that changes it — TypeScript's
+`transpileModule` plus its checker, to resolve enum names — and accepts only the minor version the maker portal compiles
+with (5.8; another is refused with `GENPAGE_COMPILER_VERSION`), so a page is stored as the portal would store it. The
+SDK's bundle holds no TypeScript (`_vendor-build/build.js` keeps it `external`), and a plugin install has no
+`node_modules`, so the plugin ships the official `typescript@5.8.3` `lib/typescript.js` — only that file: the compile
+reads no `.d.ts` — minified by esbuild as a SCRIPT (as a module esbuild renames the top-level `var ts`) and
+brotli-compressed: ~0.8 MB on disk instead of ~8.7 MB. It is unpacked and evaluated lazily, once per process, only when
+a page is compiled (~15 ms and ~200 ms), and its bytes are checked against `PROVENANCE.json` before it runs.
+
+```bash
+# Rebuild it (only when the SDK moves to another TypeScript) — from repo root:
+npm pack typescript@5.8.3 --pack-destination <dir>
+node plugins/model-apps/scripts/_vendor-build/build-typescript.js --tarball <dir>/typescript-5.8.3.tgz
+```
+
+`build-typescript.js` refuses a tarball that is not the pinned one (npm sha1 + sha512) and a source file that is not the
+pinned SHA-256, checks that the minified file still loads both as a function body and as a bare script, and writes a
+`PROVENANCE.json` with no timestamp, so a rebuild from the same tarball writes the same files.
+`scripts/tests/vendor-typescript.test.js` checks every committed byte against that provenance, that a copy which does not
+match it is refused before it runs, and that the vendored compiler emits exactly what the official package emits for the
+pages in `scripts/tests/fixtures/vendored-typescript/` (their `.expected.js` were written by the unminified package).
 
 **Vendored-SDK contract invariants (regression net).** When you bump the SDK and re-vendor, the
 skill relies on behaviors that must survive. The test files below lock them — run all against every

@@ -9,3 +9,8 @@
 # `-text` tells git to store and check this file out verbatim on every platform, which is the
 # correct treatment for generated output nobody hand-edits.
 cds-maker-sdk.cjs -text
+
+# The vendored TypeScript compiler (typescript/, built by _vendor-build/build-typescript.js) is generated too, and its
+# PROVENANCE.json records the hash of every file in it: brotli bytes are binary, and the license texts are kept exactly
+# as the npm package ships them.
+typescript/** -text
