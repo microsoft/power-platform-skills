@@ -125,6 +125,38 @@ test('makeRequest preserves UTF-8 characters split across response chunks', asyn
   }
 });
 
+// A file's content is bytes: a generative page's row, an image. Decoded as UTF-8, bytes that are not valid UTF-8 come back changed (each bad byte becomes
+// U+FFFD), so `binary` hands back the Buffer as it arrived — split across chunks or not — and a request body that is a Buffer goes out verbatim.
+test('makeRequest with `binary` returns the body as the bytes that arrived, never decoded; a Buffer body is sent as it is', async () => {
+  const { makeRequest } = require('../lib/dataverse-auth.js');
+  const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x00, 0xc3, 0x28, 0xe2, 0x82]);
+  let received = null;
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      if (req.method === 'PATCH') received = Buffer.concat(chunks);
+      res.setHeader('Content-Type', 'application/octet-stream');
+      for (let i = 0; i < bytes.length; i += 1) res.write(bytes.subarray(i, i + 1));
+      res.end();
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const got = await makeRequest({ url: `http://127.0.0.1:${port}/x/$value`, binary: true });
+    assert.ok(Buffer.isBuffer(got.body), 'a Buffer');
+    assert.ok(got.body.equals(bytes), 'byte for byte');
+    const decoded = await makeRequest({ url: `http://127.0.0.1:${port}/x/$value` });
+    assert.strictEqual(typeof decoded.body, 'string', 'without `binary`, decoded as before');
+    assert.notStrictEqual(Buffer.from(decoded.body, 'utf8').length, bytes.length, 'the control: decoding changes bytes that are not UTF-8');
+    await makeRequest({ url: `http://127.0.0.1:${port}/x`, method: 'PATCH', body: bytes, headers: { 'Content-Length': String(bytes.length) }, binary: true });
+    assert.ok(received && received.equals(bytes), 'the body went out byte for byte');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('makeRequest settles with an error when the connection closes mid-response', async () => {
   const { makeRequest } = require('../lib/dataverse-auth.js');
   // Headers and part of the body arrive, then the socket closes: no 'end', and the socket timeout

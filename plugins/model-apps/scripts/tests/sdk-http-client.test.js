@@ -44,6 +44,49 @@ test('merges per-call headers (solution + If-Match) and keeps caller Content-Typ
   assert.strictEqual(calls[0].headers['If-Match'], 'W/"7"');
 });
 
+// A file's CONTENT (`…/filecontent/$value`) is bytes — a generative page's rows, an image — and the SDK takes it as bytes. Parsed as JSON, a page's
+// `config.json` came back as an object and the SDK refused every page read (GENPAGE_CONTENT_UNREADABLE, measured live); decoded as text, bytes that are not
+// UTF-8 would be corrupted. Any other read is parsed as before.
+test('a read of a file\'s content ($value) answers the bytes as they arrived; any other read is still parsed', async () => {
+  const configJson = Buffer.from('{"dataSources":["account"],"model":"m"}', 'utf8');
+  const image = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe, 0x00, 0xc3, 0x28]);
+  const { request, calls } = fakeTransport((opts) => ({ statusCode: 200, headers: {}, body: opts.binary ? (/img/.test(opts.url) ? image : configJson) : '{"value":[]}' }));
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request });
+  const config = await http.get('https://org.crm.dynamics.com/api/data/v9.0/uxagentprojectfiles(1)/filecontent/$value', { headers: { 'MSCRM.IncludeUnpublished': 'true' } });
+  assert.ok(Buffer.isBuffer(config.body) && config.body.equals(configJson), 'a JSON row stays bytes, never an object');
+  assert.strictEqual(calls[0].binary, true, 'the transport is asked for bytes');
+  assert.strictEqual(calls[0].headers.Accept, '*/*', 'the content, of whatever type');
+  assert.strictEqual(calls[0].headers['MSCRM.IncludeUnpublished'], 'true', 'the caller\'s headers ride along');
+  const img = await http.get('https://org.crm.dynamics.com/api/data/v9.0/uxagentprojectfiles(2)/filecontent/$value?img=1');
+  assert.ok(img.body.equals(image), 'bytes that are not UTF-8 come back unchanged');
+  const list = await http.get('https://org.crm.dynamics.com/api/data/v9.0/uxagentprojectfiles?$select=filename');
+  assert.deepStrictEqual(list.body, { value: [] }, 'a query is parsed, as before');
+  assert.notStrictEqual(calls[2].binary, true);
+  await assert.rejects(http.get('https://evil.example.com/api/data/v9.0/x/filecontent/$value'), /different origin/, 'the same-origin guard holds for a content read');
+});
+
+// patchRaw (cds-maker-sdk HttpClient): a PATCH whose body is a file's bytes, sent verbatim — never JSON.stringify'd — with its length and the caller's
+// Content-Type. It carries If-Match, so one that got no answer is not re-sent: it may still commit.
+test('patchRaw sends a file\'s bytes verbatim with their length and the caller\'s headers, and is not re-sent when no answer came', async () => {
+  const bytes = new Uint8Array([0x3c, 0x64, 0x69, 0x76, 0x3e, 0xff, 0x00]);
+  const { request, calls } = fakeTransport({ statusCode: 204, headers: {}, body: '' });
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request });
+  const res = await http.patchRaw('https://org.crm.dynamics.com/api/data/v9.0/uxagentprojectfiles(1)/filecontent', bytes,
+    { headers: { 'Content-Type': 'application/octet-stream; charset=utf-8', 'x-ms-file-name': 'page.tsx', 'If-Match': '*' } });
+  assert.strictEqual(res.status, 204);
+  assert.ok(Buffer.isBuffer(calls[0].body) && calls[0].body.equals(Buffer.from(bytes)), 'the bytes, as they are');
+  assert.strictEqual(calls[0].headers['Content-Length'], String(bytes.length));
+  assert.strictEqual(calls[0].headers['Content-Type'], 'application/octet-stream; charset=utf-8', 'the caller\'s type, not a JSON default');
+  assert.strictEqual(calls[0].headers['x-ms-file-name'], 'page.tsx');
+  const bare = fakeTransport({ statusCode: 204, headers: {}, body: '' });
+  await createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request: bare.request }).patchRaw('https://org.crm.dynamics.com/x', bytes);
+  assert.strictEqual(bare.calls[0].headers['Content-Type'], 'application/octet-stream', 'bytes with no type given are octets');
+  const lost = fakeTransport({ error: 'socket hang up' });
+  const client = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request: lost.request, sleep: async () => {} });
+  await assert.rejects(client.patchRaw('https://org.crm.dynamics.com/x', bytes, { headers: { 'If-Match': '*' } }), /was not re-sent/);
+  assert.strictEqual(lost.calls.length, 1, 'one send');
+});
+
 test('does NOT throw on non-2xx — passes status/body through (412 version conflict)', async () => {
   const { request } = fakeTransport({ statusCode: 412, headers: {}, body: '{"error":{"message":"conflict"}}' });
   const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request });

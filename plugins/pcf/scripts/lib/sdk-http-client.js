@@ -45,6 +45,10 @@ const DEADLOCK_RESENDS = 3;
 // See: https://learn.microsoft.com/power-apps/developer/data-platform/api-limits#retry-operations
 const RETRY_AFTER_CAP_MS = 60000;
 
+// An OData raw-value read — `…/uxagentprojectfiles(<id>)/filecontent/$value`, or any other `$value` — answers the stored bytes
+// themselves, so the client hands them back untouched (createAzHttpClient's `get`).
+const RAW_VALUE = /\/\$value(?:\?|$)/;
+
 /**
  * The wait a response asks for in `Retry-After`, in milliseconds, capped at RETRY_AFTER_CAP_MS; 0 when
  * the header is absent or unreadable. RFC 9110 allows two forms, delay-seconds and an HTTP date:
@@ -254,7 +258,7 @@ function batchRetryAfterMs(res, now = Date.now()) {
  * Build an HttpClient bound to one Dataverse org.
  * @param {string} orgUrl - e.g. https://contoso.crm.dynamics.com
  * @param {object} [deps] - test seam: { getToken(orgUrl)->string|null, request(opts)->Promise }
- * @returns {{get,post,patch,delete,put,postRaw}}
+ * @returns {{get,post,patch,delete,put,postRaw,patchRaw}}
  */
 function createAzHttpClient(orgUrl, deps = {}) {
   // Same-origin guard: this client attaches an Azure bearer token for the org, and the SDK always
@@ -346,12 +350,16 @@ function createAzHttpClient(orgUrl, deps = {}) {
 
   /**
    * @param {object} [ctl] - transport controls, independent of the OData semantics:
-   *   `rawBody` returns the response body as the decoded string it arrived as, skipping parseBody.
+   *   `rawBody` returns the response body as the decoded string it arrived as, skipping parseBody;
+   *   `bytes` returns the response body as the Buffer it arrived as — never decoded — and sends a Uint8Array request body
+   *   verbatim, with its Content-Length and the caller's Content-Type (a file's content, which is bytes, not JSON or text).
    */
   async function call(method, url, body, options, ctl = {}) {
     assertSameOrigin(url); // never attach the org's bearer token to a foreign origin
     const hasBody = body !== undefined && body !== null;
-    const bodyStr = hasBody ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
+    const bodyOut = !hasBody ? null
+      : ctl.bytes ? Buffer.from(body.buffer, body.byteOffset, body.byteLength)
+        : (typeof body === 'string' ? body : JSON.stringify(body));
     // DELETE retry policy splits by endpoint, because the two kinds fail oppositely:
     //  - METADATA deletes (EntityDefinitions / RelationshipDefinitions / GlobalOptionSetDefinitions)
     //    are async-idempotent: a slow one client-times-out while completing server-side, and a retry
@@ -398,11 +406,18 @@ function createAzHttpClient(orgUrl, deps = {}) {
         'OData-Version': '4.0',
         ...((options && options.headers) || {}),
       };
-      if (bodyStr && !headers['Content-Type']) {
+      if (ctl.bytes) {
+        // A file's content: the bytes as they are. `$value` answers the content, not JSON, so it is asked for as any type.
+        if (!(options && options.headers && Object.keys(options.headers).some((h) => h.toLowerCase() === 'accept'))) headers.Accept = '*/*';
+        if (bodyOut) {
+          if (!headers['Content-Type']) headers['Content-Type'] = 'application/octet-stream';
+          headers['Content-Length'] = String(bodyOut.length);
+        }
+      } else if (bodyOut && !headers['Content-Type']) {
         headers['Content-Type'] = 'application/json; charset=utf-8';
       }
 
-      const res = await request({ url, method, headers, body: bodyStr, includeHeaders: true, timeout: isWrite ? WRITE_TIMEOUT_MS : READ_TIMEOUT_MS });
+      const res = await request({ url, method, headers, body: bodyOut, includeHeaders: true, timeout: isWrite ? WRITE_TIMEOUT_MS : READ_TIMEOUT_MS, ...(ctl.bytes ? { binary: true } : {}) });
       if (res.error) {
         if (conditional) {
           throw new Error(`Request failed: ${res.error} — this conditional ${method_} was not re-sent, because it may still commit and a re-send could only be refused as a false version conflict`);
@@ -451,8 +466,8 @@ function createAzHttpClient(orgUrl, deps = {}) {
       // follows the create of its table, and a table's customization lock can stay held for ~20 s behind
       // that (see maxAttempts): one column's own POST rides it out on this schedule, so the change set that
       // replaces a column's POST gets the same treatment instead of a refusal the caller has to work around.
-      const conditionalDeleteBatch = isBatch && isConditionalDeleteBatch(bodyStr);
-      const columnCreateBatch = isBatch && isColumnCreateBatch(bodyStr);
+      const conditionalDeleteBatch = isBatch && isConditionalDeleteBatch(bodyOut);
+      const columnCreateBatch = isBatch && isColumnCreateBatch(bodyOut);
       const throttled = (recordDelete && res.statusCode === 429) || ((conditionalDeleteBatch || columnCreateBatch) && isBatchThrottled(res));
       if (throttled && !last) {
         // A batch refused operation by operation may carry the wait in that operation's own headers.
@@ -468,7 +483,7 @@ function createAzHttpClient(orgUrl, deps = {}) {
       return {
         status: res.statusCode,
         headers: res.headers || {},
-        body: ctl.rawBody ? res.body : parseBody(res.body),
+        body: ctl.rawBody || ctl.bytes ? res.body : parseBody(res.body),
       };
     }
     /* istanbul ignore next */
@@ -476,7 +491,11 @@ function createAzHttpClient(orgUrl, deps = {}) {
   }
 
   return {
-    get: (url, options) => call('GET', url, undefined, options),
+    // A read of a file's CONTENT (`…/filecontent/$value`, any `$value`) answers the content itself, not JSON: a generative
+    // page's rows, an image. It comes back as the Buffer it arrived as. Parsed, a JSON row such as a page's `config.json`
+    // became an object, and the SDK refused every page read (GENPAGE_CONTENT_UNREADABLE, measured live); decoded as text,
+    // bytes that are not UTF-8 would be corrupted. The SDK takes bytes for content (cds-maker-sdk GenPageApi downloadContent).
+    get: (url, options) => call('GET', url, undefined, options, RAW_VALUE.test(url) ? { bytes: true } : {}),
     post: (url, body, options) => call('POST', url, body, options),
     patch: (url, body, options) => call('PATCH', url, body, options),
     delete: (url, options) => call('DELETE', url, undefined, options),
@@ -491,6 +510,12 @@ function createAzHttpClient(orgUrl, deps = {}) {
     // Contract: cds-maker-sdk src/types/httpClient.ts (postRaw). Without this method the SDK refuses
     // to delete an app that owns a sitemap (APP_DELETE_NOT_ATOMIC) rather than strand a row.
     postRaw: (url, body, options) => call('POST', url, body, options, { rawBody: true }),
+    // A PATCH whose body is a file's bytes, verbatim (cds-maker-sdk src/types/httpClient.ts patchRaw): a File column's
+    // content is not JSON and never rides in a JSON body. The SDK writes a page's rows in one `$batch` when every body is
+    // exactly UTF-8, and through this otherwise (a page that carries an image); without it the SDK refuses such a write
+    // rather than save a page whose content never uploaded. The caller's Content-Type passes through; Content-Length is
+    // the byte count. It carries `If-Match`, so a PATCH that got no answer is not re-sent (see `conditional` above).
+    patchRaw: (url, bytes, options) => call('PATCH', url, bytes, options, { bytes: true }),
   };
 }
 

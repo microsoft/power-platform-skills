@@ -374,7 +374,7 @@ async function preflightAuth(envUrl, deps = {}) {
  * @param {number} [options.timeout=60000]
  * @returns {Promise<{statusCode: number, body: string, headers?: object} | {error: string}>}
  */
-function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHeaders = false, timeout = 60000 }) {
+function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHeaders = false, timeout = 60000, binary = false }) {
   return new Promise((resolve) => {
     const https = require('https');
     const http = require('http');
@@ -403,8 +403,8 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
         const chunks = [];
         res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
         res.on('end', () => {
-          const data = Buffer.concat(chunks).toString('utf8');
-          const result = { statusCode: res.statusCode, body: data };
+          const bytes = Buffer.concat(chunks);
+          const result = { statusCode: res.statusCode, body: binary ? bytes : bytes.toString('utf8') };
           if (includeHeaders) result.headers = res.headers;
           resolve(result);
         });
