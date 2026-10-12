@@ -21,6 +21,8 @@ const uploadMod = require('../genpage-upload.js');
 const { notPlainFile } = uploadMod;
 const { pageHash, writeMarker } = require('../lib/genpage-base.js');
 const { buildPacInvocation, makeGenpageCli } = require('../lib/genpage-cli.js');
+// How a path appears in a command a message suggests: bare when plain, single-quoted otherwise (a Windows temp path has backslashes).
+const { commandArg } = require('../lib/cli-failure.js');
 
 const dirs = [];
 test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
@@ -1953,7 +1955,7 @@ test('a create of a page whose makeStyles drops Griffel shorthands is refused wi
     assert.ok(error.includes(`Write the longhands instead: ${longhands.join(', ')}.`), `${needle}: and what to write`);
   }
   assert.ok(error.includes(BOTH_WAYS_OUT), 'and what each way out does: deleting a key keeps the look, the longhands start to render');
-  assert.match(error, new RegExp(`Fix them in the file \\(\`node scripts/check-griffel-styles\\.js --file ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\` lists every one\\), then re-run the upload\\.$`));
+  assert.match(error, new RegExp(`Fix them in the file \\(\`node scripts/check-griffel-styles\\.js --file ${commandArg(file).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\` lists every one\\), then re-run the upload\\.$`));
   assert.deepStrictEqual(r.payload.problems.map((p) => [p.code, p.property, p.line, p.column]), [
     ['unsupported-shorthand', 'borderWidth', 4, 5], ['unsupported-shorthand', 'borderColor', 7, 24], ['unsupported-shorthand', 'borderStyle', 7, 44],
   ], 'the structured problems ride along, for a caller that reads JSON');
@@ -1991,7 +1993,7 @@ test('an UPDATE of a page that already has the keys — sent as it is, or edited
     assert.ok(warning.startsWith(`${file} updates a page that is already deployed, and the deployed page already had these, set the same, so the upload goes on. It writes CSS that Griffel drops at runtime, so the page renders without it as it does today: `), `${what}: ${warning}`);
     for (const needle of ['borderWidth', 'borderColor', 'borderStyle']) assert.ok(warning.includes(`${file}:${placeOf(local, needle)}: \`${needle}\` is not supported by Griffel`), `${what}: ${needle}, at its place in the file that is uploaded`);
     assert.ok(warning.includes(BOTH_WAYS_OUT), `${what}: both ways out`);
-    assert.match(warning, new RegExp(`Edit the file to do either \\(\`node scripts/check-griffel-styles\\.js --file ${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\` lists every one\\); an upload that adds anything the check reports, or sets one of these to another value, is refused\\.$`), what);
+    assert.match(warning, new RegExp(`Edit the file to do either \\(\`node scripts/check-griffel-styles\\.js --file ${commandArg(file).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\` lists every one\\); an upload that adds anything the check reports, or sets one of these to another value, is refused\\.$`), what);
   }
 });
 
@@ -2137,14 +2139,35 @@ test('a call the checker cannot read is refused as one it could not read — not
   assert.ok(error.startsWith(`${file} has makeStyles calls the Griffel check could not read, so it cannot tell whether the page writes CSS that Griffel drops at runtime — refusing to upload. ${file}:3:19: the makeStyles call here cannot be checked for certain`), error);
   assert.doesNotMatch(error, /writes CSS that Griffel drops at runtime, so the page would deploy without it/, 'it is not said to write any');
   assert.match(error, /put an operand in parentheses, \(\{ … \}\) \/ 2 or \(\/re\/\)\.test\(text\), or end the statement with a ";" — or move the makeStyles call above it\./, 'what to change');
-  assert.ok(error.endsWith(`Change the file as that says (\`node scripts/check-griffel-styles.js --file "${file}"\` shows what it cannot read), then re-run the upload.`), error);
+  assert.ok(error.endsWith(`Change the file as that says (\`node scripts/check-griffel-styles.js --file '${file}'\` shows what it cannot read), then re-run the upload.`), error);
   assert.deepStrictEqual(r.payload.problems.map((p) => p.code), ['unverifiable-style-call']);
   // A shorthand refusal quotes it as well.
   const bad = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', spacedFile(GRIFFEL_BAD), '--name', 'N', '--prompt', 'p', '--agent-message', 'm'], untouchableCli());
-  assert.match(bad.payload.error, /\(`node scripts\/check-griffel-styles\.js --file "[^"]*Dev User[^"]*page\.tsx"` lists every one\), then re-run the upload\.$/);
+  assert.match(bad.payload.error, /\(`node scripts\/check-griffel-styles\.js --file '[^']*Dev User[^']*page\.tsx'` lists every one\), then re-run the upload\.$/);
   // Both in one page: the keys come first, and the call is named as one the check could not read.
   const both = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', divCode(`${GRIFFEL_IMPORT}const a = makeStyles({ root: { all: 'unset' } });\nexport function skip(s: string) { if (s) { } /x/.test(s); }\nconst b = makeStyles({ root: { padding: 1 } });\n`), '--name', 'N', '--prompt', 'p', '--agent-message', 'm'], untouchableCli());
   assert.match(both.payload.error, /writes CSS that Griffel drops at runtime, so the page would deploy without it — refusing to upload\. [^ ]+:2:\d+: `all` is not supported[\s\S]*It also has makeStyles calls the check could not read, so it cannot tell whether they hold more: [^ ]+:4:\d+: the makeStyles call here cannot be checked for certain[\s\S]*Fix them in the file/);
+});
+
+// The command a refusal suggests is one the user — or the agent — pastes, and the path comes from wherever the page file is: an untrusted checkout can name a file so that
+// pasting a command written with it bare runs part of the name. Shell syntax stays inside single quotes; a name with a quote, which no shell can be given unchanged, is not
+// written into the command at all — a placeholder is, and the path is named in a sentence before the way on.
+test('a refusal\'s command never runs shell syntax from the page file\'s name: quoted, or a placeholder with the path named as data', async () => {
+  const named = (name) => {
+    const dir = tmp();
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, GRIFFEL_BAD);
+    return file;
+  };
+  const hostile = named('x;echo INJECTED;$(whoami)`id`.tsx');
+  const r = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', hostile, '--name', 'N', '--prompt', 'p', '--agent-message', 'm'], untouchableCli());
+  assert.strictEqual(r.payload.code, 'griffel-shorthand');
+  assert.ok(r.payload.error.endsWith(`Fix them in the file (\`node scripts/check-griffel-styles.js --file '${hostile}'\` lists every one), then re-run the upload.`), r.payload.error);
+  const quoted = named("it's;echo INJECTED.tsx");
+  const q = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', quoted, '--name', 'N', '--prompt', 'p', '--agent-message', 'm'], untouchableCli());
+  assert.strictEqual(q.payload.code, 'griffel-shorthand');
+  assert.ok(q.payload.error.endsWith(`<file> is ${JSON.stringify(quoted)}; it is not written into the command because no way of writing it reaches the command unchanged in both PowerShell and a POSIX shell. `
+    + 'Fix them in the file (`node scripts/check-griffel-styles.js --file <file>` lists every one), then re-run the upload.'), q.payload.error);
 });
 
 test('an UPDATE of an unreadable page that IS the deployed page only warns; one that changed is refused, because what it hides cannot be compared', async () => {

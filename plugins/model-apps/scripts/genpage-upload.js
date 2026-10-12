@@ -34,7 +34,7 @@ const os = require('node:os');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
 const { makeGenpageCli, suppliedButBlank, unescapePacName } = require('./lib/genpage-cli.js');
 const { griffelStyleProblems, griffelProblemsNotIn, describeGriffelRefusal, describeGriffelWarning } = require('./lib/griffel-styles.js');
-const { commandArg } = require('./lib/cli-failure.js');
+const { commandArgOrPlaceholder } = require('./lib/cli-failure.js');
 const genpageBase = require('./lib/genpage-base.js');
 const { writeFileSafe } = require('./lib/safe-fs.js');
 
@@ -382,7 +382,10 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   // earlier version of the plugin let through, and the same bytes sent again ship nothing new — so the file is compared with the deployed page, which an update downloads anyway for
   // its base check, and only a key that page did not have stops the upload (below, once it is read).
   const styleProblems = griffelStyleProblems(checkedText).problems;
-  const griffelWords = { surface: 'upload', subject: flags['code-file'], command: `node scripts/check-griffel-styles.js --file ${commandArg(flags['code-file'])}` };
+  // The checker command the message suggests names the file: as one argument no shell reads anything in, or — for a path a shell cannot be given literally — as a
+  // placeholder, with the path named in a sentence instead (lib/cli-failure.js commandArg; a path can come from an untrusted checkout).
+  const griffelFile = commandArgOrPlaceholder(flags['code-file'], '<file>');
+  const griffelWords = { surface: 'upload', subject: flags['code-file'], command: `node scripts/check-griffel-styles.js --file ${griffelFile.arg}`, ...(griffelFile.note ? { note: griffelFile.note } : {}) };
   const refuseStyles = (problems) => emit(false, {
     ok: false,
     code: 'griffel-shorthand',

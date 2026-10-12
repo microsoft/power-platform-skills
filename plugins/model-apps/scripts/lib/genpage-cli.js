@@ -3,7 +3,7 @@
 // to author/deploy generative pages. Page CONTENT only: uploads run WITHOUT --add-to-sitemap because
 // the SDK owns the sitemap (it writes the GenPage subareas). Real impl spawns pac; tests inject `run`.
 const { invocation, spawnProcess, killProcessTree } = require('./process-runner.js');
-const { pacTimeoutMs, pacTimeoutAdvice, pacLongerTimeoutMs, PAC_TIMEOUT_ENV, commandArg } = require('./cli-failure.js');
+const { pacTimeoutMs, pacTimeoutAdvice, pacLongerTimeoutMs, PAC_TIMEOUT_ENV, commandArgOrPlaceholder } = require('./cli-failure.js');
 const { dataverseRequest } = require('./dataverse-auth.js');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -359,8 +359,9 @@ function makeGenpageCli(env, deps = {}) {
   const unanswered = (r) => !!(r && (r.timedOut || r.ended));
   // How a stopped upload is told. pacTimeoutAdvice, which a stopped READ gets, ends in "retry" — not what to say about an upload.
   const stoppedAfter = (r) => (r.ended ? 'was ended before it answered' : `timed out after ${Math.round((r.timeoutMs || 0) / 1000)} s and was stopped`);
-  // A message's command is one the user pastes, and a path under a Windows profile folder often has a space ("C:\Users\Dev User\..."): keep it ONE argument.
-  const argText = commandArg;
+  // A message's command is one the user — or the agent — pastes, and a path can hold a space ("C:\Users\Dev User\...") or, from an untrusted checkout, shell syntax:
+  // keep it ONE argument that no shell reads anything in, or write a placeholder and name the path as data (lib/cli-failure.js commandArg).
+  const argOrPlaceholder = commandArgOrPlaceholder;
   const allowLonger = (r) => {
     // A run that was ended did not run out of time, so a longer budget would not have changed it.
     if (r.ended) return '';
@@ -622,13 +623,18 @@ function makeGenpageCli(env, deps = {}) {
         //                       told to read the deployed page with the download it already uses (the `pac model genpage download` that verify-model-app.js and
         //                       download-model-app.js run), and that running the build again sends this page once more to the same id, with what that costs.
         // `how` names the send that stopped: 'stalled' or 'failed'.
-        const lookFirst = (id, how) => (caller === 'build'
-          ? `First see what is deployed: pac model genpage download --environment ${env} --app-id ${appId} --page-id ${id} --output-directory <folder>, then read the page.tsx in the folder under <folder> that is named for the page id `
-            + '(pac writes the id in its own letter case, so look for it without regard to case; a page that links to another shows that page\'s id where its source in the app folder has a PAGEREF_ name). '
-            + `Then run the build again: it sends this page once more, to the same page id, so nothing new is created — but if the ${how} send did land, the page's history now records its prompt a second time, `
-            + 'and anything saved to the page in Maker since is replaced by the app folder\'s version. Look first if either matters.'
-          : `First see what is deployed: node scripts/genpage-base.js check --env ${env} --app-id ${appId} --page-id ${id} --file ${argText(sourceFile || codeFile)} ("contentSame": true means the update landed; "deployed": "unchanged" means it did not). `
-            + 'Then re-run the upload: its own checks decide whether it may go ahead.');
+        const lookFirst = (id, how) => {
+          if (caller === 'build') {
+            return `First see what is deployed: pac model genpage download --environment ${env} --app-id ${appId} --page-id ${id} --output-directory <folder>, then read the page.tsx in the folder under <folder> that is named for the page id `
+              + '(pac writes the id in its own letter case, so look for it without regard to case; a page that links to another shows that page\'s id where its source in the app folder has a PAGEREF_ name). '
+              + `Then run the build again: it sends this page once more, to the same page id, so nothing new is created — but if the ${how} send did land, the page's history now records its prompt a second time, `
+              + 'and anything saved to the page in Maker since is replaced by the app folder\'s version. Look first if either matters.';
+          }
+          const file = argOrPlaceholder(sourceFile || codeFile, '<file>');
+          return `First see what is deployed: node scripts/genpage-base.js check --env ${env} --app-id ${appId} --page-id ${id} --file ${file.arg} ("contentSame": true means the update landed; "deployed": "unchanged" means it did not). `
+            + (file.note ? `${file.note} ` : '')
+            + 'Then re-run the upload: its own checks decide whether it may go ahead.';
+        };
         for (let i = 0; i < attempts; i += 1) {
           if (!pid && beforeIds === null) {
             const before = await enumerateEnv(run);

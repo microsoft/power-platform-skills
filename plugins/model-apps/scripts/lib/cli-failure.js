@@ -95,11 +95,50 @@ function pacTimeoutAdvice(command, ms) {
   return `${ranOut} A stalled call is usually transient — retry, or allow it longer with ${PAC_TIMEOUT_ENV}=${longer}.`;
 }
 
-// One argument of a command that a message tells the user to paste: bare, or in double quotes when it holds white space — a path under a Windows profile folder is often
-// "C:\Users\Dev User\…" — so that it stays ONE argument.
+// One argument of a command that a message tells the user — or the agent driving the skill — to paste, written so that pasting the command hands the
+// program it runs (`node`) exactly this value, as ONE argument, in the shells the skill's own commands are written for: PowerShell (Windows PowerShell 5.1
+// and PowerShell 7) and the POSIX shells (sh, bash, zsh). The skill's instructions quote arguments in single quotes ('<working-dir>/<file>.tsx'); cmd.exe,
+// which reads no single quotes, is not one of them.
+//   letters and digits of any script, and `_ . / : -`      written bare: no shell reads anything in them
+//   (not a leading `-`)
+//   anything else                                        single-quoted: inside '…' neither PowerShell nor a POSIX shell expands, substitutes or splits
+//                                                        anything, so `;`, `$(…)`, backticks, `|`, `&`, globs, `\` and white space stay literal
+//   null — no spelling, so the caller writes a placeholder and names the value outside the command (commandArgOrPlaceholder) — for:
+//     a single quote, or one PowerShell reads as one     PowerShell doubles a quote, a POSIX shell closes and reopens one: no spelling is literal in both
+//     (‘ ’ ‚ ‛), a line break or another control
+//     character (a tab is fine)
+//     a double quote; white space with a `\` at the      Windows PowerShell does not hand a native program its arguments as they are: it joins them into one
+//     end; the empty value                               command line, wrapping a value that holds white space in double quotes and escaping nothing, so the
+//                                                        program drops a `"` ('x"y.tsx' arrives as xy.tsx) and reads the closing quote after a final `\` as
+//                                                        an escaped one ('C:\Dev User\' arrives as C:\Dev User"); an empty value is not passed at all.
+//                                                        PowerShell 7.3 and later pass all three as they are; Windows PowerShell 5.1 is still the one
+//                                                        Windows ships.
+//     exactly `--%`                                      PowerShell's stop-parsing token: both PowerShells take it for the token even quoted, and drop it
+// Measured on Windows PowerShell 5.1 and PowerShell 7.6 (tests/cli-failure.test.js runs every spelling through each shell it finds and reads node's argv).
+// See https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_parsing#passing-arguments-that-contain-quote-characters and
+// https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_parsing#the-stop-parsing-token.
+// A path can come from an untrusted checkout, so a value is written bare only when it is plain: a file named `x;rm -rf ~;.tsx`, written bare or in double
+// quotes, would run its second half when the advice is pasted.
+const BARE_ARG = /^(?!-)[\p{L}\p{N}_./:-]+$/u;
+const UNQUOTABLE = /['"\u2018\u2019\u201A\u201B\p{Zl}\p{Zp}]|[^\P{Cc}\t]/u;
 function commandArg(value) {
-  return /\s/.test(String(value)) ? `"${value}"` : String(value);
+  const text = String(value);
+  if (BARE_ARG.test(text)) return text;
+  if (UNQUOTABLE.test(text) || text === '' || text === '--%' || (/\s/u.test(text) && text.endsWith('\\'))) return null;
+  return `'${text}'`;
+}
+
+// commandArg's spelling of `value`, or — when it has none — `placeholder` (`<file>`), with the sentence a message adds to name the value as data, never as part of
+// a command.
+function commandArgOrPlaceholder(value, placeholder) {
+  const arg = commandArg(value);
+  if (arg !== null) return { arg, note: '' };
+  return {
+    arg: placeholder,
+    note: `${placeholder} is ${JSON.stringify(String(value))}; it is not written into the command because no way of writing it reaches the command unchanged in both PowerShell and a POSIX shell.`,
+  };
 }
 
 module.exports = { AZ_TIMEOUT_ENV, DEFAULT_AZ_TIMEOUT_MS, MIN_AZ_TIMEOUT_MS, MAX_AZ_TIMEOUT_MS, azTimeoutMs, cliFailureKind, azTimeoutAdvice,
-  PAC_TIMEOUT_ENV, DEFAULT_PAC_READ_TIMEOUT_MS, DEFAULT_PAC_UPLOAD_TIMEOUT_MS, MIN_PAC_TIMEOUT_MS, MAX_PAC_TIMEOUT_MS, pacTimeoutMs, pacLongerTimeoutMs, pacTimeoutAdvice, commandArg };
+  PAC_TIMEOUT_ENV, DEFAULT_PAC_READ_TIMEOUT_MS, DEFAULT_PAC_UPLOAD_TIMEOUT_MS, MIN_PAC_TIMEOUT_MS, MAX_PAC_TIMEOUT_MS, pacTimeoutMs, pacLongerTimeoutMs, pacTimeoutAdvice, commandArg,
+  commandArgOrPlaceholder };

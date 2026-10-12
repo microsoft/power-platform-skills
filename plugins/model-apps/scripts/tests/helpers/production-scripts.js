@@ -5,6 +5,7 @@
 // (whose mock SDKs deliberately differ from the real one, and which name the very calls the scans look for).
 const fs = require('node:fs');
 const path = require('node:path');
+const { commentRanges } = require('../../lib/source-literals.js');
 
 const SCRIPTS_DIR = path.resolve(__dirname, '..', '..');
 const SKIPPED_DIRS = new Set(['vendor', '_vendor-build', 'node_modules', 'tests']);
@@ -22,10 +23,20 @@ function productionScripts(dir = SCRIPTS_DIR) {
   return files;
 }
 
-// A sentence in a comment that names a call is not a call. A `//` only starts a comment at the start of a line
-// or after whitespace, so the one in `'https://host'` survives and the code after a URL is still scanned.
+// A sentence in a comment that names a call is not a call. The comments are the ones the plugin's literal-aware lexer finds
+// (lib/source-literals.js commentRanges, the lexer the page checks use), so a `//` or `/*` inside a string, a template or a
+// regular expression — `'https://host'`, `'a // b'` — is never taken for one, and the code after it is still scanned. A pattern
+// matched with a line-start or line-end anchor would see each comment as blank space rather than as nothing: a comment is replaced
+// by spaces, its line breaks kept, so an offset or a line number in the result is the source's own.
 function withoutComments(source) {
-  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1');
+  const text = String(source);
+  let out = '';
+  let at = 0;
+  for (const { start, end } of commentRanges(text)) {
+    out += text.slice(at, start) + text.slice(start, end).replace(/[^\r\n]/g, ' ');
+    at = end;
+  }
+  return out + text.slice(at);
 }
 
 // The scripts (paths relative to scripts/, forward slashes) whose code — not comments — matches `pattern`.
