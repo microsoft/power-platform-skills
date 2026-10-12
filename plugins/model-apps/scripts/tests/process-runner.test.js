@@ -200,24 +200,77 @@ test('killProcessTree ends the Windows tree with taskkill /T /F, and asks the pr
   assert.deepStrictEqual(child.killed, ['SIGKILL'], 'a tree kill that missed the process cannot leave it running');
 });
 
-test('killProcessTree kills a POSIX process and every descendant ps lists under it — and nothing else', () => {
-  //    PID  PPID           (the `=` after each name in `-o pid=,ppid=` leaves no header line)
-  const listing = ['    1     0', '  100     1', ' 4242   100', ' 5000  4242', ' 5001  5000', ' 5002  4242', ' 7000   100', ''].join('\n');
+// A recording `ps` for the POSIX tree kill: the `-A` listing is `rows` (pid, parent pid, start time), and `ps -o lstart= -p <pid>` answers with
+// `now[pid]` when given (a process that started at another time, or `null` for one that is gone), else with the listing's own start time.
+function fakePs(rows, now = {}) {
   const runs = [];
+  const listing = rows.map(([pid, ppid, started]) => `${String(pid).padStart(5)} ${String(ppid).padStart(5)}${started ? ` ${started}` : ''}`).join('\n');
+  const run = (name, args, options) => {
+    runs.push({ name, args, options });
+    if (args[0] === '-A') return { status: 0, stdout: `${listing}\n` };
+    const pid = Number(args[args.indexOf('-p') + 1]);
+    const answer = Object.prototype.hasOwnProperty.call(now, pid) ? now[pid] : (rows.find(([p]) => p === pid) || [])[2];
+    return answer == null ? { status: 1, stdout: '' } : { status: 0, stdout: `${answer}\n` };
+  };
+  return { runs, run };
+}
+
+test('killProcessTree kills a POSIX process and every descendant ps lists under it — and nothing else', () => {
+  //    PID  PPID STARTED      (the `=` after each name in `-o pid=,ppid=,lstart=` leaves no header line)
+  const ps = fakePs([
+    [1, 0, 'Mon Oct 12 08:00:00 2026'], [100, 1, 'Mon Oct 12 08:00:01 2026'], [4242, 100, 'Mon Oct 12 09:12:30 2026'],
+    [5000, 4242, 'Mon Oct 12 09:12:31 2026'], [5001, 5000, 'Mon Oct 12 09:12:32 2026'], [5002, 4242, 'Mon Oct  5 09:12:33 2026'],
+    [7000, 100, 'Mon Oct 12 09:12:34 2026'],
+  ]);
   const killedPids = [];
   const child = fakeChild(4242);
-  runner.killProcessTree(child, {
-    platform: 'linux',
-    run: (name, args, options) => { runs.push({ name, args, options }); return { status: 0, stdout: listing }; },
-    kill: (pid, signal) => { killedPids.push([pid, signal]); },
-  });
-  assert.deepStrictEqual(runs.map((r) => [r.name, r.args]), [['ps', ['-A', '-o', 'pid=,ppid=']]]);
-  assert.strictEqual(runs[0].options.encoding, 'utf8');
+  runner.killProcessTree(child, { platform: 'linux', run: ps.run, kill: (pid, signal) => { killedPids.push([pid, signal]); } });
+  assert.deepStrictEqual(ps.runs[0].args, ['-A', '-o', 'pid=,ppid=,lstart='], 'one listing, with each process\'s start time');
+  assert.strictEqual(ps.runs[0].options.encoding, 'utf8');
   assert.deepStrictEqual(killedPids.map(([pid]) => pid).sort(), [5000, 5001, 5002], 'the grandchild too; not the parent, its sibling or init');
   assert.ok(killedPids.every(([, signal]) => signal === 'SIGKILL'), 'a stalled process may ignore SIGTERM');
   assert.deepStrictEqual(child.killed, ['SIGKILL']);
   // The grandchild goes before the child it hangs from is gone for good: deepest first, so no process is orphaned into init half-killed.
   assert.ok(killedPids.findIndex(([pid]) => pid === 5001) < killedPids.findIndex(([pid]) => pid === 5000));
+  // Each one is looked at again just before its signal, by itself: the pid must still name the process the listing saw. The order is the listing's
+  // breadth-first walk reversed (4242's children 5000 and 5002, then 5000's child 5001), so 5001 comes before the 5000 it hangs from.
+  assert.deepStrictEqual(ps.runs.slice(1).map((r) => r.args), [5001, 5002, 5000].map((pid) => ['-o', 'lstart=', '-p', String(pid)]));
+});
+
+// The listing is a moment old by the time each descendant is signalled. One that exited since can have its pid given to an unrelated process, and
+// SIGKILL by that number would end it — so a pid that now names a process that started at another time, or names none, is left alone.
+test('killProcessTree does not signal a descendant whose pid now names another process, or none — only one that is still the same', () => {
+  const ps = fakePs(
+    [[4242, 100, 'Mon Oct 12 09:12:30 2026'], [5000, 4242, 'Mon Oct 12 09:12:31 2026'], [5001, 4242, 'Mon Oct 12 09:12:32 2026'], [5002, 4242, 'Mon Oct 12 09:12:33 2026']],
+    { 5000: 'Mon Oct 12 09:14:02 2026', 5002: null },
+  );
+  const killed = [];
+  const child = fakeChild(4242);
+  runner.killProcessTree(child, { platform: 'linux', run: ps.run, kill: (pid) => killed.push(pid) });
+  assert.deepStrictEqual(killed, [5001], '5000 now started later (its pid was given out again) and 5002 is gone');
+  assert.deepStrictEqual(child.killed, ['SIGKILL'], 'the child itself is still ended');
+  // A recheck that throws, or a listing that printed no start time (a ps that ignored lstart), signals nothing but the child either.
+  for (const run of [
+    (name, args) => (args[0] === '-A' ? { status: 0, stdout: ' 4242 100 Mon Oct 12 09:12:30 2026\n 5000 4242 Mon Oct 12 09:12:31 2026\n' } : (() => { throw new Error('spawn ps ENOENT'); })()),
+    (name, args) => (args[0] === '-A' ? { status: 0, stdout: ' 4242 100\n 5000 4242\n' } : { status: 0, stdout: '' }),
+  ]) {
+    const other = fakeChild(4242);
+    const signalled = [];
+    assert.doesNotThrow(() => runner.killProcessTree(other, { platform: 'linux', run, kill: (pid) => signalled.push(pid) }));
+    assert.deepStrictEqual(signalled, []);
+    assert.deepStrictEqual(other.killed, ['SIGKILL']);
+  }
+});
+
+test('startTimes reads each pid\'s start time from a ps listing as one-spaced text, and none from a line without one', () => {
+  const text = ['    1     0 Mon Oct 12 08:00:00 2026', ' 4242   100 Mon Oct  5 09:12:30 2026  ', '\t5000\t4242', 'PID PPID STARTED', ''].join('\r\n');
+  const started = runner.startTimes(text);
+  assert.strictEqual(started.get(1), 'Mon Oct 12 08:00:00 2026');
+  assert.strictEqual(started.get(4242), 'Mon Oct 5 09:12:30 2026', 'runs of spaces are one, as the recheck reads them');
+  assert.strictEqual(started.has(5000), false);
+  assert.strictEqual(runner.startTimes(undefined).size, 0);
+  // The same listing still gives the tree.
+  assert.deepStrictEqual(runner.descendantPids(100, text), [4242, 5000]);
 });
 
 test('killProcessTree still ends the process when taskkill or ps fails, throws or is absent, and never throws', () => {
@@ -459,5 +512,36 @@ test('killProcessTree ends a batch shim AND the program it started (real cmd.exe
     assert.ok(!processAlive(program), 'the program the shim started is gone too');
   } finally {
     try { process.kill(program); } catch { /* already gone */ }
+  }
+});
+
+// The same on Linux and macOS, with the real `ps`: the tree is listed with each process's start time and every descendant is read again before its
+// signal, so this also proves that `ps -A -o pid=,ppid=,lstart=` and `ps -o lstart= -p <pid>` print a process's start time the same way there.
+test('killProcessTree ends a real POSIX child and the grandchild it started, through the real ps', { skip: process.platform === 'win32' }, async () => {
+  const { spawn, spawnSync } = require('node:child_process');
+  // A zombie still answers `kill -0` until something reaps it, so a process counts as running only while ps lists it in a state other than Z.
+  const running = (pid) => {
+    const r = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' });
+    return r.status === 0 && !/^\s*Z/.test(r.stdout);
+  };
+  const script = "const { spawn } = require('node:child_process');"
+    + "const g = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });"
+    + "process.stdout.write(g.pid + '\\n'); setTimeout(() => {}, 60000);";
+  const child = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'ignore'] });
+  let grandchild = 0;
+  try {
+    grandchild = await new Promise((resolve, reject) => {
+      let out = '';
+      child.stdout.on('data', (d) => { out += d; const m = /(\d+)\n/.exec(out); if (m) resolve(Number(m[1])); });
+      child.once('error', reject);
+      child.once('exit', () => reject(new Error('the child exited before it reported its grandchild')));
+    });
+    assert.ok(running(grandchild), 'the grandchild runs');
+    runner.killProcessTree(child);
+    for (let i = 0; i < 100 && running(grandchild); i += 1) await pause(100);
+    assert.ok(!running(grandchild), 'the grandchild was ended with the child');
+  } finally {
+    try { child.kill('SIGKILL'); } catch { /* already gone */ }
+    if (grandchild) { try { process.kill(grandchild, 'SIGKILL'); } catch { /* already gone */ } }
   }
 });

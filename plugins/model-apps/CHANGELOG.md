@@ -72,7 +72,8 @@ used to, builds send fewer requests, and verify, download and `check-auth` do mo
   A verify that fails ends any `pac` run it started and removes its temporary download folder.
 - **Generative-page `pac` calls are time-bounded, and a timed-out upload is never sent again.** A `pac model genpage`
   call (list, download, upload) that outlives its budget (`POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS`) is stopped together
-  with everything it started. A timed-out update says it may
+  with everything it started — on Linux and macOS each process only after its start time is read again, which makes ending an
+  unrelated process that took over the id of one that exited far less likely (not impossible). A timed-out update says it may
   have landed and how to check; a timed-out create says the page may exist, or that it was created as `<id>` when `pac`
   printed the id, and how to finish it. A create whose outcome is not known to be nothing — it timed out, failed after
   `pac` printed its id, or left a page in the listing — is never sent again, not even by the build's own retry of a
