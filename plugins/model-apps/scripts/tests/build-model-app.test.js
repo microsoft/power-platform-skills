@@ -2337,7 +2337,7 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
         './lib/sdk-build.js': engine,
         './lib/genpage-cli.js': genpageModule,
         './lib/sdk-http-client.js': { createAzHttpClient: () => ({}), SQL_DEADLOCK_VICTIM: /Sql Number: 1205/ },
-        './vendor/cds-maker-sdk.cjs': {
+        './lib/maker-sdk.js': {
           createNodeWorkspaceStorage: (dir) => { if (dir !== workspaceDir) sdkTempDirs.push(dir); return { dir }; },
           createMakerSdk: (o) => { assert.strictEqual(o.instanceUrl, env); assert.strictEqual(o.languageCode, 1033); return sdk; },
         },

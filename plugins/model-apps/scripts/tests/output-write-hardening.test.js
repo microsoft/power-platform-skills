@@ -686,7 +686,7 @@ function loadBuild(argv, factory) {
           throw err;
         },
       },
-      './vendor/cds-maker-sdk.cjs': {
+      './lib/maker-sdk.js': {
         createMakerSdk: (...args) => factory(args[0]),
         createNodeWorkspaceStorage: (dir) => ({ dir }),
       },
@@ -787,7 +787,7 @@ test('verify refuses a junction workspace before the SDK factory is called', asy
           throw err;
         },
       },
-      './vendor/cds-maker-sdk.cjs': {
+      './lib/maker-sdk.js': {
         createMakerSdk: () => { factoryCalls += 1; return { initWorkspace: async () => {} }; },
         createNodeWorkspaceStorage: () => ({}),
       },
@@ -1008,7 +1008,7 @@ test('a folder at build-log.jsonl is the journal\'s best-effort case, not a refu
           throw err;
         },
       },
-      './vendor/cds-maker-sdk.cjs': {
+      './lib/maker-sdk.js': {
         createMakerSdk: () => { factoryCalls += 1; throw new Error('stop after the preflight'); },
         createNodeWorkspaceStorage: (dir) => ({ dir }),
       },

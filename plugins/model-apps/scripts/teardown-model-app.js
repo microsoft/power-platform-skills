@@ -32,7 +32,7 @@ const { checkPageOwnershipClearable } = require('./lib/page-ownership-records.js
 
 // Build an SDK client for teardown. Uses the same az-token HttpClient as build-model-app.js.
 async function makeSdk(env) {
-  const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('./lib/maker-sdk.js');
   const httpClient = createAzHttpClient(env);
   // Teardown uses a minimal SDK client (no workspace, no solution header) — just queryRecords
   // and delete methods. Use a throw-away temp dir since initWorkspace is mandatory.

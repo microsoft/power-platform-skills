@@ -61,7 +61,7 @@ async function readLanguages(env, httpClient) {
   // holds every such script to.
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'list-languages-'));
   try {
-    const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
+    const { createMakerSdk, createNodeWorkspaceStorage } = require('./lib/maker-sdk.js');
     const sdk = createMakerSdk({
       workspaceStorage: createNodeWorkspaceStorage(workspaceDir),
       instanceUrl: env,

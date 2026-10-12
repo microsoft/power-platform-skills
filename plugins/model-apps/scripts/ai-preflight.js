@@ -160,7 +160,7 @@ async function main() {
 
   let report;
   try {
-    const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
+    const { createMakerSdk, createNodeWorkspaceStorage } = require('./lib/maker-sdk.js');
     const httpClient = createAzHttpClient(env);
     const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
     // Keep SDK construction inside the protected region too: a constructor failure happens after the

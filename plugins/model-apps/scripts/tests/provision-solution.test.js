@@ -305,7 +305,7 @@ function solutionHarness({ argv, sdkFactoryThrows = null, initThrows = null, rmT
         emitResult: (ok, payload) => { emitted.push({ ok, payload }); },
       },
       './lib/sdk-http-client': { createAzHttpClient: () => ({}) },
-      './vendor/cds-maker-sdk.cjs': {
+      './lib/maker-sdk.js': {
         // The CLI builds its store explicitly via the /node adapter, so the mocked bundle must
         // expose it. The marker carries the root so assertions can still check WHERE the throwaway
         // workspace was placed.

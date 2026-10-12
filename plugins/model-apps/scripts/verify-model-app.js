@@ -65,7 +65,7 @@ async function makeProvision(env, workspaceDir, httpClient = createAzHttpClient(
   // factory runs. An explicit real directory is created if missing, then re-checked.
   // The module's own fs, not a second copy: a caller that replaced fs must see the same create.
   assertSafeOutputDir(workspaceDir, { create: true, fs });
-  const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('./lib/maker-sdk.js');
   const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
   await sdk.initWorkspace();
   // Only the SDK is returned. The raw `httpClient` used to come back with it because the role

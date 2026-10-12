@@ -40,6 +40,8 @@ const { recordPageCreation } = require('../lib/page-ownership-records.js');
 
 const scriptsDir = path.join(__dirname, '..');
 const BUNDLE = path.join(scriptsDir, 'vendor', 'cds-maker-sdk.cjs');
+// What the scripts make their SDK with: the bundle, given the vendored compiler (lib/maker-sdk.js).
+const FACTORY = path.join(scriptsDir, 'lib', 'maker-sdk.js');
 const WORKSPACE_ENV = 'https://contoso.crm.dynamics.com';
 const RUN_ENV = 'https://fabrikam.crm.dynamics.com';
 // A folder that does not exist, for halts built from a hand-made error: nothing in the plugin looks inside it.
@@ -518,7 +520,7 @@ function readOnlyClient(requests = []) {
 // anything else is asked of the environment. `client` replaces the inert HTTP client, for a run that is to read.
 function loadBuild(argv, { requests = [], sdkTempDirs = [], client = null } = {}) {
   const authCli = loadCli(path.join(scriptsDir, 'lib', 'dataverse-auth.js'));
-  const real = require(BUNDLE);
+  const real = require(FACTORY);
   const cli = loadCli(path.join(scriptsDir, 'build-model-app.js'), {
     argv,
     env: { PATH: path.dirname(process.execPath), POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' },
@@ -526,7 +528,7 @@ function loadBuild(argv, { requests = [], sdkTempDirs = [], client = null } = {}
       './lib/dataverse-auth.js': { ...authCli.exports, preflightAuth: async () => ({ ok: true }) },
       './lib/entity-provision.js': { resolveAuthoringLanguage: async () => 1033 },
       './lib/sdk-http-client.js': { createAzHttpClient: () => client || inertClient(requests), SQL_DEADLOCK_VICTIM: /Sql Number: 1205/ },
-      './vendor/cds-maker-sdk.cjs': {
+      './lib/maker-sdk.js': {
         createMakerSdk: real.createMakerSdk,
         createNodeWorkspaceStorage: (dir) => { sdkTempDirs.push(dir); return real.createNodeWorkspaceStorage(dir); },
       },
@@ -923,11 +925,11 @@ test('a folder the build bound under one spelling of the host is reopened under 
 // with the transport failure that read raised.
 function loadVerify(argv, { requests = [], sdkDirs = [], verifySpec = null } = {}) {
   const authCli = loadCli(path.join(scriptsDir, 'lib', 'dataverse-auth.js'));
-  const real = require(BUNDLE);
+  const real = require(FACTORY);
   const requires = {
     './lib/dataverse-auth.js': authCli.exports,
     './lib/sdk-http-client.js': { createAzHttpClient: () => inertClient(requests) },
-    './vendor/cds-maker-sdk.cjs': {
+    './lib/maker-sdk.js': {
       createMakerSdk: real.createMakerSdk,
       createNodeWorkspaceStorage: (dir) => { sdkDirs.push(dir); return real.createNodeWorkspaceStorage(dir); },
     },

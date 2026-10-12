@@ -529,7 +529,7 @@ test('teardown CLI dry-run lists live and absent page candidates without changin
         emitResult: (ok, result) => { emissions.push({ ok, result }); },
       },
       './lib/sdk-http-client.js': { createAzHttpClient: () => ({}) },
-      './vendor/cds-maker-sdk.cjs': {
+      './lib/maker-sdk.js': {
         createMakerSdk: () => sdk,
         createNodeWorkspaceStorage: () => ({}),
       },

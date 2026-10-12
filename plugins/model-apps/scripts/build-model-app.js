@@ -76,7 +76,7 @@ async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = tru
   // before either constructor: the first SDK does not use this directory, but once the
   // directory has been refused the factory must not run at all.
   assertWorkspaceDir(workspaceDir, { create: persistent });
-  const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('./lib/maker-sdk.js');
   const httpClient = createAzHttpClient(env);
   const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-'));
   const cleanup = () => {

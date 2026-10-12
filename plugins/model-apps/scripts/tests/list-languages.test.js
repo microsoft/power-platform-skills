@@ -35,7 +35,7 @@ async function run(argv, answer = { baseLanguage: 1033, provisioned: [1033], ava
         return { marker: 'az-client', env };
       },
     },
-    './vendor/cds-maker-sdk.cjs': {
+    './lib/maker-sdk.js': {
       createNodeWorkspaceStorage: (dir) => ({ dir }),
       createMakerSdk: (cfg) => {
         events.push({ type: 'sdk', cfg });

@@ -20,7 +20,7 @@ const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, read
 //   provision    — header-less; used for discovery reads (findTables/findColumns/
 //                  fetchEntityMetadata/queryRecords).
 async function makeSdk(env, input) {
-  const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
+  const { createMakerSdk, createNodeWorkspaceStorage } = require('./lib/maker-sdk.js');
   const httpClient = createAzHttpClient(env);
   const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-'));
   const provisionTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provision-'));

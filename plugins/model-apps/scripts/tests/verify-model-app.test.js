@@ -381,7 +381,7 @@ function loadVerifyCli({ parseResult, validateResult = { ok: true }, verifyResul
         parseManifestBase64: () => null,
       };
     }
-    if (id === './vendor/cds-maker-sdk.cjs') {
+    if (id === './lib/maker-sdk.js') {
         return {
           // The CLI builds its store explicitly via the /node adapter now, so the mocked bundle
           // must expose it too. The marker carries the root so the assertions below can still

@@ -37,7 +37,7 @@ async function runClear(dir, { sdk, spec, realEngine = false } = {}) {
         emitResult: (ok, result) => { emissions.push({ ok, result }); },
       },
       './lib/sdk-http-client.js': { createAzHttpClient: () => ({}) },
-      './vendor/cds-maker-sdk.cjs': {
+      './lib/maker-sdk.js': {
         createNodeWorkspaceStorage: () => ({}),
         createMakerSdk: () => sdk || ({ initWorkspace: async () => {} }),
       },

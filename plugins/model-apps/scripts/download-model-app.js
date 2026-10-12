@@ -433,7 +433,7 @@ async function makeDownloadSdk(env, deps = {}) {
   try {
     const { createMakerSdk, createNodeWorkspaceStorage } = (deps.createMakerSdk && deps.createNodeWorkspaceStorage)
       ? deps
-      : require('./vendor/cds-maker-sdk.cjs');
+      : require('./lib/maker-sdk.js');
     const httpClient = deps.httpClient || (deps.createHttpClient || createAzHttpClient)(env);
     const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
     await sdk.initWorkspace();

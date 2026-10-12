@@ -333,7 +333,7 @@ function provisionHarness({ initThrows = null, constructThrows = null, provision
         return { env };
       },
     },
-    './vendor/cds-maker-sdk.cjs': {
+    './lib/maker-sdk.js': {
       createNodeWorkspaceStorage: (root) => ({ root }),
       createMakerSdk: (opts) => {
         seen.envs.push(opts.instanceUrl);

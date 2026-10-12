@@ -99,7 +99,7 @@ function loadPreflightCli({ parseResult, readiness, sdkThrows = null }) {
     if (id === 'node:fs') return fakeFs;
     if (id === 'node:os') return { tmpdir: () => 'D:\\Projects\\power-platform-skills-sdk\\.test-workspace' };
     if (id === 'node:path') return path;
-    if (id === './vendor/cds-maker-sdk.cjs') {
+    if (id === './lib/maker-sdk.js') {
         return {
           // The CLI builds its store explicitly via the /node adapter now, so the mocked bundle
           // must expose it too. The marker carries the root so the assertions below can still

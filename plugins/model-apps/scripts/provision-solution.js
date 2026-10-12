@@ -153,7 +153,7 @@ async function main() {
   let result;
   let error;
   try {
-    const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
+    const { createMakerSdk, createNodeWorkspaceStorage } = require('./lib/maker-sdk.js');
     const httpClient = createAzHttpClient(envUrl);
     const sdk = createMakerSdk({
       workspaceStorage: createNodeWorkspaceStorage(sdkTempDir), // unused workspace (no metadata persistence needed)
