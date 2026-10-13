@@ -16,7 +16,10 @@ export interface GridRequest {
 }
 
 const RECORD_ID_TOKEN = "{recordId}";
-const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/;
+// Dataverse record ids are uniqueidentifier (Edm.Guid) values: any 8-4-4-4-12 hexadecimal value.
+// They need not carry RFC 4122 version or variant bits, so sequential and imported ids such as
+// 00000000-0000-0000-c000-000000000046 are valid and must load.
+const GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const ENTITY_NAME_RE = /<entity\s+[^>]*name\s*=\s*(["'])([^"']+)\1/i;
 
 export async function loadGridPage(

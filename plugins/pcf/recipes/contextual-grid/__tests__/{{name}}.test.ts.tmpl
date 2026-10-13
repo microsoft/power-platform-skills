@@ -131,6 +131,16 @@ test("malformed GUID braces render the invalid-record state without querying", a
     expect(mounted.status().textContent).toContain("not a valid GUID");
     expect(mounted.retrieveMultipleRecords).not.toHaveBeenCalled();
 });
+
+test("record ids without RFC 4122 version bits still load, as Dataverse ids may", async () => {
+    const mounted = mount({ entityId: mockProperty("{00000000-0000-0000-C000-000000000046}") as IInputs["entityId"] });
+
+    await flushPromises();
+
+    expect(mounted.retrieveMultipleRecords).toHaveBeenCalledTimes(1);
+    expect(mounted.retrieveMultipleRecords.mock.calls[0][1]).toContain(encodeURIComponent("00000000-0000-0000-c000-000000000046"));
+    expect(mounted.rows()).toHaveLength(1);
+});
 test("Web API permission failures and empty results render messages without notifying", async () => {
     const failed = mount({
         webAPI: mockWebApi({ retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => { throw new Error("Access denied"); }) }),

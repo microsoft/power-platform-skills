@@ -332,5 +332,6 @@ function isAliasedResultKey(key: string): boolean {
 
 function isGuidLike(value: unknown): boolean {
     if (typeof value !== "string") return false;
-    return /^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\}?$/.test(value.trim());
+    // Any 8-4-4-4-12 hexadecimal value, as Dataverse ids are (no RFC 4122 version or variant bits).
+    return /^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$/.test(value.trim());
 }
