@@ -89,8 +89,13 @@ test('PCF script CI watches every bundled telemetry source without widening unre
     .filter((source) => source.startsWith('plugins/model-apps/')));
   for (const glob of globs) {
     assert.ok(glob.startsWith('plugins/pcf/') || glob.startsWith('evals/pcf/')
-      || glob === '.github/workflows/pcf-script-tests.yml' || glob === 'scripts/validate-plugin-copies.js'
+      || /^\.github\/workflows\/pcf-[\w-]+\.yml$/.test(glob) || glob === 'scripts/validate-plugin-copies.js'
       || SHARED_SOURCES.has(glob) || modelSources.has(glob), `unrelated CI filter: ${glob}`);
   }
   for (const source of modelSources) assert.ok(globs.includes(source), `existing copied source must remain watched: ${source}`);
+  // PCF's script tests also check its other workflows (path filters, telemetry opt-outs), so a change
+  // to one of those alone must still run them.
+  for (const name of ['pcf-script-tests.yml', 'pcf-projects.yml', 'pcf-matrix-drift.yml']) {
+    assert.ok(globs.includes(`.github/workflows/${name}`), `.github/workflows/${name} must trigger the PCF script tests that check it`);
+  }
 });
