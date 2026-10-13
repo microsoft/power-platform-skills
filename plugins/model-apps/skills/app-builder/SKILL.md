@@ -534,6 +534,9 @@ node "${PLUGIN_ROOT}/scripts/teardown-model-app.js" \
     to detach it from the nav (the page record stays deployed; rebuild finalizes the sitemap).
   - `pages-shared-across-apps` — the page appears in another app's sitemap, published or only saved (not yet
     published — an app that was never published counts). Detach it in Maker. `--allow-destructive` does **not** bypass this halt.
+    The build checks again right before it updates pages in place, so a page another app takes in while the build runs halts it
+    there too ("became shared across apps while this build ran"); one taken in while the pages upload is reported after them as a
+    warning naming the app, since it is written by then.
   - `pages-shared-check-failed` / `pages-existence-failed` / `pages-sitemap-read-failed` — a
     prerequisite read failed; the build can't proceed safely. Retry on a transient error; check
     permissions on a persistent one.

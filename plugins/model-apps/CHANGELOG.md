@@ -82,7 +82,10 @@ used to, builds send fewer requests, and verify, download and `check-auth` do mo
   transient failure; a create that failed outright and left nothing behind is retried as before.
 - **Updating a generative page also checks the other apps' unpublished navigation** — each app's saved navigation and
   apps that were never published, including a sitemap linked to an app by its name. A page one of them holds stops the
-  update and names the app; a never-published app with no navigation does not.
+  update and names the app; a never-published app with no navigation does not. The check runs again right before the
+  first page is written in place and once after the last: a page another app takes in while the build runs stops it
+  before any page it began with is updated in place, or, if it lands while the pages upload, is reported with the app that holds it.
+  A page the build itself created is left out of both.
 - **The record of what a build applied is the page source it read and checked**, so a page saved while a build runs is
   checked by the next build instead of being found unchanged.
 - **More pages with a hint in parentheses resolve their navigation calls.** JSX text in parentheses that holds an `=`, a

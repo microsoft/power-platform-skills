@@ -5571,15 +5571,35 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // whose sitemap we cannot read HALTs — an unreadable app could be the one that shares the page, so we
       // cannot prove non-sharing. On positive detection (id in ≥1 other app) → HALT (never auto-modify);
       // --allow-destructive does NOT authorize cross-app mutation (this HALT has no escape by design).
-      const updateIds = Array.from(keyToId.values());
-      if (updateIds.length) {
-        const scan = await fetchAppsForPages(provision, updateIds, { excludeAppUnique: appUnique });
+      //
+      // The scan is a snapshot, and another maker can add a page to another app's navigation while this build runs: no lease reaches
+      // another app (the one above is this workspace's), Dataverse offers no write conditional on another app's sitemap, and the update
+      // itself goes through `pac`, which takes no precondition. So a build that writes a page in place takes the same scan twice more
+      // (sharedPagesNow, in the upload loop below): right before the first page is written in place, which halts on a page that became
+      // shared while pages were created and navigation resolved; and after the last — or after the loop stops early — which REPORTS a page
+      // that became shared while the uploads ran: written by then, so it names the app rather than claim a protection it could not give.
+      // A page this run created is left out of both: it was not there to share when the build began. Each scan reads every other app's
+      // navigation (three requests per other app, and three more), so it is taken those two times, not before every page.
+      const scanShared = async (ids) => {
+        const scan = await fetchAppsForPages(provision, ids, { excludeAppUnique: appUnique });
+        if (!scan.ok || scan.unreadable.length) return { scan, entries: null };
+        // An app that has the page ONLY in its saved navigation is named as such: nothing in its published app shows the page yet.
+        return { scan, entries: Array.from(scan.byId, ([id, apps]) => {
+          const savedOnly = (scan.savedOnly && scan.savedOnly.get(id)) || [];
+          return { id, published: apps.some((app) => !savedOnly.includes(app)), text: `${id} (also in ${apps.map((app) => (savedOnly.includes(app) ? `${app} [saved, not published]` : app)).join(', ')})` };
+        }) };
+      };
+      const sharedPagesNow = async (ids) => {
+        const { scan, entries } = await scanShared(ids);
         if (!scan.ok) throw new BuildHalt(`could not scan the environment for pages shared across apps (${scan.error}) — refusing to UPDATE a page without verifying it is not shared. Re-run to retry.`, { phase: 'pages', code: 'pages-shared-check-failed', recoverable: true });
         if (scan.unreadable.length) throw new BuildHalt(`cannot verify pages are not shared across apps — ${scan.unreadable.length} app(s) had an unreadable sitemap (${scan.unreadable.join(', ')}); one of them could share a page we are about to UPDATE. Fix or remove the unreadable app(s), then rebuild.`, { phase: 'pages', code: 'pages-shared-check-failed', recoverable: true });
-        if (scan.byId.size) {
-          // An app that has the page ONLY in its saved navigation is named as such: nothing in its published app shows the page yet.
-          const shared = Array.from(scan.byId, ([id, apps]) => `${id} (also in ${apps.map((app) => (((scan.savedOnly && scan.savedOnly.get(id)) || []).includes(app) ? `${app} [saved, not published]` : app)).join(', ')})`);
-          throw new BuildHalt(`generative page(s) shared across apps: ${shared.join('; ')} — refusing to UPDATE a page another app's sitemap references (a rebuild would mutate shared content). Detach it in Maker, or give this app its own page.`, { phase: 'pages', code: 'pages-shared-across-apps', recoverable: false });
+        return entries;
+      };
+      const updateIds = Array.from(keyToId.values());
+      if (updateIds.length) {
+        const shared = await sharedPagesNow(updateIds);
+        if (shared.length) {
+          throw new BuildHalt(`generative page(s) shared across apps: ${shared.map((s) => s.text).join('; ')} — refusing to UPDATE a page another app's sitemap references (a rebuild would mutate shared content). Detach it in Maker, or give this app its own page.`, { phase: 'pages', code: 'pages-shared-across-apps', recoverable: false });
         }
       }
 
@@ -5756,37 +5776,84 @@ async function runSdkBuildPhases(spec, opts, owed) {
       // keyToId already holds every existing page's live id (reconciled from the manifest/enumerate), so a
       // changed page that navigates to an unchanged page still resolves its target without re-uploading it.
       // (`selectedKeys` is the one read above, ahead of the scan.)
-      for (const p of implemented) {
+      //
+      // The pages the loop writes IN PLACE — a page id the build began with, which it now overwrites; never one this run created (step 2's
+      // navigation targets included), which no other app could have held when the build began — are checked for sharing once more right
+      // before the first of them is written, and once after the last (see "The scan is a snapshot" above). A halt there comes before any page
+      // the build began with is written in place, so it says so. `transient: false`: another app's navigation still holds the page, so the build's own re-run of a
+      // halt it takes for transient (isTransientHalt, build-model-app.js, which reads the message) would only halt again — marked outright,
+      // since the message quotes other apps' names, which no transient pattern should ever be able to turn into a re-run.
+      const writesInPlace = new Set(implemented.filter((p) => {
         const key = keyOf(p);
-        if (selectedKeys && !selectedKeys.has(key)) { runner.skip('pages', `page "${p.name}" (unchanged — changed-only)`); continue; }
-        const isNav = (p.navigatesTo || []).length > 0;
-        if (!isNav && mintedKeys.has(key)) { runner.skip('pages', `page "${p.name}" (created)`); continue; }
-        await runner.run('pages', `page "${p.name}"`, async () => {
-          const requestedId = keyToId.get(key);
-          // Capture the EXACT bytes we upload so the caller can record a MEASURED deployedSha (a nav source's
-          // deployed bytes differ from its canonical source — PAGEREF_ is resolved to GUIDs — so deployedSha
-          // must never be assumed equal to the source hash). For a non-nav page they are the bytes the scan read
-          // and checked, which its staging copy holds — not a new read of the canonical file, saved again maybe.
-          const deployedBytes = isNav ? deployment.get(key) : sourceByKey.get(key);
-          const codeFile = writeStagingFile(stagingDir, key, isNav ? deployment.get(key) : scannedBytes.get(key));
-          // `model` rides along because pac stores whatever `--model` an upload sends: re-uploading without it
-          // wiped a deployed page's model id to "". A downloaded spec carries it (pages[].model).
-          // `caller: 'build'` only words the advice for an UPDATE that timed out or failed (genpage-cli.js lookFirst): the build keeps no base marker, and every page's `codeFile` is a staging copy deleted when the build ends.
-          const up = await genpageCli.upload({ appId: result.created.app, pageId: requestedId, codeFile, name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources, model: p.model, caller: 'build' });
-          if (!requestedId) recordCreate(p, up.pageId);
-          // I7: an UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at
-          // a stale target. Case-insensitive (Dataverse may echo a differently-cased GUID).
-          if (requestedId && String(up.pageId).toLowerCase() !== String(requestedId).toLowerCase()) throw new BuildHalt(`page "${p.name}" UPDATE returned a different id (${up.pageId} != ${requestedId}) — refusing to finalize with an inconsistent target`, { phase: 'pages', code: 'pages-update-identity-mismatch', recoverable: false });
-          // Key by the STABLE key (p.key||p.name): appDef resolves result.pages[s.page] where s.page is the
-          // migrated KEY (:506). Keying by name left v2 key-referenced subareas unresolved.
-          keyToId.set(key, up.pageId);
-          result.created.pages[key] = up.pageId;
-          result.created.pageDeployedShas[key] = sha256(deployedBytes);
-          // The source this send was judged on, which is the one the baseline records for the page (see `scannedSha`).
-          result.created.pageSourceShas[key] = scannedSha.get(key);
-          await persistNow(); // manifest carries this id BEFORE the next create (crash-safety, design §9 / C5)
-          return up.pageId;
-        });
+        if (selectedKeys && !selectedKeys.has(key)) return false;
+        return keyToId.has(key) && !mintedKeys.has(key);
+      }).map(keyOf));
+      let checkedBeforeWritingInPlace = false;
+      const updatedInPlace = new Map();
+      // The last scan: a page another app took in while the uploads ran has been written all the same, so it is reported, with the app it is
+      // in; one only SAVED there shows the new content once that app is published. It runs when the loop stops early too, since what it wrote
+      // before stopping is written. It never throws: the pages are written, nothing is left to refuse, and the halt that stopped the loop
+      // must reach the caller as it was.
+      const reportSharedAfterWrites = async () => {
+        if (!updatedInPlace.size) return;
+        const report = (message) => { if (typeof opts.warn === 'function') opts.warn(message); };
+        let checked;
+        try { checked = await scanShared(Array.from(updatedInPlace.keys())); } catch (e) { checked = { scan: { ok: false, error: String((e && e.message) || e) } }; }
+        const { scan, entries } = checked;
+        if (!entries) {
+          const why = !scan.ok ? scan.error : `${scan.unreadable.length} app(s) had an unreadable sitemap (${scan.unreadable.join(', ')})`;
+          report(`could not check again, once they were written, that the ${updatedInPlace.size} page(s) this build updated in place are not shared with another app: ${why}`);
+          return;
+        }
+        for (const s of entries) {
+          report(`generative page "${updatedInPlace.get(String(s.id).toLowerCase()) || s.id}" ${s.text} was taken into another app's navigation while this build was updating it, so its new content ${s.published ? 'shows there too' : 'will show there once that app is published'}. Detach it in Maker, or give this app its own page.`);
+        }
+      };
+      try {
+        for (const p of implemented) {
+          const key = keyOf(p);
+          if (selectedKeys && !selectedKeys.has(key)) { runner.skip('pages', `page "${p.name}" (unchanged — changed-only)`); continue; }
+          const isNav = (p.navigatesTo || []).length > 0;
+          if (!isNav && mintedKeys.has(key)) { runner.skip('pages', `page "${p.name}" (created)`); continue; }
+          // Taken here, ahead of the page's step rather than inside it, so a halt reaches the caller as raised: a scan that fails stays recoverable,
+          // as it is at the first scan, and the message is its own.
+          if (writesInPlace.has(key) && !checkedBeforeWritingInPlace) {
+            checkedBeforeWritingInPlace = true;
+            const shared = await sharedPagesNow(Array.from(writesInPlace, (k) => keyToId.get(k)));
+            if (shared.length) {
+              throw Object.assign(new BuildHalt(`generative page(s) became shared across apps while this build ran: ${shared.map((s) => s.text).join('; ')} — refusing to UPDATE a page another app's sitemap references (a rebuild would mutate shared content); no page this build began with has been updated in place. Detach it in Maker, or give this app its own page.`, { phase: 'pages', code: 'pages-shared-across-apps', recoverable: false }), { transient: false });
+            }
+          }
+          await runner.run('pages', `page "${p.name}"`, async () => {
+            const requestedId = keyToId.get(key);
+            // Capture the EXACT bytes we upload so the caller can record a MEASURED deployedSha (a nav source's
+            // deployed bytes differ from its canonical source — PAGEREF_ is resolved to GUIDs — so deployedSha
+            // must never be assumed equal to the source hash). For a non-nav page they are the bytes the scan read
+            // and checked, which its staging copy holds — not a new read of the canonical file, saved again maybe.
+            const deployedBytes = isNav ? deployment.get(key) : sourceByKey.get(key);
+            const codeFile = writeStagingFile(stagingDir, key, isNav ? deployment.get(key) : scannedBytes.get(key));
+            // `model` rides along because pac stores whatever `--model` an upload sends: re-uploading without it
+            // wiped a deployed page's model id to "". A downloaded spec carries it (pages[].model).
+            // `caller: 'build'` only words the advice for an UPDATE that timed out or failed (genpage-cli.js lookFirst): the build keeps no base marker, and every page's `codeFile` is a staging copy deleted when the build ends.
+            const up = await genpageCli.upload({ appId: result.created.app, pageId: requestedId, codeFile, name: p.name, prompt: p.prompt, agentMessage: p.agentMessage, dataSources: p.dataSources, model: p.model, caller: 'build' });
+            if (!requestedId) recordCreate(p, up.pageId);
+            // I7: an UPDATE (requestedId set) must return the SAME id, else a resolved sibling could point at
+            // a stale target. Case-insensitive (Dataverse may echo a differently-cased GUID).
+            if (requestedId && String(up.pageId).toLowerCase() !== String(requestedId).toLowerCase()) throw new BuildHalt(`page "${p.name}" UPDATE returned a different id (${up.pageId} != ${requestedId}) — refusing to finalize with an inconsistent target`, { phase: 'pages', code: 'pages-update-identity-mismatch', recoverable: false });
+            if (requestedId && writesInPlace.has(key)) updatedInPlace.set(String(requestedId).toLowerCase(), p.name);
+            // Key by the STABLE key (p.key||p.name): appDef resolves result.pages[s.page] where s.page is the
+            // migrated KEY (:506). Keying by name left v2 key-referenced subareas unresolved.
+            keyToId.set(key, up.pageId);
+            result.created.pages[key] = up.pageId;
+            result.created.pageDeployedShas[key] = sha256(deployedBytes);
+            // The source this send was judged on, which is the one the baseline records for the page (see `scannedSha`).
+            result.created.pageSourceShas[key] = scannedSha.get(key);
+            await persistNow(); // manifest carries this id BEFORE the next create (crash-safety, design §9 / C5)
+            return up.pageId;
+          });
+        }
+      } finally {
+        await reportSharedAfterWrites();
       }
 
       // (5) Persist the FINAL manifest (deduped no-op after per-create persists). Skipped for a page-less

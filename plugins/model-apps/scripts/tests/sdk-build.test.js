@@ -5876,6 +5876,343 @@ test('pages: a page shared across TWO app sitemaps HALTS pages-shared-across-app
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
+// The shared-page scan is a snapshot: another maker can take a page into another app's navigation while the build runs. So the build scans
+// again right before the first page is written in place, and once more after the last. A page that became shared while a navigation target
+// was being created halts the build there, before any page is updated in place.
+const overviewToDetailSpec = () => {
+  const spec = overviewSpec();
+  spec.pages[0].navigatesTo = [{ targetKey: 'detail' }];
+  spec.pages.push({ key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'd.tsx' } });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'detail', title: 'Detail' });
+  return spec;
+};
+const NAV_TO_DETAIL = 'export function go(){ Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_detail" }); }\nexport default function P(){ return null; }';
+
+test('pages: a page another app takes in while a navigation target is created HALTS before any page it began with is updated in place', async () => {
+  const spec = overviewToDetailSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages, { 'o.tsx': NAV_TO_DETAIL });
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+    const sitemapWithO = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}" Title="Overview"/></Group></Area></SiteMap>`;
+    const other = { uniquename: 'contoso_secondapp', sitemapxml: '<SiteMap><Area><Group/></Area></SiteMap>' };
+    const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sitemapWithO, otherApps: [other] });
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }),
+      upload: async (o) => {
+        uploads.push([o.name, o.pageId]);
+        // While Detail is created, another maker saves Overview into contoso_secondapp's navigation.
+        if (!o.pageId) other.savedSitemapXml = sitemapWithO;
+        return { pageId: o.pageId || GP_D };
+      } };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => {
+        assert.strictEqual(e.phase, 'pages');
+        assert.strictEqual(e.code, 'pages-shared-across-apps');
+        assert.match(e.message, /^generative page\(s\) became shared across apps while this build ran: /, 'raised ahead of the page step, so the runner does not wrap it');
+        assert.match(e.message, new RegExp(`${GP_O} \\(also in contoso_secondapp \\[saved, not published\\]\\)`));
+        assert.match(e.message, /no page this build began with has been updated in place/);
+        assert.strictEqual(require('../build-model-app.js').isTransientHalt(e), false, 'another app still holds the page, so a re-run of the halt would only halt again');
+        // Marked outright, not left to the text: the message quotes other apps' names, and no transient pattern may ever make the build re-run it.
+        assert.strictEqual(e.transient, false, 'the halt carries transient: false itself');
+        return true;
+      });
+    assert.deepStrictEqual(uploads, [['Detail', undefined]], 'Detail was created; Overview was never written in place');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// What lands while the pages upload cannot be refused: the page is written by then, and no write can be made conditional on another app's
+// navigation. So the scan after the last upload REPORTS it, naming the page and the app that now shows the new content.
+test('pages: a page another app takes in while the pages upload is REPORTED after the uploads, naming the page and the app', async () => {
+  const spec = overviewSpec();
+  spec.pages.push({ key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'd.tsx' } });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'detail', title: 'Detail' });
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }, { key: 'detail', name: 'Detail', pageId: GP_D }] }), 'utf8').toString('base64');
+    const both = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}" Title="Overview"/><SubArea GenPageId="${GP_D}" Title="Detail"/></Group></Area></SiteMap>`;
+    const other = { uniquename: 'contoso_secondapp', sitemapxml: '<SiteMap><Area><Group/></Area></SiteMap>' };
+    const { sdk } = mockSdk({ pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: both, otherApps: [other] });
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O, GP_D], pages: [{ pageId: GP_O, name: 'Overview' }, { pageId: GP_D, name: 'Detail' }] }),
+      upload: async (o) => {
+        uploads.push([o.name, o.pageId]);
+        // While Overview uploads, another maker saves Detail into contoso_secondapp's navigation: Detail is next, past the last check before a write.
+        if (o.pageId === GP_O) other.savedSitemapXml = `<SiteMap><Area><Group><SubArea GenPageId="${GP_D}" Title="Detail"/></Group></Area></SiteMap>`;
+        return { pageId: o.pageId };
+      } };
+    const warnings = [];
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'], warn: (m) => warnings.push(String(m)) });
+    assert.deepStrictEqual(uploads, [['Overview', GP_O], ['Detail', GP_D]], 'both pages were written in place');
+    const reported = warnings.filter((w) => /was taken into another app's navigation while this build was updating it/.test(w));
+    assert.strictEqual(reported.length, 1, `one report: ${JSON.stringify(warnings)}`);
+    assert.match(reported[0], new RegExp(`^generative page "Detail" ${GP_D} \\(also in contoso_secondapp \\[saved, not published\\]\\) was taken into another app's navigation`));
+    assert.match(reported[0], /so its new content will show there once that app is published\./, 'an app that only SAVED the page shows it once published');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// The pages are written by the time of the last scan, so a scan that fails there is reported rather than halting the build.
+test('pages: a failed scan after the uploads is REPORTED, and the build completes', async () => {
+  const spec = overviewSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const existing = Buffer.from(JSON.stringify({ schemaVersion: 1, pages: [{ key: 'overview', name: 'Overview', pageId: GP_O }] }), 'utf8').toString('base64');
+    const sitemapWithO = `<SiteMap><Area><Group><SubArea GenPageId="${GP_O}" Title="Overview"/></Group></Area></SiteMap>`;
+    const options = { pageManifest: existing, manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: sitemapWithO, otherApps: [{ uniquename: 'contoso_secondapp', sitemapxml: '<SiteMap/>' }] };
+    const { sdk } = mockSdk(options);
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }),
+      upload: async (o) => { options.failAppList = true; return { pageId: o.pageId }; } };
+    const warnings = [];
+    const result = await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'], warn: (m) => warnings.push(String(m)) });
+    assert.ok(result, 'the build completes');
+    const said = warnings.filter((w) => /^could not check again, once they were written, that the 1 page\(s\) this build updated in place are not shared with another app: /.test(w));
+    assert.strictEqual(said.length, 1, JSON.stringify(warnings));
+    assert.doesNotMatch(said[0], /refusing to UPDATE|Re-run to retry|then rebuild/, 'the pages are written: no halt advice in the report');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+const pagesSitemap = (...ids) => `<SiteMap><Area><Group>${ids.map((id) => `<SubArea GenPageId="${id}" Title="x"/>`).join('')}</Group></Area></SiteMap>`;
+const pagesManifest = (pages) => Buffer.from(JSON.stringify({ schemaVersion: 1, pages }), 'utf8').toString('base64');
+const NO_PAGES_SITEMAP = '<SiteMap><Area><Group/></Area></SiteMap>';
+const NAV_TO_OVERVIEW = 'export function back(){ Xrm.Navigation.navigateTo({ pageType: "generative", pageId: "PAGEREF_overview" }); }\nexport default function P(){ return null; }';
+const backLinkSpec = () => {
+  const spec = overviewToDetailSpec();
+  spec.pages[1].navigatesTo = [{ targetKey: 'overview' }];
+  return spec;
+};
+
+// The check right before the first in-place write is taken there, inside the loop: a page the loop CREATES before it (a new page first in the
+// spec) leaves the window open until then, and a page another app takes in during that create halts the build before it is written.
+test('pages: a page another app takes in while the loop creates an earlier page HALTS before it is written in place', async () => {
+  const spec = overviewSpec();
+  spec.pages.unshift({ key: 'intro', name: 'Intro', source: { kind: 'tsx', codeFile: 'i.tsx' } });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'intro', title: 'Intro' });
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const other = { uniquename: 'contoso_secondapp', sitemapxml: NO_PAGES_SITEMAP };
+    const { sdk } = mockSdk({ pageManifest: pagesManifest([{ key: 'overview', name: 'Overview', pageId: GP_O }]), manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: pagesSitemap(GP_O), otherApps: [other] });
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }),
+      upload: async (o) => { uploads.push([o.name, o.pageId || null]); if (!o.pageId) other.savedSitemapXml = pagesSitemap(GP_O); return { pageId: o.pageId || GP_D }; } };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => e.code === 'pages-shared-across-apps' && /became shared across apps while this build ran/.test(e.message) && /no page this build began with has been updated in place/.test(e.message));
+    assert.deepStrictEqual(uploads, [['Intro', null]], 'Intro was created; Overview was never written in place');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// The check covers EVERY page the loop will write in place, not only the one it is about to write: one taken in after the first scan halts the
+// build before the first of them is written.
+test('pages: the check before the first in-place write covers every page the loop will write in place', async () => {
+  const spec = overviewSpec();
+  spec.pages.push({ key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'd.tsx' } });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'detail', title: 'Detail' });
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const other = { uniquename: 'contoso_secondapp', sitemapxml: NO_PAGES_SITEMAP };
+    const { sdk } = mockSdk({ pageManifest: pagesManifest([{ key: 'overview', name: 'Overview', pageId: GP_O }, { key: 'detail', name: 'Detail', pageId: GP_D }]), manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: pagesSitemap(GP_O, GP_D), otherApps: [other] });
+    const realGet = sdk.dataverse.get;
+    let savedReads = 0;
+    sdk.dataverse.get = async (url) => {
+      const r = await realGet(url);
+      // Once the first scan has read the saved layer, another maker saves Detail — the SECOND page written — into contoso_secondapp's navigation.
+      if (url.startsWith('/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()') && (savedReads += 1) === 1) other.savedSitemapXml = pagesSitemap(GP_D);
+      return r;
+    };
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O, GP_D], pages: [{ pageId: GP_O, name: 'Overview' }, { pageId: GP_D, name: 'Detail' }] }),
+      upload: async (o) => { uploads.push([o.name, o.pageId]); return { pageId: o.pageId }; } };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => e.code === 'pages-shared-across-apps' && e.message.includes(GP_D) && /while this build ran/.test(e.message));
+    assert.deepStrictEqual(uploads, [], 'nothing was written in place, Overview included');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// The check is taken once, before the first in-place write — not before every page: a build that updates three pages in place scans three
+// times in all (the first scan, that check, and the last).
+test('pages: a build that updates three pages in place takes the shared-page scan three times, not once per page', async () => {
+  const GP_X = '2d7b3e4f-5a6c-4d8e-8f9a-0b1c2d3e4f5a';
+  const spec = overviewSpec();
+  spec.pages.push({ key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'd.tsx' } }, { key: 'extra', name: 'Extra', source: { kind: 'tsx', codeFile: 'x.tsx' } });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'detail', title: 'Detail' }, { page: 'extra', title: 'Extra' });
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const { sdk, calls } = mockSdk({ pageManifest: pagesManifest([{ key: 'overview', name: 'Overview', pageId: GP_O }, { key: 'detail', name: 'Detail', pageId: GP_D }, { key: 'extra', name: 'Extra', pageId: GP_X }]), manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: pagesSitemap(GP_O, GP_D, GP_X), otherApps: [{ uniquename: 'contoso_secondapp', sitemapxml: NO_PAGES_SITEMAP }] });
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O, GP_D, GP_X], pages: [] }), upload: async (o) => { uploads.push(o.pageId); return { pageId: o.pageId }; } };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    assert.deepStrictEqual(uploads, [GP_O, GP_D, GP_X]);
+    assert.strictEqual(scanReads(calls).filter((u) => u === APPS_LIST_URL).length, 3, 'the first scan, the check before the first in-place write, and the last scan');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// The check is taken ahead of the page's step, so a scan that fails there halts as the first scan's does — recoverable, in its own words —
+// rather than wrapped as a failed step.
+test('pages: a scan that fails at the check before the first in-place write halts as the first scan does: recoverable, unwrapped', async () => {
+  const spec = overviewSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const options = { pageManifest: pagesManifest([{ key: 'overview', name: 'Overview', pageId: GP_O }]), manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: pagesSitemap(GP_O), otherApps: [{ uniquename: 'contoso_secondapp', sitemapxml: NO_PAGES_SITEMAP }] };
+    const { sdk } = mockSdk(options);
+    const realGet = sdk.dataverse.get;
+    let savedReads = 0;
+    // The app list fails from the second scan on: the first scan passes, the check before the first in-place write cannot read.
+    sdk.dataverse.get = async (url) => { const r = await realGet(url); if (url.startsWith('/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()') && (savedReads += 1) === 1) options.failAppList = true; return r; };
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [] }), upload: async (o) => { uploads.push(o.pageId); return { pageId: o.pageId }; } };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => {
+        assert.strictEqual(e.code, 'pages-shared-check-failed');
+        assert.strictEqual(e.recoverable, true);
+        assert.match(e.message, /^could not scan the environment for pages shared across apps/);
+        return true;
+      });
+    assert.deepStrictEqual(uploads, [], 'nothing was written');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// A page this run created, first in the spec, is written again (its link resolved) before the loop reaches the first page the build began
+// with — where the check halts. So the halt says no page the build BEGAN WITH was updated in place, which stays true.
+test('pages: a halt after the loop wrote again a page this run created says no page the build began with was updated in place', async () => {
+  const spec = backLinkSpec();
+  spec.pages.reverse(); // Detail (created this run, links back to Overview) first
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages, { 'o.tsx': NAV_TO_DETAIL, 'd.tsx': NAV_TO_OVERVIEW });
+  try {
+    const other = { uniquename: 'contoso_secondapp', sitemapxml: NO_PAGES_SITEMAP };
+    const { sdk } = mockSdk({ pageManifest: pagesManifest([{ key: 'overview', name: 'Overview', pageId: GP_O }]), manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: pagesSitemap(GP_O), otherApps: [other] });
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }),
+      upload: async (o) => { uploads.push([o.name, o.pageId || null]); if (!o.pageId) other.savedSitemapXml = pagesSitemap(GP_O); return { pageId: o.pageId || GP_D }; } };
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] }),
+      (e) => e.code === 'pages-shared-across-apps' && /no page this build began with has been updated in place/.test(e.message));
+    assert.deepStrictEqual(uploads, [['Detail', null], ['Detail', GP_D]], 'Detail, which this run created, was written again; Overview was not written');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// A page this run created was not there to share when the build began, so neither later scan covers it: a fresh app whose pages link both
+// ways (each a navigation target the build creates first, then writes again with the other's id) makes no scan at all, and an unrelated
+// app whose navigation cannot be read does not stop it.
+test('pages: a fresh app whose pages link both ways makes no shared-page scan, even beside an app whose navigation cannot be read', async () => {
+  const spec = backLinkSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages, { 'o.tsx': NAV_TO_DETAIL, 'd.tsx': NAV_TO_OVERVIEW });
+  try {
+    const { sdk, calls } = mockSdk({ selfAppUnique: appUnique, otherApps: [{ uniquename: 'contoso_fine', sitemapxml: NO_PAGES_SITEMAP }, { uniquename: 'contoso_broken', sitemapxml: '<SiteMap><Area' }] });
+    const uploads = [];
+    const fresh = [GP_O, GP_D];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }),
+      upload: async (o) => { uploads.push([o.name, o.pageId || null]); return { pageId: o.pageId || fresh.shift() }; } };
+    const warnings = [];
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'], warn: (m) => warnings.push(String(m)) });
+    assert.ok(uploads.some(([, id]) => id !== null), `a page this run created is written again with its link resolved: ${JSON.stringify(uploads)}`);
+    assert.deepStrictEqual(scanReads(calls), [], 'no shared-page scan');
+    assert.ok(find(calls, 'updateElement').some((c) => c.args[2] === '/siteMap'), 'the sitemap is written');
+    assert.deepStrictEqual(warnings.filter((w) => /another app/.test(w)), []);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// A non-navigation page created in step 2 is never written again in place, so another app taking it in at once halts nothing.
+test('pages: a navigation target created in step 2 and taken in by another app at once does not halt the build', async () => {
+  const spec = overviewToDetailSpec();
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages, { 'o.tsx': NAV_TO_DETAIL });
+  try {
+    const other = { uniquename: 'contoso_secondapp', sitemapxml: NO_PAGES_SITEMAP };
+    const { sdk } = mockSdk({ pageManifest: pagesManifest([{ key: 'overview', name: 'Overview', pageId: GP_O }]), manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: pagesSitemap(GP_O), otherApps: [other] });
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O], pages: [{ pageId: GP_O, name: 'Overview' }] }),
+      upload: async (o) => { uploads.push([o.name, o.pageId || null]); if (!o.pageId) other.savedSitemapXml = pagesSitemap(GP_D); return { pageId: o.pageId || GP_D }; } };
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
+    assert.deepStrictEqual(uploads, [['Detail', null], ['Overview', GP_O]]);
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// A changed-only run writes only its selected pages, so the checks cover only those: an unselected page another app takes in after the
+// first scan halts nothing.
+test('pages: in a changed-only run, a page it does not write that another app takes in does not halt it', async () => {
+  const spec = overviewSpec();
+  spec.pages.push({ key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'd.tsx' } });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'detail', title: 'Detail' });
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const other = { uniquename: 'contoso_secondapp', sitemapxml: NO_PAGES_SITEMAP };
+    const { sdk } = mockSdk({ pageManifest: pagesManifest([{ key: 'overview', name: 'Overview', pageId: GP_O }, { key: 'detail', name: 'Detail', pageId: GP_D }]), manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: pagesSitemap(GP_O, GP_D), otherApps: [other] });
+    const realGet = sdk.dataverse.get;
+    let savedReads = 0;
+    sdk.dataverse.get = async (url) => {
+      const r = await realGet(url);
+      // Once the first scan has read the saved layer, another maker saves Detail into contoso_secondapp's navigation.
+      if (url.startsWith('/sitemaps/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()') && (savedReads += 1) === 1) other.savedSitemapXml = pagesSitemap(GP_D);
+      return r;
+    };
+    const uploads = [];
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O, GP_D], pages: [{ pageId: GP_O, name: 'Overview' }, { pageId: GP_D, name: 'Detail' }] }),
+      upload: async (o) => { uploads.push([o.name, o.pageId]); return { pageId: o.pageId }; } };
+    const warnings = [];
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'], changedOnly: { selectedKeys: ['overview'], skipSitemapFinalize: true }, warn: (m) => warnings.push(String(m)) });
+    assert.deepStrictEqual(uploads, [['Overview', GP_O]], 'only the selected page is written');
+    assert.deepStrictEqual(warnings.filter((w) => /another app/.test(w)), [], 'Detail was not written, so there is nothing to report');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// What the loop wrote before it stopped is written, so the last scan runs when a later page's upload fails too — and the failure still
+// reaches the caller as it was.
+test('pages: a page another app takes in is REPORTED when a later upload then fails, and the failure stands', async () => {
+  const spec = overviewSpec();
+  spec.pages.push({ key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'd.tsx' } });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'detail', title: 'Detail' });
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const other = { uniquename: 'contoso_secondapp', sitemapxml: NO_PAGES_SITEMAP };
+    const { sdk } = mockSdk({ pageManifest: pagesManifest([{ key: 'overview', name: 'Overview', pageId: GP_O }, { key: 'detail', name: 'Detail', pageId: GP_D }]), manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: pagesSitemap(GP_O, GP_D), otherApps: [other] });
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O, GP_D], pages: [{ pageId: GP_O, name: 'Overview' }, { pageId: GP_D, name: 'Detail' }] }),
+      upload: async (o) => {
+        if (o.pageId === GP_O) { other.savedSitemapXml = pagesSitemap(GP_O); return { pageId: GP_O }; } // Overview is taken in while it uploads…
+        throw new Error('pac genpage upload failed: the request timed out'); // …and Detail's upload then fails.
+      } };
+    const warnings = [];
+    await assert.rejects(
+      runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'], warn: (m) => warnings.push(String(m)) }),
+      (e) => /the request timed out/.test(e.message), 'the upload failure is what the build reports');
+    const reported = warnings.filter((w) => /was taken into another app's navigation while this build was updating it/.test(w));
+    assert.strictEqual(reported.length, 1, JSON.stringify(warnings));
+    assert.match(reported[0], new RegExp(`^generative page "Overview" ${GP_O} `));
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
+// An app that has PUBLISHED the page shows the new content at once, and the report says so.
+test('pages: a page another app takes into its PUBLISHED navigation while the pages upload is reported as showing there', async () => {
+  const spec = overviewSpec();
+  spec.pages.push({ key: 'detail', name: 'Detail', source: { kind: 'tsx', codeFile: 'd.tsx' } });
+  spec.appShell.areas[0].groups[0].subAreas.push({ page: 'detail', title: 'Detail' });
+  const appUnique = appUniqueName(spec);
+  const appDir = stagePages(spec.pages);
+  try {
+    const other = { uniquename: 'contoso_secondapp', sitemapxml: NO_PAGES_SITEMAP };
+    const { sdk } = mockSdk({ pageManifest: pagesManifest([{ key: 'overview', name: 'Overview', pageId: GP_O }, { key: 'detail', name: 'Detail', pageId: GP_D }]), manifestId: 'wr-manifest', selfAppUnique: appUnique, liveSitemapXml: pagesSitemap(GP_O, GP_D), otherApps: [other] });
+    const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [GP_O, GP_D], pages: [{ pageId: GP_O, name: 'Overview' }, { pageId: GP_D, name: 'Detail' }] }),
+      upload: async (o) => { if (o.pageId === GP_O) other.sitemapxml = pagesSitemap(GP_D); return { pageId: o.pageId }; } }; // published, with Detail in it
+    const warnings = [];
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'], warn: (m) => warnings.push(String(m)) });
+    const reported = warnings.filter((w) => /was taken into another app's navigation while this build was updating it/.test(w));
+    assert.strictEqual(reported.length, 1, JSON.stringify(warnings));
+    assert.match(reported[0], new RegExp(`^generative page "Detail" ${GP_D} \\(also in contoso_secondapp\\) was taken into another app's navigation while this build was updating it, so its new content shows there too\\.`));
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
+
 test('pages: an UNREADABLE other-app sitemap HALTS pages-shared-check-failed (fail-closed — cannot prove non-sharing)', async () => {
   const spec = overviewSpec();
   const appUnique = appUniqueName(spec);
@@ -5976,7 +6313,7 @@ test('pages: another app\'s saved navigation that cannot be read HALTS pages-sha
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
-test('pages: other apps that do not hold the page — in either layer — pass the check, with one saved-layer read in all', async () => {
+test('pages: other apps that do not hold the page — in either layer — pass the check, with one saved-layer read per scan', async () => {
   const spec = overviewSpec();
   const appUnique = appUniqueName(spec);
   const appDir = stagePages(spec.pages);
@@ -5994,7 +6331,7 @@ test('pages: other apps that do not hold the page — in either layer — pass t
     await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: ['solution', 'data-model', 'app-shell', 'pages'] });
     assert.strictEqual(uploads.length, 1);
     assert.strictEqual(uploads[0].pageId, GP_O, 'reused (UPDATE): nobody else holds the page');
-    assert.strictEqual(savedLayerReads(calls).length, 1, 'three other apps, one saved-layer read');
+    assert.strictEqual(savedLayerReads(calls).length, 3, 'three other apps, one saved-layer read per scan — and three scans, as the build writes a page in place');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
 
@@ -6012,7 +6349,9 @@ test('pages: a single-app env passes the shared-page check (reads no other sitem
     assert.strictEqual(uploads.length, 1);
     assert.strictEqual(uploads[0].pageId, GP_O, 'reused (UPDATE); a single-app env has no other app to share with');
     // The cost of knowing there is no draft app: ONE small read of the list of apps that were never published, and no sitemap — saved or published — of any other app.
-    assert.deepStrictEqual(scanReads(calls), [APPS_LIST_URL], 'one request in all');
+    // The scan is taken three times when the build writes a page in place (before any write, right before the first one, and after the last: the
+    // others are the build's own guard against another maker taking a page in while it runs), so that is three such reads in all.
+    assert.deepStrictEqual(scanReads(calls), [APPS_LIST_URL, APPS_LIST_URL, APPS_LIST_URL], 'one request per scan, three scans');
     assert.strictEqual(savedLayerReads(calls).length, 0);
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
@@ -6080,7 +6419,7 @@ test('pages: the list of never-published apps that cannot be read HALTS pages-sh
 // An app saved in the maker with nothing but a name has no sitemap component, and no sitemap of its name: it has no navigation and holds no page. A read that SUCCEEDS and finds no component,
 // with no sitemap of the app's name in the saved layer, shows that, and one such app must not stop every page update in the environment; a read that FAILS proves nothing and still halts
 // (the next test, and the unit tests of fetchAppsForPages).
-test('pages: a never-published app with no sitemap component and no sitemap of its name holds no page, so the update goes ahead — for the list of apps and the one saved-layer read', async () => {
+test('pages: a never-published app with no sitemap component and no sitemap of its name holds no page, so the update goes ahead — for the list of apps and one saved-layer read per scan', async () => {
   const s = stageUpdate();
   try {
     // Another app's sitemap that names the page is nothing to do with it: no row carries this app's name.
@@ -6089,7 +6428,8 @@ test('pages: a never-published app with no sitemap component and no sitemap of i
     await runPagesUpdate(s, alone.sdk);
     assert.strictEqual(s.uploads.length, 1);
     assert.strictEqual(s.uploads[0].pageId, GP_O, 'the page is updated in place');
-    assert.deepStrictEqual(scanReads(alone.calls), [APPS_LIST_URL, SAVED_URL], 'the saved layer is read once, which is how the app is shown to have no sitemap');
+    assert.deepStrictEqual(scanReads(alone.calls), [APPS_LIST_URL, SAVED_URL, APPS_LIST_URL, SAVED_URL, APPS_LIST_URL, SAVED_URL],
+      'the saved layer is read once per scan, which is how the app is shown to have no sitemap (three scans: the build writes a page in place)');
     // Beside a draft app that does hold the page the build still halts, and names only that app.
     s.uploads.length = 0;
     const mixed = mockSdk({ pageManifest: s.existing, manifestId: 'wr-manifest', selfAppUnique: s.appUnique, liveSitemapXml: s.sitemapWithO, draftApps: [bare, { uniquename: 'contoso_draftapp', savedSitemapXml: s.sitemapWithO }] });

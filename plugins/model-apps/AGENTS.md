@@ -360,7 +360,17 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   environment rather than one 5000-row page; a pagination fault (the SDK's repeated-nextLink guard) still
   fails **closed** rather than scanning a partial list. It reads each other app's PUBLISHED sitemap and also its
   SAVED (current, unpublished) one: a page another app has saved into its navigation but not published still
-  halts the update (`pages-shared-across-apps`, naming the app `[saved, not published]`). The saved layer of
+  halts the update (`pages-shared-across-apps`, naming the app `[saved, not published]`). The scan is a snapshot: another maker
+  can take a page into another app's navigation while the build runs, and nothing reaches far enough to stop it — the lease is
+  this workspace's, Dataverse offers no write conditional on another app's sitemap, and the update goes through `pac`, which
+  takes no precondition. So a build that writes pages in place takes the scan twice more, over the pages it began with and now
+  overwrites (one this run created, a navigation target included, was not there to share and is left out): right before the
+  first of them is written, where a page that became shared halts the build before any page it began with is updated in place
+  (`pages-shared-across-apps`, "became shared across apps while this build ran", `transient: false`); and after the last — or
+  after the loop stops early, since what it wrote is written — where a page taken in while the uploads ran is reported as a
+  warning naming the page and the app (one that only saved it shows the new content once that app is published; a scan that
+  fails there is a warning too: nothing is left to refuse). Each scan reads every other app's navigation (three requests per
+  other app, and three more), which is why it is not taken before every page. The saved layer of
   every other app is **one** extra request — the `sitemap` collection's `RetrieveUnpublishedMultiple`, joined to each app by the
   sitemap id its published read found, with the same current-row rule `navigationProof` uses — and it is fail-closed too: a
   read that fails as a whole halts as `pages-shared-check-failed`, and an app whose saved row is missing, ambiguous or

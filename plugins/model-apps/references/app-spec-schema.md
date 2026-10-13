@@ -1459,6 +1459,8 @@ custom control), but the spec validator emits a warning.
   - `pages-shared-across-apps` — a page appears in another app's sitemap, published or only saved (not yet
     published — an app that was never published counts). Detach it in Maker first. `--allow-destructive` does NOT bypass this halt. If another app's
     saved navigation, or the list of apps that were never published, cannot be read, the build halts as `pages-shared-check-failed` instead of assuming it is clear.
+    The check runs again right before the first page is updated in place, so a page another app takes in while the build runs halts it there too ("became shared
+    across apps while this build ran"); one taken in while the pages upload is written by then, and is reported after the uploads as a warning naming the app.
   - `pages-removed` — a page is live in the env but no longer in the spec. Re-add it to the spec, or
     pass `--allow-destructive` to detach it from the nav (`SubArea` removed; page record left deployed).
   - `pages-griffel-shorthand` — a page that this run uploads has a `makeStyles` key Griffel drops at runtime
