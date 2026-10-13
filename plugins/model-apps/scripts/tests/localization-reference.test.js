@@ -1,8 +1,9 @@
 'use strict';
 // #585 item 6: the localization reference must never decide text direction from a hand-kept LCID list.
 // It named five Arabic LCIDs and Hebrew, so every other right-to-left culture — the remaining Arabic
-// regions, Persian, Urdu, Pashto and more — rendered left-to-right. Direction now comes from PAC's RTL
-// column, with a script-based fallback; these tests pin that fallback's data against culture metadata.
+// regions, Persian, Urdu, Pashto and more — rendered left-to-right. Direction now comes from the `rtl`
+// field of scripts/list-languages.js (which read PAC's RTL column before that script replaced `pac model
+// list-languages`), with a script-based fallback; these tests pin that fallback's data against culture metadata.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -31,10 +32,10 @@ function docRtlScripts() {
   return new Set([...m[1].matchAll(/"([A-Z][a-z]{3})"/g)].map((x) => x[1]));
 }
 
-test('the localization reference takes text direction from PAC, not from a hand-kept LCID list', () => {
+test('the localization reference takes text direction from the languages script, not from a hand-kept LCID list', () => {
   const section = DOC.slice(DOC.indexOf('### RTL Layout Support'), DOC.indexOf('### User Settings for Formatting'));
   assert.ok(section.length > 0, 'the RTL section exists');
-  assert.match(section, /\*\*RTL\*\* column of `pac model list-languages`/);
+  assert.match(section, /`rtl` field of `scripts\/list-languages\.js`/);
   assert.doesNotMatch(section, /\b(1025|1037|2049|3073|4097|5121)\b/, 'no LCIDs are given as the rule');
 });
 

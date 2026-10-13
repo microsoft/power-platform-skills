@@ -10,7 +10,9 @@
 // Arguments:
 //   envUrl   - Dataverse environment URL (https://org.crm.dynamics.com)
 //   method   - GET | POST | PATCH | DELETE
-//   apiPath  - Path after /api/data/v9.2/ (e.g. "EntityDefinitions(LogicalName='account')")
+//   apiPath  - Path after /api/data/v9.2/ (e.g. "EntityDefinitions(LogicalName='account')"). A path
+//              that would leave that root is refused before a token is read; a '..' segment counts
+//              whether written plainly, percent-encoded or joined by an encoded slash (%2F, %5C).
 //
 // Options:
 //   --body <json|@path>   Inline JSON or @filepath to a JSON file

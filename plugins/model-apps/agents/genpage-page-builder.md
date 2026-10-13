@@ -141,11 +141,34 @@ import has been Grep-validated against the verified list.
 (a type error, or a reference to a column that does not exist, still transpiles
 and writes JavaScript), and it does not execute `makeStyles`. A clean transpile is
 therefore no proof that the page is type-safe, and unsupported Griffel shorthands
-can compile and then log runtime errors in the browser. Before returning, Grep the
-generated `.tsx` with the regex `['"]?borderWidth['"]?\s*:` so unquoted, quoted,
-and spaced property syntax are all caught. Replace every match with the four
-explicit longhands: `borderTopWidth`, `borderRightWidth`, `borderBottomWidth`, and
-`borderLeftWidth`. Do not return a file that still matches the regex.
+can compile and then log runtime errors in the browser. Before returning, review
+every `makeStyles` object you wrote against this rule:
+
+Griffel does not support ten CSS shorthands, and `makeStyles` drops them at
+runtime: the page type-checks, transpiles and deploys, then renders without the
+border, color or reset. They are `all`, `borderColor`, `borderStyle`,
+`borderWidth`, `borderBlock`, `borderBlockStart`, `borderBlockEnd`,
+`borderInline`, `borderInlineStart` and `borderInlineEnd`. Write longhands
+instead: `borderColor`, `borderStyle` and `borderWidth` become one longhand per
+side, `border` + `Top`, `Right`, `Bottom` or `Left` + `Color`, `Style` or `Width`
+(`borderWidth` → `borderTopWidth`, `borderRightWidth`, `borderBottomWidth`,
+`borderLeftWidth`); `borderBlock`, `borderInline` and their `Start` and `End`
+forms become the `Width`, `Style` and `Color` longhands of the sides they name
+(`borderBlockStart` → `borderBlockStartWidth`, `borderBlockStartStyle`,
+`borderBlockStartColor`; `borderBlock` → those and the three `borderBlockEnd…`
+ones); `all` has no longhands, so set the properties you need one by one. Every
+other shorthand (`padding`, `margin`, `border`, `borderRadius`, `gap`,
+`outline`) is supported, and an inline `style={{ … }}` is not Griffel at all.
+
+You have no shell, so you cannot run the checker: after you return, the
+orchestrator runs `${PLUGIN_ROOT}/scripts/check-griffel-styles.js` on your file and
+fixes anything it reports before the page is deployed. It reads the style objects
+written inline in the call, `makeStyles({ … })`, so write every one that way. To
+list the places to look, Grep the file with the regex
+`(^|[\s{,'"])(all|borderColor|borderStyle|borderWidth|borderBlock|borderBlockStart|borderBlockEnd|borderInline|borderInlineStart|borderInlineEnd)['"]?\]?\s*:`
+and look at each match: one inside a `makeStyles` object is the defect, and one in
+a string, a comment or an inline `style={{ … }}` is fine. Do not return a file that
+still has one in a `makeStyles` object.
 
 ## Step 3 — Read References and Samples
 
@@ -374,6 +397,7 @@ export default GeneratedComponent;
   is not recognised, so the token in it halts the build as stray. **Write the plain form,
   `navigateTo({ … })`** — a parenthesised callee, `(navigateTo)({ … })`, is read only at the start of a
   statement or after `;` `{` `(` `[` `,` `:` a ternary `?`, an operator ending in `=`, `=>`, `&&`, `||` or `??`,
+  or the keyword `return` on the same line (`return (navigateTo)({ … })`; not `await` or `yield`),
   and any other spelling (`factory!(navigateTo)({ … })`) halts as stray. A `PAGEREF_` token may appear
   nowhere but that double-quoted `pageId` literal — **not in a comment of any kind**: a `//` comment, a
   block comment, a trailing comment (`navigateTo({ … }); // PAGEREF_x`) and a JSX `{/* PAGEREF_x */}` all halt

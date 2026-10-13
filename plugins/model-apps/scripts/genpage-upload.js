@@ -23,15 +23,18 @@
 // Usage:
 //   node scripts/genpage-upload.js --env <orgUrl> --app-id <guid> --code-file <path>
 //        --prompt-file <path> --agent-message-file <path>
-//        [--page-id <guid>] [--name <text>] [--data-sources <csv>] [--compiled-code-file <path>]
+//        [--page-id <guid>] [--name <text>] [--data-sources <csv>]
 //
 //   `--prompt` / `--agent-message` are accepted for short, shell-safe text, but `--prompt-file` is
-//   the documented path precisely because it cannot be mangled by a shell.
+//   the documented path precisely because it cannot be mangled by a shell. `--compiled-code-file` is
+//   refused (see main): pac compiles the checked `--code-file` itself.
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
 const { makeGenpageCli, suppliedButBlank, unescapePacName } = require('./lib/genpage-cli.js');
+const { griffelStyleProblems, griffelProblemsNotIn, describeGriffelRefusal, describeGriffelWarning } = require('./lib/griffel-styles.js');
+const { commandArgOrPlaceholder } = require('./lib/cli-failure.js');
 const genpageBase = require('./lib/genpage-base.js');
 const { writeFileSafe } = require('./lib/safe-fs.js');
 
@@ -44,7 +47,7 @@ const NEED_VALUE = KNOWN.filter((f) => !SWITCHES.includes(f));
 
 const USAGE = 'Usage: node scripts/genpage-upload.js --env <orgUrl> --app-id <guid> --code-file <path> '
   + '--prompt-file <path> --agent-message-file <path> [--page-id <guid>] [--name-file <path> | --name <text>] '
-  + '[--data-sources <csv>] [--clear-data-sources] [--compiled-code-file <path>] [--model <id>] '
+  + '[--data-sources <csv>] [--clear-data-sources] [--model <id>] '
   + '[--connectors <path>] [--actions <path>] [--add-to-sitemap] [--overwrite-deployed]';
 
 // The skill writes these inputs — the prompt, agent-message and page-name files, connectors.json, actions.json —
@@ -195,13 +198,15 @@ async function recordObservedBase(args) {
   }
 }
 
-async function writeObservedBase({ cli, flags, pageId, base, warnings, mkdtempSync, rmSync }) {
+async function writeObservedBase({ cli, flags, pageId, base, warnings, checkedText, mkdtempSync, rmSync }) {
   const codeFile = flags['code-file'];
   const mkdtemp = mkdtempSync || fs.mkdtempSync;
   const rm = rmSync || fs.rmSync;
-  let localText;
+  // The marker sits beside the file the caller named, which must still be a regular file with one name: readPlainText refuses a link, or a file
+  // that is gone, as it always did. What the marker records is the hash of the bytes that were checked and sent (`checkedText`) — never a new
+  // read of the file, which may have been saved again since; a later check then sees that save as a local change, which it is.
   try {
-    localText = base.readPlainText(path.resolve(codeFile));
+    base.readPlainText(path.resolve(codeFile));
   } catch (e) {
     warnings.push(`could not read ${codeFile} to record a base marker (${e.message}) — a later update will refuse no-base until the page is recorded`);
     try { base.deleteMarker(codeFile); } catch (del) {
@@ -209,6 +214,7 @@ async function writeObservedBase({ cli, flags, pageId, base, warnings, mkdtempSy
     }
     return;
   }
+  const localText = checkedText;
   const localSha256 = base.pageHash(localText);
   let deployedSha256 = localSha256;
   let source = 'upload';
@@ -268,6 +274,16 @@ async function main(argv = process.argv.slice(2), deps = {}) {
     if (typeof flags[required] !== 'string' || !flags[required]) {
       return emit(false, { error: `--${required} is required\n${USAGE}` });
     }
+  }
+  // Refused, not passed on. pac deploys the JavaScript in --compiled-code-file instead of compiling --code-file, and the Griffel check below
+  // reads the TypeScript: compiled output names makeStyles in ways the check does not read as Griffel's (`(0, x.makeStyles)(…)` after a
+  // require), and nothing ties the file to the source that was checked — so a page could ship a shorthand Griffel drops with no check at all.
+  // No flow of this plugin sends it; without it pac compiles the checked file itself, which is how every page here is deployed.
+  if (flags['compiled-code-file'] !== undefined) {
+    return emit(false, {
+      error: '--compiled-code-file is not accepted: the Griffel check reads the TypeScript in --code-file, and JavaScript compiled '
+        + 'elsewhere would be deployed without it. Leave it out — pac compiles the --code-file it is given.',
+    });
   }
 
   const prompt = resolveText(flags, 'prompt', 'prompt-file', readFile);
@@ -345,6 +361,39 @@ async function main(argv = process.argv.slice(2), deps = {}) {
     const linked = typeof flags[flag] === 'string' && flags[flag] ? notPlainFile(path.resolve(flags[flag])) : null;
     if (linked) return emit(false, { error: `--${flag} ${linked}` });
   }
+
+  // The page is read ONCE, here, and everything after is decided on these bytes: the Griffel check below, an update's comparison with the deployed page, the base marker's hash,
+  // and the upload itself, which sends pac a copy of them rather than the file (see the upload below). An update lists the environment and downloads the deployed page before it
+  // uploads — seconds in which the file can be saved again — and pac reading the file then would deploy bytes nothing here checked. A file that cannot be read is refused: there
+  // is nothing to check, or to send.
+  let checkedCode;
+  try {
+    checkedCode = fs.readFileSync(path.resolve(flags['code-file']));
+  } catch (e) {
+    return emit(false, { error: `--code-file could not be read: ${(e && e.message) || e}` });
+  }
+  const checkedText = checkedCode.toString('utf8');
+
+  // The Griffel check (AB#6691124), where every page upload passes: a /genpage create, an edit-flow update and a browser-verify fix all go through this script, so a page whose
+  // `makeStyles` writes one of the ten shorthands Griffel drops at runtime is refused here whether or not the skill's own gate (scripts/check-griffel-styles.js) was run before
+  // it — pac transpiles without executing makeStyles, and the page would otherwise deploy and render without its border, colour or reset. It is made on the bytes read above,
+  // which are the ones pac is sent.
+  // A CREATE is refused here, before any listing or download. An UPDATE is held to the check by what it ADDS: the page is already deployed, possibly with a key Griffel drops that an
+  // earlier version of the plugin let through, and the same bytes sent again ship nothing new — so the file is compared with the deployed page, which an update downloads anyway for
+  // its base check, and only a key that page did not have stops the upload (below, once it is read).
+  const styleProblems = griffelStyleProblems(checkedText).problems;
+  // The checker command the message suggests names the file: as one argument no shell reads anything in, or — for a path a shell cannot be given literally — as a
+  // placeholder, with the path named in a sentence instead (lib/cli-failure.js commandArg; a path can come from an untrusted checkout).
+  const griffelFile = commandArgOrPlaceholder(flags['code-file'], '<file>');
+  const griffelWords = { surface: 'upload', subject: flags['code-file'], command: `node scripts/check-griffel-styles.js --file ${griffelFile.arg}`, ...(griffelFile.note ? { note: griffelFile.note } : {}) };
+  const refuseStyles = (problems) => emit(false, {
+    ok: false,
+    code: 'griffel-shorthand',
+    error: describeGriffelRefusal(problems, flags['code-file'], griffelWords),
+    problems,
+  });
+  if (styleProblems.length && !flags['page-id']) return refuseStyles(styleProblems);
+  let griffelWarnings = [];
 
   const cli = cliFactory(flags.env);
   const base = deps.base || genpageBase;
@@ -504,6 +553,23 @@ async function main(argv = process.argv.slice(2), deps = {}) {
           + 'to replace it deliberately, or retry when the page can be downloaded.',
       });
     }
+    // The Griffel check for an UPDATE (see the create check above): what the deployed page already has ships nothing new. A file that IS the deployed page's text (pac's BOM and final
+    // CRLF are not a difference) is a re-send as it is, so none of its problems is new; otherwise a key counts as already there when the deployed page has it (griffelProblemsNotIn).
+    // Only a key, or a call the checker cannot read, that the deployed page did not have stops the upload — and --overwrite-deployed is no way past it: that flag is about edits made
+    // to the deployed page, not about what this file writes. When the deployed page could not be read (possible only under --overwrite-deployed) nothing says which keys it had; the
+    // page exists, and the release before this check updated it as it was, so the update goes on with a warning — as the build does for a page it has no record of.
+    if (styleProblems.length) {
+      if (probe.deployedText === null) {
+        griffelWarnings = [describeGriffelWarning(styleProblems, flags['code-file'], { ...griffelWords, standing: 'undetermined' })];
+      } else {
+        const sameAsDeployed = base.pageHash(checkedText) === base.pageHash(probe.deployedText);
+        const { added, inherited } = sameAsDeployed
+          ? { added: [], inherited: styleProblems }
+          : griffelProblemsNotIn(styleProblems, griffelStyleProblems(probe.deployedText).problems);
+        if (added.length) return refuseStyles(added);
+        griffelWarnings = [describeGriffelWarning(inherited, flags['code-file'], { ...griffelWords, standing: 'inherited' })];
+      }
+    }
     if (preserveBindings) {
       let why = null;
       if (probe.configError || !probe.cfg) {
@@ -552,9 +618,7 @@ async function main(argv = process.argv.slice(2), deps = {}) {
         });
       }
       if (cmp.deployed === 'changed') {
-        let localText = '';
-        try { localText = base.readPlainText(path.resolve(flags['code-file'])); } catch { /* summary against an unreadable local file */ }
-        const lines = base.lineDelta(localText, probe.deployedText);
+        const lines = base.lineDelta(checkedText, probe.deployedText);
         let deployedCopy;
         let copyError;
         try {
@@ -582,23 +646,40 @@ async function main(argv = process.argv.slice(2), deps = {}) {
     }
   }
 
+  // pac reads the code file itself, after every check above, so it is sent a copy of the bytes they were made on: a file of the same name (pac compiles by its extension) in a
+  // folder of its own, removed as soon as pac has answered and before anything is reported (emit may end the process). `sourceFile` is the file the caller named, which is what
+  // an upload's own messages point at; the base marker belongs to it too, and records the hash of these bytes.
+  let stageDir = null;
+  const removeStage = () => {
+    if (!stageDir) return;
+    try { fs.rmSync(stageDir, { recursive: true, force: true }); } catch { /* leave the temp dir */ }
+    stageDir = null;
+  };
   try {
-    const res = await cli.upload({
-      appId: flags['app-id'],
-      pageId: flags['page-id'] || undefined,
-      codeFile: flags['code-file'],
-      compiledCodeFile: flags['compiled-code-file'] || undefined,
-      name: pageName.value || preservedName || undefined,
-      prompt: prompt.value,
-      agentMessage: agentMessage.value,
-      // Passed through as the CSV the caller typed; upload() normalizes array-or-string. When the
-      // caller said nothing on an update, this carries the page's EXISTING bindings so they survive.
-      dataSources: flags['data-sources'] || preservedDataSources || undefined,
-      model: flags.model || preservedModel || undefined,
-      connectors: flags.connectors || undefined,
-      actions: flags.actions || undefined,
-      addToSitemap,
-    });
+    stageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-code-'));
+    const stagedCodeFile = path.join(stageDir, path.basename(flags['code-file']));
+    fs.writeFileSync(stagedCodeFile, checkedCode);
+    let res;
+    try {
+      res = await cli.upload({
+        appId: flags['app-id'],
+        pageId: flags['page-id'] || undefined,
+        codeFile: stagedCodeFile,
+        sourceFile: flags['code-file'],
+        name: pageName.value || preservedName || undefined,
+        prompt: prompt.value,
+        agentMessage: agentMessage.value,
+        // Passed through as the CSV the caller typed; upload() normalizes array-or-string. When the
+        // caller said nothing on an update, this carries the page's EXISTING bindings so they survive.
+        dataSources: flags['data-sources'] || preservedDataSources || undefined,
+        model: flags.model || preservedModel || undefined,
+        connectors: flags.connectors || undefined,
+        actions: flags.actions || undefined,
+        addToSitemap,
+      });
+    } finally {
+      removeStage();
+    }
     const pageId = (res && (res.pageId || res.id)) || null;
     // A create that asked for placement, crashed mid-flight, and was recovered as an UPDATE leaves
     // the page deployed but NOT in the sitemap — invisible in the app's navigation. That is an
@@ -615,6 +696,7 @@ async function main(argv = process.argv.slice(2), deps = {}) {
     // `pageId` is the one value a caller needs in order to continue (sitemap wiring, a follow-up
     // edit). Echo the identity back rather than making the caller re-parse pac output.
     const warnings = [
+      ...griffelWarnings,
       ...(modelUnread ? [`could not read page ${flags['page-id']}'s current model (${modelUnread}), so this update stored it empty — pass --model to set it`] : []),
       ...(nameUnread ? [`could not read page ${flags['page-id']}'s current name (${nameUnread}), so pac may have renamed it to its navigation title — pass --name-file to set it`] : []),
       ...(nameChanged ? [`page ${flags['page-id']}'s name ${JSON.stringify(nameChanged)} has a double quote (") pac cannot store as it is, so the page now shows \\" there — pass --name-file with typographic quotes (“ ”) or an apostrophe to fix it`] : []),
@@ -622,7 +704,7 @@ async function main(argv = process.argv.slice(2), deps = {}) {
     ];
     // After the upload, not before emit's caller returns. The post-upload probe is removed inside
     // recordObservedBase, so this emit — which may process.exit — does not leak it.
-    if (pageId) await recordObservedBase({ cli, flags, pageId, base, warnings, mkdtempSync: deps.mkdtempSync, rmSync: deps.rmSync });
+    if (pageId) await recordObservedBase({ cli, flags, pageId, base, warnings, checkedText, mkdtempSync: deps.mkdtempSync, rmSync: deps.rmSync });
     return emit(true, {
       ok: true,
       pageId,
@@ -632,6 +714,7 @@ async function main(argv = process.argv.slice(2), deps = {}) {
       ...(warnings.length ? { warnings } : {}),
     });
   } catch (e) {
+    removeStage();
     return emit(false, { error: e && e.message ? e.message : String(e) });
   }
 }

@@ -63,6 +63,7 @@ const COPY_SETS = [
       requiredExports: [
         'dataverseOrigin',
         'requireDataverseOrigin',
+        'webApiUrl',
         'getAuthToken',
         'getAuthTokenAsync',
         'tokenFailureKind',

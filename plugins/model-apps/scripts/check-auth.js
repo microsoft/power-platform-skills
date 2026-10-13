@@ -118,6 +118,33 @@ function normalizeUser(u) {
   return (u || '').trim().toLowerCase();
 }
 
+// With an explicit environment the Dataverse token needs nothing from the other probes, so it is read
+// beside `az account show` instead of after it, and WhoAmI is sent the moment the token is in hand — while
+// `pac org who` (the slowest cold start) is still running. Only the START times move: every verdict is still
+// reached in the same order by main() (account, token timeout, pac, WhoAmI), and WhoAmI's answer is read
+// only when that order gets to it.
+//
+// The WhoAmI outcome is captured as data — `{ res }` or `{ error }` — because it can settle long before
+// main() looks at it, and a rejection nobody awaited yet would otherwise be reported as unhandled. It is
+// started only when the token read SUCCEEDED: with no token in the process memo, dataverseRequest would
+// run a synchronous `az` read of its own, freezing the event loop (and pac's timeout timer) mid-probe;
+// that case keeps today's order, after pac.
+//
+// The same rule is why the early request is sent with `refreshOn401: false`. On a 401 dataverseRequest would
+// replace the token with a synchronous `az` read — up to twice, seconds each on a cold Windows start — while
+// `az account show` and `pac` are still running. A wrong-tenant 401 is exactly what this preflight exists to
+// diagnose, so that freeze is the case that matters. The 401 is handed back instead, and main() sends WhoAmI
+// again at its old place (after pac), where the refresh blocks nothing.
+function warmDataverseToken(envUrl, signal) {
+  const token = Promise.resolve()
+    .then(() => getAuthTokenAsync(envUrl, { signal }))
+    .catch(() => null);
+  const whoAmI = token.then((value) => (value
+    ? dataverseRequest(envUrl, 'GET', 'WhoAmI', null, { timeout: 30000, refreshOn401: false }).then((res) => ({ res }), (error) => ({ error }))
+    : null));
+  return { token, whoAmI };
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   // This tool always exits 0 so callers can parse stdout, so a usage error is reported as a
@@ -140,20 +167,32 @@ async function main() {
   // Every probe below is a cold CLI start. Measured on Windows: `pac org who` ~7 s, and each `az`
   // call ~3-5 s. Run one after another (az --version, az account show, pac, then az again for the
   // WhoAmI token), the preflight cost ~19 s at the start of every /genpage and /app-builder run.
-  // pac needs nothing from az, so it is started FIRST and runs while the az probes run.
+  // pac needs nothing from az, so it is started FIRST and runs while the az probes run; with an explicit
+  // environment the token read and WhoAmI are independent of the account probe too (warmDataverseToken).
   const pacOrgProbe = runQuietAsync('pac', ['org', 'who'], PAC_PROBE_TIMEOUT_MS);
   const azBudget = azTimeoutMs();
+  // Every probe an early verdict could leave running. A non-detached child outlives the process that
+  // started it, so each early return cancels all of them — pac, and the token read started beside the
+  // account probe — before it emits.
+  const tokenAbort = new AbortController();
+  const cancelProbes = () => {
+    pacOrgProbe.cancel();
+    tokenAbort.abort();
+  };
   // A slow Azure CLI is reported as slow — neither "not installed" nor "not logged in" is true of it,
   // and sending the user to reinstall or `az login` fixes nothing.
   const azTimedOut = (command, partial = {}) => {
-    pacOrgProbe.cancel();
+    cancelProbes();
     return emit(buildResult(Object.assign({ blocker: 'az_timeout', message: azTimeoutAdvice(command, azBudget) }, partial)));
   };
 
   // 1) az login. `az account show` answers "installed?" and "logged in?" together on the happy path,
   //    so `az --version` runs only to tell those two failures apart — and not at all when the runner
   //    already found no `az` on PATH.
-  const account = await runQuietAsync('az', ['account', 'show', '--query', 'user.name', '-o', 'tsv'], azBudget).promise;
+  const accountProbe = runQuietAsync('az', ['account', 'show', '--query', 'user.name', '-o', 'tsv'], azBudget);
+  // Started with the account probe, awaited after it: the verdict order below is unchanged.
+  const warm = envUrl ? warmDataverseToken(envUrl, tokenAbort.signal) : null;
+  const account = await accountProbe.promise;
   const azUser = account.out;
   if (!azUser) {
     if (account.failure === 'timeout') return azTimedOut('az account show');
@@ -162,7 +201,7 @@ async function main() {
     if (version.out == null) {
       // This branch returns before the pac probe is awaited. Kill the child explicitly so a
       // non-detached PAC process cannot outlive the preflight after its parent exits.
-      pacOrgProbe.cancel();
+      cancelProbes();
       return emit(
         buildResult({
           blocker: 'az_missing',
@@ -172,7 +211,7 @@ async function main() {
     }
     // Same early-return hazard as az_missing: once we know az is installed but logged out, the
     // pending PAC result cannot affect this verdict, so cancel it before emitting.
-    pacOrgProbe.cancel();
+    cancelProbes();
     return emit(
       buildResult({
         blocker: 'az_not_logged_in',
@@ -181,13 +220,12 @@ async function main() {
     );
   }
 
-  // Acquire the WhoAmI token while pac is still running. getAuthToken memoizes per process, so the
+  // The WhoAmI token, read while pac is still running. getAuthToken memoizes per process, so the
   // dataverseRequest below reuses it instead of paying another az cold start after pac returns. A
   // failure here is not reported: WhoAmI acquires again and reports it with the right blocker — except
   // a TIMEOUT, which WhoAmI's own attempt would only repeat, doubling the wait before saying so.
-  if (envUrl) {
-    let warmed = null;
-    try { warmed = await getAuthTokenAsync(envUrl); } catch { /* reported by WhoAmI */ }
+  if (warm) {
+    const warmed = await warm.token;
     if (!warmed && tokenFailureKind(envUrl) === 'timeout') {
       return azTimedOut('az account get-access-token', { azUser, envUrl, warnings, message: tokenFailureMessage(envUrl, '') });
     }
@@ -242,10 +280,15 @@ async function main() {
   // Identity match only applies when pac is actually logged in.
   const identitiesMatch = pacUser ? normalizeUser(azUser) === normalizeUser(pacUser) : false;
 
-  // 3) WhoAmI — authoritative test
+  // 3) WhoAmI — authoritative test. Already in flight (or answered) when the token was read early, in
+  //    which case its outcome is only READ here, after every verdict above; otherwise it is sent now. An early
+  //    401 is not taken as the answer: that request could not refresh the token without freezing the probes
+  //    still running (see warmDataverseToken), so it is sent again here, with the refresh, as it always was.
   let whoRes;
   try {
-    whoRes = await dataverseRequest(envUrl, 'GET', 'WhoAmI', null, { timeout: 30000 });
+    const early = warm ? await warm.whoAmI : null;
+    if (early && early.error) throw early.error;
+    whoRes = early && early.res.status !== 401 ? early.res : await dataverseRequest(envUrl, 'GET', 'WhoAmI', null, { timeout: 30000 });
   } catch (e) {
     // The token for WhoAmI is read here when the env URL came from pac (nothing was warmed above); a
     // read that ran out of time is the Azure CLI being slow, not WhoAmI failing.

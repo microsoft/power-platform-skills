@@ -23,7 +23,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { annotateContentHashes } = require('./content-hash.js');
+const { annotateContentHashes, recordedContentSha } = require('./content-hash.js');
 const { migrateAppSpec } = require('./app-spec.js');
 const { writeFileAtomic } = require('./apply-snapshot-store.js');
 const { resolveAppSource } = require('./app-source-path.js');
@@ -85,14 +85,42 @@ function deployedIdsFor(spec, { created, previous, fromSpec = false } = {}) {
 }
 
 /**
+ * `spec` annotated with the hash of each page's source, as the baseline records it. What a page's `__contentSha` says is "the source an apply SENT", and the build's Griffel check judges a
+ * later source against it (sdk-build.js griffelStanding), so it must not describe bytes the apply never looked at. When the apply measured its pages (`created.pageSourceShas`, the hash of
+ * the source the pages phase READ and checked before it sent the page) that hash is the record. Hashing the files here instead — as the build ENDS — records a page a maker saved while
+ * the build ran as applied, and the next build finds the edit "unchanged".
+ * A page the apply did not send (a changed-only run sends only the pages it selects) keeps the record it had (`previous`): what was last sent is still what is deployed, whatever the file
+ * says by now. With no record to keep it records the file as it is, as before — no record at all would be no stricter: the next build reads a missing record as `unrecorded` and goes on
+ * with a warning (sdk-build.js), where a source that differs from a recorded hash is held. Without `created.pageSourceShas` — a download, whose files ARE the deployed
+ * state, or any caller that measured nothing — every source is hashed as it is on disk.
+ */
+function annotateForBaseline(v2, appDir, { created, previous } = {}) {
+  const annotated = annotateContentHashes(v2, confinedReader(appDir));
+  const sent = created && created.pageSourceShas && typeof created.pageSourceShas === 'object' ? created.pageSourceShas : null;
+  if (!sent || !annotated || !Array.isArray(annotated.pages)) return annotated;
+  return {
+    ...annotated,
+    pages: annotated.pages.map((page) => {
+      // An intent page has no source on disk, so it carries no hash to replace.
+      if (!page || typeof page !== 'object' || !Object.prototype.hasOwnProperty.call(page, '__contentSha')) return page;
+      const key = page.key || page.name;
+      if (Object.prototype.hasOwnProperty.call(sent, key)) return { ...page, __contentSha: typeof sent[key] === 'string' && sent[key] ? sent[key] : null };
+      const earlier = recordedContentSha(previous, key);
+      return earlier === null ? page : { ...page, __contentSha: earlier };
+    }),
+  };
+}
+
+/**
  * Record `spec` as the state of `appUniqueName` in `environment` (a canonical origin, e.g.
  * `https://contoso.crm.dynamics.com`), with the deployed ids `deployedIdsFor` finds from `created`,
- * `previous` and — for a download — `fromSpec`. Throws on a write error; callers treat it as non-fatal.
+ * `previous` and — for a download — `fromSpec`, and each page's source hash as `annotateForBaseline` finds
+ * it. Throws on a write error; callers treat it as non-fatal.
  */
 function writeBaseline(workspaceDir, spec, { appDir, environment, appUniqueName, created, previous, fromSpec } = {}) {
   const v2 = migrateAppSpec(spec);
   const snapshot = {
-    ...annotateContentHashes(v2, confinedReader(appDir)),
+    ...annotateForBaseline(v2, appDir, { created, previous }),
     [ENVIRONMENT_KEY]: environment || null,
     [APP_KEY]: appUniqueName || null,
     [IDS_KEY]: deployedIdsFor(v2, { created, previous, fromSpec }),

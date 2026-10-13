@@ -26,6 +26,7 @@ const {
   fieldCellIntent,
   formFieldLogicals,
   findFieldCellLocation,
+  findFieldCellLocations,
   normalizeFieldEntry,
   fieldOptionsMap,
   NON_FORM_RENDERABLE_TYPES,
@@ -372,6 +373,29 @@ test('findFieldCellLocation returns the containing arrays, indices, and the SECT
   assert.strictEqual(c.rowIndex, 1);
   assert.strictEqual(c.rowCellCount, 1, 'a lone cell is detected so the ROW can be moved');
   assert.strictEqual(findFieldCellLocation(form, 'zzz'), null);
+});
+
+test('findFieldCellLocations returns EVERY cell of a field the form holds more than once, in form order — and findFieldCellLocation the first', () => {
+  const quickView = { fieldName: 'b', classId: '{5C5600E0-1D6E-4205-A272-BE80DA87FD42}' };
+  const form = {
+    tabs: [
+      { columns: [{ sections: [{ rows: [
+        { cells: [{ control: { fieldName: 'a' } }, { control: { fieldName: 'B' } }] },
+        { cells: [{ control: quickView }] },
+      ] }, { rows: [{ cells: [{ control: { fieldName: 'b' } }] }] }] }] },
+      { columns: [{ sections: [{ rows: [{ cells: [{ control: { fieldName: 'b' } }] }] }] }] },
+    ],
+  };
+  const all = findFieldCellLocations(form, 'b');
+  assert.deepStrictEqual(all.map((l) => l.cellPointer), [
+    '/tabs/0/columns/0/sections/0/rows/0/cells/1',
+    '/tabs/0/columns/0/sections/1/rows/0/cells/0',
+    '/tabs/1/columns/0/sections/0/rows/0/cells/0',
+  ], 'each placement, across sections and tabs, matched case-insensitively — and never the quick-view control that carries the field as its lookup');
+  assert.deepStrictEqual(all[0], findFieldCellLocation(form, 'b'), 'the first is the one findFieldCellLocation gives');
+  assert.deepStrictEqual(findFieldCellLocations(form, 'a').length, 1);
+  assert.deepStrictEqual(findFieldCellLocations(form, 'zzz'), []);
+  assert.deepStrictEqual(findFieldCellLocations({}, 'b'), [], 'a form with no tabs has no cells');
 });
 
 // ---------------------------------------------------------------------------

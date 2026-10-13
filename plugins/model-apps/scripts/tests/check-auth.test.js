@@ -234,6 +234,8 @@ function makeCancelableExecFile({ pacOrg = null, azUser = 'maker@contoso.com', a
 
 async function run({ argv = [], exec = {}, whoAmI, whoAmIThrows, tokenFailure = null }) {
   const calls = [];
+  // The token read is an `az` call too: with the Azure CLI missing or logged out it fails, as it would live.
+  const azUnusable = exec.azVersion === null || exec.azUser === null || (exec.notOnPath || []).includes('az');
   const cli = loadCli(scriptPath, {
     argv,
     requires: {
@@ -246,9 +248,10 @@ async function run({ argv = [], exec = {}, whoAmI, whoAmIThrows, tokenFailure = 
           calls.push(`token ${url}`);
           return 'token-value';
         },
-        getAuthTokenAsync: async (url) => {
+        getAuthTokenAsync: async (url, opts = {}) => {
           calls.push(`token ${url}`);
-          return tokenFailure ? null : 'token-value';
+          if (opts.signal) opts.signal.addEventListener('abort', () => calls.push(`abort token ${url}`));
+          return tokenFailure || azUnusable ? null : 'token-value';
         },
         tokenFailureKind: () => tokenFailure,
         tokenFailureMessage: (url, fallback) => (tokenFailure === 'timeout' ? `token for ${url} timed out` : fallback),
@@ -309,12 +312,13 @@ async function runWithAsyncChildren({ argv = [], exec = {}, token, whoAmI } = {}
   return result;
 }
 
-test('a missing az CLI blocks with az_missing, and no token or WhoAmI is attempted', async () => {
+test('a missing az CLI blocks with az_missing; the token read started beside the account probe is cancelled and no WhoAmI is sent', async () => {
   const r = await run({ argv: ['--env', ENVURL], exec: { azVersion: null } });
   assert.equal(r.ok, false);
   assert.equal(r.blocker, 'az_missing');
   assert.match(r.message, /aka\.ms\/azure-cli/);
-  assert.ok(!r.calls.some((c) => c.startsWith('token ') || c === 'whoami'), r.calls.join(' | '));
+  assert.ok(!r.calls.includes('whoami'), r.calls.join(' | '));
+  assert.ok(r.calls.includes(`abort token ${ENVURL}`), `the token read must not outlive the verdict: ${r.calls.join(' | ')}`);
 });
 
 // A launch that THROWS instead of calling back (Node's execFile does, synchronously, for some launch errors) is a verdict
@@ -324,7 +328,7 @@ test('an az launch that throws synchronously still blocks with a verdict (az_mis
   assert.equal(r.ok, false);
   assert.equal(r.blocker, 'az_missing');
   assert.ok(r.calls.some((c) => c.startsWith('not on PATH: az ')), r.calls.join(' | '));
-  assert.ok(!r.calls.some((c) => c.startsWith('token ') || c === 'whoami'), r.calls.join(' | '));
+  assert.ok(!r.calls.includes('whoami'), r.calls.join(' | '));
 });
 
 test('az installed but logged out blocks with az_not_logged_in', async () => {
@@ -347,7 +351,7 @@ test('an az probe that runs out of time blocks with az_timeout — not az_missin
     assert.match(r.message, /did not answer within 60 s[\s\S]*POWER_PLATFORM_SKILLS_AZ_TIMEOUT_MS=120000/, slow);
     assert.ok(r.calls.some((c) => /\(timeout 60000\)$/.test(c)), `the az budget is 60 s: ${r.calls.join(' | ')}`);
     assert.ok(r.calls.includes('kill pac org who'), `the pac probe is cancelled: ${r.calls.join(' | ')}`);
-    assert.ok(!r.calls.some((c) => c.startsWith('token ') || c === 'whoami'), r.calls.join(' | '));
+    assert.ok(r.calls.includes(`abort token ${ENVURL}`), `the token read is cancelled too: ${r.calls.join(' | ')}`);
   }
   // An account-show timeout is not followed by `az --version`: nothing it answers changes the verdict.
   const r = await run({ argv: ['--env', ENVURL], exec: { slow: ['az account show'] } });
@@ -405,14 +409,16 @@ test('a working az login costs ONE az call before WhoAmI: `az --version` only cl
 test('pac org who starts before the az probes, and the WhoAmI token is warmed while it runs', async () => {
   // Measured cold starts on Windows: pac org who ~7 s, each az call ~3-5 s. Run one after another the
   // preflight cost ~19 s at the start of every run; overlapped it costs about the slower branch.
+  // With an explicit environment the token read now starts beside `az account show` (it needs
+  // nothing from it), and WhoAmI is sent as soon as the token is in hand — before pac has answered.
   const r = await run({ argv: ['--env', ENVURL], exec: { pacOrg: 'Connected as maker@contoso.com\n' } });
   assert.equal(r.ok, true);
   assert.deepEqual(r.calls, [
     'start pac org who',
     'az account show --query user.name -o tsv',
     `token ${ENVURL}`,
-    'done pac',
     'whoami',
+    'done pac',
   ]);
 });
 
@@ -558,4 +564,236 @@ test('a mismatched-but-working identity is reported as ready WITH the caveat', a
   assert.equal(r.identitiesMatch, false);
   assert.match(r.message, /different identities/);
   assert.match(r.message, /403/);
+});
+
+// --- the independent probes overlap, the verdicts do not move ------------------------------------------
+//
+// Gated children: every probe answers only when the test says so, which is what lets a test PROVE the order
+// things started in (not just the order they finished in) and drive each completion order by hand.
+const settle = async () => { for (let i = 0; i < 6; i += 1) await new Promise((resolve) => setImmediate(resolve)); };
+function deferred() {
+  let resolve;
+  const promise = new Promise((res) => { resolve = res; });
+  return { promise, resolve };
+}
+
+function runGated({ argv = ['--env', ENVURL], requirePac = false, tokenKind = null, whoAmIRequest = null } = {}) {
+  const events = [];
+  const gates = { account: deferred(), token: deferred(), pac: deferred(), who: deferred() };
+  const child = (label) => ({
+    killed: false,
+    stdin: { end() {} },
+    kill() { this.killed = true; events.push(`kill ${label}`); },
+  });
+  const execFileAsync = (cmd, args, _opts, cb) => {
+    const argvText = (args || []).join(' ');
+    const c = child(`${cmd} ${argvText}`);
+    if (cmd === 'pac') {
+      events.push('start pac');
+      gates.pac.promise.then((out) => { if (!c.killed) { events.push('pac answered'); cb(out === null ? new Error('spawn pac ENOENT') : null, out || '', ''); } });
+    } else if (argvText.includes('account show')) {
+      events.push('start account');
+      gates.account.promise.then((out) => { if (!c.killed) { events.push('account answered'); cb(out === null ? new Error('Please run az login') : null, out || '', ''); } });
+    } else {
+      // `az --version`, only ever run to classify an account failure.
+      events.push('start az --version');
+      setImmediate(() => cb(null, 'azure-cli 2.60.0', ''));
+    }
+    return c;
+  };
+  const cli = loadCli(scriptPath, {
+    argv: requirePac ? [...argv, '--require-pac'] : argv,
+    requires: {
+      './lib/process-runner': { execFileAsync, runSync: () => { throw new Error('sync child processes must not be used by check-auth'); } },
+      './lib/dataverse-auth': {
+        parseArgs: require('../lib/dataverse-auth.js').parseArgs,
+        validateFlags: require('../lib/dataverse-auth.js').validateFlags,
+        getAuthToken: () => { throw new Error('sync token acquisition must not be used by check-auth'); },
+        getAuthTokenAsync: (url, opts = {}) => {
+          events.push('start token');
+          if (opts.signal) opts.signal.addEventListener('abort', () => events.push('abort token'));
+          return gates.token.promise.then((value) => { events.push(value ? 'token ready' : 'token failed'); return value; });
+        },
+        tokenFailureKind: () => tokenKind,
+        tokenFailureMessage: (url, fallback) => (tokenKind === 'timeout' ? `token for ${url} timed out` : fallback),
+        // `whoAmIRequest(events)` swaps in a different WhoAmI (the real dataverseRequest over a stub transport, say);
+        // by default WhoAmI is a gate the test opens by hand.
+        dataverseRequest: whoAmIRequest ? whoAmIRequest(events) : () => {
+          events.push('start whoami');
+          return gates.who.promise.then((value) => {
+            events.push('whoami answered');
+            if (value instanceof Error) throw value;
+            return value;
+          });
+        },
+      },
+    },
+  });
+  const finished = cli.main().then(() => null, (e) => { if (e.exitCode === undefined) throw e; })
+    .then(() => JSON.parse(cli.stdoutText()));
+  return { events, gates, finished };
+}
+
+const WHO_OK = { status: 200, data: { UserId: 'u-1', OrganizationId: 'o-1' } };
+
+test('the account probe, the token read and pac are all in flight before any of them answers', async () => {
+  const { events, gates, finished } = runGated();
+  await settle();
+  assert.deepEqual(events, ['start pac', 'start account', 'start token'],
+    'with an explicit --env nothing waits for another probe to start (before: the token read waited for the account probe)');
+  gates.account.resolve('maker@contoso.com');
+  gates.token.resolve('token-value');
+  gates.pac.resolve('Connected as maker@contoso.com\n');
+  gates.who.resolve(WHO_OK);
+  const r = await finished;
+  assert.equal(r.ok, true);
+  assert.equal(r.message, 'Ready (az + pac both signed in as maker@contoso.com, env https://contoso.crm.dynamics.com).');
+});
+
+test('WhoAmI is sent the moment the token is ready, while the account probe and pac are still running', async () => {
+  const { events, gates, finished } = runGated();
+  await settle();
+  gates.token.resolve('token-value');
+  await settle();
+  assert.deepEqual(events, ['start pac', 'start account', 'start token', 'token ready', 'start whoami'],
+    'WhoAmI starts on the token alone (before: after the account probe, the token and pac had all finished)');
+  gates.who.resolve(WHO_OK);
+  await settle();
+  assert.ok(!events.includes('pac answered') && !events.includes('account answered'), 'both slower probes are still running');
+  gates.account.resolve('maker@contoso.com');
+  gates.pac.resolve('Connected as maker@contoso.com\n');
+  const r = await finished;
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.whoAmI, { ok: true, userId: 'u-1', organizationId: 'o-1' });
+});
+
+test('an account failure outranks a token and WhoAmI that already succeeded, and cancels every probe it left running', async () => {
+  const { events, gates, finished } = runGated();
+  await settle();
+  gates.token.resolve('token-value');
+  gates.who.resolve(WHO_OK);
+  await settle();
+  assert.ok(events.includes('whoami answered'), 'WhoAmI had already answered when the account probe failed');
+  gates.account.resolve(null);
+  const r = await finished;
+  assert.equal(r.ok, false);
+  assert.equal(r.blocker, 'az_not_logged_in', 'the verdict order is unchanged: the account probe speaks first');
+  assert.ok(events.includes('kill pac org who'), events.join(' | '));
+  assert.ok(events.includes('abort token'), events.join(' | '));
+  assert.equal(events.filter((e) => e === 'start token').length, 1, 'no second token acquisition');
+});
+
+test('pac still outranks a WhoAmI failure that arrived first (--require-pac)', async () => {
+  const { gates, finished } = runGated({ requirePac: true });
+  await settle();
+  gates.token.resolve('token-value');
+  gates.who.resolve(new Error('getaddrinfo ENOTFOUND'));
+  gates.account.resolve('maker@contoso.com');
+  await settle();
+  gates.pac.resolve(null);
+  const r = await finished;
+  assert.equal(r.blocker, 'pac_not_logged_in', 'before and after: pac is judged before WhoAmI');
+});
+
+test('a WhoAmI failure that arrives before pac does is reported once pac has answered, and is never unhandled', async () => {
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    const { gates, finished } = runGated();
+    await settle();
+    gates.token.resolve('token-value');
+    gates.who.resolve(new Error('getaddrinfo ENOTFOUND'));
+    gates.account.resolve('maker@contoso.com');
+    await settle();
+    gates.pac.resolve('Connected as maker@contoso.com\n');
+    const r = await finished;
+    assert.equal(r.blocker, 'whoami_error');
+    assert.match(r.message, /WhoAmI probe failed: getaddrinfo ENOTFOUND/);
+    await settle();
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
+});
+
+test('a token read that times out is az_timeout with no WhoAmI, and pac is cancelled', async () => {
+  const { events, gates, finished } = runGated({ tokenKind: 'timeout' });
+  await settle();
+  gates.token.resolve(null);
+  gates.account.resolve('maker@contoso.com');
+  const r = await finished;
+  assert.equal(r.blocker, 'az_timeout');
+  assert.match(r.message, /token for https:\/\/contoso\.crm\.dynamics\.com timed out/);
+  assert.ok(!events.includes('start whoami'), 'with no token WhoAmI is not started early (it would run a blocking token read of its own)');
+  assert.ok(events.includes('kill pac org who'), events.join(' | '));
+});
+
+test('without --env nothing is started early, because the environment comes from pac', async () => {
+  const { events, gates, finished } = runGated({ argv: [] });
+  await settle();
+  assert.deepEqual(events, ['start pac', 'start account']);
+  gates.account.resolve('maker@contoso.com');
+  gates.pac.resolve(`Connected as maker@contoso.com\nOrg URL: ${ENVURL}/\n`);
+  await settle();
+  assert.ok(!events.includes('start token'), 'check-auth never reads a token early for an environment it does not know yet');
+  gates.who.resolve(WHO_OK);
+  const r = await finished;
+  assert.equal(r.envUrl, ENVURL);
+  assert.equal(r.ok, true);
+});
+
+// The real dataverseRequest over a stub transport: a 401 makes it replace the token with a SYNCHRONOUS Azure CLI read
+// (seconds on a cold Windows process, with the whole event loop — pac's timeout timer and the other az probe included —
+// frozen), up to twice. A wrong-tenant 401 is exactly what this preflight is run to diagnose, so the early WhoAmI must not
+// do that while the other probes are running.
+test('an early WhoAmI answered 401 does not refresh the token while the other probes run: it is sent again after pac, where the refresh blocks nothing', async () => {
+  const { dataverseRequest: realRequest } = require('../lib/dataverse-auth.js');
+  let sent = 0;
+  const { events, gates, finished } = runGated({
+    whoAmIRequest: (log) => (url, method, apiPath, body, options) => {
+      log.push('start whoami');
+      return realRequest(url, method, apiPath, body, {
+        ...options,
+        getToken: (_origin, tokenOptions) => { log.push(tokenOptions && tokenOptions.fresh ? 'refresh token (synchronous az call)' : 'token from memo'); return 'TOK'; },
+        // The first two sends are refused, the third (after a refresh) is accepted.
+        request: async () => {
+          sent += 1;
+          log.push(sent < 3 ? 'WhoAmI answered 401' : 'WhoAmI answered 200');
+          return sent < 3 ? { statusCode: 401, body: '' } : { statusCode: 200, body: JSON.stringify({ UserId: 'u-1', OrganizationId: 'o-1' }) };
+        },
+      });
+    },
+  });
+  await settle();
+  gates.token.resolve('token-value');
+  await settle();
+  assert.deepEqual(events.slice(3), ['token ready', 'start whoami', 'token from memo', 'WhoAmI answered 401'], 'the early WhoAmI was refused while pac and the account probe were still running');
+  assert.ok(!events.some((e) => /refresh/.test(e)), `no synchronous refresh while other probes run: ${events.join(' | ')}`);
+  gates.account.resolve('maker@contoso.com');
+  gates.pac.resolve('Connected as maker@contoso.com\n');
+  const r = await finished;
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual(r.whoAmI, { ok: true, userId: 'u-1', organizationId: 'o-1' });
+  const after = events.slice(events.indexOf('pac answered') + 1);
+  assert.deepEqual(after.filter((e) => e !== 'account answered'), ['start whoami', 'token from memo', 'WhoAmI answered 401', 'refresh token (synchronous az call)', 'WhoAmI answered 200'],
+    'WhoAmI is sent again at its old place, after pac, and only that request refreshes the token');
+  assert.equal(events.filter((e) => /refresh/.test(e)).length, 1);
+});
+
+test('an early WhoAmI that is still refused after the refresh reports whoami_401, as it always did', async () => {
+  const { dataverseRequest: realRequest } = require('../lib/dataverse-auth.js');
+  const { gates, finished } = runGated({
+    whoAmIRequest: () => (url, method, apiPath, body, options) => realRequest(url, method, apiPath, body, {
+      ...options, getToken: () => 'TOK', request: async () => ({ statusCode: 401, body: '' }),
+    }),
+  });
+  await settle();
+  gates.token.resolve('token-value');
+  gates.account.resolve('maker@contoso.com');
+  gates.pac.resolve('Connected as maker@contoso.com\n');
+  const r = await finished;
+  assert.equal(r.ok, false);
+  assert.equal(r.blocker, 'whoami_401');
+  assert.match(r.message, /Dataverse rejected the token \(401\)/);
 });

@@ -95,6 +95,12 @@ const {
 
 const SP_CONN = '/providers/Microsoft.PowerApps/apis/shared_sharepointonline/connections/abc';
 
+// Sentences that read like an empty-state message and are NOT taken for one. `pac connection list` says an environment has no connections by printing the grid's header with
+// no rows under it (pacGrid below), never a sentence. The first is PAC's own `ConnectionNotFound` resource string, which the command does not print (PAC CLI 2.12.2: nothing
+// refers to it); the second is the wording an earlier version of this script guessed, which is in none of PAC's resources. A parser that took either for emptiness would give a
+// failure a way to read as "no connections", for the sake of text PAC does not print.
+const NO_CONNECTIONS_SENTENCES = ['No connections were found in the passed environment.', 'No connections found.'];
+
 test('parses the fixed-width table PAC emits by default', () => {
   //   Connection Name        Connector Id                     Connection Id
   //   ---------------------  -------------------------------  ------------------
@@ -179,11 +185,31 @@ const REAL_CONNECTIONS = [
   { connectorId: '/providers/Microsoft.PowerApps/apis/shared_sharepointonline', connectionId: '00000000000000000000000000000002', displayName: 'SharePoint' },
 ];
 
+// `pac connection list` sizes every column of its grid to its widest cell — the header name included — plus one space (PAC CLI 2.12.2; the capture above is that rule applied
+// to a "Weather" and a "SharePoint" row), so the gap between two header names is wide only while some cell is longer than the name. This renders a grid by that rule for ANY rows, so a
+// test cannot drift from what PAC prints. The last column is not padded (the capture's lines end at their last character); `padLast` pads it, in case a build does.
+//   no rows                  Id Name API Id Status
+//   one connection "mail"    Id                               Name API Id                                               Status
+//                            00000000000000000000000000000001 mail /providers/Microsoft.PowerApps/apis/shared_office365 Connected
+const PAC_GRID_HEADER = ['Id', 'Name', 'API Id', 'Status'];
+function pacGrid(rows, { banner = true, eol = '\r\n', padLast = false } = {}) {
+  const widths = PAC_GRID_HEADER.map((name, i) => Math.max(name.length, ...rows.map((row) => row[i].length)) + 1);
+  const line = (cells) => cells.map((cell, i) => (i === cells.length - 1 && !padLast ? cell : cell.padEnd(widths[i]))).join('');
+  return `${[...(banner ? [REAL_BANNER] : []), line(PAC_GRID_HEADER), ...rows.map(line)].join(eol)}${eol}${eol}`;
+}
+const GRID_ID = (n) => String(n).padStart(32, '0');
+const gridRow = (n, name, connector, status = 'Connected') => [GRID_ID(n), name, `/providers/Microsoft.PowerApps/apis/shared_${connector}`, status];
+const gridConnection = (n, name, connector) => ({ connectorId: `/providers/Microsoft.PowerApps/apis/shared_${connector}`, connectionId: GRID_ID(n), displayName: name });
+// The empty environment's listing, as PAC prints it.
+const EMPTY_GRID = pacGrid([]);
+
 test('parses the exact layout of a real `pac connection list` capture, banner and CRLF included', () => {
   assert.deepEqual(REAL_LISTING.split('\r\n').map((line) => line.length), [23, 110, 113, 113, 0, 0], 'the same line lengths as the capture');
   assert.deepEqual(parsePacConnectionList(REAL_LISTING), REAL_CONNECTIONS);
   assert.deepEqual(parsePacConnectionList(REAL_LISTING.replace(/\r\n/g, '\n')), REAL_CONNECTIONS, 'the same output with LF endings');
-  assert.deepEqual(parsePacConnectionList(realListing()), [], 'the real header with no rows is an empty listing');
+  assert.deepEqual(parsePacConnectionList(realListing()), [], 'the capture\'s header with no rows below it is an empty listing');
+  // pacGrid applies the rule that made the capture: with the capture's two rows it reproduces it, character for character.
+  assert.strictEqual(pacGrid([gridRow(1, 'Weather', 'msnweather'), gridRow(2, 'SharePoint', 'sharepointonline')]), REAL_LISTING, 'the renderer is PAC\'s grid');
   for (const [what, raw] of Object.entries(UNREADABLE_REAL_LISTINGS)) {
     assert.throws(() => parsePacConnectionList(raw), /unrecognized connection listing/, what);
   }
@@ -197,8 +223,10 @@ test('an Id/Name/API Id listing with a line that is not a connection row fails c
   // Connection rows read wrong: each carries a connector's API path but not the columns around it.
   assert.throws(() => parsePacConnectionList([header, '/providers/Microsoft.PowerApps/apis/shared_sharepointonline', 'Contoso /providers/Microsoft.PowerApps/apis/shared_office365'].join('\n')),
     /unrecognized connection listing[\s\S]*Id\/Name\/API Id[\s\S]*"\/providers\/Microsoft\.PowerApps\/apis\/shared_sharepointonline"/);
-  // PAC's own empty-state message under the header is still an empty listing.
-  assert.deepEqual(parsePacConnectionList([header, 'No connections found.'].join('\n')), []);
+  // A sentence under the header — even PAC's own `ConnectionNotFound` resource string — is not a row: the listing is refused, not read as empty.
+  for (const sentence of NO_CONNECTIONS_SENTENCES) {
+    assert.throws(() => parsePacConnectionList([header, sentence].join('\n')), /unrecognized connection listing[\s\S]*not a connection row/, sentence);
+  }
   // A Status of several words, or none, still parses.
   const status = (s) => `00000000000000000000000000000001 Contoso Dataverse                   /providers/Microsoft.PowerApps/apis/shared_commondataservice${s}`;
   for (const s of ['        Not connected', '']) {
@@ -266,11 +294,142 @@ test('unreadable output is refused, never read as "no connections"', () => {
   assert.equal(parseJsonConnections('"a string"'), null);
 });
 
-test('an empty listing is one PAC itself reports as empty', () => {
-  for (const raw of ['[]', '{"value":[]}', 'No connections found.', 'Connected as maker@contoso.onmicrosoft.com\r\nNo connections found.\r\n',
+test('an empty listing is what PAC prints for an empty environment: a header with no rows, or an empty JSON list', () => {
+  for (const raw of ['[]', '{"value":[]}', EMPTY_GRID,
     'Connected as maker@contoso.onmicrosoft.com\r\nId                               Name       API Id                                                      Status\r\n',
     'Connection Name    Connector Id    Connection Id\n---------------    ------------    -------------\n']) {
     assert.deepEqual(parsePacConnectionList(raw), [], JSON.stringify(raw));
+  }
+});
+
+// `pac connection list` on an environment with NO connections prints PAC's banner and the grid's header, and nothing else — no message (PAC CLI 2.12.2). Its columns are sized to
+// the widest cell plus one space, so with no row to widen them the header is `Id Name API Id Status`, single-spaced; a header read by two-space gaps between its names refused
+// it, and an empty environment was reported as unreadable. The header is read by its words. These are the grids PAC renders (pacGrid), not hand-made approximations of them.
+test('pac\'s grid with NO rows — the header alone, single-spaced — is an empty listing, with the banner or without it, whatever the line endings and padding', async () => {
+  assert.strictEqual(EMPTY_GRID, `${REAL_BANNER}\r\nId Name API Id Status\r\n\r\n`, 'the premise: the exact text PAC prints, one space between the names');
+  for (const [what, raw] of [
+    ['with the banner, in CRLF', EMPTY_GRID],
+    ['in LF', pacGrid([], { eol: '\n' })],
+    ['in a bare CR', pacGrid([], { eol: '\r' })],
+    ['with no banner', pacGrid([], { banner: false })],
+    ['with the last column padded', pacGrid([], { padLast: true })],
+    ['with a trailing space', `${REAL_BANNER}\r\nId Name API Id Status \r\n\r\n`],
+    ['with a tab between the names', `${REAL_BANNER}\r\nId\tName\tAPI Id\tStatus\r\n`],
+    ['in the other cases', `${REAL_BANNER}\r\nid name api id status\r\n`],
+    ['with no trailing line break', `${REAL_BANNER}\r\nId Name API Id Status`],
+    ['with the wider gaps older fixtures use', `${REAL_BANNER}\r\nId  Name  API Id  Status\r\n`],
+  ]) {
+    assert.deepEqual(parsePacConnectionList(raw), [], what);
+    const run = await driveDiscovery({ pac: { status: 0, stdout: raw, stderr: '' }, refs: { status: 200, data: { value: [] } } });
+    assert.deepEqual(run.emitted, [{ ok: true, payload: { ok: true, connections: [], connectionReferences: [] } }], `${what}: an empty environment is a successful, empty discovery`);
+    assert.strictEqual(run.queries.length, 1, `${what}: the connection-reference read follows a readable listing`);
+  }
+});
+
+test('pac\'s grid with ONE connection, whose name is short enough that the header pads to a single space, is read', async () => {
+  // A name of four characters or fewer leaves "Name" the widest cell of its column, so the header is `Name API Id` and the row `<id> mail /providers/…`.
+  for (const name of ['a', 'ab', 'abc', 'mail', 'Sales']) {
+    const grid = pacGrid([gridRow(7, name, 'office365')]);
+    const header = grid.split('\r\n')[1];
+    if (name.length <= 4) assert.match(header, /Name API Id/, `the premise for ${JSON.stringify(name)}: one space between the names`);
+    else assert.match(header, /Name {2,}API Id/, `the premise for ${JSON.stringify(name)}: the longer name widens the column`);
+    assert.deepEqual(parsePacConnectionList(grid), [gridConnection(7, name, 'office365')], name);
+    assert.deepEqual(parsePacConnectionList(pacGrid([gridRow(7, name, 'office365')], { padLast: true, eol: '\n' })), [gridConnection(7, name, 'office365')], `${name}: padded last column, LF`);
+    const run = await driveDiscovery({ pac: { status: 0, stdout: grid, stderr: '' }, refs: { status: 200, data: { value: [] } } });
+    assert.strictEqual(run.emitted[0].ok, true, `${name}: ${run.emitted[0].ok ? '' : run.emitted[0].payload.message}`);
+    assert.deepEqual(run.emitted[0].payload.connections.map((c) => [c.connectionId, c.displayName]), [[GRID_ID(7), name]], name);
+  }
+  // A name with spaces in it, still short: the API path is the delimiter, not the gaps.
+  assert.deepEqual(parsePacConnectionList(pacGrid([gridRow(8, 'a b', 'sql', 'Error')])), [gridConnection(8, 'a b', 'sql')]);
+});
+
+test('pac\'s grid with several connections of mixed name lengths is read, rows in the order PAC printed them', () => {
+  const rows = [gridRow(1, 'Weather', 'msnweather'), gridRow(2, 'ab', 'sql', 'Error'), gridRow(3, 'SharePoint', 'sharepointonline'), gridRow(4, 'Contoso Dataverse (maker)', 'commondataserviceforapps', 'Not connected')];
+  const expected = [gridConnection(1, 'Weather', 'msnweather'), gridConnection(2, 'ab', 'sql'), gridConnection(3, 'SharePoint', 'sharepointonline'), gridConnection(4, 'Contoso Dataverse (maker)', 'commondataserviceforapps')];
+  for (const options of [{}, { eol: '\n' }, { banner: false }, { padLast: true }]) {
+    assert.deepEqual(parsePacConnectionList(pacGrid(rows, options)), expected, JSON.stringify(options));
+  }
+  // The names alone decide how wide the Name column is: all short, then one long.
+  assert.deepEqual(parsePacConnectionList(pacGrid(rows.slice(1, 2))), expected.slice(1, 2));
+  assert.match(pacGrid(rows).split('\r\n')[1], /Name {2,}API Id/);
+});
+
+// An empty listing is the ONE answer that sends connection setup on to create a connection, so what makes a header "the header" is exactly its words and nothing else on the line.
+test('only the grid\'s four header names, in order, on a line of their own are the header; nothing else is read as an empty listing', () => {
+  const header = 'Id Name API Id Status';
+  for (const line of ['Id Name API Id', 'Id Name API Id Status Extra', 'Id Name Status API Id', 'Id API Id Name Status', 'Name Id API Id Status', 'Id Name API Status', 'Id Name APIId Status',
+    'Id Name API Id Status could not be read', 'Warning: Id Name API Id Status', 'Id: Name API Id Status', 'Id, Name, API Id, Status', 'Connection Id Connector Id Status',
+    'Id Name API Id Status.', '- Id Name API Id Status']) {
+    for (const raw of [`${REAL_BANNER}\r\n${line}\r\n`, `${line}\r\n`]) {
+      assert.throws(() => parsePacConnectionList(raw), /could not read[\s\S]*not reported as "no connections"/, JSON.stringify(raw));
+    }
+  }
+  assert.deepEqual(parsePacConnectionList(`${REAL_BANNER}\r\n${header}\r\n`), []);
+});
+
+// A listing is only as good as what is under its header. A header with nothing under it is empty; a header with a warning under it, or before it, is a failure to read.
+test('pac\'s grid with a warning line before or after the header — or between rows — is refused, never read as empty or as the rows that parsed', async () => {
+  const warning = 'Warning: failed to retrieve connections.';
+  const rows = [gridRow(1, 'mail', 'office365'), gridRow(2, 'Weather', 'msnweather')];
+  const cases = {
+    'a warning after the header of an empty environment': `${[REAL_BANNER, 'Id Name API Id Status', warning].join('\r\n')}\r\n\r\n`,
+    'the same, as one line cut off': `${[REAL_BANNER, 'Id Name API Id Status', 'Warning: failed to retr'].join('\r\n')}\r\n`,
+    'a warning before the header of an empty environment': `${[REAL_BANNER, warning, 'Id Name API Id Status'].join('\r\n')}\r\n\r\n`,
+    'a warning after the rows': `${pacGrid(rows).trimEnd()}\r\n${warning}\r\n`,
+    'a warning between the rows': `${[REAL_BANNER, pacGrid(rows, { banner: false }).split('\r\n')[0], pacGrid(rows, { banner: false }).split('\r\n')[1], warning, pacGrid(rows, { banner: false }).split('\r\n')[2]].join('\r\n')}\r\n`,
+    'a warning before the rows': `${[REAL_BANNER, pacGrid(rows, { banner: false }).split('\r\n')[0], warning, pacGrid(rows, { banner: false }).split('\r\n')[1]].join('\r\n')}\r\n`,
+    'a sentence PAC does not print': `${[REAL_BANNER, 'Id Name API Id Status', NO_CONNECTIONS_SENTENCES[0]].join('\r\n')}\r\n`,
+    'a diagnostic that names an API path': `${[REAL_BANNER, 'Id Name API Id Status', 'Warning: could not read /providers/Microsoft.PowerApps/apis/shared_msnweather connections'].join('\r\n')}\r\n`,
+  };
+  for (const [what, raw] of Object.entries(cases)) {
+    assert.throws(() => parsePacConnectionList(raw), /could not read[\s\S]*not reported as "no connections"/, what);
+    const run = await driveDiscovery({ pac: { status: 0, stdout: raw, stderr: '' }, refs: { status: 200, data: { value: [] } } });
+    assert.deepEqual(run.queries, [], `${what}: no connection-reference query`);
+    assert.strictEqual(run.emitted.length, 1, what);
+    assert.strictEqual(run.emitted[0].ok, false, what);
+  }
+});
+
+test('pac\'s empty grid is refused when PAC exited non-zero or wrote to stderr: a failed listing can print a header', async () => {
+  // A non-zero exit keeps its own report and never reaches the parser, so the header cannot make it an empty environment.
+  const failed = await driveDiscovery({ pac: { status: 1, stdout: EMPTY_GRID, stderr: 'Error: the request failed' } });
+  assert.deepEqual(failed.queries, []);
+  assert.strictEqual(failed.emitted[0].ok, false);
+  assert.strictEqual(failed.emitted[0].payload.message, 'pac connection list failed (exit 1): Error: the request failed');
+  const failedQuietly = await driveDiscovery({ pac: { status: 3, stdout: EMPTY_GRID, stderr: '' } });
+  assert.deepEqual(failedQuietly.queries, []);
+  assert.strictEqual(failedQuietly.emitted[0].ok, false, 'a non-zero exit with the header on stdout is not an empty environment');
+  // Text on stderr after a zero exit means the stdout cannot be trusted, whatever it holds.
+  for (const stderr of ['Warning: failed to retrieve connections.\n', '\r\n  Warning: indented\r\n', 'x']) {
+    const run = await driveDiscovery({ pac: { status: 0, stdout: EMPTY_GRID, stderr }, refs: { status: 200, data: { value: [] } } });
+    assert.deepEqual(run.queries, [], JSON.stringify(stderr));
+    assert.strictEqual(run.emitted[0].ok, false, JSON.stringify(stderr));
+    assert.match(run.emitted[0].payload.message, /exited 0 but wrote to stderr[\s\S]*not reported as "no connections"/, JSON.stringify(stderr));
+  }
+  // The control: a quiet stderr is the clean exit PAC really gives, and the empty grid is then an empty discovery.
+  for (const stderr of ['', '\r\n', undefined, null]) {
+    const run = await driveDiscovery({ pac: { status: 0, stdout: EMPTY_GRID, stderr }, refs: { status: 200, data: { value: [] } } });
+    assert.deepEqual(run.emitted, [{ ok: true, payload: { ok: true, connections: [], connectionReferences: [] } }], JSON.stringify(stderr));
+  }
+});
+
+// PAC's resources hold a sentence for "no connections" (`ConnectionNotFound`) and a header ("Connection ID,Connector ID,Created By", `ConnectionListHeader`), but `pac connection list`
+// prints neither (PAC CLI 2.12.2). They are not accepted either: a parser that took them would be taking text PAC does not print, and a sentence taken for emptiness is how a failure
+// reads as "no connections". A build that does print one is refused as unreadable, which costs a re-run of `pac connection list`; the answer it would otherwise give is a duplicate connection.
+test('sentences and headers from PAC\'s resources that `pac connection list` does not print are refused, alone and with the banner', async () => {
+  const unprinted = [
+    ...NO_CONNECTIONS_SENTENCES, ...NO_CONNECTIONS_SENTENCES.map((s) => s.toLowerCase()), ...NO_CONNECTIONS_SENTENCES.map((s) => s.slice(0, -1)),
+    'Connection ID Connector ID Created By', 'Connection ID  Connector ID  Created By', 'connection id,connector id,created by',
+    `Connection ID Connector ID Created By\r\n${GRID_ID(1)} /providers/Microsoft.PowerApps/apis/shared_sql maker@contoso.onmicrosoft.com`,
+    `Connection ID  Connector ID  Created By\r\n${GRID_ID(1)}  /providers/Microsoft.PowerApps/apis/shared_sql  maker@contoso.onmicrosoft.com`,
+  ];
+  for (const text of unprinted) {
+    for (const raw of [text, `${REAL_BANNER}\r\n${text}\r\n`, `${text}\r\n`]) {
+      assert.throws(() => parsePacConnectionList(raw), /could not read[\s\S]*not reported as "no connections"/, JSON.stringify(raw));
+      const run = await driveDiscovery({ pac: { status: 0, stdout: raw, stderr: '' }, refs: { status: 200, data: { value: [] } } });
+      assert.deepEqual(run.queries, [], `${JSON.stringify(raw)}: no connection-reference query`);
+      assert.strictEqual(run.emitted[0].ok, false, JSON.stringify(raw));
+    }
   }
 });
 
@@ -368,7 +527,7 @@ test('a line other than the banner before a recognised table header is refused, 
     'Id/Name/API Id, after the banner': ['Connected as maker@contoso.onmicrosoft.com', warning, idNameApi, goodRow],
     'Id/Name/API Id, between two banners': ['Connected as a@contoso.com', warning, 'Connected as b@contoso.com', idNameApi, goodRow],
     'Id/Name/API Id, text that only resembles the banner': ['Connected to maker@contoso.onmicrosoft.com', idNameApi, goodRow],
-    'Id/Name/API Id, the empty-state message is not preamble': ['No connections found.', idNameApi],
+    'Id/Name/API Id, a sentence before the header is not preamble': [NO_CONNECTIONS_SENTENCES[0], idNameApi],
     'fixed-width, header only': [warning, ...fixedHeader],
     'fixed-width, with a row': [warning, ...fixedHeader, fixedRow],
     'fixed-width, after the banner': ['Connected as maker@contoso.onmicrosoft.com', warning, ...fixedHeader, fixedRow],
@@ -448,21 +607,29 @@ test('tables of real rows, a trailing blank line and a separator-only line still
   assert.deepEqual(parsePacConnectionList(loose), [{ connectorId: 'shared_msnweather', connectionId: 'shared-msnweather-00000000-0000-4000-8000-000000000001', displayName: 'Weather' }]);
 });
 
-// Emptiness is PAC's own statement that there is nothing to list — or a header with no rows. A broad pattern
-// ("no connections ... found") accepted "No connections could be found because the request failed.", the
-// answer that sends connection setup on to create a duplicate of a connection the maker already has.
-test('only the exact PAC empty-state message, or a header with no rows, reads as an empty listing', () => {
+// Emptiness is a header with no rows (or an empty JSON list) and nothing else: no sentence is taken for it. A broad pattern ("no connections ... found") accepted "No connections could be
+// found because the request failed.", the answer that sends connection setup on to create a duplicate of a connection the maker already has — and a sentence PAC does not print
+// gains nothing by being accepted (see NO_CONNECTIONS_SENTENCES).
+test('only a header with no rows, or an empty JSON list, reads as an empty listing: no sentence does', () => {
   const idNameApi = 'Id  Name  API Id  Status';
-  for (const raw of ['No connections found.', 'no connections found', 'No connections found.\r\n', '\r\n  No connections found.  \r\n',
-    'Connected as maker@contoso.onmicrosoft.com\nNo connections found.', 'Connected as a@contoso.com\nConnected as b@contoso.com\n\nNo connections found.',
-    idNameApi, `${idNameApi}\nNo connections found.`, `${idNameApi}\n\n`, '[]', '{"value":[]}']) {
+  for (const raw of [idNameApi, `${idNameApi}\n\n`, 'Id Name API Id Status', EMPTY_GRID, '[]', '{"value":[]}']) {
     assert.deepEqual(parsePacConnectionList(raw), [], JSON.stringify(raw));
   }
-  for (const raw of ['No connections could be found because the request failed.', 'No connections found because the request failed.',
-    'No connections were found.', 'No connection found.', 'No connections found. Try again later.', 'No connections found.\nWarning: partial failure',
-    'Warning: partial failure\nNo connections found.', 'No connections found.\nNo connections found. Retrying...',
-    // The message beside a row contradicts it: neither is trusted.
-    `${idNameApi}\n00000000000000000000000000000001 Contoso Dataverse  /providers/Microsoft.PowerApps/apis/shared_commondataservice  Connected\nNo connections found.`]) {
+  const [pacSentence, guessedSentence] = NO_CONNECTIONS_SENTENCES;
+  for (const raw of [
+    // A failure worded like the empty-state message is a failure, not an empty environment.
+    'No connections could be found because the request failed.', 'No connections found because the request failed.',
+    'No connections were found in the passed environment because the request failed.', `${pacSentence} Try again later.`,
+    'No connections were found in the environment.', 'No connections were found.', 'No connection was found in the passed environment.',
+    `${pacSentence}\nWarning: partial failure`, `Warning: partial failure\n${pacSentence}`, `${pacSentence}\n${pacSentence} Retrying...`,
+    // PAC's own resource string, which this command does not print, and the wording an earlier version guessed, which is in none of PAC's resources: neither is read as emptiness — alone,
+    // in any case, with or without its period or the banner, or under or over a header.
+    ...NO_CONNECTIONS_SENTENCES, ...NO_CONNECTIONS_SENTENCES.map((s) => s.toUpperCase()), ...NO_CONNECTIONS_SENTENCES.map((s) => `\r\n  ${s}  \r\n`),
+    pacSentence.slice(0, -1), 'no connections found', `${guessedSentence}\r\n`,
+    `Connected as maker@contoso.onmicrosoft.com\n${pacSentence}`, `Connected as a@contoso.com\nConnected as b@contoso.com\n\n${pacSentence}`,
+    `Connected as maker@contoso.onmicrosoft.com\n${guessedSentence}`, `${idNameApi}\n${pacSentence}`, `${idNameApi}\n${guessedSentence}`, `${EMPTY_GRID}${pacSentence}\r\n`,
+    // A sentence beside a row contradicts it: neither is trusted.
+    `${idNameApi}\n00000000000000000000000000000001 Contoso Dataverse  /providers/Microsoft.PowerApps/apis/shared_commondataservice  Connected\n${pacSentence}`]) {
     assert.throws(() => parsePacConnectionList(raw), /could not read[\s\S]*not reported as "no connections"/, JSON.stringify(raw));
   }
 });
@@ -536,7 +703,7 @@ function driveDiscovery({ pac, refs, refsError }) {
 
 test('CLI discovery failure is not an empty success', async () => {
   const warning = 'Warning: failed to retrieve connections.';
-  const warningMessage = 'pac connection list printed output this script could not read — no connection table, JSON list or "no connections found" message '
+  const warningMessage = 'pac connection list printed output this script could not read — no connection table or JSON list '
     + `(first line: "${warning}"). It is not reported as "no connections", which would lead connection setup to create a duplicate; run \`pac connection list\` to see what it printed.`;
   const malformed = '[{"Id":';
   const malformedMessage = 'pac connection list printed output this script could not read — it starts like JSON but is not a connection list '
@@ -568,7 +735,7 @@ test('CLI discovery failure is not an empty success', async () => {
   );
 
   const empty = await driveDiscovery({
-    pac: { status: 0, stdout: 'No connections found.', stderr: '' },
+    pac: { status: 0, stdout: EMPTY_GRID, stderr: '' },
     refs: { status: 200, data: { value: [] } },
   });
   assert.deepEqual(empty.queries, [{
@@ -629,7 +796,7 @@ test('CLI discovery failure is not an empty success', async () => {
   }]);
 
   const refsDown = await driveDiscovery({
-    pac: { status: 0, stdout: 'No connections found.', stderr: '' },
+    pac: { status: 0, stdout: EMPTY_GRID, stderr: '' },
     refs: { status: 500, data: { error: { message: 'refs unavailable' } } },
   });
   assert.equal(refsDown.queries.length, 1, 'the reference read is attempted only after a readable listing');
@@ -645,6 +812,7 @@ test('CLI: a diagnostic after a table header, or a failure worded like emptiness
     'Connection Id  Connector Id\n-------------  ------------\nWarning: failed to retrieve connections.',
     'Id  Name  API Id  Status\n[{"Id":',
     'No connections could be found because the request failed.',
+    ...NO_CONNECTIONS_SENTENCES,
   ]) {
     const run = await driveDiscovery({ pac: { status: 0, stdout, stderr: '' } });
     assert.deepEqual(run.queries, [], `${JSON.stringify(stdout)} must not query connection references`);
@@ -652,9 +820,9 @@ test('CLI: a diagnostic after a table header, or a failure worded like emptiness
     assert.equal(run.emitted[0].ok, false);
     assert.match(run.emitted[0].payload.message, /could not read[\s\S]*not reported as "no connections"/);
   }
-  // Controls: PAC's own empty-state message, with its banner, is a successful empty listing; so is JSON after the banner.
+  // Controls: the empty grid, with its banner, is a successful empty listing; so is JSON after the banner.
   const empty = await driveDiscovery({
-    pac: { status: 0, stdout: 'Connected as maker@contoso.onmicrosoft.com\r\nNo connections found.\r\n', stderr: '' },
+    pac: { status: 0, stdout: EMPTY_GRID, stderr: '' },
     refs: { status: 200, data: { value: [] } },
   });
   assert.deepEqual(empty.emitted, [{ ok: true, payload: { ok: true, connections: [], connectionReferences: [] } }]);
@@ -729,7 +897,7 @@ test('CLI: text on stderr after a zero exit is a discovery failure, before the r
   const cases = {
     'a header with no rows beside a warning': [{ status: 0, stdout: header, stderr: 'Warning: failed to retrieve connections.\n' }, 'Warning: failed to retrieve connections.'],
     'an empty JSON list beside an error': [{ status: 0, stdout: '[]', stderr: 'Error: the request failed\n' }, 'Error: the request failed'],
-    'PAC\'s empty-state message beside a warning': [{ status: 0, stdout: 'No connections found.', stderr: 'Warning: partial results\n' }, 'Warning: partial results'],
+    'the empty grid beside a warning': [{ status: 0, stdout: EMPTY_GRID, stderr: 'Warning: partial results\n' }, 'Warning: partial results'],
     'a readable listing beside a warning': [{ status: 0, stdout: REAL_LISTING, stderr: 'Warning: some connections were skipped\n' }, 'Warning: some connections were skipped'],
     'blank lines, then a warning': [{ status: 0, stdout: header, stderr: '\r\n  \t\r\n   Warning: indented\r\nsecond line\r\n' }, 'Warning: indented'],
     'output that is unreadable too': [{ status: 0, stdout: 'garbage', stderr: 'Error: boom\n' }, 'Error: boom'],
@@ -770,13 +938,15 @@ test('CLI: text on stderr after a zero exit is a discovery failure, before the r
 // column set PAC prints (compared normalized: case and punctuation do not matter), never by one column that looks like an id column.
 // `Connection Id  could not be read.` has such a column, was read as a header with no rows, and so as "no connections": the answer that
 // sends connection setup on to create a duplicate. The column sets, from the layouts in this file:
-//   Id  Name  API Id  Status                         a live capture of `pac connection list` (no dashed separator)
+//   Id  Name  API Id  Status                         the header of `pac connection list`'s grid (a live capture; read by its words, see pacGrid) — and under a dashed separator
 //   Connection Name  Connector Id  Connection Id      the default fixed-width table, and the plain whitespace one
 //   Connection Id  Connector Id                       the two-column fixed-width table
+// PAC's resources also hold a "Connection ID,Connector ID,Created By" header string that this command does not print: it is not a column set (see the test for it below).
 test('a line with an id column and prose, or any column set PAC does not print, is unreadable rather than an empty table', async () => {
   const lookalikes = [
     'Connection Id  could not be read.', 'Connection Id  Error', 'Id  Error', 'Id  Name', 'Id  Name  API Id', 'Id  Name  API Id  Status  Extra',
     'Name  Id  API Id  Status', 'Connection  Connector', 'Connection Id  Connector Id  Status', 'Connection Name  Connection Id', 'Connection Name  Connector Id',
+    'Connection ID  Connector ID  Created By', 'Connection ID Connector ID Created By',
   ];
   for (const header of lookalikes) {
     for (const [where, stdout] of [
@@ -829,6 +999,26 @@ test('each column set PAC prints is still a table, with rows or none, whatever t
     assert.deepEqual(parsePacConnectionList(headers.join('   ')), [], `${headers.join(' / ')}: whitespace, no rows`);
   }
   assert.deepEqual(parsePacConnectionList('Id  Name  API Id  Status'), []);
+});
+
+// The belief that PAC's `ConnectionNotFound` sentence and `ConnectionListHeader` header were what this command prints is what once left an empty environment unreadable: both are
+// resource strings it does not print. Wherever the script's comments name either, the same comment says so — and no code is left behind that accepts them.
+test('the script\'s comments name PAC\'s `ConnectionNotFound` and `ConnectionListHeader` strings only as ones the command does not print, and no code reads them', () => {
+  const comments = scriptSrc.split(/\r?\n/).filter((line) => /^\s*\/\//.test(line)).map((line) => line.replace(/^\s*\/\/\s?/, ''));
+  const blocks = [];
+  let current = [];
+  for (const line of scriptSrc.split(/\r?\n/)) {
+    if (/^\s*\/\//.test(line)) current.push(line.replace(/^\s*\/\/\s?/, ''));
+    else if (current.length) { blocks.push(current.join(' ').replace(/\s+/g, ' ')); current = []; }
+  }
+  assert.ok(comments.length > 0);
+  for (const name of ['ConnectionNotFound', 'ConnectionListHeader']) {
+    const naming = blocks.filter((block) => block.includes(name));
+    assert.ok(naming.length >= 1, `${name} is explained where the parser leaves it out`);
+    for (const block of naming) assert.match(block, /does not print|not print it|nothing refers to that string/, `${name}: a comment that names it says the command does not print it`);
+  }
+  assert.doesNotMatch(scriptSrc, /NO_CONNECTIONS_MESSAGE|CREATED_BY_COLUMNS|headerCells|createdby/i, 'nothing in the parser reads either');
+  assert.doesNotMatch(scriptSrc, /^\s*(?:const|let)\s+\w+\s*=\s*\/\^no connections/im, 'and no pattern takes a sentence for "no connections"');
 });
 
 // PAC's output is split into lines on CRLF, CR and LF alike, never by deleting CRs, and the auth banner is a WHOLE line. Deleting every CR

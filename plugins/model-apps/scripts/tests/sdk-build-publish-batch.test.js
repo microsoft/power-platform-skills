@@ -11,7 +11,7 @@
 // retry follows (settleOwedPublishes; the CLI side is pinned in build-model-app.test.js).
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, BuildHalt } = require('../lib/sdk-build.js');
+const { runSdkBuild, publishTargets, partialEnrichment, settleOwedPublishes, collectOwedPublishes, BuildHalt } = require('../lib/sdk-build.js');
 const { makeSimpleMockSdk } = require('./helpers/mock-sdk.js');
 
 // Two tables: Project (with a form, so phase 8 already names it) and Task (no form, view or chart,
@@ -112,7 +112,11 @@ test('a refused envelope falls back to the per-target path unchanged', async () 
 });
 
 const failure = (promise) => promise.then(() => assert.fail('the build was expected to halt'), (e) => e);
+// A target as a caller hands it to settleOwedPublishes: just the artifact that stands for its table.
 const owedView = (logical) => ['view', `defview-${logical}`];
+// The same target as a halted build carries it: the artifact the SDK reported as saved but not published, and the name
+// of what it covers, which a failed publish then says (publishTargets).
+const savedDefaults = (logical, id = `defview-${logical}`) => ['view', id, [`default views of ${logical}`]];
 
 test('a deferred enrichment that fails part-way halts, and the halt carries every publish still owed', async () => {
   const PARTIAL = Symbol.for('cds-maker-sdk.partialDefaultViewEnrichment');
@@ -136,7 +140,7 @@ test('a deferred enrichment that fails part-way halts, and the halt carries ever
   assert.ok(steps.some((e) => e.status === 'error' && /enrich default views for cnt_task/.test(e.label || '')), 'the failed step is reported');
   // The build itself publishes nothing on a halt: only its caller knows whether a retry follows.
   assert.equal(named(calls, 'publishArtifacts').length + named(calls, 'publishArtifact').length, 0);
-  assert.deepEqual(halt.owedPublishes, [owedView('cnt_project'), owedView('cnt_task')], 'the table enriched before the failure, and what the failed call had saved');
+  assert.deepEqual(halt.owedPublishes, [savedDefaults('cnt_project'), savedDefaults('cnt_task')], 'the table enriched before the failure, and what the failed call had saved');
   assert.equal(Object.keys(halt).includes('owedPublishes'), false, 'it rides along, never into a serialized error');
   assert.equal(halt.owedPaid, false, 'no publish phase ran');
   assert.equal(Object.keys(halt).includes('owedPaid'), false);
@@ -168,7 +172,7 @@ test('a default-view push refused by value (a concurrent edit) fails the enrichm
   const halt = await failure(runSdkBuild(spec(), { sdk, apply: true, publish: true }));
   assert.ok(halt instanceof BuildHalt && halt.phase === 'views' && halt.code === 'version-conflict', `${halt.code}: ${halt.message}`);
   assert.match(halt.message, /default view defview-cnt_task-inactive of cnt_task/);
-  assert.deepEqual(halt.owedPublishes, [owedView('cnt_project'), ['view', 'defview-cnt_task-active']], 'the saved view still owes its publish');
+  assert.deepEqual(halt.owedPublishes, [savedDefaults('cnt_project'), savedDefaults('cnt_task', 'defview-cnt_task-active')], 'the saved view still owes its publish');
   assert.equal(halt.owedPaid, false);
   assert.equal(named(calls, 'publishArtifacts').length + named(calls, 'publishArtifact').length, 0);
 });
@@ -182,7 +186,7 @@ test('a later phase that halts hands every enriched table to the caller: nothing
   const halt = await failure(runSdkBuild(spec(), { sdk, apply: true, publish: true }));
   assert.ok(halt instanceof BuildHalt && halt.phase === 'app-shell', String(halt));
   assert.equal(named(calls, 'publishArtifacts').length + named(calls, 'publishArtifact').length, 0);
-  assert.deepEqual(halt.owedPublishes, [owedView('cnt_project'), owedView('cnt_task')]);
+  assert.deepEqual(halt.owedPublishes, [savedDefaults('cnt_project'), savedDefaults('cnt_task')]);
   assert.equal(halt.owedPaid, false);
   await settleOwedPublishes(sdk, halt.owedPublishes, () => {});
   assert.deepEqual(named(calls, 'publishArtifacts').map((c) => c[1].map((t) => t.id)), [['defview-cnt_project', 'defview-cnt_task']]);
@@ -194,7 +198,7 @@ test('a halt inside the publish phase still owes; once that phase has run, a lat
   inside.sdk.publishArtifact = async () => { throw new Error('publish down'); };
   const halted = await failure(runSdkBuild(spec(), { sdk: inside.sdk, apply: true, publish: true }));
   assert.ok(halted instanceof BuildHalt && halted.phase === 'publish', String(halted));
-  assert.deepEqual(halted.owedPublishes, [owedView('cnt_project'), owedView('cnt_task')]);
+  assert.deepEqual(halted.owedPublishes, [savedDefaults('cnt_project'), savedDefaults('cnt_task')]);
   assert.equal(halted.owedPaid, false, 'a publish phase that halts has paid nothing');
 
   // After: the AI re-confirmation runs after the publish phase; an event it emits fails the build.
@@ -270,4 +274,173 @@ test('publishTargets: a single target and an empty list never use the envelope',
   // A result list of the wrong length is not trusted: every target is published on its own.
   await publishTargets(provision, runner, 2, [['form', 'f1'], ['view', 'v1']], ['app', 'a1', 'app One'], () => {});
   assert.deepEqual(calls.map((c) => c[0]), ['publishArtifacts', 'publishArtifact', 'publishArtifact', 'publishArtifact']);
+});
+
+// `publishTargets` tells the publish phase whether the app's OWN publish went through, because an AI override saved in
+// the app's unpublished layer is in force once the app is published (and only then). The batched branch is the one a
+// build takes whenever tables and the app publish together, so it answers for itself.
+test('publishTargets reports whether the app\u2019s own publish went through, in the envelope or on its own', async () => {
+  const runner = { mapLimit: async (items, n, fn) => Promise.all(items.map(fn)) };
+  const publishOf = (kind) => (kind === 'failed' ? { kind, error: new Error('publish refused') } : kind === 'unverifiable' ? { kind, reason: 'the published copy was not read back' } : { kind });
+  const outcome = (type, id, kind) => ({ type, id, shipped: kind === 'verified', publish: publishOf(kind) });
+  // `envelope`: what the one envelope answers for [form, app]; `single`: what a publish on its own answers, by type.
+  const run = async ({ envelope, single = {}, entities = [['form', 'f1']], app = ['app', 'a1', 'app One'] }) => {
+    const provision = {
+      publishArtifacts: async (targets) => targets.map(({ type, id }, i) => outcome(type, id, envelope[i])),
+      publishArtifact: async (type, id) => outcome(type, id, single[type] || 'verified'),
+    };
+    return (await publishTargets(provision, runner, 2, entities, app, () => {})).appPublished;
+  };
+  assert.equal(await run({ envelope: ['verified', 'verified'] }), true);
+  assert.equal(await run({ envelope: ['verified', 'unverifiable'] }), true, 'PublishXml answered; only the read-back was not possible');
+  assert.equal(await run({ envelope: ['verified', 'failed'] }), true, 'failed in the envelope, published on its own');
+  assert.equal(await run({ envelope: ['verified', 'failed'], single: { app: 'unverifiable' } }), true);
+  assert.equal(await run({ envelope: ['verified', 'failed'], single: { app: 'failed' } }), false, 'failed in the envelope and again on its own');
+  assert.equal(await run({ envelope: ['failed', 'verified'], single: { form: 'failed' } }), true, 'another target\u2019s failure says nothing about the app');
+  assert.equal(await run({ envelope: ['verified', 'notRequested'] }), false, 'an outcome that says nothing about publishing proves nothing');
+  assert.equal(await run({ envelope: ['verified', 'verified'], app: null }), false, 'no app target, no app publish');
+  assert.equal(await run({ envelope: ['verified', 'verified', 'verified'], entities: [['form', 'f1'], ['view', 'v1']] }), true, 'the app\u2019s own entry is the one that counts, wherever it sits in the envelope');
+});
+
+test('publishTargets: a refused envelope falls back to per-target publishes, and the app\u2019s own decides', async () => {
+  const runner = { mapLimit: async (items, n, fn) => Promise.all(items.map(fn)) };
+  const run = async (appKind) => (await publishTargets({
+    publishArtifacts: async () => { throw new Error('ARTIFACT_NOT_FOUND: view/x not in workspace'); },
+    publishArtifact: async (type, id) => ({ type, id, publish: type === 'app' && appKind === 'failed' ? { kind: 'failed', error: new Error('refused') } : { kind: appKind === 'unverifiable' && type === 'app' ? 'unverifiable' : 'verified' } }),
+  }, runner, 2, [['form', 'f1']], ['app', 'a1', 'app One'], () => {})).appPublished;
+  assert.equal(await run('verified'), true);
+  assert.equal(await run('unverifiable'), true);
+  assert.equal(await run('failed'), false);
+});
+
+// `failed` names the TABLE targets whose last publish the SDK refused by value — the ones whose saved changes are not live.
+// The build halts on one before it writes the app (publishReconciledTables), so a table the envelope refused but its own
+// publish then took must not be in it, nor the app's own failure, nor an outcome that is not a refusal.
+test('publishTargets names each table whose publish stayed refused, in the envelope and on its own, and nothing else', async () => {
+  const runner = { mapLimit: async (items, n, fn) => Promise.all(items.map(fn)) };
+  const refused = new Error('PublishXml refused');
+  const outcome = (type, id, kind) => ({ type, id, publish: kind === 'failed' ? { kind, error: refused } : { kind } });
+  const failedOf = async ({ envelope, single = {}, batch = true }) => (await publishTargets({
+    ...(batch ? { publishArtifacts: async (targets) => targets.map(({ type, id }, i) => outcome(type, id, envelope[i])) } : {}),
+    publishArtifact: async (type, id) => outcome(type, id, single[type] || 'submitted'),
+  }, runner, 2, [['form', 'f1', ['form Ticket']], ['view', 'v1']], ['app', 'a1', 'app One'], () => {})).failed;
+  assert.deepEqual(await failedOf({ envelope: ['submitted', 'submitted', 'submitted'] }), []);
+  assert.deepEqual(await failedOf({ envelope: ['failed', 'submitted', 'submitted'] }), [], 'refused in the envelope, taken on its own');
+  assert.deepEqual(await failedOf({ envelope: ['failed', 'submitted', 'submitted'], single: { form: 'failed' } }), [{ target: ['form', 'f1', ['form Ticket']], error: refused }]);
+  assert.deepEqual(await failedOf({ envelope: ['submitted', 'submitted', 'failed'], single: { app: 'failed' } }), [], 'the app is no table');
+  assert.deepEqual(await failedOf({ envelope: ['submitted', 'unverifiable', 'submitted'] }), [], 'unconfirmed is not refused');
+  assert.deepEqual(await failedOf({ batch: false, single: { view: 'failed' } }), [{ target: ['view', 'v1'], error: refused }], 'one table at a time');
+});
+
+// The same fixture with an AI override that the SDK saved but could not yet publish — the case the report is for. The
+// override row reads as present only once an app publish has really gone through, as on a live environment.
+function aiBatchSdk({ envelope, single } = {}) {
+  const state = { inForce: false };
+  const { sdk, calls } = batchSdk({
+    envelope: (targets) => {
+      const out = envelope ? envelope(targets) : targets.map(({ type, id }) => ({ type, id, shipped: true, publish: { kind: 'verified' } }));
+      out.forEach((o, i) => { if (targets[i].type === 'app' && o.publish.kind !== 'failed') state.inForce = true; });
+      return out;
+    },
+  });
+  sdk.publishArtifact = async (type, id) => {
+    calls.push(['publishArtifact', type, id]);
+    const publish = single ? single(type) : { kind: 'verified' };
+    if (type === 'app' && publish.kind !== 'failed') state.inForce = true;
+    return { type, id, shipped: publish.kind === 'verified', publish };
+  };
+  const fetched = sdk.fetchArtifact;
+  sdk.fetchArtifact = async (type, id, ...rest) => { calls.push(['fetchArtifact', type, id]); return fetched(type, id, ...rest); };
+  const query = sdk.queryRecords;
+  sdk.queryRecords = async (entity, ...rest) => {
+    if (entity === 'appmodule') return [{ appmoduleid: 'APPID' }];
+    if (entity === 'settingdefinition') return [{ settingdefinitionid: 'DEFID' }];
+    if (entity === 'appsetting') return state.inForce ? [{ value: '2' }] : [];
+    return query(entity, ...rest);
+  };
+  sdk.setAppAiFeatures = async (appUnique, flags) => {
+    calls.push(['setAppAiFeatures', appUnique, flags]);
+    return { applied: ['formFill'], skipped: [], notPersisted: [], unverified: [], failed: [], outcomes: [{ feature: 'formFill', status: 'applied', appOverrideExists: true, pendingPublish: true }] };
+  };
+  return { sdk, calls };
+}
+const aiSpec = () => ({ ...spec(), ai: { appFeatures: { formFill: true }, summaries: { default: 'off' } } });
+const aiWarnings = (events) => events.filter((e) => e.phase === 'ai-features' && e.status === 'skip').map((e) => e.label);
+const appPublishes = (calls) => named(calls, 'publishArtifact').filter((c) => c[1] === 'app');
+
+test('with --publish, an app the envelope published is not published again for a saved AI override: it is only proved', async () => {
+  const { sdk, calls } = aiBatchSdk();
+  const events = [];
+  const r = await runSdkBuild(aiSpec(), { sdk, apply: true, publish: true, emit: (e) => events.push(e) });
+  assert.equal(named(calls, 'publishArtifacts').length, 1, 'one envelope');
+  assert.equal(appPublishes(calls).length, 0, 'the app rode in the envelope; nothing publishes it again');
+  assert.equal(named(calls, 'fetchArtifact').filter((c) => c[1] === 'app').length, 0, 'and it is not fetched for a retry');
+  assert.equal(named(calls, 'setAppAiFeatures').length, 1, 'nor is the override written again');
+  assert.deepEqual(r.created.ai.appFeatures.applied, ['formFill']);
+  assert.deepEqual(aiWarnings(events), []);
+});
+
+test('with --publish, an app the envelope could not publish is published again for a saved AI override, and the result is the proof\u2019s', async () => {
+  const failedApp = { kind: 'failed', error: new Error('publish refused') };
+  const { sdk, calls } = aiBatchSdk({
+    envelope: (targets) => targets.map(({ type, id }) => (type === 'app'
+      ? { type, id, shipped: false, publish: failedApp }
+      : { type, id, shipped: true, publish: { kind: 'verified' } })),
+    single: (type) => (type === 'app' ? failedApp : { kind: 'verified' }),
+  });
+  const events = [];
+  const r = await runSdkBuild(aiSpec(), { sdk, apply: true, publish: true, emit: (e) => events.push(e), warn: () => {}, proofDelayMs: 0 });
+  assert.equal(appPublishes(calls).length, 2, 'on its own after the envelope, and once more for the override');
+  assert.equal(named(calls, 'setAppAiFeatures').length, 1, 'publishing is what a saved override needs; it is not written again');
+  assert.ok(aiWarnings(events).some((l) => /NOT YET PUBLISHED: formFill/.test(l)), JSON.stringify(aiWarnings(events)));
+  assert.ok(!r.created.ai.appFeatures.applied.includes('formFill'));
+});
+
+test('with --publish, an app the envelope could not publish but its own publish then did is not published a third time', async () => {
+  const { sdk, calls } = aiBatchSdk({
+    envelope: (targets) => targets.map(({ type, id }) => (type === 'app'
+      ? { type, id, shipped: false, publish: { kind: 'failed', error: new Error('envelope 400') } }
+      : { type, id, shipped: true, publish: { kind: 'verified' } })),
+  });
+  const r = await runSdkBuild(aiSpec(), { sdk, apply: true, publish: true });
+  assert.equal(appPublishes(calls).length, 1, 'the retry on its own is the app\u2019s publish; the override needs no other');
+  assert.deepEqual(r.created.ai.appFeatures.applied, ['formFill']);
+});
+
+// A target is `[type, id]` plus, optionally, what it is for: the names of the saved views and forms deferred onto its
+// table, or the app's label. A line about a publish that failed or could not be confirmed says that, not `form <guid>`.
+test('publishTargets names what a target is for in every line it prints, and falls back to `type id` for one that is not named', async () => {
+  const runner = { mapLimit: async (items, n, fn) => Promise.all(items.map(fn)) };
+  const down = (type, id) => ({ type, id, shipped: false, publish: { kind: 'failed', error: new Error('PublishXml 500') } });
+  const targets = [['form', 'f1', ['view Open Tickets', 'form Ticket']], ['view', 'v2']];
+
+  // One envelope that fails, then each failed target alone (which fails again).
+  const warnings = [];
+  await publishTargets({ publishArtifacts: async (t) => t.map(({ type, id }) => down(type, id)), publishArtifact: async (type, id) => down(type, id) }, runner, 2, targets, ['app', 'a1', 'app One'], (w) => warnings.push(w));
+  assert.deepEqual(warnings.map((w) => w.replace(/ FAILED:.*/, '')), ['publish view Open Tickets, form Ticket', 'publish view v2', 'publish app One']);
+
+  // Without an envelope each target is published alone, and named the same way.
+  warnings.length = 0;
+  await publishTargets({ publishArtifact: async (type, id) => down(type, id) }, runner, 2, targets, null, (w) => warnings.push(w));
+  assert.deepEqual(warnings.map((w) => w.replace(/ FAILED:.*/, '')), ['publish view Open Tickets, form Ticket', 'publish view v2']);
+
+  // A publish that cannot be CONFIRMED is named too.
+  warnings.length = 0;
+  const unverifiable = (type, id) => ({ type, id, shipped: false, publish: { kind: 'unverifiable', reason: 'projection not readable' } });
+  await publishTargets({ publishArtifacts: async (t) => t.map(({ type, id }) => unverifiable(type, id)) }, runner, 2, targets, null, (w) => warnings.push(w));
+  assert.deepEqual(warnings, [
+    'publish view Open Tickets, form Ticket could not be CONFIRMED (projection not readable) — the publish call succeeded but the published projection was not read back, so treat "live" as unproven',
+    'publish view v2 could not be CONFIRMED (projection not readable) — the publish call succeeded but the published projection was not read back, so treat "live" as unproven',
+  ]);
+});
+
+test('collectOwedPublishes keeps one entry per target and unions the names every attempt recorded for it', () => {
+  const byTarget = new Map();
+  collectOwedPublishes(byTarget, [['view', 'v1', ['view A']], ['view', 'v2']]);
+  collectOwedPublishes(byTarget, [['view', 'v1', ['view A', 'form B']], ['view', 'v2']]);
+  collectOwedPublishes(byTarget, [['view', 'v1', ['form C']]]); // an attempt that stopped before the others got as far
+  assert.deepEqual([...byTarget.values()], [['view', 'v1', ['view A', 'form B', 'form C']], ['view', 'v2']]);
+  assert.equal(collectOwedPublishes(byTarget, undefined), byTarget);
+  for (const nothing of [undefined, null, 'view:v1', [], [null], [undefined]]) collectOwedPublishes(byTarget, nothing);
+  assert.equal(byTarget.size, 2, 'anything that is not a list of targets adds nothing');
 });

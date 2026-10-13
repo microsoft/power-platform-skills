@@ -270,22 +270,233 @@ test('the manifest step halts on exit 2 instead of carrying on over a stale pack
   assert.doesNotMatch(step, /do\s+not\s+block\s+the\s+workflow/i, 'no non-zero exit is waved through');
 });
 
-test('page generation rejects Griffel borderWidth shorthand before deploy', () => {
-  const rules = readDoc(path.join(PLUGIN, 'references', 'rules.md'));
-  const builder = readDoc(path.join(PLUGIN, 'agents', 'genpage-page-builder.md'));
-  const skill = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md'));
-  const editFlow = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'edit-flow.md'));
-  assert.match(rules, /borderWidth/i, 'rules must name the runtime-only Griffel failure');
-  assert.match(builder, /borderWidth/i, 'page-builder must scan its output for the shorthand');
-  assert.match(skill, /borderWidth/i, 'inline page generation must run the same scan');
-  assert.match(editFlow, /borderWidth/i, 'edited pages must run the same scan before upload');
-  const documentedPattern = `['"]?borderWidth['"]?\\s*:`;
-  for (const [name, text] of [['rules', rules], ['page-builder', builder], ['create flow', skill], ['edit flow', editFlow]]) {
-    assert.ok(text.includes(documentedPattern), `${name} must carry the complete Griffel key regex`);
+// The Griffel shorthand gate (AB#6691124). Griffel's runtime drops ten CSS shorthands from a `makeStyles` object and the page then deploys without them, so every instruction
+// that writes, edits or accepts a page names them, and every orchestrator runs scripts/check-griffel-styles.js on the page before it transpiles or uploads it. Nothing executes
+// those instructions, so — as with the Connectors line above — a document that drops the rule or the command is invisible until a page ships without its border. The rule is ONE
+// text, stated in the same words in every document (whitespace aside: they wrap their lines differently), so a correction to one cannot leave another stating the old rule.
+const { UNSUPPORTED_GRIFFEL_SHORTHANDS } = require('../lib/griffel-styles.js');
+
+const squash = (text) => text.replace(/\s+/g, ' ');
+const GRIFFEL_RULE = [
+  'Griffel does not support ten CSS shorthands, and `makeStyles` drops them at runtime: the page type-checks, transpiles and deploys, then renders without the border, color or reset.',
+  'They are `all`, `borderColor`, `borderStyle`, `borderWidth`, `borderBlock`, `borderBlockStart`, `borderBlockEnd`, `borderInline`, `borderInlineStart` and `borderInlineEnd`.',
+  'Write longhands instead: `borderColor`, `borderStyle` and `borderWidth` become one longhand per side, `border` + `Top`, `Right`, `Bottom` or `Left` + `Color`, `Style` or `Width`',
+  '(`borderWidth` → `borderTopWidth`, `borderRightWidth`, `borderBottomWidth`, `borderLeftWidth`);',
+  '`borderBlock`, `borderInline` and their `Start` and `End` forms become the `Width`, `Style` and `Color` longhands of the sides they name',
+  '(`borderBlockStart` → `borderBlockStartWidth`, `borderBlockStartStyle`, `borderBlockStartColor`; `borderBlock` → those and the three `borderBlockEnd…` ones);',
+  '`all` has no longhands, so set the properties you need one by one.',
+  'Every other shorthand (`padding`, `margin`, `border`, `borderRadius`, `gap`, `outline`) is supported, and an inline `style={{ … }}` is not Griffel at all.',
+].join(' ');
+// What the documents that RUN the checker add: its output, its exit code, and that nothing is transpiled or uploaded before it exits 0.
+const GRIFFEL_GATE = [
+  '`check-griffel-styles.js` prints each problem it finds — a key Griffel drops in a `makeStyles` call, at any depth, with its line, column and longhands,',
+  'or a call or a style object it cannot read, with what to change — and exits 3 while any is left:',
+  'fix what it reports and run it again, and do not transpile or upload the page until it exits 0.',
+  'It reads the style objects written inline in the call, `makeStyles({ … })`, so write them there:',
+  'one passed or spread in from elsewhere (`makeStyles(styles)`, `...base`) is reported, because the check cannot see its keys,',
+  'and so is a key computed from an expression (`[key]: …`), whose name it cannot see (a template that starts with `--`, `&`, `:` or `@` is read);',
+  'Fluent\'s `...shorthands.*(…)` and `...typographyStyles.*` may be spread as they are.',
+].join(' ');
+const OLD_BORDER_WIDTH_GREP = `['"]?borderWidth['"]?\\s*:`;
+
+function griffelDocs() {
+  return {
+    rules: readDoc(path.join(PLUGIN, 'references', 'rules.md')),
+    'page-builder': readDoc(path.join(PLUGIN, 'agents', 'genpage-page-builder.md')),
+    'create flow': readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md')),
+    'edit flow': readDoc(path.join(PLUGIN, 'skills', 'genpage', 'edit-flow.md')),
+    'app-builder': readDoc(path.join(PLUGIN, 'skills', 'app-builder', 'SKILL.md')),
+  };
+}
+
+test('every instruction that writes a page states the Griffel rule in the same words, with all ten properties and their longhands', () => {
+  for (const [name, text] of Object.entries(griffelDocs())) {
+    assert.ok(squash(text).includes(GRIFFEL_RULE), `${name} must state the Griffel rule in the shared words`);
   }
-  const regex = /['"]?borderWidth['"]?\s*:/;
-  for (const source of ['borderWidth: 0', 'borderWidth : 0', '"borderWidth": 0', "'borderWidth' : 0"]) {
-    assert.match(source, regex, `guard must detect ${source}`);
+  // The shared text is the checker's own set: a property the checker gains has to reach the instructions, and one it loses must leave them.
+  for (const property of UNSUPPORTED_GRIFFEL_SHORTHANDS.keys()) assert.ok(GRIFFEL_RULE.includes(`\`${property}\``), `the rule names ${property}`);
+  assert.equal(GRIFFEL_RULE.match(/ They are (.*?)\. /)[1].split(/, | and /).length, UNSUPPORTED_GRIFFEL_SHORTHANDS.size, 'and names no other');
+  for (const property of ['borderWidth', 'borderBlockStart']) {
+    for (const longhand of UNSUPPORTED_GRIFFEL_SHORTHANDS.get(property)) assert.ok(GRIFFEL_RULE.includes(`\`${longhand}\``), `the rule spells out ${longhand}`);
+  }
+});
+
+test('the grep for borderWidth alone — one of the ten, and blind to a string or a comment — is gone from every instruction', () => {
+  for (const file of mdFiles()) assert.ok(!readDoc(file).includes(OLD_BORDER_WIDTH_GREP), `${rel(file)} still greps for borderWidth alone`);
+});
+
+test('every orchestrator runs the Griffel checker as a gate before it transpiles or uploads a page', () => {
+  const docs = griffelDocs();
+  const command = (target) => `node "\${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '${target}'`;
+  const gated = (name, text) => assert.ok(squash(text).includes(GRIFFEL_GATE), `${name} must state the gate: exit 3 while a problem is left, nothing uploaded until exit 0`);
+
+  // /genpage, one page: step 9 of Phase 5b, ahead of the completeness gate (step 10) and of Phase 6.
+  const skill = docs['create flow'];
+  const fastPath = skill.split(/#### 5b\. Single-page fast path/)[1].split(/#### 5c\. Multi-page/)[0];
+  assert.ok(fastPath.includes(command('<working-dir>/<filename>.tsx')), 'single-page generation runs the checker on the page it wrote');
+  gated('single-page generation', fastPath);
+  assert.ok(fastPath.indexOf('check-griffel-styles.js') < fastPath.indexOf('genpage-worker-output.js" --file'), 'the Griffel check comes before the completeness gate');
+
+  // /genpage, several pages: the workers cannot run it, so the orchestrator does, per page, before Phase 6.
+  const multiPage = skill.split(/#### 5c\. Multi-page/)[1].split(/### Phase 6: Deploy/)[0];
+  assert.ok(multiPage.includes(command('<working-dir>/<filename>.tsx')), 'multi-page generation runs the checker on every page');
+  assert.match(squash(multiPage), /workers have no shell, so they cannot run the Griffel check themselves/);
+  assert.match(squash(multiPage), /A page that has not exited 0 is not deployed\./);
+  assert.ok(multiPage.lastIndexOf('genpage-worker-output.js') < multiPage.indexOf('check-griffel-styles.js'), 'the Griffel check follows the completeness gate');
+
+  // /genpage, an edit: before Edit Phase 6.
+  const edit = docs['edit flow'];
+  assert.ok(edit.includes(command('<working-dir>/<page-id>/page.tsx')), 'an edited page is checked');
+  gated('the edit flow', edit);
+  assert.ok(edit.indexOf('check-griffel-styles.js') < edit.indexOf('## Edit Phase 6: Deploy Updated Page'), 'the edited page is checked before it is uploaded');
+
+  // /app-builder: its pages come from the same workers, and are checked before promote-intent-pages.js commits them.
+  const appBuilder = docs['app-builder'];
+  assert.ok(appBuilder.includes('node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file <working-dir>/<file>'), 'app-builder checks every generated page');
+  gated('app-builder', appBuilder);
+  assert.ok(appBuilder.indexOf('check-griffel-styles.js') < appBuilder.indexOf('promote-intent-pages.js" \\'), 'the pages are checked before they are promoted');
+
+  // The reference the workers read spells the same command and gate out.
+  assert.ok(docs.rules.includes(command('<page.tsx>')), 'rules.md names the checker');
+  gated('rules.md', docs.rules);
+});
+
+// The page-builder worker has Read, Write, Edit and Grep — no shell — so it cannot run a Node script, and an instruction to would be one it can only skip or fake. It gets the rule
+// and a Grep to find the places to look; the orchestrators above run the checker on what it writes.
+test('the page-builder, which has no shell, is given the Griffel rule and a Grep self-review rather than a command it cannot run', () => {
+  const builder = griffelDocs()['page-builder'];
+  const tools = /^---\n([\s\S]*?)\n---/.exec(builder)[1];
+  assert.doesNotMatch(tools, /^\s*-\s*(Bash|execute|shell|powershell)\s*$/im, 'the premise: this agent has no shell tool — if it gains one, make it run the checker');
+  const step = squash(builder.split('## Step 2.6')[1].split('## Step 3')[0]);
+  assert.doesNotMatch(step, /node\s+"\$\{PLUGIN_ROOT\}/, 'no command for a worker to run');
+  assert.match(step, /You have no shell, so you cannot run the checker: after you return, the orchestrator runs `\$\{PLUGIN_ROOT\}\/scripts\/check-griffel-styles\.js` on your file and fixes anything it reports before the page is deployed\./);
+  assert.match(step, /so write every one that way\./, 'the worker is told to write the objects inline, the one form the checker reads');
+  assert.match(step, /Do not return a file that still has one in a `makeStyles` object\./);
+
+  // The Grep is the documented regex: it must list every place a flagged key is written and nothing that merely resembles one.
+  const documented = /with the regex `([^`]+)`/.exec(step)[1];
+  const grep = new RegExp(documented);
+  for (const property of UNSUPPORTED_GRIFFEL_SHORTHANDS.keys()) assert.ok(documented.includes(property), `the regex lists ${property}`);
+  const keyed = ["borderWidth: 0", "  borderWidth : 0", "{ all: 'unset' }", '"borderColor": 1', "'borderStyle' : 'solid'", "['borderBlock']: x", '{borderInline: 1}',
+    ',borderInlineStart: 1', 'root: { borderBlockEnd: `1px` }', '\tborderBlockStart:'];
+  for (const line of keyed) assert.match(line, grep, `the Grep must list ${JSON.stringify(line)}`);
+  const lookalikes = ['overall: 1', 'borderTopWidth: 1', 'borderWidths: 1', 'padding: 1', "border: '1px solid red'", 'borderRadius: 1', 'borderBlockStartWidth: 1', 'allow: true', "content: 'borderWidth'"];
+  for (const line of lookalikes) assert.doesNotMatch(line, grep, `the Grep must not list ${JSON.stringify(line)}`);
+});
+
+// The orchestrators' gate above is an instruction, and an instruction can be skipped — so the paths that upload a page AFTER a fix or a hand edit, which had no check at all, name the
+// checker as well, and say that the code holds the same line: genpage-upload.js refuses the page, and so does the build (scripts/tests/genpage-upload.test.js and
+// sdk-build-pages-deploy.test.js run those).
+test('the paths that re-upload a page after a browser-verify fix or a hand edit run the Griffel checker too, and say the upload and the build enforce it', () => {
+  const checker = (target) => `node "\${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file ${target}`;
+  // /genpage §7.5: the fix is new code, checked before the update command.
+  const fix = readDoc(path.join(PLUGIN, 'skills', 'genpage', 'verify-flow.md')).split('## 7.5 Fix and Re-deploy')[1];
+  assert.ok(fix.includes(checker("'<working-dir>/<file>.tsx'")), 'the fixed page is checked');
+  assert.ok(fix.indexOf('check-griffel-styles.js') < fix.indexOf('node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `'), 'the check comes before the update command');
+  assert.match(squash(fix), /Do not upload until it exits 0: fix what it reports \(each key's line, column and longhands\) and run it again\./);
+  assert.match(squash(fix), /`genpage-upload\.js` makes the same check and refuses a page that adds a key the deployed page did not already have, or gives one it had another value \(`griffel-shorthand`\)/);
+  assert.match(squash(fix), /`references\/rules\.md` Common Pitfalls 5/, 'and it points at the rule rather than restating it');
+
+  // /app-builder, editing a deployed app: a page edited by hand is checked before the rebuild, and the build's own halt is named.
+  const appBuilder = readDoc(path.join(PLUGIN, 'skills', 'app-builder', 'SKILL.md'));
+  const editing = appBuilder.split('## Editing a deployed app')[1].split('## What the builder does')[0];
+  const editStep = editing.split(/\n2\. /)[1].split(/\n3\. /)[0];
+  assert.ok(editStep.includes(checker('<page.tsx>')), 'a hand-edited page is checked');
+  assert.match(squash(editStep), /before you rebuild \(the rule and the ten shorthands are in Phase 1\.5, step 5\)/);
+  assert.match(squash(editStep), /halts as `pages-griffel-shorthand` — naming the page, each key's line and column, and the longhands/);
+  assert.match(squash(appBuilder), /- `pages-griffel-shorthand` — a page's `makeStyles` writes a CSS shorthand Griffel drops at runtime/, 'the halt is in the list a user is told to follow');
+  assert.match(readDoc(path.join(PLUGIN, 'references', 'app-spec-schema.md')), /- `pages-griffel-shorthand` — a page that this run uploads has a `makeStyles` key Griffel drops at runtime/);
+
+  // /genpage Phase 6: the upload script's refusal is described, with its code.
+  const skill = squash(readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md')));
+  assert.match(skill, /`genpage-upload\.js` reads the code file and refuses a page whose `makeStyles` writes one of the ten Griffel shorthands \(Phase 5b step 9\): a create outright, before it lists, reads or writes anything, and an update for any key the deployed page did not already have \(below\)\. The result is `"code":"griffel-shorthand"`/);
+  assert.match(skill, /no flag skips it, and `--overwrite-deployed` does not/);
+  // The plugin guide says the same, and that the check is made in code.
+  const agents = squash(readDoc(path.join(PLUGIN, 'AGENTS.md')));
+  assert.match(agents, /the code \*\*enforces\*\* it where pages are uploaded/);
+  assert.match(agents, /`genpage-upload\.js` reads the code file first and refuses a create with `code: "griffel-shorthand"`/);
+  assert.match(agents, /the build's pages phase halts as `pages-griffel-shorthand` in its pre-write scan/);
+});
+
+// A page deployed by an earlier release can already hold a key Griffel drops (its only guard was a grep for `borderWidth`), and it renders without it today. Sending the same bytes again
+// ships nothing new, and refusing them stops a rebuild over a page nobody touched — whose way through, the longhands, CHANGES how the page renders. So the gates hold a page to what a run
+// would ADD, and say what each way out does. These are instructions nothing executes, so a document that drops the distinction — or the advice that goes with it — is invisible until
+// a maker is told to change how a page looks. scripts/tests/sdk-build-pages-deploy.test.js and genpage-upload.test.js run the gates themselves.
+test('the docs say the gates hold a page to what a run would add, and say what each way out does to the page', () => {
+  const read = (...parts) => squash(readDoc(path.join(PLUGIN, ...parts)));
+  const agents = read('AGENTS.md');
+  // The plugin guide: the build's four standings and why the unrecorded one fails open, and the upload script's comparison.
+  const holds = agents.split('**What the gates hold a page to.**')[1].split('- **Who runs it.**')[0];
+  assert.match(holds, /So every refusal and warning says both: \*deleting a key changes nothing on screen; writing the longhands makes the style start to render\*\./);
+  assert.match(holds, /A page that does not exist yet \(`keyToId` has no id for it: it is \*created\*\) and a page that exists but whose source no longer hashes to the `__contentSha` that `last-applied\.json` recorded for it at the last apply \(\*changed\*\) are held to the check/);
+  assert.match(holds, /A page whose source hashes to that record \(\*unchanged\*\), or that has no record \(\*unrecorded\*\), is sent as it is, and the build warns \(`opts\.warn`\) with file:line:column and both remedies\./);
+  assert.match(holds, /returned only for this app \*\*in this environment\*\* \(`readBaseline`/);
+  assert.match(holds, /\*Unrecorded\* [^.]*fails \*\*open\*\* on purpose/);
+  assert.match(holds, /a page that does not exist is always held, record or not/);
+  assert.match(holds, /\*\*`genpage-upload\.js`\*\* has the deployed page in hand/);
+  assert.match(holds, /`griffelProblemsNotIn`: the same key set to the same value in the same place \(`within`: its slot, selectors and at-rules\), or failing that the same key and value anywhere that nothing else has claimed/);
+  assert.match(holds, /A key given \*\*another value\*\* is new too: Griffel drops the new value as it dropped the old one, so the page would show none of the change the maker meant/);
+  assert.match(holds, /the hash recorded is of the source the pages phase \*read and checked\* \(`created\.pageSourceShas`\), not of the file when the baseline is written as the build ends/);
+  assert.match(holds, /What is sent is what was checked: every page, a navigation source or not, goes to pac from a staging copy of the bytes the scan read \(`writeStagingFile`\), never from its own file, so a save made after the check does not ship until a build has checked it\./);
+  assert.doesNotMatch(holds, /sent from its own file|ships unchecked/, 'no page is uploaded from its canonical file any more, so the guide must not describe the gap that closed');
+  assert.match(holds, /`--overwrite-deployed` is no way past that/);
+  assert.match(holds, /A call the checker cannot read\*\* is not CSS Griffel drops, and is not said to be/);
+  assert.match(holds, /quotes a path that has white space/);
+  // The skills and references that tell a user or an agent what to do.
+  const editFlow = read('skills', 'genpage', 'edit-flow.md');
+  assert.match(editFlow, /A page that was deployed before this check existed can already hold such a key, so the checker may report one that your edit did not add\./);
+  assert.match(editFlow, /\*\*delete the key\*\* — nothing changes on screen, so it is the edit that preserves the page — or \*\*write the longhands\*\*, which makes the style start to render, so the page changes\. Delete it unless the user asked for that change/);
+  const skill = read('skills', 'genpage', 'SKILL.md');
+  assert.match(skill, /An update is held to what it \*\*adds\*\*\./);
+  assert.match(skill, /\*\*delete the key\*\* \(nothing changes on screen\) or \*\*write the longhands\*\* \(the style starts to render, so the page changes\)\. Only a key the deployed page did not have — or one it had, given another value, because Griffel drops the new value just as it dropped the old, so the page would show none of the change — stops the upload\./);
+  assert.match(read('skills', 'genpage', 'verify-flow.md'), /delete it to keep the page looking as it does, or write the longhands to make the style start to render/);
+  const appBuilder = read('skills', 'app-builder', 'SKILL.md');
+  assert.match(appBuilder, /The build runs the same check on every page it uploads that is new or that you changed since the last successful apply of this app, and halts as `pages-griffel-shorthand`/);
+  assert.match(appBuilder, /"Changed" is measured against the source that apply recorded for the page in `\.maker-workspace\/last-applied\.json` \(a successful full or changed-only apply, or a download, writes it; a failed or partial build records nothing\)\./);
+  assert.match(appBuilder, /A page you did not touch is sent again as it is, and a key it already has only draws a warning — and so does a page you changed in a workspace that holds no record of it/);
+  assert.match(appBuilder, /Deleting a key keeps the page looking as it does; writing the longhands makes the style start to render\. The same halt reports a `makeStyles` call the check cannot read for certain as that — not as CSS Griffel drops — and says what to change in the code\./);
+  const schema = read('references', 'app-spec-schema.md');
+  assert.match(schema, /is \*\*new\*\* \(no deployed page\) or \*\*changed\*\* \(its source no longer hashes to the `__contentSha` that `last-applied\.json` recorded for it at the last apply to this app in this environment — the record a successful full or changed-only apply, or a download, writes; for a page it is the hash of the source the build read and sent, and a failed or partial build records nothing\)/);
+  assert.match(schema, /deleting a key changes nothing on screen \(Griffel never applied it\), writing the longhands makes the style start to render/);
+  assert.match(schema, /is sent as it is and the build \*\*warns\*\* with the same detail instead: it ships nothing new\./);
+});
+
+// A pac upload that stalls is stopped, and what the script — and so the agent — does next depends on what the stalled call can have done: pac writes the page, records the prompt
+// and the agent message, prints its Page ID, then publishes. The first version of these instructions said an UPDATE is simply sent again ("a second send cannot create anything"),
+// which is false — a call stalled in the publish has already written everything, so a re-send records the prompt twice and overwrites whatever was saved meanwhile — and its
+// advice for a create ("update it") is refused when the stalled create left the page out of the app's navigation. scripts/tests/genpage-cli.test.js runs what the script does.
+test('the docs say a stalled upload is never sent again by the script, what to check after an update that timed out, and what finishes a create that stalled', () => {
+  const skill = squash(readDoc(path.join(PLUGIN, 'skills', 'genpage', 'SKILL.md')));
+  assert.match(skill, /A listing or a download that times out is retried once\. An \*\*upload is never sent again by the script\*\*/);
+  assert.match(skill, /sending it again can record the prompt a second time or overwrite a change someone saved in the meantime\. Follow the message the script prints; do not simply re-run the command\./);
+  assert.match(skill, /\*\*An update that timed out, or failed,\*\* "MAY HAVE LANDED" — pac can fail while publishing, after it wrote the page, so neither is sent again by the script\. \(A failure pac reports for its own arguments or files is an ordinary error: fix what it names and re-run\.\) Compare the deployed page with your file first: `node "\$\{PLUGIN_ROOT\}\/scripts\/genpage-base\.js" check --env '<org-url>' --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>\/<file>\.tsx'`/);
+  assert.match(skill, /`"contentSame": true` means the update landed: do not upload it again/);
+  assert.match(skill, /`"deployed": "unchanged"` means it did not land, and re-running the update is safe\./);
+  assert.match(skill, /\*\*A create that timed out\*\* is an \*uncertain\* create, and is never run again — by the script, or by you\./);
+  assert.match(skill, /If the message says the page was \*\*created as `<page-id>`\*\*, it exists but was stopped before it was published/);
+  assert.match(skill, /Add it to the app's navigation \(in Maker, or `pac model genpage add --environment '<org-url>' --app-id '<app-id>' --page-id '<page-id>' --publish`\)/);
+  assert.match(skill, /An update of a page that is not in the app's navigation is refused, and a second create makes a duplicate — so neither is the way on\. A create that \*\*failed\*\* \(not timed out\) after pac had printed a `Page ID` is in the same state: its error says the page was \*\*created as `<page-id>`\*\* and that the create was not run again, with the same two ways on rather than "re-run it as an update"\. The build never re-sends such a create by itself either: every one of these errors is marked as one that is not to be retried\./);
+  assert.match(skill, /The same goes for a message that says the environment could not be listed after the create, so nothing is known about what it made\./);
+  const agents = squash(readDoc(path.join(PLUGIN, 'AGENTS.md')));
+  assert.match(agents, /A timed-out list or download is read-only, so it is retried once\. A timed-out \*\*update\*\* is \*\*not\*\* retried, though it names a page that exists/);
+  assert.match(agents, /It is reported as one that \*may have landed\*, and what it sends you to look at depends on the caller \(`upload\(\)`'s `caller`\): the upload script's message names `genpage-base\.js check`/);
+  // The build keeps no base marker and sends every page from a staging copy it deletes, so the script's advice fails there: it gets its own, and its error is never retried by the build.
+  assert.match(agents, /The \*\*build\*\* keeps no base marker, so that check could only answer "unknown", and every page's code file is a staging copy its cleanup deletes, so the command would fail on a missing file: the build's message tells you to read the deployed page with `pac model genpage download`/);
+  // A FAILED update is in the same state as a stalled one (pac can fail in the publish), so it is not retried either; only a refusal of pac's own arguments is ordinary.
+  assert.match(agents, /An \*\*update\*\* that \*\*fails\*\* — a non-zero exit, or an exit 0 with no `Page ID` — is handled the same way, for the same reason \(pac can fail in the publish, after everything else is written\): it is \*\*not\*\* retried/);
+  assert.match(agents, /Only a non-zero exit that pac reports for its own arguments or input files \(`isDeterministic`\) is an ordinary error, because pac checks those before it sends anything — and only when pac printed no `Page ID`:/);
+  assert.match(agents, /and to open the `page\.tsx` in the folder named for the id, which pac writes in its own letter case\) and then run the build again, which sends the page once more to the same id — nothing new is created, but if the stalled send did land, the page's history now records its prompt a second time/);
+  assert.match(agents, /The error carries `transient: false`, so the build's own retry of transient halts never re-sends it\./);
+  assert.match(agents, /A `Page ID` pac had already printed names the page it created, whether the call then stalled or \*\*failed\*\* \(exited non-zero\): it is reported as \*created as `<id>`, stalled \(or failed\) before publish or placement\*, the create is \*\*not\*\* sent again however the environment's listing looks/);
+  assert.match(agents, /a create that failed and left a candidate gets the same way on, not "re-run it as an update with `--page-id`"/);
+  // Every error that follows a create whose outcome is not known to be nothing is one the build's own retry cannot re-send — the page's name and pac's words are what that retry reads —
+  // and a create that failed outright and left nothing is retried, as in 2.13.0.
+  assert.match(agents, /\*\*Every error that follows a create whose outcome is not known to be nothing carries `transient: false`\*\* \(`neverRetriedError`\) — a stall, a printed Page ID, a candidate in the listing, a listing that cannot be read: the build re-runs a phase when a halt reads as transient/);
+  assert.match(agents, /A create that failed outright and left nothing in the listing, and a listing that fails \*before\* the create was sent, leave nothing to duplicate: both are still retried — by the upload \(3 sends\) and, when the error's text reads as transient, by the build — as in 2\.13\.0\./);
+  assert.doesNotMatch(agents, /Every error that follows a create that was sent|every error that follows a sent create/, 'the claim is made for the creates whose outcome is not known to be nothing, not for every create that was sent');
+  // The retired claim is in none of them, nor in the wrapper's own comments.
+  for (const [name, text] of [['the genpage skill', skill], ['AGENTS.md', agents], ['lib/genpage-cli.js', squash(fs.readFileSync(path.join(PLUGIN, 'scripts', 'lib', 'genpage-cli.js'), 'utf8'))]]) {
+    assert.doesNotMatch(text, /cannot create anything|So it is retried\.|a time out is retried once, and so is an \*\*update\*\*/i, `${name} still says a second send of an update is harmless`);
   }
 });
 

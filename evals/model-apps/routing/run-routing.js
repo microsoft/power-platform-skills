@@ -214,8 +214,16 @@ function copilotSkillInventory({ bin, binArgs = [], pluginDir, env, cwd }) {
  * Never rejects: every failure becomes `trial.error`, which grading excludes from the pass rate.
  * `loadedSkills` / `loadError` carry a preflight's skill inventory for agents whose transcript does
  * not report it (Copilot); a `loadError` fails the trial before any model call is made.
+ *
+ * Two seams exist for the tests, and neither changes what a run does:
+ *   `clock`    the timer pair the `timeoutMs` deadline runs on. A test that must fire the deadline at
+ *              a chosen moment (after the agent has printed its first event, say) passes its own,
+ *              rather than racing a real timer against how long a loaded machine takes to start Node.
+ *   `onStart`  called once, right after the process is launched, with `{ child, parser }`, so a test
+ *              can tell when the parser has seen a line and when the killed process has really exited.
  */
-function spawnTrial({ bin, binArgs = [], args, env, prompt, cwd, timeoutMs, plugin, agent, loadedSkills = null, loadError = null }) {
+const REAL_CLOCK = { setTimeout, clearTimeout };
+function spawnTrial({ bin, binArgs = [], args, env, prompt, cwd, timeoutMs, plugin, agent, loadedSkills = null, loadError = null, clock = REAL_CLOCK, onStart = null }) {
   return new Promise((resolve) => {
     const started = Date.now();
     const parser = new TranscriptParser(agent, plugin);
@@ -246,7 +254,7 @@ function spawnTrial({ bin, binArgs = [], args, env, prompt, cwd, timeoutMs, plug
     const finish = (extra = {}) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      clock.clearTimeout(timer);
       killTree(child);
       let error = extra.error || null;
       // "none" is a DECISION only when the run ended on its own without choosing a plugin skill.
@@ -285,7 +293,8 @@ function spawnTrial({ bin, binArgs = [], args, env, prompt, cwd, timeoutMs, plug
         stdout,
       });
     };
-    const timer = setTimeout(() => { timedOut = true; finish(); }, timeoutMs);
+    const timer = clock.setTimeout(() => { timedOut = true; finish(); }, timeoutMs);
+    if (onStart) onStart({ child, parser });
     child.stdout.on('data', (chunk) => {
       const s = chunk.toString('utf8');
       stdout += s;

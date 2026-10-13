@@ -357,10 +357,10 @@
           "specific_requirements": "Contact list display"
         },
         "app_selection": "user selects an existing app",
-        "environment_state": "pac model list-languages returns multiple languages: English (1033), Arabic (1025), French (1036). This eval exercises the localization code path."
+        "environment_state": "The environment has English (1033), Arabic (1025) and French (1036) provisioned, which scripts/list-languages.js reports (or pac model list-languages, which the planner runs when that script cannot read them). This eval exercises the localization code path."
       },
       "expectations": [
-        "Phase 1 (Planner): pac model list-languages output includes Arabic (1025) and French (1036) in addition to English",
+        "Phase 1 (Planner): language discovery output includes Arabic (1025) and French (1036) in addition to English",
         "Phase 1 (Planner): Plan includes a Localization section listing detected languages",
         "Phase 5 (Page Builder): Generated .tsx includes language detection boilerplate using Xrm.Utility.getGlobalContext().userSettings.languageId",
         "Phase 5 (Page Builder): Generated .tsx has a translations dictionary with entries for en-US, ar-SA, and fr-FR",

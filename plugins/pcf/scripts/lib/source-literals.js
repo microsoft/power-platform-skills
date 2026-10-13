@@ -808,8 +808,10 @@ function readRuleToken(src, j) {
 }
 
 // Whether the `<` at `i`, where an assignment expression may start, opens a generic arrow's type parameters (`generic`) or an element, and the kind of
-// guess the answer rests on, or null where the rule decides: { generic, ambiguity }. See above.
-function opensTypeParameters(src, i, budget = null) {
+// guess the answer rests on, or null where the rule decides: { generic, ambiguity }. See above. `inExpression` says the `<` is known to start an expression (a default value after an `=`): a name and a
+// `>` is then an element, as the rule says, and no function type's `<T>` is read there (genericFunctionTypeFollows), which a `<` in a type may be. `noMember` says that no member of a type begins at the `<` (NO_MEMBER_BEFORE),
+// which settles a parameter list with neither `=>` nor `:` after it.
+function opensTypeParameters(src, i, budget = null, inExpression = false, noMember = false) {
   let escaped = false;
   const read = (j) => {
     const token = readRuleToken(src, skipSpaceAndComments(src, j));
@@ -835,13 +837,15 @@ function opensTypeParameters(src, i, budget = null) {
     const fourth = read(third.end);
     // TypeScript's rule makes `<T extends` and a `=`, a `>` or a `/` an element where an expression starts. In a type a `=` or a `>` there is no constraint (TS1110), but a `/` starts one:
     // parseTypeParameter reads a constraint that starts no type as an expression, a regex, and only the checker objects (`let f: <T extends />;…/>(a: T) => T` is a FunctionType). The lexer
-    // cannot tell a type from an expression there, so the `/` is the guess, with the element read.
-    if (fourth.kind === 'slash') return verdict(false, 'generic');
+    // cannot tell a type from an expression there, so the `/` is the guess, with the element read — unless the regex does not close on its line: it is unterminated then (TS1161, a parse
+    // error), no type has the text, and the element is certain (`const e = <T extends />;` and the end of the line). A regex that closes leaves both: `<T extends />; const r = a / b;`.
+    if (fourth.kind === 'slash') return verdict(false, regexEnd(src, fourth.end - 1) === -1 ? null : 'generic');
     return verdict(!(fourth.kind === 'equals' || fourth.kind === 'gt'));
   }
   if (third.kind === 'comma' || third.kind === 'equals') return verdict(true);
   if (third.kind === 'gt' && identifier.kind === 'word') {
-    const type = genericFunctionTypeFollows(src, third.end, i, budget);
+    if (inExpression) return verdict(false);
+    const type = genericFunctionTypeFollows(src, third.end, i, budget, noMember);
     return verdict(type.generic, type.ambiguity);
   }
   return verdict(false);
@@ -902,6 +906,14 @@ const ANGLE_CLASS = new Map([
   ...ANGLE_AFTER.rule.map((token) => [token, { read: 'rule' }]),
 ]);
 const ANGLE_CLASS_AFTER_LINE_BREAK = new Map(Object.entries(ANGLE_AFTER_LINE_BREAK).map(([token, kind]) => [token, { read: 'guess', kind }]));
+
+// The tokens of the `rule` class after which no member of a type begins and no name stands that a signature's type parameters could follow: an assignment's `=` and the compound ones, the `=>` of an arrow, a `(` or a `[` that opens
+// what an expression or a type must fill, and a `:`, after which a type is a function type only with an `=>`. So a head `<Name>` and a parameter list that neither `=>` nor `:` follows is an element there in every program that
+// parses — there is no call signature for its text to be the start of (callSignatureOrElement). Any other token that the rule is asked after can end a member, or can be the name of one: a separator or a bracket (`,`, `;`, `{`, `}`, `)`), a
+// `?` (`m?<T>(x)` is a method with an optional mark) and a keyword (`return <T>(x)` is a method named `return`; every keyword is a name in a type), and the text after the head is read to tell the two apart.
+//   const help = <p>(optional);  foo( // note  /docs</p>;      f(<p>(a)</p>)      [<p>(a)</p>]      o = { k: <p>(a)</p> }      () => <p>(a)</p>
+//   (not: `interface I { m? <T>(x); a: '</T>…' }`, `interface I { return <T>(x); a: '</T>…' }`, `f(x), <p>(a)</p>`)
+const NO_MEMBER_BEFORE = new Set(['=', '+=', '-=', '*=', '**=', '/=', '%=', '<<=', '&=', '|=', '^=', '&&=', '||=', '??=', '=>', '(', '[', ':']);
 
 // The characters of an operator, and the operators a run of them is cut into — longest first; a `>` is read on its own. A run longer than RUN_LIMIT is read from its
 // end: every operator is shorter than that, and a scan that went back over the whole of a long `=====…` — or of `<></>=<></>=…`, where every character is one of
@@ -983,7 +995,7 @@ function angleBefore(src, i) {
     if (star === 'cut') return { read: 'guess', kind: 'identifier' };
   }
   const cls = (newline && ANGLE_CLASS_AFTER_LINE_BREAK.get(token)) || ANGLE_CLASS.get(token) || { read: 'guess', kind: 'operator' };
-  return cls.read === 'guess' ? { ...cls, token } : cls;
+  return { ...cls, token };
 }
 
 // Whether the head of the `<` at `i`, read as a tag to its `>`, is followed by no parameter list and arrow that type parameters could take: `<T extends X>text</T>`, `<T extends X>(text)`.
@@ -1046,7 +1058,8 @@ function angleOpens(src, out, i, budget = null, certainOperator = false) {
   // Directly after the head of a type alias a `<` is a function type's whatever follows it (afterTypeAliasHead). The head ends in a lone `=`, so no token of
   // another class can precede it.
   if (afterTypeAliasHead(out, i)) return { generic: true, ambiguity: null };
-  const rule = opensTypeParameters(src, i, budget);
+  // After one of these tokens no member of a type begins, so a head with a parameter list that neither `=>` nor `:` follows is no call signature (NO_MEMBER_BEFORE).
+  const rule = opensTypeParameters(src, i, budget, false, before.read === 'rule' && NO_MEMBER_BEFORE.has(before.token));
   // After a guess token, a head with a constraint and no parameter list is an element in every program that parses (headWithoutParameterList). That holds after the cut `>=`, `>>=`
   // and `>>>=` too: where the first `>` ends type arguments, `>=` compares and the head is an element; where the run is one operator, an assignment, the rule reads the head as
   // type parameters, TypeScript attempts the arrow it then must be, and with no parameter list that is an error (`v >>= <T extends X>text</T>`).
@@ -1262,55 +1275,452 @@ function commentEnd(src, open, last) {
 // leaves it out (it is a contextual word there, a guess): its heritage clause takes an expression, as `extends` does, so in a computed name a type may hold `[class C implements /re/ {}]`, and the
 // closing tag in that regex (parseHeritageClause, parseExpressionWithTypeArguments, https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts).
 //   and/or      1/2      a / b          (not: `(a) /x/`, `= /x/`, `return /x/`, `implements /x/`, `</b> /x/`)
-function slashFollowsAnOperand(src, at) {
-  const before = prevSignificant(src, at);
-  if (!/[\w$]/.test(before.ch)) return false;
+// The text is read as written, comments included, and prevSignificant skips white space only: after a comment it finds the comment's last character, which says nothing — a block comment ends in a `/` and a line comment in
+// whatever its text does — where the comment is trivia, and what the `/` follows is the token before it. A regex may follow a line comment on the next line, after the operator that the comment stands behind:
+//   x = 1 + // fallback         the last token is the `+`, the comment is trivia, and `fallback` is no operand
+//   /\)/                        a regex, whose `)` is not the one that ends a parameter list
+// A `/` read as a division there ended the scan of the list at that `)` (genericFunctionTypeFollows) and hid the closing tag of a signature's text in a regex (readChildren). So a `/` after a line comment that the caller
+// has not found itself follows no operand (see lineMayEndInComment); one that has passes the comments (`comments`, { from, to }: the run of comments, and the white space between them, that ends before the `/`) and
+// the token before the run decides, as it does to a parser: `b // c` and a line break, then `/d`, divides, and `1 + // c` and a line break, then `/d/`, does not.
+// A `/` after a `)` or `]` divides as well, where the caller says so (`brackets`): no regex follows a parenthesised expression, a call, an index or an array literal, and no type has a `/` after a bracket
+// (`(x) // c` and a line break, then `/d`). A `)` is where a regex could follow only after the head of a statement (`if (x) /re/.test(y)`), which has a block to hold it, and the caller reads none: a `{` in the text it reads
+// is an expression container, which it skips or does not read (containerFailsAt).
+//   (x) // c     m[0] // c      f(a, b)      [1, 2]        (not: `if (x)` in a block that is not read, `(x) => /re/`: a `/` after `=>` follows the `>`)
+function slashFollowsAnOperand(src, at, comments = null, brackets = false) {
+  let before = prevSignificant(src, at);
+  if (comments !== null && before.index >= comments.from && before.index < comments.to) before = prevSignificant(src, comments.from);
+  const bracket = brackets && (before.ch === ')' || before.ch === ']');
+  // Only a word, a number or a bracket is an operand — and lineMayEndInComment depends on that: it starts before `before.index`, whose character is then no `/` that could end a `//` and no line terminator, so where it starts cannot matter.
+  if (!bracket && !/[\w$]/.test(before.ch)) return false;
+  if (before.newline && lineMayEndInComment(src, before.index)) return false;
+  if (bracket) return true;
   let start = before.index;
   while (start > 0 && /[\w$]/.test(src[start - 1])) start -= 1;
   const word = src.slice(start, before.index + 1);
+  // A hex, binary or octal literal takes no check for a word after it (`0x1Fin`: the literal and `in`, scanner.ts scanNumber checks only a decimal one), and `in` and `instanceof` are operators that a regex follows.
+  if (/^0[xXbBoO]/.test(word) && /(?:in|instanceof)$/.test(word)) return false;
   return !EXPR_START_WORDS.has(word) && word !== 'implements';
+}
+
+// The run of comments that the comment at `at`, which ends at `end` (commentEnd), belongs to, for slashFollowsAnOperand: it goes on from `comments` where nothing but white space stands between them, and
+// is the start of a new one where something else does.
+function commentRun(src, comments, at, end) {
+  if (comments !== null) {
+    const previous = prevSignificant(src, at).index;
+    if (previous >= comments.from && previous < comments.to) return { from: comments.from, to: Math.max(comments.to, end) };
+  }
+  return { from: at, to: end };
+}
+
+// Whether the character at `index`, which is last on its line (a line break follows it), may be in a line comment: a `//` stands before it on its line. A line comment runs to the line terminator, so what is last on a
+// line is in one if a `//` begins a comment before it. A `//` that begins none — in a string, a template or a regex, which a line may begin inside of — is not told from one, since nothing before the line is read: the `/`
+// after it stays a guess, which is the safe side (a regex read as a division hides a `)` or a closing tag, and a division read as a regex only refuses). A line that begins before the window is not read at all: the
+// answer is yes. Line comments and line terminators: https://tc39.es/ecma262/#sec-comments, isLineTerminator.
+//   a = 1 + // fallback        `fallback` is in the comment
+//   b = "http://x" + y         `y` is code, but a `//` stands before it on its line: the guess all the same
+function lineMayEndInComment(src, index) {
+  const floor = Math.max(0, index - LOOKAHEAD);
+  for (let k = index - 1; k >= floor; k -= 1) {
+    if (isLineTerminator(src[k])) return false;
+    if (src[k] === '/' && src[k + 1] === '/') return true;
+  }
+  return floor > 0;
 }
 
 // The words that can stand before a member's name in a type, so that a name after one is no second name: every reserved word, every contextual one, and the modifiers TypeScript takes.
 const MEMBER_MODIFIERS = new Set(['public', 'private', 'protected', 'const', 'interface', 'package']);
 
-// Whether the text from `from` to `to` cannot be the members of a type. It is what follows the `)` of a call or construct signature, up to the first place that could hide the closing tag the text reaches
-// (a string, a template, a comment, a regex): where no type can be valid up to there, no program has one that holds the closing tag in anything, and nothing after it hides it. A member is a name, and what follows
-// a name on its line is `:`, `?`, `(`, `<`, a separator or the end of the line (parseTypeMemberSemicolon, https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts); a second name or a string
-// there is TS1005, and a `/` has no place after a name in a type (it divides in an expression, where a name may stand but a member does not). A template or a regex that opens at `to` is no member's
-// start either (TS1131, "Property or signature expected"; parseTypeMember): with only names and separators before it, it stands where a member begins or right after a name. (After a `:` a template is
-// a type, `m: \`a${string}\``, and the reading stops at the colon, undecided.) Only plain prose is read — names, numbers, `,` and `;` — and a word that may be a modifier, or any other character, leaves it
-// undecided (false):
-//   (a), see https://x.y           `see` and `https`, two names on a line
-//   (a); and/or more               a name and a `/`
-//   (a), see 'x                    a name and the string that opens at `to`
-//   (a); `x ${y}                   a template where a member begins
-function typeMembersFail(src, from, to, opener) {
-  let named = false;                           // a member's name was read on this line
-  let k = from;
-  while (k < to) {
-    const c = src[k];
-    if (isTrivia(c)) {
-      if (isLineTerminator(c)) named = false;
-      k += 1;
-    } else if (/[\w$]/.test(c)) {
-      let end = k;
-      while (end < to && /[\w$]/.test(src[end])) end += 1;
-      if (named) return true;
-      const word = src.slice(k, end);
-      if (RESERVED_WORDS.has(word) || CONTEXTUAL_WORDS.has(word) || MEMBER_MODIFIERS.has(word)) return false;
-      named = true;
-      k = end;
-    } else if (c === ',' || c === ';') {
-      named = false;
-      k += 1;
-    } else {
-      return c === '/' && named && src[k + 1] !== '/' && src[k + 1] !== '*';
+// The keywords that TypeScript's parser may take for the modifier of a member, which a name follows, and the two that start an accessor (isModifierKind, parseModifiers and parseContextualModifier in
+// https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts). Any other keyword that stands where a member begins is its name: every keyword is a name there (parsePropertyName).
+const MODIFIER_WORDS = new Set(['abstract', 'accessor', 'async', 'const', 'declare', 'default', 'export', 'in', 'out', 'override', 'private', 'protected', 'public', 'readonly', 'static', 'get', 'set']);
+
+// The characters that no member of a type begins with, wherever one may: a sign, an operator, a closing bracket (TS1131, "Property or signature expected").
+const STARTS_NO_MEMBER = '-+*%^~)]';
+// The characters that no member begins with where nothing goes on the member before it — right after a `,` or a `;`, or after a signature's `)`: also `&` and `|`, which a line break puts at the start of a line
+// that goes on the type before it (`m: A` and a line break, then `| B`), `=` (an initializer, `m` and a line break, then `= 1`), `?`, `:`, `.` (when no digit follows: `.5` is a number), `!`, and `>`, `{` and `@`.
+// Measured over every ASCII character: each is TS1131 there, and each of the others (a letter, a digit, `_`, `$`, a quote, `(`, `<`, `[`, a back-tick, `}`) can begin a member; so can a `#` that a name follows
+// (a private name, `#x`, which the parser takes for a member's name, and only the checker objects), where a `#` that nothing follows is an invalid character (TS1127).
+const STARTS_NO_HARD_MEMBER = `${STARTS_NO_MEMBER}!&=>?@|{.`;
+// The characters that no name is followed by on its line (TS1005, "';' expected"). `&` and `|` go on a type from the next line, `=` starts an initializer, a quote is read as a string (typeMembersFail), and a backslash
+// may go on the name (`a\u0061b` is ONE identifier, a name with an escape in it), so nothing is said of them.
+const NO_AFTER_NAME = `${STARTS_NO_MEMBER}&|!.>@`;
+// After a word that may be a modifier (a name, or a modifier that a name follows): the same, but a quote is a name, a backslash may start one (`readonly \u0061b: T`), and `=` is an initializer's (`get = 1` is a
+// member; any other word and `=` is not, which is not said).
+const NO_AFTER_MODIFIER = `${STARTS_NO_MEMBER}&|!.>@`;
+// After a line break that follows a name — `m` and a line break, then the next line: the member goes on with `:`, `?`, `=`, `(` or `<`, or another begins, so what is dead is what none of them starts with. `&` and `|` do not
+// go on a name (a type needs its `:` first), nor do `.`, `!`, `>` and `@`.
+const NO_NEXT_LINE_AFTER_NAME = `${STARTS_NO_MEMBER}&|!.>@`;
+// After a line break that follows a type — `m: A` and a line break: the type goes on with `&`, `|` and `.`, or the member with an initializer's `=`, or another begins; a `:` and a `?` are TS1005 there, and so are `!`, `>` and `@`.
+const NO_NEXT_LINE_AFTER_TYPE = `${STARTS_NO_MEMBER}!>@?`;
+// Where a type must follow — after a `:`, a leading `|` or `&`, a `.` — the characters that no type starts with (TS1110, "Type expected"), of those measured over every ASCII character that can be said of one character: a
+// `-` starts a number (`-1`: its own rule), a `.` that no digit follows starts nothing (`.5` is read as a number before this), a `#` and a backslash may start a name, `*`, `!`, `?`, `<`, a bracket, a quote and a back-tick start
+// a type, and a `,`, `;`, `:` and `/` have a rule of their own.
+const NO_START_OF_TYPE = '%^~)]+=@.';
+
+// Where the prose after a signature's `)` is, read as the members of a type (typeMembersFail):
+const PROSE_START = 0;      // a member begins and no member goes on there: after the `)`, a `,` or a `;`
+const PROSE_NAME = 1;       // a member's name — or the name and the parameters of a signature — was read on this line
+const PROSE_COLON = 2;      // `name:` was read: a type must follow, on this line or on a later one
+const PROSE_TYPE = 3;       // `name: type` was read on this line
+const PROSE_OTHER = 4;      // anything else was read: nothing more is said
+const PROSE_LINE = 5;       // a member begins, or the one before it goes on: after a line break that follows a name
+const PROSE_MODIFIER = 6;   // a word was read where a member begins that is a modifier if a name follows, and a name if not
+const PROSE_TPARAMS = 7;    // a signature's type parameters were read: its parameter list must follow
+const PROSE_INIT = 8;       // a member's `=` was read: an initializer follows, and nothing of it has been
+const PROSE_OPERAND = 9;    // ... and a name, a number or a string, with no keyword before it: the initializer's first operand, on the line it began on
+const PROSE_SIGNATURE = 10; // the `)` of the signature that the text follows: a member begins after it, as after a separator, but a `:` is the signature's return type
+const PROSE_LINE_TYPE = 11; // a member begins, or the type before it goes on: after a line break that follows a type
+const PROSE_QUALIFIED = 12; // a `.` in a type was read, or `typeof` or `infer`: a name follows, and any word is one there (`A.new`, `A.keyof`, `typeof new`, `infer keyof`)
+const PROSE_OPERATOR = 13;  // `keyof`, `readonly` or `unique` was read: a type follows, which may be another of them, and any other word is a name (`keyof new`)
+
+// Every keyword TypeScript has (ts.SyntaxKind.FirstKeyword to LastKeyword in 5.8): the words that may stand beside another operand in an expression. No other word may — `a b` is an error, whatever they are — so two
+// side by side that are not on this list are TS1005.
+const TS_KEYWORDS = new Set(['break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'else', 'enum', 'export', 'extends', 'false', 'finally', 'for', 'function', 'if', 'import', 'in',
+  'instanceof', 'new', 'null', 'return', 'super', 'switch', 'this', 'throw', 'true', 'try', 'typeof', 'var', 'void', 'while', 'with', 'implements', 'interface', 'let', 'package', 'private', 'protected', 'public',
+  'static', 'yield', 'abstract', 'accessor', 'as', 'asserts', 'assert', 'any', 'async', 'await', 'boolean', 'constructor', 'declare', 'get', 'infer', 'intrinsic', 'is', 'keyof', 'module', 'namespace', 'never', 'out',
+  'readonly', 'require', 'number', 'object', 'satisfies', 'set', 'string', 'symbol', 'type', 'undefined', 'unique', 'unknown', 'using', 'from', 'global', 'bigint', 'override', 'of']);
+
+// A character of a name, or of a word that no token of a type is made of: every character beyond ASCII that is no white space is part of an identifier or is no token at all (TS1127), and either way
+// it is no punctuation that a name could be followed by.
+function isProseWordChar(ch) {
+  return /[\w$]/.test(ch) || (ch.charCodeAt(0) > 0x7f && !isTrivia(ch));
+}
+
+// Whether `ch`, the character after a `#`, makes it the start of a private name (`#x`): any character that may start a name — a digit and a backslash may not.
+function isPrivateNameStart(ch) {
+  return ch !== undefined && ch !== '\\' && isProseWordChar(ch) && !isDigit(ch);
+}
+
+// The end of the numeric literal that starts at `at` — a digit, or a `.` and a digit — as the scanner reads one (scanNumber, https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/scanner.ts): digits and `_`, a `.`
+// and more digits, and an exponent whose `e` or `E` takes a sign, all of it ONE token, which is a valid name for a member. The characters of a word go on with a decimal literal (`1n`: and a word after one is an error).
+//   1.5     .5     1.     1e5     1e+5     1E-5     1_0e+1     1.5e-3     0x1e+5 is `0x1e`, `+` and `5`: a hex literal has no exponent     0x1Fin is `0x1F` and `in`
+// A sign that no digit follows (`1e+x`) is not part of the literal: the scanner reports TS1124 ("Digit expected") there, and the page has no valid reading.
+function numericLiteralEnd(src, at, to) {
+  let k = at;
+  if (src[k] === '0' && /^[xXbBoO]$/.test(src[k + 1] || '')) {
+    // A hex, binary or octal literal ends at its last digit, or at the `n` of a BigInt: what follows is another token (`0x1Fin` is `0x1F` and `in`, and no check forbids it, where a word right after a decimal literal is
+    // TS1351, which no page has). scanner.ts, scan: the `0x`, `0b` and `0o` cases.
+    const digit = /^[xX]$/.test(src[k + 1]) ? /[0-9a-fA-F_]/ : /^[bB]$/.test(src[k + 1]) ? /[01_]/ : /[0-7_]/;
+    k += 2;
+    while (k < to && digit.test(src[k])) k += 1;
+    if (src[k] === 'n') k += 1;
+    return k;
+  }
+  const digits = () => { while (k < to && (isDigit(src[k]) || src[k] === '_')) k += 1; };
+  if (src[k] !== '.') digits();
+  if (src[k] === '.') {
+    k += 1;
+    digits();
+  }
+  if (src[k] === 'e' || src[k] === 'E') {
+    let sign = k + 1;
+    if (src[sign] === '+' || src[sign] === '-') sign += 1;
+    if (isDigit(src[sign])) {
+      k = sign;
+      digits();
     }
   }
-  // Only an opener after the parameter list stands where a member does: one inside it (a default value's template, `(a = \`x</p>\`)`) is the type's too.
-  if (from <= to && (opener === '`' || (opener === '/' && src[to + 1] !== '/' && src[to + 1] !== '*'))) return true;
-  return named && (opener === '"' || opener === "'");
+  while (k < to && isProseWordChar(src[k])) k += 1;
+  return k;
+}
+
+const CLOSERS = Object.freeze({ '(': ')', '[': ']', '{': '}' });
+
+// The index just past the bracket that closes the `(`, `[` or `{` at `open`, or -1 where it is not known to be the one: the text up to `last` is read as code in which no literal can hide a bracket. A string is
+// skipped (it ends on its line, which stringEnd says), and so is a comment, and everything else that has a bracket in it is not read: a template, a regex or a division (a `/` that starts no comment), an element (a `<`) and
+// a backslash. So the brackets that are read are the ones TypeScript reads, and they match, where the text is a parameter list, a computed name or an index signature (`(x, y?: string)`, `[k: string]`, `[a.b]`, `(a = f(1))`).
+function bracketEnd(src, open, last) {
+  const expected = [];
+  for (let k = open; k <= last; k += 1) {
+    const c = src[k];
+    if (CLOSERS[c] !== undefined) {
+      expected.push(CLOSERS[c]);
+    } else if (c === ')' || c === ']' || c === '}') {
+      if (expected.pop() !== c) return -1;
+      if (expected.length === 0) return k + 1;
+    } else if (c === '"' || c === "'") {
+      const end = stringEnd(src, k, last);
+      if (end === -1) return -1;
+      k = end - 1;
+    } else if (c === '/') {
+      const end = commentEnd(src, k, last);
+      if (end === -1 || end > last) return -1;
+      k = end - 1;
+    } else if (c === '`' || c === '<' || c === '\\') {
+      return -1;
+    }
+  }
+  return -1;
+}
+
+// The type parameters that start at the `<` at `open`, read where the list is names and commas — what a signature's `<T>` and `<T, U>` are — and told from the text of an element that starts with a tag: { end } is the index
+// just past the `>` of a list that may be one, { fails } where what stands in it is no list's, and null where this does not say (it is not closed before `to`, or holds a constraint, a default, a modifier or a character
+// that is read no further). A name must be followed by `,` or `>`, or `extends` or `=`, which begin what is not read here: anything else is TS1005, and so is anything but a name where one must stand (TS1003)
+// (parseTypeParameter, parseBracketedList, https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts).
+//   <T>   <T, U>   <T,>   <>                  lists: after one, only a parameter list may follow
+//   <b/>   <b x="1">   <b x>   <1>   <"a">    no list: a `/`, a second name, a string, a number
+function typeParameterList(src, open, to) {
+  let k = skipSpaceAndComments(src, open + 1);
+  let named = false;
+  for (;;) {
+    if (k >= to) return null;
+    const c = src[k];
+    if (c === '>') return { end: k + 1 };
+    if (c === ',') {
+      if (!named) return null;
+      named = false;
+      k = skipSpaceAndComments(src, k + 1);
+      continue;
+    }
+    if (c === '=' || c === '<' || c === '\\' || (c.charCodeAt(0) > 0x7f && !isTrivia(c))) return null;
+    if (!/[A-Za-z_$]/.test(c)) return { fails: true };
+    let end = k + 1;
+    while (end < src.length && /[A-Za-z0-9_$]/.test(src[end])) end += 1;
+    const after = src[end];
+    if (after === '\\' || (after !== undefined && after.charCodeAt(0) > 0x7f && !isTrivia(after))) return null;
+    const word = src.slice(k, end);
+    if (word === 'extends') return named ? null : { fails: true };
+    if (named) return { fails: true };
+    // A modifier may stand before the name (`<const T>`, `<in out T>`: parseTypeParameter takes every one, and only the checker objects), and a reserved word is no name.
+    if (word === 'const' || PARAMETER_MODIFIERS.has(word) || RESERVED_WORDS.has(word)) return null;
+    named = true;
+    k = skipSpaceAndComments(src, end);
+  }
+}
+
+// Whether the `typeof` that ends at `end` is followed by `import`, through white space and comments: an import type, `typeof import('m')`, and not a type query (`typeof A.import`, whose `import` is a name, is read by the
+// qualified-name state). An import type needs its `(` and has no line-break rule before it (isStartOfTypeOfImportType, parseImportType), so the `(` may stand on a line of its own:
+//   m: typeof import
+//   ('./m')                  the import type's `(`, and no signature's parameter list
+// Read as a type that ends with `import` — a type query's name — the `(` at the start of the next line would be the parameter list of a call signature, which no string starts, and the text would be said to be no type's.
+function typeofImport(src, end) {
+  const at = skipSpaceAndComments(src, end);
+  return src.startsWith('import', at) && !isProseWordChar(src[at + 6] || ' ');
+}
+
+// Whether the text after a call or construct signature's `)` cannot be the members of a type, as far as it has been read: `prose` is the reading, which has come to `prose.at` and goes on to `to`, where
+// something that could hide the closing tag opens (a string, a template, a comment, a regex). It is asked at each of those until it says yes or reads something it cannot follow, so that comments, which
+// are trivia to a type and say nothing of its members, are read through. Where no type can be valid up to there, no program has one that holds the closing tag in anything, and nothing after it hides it.
+// A member is a name — an identifier, a keyword, a string or a number — and then `?`, `:` and a type, or the parameters of a signature, and a member ends at `,`, `;` or the end of its line (parseTypeMember,
+// parseTypeMemberSemicolon, https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts). The reading is where a member is — it begins, has a name, a `:`, a type, an initializer — and a type has no
+// expression in it, so a `/` that starts no comment is an error wherever one must not be. Each of the `PROSE_*` states is a place, and what fails there is TypeScript's: every character set below was measured over every
+// ASCII character against its parser, and a rule that is wrong is found by the sweeps in tests/source-literals.test.js (every text of a vocabulary, draws, runs of members, every keyword in each place a word may stand).
+// It fails
+//   - at a second name on a line, or a name after a type: what follows a name on its line is `:`, `?`, `(`, `<`, a separator or the line's end, so a name, a string, a `[`, a `.`, a `!`, a sign, `&`, `|`, `>`, `@` or a
+//     backslash after one is TS1005 (a `.` that continues a number is none: `1.5`, and `1e+5` is one name), and after a type on its line so is a keyword — but `extends` and `is` — a sign, a bracket, a `:`;
+//   - at a `:` after a `:` or at the start of a member, and at a `/` that starts no comment where a type must be (TS1110, "Type expected"), after a name or a type (it divides in an expression, where a name may stand and a member
+//     does not) and where a member begins (TS1131, "Property or signature expected"), as does a sign, an operator, a closing bracket, `=`, `?`, `!`, `.`, `@`, `#`, `>` or `{` there; where a type must be, `,`, `;`, `||`,
+//     `&&`, `=`, `@` and a sign that no number follows are TS1110; and at a `/` right after a `[` that follows a `:` or a type, which is a tuple's or an indexed access's first type (`Total: [ // note` and a line break, then `/docs`);
+//   - on the line after a name — `m` and a line break, then `&`, `|`, `.`, `!`, `>`, `@` or a sign — or after a type, which may go on with `&`, `|` and `.` and an initializer's `=` but not with a `:`, a `?`, `!`, `>`, `@`
+//     or `||`: the member before it goes on only with what a name or a type goes on with (PROSE_LINE, PROSE_LINE_TYPE), and says nothing of `:`, `?`, `=`, `(`, `<` after a name;
+//   - at a template or a string that opens at `to`, where no member has one: where a member begins or right after a name (after a `:` a template is a type, `m: \`a${string}\``, and a string is one), and at a
+//     string that no quote closes on its line (TS1002);
+//   - at `</`, which is one token in a .tsx file (TS1131 and TS1005 wherever a member or a type may stand), and at a `<` and a list of type parameters (typeParameterList) that no parameter list follows (parseSignatureMember);
+//   - in an initializer (PROSE_INIT, PROSE_OPERAND: `=` after a name or a type): at a second operand beside the first on its line when no keyword is either of them (TS1005; TS_KEYWORDS is every keyword TypeScript has, as
+//     any of them may be an operator).
+// A keyword is a name where a member begins, unless it may be a modifier (MODIFIER_WORDS): that is a name if no name follows it, and a modifier if one does (PROSE_MODIFIER: `readonly` and a line break, then `/`, and
+// `readonly x`, are read alike; every modifier a name may follow, and a `/` after one is TS1131 whichever it is). After a `:` a keyword is a type, or an operator that a type must follow (TYPE_PREFIX_WORDS: `keyof T`).
+// A group of brackets that is read to its end (bracketEnd) is one thing: after the start of a member a `(…)` is a signature's parameters, and a `[…]` an index signature or a computed name, which a name that follows
+// on the line fails; after a `:` either is a type, and a `[…]` after a type is an array or an indexed access. A type goes on with `.`, `|` and `&` (a type must follow). A group that is not closed on its line is read
+// as far as TypeScript's parser decides it: a `(` after a name or a keyword opens a parameter list, whose first parameters fail as a head's do (parameterListMayStart, parameterSyntaxFails) — but not the `(` of an import type,
+// `typeof import` or `import` and a line break, then `('m')`, which has no line-break rule (typeofImport) — and a `[`, a name and a `,` or a `:` are an index signature for certain, which no `/` follows
+// (indexSignatureThenSlash) — but not after `get` or `set`, whose `[` begins an accessor's computed name, `get [a, /x/]()` (lastWord). A name, a number, a string or a signature with a `=` right after it on its line is no member (`bare`: TS1131, and TS1005 after
+// a signature); after a `?`, a type, a computed name, `get` or `set`, or a line break, the `=` is an initializer, which the parser accepts and the checker rejects. Anything else leaves the rest undecided (false) —
+// a `[` that nothing closes, an initializer after a `?` or a type, a conditional type, an expression, a decorator — and the closing tag may be hidden there:
+//   (a), see https://x.y           `see` and `https`, two names on a line
+//   (a); https://x.y              a name, a colon, and a comment: a type that a later line gives the name; nothing fails yet ...
+//     /b                           ... and then a `/` where a type must be
+//   (a), Docs: https://x.y         a name, a colon, a type, and a second colon
+//   (a), default: https://x.y      the same, with a keyword for the name
+//   (a); [x] https://x.y           a computed name and a second name
+//   (a); (x): https://x.y          a signature, its return type, and a second colon
+//   (a); 'x': https://x.y          a string for a name, a type and a second colon
+//   (a); 1.5 https://x.y           a number for a name and a second name
+//   (a); readonly https://x.y      a modifier and a name, then a colon: the type that must follow is the `/` after the comment
+//   (a); well-known // note        a name and a sign
+//   (a); and/or more               a name and a `/`
+//   (a); x! // note                a name and a `!`
+//   (a); || // note                a sign where no member begins
+//   (a); <b>y</b>                  type parameters and no parameter list
+//   (a), see 'x                    a name and the string that opens at `to`
+//   (a); `x ${y}                   a template where a member begins
+//   (a), m                         a name, a line break, and `&"x"`: a name is no type to go on
+//   (a); m: A.B default // note    a type that goes on with a name, a keyword
+//   (a); m: A = 1 https://x.y      an initializer's operand and a second one
+//   (a); x = 1 // note             a name and an `=` right after it: no member
+//   (a); foo( // note              a parameter list, and a `/` after the comment that follows its `(`: TS1138 (and a line break, then `/docs`)
+//   (a); [ k, // note              an index signature, and a `/` after the comment that follows its `,`: TS1138
+function typeMembersFail(src, prose, to, opener) {
+  // Nothing more is said once something that is no plain prose was read, nor of an opener inside a group of brackets that was read to its end past it (a default value's template, `(a = \`x</p>\`)`), which is the type's too.
+  if (prose.state === PROSE_OTHER || prose.at > to) return false;
+  let k = prose.at;
+  let state = prose.state;
+  // Whether the name the line is at was read with no `?` after it and is no computed name: a plain name, a number, a string, or a signature (`bare`).
+  let bare = prose.bare === true;
+  // The word that was read last with nothing but white space and comments since (null after any other token): a `[` after `get` or `set` begins an accessor's computed name, whatever its line (parseContextualModifier,
+  // canFollowGetOrSetKeyword: no line-break rule), and not an index signature.
+  let lastWord = prose.lastWord || null;
+  while (state !== PROSE_OTHER && k < to) {
+    const c = src[k];
+    const wordBeforeThis = lastWord;
+    if (!isTrivia(c) && !(c === '/' && (src[k + 1] === '/' || src[k + 1] === '*'))) lastWord = null;
+    const begins = state === PROSE_START || state === PROSE_LINE || state === PROSE_LINE_TYPE || state === PROSE_SIGNATURE;
+    const named = state === PROSE_NAME || state === PROSE_MODIFIER;
+    const initial = state === PROSE_INIT || state === PROSE_OPERAND;
+    // What a line break does: it ends the line a name or a type is on, where a member may begin or the one before it may go on, and it leaves an initializer undecided (an expression goes on over it, or ends at it).
+    const afterLineBreak = () => (named ? PROSE_LINE : state === PROSE_TYPE ? PROSE_LINE_TYPE : initial ? PROSE_OTHER : state);
+    if (isTrivia(c)) {
+      if (isLineTerminator(c)) state = afterLineBreak();
+      k += 1;
+    } else if (c === '/') {
+      if (src[k + 1] !== '/' && src[k + 1] !== '*') {
+        // Where a type is, a `/` is an error. Where an initializer is, it divides, or starts a regex.
+        if (!initial) return true;
+        state = PROSE_OTHER;
+      } else {
+        // A comment is trivia: the line break at the end of a `//` comment is read as one (the next step), and a `/* */` comment that holds one is a line break too (scanner.ts, scan).
+        const end = commentEnd(src, k, to - 1);
+        for (let m = k; m < end; m += 1) if (isLineTerminator(src[m])) state = afterLineBreak();
+        k = end;
+      }
+    } else if (state === PROSE_TPARAMS && c !== '(') {
+      return true;
+    } else if (c === '#' && !isPrivateNameStart(src[k + 1])) {
+      // A `#` that no name follows is an invalid character (TS1127, scanner.ts scan); one that a backslash follows may start a name written with an escape, which is not read.
+      if (src[k + 1] !== '\\') return true;
+      state = PROSE_OTHER;
+    } else if (isProseWordChar(c) || (c === '.' && isDigit(src[k + 1])) || c === '#') {
+      let end = k + 1;
+      if (isDigit(c) || c === '.') end = numericLiteralEnd(src, k, to);
+      else while (end < to && isProseWordChar(src[end])) end += 1;
+      const word = src.slice(k, end);
+      lastWord = word;
+      k = end;
+      if (state === PROSE_QUALIFIED) {
+        // Every word is a name after a `.` in a type, a keyword too (`A.new`, `A.keyof`, `A.unique`: parseRightSideOfDot takes identifier names), and after `typeof` (an entity name), and no operator that a type follows.
+        state = PROSE_TYPE;
+        continue;
+      }
+      if (state === PROSE_OPERATOR) {
+        // After `keyof` and the like, a type: another of those words is an operator again, `typeof` takes a name, and any other word is the type, a keyword too (`keyof new` is the keys of a type named `new`). A word that
+        // starts a type that a word may follow (`asserts b` is a type predicate in any type) is not read.
+        state = TYPE_PREFIX_WORDS.has(word) ? PROSE_OPERATOR : word === 'typeof' && typeofImport(src, k) ? PROSE_COLON : word === 'typeof' || word === 'infer' ? PROSE_QUALIFIED : TYPE_OPERATOR_WORDS.has(word) ? PROSE_OTHER : PROSE_TYPE;
+        continue;
+      }
+      if (state === PROSE_NAME) return true;
+      if (initial) {
+        // Two operands side by side are an error whatever they are (TS1005), unless a keyword stands between them or is one of them: `typeof a`, `a in b`, `new A`.
+        if (TS_KEYWORDS.has(word)) state = PROSE_OTHER;
+        else if (state === PROSE_OPERAND) return true;
+        else state = PROSE_OPERAND;
+      } else if (RESERVED_WORDS.has(word) || CONTEXTUAL_WORDS.has(word) || MEMBER_MODIFIERS.has(word)) {
+        if (begins || state === PROSE_MODIFIER) {
+          state = MODIFIER_WORDS.has(word) ? PROSE_MODIFIER : PROSE_NAME;
+          bare = true;
+        }
+        // After a `:` a keyword is a type's name, or an operator that a type follows (`keyof T`, `typeof x`, `unique symbol`, `new (x)`): the ones that must have an operand leave a type to follow, and the others (`abstract`,
+        // `asserts`, `function`) may be a type on their own or go on, which is not read. After a type, on its line, only `extends` (a conditional type) and `is` (a type predicate, which a return type has) are no error (TS1005).
+        else if (state === PROSE_COLON) state = word === 'typeof' && typeofImport(src, k) ? PROSE_COLON : word === 'typeof' || word === 'infer' ? PROSE_QUALIFIED : TYPE_PREFIX_WORDS.has(word) ? PROSE_OPERATOR : word === 'new' || word === 'import' ? PROSE_COLON : TYPE_OPERATOR_WORDS.has(word) ? PROSE_OTHER : PROSE_TYPE;
+        else if (state === PROSE_TYPE && word !== 'extends' && word !== 'is') return true;
+        else state = PROSE_OTHER;
+      } else if (state === PROSE_TYPE) return true;
+      else {
+        state = state === PROSE_COLON ? PROSE_TYPE : PROSE_NAME;
+        bare = true;
+      }
+    } else if (c === ':') {
+      // A `:` follows a name, on its line or the next (`m\n: T` is a member). After a `:` where a type must be it is TS1110, and after a type, on its line or the next, TS1005, and where a member begins and no member goes
+      // on, TS1131. Where one may go on — after a line break that follows a name — the type is what must follow.
+      if (state === PROSE_COLON || state === PROSE_TYPE || state === PROSE_LINE_TYPE || state === PROSE_START) return true;
+      state = named || state === PROSE_LINE ? PROSE_COLON : PROSE_OTHER;
+      k += 1;
+    } else if (c === ',' || c === ';') {
+      // Where a type must be, or a name after a `.` or after the operator of a type, either is TS1110 or TS1003.
+      if (state === PROSE_COLON || state === PROSE_QUALIFIED || state === PROSE_OPERATOR) return true;
+      state = PROSE_START;
+      k += 1;
+    } else if ((named || state === PROSE_LINE) && c === '?') {
+      state = PROSE_NAME;                    // an optional member: `name?`, and `:` may follow, on its line or the next. No modifier is followed by one, so the word was the name.
+      bare = false;
+      k += 1;
+    } else if (state === PROSE_NAME && bare && c === '=' && src[k + 1] !== '>' && src[k + 1] !== '=') {
+      // A name, a number or a string, or a signature, with a `=` right after it on its line is no member: the parser takes a name for a member's only where `?`, `:`, `(`, `<`, `,` or the end of the line follows it (isTypeMemberStart,
+      // TS1131), and a signature wants its `;` (TS1005). Where a `?` stands before the `=` (`m? = 1`), the name is a computed one (`[x] = 1`) or a line break comes first (`m` and `= 1`), the initializer is kept for the checker, and is read below.
+      return true;
+    } else if ((named || state === PROSE_TYPE || state === PROSE_LINE || state === PROSE_LINE_TYPE) && c === '=' && src[k + 1] !== '>' && src[k + 1] !== '=') {
+      state = PROSE_INIT;                    // an initializer, which TypeScript parses for a property signature and leaves to the checker (`m` and `= 1`, `m: A` and `= 1`)
+      k += 1;
+    } else if ((c === '|' || c === '&') && src[k + 1] === c && (state === PROSE_COLON || state === PROSE_TYPE || state === PROSE_LINE_TYPE)) {
+      return true;                           // `||` and `&&` are one token each: a type may begin with a `|` or a `&`, and goes on with one, but not with these (TS1110, TS1005)
+    } else if ((state === PROSE_TYPE || state === PROSE_LINE_TYPE) && (c === '.' || c === '|' || c === '&')) {
+      state = c === '.' ? PROSE_QUALIFIED : PROSE_COLON;   // a type goes on with `.A`, `| A` and `& A`, on its line or the next, and what follows must be a type (a name, after a `.`)
+      k += 1;
+    } else if (state === PROSE_COLON && (c === '|' || c === '&')) {
+      k += 1;                                // a leading `|` or `&`: a type must still follow
+    } else if (c === '"' || c === "'") {
+      // A string names a member where one begins, is a type after a `:`, and is an initializer's operand after a `=`; after a name, a type or an operand it is TS1005, and one that no quote closes on its line is TS1002
+      // wherever it stands. One that is read past `to` has an opener in it, which is not asked of.
+      const end = stringScan(src, k, prose.last);
+      if (end === -2 || end > to) state = PROSE_OTHER;
+      else if (end === -1 || state === PROSE_NAME || state === PROSE_TYPE || state === PROSE_OPERAND) return true;
+      else {
+        state = state === PROSE_COLON || state === PROSE_QUALIFIED || state === PROSE_OPERATOR ? PROSE_TYPE : state === PROSE_INIT ? PROSE_OPERAND : PROSE_NAME;
+        bare = true;
+        k = end;
+      }
+    } else if (c === '(' || c === '[') {
+      // The parameters of a signature, or a name that a signature follows (`m(x)`, `see (x)`), after the start of a member or a name; a parenthesised type or a function type's parameters after a `:`. A `[` is the name
+      // of an index signature or a computed property at the start of a member, which a name on the same line fails (TS1131), and a tuple, an array or an indexed access in a type.
+      let after = PROSE_OTHER;
+      if (c === '(') after = begins || named || state === PROSE_TPARAMS ? PROSE_NAME : state === PROSE_COLON ? PROSE_TYPE : PROSE_OTHER;
+      else if (state === PROSE_NAME) return true;
+      else after = begins || state === PROSE_MODIFIER ? PROSE_NAME : state === PROSE_COLON || state === PROSE_TYPE ? PROSE_TYPE : PROSE_OTHER;
+      // A signature's parameter list starts with a parameter or the `)`, and its first parameters are read the way a head's are (parameterListMayStart, parameterSyntaxFails): a `/` right after the `(` and its comments, a number,
+      // a string or an operator there, or two names, is no list in any signature, whether the `)` is found or not. So a text whose list cannot be one is no type's — `foo( // note` and a line break, then `/docs`: TS1138 at the `/`.
+      if (c === '(' && after === PROSE_NAME && (!parameterListMayStart(src, k) || parameterSyntaxFails(src, k))) return true;
+      if (c === '[' && after === PROSE_NAME && wordBeforeThis !== 'get' && wordBeforeThis !== 'set' && indexSignatureThenSlash(src, k)) return true;
+      // After a `:` or a type the `[` opens a tuple or an indexed access, whose first token is a type, and no type starts with a `/` that begins no comment (TS1110): `Total: [ // note` and a line break, then `/docs`.
+      if (c === '[' && after === PROSE_TYPE && src[skipSpaceAndComments(src, k + 1)] === '/') return true;
+      const end = after === PROSE_OTHER ? -1 : bracketEnd(src, k, prose.last);
+      state = end === -1 ? PROSE_OTHER : after;
+      bare = c === '(';                      // a computed name or an index signature (`[x] = 1`) keeps its initializer, a signature does not
+      if (end !== -1) k = end;
+    } else if (c === '<') {
+      // `</` is one token in a .tsx file, which no member, name or type has; `</*` is a `<` and a comment.
+      if (src[k + 1] === '/' && src[k + 2] !== '*') return true;
+      const list = begins || named ? typeParameterList(src, k, to) : null;
+      if (list !== null && list.fails) return true;
+      state = list === null ? PROSE_OTHER : PROSE_TPARAMS;
+      if (list !== null) k = list.end;
+    } else if (state === PROSE_COLON && c === '-') {
+      // A `-` where a type must be is the sign of a number (`m: -1`, TypeScript's isStartOfType looks past trivia for a numeric literal), and an error (TS1110) where no number follows.
+      const next = skipSpaceAndComments(src, k + 1);
+      if (next >= to) state = PROSE_OTHER;
+      else if (isDigit(src[next]) || (src[next] === '.' && isDigit(src[next + 1]))) k += 1;
+      else return true;
+    } else if (state === PROSE_START || state === PROSE_SIGNATURE ? STARTS_NO_HARD_MEMBER.includes(c)
+      : state === PROSE_LINE ? NO_NEXT_LINE_AFTER_NAME.includes(c)
+      : state === PROSE_LINE_TYPE ? NO_NEXT_LINE_AFTER_TYPE.includes(c)
+      : state === PROSE_NAME ? NO_AFTER_NAME.includes(c)
+      : state === PROSE_TYPE ? STARTS_NO_MEMBER.includes(c)
+      : state === PROSE_COLON ? NO_START_OF_TYPE.includes(c)
+      : state === PROSE_MODIFIER && NO_AFTER_MODIFIER.includes(c)) {
+      return true;
+    } else {
+      state = PROSE_OTHER;
+    }
+  }
+  prose.at = k;
+  prose.state = state;
+  prose.bare = bare;
+  prose.lastWord = lastWord;
+  // A group of brackets that ends after `to` has the opener inside it.
+  if (state === PROSE_OTHER || k > to) return false;
+  // An initializer: a `/` divides or starts a regex and a template may be tagged, but a string right after an operand is an error.
+  if (state === PROSE_INIT || state === PROSE_OPERAND) return state === PROSE_OPERAND && (opener === '"' || opener === "'");
+  if (opener === '`') return state === PROSE_START || state === PROSE_LINE || state === PROSE_LINE_TYPE || state === PROSE_SIGNATURE || state === PROSE_NAME || state === PROSE_MODIFIER || state === PROSE_TPARAMS;
+  if (opener === '"' || opener === "'") return state === PROSE_NAME || state === PROSE_TPARAMS;
+  return opener === '/' && src[to + 1] !== '/' && src[to + 1] !== '*';
 }
 
 // Whether the quote at `at` comes right after a word that is no keyword: an apostrophe in prose (`it's`) or an inch mark (`5" wide`). A type has no string right after a name or a number — what follows
@@ -1322,7 +1732,9 @@ function quoteEndsAWord(src, at) {
   let start = at;
   while (isTagNamePart(src[start - 1])) start -= 1;
   if (start === at) return false;
-  const word = src.slice(start, at);
+  let word = src.slice(start, at);
+  // A hex, binary or octal literal and a word right after it are two tokens (`0x1Fin'a'`: see numericLiteralEnd), and the word is the one that a string may follow.
+  if (/^0[xXbBoO]/.test(word)) word = word.slice(numericLiteralEnd(word, 0, word.length)) || word;
   return !RESERVED_WORDS.has(word) && !CONTEXTUAL_WORDS.has(word) && !MEMBER_MODIFIERS.has(word);
 }
 
@@ -1574,6 +1986,100 @@ function readTag(src, at, arrow, closing = false) {
   }
 }
 
+// A tag whose name starts at `at` and whose `>` is at `close`: whether it can be something other than the opening tag of an element, as it is where the text is read as the members of a type — the type arguments of a name
+// (`Array<b>`, `Array<keyof X>`), a comparison (`x < b > y`, `x < a in b > y`, `x < typeof U > y`), the type parameters of a signature (`<U extends A>`, `<U = 'x'>`, `<in out U>`, `<const U>`, `<public U>`: parseTypeParameter takes every
+// modifier a member may have, and only the checker objects; https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts).
+// What stands in it is read as the attributes of a tag are: names, `=` and a string or a container. It may be code when
+//   - it is one word, which is a type, a name or a type parameter, with a default or none;
+//   - a keyword stands in it that no value follows (hasKeywordPart): a modifier of a type parameter, an operator of a type (`keyof`, `typeof`, `readonly`, `unique`, `infer`, `asserts`) or of an expression (`new`, `void`, `delete`, `await`, and the
+//     infix `in`, `instanceof`, `as`, `satisfies`, `is`). A keyword that has a value (`type="button"`, `as="span"`, `for="x"`) is an attribute in every reading that keeps the tag on one line: no comparison or type has a `=`, and a type
+//     parameter's default, the one place that does, belongs to its name or the last word of its constraint, which the other readings below see;
+//   - a line break stands between a word and its `=` (`href` and a line break, then `="/x"`), or before a `get` or a `set` that has a value (`get="x"`): where the tag is inside the members of a type, a line break ends a member
+//     (canParseSemicolon, parseTypeMemberSemicolon), and each line after it is a member of its own, so the tag is no attribute list there:
+//         m: A = x <a                     the initializer `x < a` ends at the line break
+//         href                            a member named `href`,
+//         ="/x"> '</a>' + '</T>…'        whose `=` takes an initializer, `"/x" > '</a>' + '</T>…'` (parsePropertyOrMethodSignature reads one after any name, and has no line-break rule before it)
+//     A name and its `=` on one line are no member (isTypeMemberStart: TS1131), but `get` and `set` are: isTypeMemberStart takes either for the start of a member before it looks at what follows, so `get="/x"` on a line of its own is
+//     a property named `get` with an initializer;
+//   - it has the shape of a type parameter: some modifiers, a name, `extends` and a constraint, and `=` and a default.
+// So a name that `extends` does not introduce, a value before the `extends`, a value that is not the last word's, or a dotted name that anything follows is an element's attribute and no type's when no keyword is in it and no line break
+// stands before an `=` or a valued `get` or `set`: `<a href="/x">`, `<b d="//">`, `<button type="button">`. Anything that is not read here (a `<`, a comment, a spread) leaves it possible.
+//   <b>   <A.B>   <U extends A>   <U extends A = 'x'>   <in out U>   <const U>   <public U>   <keyof x>   <a in b>   <A.B as T>   <U = {x}>   <a⏎href⏎="/x">   <a⏎get="x">        (not: <a href="/x">   <b d>   <button type="button">   <U = 'x' extends A>   <A.B x>)
+// Whether a word of a tag holds a keyword, once it is split at the dots and dashes that the words of a tag may hold (`A.in`, `data-in`). `extends` is read on its own, by the shape of a type parameter.
+const hasKeywordPart = (word) => word.split(/[.-]/).some((part) => part !== 'extends' && TS_KEYWORDS.has(part));
+function tagMayBeCode(src, at, close) {
+  let k = tagNameEnd(src, at);
+  const words = [src.slice(at, k)];
+  const valued = [false];
+  let lineBreak = false;                     // a line break was read since the last token (a word, a `=` or a value)
+  let wordStartsLine = false;                // ... and stood before the last word
+  while (k < close) {
+    const c = src[k];
+    if (isTagSpace(c)) {
+      // LF and CR are the line breaks in a tag's white space. U+2028 and U+2029 are no tag space (isTagSpace), nor are U+0085 and U+00A0: they reach the `return true` below, and leave the tag possible code.
+      if (c === '\n' || c === '\r') lineBreak = true;
+      k += 1;
+    } else if (c === '=') {
+      // A line break before the `=`, or before a valued `get` or `set`, makes the tag the members of a type (see above).
+      if (lineBreak) return true;
+      const word = words[words.length - 1];
+      if (wordStartsLine && (word === 'get' || word === 'set')) return true;
+      k += 1;
+      while (k < close && isTagSpace(src[k])) k += 1;
+      if (src[k] === '"' || src[k] === "'") {
+        const end = src.indexOf(src[k], k + 1);
+        if (end === -1 || end > close) return true;
+        k = end + 1;
+      } else if (src[k] === '{') {
+        let depth = 0;
+        let end = k;
+        for (; end < close; end += 1) {
+          if (src[end] === '{') depth += 1;
+          else if (src[end] === '}' && --depth === 0) break;
+        }
+        if (depth !== 0) return true;
+        k = end + 1;
+      } else {
+        return true;
+      }
+      valued[valued.length - 1] = true;
+    } else if (isTagNameStart(c)) {
+      let end = k + 1;
+      while (end < close && (isTagNamePart(src[end]) || src[end] === '-')) end += 1;
+      words.push(src.slice(k, end));
+      valued.push(false);
+      wordStartsLine = lineBreak;
+      lineBreak = false;
+      k = end;
+    } else {
+      return true;
+    }
+  }
+  if (words.length === 1) return true;
+  // A modifier before a type parameter's name (`<in out U>`, `<const U>`, `<public U>`) is a keyword, so no word that reaches the lines below holds one.
+  if (words.some((word, m) => !valued[m] && hasKeywordPart(word))) return true;
+  if (words[0].includes('.')) return false;
+  if (words[1] !== 'extends' || valued[0] || words.length === 2) return false;
+  for (let m = 2; m < words.length - 1; m += 1) if (valued[m]) return false;
+  return true;
+}
+
+// Whether the fragment `<>` at `open`, whose `>` is the character before `after`, may be code: an empty list of type parameters or of type arguments, which TypeScript parses and leaves to the checker (TS1098 and TS1099 are
+// checker errors, so a page with one has no parse diagnostic). Type parameters stand before a parameter list, and type arguments after a name or after the end of an operand — and before a parameter list or a template, or not
+// before anything in particular (`f(x)<>;` is an instantiation expression):
+//   interface I { <>(y); m<>(y); new <>(y) }      m: A<>      f<>(1)      f(x)<> || 1      a[0]<>      x <>`t`      class C<> {}      a?.<>(1)      1.<> || 1
+// Anywhere else a `<>` is a fragment, and no type reads it: after an operator, a separator or an opening bracket, and after a `>` that ends a tag. The character before it is read as written (comments are not skipped: a `/` there may end a
+// block comment, and is taken for the end of an operand), and a `.` is an operand's end as well: the end of a number (`1.`) or of an optional chain (`a?.<>(1)`).
+// Where a line break stands before the fragment, the character before it may be the last one of a line comment, whatever it is, and the operand is what stands before the comment: `f // note:` and a line break, then `<> || …` is the
+// instantiation expression `f<> || …`, and its text opens no element. That is told as it is for a `/` after a comment (lineMayEndInComment): a line that has no `//` before the character is read as written.
+function fragmentMayBeList(src, open, after) {
+  const prev = prevSignificant(src, open);
+  if (prev.newline && lineMayEndInComment(src, prev.index)) return true;
+  if (/[\w$)\]}'"`!\\/.]/.test(prev.ch) || prev.ch.charCodeAt(0) > 0x7f) return true;
+  const next = src[skipSpaceAndComments(src, after)];
+  return next === '(' || next === '`';
+}
+
 // The reading of the text that starts at `from` — just past the `>` of `<Name>` — as the children of an element, token by token, the way TypeScript's parser reads them (see above). It stops at the
 // first character TypeScript rejects, and it is asked two things, which differ in where the text ends:
 //   `closing` null     up to and including the `>` of the `=>` at `arrow`: is the text of `<Name>(…) =>` an element? A `>` or `}` in the text is the error, so reaching the arrow's own `>` in text is
@@ -1584,17 +2090,63 @@ function readTag(src, at, arrow, closing = false) {
 // a container, tag or closing tag this does not read, or the end of the window. `hideable` is set where the closing tag could be inside a string, a template, a comment or a regex that the text
 // opens, as part of a type that holds one, and not a closing tag at all. The text is scanned as the type would scan it, as code: a string that starts in it and ends after the closing tag (or may: the
 // window ends first); a template that does (one with a `${` is code that is not read: it may); a comment, `//` to the end of its line or `/* */`, that does; and a `/` that is neither — a
-// regex, where one may start, is the one thing left that could — unless a word or a number stands before it, after which it divides, or is an error in a type (slashFollowsAnOperand). A quote with no
-// closing quote on its line is no string, and neither is one right after a word that is no keyword, an apostrophe or an inch mark (quoteEndsAWord). A nested tag's attribute strings and a container's
-// content are no text, and set nothing.
+// regex, where one may start, is the one thing left that could — unless a word or a number stands before it, after which it divides, or is an error in a type (slashFollowsAnOperand, with the comments that the text
+// opened: a comment is trivia, and the token before it is what the `/` follows). A quote with no closing quote on its line is no string, and neither is one right after a word that is no keyword, an apostrophe or an inch
+// mark (quoteEndsAWord). A nested tag's attribute strings and a container's content are no text, and set nothing. What the text of a nested element opens — a string, a template, a comment — and that is still open
+// at that element's closing tag takes the head's closing tag for hidden, as a type might read it: see skipUntil.
 // An expression container is read for what it can be said to hold (containerFailsAt): an error, or nothing that matters, after which the text goes on.
 function readChildren(src, from, last, arrow, closing) {
+  const read = scanChildren(src, from, last, arrow, closing, false);
+  // A string, a template or a comment that the text of a nested element opened and that is still open at the closing tag of an element that could be code has two readings of what follows (see skipUntil in
+  // scanChildren), and so has the pairing of the quotes after a tag that stands inside such a region (a ghost to the reading in which the region is code, an element's to the other). Such a place is read both ways, and the
+  // closing tag is hidden if either hides it; two crossings are taken for hidden, as the readings of the second depend on the choice made at the first.
+  if (read === null || read.closes === undefined || read.hideable || (read.crossed === 0 && !read.tagged)) return read;
+  const kept = scanChildren(src, from, last, arrow, closing, true);
+  // Both readings walk the same tags, so the closing tag that ends the element is the same: this guards a change that would make them differ, as the guess.
+  if (kept === null || kept.closes !== read.closes) return { closes: read.closes, hideable: true };
+  return { closes: read.closes, hideable: kept.hideable };
+}
+
+// readChildren's reading in one of the two ways that a nested element can be read where a region that its text opened crosses its closing tag: as an element, which ends the region there (`keep` false), or as code, in
+// which it goes on (`keep` true). { crossed } is how many such places the text has, and { tagged } says that a tag stood inside a region that the text of an element opened (in `keep`, such a tag is a ghost: the region
+// holds it as text).
+function scanChildren(src, from, last, arrow, closing, keep) {
   const bound = closing === null ? arrow : last + 1;
   const open = [];
   let hideable = false;
-  let hiddenUntil = 0;                       // the end of the furthest string, template or comment that the text opened
-  let typeChecked = false;                   // the first thing in the text that could hide the closing tag was asked whether the type up to it can be valid (typeMembersFail)
-  let typeDead = false;                      // ... and it cannot: nothing in the text hides the closing tag
+  let hiddenUntil = 0;                       // the end of the furthest string, template or comment that the text opened: a closing tag before it may be inside it
+  // Where the scan looks for what the text opens again (`skipUntil`: the end of the furthest region), and the depth (`realDepth`) of the opener of the region that ends there. A type reads a nested element `<b>…</b>` two
+  // ways. As an element (`m(a = <b>'x</b>)`), its text is JSX text, which holds no string, template or comment, and code goes on after its closing tag. As anything else — type arguments (`Array<b>`), a comparison
+  // (`x < b > y`), the type parameters of a signature (`<b>(y): T`) — the text after the `>` is code, which does, and the closing tag has no meaning there, so it is inside a string, a template or a comment that
+  // the text opened before it. The two read the rest alike, unless a region that the text of the element opened is still open at its closing tag: the quote that ends it in the second reading is an opener in the first
+  // (`<b>'x</b> + '</T>…'`, `Array<b> = '</b>' + '</T>…'`), and which of them holds the head's closing tag is for the type to say. The first reading ends the region at the closing tag (`keep` false) and the second
+  // keeps it (`keep` true), and readChildren asks both.
+  let skipUntil = 0;
+  let skipDepth = 0;
+  let skipFrom = -1;                         // where the region that ends at skipUntil starts: two regions may end at one place (two `//` comments on a line), and are two crossings
+  let crossed = 0;                           // how many regions a closing tag of a nested element that could be code is inside, where the text of that element opened them
+  let crossedFrom = -1;                      // where the region that the last of them was counted for starts: it crosses the closing tags of the elements around that one too, which are no more places to choose
+  let tagged = false;                        // a tag opened inside a region that the text of an element opened, which the reading where the region is code takes for text (a ghost): the two readings pair the quotes after it differently
+  const codeable = [];
+  // The elements of the text that are elements to every reading — a tag that is no code, which no region of the text covers — and how many are open: where one is, the text is JSX text, which holds no string, template, comment
+  // or regex, so that nothing in it opens anything (`<a href="/x">https://x.y</a>`, `<b title="t">it's</b>`).
+  const elements = [];
+  let jsxText = 0;
+  // A string, a template or a comment that the text opens where no element of the type's reading is open is a token in every reading of it, and a tag inside it is none to the type: `'a <b>' + \`</b>\` + '</T>…'` holds
+  // `<b>` and `</b>` in two literals, which the element reading takes for the tags of an element, and the type for strings. Such a tag — a ghost — opens and closes in the element reading (`open`), and in the other it is
+  // nothing: it adds nothing to `realDepth`, the number of elements of the type's reading that are open (a region that was opened at a greater depth than the one a closing tag brings the scan back to was opened inside the
+  // element that the tag closes: skipDepth). `certainUntil` is the end of the furthest such literal. Where the nested elements are read as code (`keep`), every region is such a literal: the tags in it are ghosts too.
+  const ghosts = [];
+  let realDepth = 0;
+  let certainUntil = 0;
+  // What the type that the text would be the members of can be, read as far as the text is plain prose (typeMembersFail): each thing that could hide the closing tag is asked whether that type can be valid up to
+  // it, until the answer is no (`typeDead`), which is the end of the question: no type holds the closing tag in anything, nothing that follows can hide it, and the text is an element.
+  const prose = closing !== null && closing.typeFrom >= 0 ? { at: closing.typeFrom, state: PROSE_SIGNATURE, last } : null;
+  let typeDead = false;
+  // The comments that the text opened, as a run: `//` to the end of its line and `/* */`, with nothing but white space and further comments between them, and the depth at which the run began. A comment is trivia to the
+  // type, so what follows the run is judged by what stands before it (slashFollowsAnOperand). Where the text of a nested element is the element's, the run that began in it is no comment, and ends with the element: the
+  // line comment ends at the closing tag, so a `/` after `x // y</b> +` and a line break follows the `+`, not `x`.
+  let comments = null;
   let j = from;
   while (j <= last) {
     const c = src[j];
@@ -1608,7 +2160,7 @@ function readChildren(src, from, last, arrow, closing) {
       continue;
     }
     if (c !== '<') {
-      if (closing !== null && j >= hiddenUntil && !typeDead) {
+      if (closing !== null && j >= skipUntil && !typeDead && jsxText === 0) {
         // What the text opens that a type reads as a token: a string, a template, a comment (a regex, where one may start) — the closing tag is hidden by one that is not closed before it. `hides`
         // is 0 where this opens nothing that hides, -1 where it may, and the index just past it where it does.
         let hides = 0;
@@ -1617,28 +2169,39 @@ function readChildren(src, from, last, arrow, closing) {
           hides = end === -1 ? -1 : end;
         } else if (c === '/') {
           const end = commentEnd(src, j, last);
-          if (end !== -1) hides = end;
-          else if (!slashFollowsAnOperand(src, j)) hides = -1;
+          if (end !== -1) {
+            hides = end;
+            const run = commentRun(src, comments, j, end);
+            run.depth = realDepth;
+            comments = run;
+          } else if (!slashFollowsAnOperand(src, j, comments, true)) {
+            hides = -1;
+          }
         } else if ((c === '"' || c === "'") && !quoteEndsAWord(src, j)) {
           const end = stringScan(src, j, last);
           hides = end === -2 ? -1 : Math.max(end, 0);
         }
         if (hides !== 0) {
-          // The first thing that could hide the closing tag is asked whether the type that this text would be the members of can be valid up to it: where it cannot, no type holds the closing tag
-          // in anything, nothing that follows can hide it, and the text is an element.
-          if (!typeChecked) {
-            typeChecked = true;
-            typeDead = closing.typeFrom >= 0 && typeMembersFail(src, closing.typeFrom, j, c);
-          }
+          if (prose !== null && typeMembersFail(src, prose, j, c)) typeDead = true;
           if (!typeDead) {
-            if (hides === -1) hideable = true;
-            else hiddenUntil = Math.max(hiddenUntil, hides);
+            if (hides === -1) {
+              hideable = true;
+            } else {
+              hiddenUntil = Math.max(hiddenUntil, hides);
+              if (realDepth === 0) certainUntil = Math.max(certainUntil, hides);
+              if (hides > skipUntil) {
+                skipUntil = hides;
+                skipDepth = realDepth;
+                skipFrom = j;
+              }
+            }
           }
         }
       }
       j += 1;
       continue;
     }
+    const opensAt = j;                    // the `<` of a tag: it is a ghost where a literal that no reading of the type can end covers it
     j += 1;
     // `</` is one token to TypeScript's scanner in JSX text, with nothing between the two characters (scanner.ts, scanJsxToken); `< /b>` is no closing tag. What follows it is scanned as ordinary tokens, so
     // a comment may stand before the name (`</ /* c */ b>`), but `</*` has none in it: the `/` is the token's, and the `*` is TS1003. (A type reads `</*` as a `<` and a comment.)
@@ -1649,8 +2212,28 @@ function readChildren(src, from, last, arrow, closing) {
       const expected = open.length > 0 ? open[open.length - 1] : closing.name;
       if (expected === null) return null;
       if (tag.name !== expected) return { fails: j };
-      if (open.length === 0) return { closes: tag.end, hideable: hideable || j - 1 < hiddenUntil };
+      if (open.length === 0) return { closes: tag.end, hideable: hideable || j - 1 < hiddenUntil, crossed, tagged };
       open.pop();
+      const mayBeCode = codeable.pop();
+      if (elements.pop()) jsxText -= 1;
+      if (!ghosts.pop()) {
+        realDepth -= 1;
+        // A region that the text of this element opened and that is still open at its closing tag (a comment to the end of a line that holds the tag, a string or a template that ends after it): see skipUntil. A
+        // ghost's closing tag is inside the literal that holds its opening tag, so the regions that are open at it were opened outside the element. One that was kept at an element's closing tag holds the closing tags of the
+        // elements around it too, which are no more places to choose (`crossedFrom`: a region is told by where it starts, since two regions can end at one place — two `//` comments on one line). An element whose tag is no code has no region of its own to keep: its text opens none (jsxText), and a region that was open where it
+        // started holds its tags as text, which makes them ghosts in the reading that keeps it.
+        if (skipUntil > j - 1 && skipDepth > realDepth && skipFrom !== crossedFrom) {
+          if (mayBeCode) {
+            crossed += 1;
+            crossedFrom = skipFrom;
+            if (crossed > 1) hideable = true;
+          }
+          if (!mayBeCode || !keep) {
+            skipUntil = tag.end + 1;
+            if (comments !== null && comments.depth > realDepth) comments = null;
+          }
+        }
+      }
       j = tag.end + 1;
       continue;
     }
@@ -1661,12 +2244,34 @@ function readChildren(src, from, last, arrow, closing) {
       if (tag === null) return null;
       if (tag.fails !== undefined) return { fails: tag.fails };
       // A tag that is not self-closing opens an element, which a closing tag with its name closes.
-      if (closing !== null && !tag.selfClosing) open.push(src.slice(j, tagNameEnd(src, j)));
+      if (closing !== null && !tag.selfClosing) {
+        open.push(src.slice(j, tagNameEnd(src, j)));
+        // A tag that stands inside a region is a ghost in the reading where the region is code (`keep`): the region holds it as text.
+        const ghost = opensAt < certainUntil || (keep && opensAt < skipUntil);
+        if (!keep && !ghost && opensAt < skipUntil) tagged = true;
+        ghosts.push(ghost);
+        const mayBeCode = tagMayBeCode(src, j, tag.resume - 1);
+        codeable.push(mayBeCode);
+        // An element whose tag is no code and that no region of the text covers is an element to every reading, and its text is JSX text, which opens nothing (jsxText).
+        const certain = !ghost && !mayBeCode && opensAt >= skipUntil;
+        elements.push(certain);
+        if (certain) jsxText += 1;
+        if (!ghost) realDepth += 1;
+      }
       j = tag.resume;
       continue;
     }
     if (closing !== null && next === '>') {
       open.push('');                       // a fragment, `<>`, which `</>` closes
+      const ghost = opensAt < certainUntil || (keep && opensAt < skipUntil);
+      if (!keep && !ghost && opensAt < skipUntil) tagged = true;
+      ghosts.push(ghost);
+      const fragmentMayBeCode = fragmentMayBeList(src, opensAt, j + 1);
+      codeable.push(fragmentMayBeCode);
+      const certain = !ghost && !fragmentMayBeCode && opensAt >= skipUntil;
+      elements.push(certain);
+      if (certain) jsxText += 1;
+      if (!ghost) realDepth += 1;
       j += 1;
       continue;
     }
@@ -1712,12 +2317,18 @@ function elementChildren(src, from, name, budget = null, typeFrom = -1) {
 // same. The parentheses are matched with comments and strings skipped, which is JavaScript's reading and not JSX's — the reason an arrow can be found where there is none.
 // In a type the list is read exactly that way until something in it may start an expression (expressionMayStart: an initializer's `=`, a computed name's `[`, a decorator's `@`, an import
 // type's attributes, an accessor's body, a type parameter's constraint). A type holds no regex, no JSX and no statement, so before one the `)` the scan finds is the type's, and a `/` that
-// starts no comment is in no type at all: the text is the element's. After one, the scan is still exact while it reads no `/`, `<` or back-tick — with no regex, no JSX and no template, every
-// quote opens a string and every parenthesis is code — and once it reads one, the expression may hold what the scan misreads (a regex with a `)` in it, JSX text, a template in a template),
-// so the `)` it finds is not trusted, and a list with no arrow after it is the guess (`interface I { <T>(a = /[)]/); m: '</T>…' }` ended the list at the `)` in the regex's class, and the
-// `]` after it read as the text of an element). A list whose parameters fail before any of that has no type reading either (parameterSyntaxFails).
+// starts no comment is in no type at all: the text is the element's. After one, the scan is still exact while it reads no `/`, `<` or back-tick that may start a regex, JSX or a template — with no regex, no JSX
+// and no template, every quote opens a string and every parenthesis is code — and once it reads one, the expression may hold what the scan misreads (a regex with a `)` in it, JSX text, a template in a
+// template), so the `)` it finds is not trusted, and a list with no arrow after it is the guess (`interface I { <T>(a = /[)]/); m: '</T>…' }` ended the list at the `)` in the regex's class, and the
+// `]` after it read as the text of an element). Three of those are read exactly instead, which is what keeps the guess for the rest (initializerReading, and the loop below):
+//   - the default value's first token, where it is a regex or an element: `(a = /x/)`, `(a = <b>c</b>)` — a `/` right after the `=` begins a regex, which ends at its own `/` on the line, and a `<` there
+//     an element, which the element reading follows to its closing tag (the `=` must be an initializer's, not a type parameter's default: no `<` was read before it);
+//   - a `/` after a name or a number: it divides, in an expression (`(a = b/(c))`), so it opens no regex — unless a `{` has been read, which may open a function body where a statement starts, or a line
+//     comment stands behind the name (`1 + // c` and a line break, then `/[)]/`: the comment is trivia, and the `/` begins a regex — slashFollowsAnOperand);
+//   - a template with no `${`, which holds nothing but its own text, wherever it stands.
+// A list whose parameters fail before any of that has no type reading either (parameterSyntaxFails), and neither does one whose first default is `</`: no expression and no type starts with it.
 // Parentheses followed by neither `=>` nor `:` are JSX text (`<b>(optional)</b>`) or a call signature with no return type: callSignatureOrElement says which, where it can.
-function genericFunctionTypeFollows(src, after, head, budget = null) {
+function genericFunctionTypeFollows(src, after, head, budget = null, noMember = false) {
   const open = skipSpaceAndComments(src, after);
   if (src[open] !== '(') return { generic: false, ambiguity: null };
   // A list that can hold no parameters, or whose parameters fail before a type, a default, a pattern or a decorator, belongs to no signature and no function type: the text is an element,
@@ -1728,13 +2339,15 @@ function genericFunctionTypeFollows(src, after, head, budget = null) {
   let k = open;
   let expression = false;   // something that may start an expression was read (expressionMayStart)
   let unsafe = false;       // ... and after it a `/`, a `<` or a back-tick: a regex, JSX or a template, which may hold what the scan misreads
+  let angle = false;        // a `<` was read before it: type arguments or the type parameters of a function type, where an `=` is a default
+  let braces = false;       // a `{` was read after it: it may open a function body, where a statement starts and a `/` after a `)` may begin a regex
   for (; k < end; k += 1) {
     const skipped = skipTrivia(src, k);
     if (skipped !== k) {
       if (src[k] === '`') {
         // skipTrivia ends a template at its first back-tick, which may be the start of one nested in a substitution: ``(a: `${`)`}`)``.
         if (!templateSkipIsWhole(src, k, skipped - 1)) return { generic: false, ambiguity: 'generic' };
-        if (expression) unsafe = true;
+        if (expression && src.slice(k, skipped).includes('${')) unsafe = true;
       }
       k = skipped - 1;
       continue;
@@ -1743,19 +2356,85 @@ function genericFunctionTypeFollows(src, after, head, budget = null) {
     if (c === '(') depth += 1;
     else if (c === ')' && --depth === 0) break;
     else if (expression) {
-      if (c === '/' || c === '<') unsafe = true;
+      if (c === '{') braces = true;
+      else if (c === '<' || (c === '/' && (braces || !slashFollowsAnOperand(src, k)))) unsafe = true;
     } else if (expressionMayStart(src, k)) {
       expression = true;
+      if (c === '=') {
+        const first = skipSpaceAndComments(src, k + 1);
+        // `</` is one token in a .tsx file, and no expression starts with it (TS1109, "Expression expected", for an initializer) and no type does (TS1110, for a type parameter's default): a list that
+        // holds an `=` and then a closing tag is no signature's, `(Tip: use <code>=</code>)`. `</*` is a `<` and a comment, and starts what a `<` does.
+        if (src[first] === '<' && src[first + 1] === '/' && src[first + 2] !== '*') return { generic: false, ambiguity: null };
+        const read = angle ? null : initializerReading(src, first, budget);
+        if (read !== null && read.fails) return { generic: false, ambiguity: null };
+        if (read !== null) k = read.resume - 1;
+      }
     } else if (c === '/') {
       // No type holds a `/` that starts no comment: only the element compiles (`<p>(see: /docs)</p>`, `<span>({done}/{total})</span>`).
       return { generic: false, ambiguity: null };
+    } else if (c === '<') {
+      angle = true;
     }
   }
   if (k >= end) return { generic: false, ambiguity: k >= src.length && !unsafe ? null : 'generic' };
   const next = skipSpaceAndComments(src, k + 1);
   if (src[next] === '=' && src[next + 1] === '>') return { generic: true, ambiguity: elementFailsAt(src, after, next) === -1 ? 'generic' : null };
   if (src[next] === ':' || unsafe) return { generic: false, ambiguity: 'generic' };
-  return callSignatureOrElement(src, after, head, k, next, budget);
+  return callSignatureOrElement(src, after, head, k, next, budget, noMember);
+}
+
+// The index of the `/` that closes the regex literal whose opening `/` is at `i`, as TypeScript's scanner finds it (scanner.ts, reScanSlashToken, https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/scanner.ts):
+// a `/` that no backslash escapes and no character class holds. A line break ends the line before one, and the literal is unterminated (TS1161) — and so does the end of the source: -1. -2 is where the window
+// ends first, which says nothing. (regexCloses asks the weaker question, whether one COULD close: it reads a backslash and a line break as an escape.)
+function regexEnd(src, i) {
+  const last = Math.min(src.length, i + LOOKAHEAD);
+  let escaped = false;
+  let inClass = false;
+  for (let j = i + 1; j < last; j += 1) {
+    const c = src[j];
+    if (isLineTerminator(c)) return -1;
+    if (escaped) escaped = false;
+    else if (c === '/' && !inClass) return j;
+    else if (c === '[') inClass = true;
+    else if (c === '\\') escaped = true;
+    else if (c === ']') inClass = false;
+  }
+  return last >= src.length ? -1 : -2;
+}
+
+// What the default value that starts at `first` — the token after an initializer's `=`, where an expression starts — is, where it can be read exactly: { fails } where no program that parses has it
+// (a regex that its line does not close, TS1161, which is the end of the text for TypeScript), { resume } — the index just past it — for a regex or an element, and null where the scan reads on:
+// a name, a number, a string, a bracket, and anything else it reads as it always has.
+//   (a = /x/)          a `/` right after the `=` has no operand to divide, so it begins a regex (a comment was passed over, and `/=` is a regex that starts with `=`): read to its closing `/`; its flags are name
+//                      characters, which the scan passes over
+//   (a = <b>c</b>)     a `<` there is an element (startsElement), read as the element reading follows one, to its closing tag: what it holds is text and expression containers, never the parenthesis that ends the list
+function initializerReading(src, first, budget) {
+  if (src[first] === '/') {
+    const closing = regexEnd(src, first);
+    if (closing === -2) return null;
+    return closing === -1 ? { fails: true } : { resume: closing + 1 };
+  }
+  if (src[first] !== '<') return null;
+  const end = nestedElementEnd(src, first, budget);
+  return end === -1 ? null : { resume: end };
+}
+
+// Whether the `<` at `at`, where an assignment expression starts, begins an element in every program that parses: it does where TypeScript's rule for a `<` there (parser.ts,
+// isParenthesizedArrowFunctionExpressionWorker, the JSX branch, which opensTypeParameters reads) says so with no guess.
+function startsElement(src, at) {
+  const rule = opensTypeParameters(src, at, null, true);
+  return !rule.generic && rule.ambiguity === null;
+}
+
+// The index just past the element that starts at the `<` at `at`, read as TypeScript reads one — the tag, its attributes and the children up to the closing tag that ends it (readTag, readChildren) — or -1 where
+// the `<` is not known to begin one (startsElement) or the element cannot be read to its end. A `<` that no tag name follows at once (`<>`, `< b>`) has no closing tag to look for (headTagName), and is never read to one.
+function nestedElementEnd(src, at, budget) {
+  if (!startsElement(src, at)) return -1;
+  const tag = readTag(src, at + 1, Math.min(src.length, at + LOOKAHEAD), true);
+  if (tag === null || tag.fails !== undefined) return -1;
+  if (tag.selfClosing) return tag.resume;
+  const read = elementChildren(src, tag.resume, headTagName(src, at), budget);
+  return read !== null && read.closes !== undefined ? read.closes + 1 : -1;
 }
 
 // Whether the parameter list whose `(` is at `open` can hold what TypeScript parses as parameters (parseParameters, parseParameterWorker,
@@ -1766,6 +2445,19 @@ function genericFunctionTypeFollows(src, after, head, budget = null) {
 function parameterListMayStart(src, open) {
   const c = src[skipSpaceAndComments(src, open + 1)];
   return c === undefined || c.charCodeAt(0) > 0x7f || /^[A-Za-z_$\\{[.@)]$/.test(c);
+}
+
+// Whether the `[` at `open`, where a member of a type begins, is an index signature that a `/` follows: a `[`, a name and a `,` or a `:` are one for certain (isUnambiguouslyIndexSignature,
+// https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts), whose next token is a parameter (after the `,`) or a type (after the `:`), and neither starts with a `/` that no comment makes
+// (TS1138, TS1110). So `[ a, // note` and a line break, then `/path`, is no type's, where `[ // note` and a `/` is a computed name that a regex may follow. A word that is a keyword is not read: it may not be a
+// name there (`[this, /x/]` is a computed name with a comma), and neither may a character beyond ASCII.
+function indexSignatureThenSlash(src, open) {
+  let k = skipSpaceAndComments(src, open + 1);
+  const end = asciiNameEnd(src, k);
+  if (end === -1 || TS_KEYWORDS.has(src.slice(k, end))) return false;
+  k = skipSpaceAndComments(src, end);
+  if (src[k] !== ',' && src[k] !== ':') return false;
+  return src[skipSpaceAndComments(src, k + 1)] === '/';
 }
 
 // The words TypeScript's parser takes before a parameter's name (parseParameterWorker reads modifiers there, and only the checker rejects a misplaced one), measured over every keyword
@@ -1844,6 +2536,10 @@ function defaultMayModify(src, end) {
 // The words a type may start with that take a type after them: `keyof T`, `typeof x`, `readonly T[]`, `unique symbol`, `infer U`, `asserts x`, measured over every keyword
 // TypeScript has; `new`, `abstract`, `function` and `import`, which start a type that a name does not follow, are kept as well. (`this is T` is read in typeStartFails.)
 const TYPE_OPERATOR_WORDS = new Set(['keyof', 'typeof', 'readonly', 'unique', 'infer', 'asserts', 'new', 'abstract', 'function', 'import']);
+// The ones of those that are no type without an operand (`a: keyof` is TS1110, where `a: abstract` and `a: function` are types named so): the reader of a type's members goes on from a `:` after one of them (typeMembersFail).
+// `keyof`, `readonly` and `unique` are operators of parseTypeOperatorOrHigher, whose operand may be an operator of its own and is otherwise a name (`keyof new`, `keyof import`: a reference to a type of that name);
+// `typeof` takes an entity name and `infer` an identifier, which any word is (`typeof new`, `infer keyof`); `new` and `import`, where a type starts, are a constructor type and an import type, which `(` or `<` must follow.
+const TYPE_PREFIX_WORDS = new Set(['keyof', 'readonly', 'unique']);
 
 // Whether the type that starts at `t`, a parameter's, fails at the second name it holds. A name there that follows a type reference is TS1005 (the list wants a `,`, a `)`, an
 // `=`, a `?` or an operator), unless the first word takes a type after it (TYPE_OPERATOR_WORDS) or the second is a conditional type's `extends`. `this` and `is` on one line are
@@ -1852,15 +2548,30 @@ const TYPE_OPERATOR_WORDS = new Set(['keyof', 'typeof', 'readonly', 'unique', 'i
 // (parseTypeParameter), unless the first word is a modifier — TypeScript parses every one there, and only the checker objects (`<private x>`). A `<` after a type reference opens
 // its type arguments, whose first is a type and is read the same way (`see<a href` fails at `href`). A name that a character beyond ASCII or a backslash goes on with ends the
 // reading, as anything else does: false. All of it is measured against TypeScript over every pair of keywords, with the endings that could complete a type.
+// Four more types are read where they fail at their own second token (each measured the same way, over every keyword after it):
+//   a number      `10 MB max`          a number literal is a type, and a name after it is TS1005 unless it is a conditional type's `extends` (numberTypeFails)
+//   an object     `{user.name}`        a type literal's member is a name and then `?`, `:`, `(`, `<`, `,`, `;`, the `}` or a line's end — anything else after the name is TS1131 (objectTypeFails)
+//   `new`         `new <a href=`       a constructor type is `new`, type parameters if a `<` follows, and a `(`: a `new` that a `(` or a `<` does not follow is TS1005, and the type parameters are read as above
+//   `import`      `import <a href=`    an import type is `import` and a `(` (parseImportType): anything else after it is TS1005
 function typeStartFails(src, t) {
   // Each step reads one type: the parameter's, the type after `this is`, or the first type argument of a type reference that a `<` follows. Every step consumes text, so the
   // loop ends.
   for (let start = t; ;) {
     const parameters = src[start] === '<';
     const first = parameters ? skipSpaceAndComments(src, start + 1) : start;
+    if (!parameters && src[first] === '{') return objectTypeFails(src, first);
+    if (!parameters && (src[first] === '-' || isDigit(src[first]))) return numberTypeFails(src, first);
     const firstEnd = asciiNameEnd(src, first);
     if (firstEnd === -1) return false;
     const word = src.slice(first, firstEnd);
+    if (!parameters && (word === 'new' || word === 'import')) {
+      const next = skipSpaceAndComments(src, firstEnd);
+      if (word === 'new' && src[next] === '<') {
+        start = next;
+        continue;
+      }
+      return src[next] !== '(';
+    }
     if (parameters ? word === 'const' || PARAMETER_MODIFIERS.has(word) : TYPE_OPERATOR_WORDS.has(word)) return false;
     const second = skipSpaceAndComments(src, firstEnd);
     if (!parameters && word === 'this' && asciiNameEnd(src, second) === second + 2 && src.startsWith('is', second) && !/[\n\r\u2028\u2029]/.test(src.slice(firstEnd, second))) {
@@ -1874,6 +2585,52 @@ function typeStartFails(src, t) {
     const secondEnd = asciiNameEnd(src, second);
     return secondEnd !== -1 && src.slice(second, secondEnd) !== 'extends';
   }
+}
+
+const isDigit = (c) => typeof c === 'string' && c >= '0' && c <= '9';
+
+// The end of the decimal number literal that is a type at `at`, or -1: an optional `-` (the type is a negative number; TypeScript allows trivia between the two tokens, parseNonArrayType and
+// nextTokenIsNumericOrBigIntLiteral), digits and an optional fraction, with white space or a comment right after it. A number that a name is glued to is its own error (TS1351), one with an
+// exponent, a radix, a separator, a `n` or a `.` and no digit after it is another token to read, and neither is read here.
+function decimalLiteralEnd(src, at) {
+  let k = at;
+  if (src[k] === '-') k = skipSpaceAndComments(src, k + 1);
+  const digits = k;
+  while (isDigit(src[k])) k += 1;
+  if (k === digits) return -1;
+  if (src[k] === '.' && isDigit(src[k + 1])) {
+    k += 1;
+    while (isDigit(src[k])) k += 1;
+  }
+  return isTrivia(src[k]) || (src[k] === '/' && (src[k + 1] === '/' || src[k + 1] === '*')) ? k : -1;
+}
+
+// Whether the number literal type at `at` is followed by a name that no type has there: after a literal type the type ends, and only `[`, `|`, `&`, `?`, `!` and a conditional type's `extends` go on with
+// it — every other word is TS1005 (`',' expected`), in a call signature, a construct signature and a function type alike:
+//   (Size: 10 MB max, <a href="/x">upgrade</a>)
+function numberTypeFails(src, at) {
+  const end = decimalLiteralEnd(src, at);
+  if (end === -1) return false;
+  const word = skipSpaceAndComments(src, end);
+  const wordEnd = asciiNameEnd(src, word);
+  return wordEnd !== -1 && src.slice(word, wordEnd) !== 'extends';
+}
+
+// What can follow the name that starts a type literal's first member and make it no member: `.`, an operator that no member has, or a `/` that starts no comment (a comment is trivia, and skipped). A member
+// is a name that `?`, `:`, `(`, `<`, `,`, `;`, the `}` or the end of a line follows (isTypeMemberStart, parseTypeMemberSemicolon); anything else — here every one of these, whatever the name is, a modifier and
+// `get` and `set` included, and a line break before it as well — is TS1131, "Property or signature expected". The exception is a `.` and a digit, `.5`, which is a number and so a property's name: after a modifier
+// (`{ readonly .5: T }`), or as the next member after a line break (`{ a` LF `.5 }`). Names, strings and numbers, `[`, `{` and `#`, which a modifier goes on with, are not in the list, and neither are `=`, `>`,
+// `<`, `(` and the other brackets, which a member may hold or which begin one.
+const OBJECT_MEMBER_JUNK = new Set([...'.+-*%&|^!~/']);
+
+// Whether the object type that opens at `open`, a parameter's type, is none: its first member is a name and then one of OBJECT_MEMBER_JUNK, as in the text of an element that starts with a parenthesis and
+// holds an expression container, `(Name: {user.name}, <a href={profile}>edit</a>)`.
+function objectTypeFails(src, open) {
+  const name = skipSpaceAndComments(src, open + 1);
+  const nameEnd = asciiNameEnd(src, name);
+  if (nameEnd === -1) return false;
+  const junk = skipSpaceAndComments(src, nameEnd);
+  return OBJECT_MEMBER_JUNK.has(src[junk]) && !(src[junk] === '.' && isDigit(src[junk + 1]));
 }
 
 // Whether the character at `k`, in a parameter list read as a type, may start an expression or a statement there. TypeScript's parser does so from a type only at these places (parser.ts,
@@ -1958,7 +2715,9 @@ function headTagName(src, head) {
 //   const e = <b>(optional)</b>;                  interface I { <T>(x) }            type L = { <T>(x); m: { a: string } };            interface C { new <T>(x) }
 // An element read for a signature reads the rest of the type as JSX text up to a closing tag found in a string or a comment that comes after it — `const s = '</T>;navigateTo({ … });//'` — where the
 // call is a real one in no reading, and its token was rewritten. A signature read for an element is the failure; an element read for a signature reads JSX text as code, which is the same failure
-// the other way (a call inside the text of an element is no call). Two things settle it:
+// the other way (a call inside the text of an element is no call). Three things settle it:
+//   0. Where no member of a type begins at the head — right after an `=`, a `(`, a `[`, a `:` or an `=>`, `noMember` (NO_MEMBER_BEFORE) — there is no call signature for the text to be the start of, whatever it holds
+//      after the `)`: an element, for certain. (After a `,`, a `;`, a `{` or a line break a member may begin, and the next two decide.)
 //   1. A signature ends its member where TypeScript wants it to: after the `)` comes `,`, `;`, `}` or the end of the source, or the next token is on a later line (parseTypeMemberSemicolon, and
 //      canParseSemicolon for the line break, https://github.com/microsoft/TypeScript/blob/v5.8.3/src/compiler/parser.ts). Anything else on the line — a name, a `<`, a `(`, a `{`, a comment that holds no
 //      line break — is TS1005, so no signature stands there and the text is an element, for certain: `<b>(optional)</b>`, `<p>({t("label")})</p>`, `<span>(total: {count})</span>`. So is a closing tag
@@ -1972,10 +2731,11 @@ function headTagName(src, head) {
 //      closed before it is open at it (a string, a template, a comment), or may be (a `/` that a regex may start after, a template with a `${`), or the reading cannot say, both programs compile and the text up to
 //      the decision is the same: the guess
 //      (`generic`), the element read.
-function callSignatureOrElement(src, after, head, close, next, budget) {
+function callSignatureOrElement(src, after, head, close, next, budget, noMember = false) {
   const token = src[next];
   // Text that ends here is a page that was cut off; no reading of it is complete.
   if (token === undefined) return { generic: false, ambiguity: null };
+  if (noMember) return { generic: false, ambiguity: null };
   let lineBreak = false;
   for (let k = close + 1; k < next && !lineBreak; k += 1) lineBreak = isLineTerminator(src[k]);
   const closingTag = token === '<' && src[next + 1] === '/' && src[next + 2] !== '*';
@@ -3088,4 +3848,4 @@ function ellipsisFollowedByStatement(mask, k) {
   return STATEMENT_WORDS.has(word) || word === 'import' || word === 'export';
 }
 
-module.exports = { blankLiterals, blankNonCodePreservingTemplateExpressions, commentRanges, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets, expressionPosition, opensTypeParameters, elementFailsAt, elementChildren, scanTemplateExpressionEnd, isLineTerminator, isTrivia, isSingleLineTrivia, trimTrivia, TRIVIA_CLASS, WS, AMBIGUITY_KINDS, ANGLE_AFTER, ANGLE_AFTER_LINE_BREAK, RESERVED_WORDS };
+module.exports = { blankLiterals, blankNonCodePreservingTemplateExpressions, commentRanges, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets, expressionPosition, opensTypeParameters, elementFailsAt, elementChildren, scanTemplateExpressionEnd, isLineTerminator, isTrivia, isSingleLineTrivia, trimTrivia, TRIVIA_CLASS, WS, AMBIGUITY_KINDS, ANGLE_AFTER, ANGLE_AFTER_LINE_BREAK, NO_MEMBER_BEFORE, RESERVED_WORDS };

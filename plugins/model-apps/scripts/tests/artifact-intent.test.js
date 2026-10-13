@@ -15,6 +15,8 @@ const {
   firstSectionRowsPointer,
   sectionRowsPointer,
   findFieldCellPointer,
+  findSectionLocation,
+  findSectionById,
 } = require(path.join(__dirname, '..', 'lib', 'artifact-intent.js'));
 
 // ---------------------------------------------------------------------------
@@ -103,10 +105,15 @@ test('fieldCellIntent: includes label only when passed as an explicit override',
 // notesCellIntent / notesSectionIntent
 // ---------------------------------------------------------------------------
 
-test('notesCellIntent: returns exact shape with passed-in classId', () => {
+test('notesCellIntent: returns the platform timeline cell with the passed-in classId', () => {
   const cell = notesCellIntent('notes-class-guid');
   assert.deepStrictEqual(cell, {
+    // A tall cell the empty rows under it are the height of, with the attributes the platform's cell carries.
+    rowspan: 23,
+    bag: { a: [['showlabel', 'false'], ['colspan', '1'], ['rowspan', '23'], ['auto', 'false']], c: [] },
     control: {
+      // The one control id Dynamics renders a timeline under — a generated id is published and never shown.
+      id: 'notescontrol',
       classId: 'notes-class-guid',
       fieldName: null,
       label: 'Notes',
@@ -121,16 +128,19 @@ test('notesCellIntent: coerces classId to string (undefined becomes "undefined")
   assert.strictEqual(typeof cell.control.classId, 'string');
 });
 
-test('notesSectionIntent: wraps notesCellIntent in the correct section structure', () => {
+test('notesSectionIntent: the section holds the timeline row, then the 22 empty rows its cell spans', () => {
   const sec = notesSectionIntent('notes-class-guid');
   assert.strictEqual(sec.name, 'section_notes');
   assert.strictEqual(sec.label, 'Notes');
   assert.strictEqual(sec.visible, true);
   assert.strictEqual(sec.showLabel, true);
   assert.strictEqual(sec.columns, 1);
-  assert.strictEqual(sec.rows.length, 1);
+  assert.strictEqual(sec.rows.length, 23);
   assert.strictEqual(sec.rows[0].cells.length, 1);
   assert.strictEqual(sec.rows[0].cells[0].control.classId, 'notes-class-guid');
+  assert.strictEqual(sec.rows[0].cells[0].control.id, 'notescontrol');
+  assert.strictEqual(sec.rows[0].cells[0].rowspan, 23);
+  assert.ok(sec.rows.slice(1).every(function (r) { return Array.isArray(r.cells) && r.cells.length === 0; }), 'the other 22 rows are empty');
 });
 
 // ---------------------------------------------------------------------------
@@ -488,6 +498,36 @@ test('compileFormIntent: notes section NOT added when neither form.notes nor ent
     'no notes section without opt-in');
 });
 
+test('compileFormIntent: the Notes section is the platform timeline host, on an auto and an explicit layout alike', () => {
+  const spec = makeSpec();
+  const layouts = [
+    { entity: 'new_item', notes: true },
+    { entity: 'new_item', notes: true, tabs: [{ name: 'tab_a', label: 'A', sections: [{ name: 'sec_a', columns: 1, fields: ['new_name'] }] }] },
+  ];
+  for (const formSpec of layouts) {
+    const def = compileFormIntent(spec, formSpec, { notesClassId: 'ng' });
+    assert.strictEqual(def.__notes, true, 'the def records that the form asked for the timeline');
+    const sections = def.tabs[0].columns[0].sections;
+    const host = sections[sections.length - 1];
+    assert.strictEqual(host.name, 'section_notes', 'appended last, as before');
+    assert.strictEqual(host.rows.length, 23, 'the timeline row and the 22 rows its cell spans');
+    const timeline = host.rows[0].cells[0];
+    assert.strictEqual(timeline.control.id, 'notescontrol');
+    assert.strictEqual(timeline.rowspan, 23);
+    assert.deepStrictEqual(timeline.bag.a.find(function (p) { return p[0] === 'auto'; }), ['auto', 'false']);
+    assert.ok(host.rows.slice(1).every(function (r) { return r.cells.length === 0; }));
+    // Nothing about it reads as a field: not bound, so it is never placed, pruned or moved as one.
+    assert.deepStrictEqual(formFieldLogicals(def), formFieldLogicals(compileFormIntent(spec, Object.assign({}, formSpec, { notes: false }))));
+  }
+});
+
+test('compileFormIntent: __notes is false for a form that did not ask, and for a form that cannot host the timeline', () => {
+  const spec = makeSpec();
+  assert.strictEqual(compileFormIntent(spec, { entity: 'new_item' }).__notes, false);
+  assert.strictEqual(compileFormIntent(spec, { entity: 'new_item', formType: 'QuickCreate', notes: true }).__notes, false);
+  assert.strictEqual(compileFormIntent(spec, { entity: 'new_item', formType: 'QuickView', notes: true }).__notes, false);
+});
+
 // ---------------------------------------------------------------------------
 // formFieldLogicals
 // ---------------------------------------------------------------------------
@@ -652,6 +692,51 @@ test('findFieldCellPointer: skips null-fieldName controls (notes/subgrid)', () =
   );
   // null fieldName must not match anything
   assert.strictEqual(findFieldCellPointer(formJson, ''), null);
+});
+
+// A section is found by name, and by the id the SDK mints for it. The id is what a caller holding a section across
+// the addition or removal of the sections around it finds it again by — a section's index moves, and a name can be
+// shared by a real section and the emptied copy an older build left, or be missing.
+const sectionTree = (...tabs) => ({ tabs: tabs.map((columns) => ({ columns: columns.map((sections) => ({ sections })) })) });
+
+test('findSectionLocation: finds a section by name across the whole form, case-insensitively, with where it is', () => {
+  const form = sectionTree([[{ id: 'a', name: 'sec_one' }, { id: 'b', name: 'Sec_Two' }]], [[{ id: 'c', name: 'sec_three' }], [{ id: 'd', name: 'sec_four' }]]);
+  const hit = findSectionLocation(form, 'SEC_TWO');
+  assert.deepStrictEqual([hit.pointer, hit.rowsPointer, hit.tabIndex, hit.columnIndex, hit.sectionIndex, hit.section.id], ['/tabs/0/columns/0/sections/1', '/tabs/0/columns/0/sections/1/rows', 0, 0, 1, 'b']);
+  assert.strictEqual(findSectionLocation(form, 'sec_four').pointer, '/tabs/1/columns/1/sections/0');
+  assert.strictEqual(findSectionLocation(form, 'sec_nope'), null);
+  assert.strictEqual(findSectionLocation(form, ''), null);
+  assert.strictEqual(findSectionLocation({}, 'sec_one'), null);
+});
+
+test('findSectionLocation: `accept` hides a same-named section from the lookup, and the first the caller accepts is the one found', () => {
+  const form = sectionTree([[{ id: 'host', name: 'section_notes', host: true }, { id: 'mine', name: 'section_notes' }]]);
+  assert.strictEqual(findSectionLocation(form, 'section_notes').section.id, 'host', 'document order');
+  assert.strictEqual(findSectionLocation(form, 'section_notes', (s) => !s.host).section.id, 'mine');
+  assert.strictEqual(findSectionLocation(form, 'section_notes', () => false), null);
+});
+
+test('findSectionById: finds a section by its id wherever it is, and still finds it after sections were added or taken out ahead of it', () => {
+  const sections = [{ id: '0F0F0F0F-0000-4000-8000-000000000001', name: 'sec_one' }, { id: '0f0f0f0f-0000-4000-8000-000000000002', name: 'sec_two' }];
+  const form = sectionTree([[sections[0], sections[1]]], [[{ id: 'tab-two-section', name: 'sec_b' }]]);
+  assert.strictEqual(findSectionById(form, sections[1].id).pointer, '/tabs/0/columns/0/sections/1');
+  assert.strictEqual(findSectionById(form, '0f0f0f0f-0000-4000-8000-000000000001').pointer, '/tabs/0/columns/0/sections/0', 'case does not matter');
+  assert.strictEqual(findSectionById(form, 'tab-two-section').pointer, '/tabs/1/columns/0/sections/0');
+  // A section is added ahead of sec_two, and one is taken out of its column: the same section, found at its new place.
+  form.tabs[0].columns[0].sections.unshift({ id: 'grid', name: 'section_grid_x' });
+  assert.strictEqual(findSectionById(form, sections[1].id).pointer, '/tabs/0/columns/0/sections/2');
+  form.tabs[0].columns[0].sections.splice(0, 2);
+  const hit = findSectionById(form, sections[1].id);
+  assert.deepStrictEqual([hit.pointer, hit.rowsPointer, hit.tabIndex, hit.columnIndex, hit.sectionIndex, hit.section.name], ['/tabs/0/columns/0/sections/0', '/tabs/0/columns/0/sections/0/rows', 0, 0, 0, 'sec_two']);
+});
+
+test('findSectionById: a section that is not there, an id that is blank, and a section with no id are all null — never another section', () => {
+  const form = sectionTree([[{ id: 'a', name: 'sec_one' }, { name: 'no_id' }, { id: '', name: 'blank_id' }, { id: null, name: 'null_id' }]]);
+  assert.strictEqual(findSectionById(form, 'zzz'), null);
+  for (const blank of ['', null, undefined]) assert.strictEqual(findSectionById(form, blank), null, `id ${JSON.stringify(blank)}`);
+  assert.strictEqual(findSectionById({}, 'a'), null);
+  assert.strictEqual(findSectionById({ tabs: [{}, { columns: [{}] }] }, 'a'), null);
+  assert.strictEqual(findSectionById(form, 'a').section.name, 'sec_one');
 });
 
 // The App Spec has documented `enabled`, `passExecutionContext` and `parameters` on

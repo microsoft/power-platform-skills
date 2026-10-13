@@ -180,6 +180,39 @@ function rebucketNonEnablingSkips(result, encodedFlags) {
 }
 
 /**
+ * Move the outcomes the SDK reports `applied` but flags `pendingPublish` out of `applied`, into a `pendingPublish`
+ * bucket of their own.
+ *
+ * The SDK proves an app-scope override where the write put it, and a write lands in the app's UNPUBLISHED layer — the
+ * published `appsettings` projection cannot show it, which is why a feature on a freshly created app used to read back
+ * `notPersisted` and be written again after a publish. It now reads the row where it is, and answers `applied` with
+ * `pendingPublish: true`: saved, in force once the app is published. That is not "applied" for this build unless a
+ * publish follows — nothing else publishes the app after the write, and `--verify` reads the published layer — so
+ * counting it applied would let a build without `--publish` report rows that are not in force.
+ *
+ * The bucket is the plugin's own, so `applied` stays the one bucket that means "in force", and the build's generic
+ * re-confirmation (every non-`applied` array in the result) takes it from here: it publishes the app and PROVES the
+ * row — the row is already saved, so there is nothing to write again — or, when the build has already published the
+ * app, only proves it. The same filing applies to the result of a write the re-confirmation re-issues, because a
+ * publish that failed, or could not be confirmed, leaves that row in the unpublished layer too.
+ *
+ * Mutates and returns `result`.
+ */
+function rebucketPendingPublish(result) {
+  if (!result || !Array.isArray(result.outcomes)) return result;
+  const pending = result.outcomes.filter((o) => o && o.status === 'applied' && o.pendingPublish === true && typeof o.feature === 'string');
+  if (!pending.length) return result;
+  const features = pending.map((o) => o.feature);
+  result.applied = (Array.isArray(result.applied) ? result.applied : []).filter((f) => !features.includes(f));
+  result.pendingPublish = [...(Array.isArray(result.pendingPublish) ? result.pendingPublish : []), ...features];
+  for (const o of pending) {
+    o.status = 'pendingPublish';
+    o.reason = "saved in the app's unpublished layer, so it is not in force until the app is published";
+  }
+  return result;
+}
+
+/**
  * Compare a stored setting value against a requested one.
  *
  * Deliberately NOT dependent on the setting's `dataType`. A Dataverse Boolean setting (dataType 2)
@@ -271,6 +304,22 @@ async function proveAppOverride(read, appModuleId, setting, opts = {}) {
     }
   }
   return last;
+}
+
+// How long an app-scope override row is waited for after the call that should have put it in force (a write, or the
+// publish of the app). The row can lag briefly behind that call, and one read turns the lag into a false negative: it
+// reported a published row as NOT YET PUBLISHED in a run whose own `--verify` — which reads three times — passed. Only the
+// ABSENT case is read again (see proveAppOverride), 500 ms apart. ONE budget for the build's proof after its publish
+// and for `--verify`, so the two cannot disagree about the same row for want of a second look.
+const AI_PROOF_BUDGET = Object.freeze({ attempts: 3, delayMs: 500 });
+
+// The budget a caller uses: `AI_PROOF_BUDGET`, unless a test passes `proofAttempts` / `proofDelayMs` to drive the absent
+// path without paying the backoff (both callers take the same two options).
+function proofBudget(opts = {}) {
+  return {
+    attempts: opts.proofAttempts === undefined ? AI_PROOF_BUDGET.attempts : opts.proofAttempts,
+    delayMs: opts.proofDelayMs === undefined ? AI_PROOF_BUDGET.delayMs : opts.proofDelayMs,
+  };
 }
 
 /**
@@ -382,9 +431,12 @@ module.exports = {
   featureWantValue,
   encodeAiFlags,
   rebucketNonEnablingSkips,
+  rebucketPendingPublish,
   sameSettingValue,
   resolveAppModuleId,
   proveAppOverride,
+  AI_PROOF_BUDGET,
+  proofBudget,
   effectiveSettingValue,
   settingIsOn,
   odataGuid,

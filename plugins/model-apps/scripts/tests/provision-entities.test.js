@@ -125,6 +125,54 @@ test('dry-run plan includes non-trivial provision steps and skips non-actions', 
   ]);
 });
 
+test('dry-run plan lists the relationships in the order the apply creates them — a lookup labelled in several languages first', async () => {
+  // The plan used to follow the declared order while the apply creates a lookup with a language-map label before
+  // the others (lib/entity-provision.js relationshipsInCreateOrder), so the two disagreed whenever a spec — which
+  // this entry point accepts as well — gave one of them an LCID map.
+  const bilingual = {
+    solution: { uniqueName: 'Default', publisherPrefix: 'cr' },
+    entities: [
+      { schemaName: 'cr_parent', displayName: 'Parent', primaryAttribute: { schemaName: 'cr_name' }, columns: [] },
+      { schemaName: 'cr_child', displayName: 'Child', primaryAttribute: { schemaName: 'cr_name' }, columns: [] },
+      { schemaName: 'cr_other', displayName: 'Other', primaryAttribute: { schemaName: 'cr_name' }, columns: [] },
+    ],
+    relationships: [
+      { type: 'ManyToMany', schemaName: 'cr_parent_child_nn', entity1: 'cr_parent', entity2: 'cr_child' },
+      { type: 'OneToMany', schemaName: 'cr_parent_children', referenced: 'cr_parent', referencing: 'cr_child', lookup: { schemaName: 'cr_parentid' } },
+      { type: 'OneToMany', schemaName: 'cr_other_children', referenced: 'cr_other', referencing: 'cr_child', lookup: { schemaName: 'cr_otherid', displayName: { 1033: 'Other', 3082: 'Otro' } } },
+    ],
+  };
+  const dry = await provisionEntities(bilingual, { apply: false }, mockDeps());
+  assert.deepStrictEqual(dry.plan.filter((p) => /^relationship /.test(p)), [
+    'relationship 1:N cr_other->cr_child',
+    'relationship N:N cr_parent<->cr_child',
+    'relationship 1:N cr_parent->cr_child',
+  ]);
+
+  const d = mockDeps();
+  const created = [];
+  d.sdk.createRelationship = async (o) => { created.push(o.schemaName); return { schemaName: o.schemaName, metadataId: `rel-${o.schemaName}` }; };
+  const applied = await provisionEntities(bilingual, { apply: true }, { sdk: d.sdk, provision: d.provision, provisionedLanguages: [1033, 3082] });
+  assert.strictEqual(applied.ok, true, JSON.stringify(applied));
+  assert.deepStrictEqual(created, ['cr_other_children', 'cr_parent_child_nn', 'cr_parent_children'], 'the apply creates them in the order the plan lists');
+});
+
+test('a spec with no language-map lookup label keeps the declared order in the plan', async () => {
+  const plain = {
+    solution: { uniqueName: 'Default', publisherPrefix: 'cr' },
+    entities: [
+      { schemaName: 'cr_parent', displayName: 'Parent', primaryAttribute: { schemaName: 'cr_name' }, columns: [] },
+      { schemaName: 'cr_child', displayName: 'Child', primaryAttribute: { schemaName: 'cr_name' }, columns: [] },
+    ],
+    relationships: [
+      { type: 'ManyToMany', schemaName: 'cr_parent_child_nn', entity1: 'cr_parent', entity2: 'cr_child' },
+      { type: 'OneToMany', schemaName: 'cr_parent_children', referenced: 'cr_parent', referencing: 'cr_child', lookup: { schemaName: 'cr_parentid' } },
+    ],
+  };
+  const dry = await provisionEntities(plain, { apply: false }, mockDeps());
+  assert.deepStrictEqual(dry.plan.filter((p) => /^relationship /.test(p)), ['relationship N:N cr_parent<->cr_child', 'relationship 1:N cr_parent->cr_child']);
+});
+
 test('apply surfaces fallback metadata for existing columns and relationships', async () => {
   const existingInput = {
     solution: { uniqueName: 'Default', publisherPrefix: 'cr' },
@@ -452,5 +500,79 @@ test('CLI provisions the requested input and cleans its workspace before emit', 
     assertCleanedBeforeEmit(unprovisioned.seen);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- primaryAttribute.maxLength through this entry point -----------------------------------------------------------
+// This is the entry point of /genpage and /app-builder: it writes the publisher and the solution BEFORE its first table, and
+// puts the name column's length in both table creates as it is written. The input gate is the only thing between a value the
+// platform refuses (or a string, which would be sent as a string) and those writes.
+
+function withPrimaryAttribute(primaryAttribute, columns) {
+  return { ...input, entities: [{ ...input.entities[0], primaryAttribute, ...(columns ? { columns } : {}) }] };
+}
+
+test('an invalid primaryAttribute.maxLength is refused before anything is called — no publisher, no solution, no table', async () => {
+  for (const maxLength of ['120', 5000, 851, 0, 1.5, -3, null]) {
+    const d = mockDeps();
+    const touched = [];
+    const watch = (target) => new Proxy(target, { get: (t, key) => (typeof t[key] === 'function' ? (...args) => { touched.push(String(key)); return t[key](...args); } : t[key]) });
+    const r = await provisionEntities(withPrimaryAttribute({ schemaName: 'cr_name', maxLength }), { apply: true }, { sdk: watch(d.sdk), provision: watch(d.provision) });
+    assert.strictEqual(r.ok, false, `${JSON.stringify(maxLength)} must be refused`);
+    assert.ok(r.errors.some((e) => /^entity 'cr_candidate': primaryAttribute\.maxLength must be a whole number from 1 to 850 \(got /.test(e)), JSON.stringify(r.errors));
+    assert.deepStrictEqual(touched, [], `${JSON.stringify(maxLength)}: nothing was called`);
+  }
+});
+
+test('the name column asks for the length given (1 to 850), else 100 — auto-numbered or not — in the table create', async () => {
+  const askedBy = async (primaryAttribute) => {
+    const d = mockDeps();
+    const creates = [];
+    d.sdk.createTable = async (o) => { creates.push(o); return { logicalName: o.schemaName.toLowerCase(), entitySetName: `${o.schemaName.toLowerCase()}s`, metadataId: 'tbl' }; };
+    // Reads the length back as asked, so a given length needs no update.
+    d.provision.dataverse = { get: async (url) => (/StringAttributeMetadata/.test(url) ? { status: 200, body: { MaxLength: primaryAttribute.maxLength } } : { status: 404, body: null }) };
+    const r = await provisionEntities(withPrimaryAttribute(primaryAttribute), { apply: true }, { sdk: d.sdk, provision: d.provision });
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    return creates[0].primaryColumnMaxLength;
+  };
+  // 100 is what the previous release always sent, for a plain and an auto-numbered name column alike.
+  assert.strictEqual(await askedBy({ schemaName: 'cr_name' }), 100);
+  assert.strictEqual(await askedBy({ schemaName: 'cr_name', autoNumberFormat: 'CAND-{SEQNUM:4}' }), 100);
+  assert.strictEqual(await askedBy({ schemaName: 'cr_name', maxLength: 1 }), 1);
+  assert.strictEqual(await askedBy({ schemaName: 'cr_name', maxLength: 850 }), 850);
+  assert.strictEqual(await askedBy({ schemaName: 'cr_name', maxLength: 120, autoNumberFormat: 'CAND-{SEQNUM:4}' }), 120);
+});
+
+test('primary column length: the step is planned AND counted, so [n/total] never drifts, whether it updates, finds the length right, or fails', async () => {
+  const sized = withPrimaryAttribute({ schemaName: 'cr_name', maxLength: 120 });
+  const dry = await provisionEntities(sized, { apply: false }, mockDeps());
+  // Listed where the build runs it: last in the data model, after the relationships — the length is set once nothing labelled is left to create.
+  assert.deepStrictEqual(dry.plan, ['solution Default', 'table cr_candidate', 'column cr_candidate.cr_status (Choice)', 'primary column length cr_candidate.cr_name']);
+  const related = {
+    ...sized,
+    entities: [...sized.entities, { schemaName: 'cr_note', displayName: 'Note', primaryAttribute: { schemaName: 'cr_name' }, columns: [] }],
+    relationships: [{ type: 'OneToMany', schemaName: 'cr_candidate_notes', referenced: 'cr_candidate', referencing: 'cr_note', lookup: { schemaName: 'cr_candidateid' } }],
+  };
+  assert.deepStrictEqual((await provisionEntities(related, { apply: false }, mockDeps())).plan, [
+    'solution Default', 'table cr_candidate', 'column cr_candidate.cr_status (Choice)', 'table cr_note', 'relationship 1:N cr_candidate->cr_note', 'primary column length cr_candidate.cr_name',
+  ]);
+  const plain = await provisionEntities(input, { apply: false }, mockDeps());
+  assert.ok(!plain.plan.some((p) => /primary column length/.test(p)), 'no step when the input gives no length');
+
+  for (const [what, read, updateFails] of [['updated', 850, false], ['already right', 120, false], ['update fails', 850, true]]) {
+    const d = mockDeps();
+    const updates = [];
+    d.provision.dataverse = { get: async (url) => (/StringAttributeMetadata/.test(url) ? { status: 200, body: { MaxLength: read } } : { status: 404, body: null }) };
+    d.sdk.updateColumn = async (table, column, opts) => { updates.push([table, column, opts]); if (updateFails) throw new Error('refused'); return {}; };
+    const events = [];
+    const r = await provisionEntities(related, { apply: true }, { sdk: d.sdk, provision: d.provision, emit: (e) => events.push(e), warn: () => {} });
+    assert.strictEqual(r.ok, true, what);
+    const done = events.filter((e) => e.status !== 'start');
+    assert.ok(events.every((e) => e.n <= e.total), `${what}: no step emits n > total`);
+    assert.strictEqual(done[done.length - 1].n, done[0].total, `${what}: the last step is the total`);
+    assert.strictEqual(done.filter((e) => /^primary column length /.test(e.label)).length, 1, `${what}: the step is narrated once`);
+    assert.match(done[done.length - 1].label, /^primary column length cr_candidate\.cr_name/, `${what}: and it is the last step, after the relationship`);
+    assert.ok(done.findIndex((e) => /^relationship /.test(e.label)) < done.length - 1, `${what}: the relationship came before it`);
+    assert.deepStrictEqual(updates, read === 120 ? [] : [['cr_candidate', 'cr_name', { maxLength: 120 }]], what);
   }
 });

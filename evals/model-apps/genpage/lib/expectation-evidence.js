@@ -17,7 +17,10 @@ const { planSection, parseMarkdownRows } = require('./plan-evidence.js');
 
 const PAC = String.raw`\bpac(?:\.exe|\.cmd)?\s+model\s+`;
 const LIST_TABLES = new RegExp(`${PAC}list-tables\\b`);
-const LIST_LANGUAGES = new RegExp(`${PAC}list-languages\\b`);
+// Language discovery is the plugin's own `scripts/list-languages.js` or `pac model list-languages` — the command the
+// captures made before that script record, and the one the planner runs when the script cannot read the languages — so
+// either spelling is the planner having looked.
+const LIST_LANGUAGES = new RegExp(`${PAC}list-languages\\b|\\blist-languages\\.js\\b`);
 const GENERATE_TYPES = new RegExp(`${PAC}genpage\\s+generate-types\\b`);
 const GENPAGE_LIST = new RegExp(`${PAC}genpage\\s+list\\b`);
 const PROVISION = /\bprovision-entities\.js\b/;

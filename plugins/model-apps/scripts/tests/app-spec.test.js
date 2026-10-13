@@ -1130,6 +1130,49 @@ test('validateAppSpec rejects a non-boolean entities[].quickCreate', () => {
   assert.ok(r.errors.some((e) => /quickCreate must be a boolean/.test(e)), 'the error names the field');
 });
 
+// --- entities[].primaryAttribute.maxLength (the length of the table's name column) ----------------
+// Accepted and ignored until the build began sending it, so a value the platform cannot take is refused at the spec gate, not
+// part-way through a build. The platform's limit for a table's name column is 850, well under the 4,000 of other text columns:
+// asked for more, the table create is refused — "The maximum length of Primary attribute '<name>' is <asked>. The maximum
+// allowed limit is 850."
+test('validateAppSpec accepts primaryAttribute.maxLength from 1 to 850, and an omitted one', () => {
+  for (const maxLength of [undefined, 1, 100, 120, 849, 850]) {
+    const primaryAttribute = { schemaName: 'new_name', displayName: 'Name', ...(maxLength === undefined ? {} : { maxLength }) };
+    const r = validateAppSpec(quickCreateSpec({ primaryAttribute }), { profile: 'deploy' });
+    assert.ok(r.ok, `${maxLength}: ${JSON.stringify(r.errors)}`);
+  }
+});
+
+test('validateAppSpec rejects a primaryAttribute.maxLength that is not a whole number from 1 to 850, naming the field and the value', () => {
+  for (const bad of [0, -1, 851, 4000, 4001, 12.5, '120', null, true, [], {}]) {
+    const r = validateAppSpec(quickCreateSpec({ primaryAttribute: { schemaName: 'new_name', displayName: 'Name', maxLength: bad } }), { profile: 'deploy' });
+    assert.ok(!r.ok, `${JSON.stringify(bad)} must be rejected`);
+    assert.ok(r.errors.some((e) => e.startsWith('entity new_ticket: primaryAttribute.maxLength must be a whole number from 1 to 850 (got ')), `${JSON.stringify(bad)}: ${JSON.stringify(r.errors)}`);
+  }
+  assert.ok(validateAppSpec(quickCreateSpec({ primaryAttribute: { schemaName: 'new_name', maxLength: 851 } }), { profile: 'deploy' }).errors.some((e) => /\(got 851\)/.test(e)), 'the value is quoted back');
+});
+
+// /genpage and /app-builder reach the build through the provision-entities input gate, not validateAppSpec: it must refuse
+// exactly what the spec gate refuses, because the length goes into the table request as it is written.
+test('the provision-entities input gate applies the same primaryAttribute.maxLength rule as validateAppSpec', () => {
+  const { validateProvisionInput } = require(path.join(__dirname, '..', 'lib', 'provision-input.js'));
+  const lengthErrors = (errors) => errors.filter((e) => /primaryAttribute\.maxLength/.test(e)).map((e) => e.slice(e.indexOf('primaryAttribute.maxLength')));
+  for (const maxLength of [undefined, 1, 120, 850, 851, 4000, 5000, 0, 1.5, -3, '120', null, true, [], {}]) {
+    const primaryAttribute = { schemaName: 'new_name', displayName: 'Name', ...(maxLength === undefined ? {} : { maxLength }) };
+    const spec = validateAppSpec(quickCreateSpec({ primaryAttribute }), { profile: 'deploy' });
+    const input = validateProvisionInput({
+      solution: { uniqueName: 'S', publisherPrefix: 'new' },
+      entities: [{ schemaName: 'new_ticket', displayName: 'Ticket', primaryAttribute, columns: [] }],
+      relationships: [],
+    });
+    const label = JSON.stringify(maxLength);
+    assert.deepStrictEqual(lengthErrors(input.errors), lengthErrors(spec.errors), `${label}: the same verdict and wording from both gates`);
+    assert.strictEqual(input.ok, spec.ok, label);
+    const valid = maxLength === undefined || (Number.isInteger(maxLength) && maxLength >= 1 && maxLength <= 850);
+    assert.strictEqual(lengthErrors(input.errors).length === 0, valid, `${label} is ${valid ? 'accepted' : 'rejected'}`);
+  }
+});
+
 test('quickCreateEnabledFor: true for an explicit flag, a derived QuickCreate form, else false', () => {
   const entity = { schemaName: 'new_ticket', primaryAttribute: { schemaName: 'new_name' }, columns: [] };
   // explicit flag — the flag lives on the ENTITY object passed (quickCreateEnabledFor reads entity.quickCreate)

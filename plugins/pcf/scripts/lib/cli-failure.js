@@ -55,4 +55,90 @@ function azTimeoutAdvice(command, ms = azTimeoutMs()) {
     + `${AZ_TIMEOUT_ENV}=${longer}.`;
 }
 
-module.exports = { AZ_TIMEOUT_ENV, DEFAULT_AZ_TIMEOUT_MS, MIN_AZ_TIMEOUT_MS, MAX_AZ_TIMEOUT_MS, azTimeoutMs, cliFailureKind, azTimeoutAdvice };
+// ── The time one `pac model genpage` call may take ─────────────────────────────────────────────────────────────
+// A page upload once stalled — no CPU, no network — for 17 minutes, until the process was killed by hand; the build then finished. A pac call
+// therefore waits a bounded time (lib/genpage-cli.js runPac ends the whole process tree when it runs out and reports `timedOut`). The bound is
+// generous, because a real upload of a large page is slow and a slow call is not a stalled one:
+//   list, download   3 min   (a listing takes ~5 s; a download is a few files)
+//   upload           10 min  (it transpiles the page and writes it through the service)
+// POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS sets the budget of ONE call, for every kind, for a machine or an environment slower than that: 1 s to
+// 60 min. Like the Azure CLI budget it is a tuning knob, so an unusable value keeps the default instead of stopping the work.
+const PAC_TIMEOUT_ENV = 'POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS';
+const DEFAULT_PAC_READ_TIMEOUT_MS = 180000;
+const DEFAULT_PAC_UPLOAD_TIMEOUT_MS = 600000;
+const MIN_PAC_TIMEOUT_MS = 1000;
+const MAX_PAC_TIMEOUT_MS = 3600000;
+
+// The budget for one pac call of `kind` ('upload'; anything else is a read: list, download).
+function pacTimeoutMs(kind, env = process.env) {
+  const n = Number(env && env[PAC_TIMEOUT_ENV]);
+  if (Number.isInteger(n) && n >= MIN_PAC_TIMEOUT_MS && n <= MAX_PAC_TIMEOUT_MS) return n;
+  return kind === 'upload' ? DEFAULT_PAC_UPLOAD_TIMEOUT_MS : DEFAULT_PAC_READ_TIMEOUT_MS;
+}
+
+// The budget to suggest in place of `ms`: one pacTimeoutMs accepts — double, at least 5 min, capped at the maximum — or null once `ms` is the
+// maximum, because nothing larger would be read and the default would quietly come back.
+function pacLongerTimeoutMs(ms) {
+  return ms >= MAX_PAC_TIMEOUT_MS ? null : Math.min(Math.max(ms * 2, 300000), MAX_PAC_TIMEOUT_MS);
+}
+
+// What to tell the user when `command` ran out of time: that it was stopped, and how to allow it longer. As for azTimeoutAdvice, the suggested
+// budget is one pacTimeoutMs accepts, and once the budget is the maximum, more time is not the remedy. For a READ — a listing or a download, which
+// can be made again at no cost; an upload that stalls says what to do about itself (lib/genpage-cli.js), because running it again is not always safe.
+function pacTimeoutAdvice(command, ms) {
+  const ranOut = `\`${command}\` did not finish within ${Math.round(ms / 1000)} s and was stopped.`;
+  const longer = pacLongerTimeoutMs(ms);
+  if (longer === null) {
+    return `${ranOut} That is already the longest ${PAC_TIMEOUT_ENV} allows (${MAX_PAC_TIMEOUT_MS / 60000} min), so waiting longer will not help: `
+      + 'check that the PAC CLI can reach the environment (`pac org who`), then retry.';
+  }
+  return `${ranOut} A stalled call is usually transient — retry, or allow it longer with ${PAC_TIMEOUT_ENV}=${longer}.`;
+}
+
+// One argument of a command that a message tells the user — or the agent driving the skill — to paste, written so that pasting the command hands the
+// program it runs (`node`) exactly this value, as ONE argument, in the shells the skill's own commands are written for: PowerShell (Windows PowerShell 5.1
+// and PowerShell 7) and the POSIX shells (sh, bash, zsh). The skill's instructions quote arguments in single quotes ('<working-dir>/<file>.tsx'); cmd.exe,
+// which reads no single quotes, is not one of them.
+//   letters and digits of any script, and `_ . / : -`      written bare: no shell reads anything in them
+//   (not a leading `-`)
+//   anything else                                        single-quoted: inside '…' neither PowerShell nor a POSIX shell expands, substitutes or splits
+//                                                        anything, so `;`, `$(…)`, backticks, `|`, `&`, globs, `\` and white space stay literal
+//   null — no spelling, so the caller writes a placeholder and names the value outside the command (commandArgOrPlaceholder) — for:
+//     a single quote, or one PowerShell reads as one     PowerShell doubles a quote, a POSIX shell closes and reopens one: no spelling is literal in both
+//     (‘ ’ ‚ ‛), a line break or another control
+//     character (a tab is fine)
+//     a double quote; white space with a `\` at the      Windows PowerShell does not hand a native program its arguments as they are: it joins them into one
+//     end; the empty value                               command line, wrapping a value that holds white space in double quotes and escaping nothing, so the
+//                                                        program drops a `"` ('x"y.tsx' arrives as xy.tsx) and reads the closing quote after a final `\` as
+//                                                        an escaped one ('C:\Dev User\' arrives as C:\Dev User"); an empty value is not passed at all.
+//                                                        PowerShell 7.3 and later pass all three as they are; Windows PowerShell 5.1 is still the one
+//                                                        Windows ships.
+//     exactly `--%`                                      PowerShell's stop-parsing token: both PowerShells take it for the token even quoted, and drop it
+// Measured on Windows PowerShell 5.1 and PowerShell 7.6 (tests/cli-failure.test.js runs every spelling through each shell it finds and reads node's argv).
+// See https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_parsing#passing-arguments-that-contain-quote-characters and
+// https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_parsing#the-stop-parsing-token.
+// A path can come from an untrusted checkout, so a value is written bare only when it is plain: a file named `x;rm -rf ~;.tsx`, written bare or in double
+// quotes, would run its second half when the advice is pasted.
+const BARE_ARG = /^(?!-)[\p{L}\p{N}_./:-]+$/u;
+const UNQUOTABLE = /['"\u2018\u2019\u201A\u201B\p{Zl}\p{Zp}]|[^\P{Cc}\t]/u;
+function commandArg(value) {
+  const text = String(value);
+  if (BARE_ARG.test(text)) return text;
+  if (UNQUOTABLE.test(text) || text === '' || text === '--%' || (/\s/u.test(text) && text.endsWith('\\'))) return null;
+  return `'${text}'`;
+}
+
+// commandArg's spelling of `value`, or — when it has none — `placeholder` (`<file>`), with the sentence a message adds to name the value as data, never as part of
+// a command.
+function commandArgOrPlaceholder(value, placeholder) {
+  const arg = commandArg(value);
+  if (arg !== null) return { arg, note: '' };
+  return {
+    arg: placeholder,
+    note: `${placeholder} is ${JSON.stringify(String(value))}; it is not written into the command because no way of writing it reaches the command unchanged in both PowerShell and a POSIX shell.`,
+  };
+}
+
+module.exports = { AZ_TIMEOUT_ENV, DEFAULT_AZ_TIMEOUT_MS, MIN_AZ_TIMEOUT_MS, MAX_AZ_TIMEOUT_MS, azTimeoutMs, cliFailureKind, azTimeoutAdvice,
+  PAC_TIMEOUT_ENV, DEFAULT_PAC_READ_TIMEOUT_MS, DEFAULT_PAC_UPLOAD_TIMEOUT_MS, MIN_PAC_TIMEOUT_MS, MAX_PAC_TIMEOUT_MS, pacTimeoutMs, pacLongerTimeoutMs, pacTimeoutAdvice, commandArg,
+  commandArgOrPlaceholder };

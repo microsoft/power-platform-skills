@@ -9,14 +9,15 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
-const { blankLiterals, blankNonCodePreservingTemplateExpressions, commentRanges, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets, scanTemplateExpressionEnd, expressionPosition, opensTypeParameters, elementFailsAt, elementChildren, isTrivia, isSingleLineTrivia, trimTrivia, TRIVIA_CLASS, WS, AMBIGUITY_KINDS, ANGLE_AFTER, ANGLE_AFTER_LINE_BREAK, RESERVED_WORDS } = require('../lib/source-literals.js');
-const { navReferencedKeys, strayPageRefs } = require('../lib/pageref-resolver.js');
+const { blankLiterals, blankNonCodePreservingTemplateExpressions, commentRanges, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets, scanTemplateExpressionEnd, expressionPosition, opensTypeParameters, elementFailsAt, elementChildren, isTrivia, isSingleLineTrivia, trimTrivia, TRIVIA_CLASS, WS, AMBIGUITY_KINDS, ANGLE_AFTER, ANGLE_AFTER_LINE_BREAK, NO_MEMBER_BEFORE, RESERVED_WORDS } = require('../lib/source-literals.js');
+const { navReferencedKeys, strayPageRefs, resolvePageRefs } = require('../lib/pageref-resolver.js');
 const { pageStructureProblems } = require('../lib/page-structure.js');
 
 const { loadTypescriptOracle, loadBabelOracle } = require('./helpers/typescript-oracle.js');
-const { FRAMES, tokenVocabulary, programsFor, cleanSourceFile, readingAt, isElement, SIGNATURE_ENDINGS, HIDING_ENDINGS, CERTAIN_ELEMENTS, GUESSED_ELEMENTS, signaturePages, elementPages, SIGNATURE_FRAMES, DECOYS, signaturePage } = require('./helpers/angle-frames.js');
+const { FRAMES, tokenVocabulary, programsFor, cleanSourceFile, readingAt, isElement, SIGNATURE_ENDINGS, HIDING_ENDINGS, CERTAIN_ELEMENTS, GUESSED_ELEMENTS, HIDDEN_TEXT_ELEMENTS, UNREAD_LIST_ELEMENTS, MEMBER_ELEMENT_FRAMES, NO_MEMBER_ELEMENT_FRAMES, signaturePages, elementPages, SIGNATURE_FRAMES, DECOYS, signaturePage, EXACT_DEFAULTS, UNREAD_DEFAULTS, UNTERMINATED_DEFAULTS, PROSE_SHAPED_LINES, PROSE_HIDING_ELEMENTS, proseElements } = require('./helpers/angle-frames.js');
 const { FUNCTION_TYPE_DECLARATIONS, ELEMENT_LOOKALIKE_PAGES } = require('./helpers/misread-page.js');
 const { judgeDirect } = require('./helpers/jsx-element-fuzz.js');
+const { BASE_TOKENS, ALL_TOKENS, tokenTexts, drawnTexts, memberTexts, keywordTexts, keywordPairTexts, bracketTexts, wordTexts, numberWordTexts, importTypeTexts, drawnImportTypeTexts, accessorNameTexts, drawnAccessorNameTexts, tupleTexts } = require('./helpers/type-member-texts.js');
 
 function parseDiagnosticMessages(ts, code) {
   return ts.createSourceFile('snippet.tsx', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
@@ -1703,12 +1704,18 @@ test('a "<" that starts an expression opens type parameters only by the TSX rule
 
 // `<T extends` and a `/` is an element where an expression starts, by the rule; but in a type the `<` opens type parameters, and parseTypeParameter reads a constraint that starts no type as an
 // expression, where a `/` starts a regex (only the checker objects): `let f: <T extends />;…[/]/>(a: T) => T` is a function type whose constraint is the regex `/>;…[/]/`, and the `/>` that
-// ends the element's tag is the regex's first characters. The lexer does not know which of the two it is in, so the head is a guess, read as an element. `/=` is one token to TypeScript's
-// scanner, not the `/` the rule names: type parameters in both.
-test('`<T extends` and a `/` is an element where an expression starts and type parameters in a type, so it is a guess; `/=` is type parameters in both', (t) => {
+// ends the element's tag is the regex's first characters. The lexer does not know which of the two it is in, so the head is a guess, read as an element — unless the regex does not close on its
+// line: TypeScript's scanner ends one at a line break (reScanSlashToken) and reports it unterminated (TS1161, a parse error), so no type has the text and the element is certain. `/=` is one token to
+// TypeScript's scanner, not the `/` the rule names: type parameters in both.
+test('`<T extends` and a `/` is an element where an expression starts and type parameters in a type, so it is a guess where its regex closes on the line, and an element where it does not; `/=` is type parameters in both', (t) => {
   const GUESS = { generic: false, ambiguity: 'generic' };
-  const GUESSED = ['<T extends/>', '<T extends />', '<T extends /x/>(a: T) => T', '<T extends />;f();[/]/>(a: T) => T', '<T extends/* c *//x/>(a: T) => T', '<const T extends />', '<T extends\n/>'];
-  for (const code of GUESSED) assert.deepStrictEqual(opens(code), GUESS, code);
+  const GUESSED = ['<T extends /x/>(a: T) => T', '<T extends />;f();[/]/>(a: T) => T', '<T extends/* c *//x/>(a: T) => T', '<T extends\n/x/>(a: T) => T', '<T extends />; const r = a / b;', '<T extends /[/]/>(a: T) => T', '<T extends /\\//>(a: T) => T',
+    '<T extends /x/g>(a: T) => T', '<T extends />; const r = a />(a: T) => T;', '<T extends />; // c / d\n', `<T extends /${'a'.repeat(2500)}`];
+  for (const code of GUESSED) assert.deepStrictEqual(opens(code), GUESS, code.slice(0, 60));
+  // The regex that no `/` closes on its line: the end of the text, or a line break of any kind first — a backslash does not carry a regex over one, as it does a string.
+  const ELEMENTS = ['<T extends/>', '<T extends />', '<const T extends />', '<T extends\n/>', '<T extends />;\nf();[/]/>(a: T) => T', '<T extends />;\r\n/x/', '<T extends />;\u2028/x/', '<T extends />;\u2029/x/',
+    '<T extends /\\\n/>', '<T extends /[/>;', '<T extends /\\/>;', '<T extends /* c */ />;', '<T extends // c\n/>;\n/x/'];
+  for (const code of ELEMENTS) assert.deepStrictEqual(opens(code), ELEMENT, JSON.stringify(code));
   for (const code of ['<T extends /=x/>(a: T) => a', '<T extends/=x/>(a: T) => a']) assert.deepStrictEqual(opens(code), GENERIC, code);
   const ts = loadTypescriptOracle();
   if (!ts) return t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the readings');
@@ -1722,6 +1729,16 @@ test('`<T extends` and a `/` is an element where an expression starts and type p
   assert.strictEqual(reading('interface I { <T extends />;f();[/]/>(a: T): T }'), 'CallSignature');
   assert.strictEqual(reading('const f = <T extends /=x/>(a: T) => a;'), 'ArrowFunction');
   assert.strictEqual(reading('let f: <T extends /=x/>(a: T) => T;'), 'FunctionType');
+  // Where its regex does not close on the line the text is no type in any place a type stands: the regex is unterminated (TS1161). A regex that closes leaves both — the pairs above.
+  for (const [what, frame] of [['an annotation', (head) => `let f: ${head}`], ['a type alias', (head) => `type F = ${head}`], ['an interface', (head) => `interface I { ${head} }`], ['a parameter', (head) => `function g(a: ${head}) {}`],
+    ['a construct signature', (head) => `interface I { new ${head} }`], ['an argument', (head) => `g<${head}>()`], ['a union', (head) => `let f: A | ${head}`]]) {
+    for (const head of ['<T extends />;', '<T extends/>;', '<T extends />;\nconst x = a / b;', '<T extends /x', '<T extends /\\\n/>(a: T) => T;']) {
+      assert.match(parseDiagnosticMessages(ts, frame(head)).join('\n'), /Unterminated regular expression literal/, `${what}: ${JSON.stringify(head)} is no type`);
+    }
+  }
+  for (const code of ['const e = <T extends />;', 'const e = <T extends/>;\nconst r = a / b;', 'const e = <div><T extends /></div>;']) assertTsParses(ts, code, `the element ${JSON.stringify(code)} parses`);
+  // The same text where the regex closes on its line is a function type that TypeScript parses: both readings compile, and the head is a guess.
+  for (const code of ['let f: <T extends />;f();[/]/>(a: T) => T;', 'let f: <T extends />; const r = a />(a: T) => T;']) assert.strictEqual(reading(code), 'FunctionType', code);
 });
 
 // A `>` in JSX text does not compile: TypeScript reports TS1382, "Unexpected token. Did you mean `{'>'}` or `&gt;`?" (the test after next checks it against the
@@ -2616,8 +2633,9 @@ test('the TSX rule and the generic function type read past every character TypeS
       `<T${c}extends${c}X>(x: T) => x`, `<T${c},>(x: T) => x`, `<${c}T,>(x: T) => x`, `<const${c}T,>(x: T) => x`, `<T${c}= string>(x: T) => x`, `<T${c}${c}extends${c}${c}X>(x: T) => x`,
     ]) assert.deepStrictEqual(opens(code), GENERIC, visible(code));
     for (const code of [`<T extends${c}>text</T>`, `<T${c}extends${c}>text</T>`, `<T${c}x>text</T>`, `<${c}T>text</T>`]) assert.deepStrictEqual(opens(code), ELEMENT, visible(code));
-    // `extends` and a `/` is the guess whatever is between them (the test of the rule above says why).
-    assert.deepStrictEqual(opens(`<T extends${c}/>`), { generic: false, ambiguity: 'generic' }, visible(`<T extends${c}/>`));
+    // `extends` and a `/` is the guess whatever is between them where the regex closes on its line, and an element where it does not (the test of the rule above says why).
+    assert.deepStrictEqual(opens(`<T extends${c}/>`), ELEMENT, visible(`<T extends${c}/>`));
+    assert.deepStrictEqual(opens(`<T extends${c}/x/>(a: T) => T`), { generic: false, ambiguity: 'generic' }, visible(`<T extends${c}/x/>(a: T) => T`));
     // A generic function type has trivia between its `>`, its parameter list and its arrow: the list is found, and the type is certain.
     for (const code of [`<T>${c}(x: T) => T`, `<T>(x: T)${c}=> T`, `<T>${c}(x: T)${c}=> T`]) assert.deepStrictEqual(opens(code), GENERIC, visible(code));
   }
@@ -3075,14 +3093,21 @@ test('JSX text that starts with a parenthesis is an element, for certain, wherev
 });
 
 test('JSX text that starts with a parenthesis is a guess where the closing tag could be inside a template, a comment or a regex that its text opens: the element is read, nothing after it is trusted', (t) => {
-  const pages = elementPages(GUESSED_ELEMENTS);
+  // Where a member of a type may begin at the head, the text could be a type's members; a list that the scan cannot read is a guess wherever the head stands.
+  const pages = [...elementPages(HIDDEN_TEXT_ELEMENTS, undefined, MEMBER_ELEMENT_FRAMES), ...elementPages(UNREAD_LIST_ELEMENTS)];
   for (const { code, at, label } of pages) {
     assert.deepStrictEqual(earliestAmbiguity(code), [at, 'generic'], label);
     assert.notStrictEqual(maskOf(code)[code.indexOf('(', at)], '(', `${label}: read as an element`);
   }
+  // After an `=`, a `(`, a `[`, a `:` or an `=>` no member of a type begins, and a head with a parameter list that neither `=>` nor `:` follows is an element, for certain, whatever its text holds.
+  const certain = elementPages(HIDDEN_TEXT_ELEMENTS, undefined, NO_MEMBER_ELEMENT_FRAMES);
+  for (const { code, at, label } of certain) {
+    assert.deepStrictEqual(ambiguities(code), [], label);
+    assert.notStrictEqual(maskOf(code)[code.indexOf('(', at)], '(', `${label}: read as an element`);
+  }
   const ts = loadTypescriptOracle();
   if (!ts) return t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the readings');
-  for (const { code, at, label } of pages) {
+  for (const { code, at, label } of [...pages, ...certain]) {
     const source = cleanSourceFile(ts, code);
     assert.ok(source, `TypeScript parses ${label}`);
     assert.ok(isElement(readingAt(ts, source, at)), `${label}: TypeScript reads an element, so the guess is a cost`);
@@ -3113,13 +3138,15 @@ test('opensTypeParameters: a parameter list with no arrow and no colon after it 
     // The text is scanned as a type would scan it, as code: a `/` after a word or a number divides (and is an error in a type), a comment or a template that is closed before the closing tag
     // hides nothing, and a line comment that ends before it hides nothing; a comment that is open at the closing tag, or a `//` on its line, hides it.
     ['<T>(x), a/b</T>', ELEMENT], ['<T>(x), 1/2 done</T>', ELEMENT], ['<T>(x);\n  and/or more</T>', ELEMENT], ['<T>(x)\n  `x`</T>', ELEMENT], ['<T>(x); /* c */ </T>', ELEMENT], ['<T>(x); // c\n</T>', ELEMENT],
-    ['<T>(x), see https://x.y</T>', ELEMENT], ['<T>(x); // c </T>', GUESS], ['<T>(x);\n  /* c </T>', GUESS], ['<T>(x); m: `a ${b} </T>', GUESS], ['<T>(x), = /re/ </T>', GUESS], ['<T>(x), return/exchange </T>', GUESS],
+    ['<T>(x), see https://x.y</T>', ELEMENT], ['<T>(x); // c </T>', GUESS], ['<T>(x);\n  /* c </T>', GUESS], ['<T>(x); m: `a ${b} </T>', GUESS], ['<T>(x), = /re/ </T>', ELEMENT], ['<T>(x), return/exchange </T>', ELEMENT],
     // Where the text before the first thing that could hide the closing tag cannot be the members of a type — two names on a line, a name and a string or a `/`, a template or a regex where a member
-    // would begin — no type holds the closing tag in anything: an element. A name alone, a modifier, a name on the next line, a colon or a character that is no prose leaves both programs possible.
+    // would begin, a name and a sign, a `.` or a quote, a colon after a type — no type holds the closing tag in anything: an element. A name alone, a modifier, a name on the next line, a colon and a
+    // type, or a computed name leaves both programs possible.
     ['<T>(x); `a ${b} </T>', ELEMENT], ['<T>(x);\n  /re </T>', ELEMENT], ['<T>(a = `x </T>`); m', GUESS],
     ["<T>(x), see 'a </T> b'", ELEMENT], ['<T>(x), a b // </T>', ELEMENT], ['<T>(x); 1 2 // </T>', ELEMENT], ['<T>(x), see a/b // </T>', ELEMENT], ['<T>(x);\n  see https://x.y more\n  </T>', ELEMENT], ['<T>(x), a, b c // </T>', ELEMENT],
-    ['<T>(x), a // </T>', GUESS], ['<T>(x), a\n  b // </T>', GUESS], ['<T>(x), readonly b // </T>', GUESS], ['<T>(x), get b // </T>', GUESS], ['<T>(x), public b // </T>', GUESS], ['<T>(x), see: https://x.y</T>', GUESS],
-    ["<T>(x); 'a </T> b'", GUESS], ['<T>(x), a, // </T>', GUESS], ["<T>(x), it's // </T>", GUESS], ['<T>(x), é b // </T>', GUESS], ['<T>(x), a.b c // </T>', GUESS], ['<T>(x), a? b // </T>', GUESS],
+    ['<T>(x), see: https://x.y</T>', ELEMENT], ['<T>(x), é b // </T>', ELEMENT], ['<T>(x), a.b c // </T>', ELEMENT], ['<T>(x), a? b // </T>', ELEMENT], ["<T>(x), it's // </T>", ELEMENT], ['<T>(x), a-b // </T>', ELEMENT],
+    ['<T>(x), a // </T>', GUESS], ['<T>(x), a\n  b // </T>', GUESS], ['<T>(x), readonly b // </T>', GUESS], ['<T>(x), get b // </T>', GUESS], ['<T>(x), public b // </T>', GUESS], ['<T>(x), see: a // </T>', GUESS],
+    ["<T>(x); 'a </T> b'", GUESS], ['<T>(x), a, // </T>', GUESS], ['<T>(x), a: b // </T>', GUESS], ['<T>(x), a? // </T>', GUESS], ['<T>(x), é // </T>', GUESS], ['<T>(x), default: // </T>', GUESS],
     ['<T>(x); m: { <U>(y: U): void }', GUESS], ['<T>(x); m: { a / b }</T>', GUESS], ['<T>(x), </T c></T>', GUESS], ['<T>(x), </* c */T>', CODE], ['<T>(x);', GUESS], ['<T>(x), <b>y', GUESS],
     // A `</*` after the `)` is a `<`, a comment and a name: the next signature's type parameters, `</* c */T extends X>(y)`, which no closing tag is. (`</* c */T>` is one to the element reading.)
     ['<T>(x)\n</* c */T extends X>(y) }', CODE], ['<T>(x)\n</* c */T>(y)', CODE], ['<T>(x); </* c */T>(y) }', CODE], ['<T>(x)\n</ T>', ELEMENT], ['<T>(x)\n</ /* c */ T>', ELEMENT],
@@ -3130,6 +3157,87 @@ test('opensTypeParameters: a parameter list with no arrow and no colon after it 
   // A parameter list that a `:` follows is still both, and one too long to scan.
   assert.deepStrictEqual(opensTypeParameters('<T>(x): T }', 0), GUESS);
   assert.deepStrictEqual(opensTypeParameters(`<T>(${'x, '.repeat(900)}x) }`, 0), GUESS);
+});
+
+// A head that stands where no member of a type begins (NO_MEMBER_BEFORE) — after an `=` or an assignment operator, an `=>`, a `(`, a `[` and a `:`: a call signature, a construct signature and a method are members of a type, and a function type needs the
+// `=>` that its list lacks here, so `<Name>(…)` that neither `=>` nor `:` follows is an element whatever its text holds. Anywhere else a member may begin, and a text that could hide the closing tag makes the head a guess.
+test('opensTypeParameters, where no member of a type begins: a list that neither `=>` nor `:` follows is an element for certain, whatever its text holds; where one may begin the same text is a guess', () => {
+  const ELEMENT = { generic: false, ambiguity: null };
+  const GUESS = { generic: false, ambiguity: 'generic' };
+  const texts = ['<T>(x); // c </T>', "<T>(x); m: '</T>'", '<T>(x); m: `</T>`', '<T>(x);\n  /* c </T>', '<T>(x), a // </T>', '<T>(x); [ // c\n/b </T>', '<T>(x), f(a = // c\n/b </T>', "<T>(x); 'a </T> b'", '<T>(x), readonly b // </T>', '<T>(x); m: { <U>(y: U): void }'];
+  for (const code of texts) {
+    assert.deepStrictEqual(opensTypeParameters(code, 0), GUESS, `where a member may begin: ${JSON.stringify(code)}`);
+    assert.deepStrictEqual(opensTypeParameters(code, 0, null, false, true), ELEMENT, `where none does: ${JSON.stringify(code)}`);
+  }
+  // A `:` after the list is a signature's return type and JSX text alike, and an `=>` a function type: the place decides neither.
+  for (const code of ['<T>(x): T }', '<T>(x): text</T>', '<T>(x) => y }', '<T>(x) => y</T>']) assert.deepStrictEqual(opensTypeParameters(code, 0, null, false, true), opensTypeParameters(code, 0), JSON.stringify(code));
+  // The tokens are the ones that are an operator or a bracket that opens what an expression or a type fills: a separator, a closing bracket, a `{`, a `?` and a keyword are not (`return <T>(x)` is a method named `return`, `m? <T>(x)` an optional one).
+  assert.deepStrictEqual([...NO_MEMBER_BEFORE].sort(), ['(', ':', '=', '=>', '[', '+=', '-=', '*=', '**=', '/=', '%=', '<<=', '&=', '|=', '^=', '&&=', '||=', '??='].sort());
+  for (const token of NO_MEMBER_BEFORE) assert.ok(ANGLE_AFTER.rule.includes(token), `${token} is read by the rule`);
+});
+
+// The tokens of NO_MEMBER_BEFORE are the tokens that no program has before type parameters with no arrow and no colon (TypeScript's parser says so), and every one of the other tokens that the rule is asked after has a program that does:
+// the pages below are parsed, and a head that is the type parameters of a signature is found in the tree.
+test('TypeScript: no program has type parameters with no arrow and no `:` after a token of NO_MEMBER_BEFORE; each token the rule reads that is left out has one, and the lexer does not read it as an element', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the tokens');
+  const typeParameters = (code) => {
+    const source = cleanSourceFile(ts, code);
+    if (!source) return null;
+    let found = false;
+    const visit = (node) => {
+      if (ts.isTypeParameterDeclaration(node) && node.name.text === 'T') found = true;
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    return found;
+  };
+  // Every place the token can stand, as syntax: the token is the operator, the `=>`, the bracket or the colon that precedes the head, so a program parses where the head is an element (a closing tag after it) and where it is none.
+  const assignment = (t) => [(tail) => `let a: any; a ${t} ${tail};`, (tail) => `let o: any; o.k ${t} ${tail};`, (tail) => `let a: any; (a) ${t} ${tail};`];
+  const framesOf = (token) => {
+    if (token === '=') return [...assignment(token), (tail) => `const a ${token} ${tail};`, (tail) => `class C { m ${token} ${tail} }`, (tail) => `function f(a ${token} ${tail}) {}`, (tail) => `const { a ${token} ${tail} } = o;`, (tail) => `type A<T ${token} ${tail}> = x;`];
+    if (token === '=>') return [(tail) => `const f = () ${token} ${tail};`, (tail) => `const f = async (a) ${token} ${tail};`, (tail) => `type F = () ${token} ${tail};`, (tail) => `const f = (a) ${token} ({ k: ${tail} });`];
+    if (token === '(') return [(tail) => `f ${token} ${tail});`, (tail) => `new f ${token} ${tail});`, (tail) => `if ${token} ${tail}) {}`, (tail) => `const a = f ${token} ${tail}, 1);`, (tail) => `interface I { m ${token} ${tail}): void }`, (tail) => `function f ${token} ${tail}) {}`];
+    if (token === '[') return [(tail) => `const l = ${token} ${tail}];`, (tail) => `a ${token} ${tail}];`, (tail) => `const { ${token} ${tail}]: v } = o;`, (tail) => `type Tup = ${token} ${tail}];`, (tail) => `interface I { ${token} ${tail}]: string }`];
+    if (token === ':') return [(tail) => `const o = { k ${token} ${tail} };`, (tail) => `const o = c ? a ${token} ${tail};`, (tail) => `let v ${token} ${tail};`, (tail) => `function f(a ${token} ${tail}) {}`, (tail) => `interface I { m ${token} ${tail} }`,
+      (tail) => `type L = { k ${token} ${tail} };`, (tail) => `class C { m ${token} ${tail} }`, (tail) => `a ${token} ${tail};`, (tail) => `switch (a) { case 1 ${token} ${tail}; }`, (tail) => `const e = <div x={c ? a ${token} ${tail}} />;`];
+    return assignment(token);
+  };
+  // What follows the token: an element that a closing tag ends, text that goes on, and what no arrow and no colon follows in a type, which no program parses after these tokens.
+  const tails = ['<T>(x)</T>', '<T>(x); m: 1 </T>', '<T>(x), y</T>', '<T>(x)', '<T>(x);', '<T>(x),', '<T>(x)\n'];
+  let programs = 0;
+  let elements = 0;
+  for (const token of NO_MEMBER_BEFORE) {
+    for (const frame of framesOf(token)) {
+      for (const tail of tails) {
+        const code = frame(tail);
+        const found = typeParameters(code);
+        if (found === null) continue;
+        programs += 1;
+        if (tail.endsWith('</T>')) elements += 1;
+        assert.strictEqual(found, false, `type parameters after ${token}: ${JSON.stringify(code)}`);
+      }
+    }
+  }
+  t.diagnostic(`${programs} programs that parse after the tokens of NO_MEMBER_BEFORE (${elements} with an element), none with type parameters`);
+  assert.ok(elements >= 40 && programs >= elements, `only ${programs} programs parse, ${elements} with an element`);
+  // The tokens that the rule reads and that are left out: each is a name or ends a member, so a program has type parameters there, and the lexer reads the head as a signature or a guess, never as the element it would be.
+  const witnesses = {
+    '?': 'interface I { m? <T>(x); a: "</T>" }', return: 'interface I { return <T>(x); a: "</T>" }', new: 'interface I { new <T>(x); a: "</T>" }', extends: 'interface I { extends <T>(x); a: "</T>" }', throw: 'interface I { throw <T>(x); a: "</T>" }',
+    case: 'interface I { case <T>(x); a: "</T>" }', else: 'interface I { else <T>(x); a: "</T>" }', do: 'interface I { do <T>(x); a: "</T>" }', yield: 'interface I { yield <T>(x); a: "</T>" }', of: 'interface I { of <T>(x); a: "</T>" }',
+    default: 'interface I { default <T>(x); a: "</T>" }', break: 'interface I { break <T>(x); a: "</T>" }', continue: 'interface I { continue <T>(x); a: "</T>" }', ',': 'interface I { a: A, <T>(x); b: "</T>" }',
+    ';': 'interface I { a: A; <T>(x); b: "</T>" }', '{': 'let a: { <T>(x); b: "</T>" };', ')': 'interface I { m(x)\n<T>(y); b: "</T>" }', '}': 'interface I { a: { b: 1 }\n<T>(y); b: "</T>" }',
+  };
+  for (const token of ANGLE_AFTER.rule) {
+    if (NO_MEMBER_BEFORE.has(token)) continue;
+    const code = witnesses[token];
+    assert.ok(code, `a program with type parameters after ${token}`);
+    assert.strictEqual(typeParameters(code), true, `TypeScript reads type parameters after ${token}: ${JSON.stringify(code)}`);
+    const head = code.indexOf('<T>');
+    // The head is a guess, or is read as the type parameters it is (a `(` that the mask keeps); it is never the element it would be after an `=`.
+    const guessed = ambiguities(code).some(([at]) => at === head);
+    assert.ok(guessed || maskOf(code)[head + 3] === '(', `${token}: the lexer reads the head as an element for certain: ${JSON.stringify(code)}`);
+  }
 });
 
 // A parameter list whose first token no parameter starts with — a number, a string, a template, a `#`, an operator, a parenthesis — is TS1003 in a call signature, a construct signature and a function type
@@ -3159,15 +3267,17 @@ test('a parameter list that can hold no parameters makes the head an element, fo
 
 // The parenthesis scan of a parameter list skips comments and strings, but reads a regex, JSX text and a statement as code and ends a template at its first back-tick, so where the list may
 // hold an expression — after an `=`, a `[` other than `[]`, an `@` or `import` — the `)` it finds may be another: in `interface I { <T>(a = /[)]/); m: '</T>…' }` the `]` after the regex's
-// `)` read as the text of an element, and the string's token was rewritten. Each head below is a guess in every frame a signature stands in, whatever follows it.
+// `)` read as the text of an element, and the string's token was rewritten. A default whose first token is a regex or an element is read exactly now (initializerReading), a `/` after a
+// name or a number divides, and a template with no `${` holds nothing but itself; every other head below is a guess in every frame a signature stands in, whatever follows it.
 const RISKY_LIST_HEADS = [
-  '<T>(a = /[)]/)', '<T>(a = /\\)/)', "<T>(a = /'/, b = '')", '<T>(a = // c\n  /[)]/)', '<T>(a = () => { if (x) /[)]/.test(y) })', '<T>(@d(/[)]/) a)', '<T>(a: { [/[)]/.source]: 1 })',
-  '<T>(a = /[/*]/)', '<T>(a = /\\/*/)', '<T>(a = /(/)', '<T>(a = /[)(]/)', '<T>(a = `${`)`}`)', '<T>(a = `${"}" + `)`}`)', '<T>(a = `${/}/.source + `)`}`)',
+  '<T>(a = () => { if (x) /[)]/.test(y) })', '<T>(@d(/[)]/) a)', '<T>(a: { [/[)]/.source]: 1 })',
+  '<T>(a = `${`)`}`)', '<T>(a = `${"}" + `)`}`)', '<T>(a = `${/}/.source + `)`}`)',
   '<T>(a = function () { if (x) /[)]/.test(y) })', '<T>(a = class { static { if (x) ; else {} /[)]/.test(y) } })', '<T>(a = typeof /[)]/)', '<T>(a = class C implements /[)]/ {})',
-  // A regex that a `*` or a `/` follows, a block after a return type, `break` and a line break, a spread, a default after type arguments, an import type's attributes, JSX in a template and
-  // in a default: each holds what the scan misreads, and only the `=`, the `[` or `import` before it says so.
-  '<T>(a = /x/*1)', '<T>(a = /x//1)', '<T>(a = function (): number[] { if (a) /[)]/.test(""); return [] })', '<T>(a = () => { for (;;) { break\n/[)]/.test("") } })', '<T>(a = [.../[)]/.source])',
-  '<T>(a: A<B>= /[)]/)', '<T>(a: import("x", { with: { k: /[)]/ } }))', "<T>(a = `${<p>it's</p>}${'}' + `)`}`)", '<T>(a = <p>)</p>)', "<T>(a = <p>it's</p>)", '<T>(a = <p x="\\" y=")" />)',
+  // A regex that a `/` follows, a block after a return type, `break` and a line break, a spread, a default after type arguments, an import type's attributes, JSX in a template: each holds what the
+  // scan misreads, and only the `=`, the `[` or `import` before it says so. So does a regex or an element that is no default's first token, and a `/` after what is no name or number.
+  '<T>(a = /x//1)', '<T>(a = function (): number[] { if (a) /[)]/.test(""); return [] })', '<T>(a = () => { for (;;) { break\n/[)]/.test("") } })', '<T>(a = [.../[)]/.source])',
+  '<T>(a: A<B>= /[)]/)', '<T>(a: import("x", { with: { k: /[)]/ } }))', "<T>(a = `${<p>it's</p>}${'}' + `)`}`)", '<T>(a = f(/[)]/))', '<T>(a = x ? /[)]/ : y)', '<T>(a = b + /[)]/)', "<T>(a = f(<p>it's</p>))",
+  '<T>(a = <p>)</p> / 2)', '<T>(a: A<B> = /[)]/)', '<T>(a = <p>(</p>, b = <q>)</q>)', '<T>(a = b / (c) / d)', '<T>(a = x, b = /[)]/)',
   // A template literal type nests with no `=` before it: the scan's skip ends at the inner back-tick, and only a template that is whole is skipped (templateSkipIsWhole) — not one with a
   // template in a substitution, behind a string type that holds a brace, or behind a comment that holds one.
   '<T>(a: `${`)`}`)', '<T>(a: `${"}" | `)`}`)', '<T>(a: `${/* } */ `)`}`)',
@@ -3179,6 +3289,17 @@ const RISKY_LIST_HEADS = [
   // an expression too, and a `/`, a `<` or a back-tick after one leaves the scan untrusted.
   '<T>(a: { get x() { return 1 / 2 } })', '<T>(a: { set x(v) { v / 2 } })', '<T>(a: { get x() { return <p>)</p> } })', '<T>(a: { get x() { return <p>(</p> } })',
   '<T>(f: <U extends /x/>() => void)', '<T>(a: { m<U extends /x/>(): void })',
+  // A regex after a line comment: the last token is the operator, keyword or bracket before the comment, and the word that the comment ends in is no operand, so the `)` in the regex is no end of the list; a `/` after a
+  // block comment, which ends in a `/`, and after a line break with no comment are the same guess, and so is a division after a line comment, which is as valid (slashFollowsAnOperand).
+  '<T>(a = 1 + // c\n/[)]/)', '<T>(a = x || // c\n/\\)/)', '<T>(value: T, pattern = /\\s/ || // fallback\n  /\\)/)', '<T>(a: T, re = x && // c1\r\n/(x)/)', '<T>(a = f(// $\n/[)]/))', '<T>(a = 1 + // c\u2028/[)]/)', '<T>(a = x ?? // c\r/[)]/)',
+  '<T>(a: <U extends // c\n/x)/>(b: U) => U)', '<T>(a = b // c\n/ (c))', '<T>(a = 1 // c\n/ 2)', '<T>(a = 1 + /* c */ /[)]/)', '<T>(a = 1 +\n/[)]/)',
+];
+// ... and the heads that hold a default whose first token is a regex or an element, a division of a name or a number, or a template with no substitution: the scan finds the `)` that ends the list
+// exactly, so a signature that nothing after it can make an element is code for certain, and a closing tag in a string after it is data.
+const EXACT_LIST_HEADS = [
+  '<T>(a = /[)]/)', '<T>(a = /\\)/)', "<T>(a = /'/, b = '')", '<T>(a = // c\n  /[)]/)', '<T>(a = /[/*]/)', '<T>(a = /\\/*/)', '<T>(a = /(/)', '<T>(a = /[)(]/)', '<T>(a = /x/*1)', '<T>(a = /x/g)', '<T>(a = /=x/)',
+  '<T>(a = <p>)</p>)', "<T>(a = <p>it's</p>)", '<T>(a = <p x="\\" y=")" />)', '<T>(a = <p/>)', '<T>(a = <A.B>)</A.B>)', '<T>(a = <p x={")"}>y</p>)', '<T>(a = <p>{")"}</p>)',
+  '<T>(a = `)`)', '<T>(a = `(`, b = `)`)', '<T>(a = `\\``)', '<T>(a = b/(c))', '<T>(a = 1/2)', '<T>(a = b/c/d)',
 ];
 // ... and the lists that hold none of those: a `/` there is in no type, so the text is the element's; text whose parameters fail before a type, a default or a pattern; a list in which
 // something may start an expression but no `/`, `<` or back-tick follows, which the scan reads exactly; a template literal type.
@@ -3203,9 +3324,12 @@ const PLAIN_LIST_ELEMENTS = [
   '<p>(Tip: this works best in <a href="/x">Chrome</a>)</p>', '<p>(Note: this is a preview, see <a href="/docs">docs</a>)</p>', '<p>(Type: string, <a href="/x">docs</a>)</p>',
   '<p>(this opens <a href="/x">settings</a>)</p>',
 ];
-// ... and the text in which something may start an expression and a `/`, a `<` or a back-tick follows, which a signature's parameter list shares: the guess.
-const INITIALIZER_LIST_ELEMENTS = ['<p>(a = /x/)</p>', '<p>(a = b/(c))</p>', '<p>(a = /(x)/)</p>', '<p>(a = <b>c</b>)</p>', '<p>(a = `x`)</p>'];
-test('a parameter list in which an expression may start and a `/`, a `<` or a back-tick follows is a guess; one without is read as before', (t) => {
+// ... and the text in which something may start an expression and a `/`, a `<` or a back-tick follows, which a signature's parameter list shares: the guess — except where the default's first token is a
+// regex or an element, a `/` divides a name or a number, or the template has no `${`, which the scan reads exactly (EXACT_INITIALIZER_ELEMENTS).
+const INITIALIZER_LIST_ELEMENTS = ['<p>(a = f(/x/))</p>', '<p>(a = (b)/c)</p>', '<p>(a = typeof /x/)</p>', '<p>(a = <b>c</b> / 2)</p>', '<p>(a = `${b}`)</p>', '<p>(a = x ? /y/ : z)</p>', '<p>(a = [/x/])</p>', '<p>(a = b + /x/)</p>'];
+const EXACT_INITIALIZER_ELEMENTS = ['<p>(a = /x/)</p>', '<p>(a = b/(c))</p>', '<p>(a = /(x)/)</p>', '<p>(a = <b>c</b>)</p>', '<p>(a = `x`)</p>', '<p>(a = /[)]/)</p>', '<p>(score = 3/5)</p>', '<p>(Status = <Badge>OK</Badge>)</p>',
+  '<p>(rate = 4/5 stars)</p>', '<p>(x = 1/2, y = 3/4)</p>', '<p>(a = <b/>)</p>', "<p>(a = <b>it's</b>)</p>", '<p>(a = <b>(c)</b>)</p>', '<p>(a = `)`)</p>'];
+test('a parameter list in which an expression may start and a `/`, a `<` or a back-tick follows is a guess unless the scan reads it exactly; one without is read as before', (t) => {
   const pages = [];
   for (const [frameName, frame] of SIGNATURE_FRAMES) {
     for (const head of RISKY_LIST_HEADS) {
@@ -3215,8 +3339,24 @@ test('a parameter list in which an expression may start and a `/`, a `<` or a ba
     }
   }
   for (const { code, at, label } of pages) assert.deepStrictEqual(earliestAmbiguity(code), [at, 'generic'], label);
+  // The heads the scan reads exactly: no guess, the signature is code, the token in the string after it is data and the real call is read.
+  const exact = [];
+  for (const [frameName, frame] of SIGNATURE_FRAMES) {
+    for (const head of EXACT_LIST_HEADS) {
+      for (const ending of ['', ';\n  m: string', '\n  <U>(y)']) {
+        for (const [decoyName, decoy] of Object.entries(DECOYS)) {
+          if (decoyName !== 'double-quoted string') exact.push({ ...signaturePage(frame, head, ending, decoy), label: `${frameName} / ${JSON.stringify(head)} / ${JSON.stringify(ending)} / ${decoyName}` });
+        }
+      }
+    }
+  }
+  for (const { code, label } of exact) {
+    assert.deepStrictEqual(ambiguities(code), [], label);
+    assert.deepStrictEqual(strayPageRefs(code).map((found) => found.start), [code.indexOf('PAGEREF_detail')], `${label}: the token in the decoy is stray, and the real call is not`);
+    assert.deepStrictEqual(navReferencedKeys(code), ['detail'], label);
+  }
   const call = 'navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})';
-  for (const element of PLAIN_LIST_ELEMENTS) assert.deepStrictEqual(strayPageRefs(`const e = ${element};\n${call};\n`), [], element);
+  for (const element of [...PLAIN_LIST_ELEMENTS, ...EXACT_INITIALIZER_ELEMENTS]) assert.deepStrictEqual(strayPageRefs(`const e = ${element};\n${call};\n`), [], element);
   for (const element of INITIALIZER_LIST_ELEMENTS) assert.deepStrictEqual(earliestAmbiguity(`const e = ${element};\n${call};\n`), [10, 'generic'], element);
   assert.deepStrictEqual(opensTypeParameters('<T>(x: `a${string}`) => T', 0), { generic: true, ambiguity: null }, 'a template literal type is skipped whole');
   // ... and so is one in whose substitution something may start an expression with no `<` after it: no JSX is in it, and its strings are strings.
@@ -3240,13 +3380,13 @@ test('a parameter list in which an expression may start and a `/`, a `<` or a ba
   const ts = loadTypescriptOracle();
   if (!ts) return t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the readings');
   // The double-quoted decoy holds the call's own double quotes, so it parses in no frame; the others parse everywhere.
-  for (const { code, at, label } of pages.filter((page, index) => index % 5 === 0 && !page.label.endsWith('/ double-quoted string'))) {
+  for (const { code, at, label } of [...pages, ...exact].filter((page, index) => index % 5 === 0 && !page.label.endsWith('/ double-quoted string'))) {
     const source = cleanSourceFile(ts, code);
     assert.ok(source, `TypeScript parses ${label}`);
     assert.ok(!isElement(readingAt(ts, source, at)), `${label}: TypeScript reads a signature`);
   }
-  const declared = 'declare const done: number, total: number, url: string, a: any, b: any, c: any, y: any;\n';
-  for (const element of [...PLAIN_LIST_ELEMENTS, ...INITIALIZER_LIST_ELEMENTS]) assertTsParses(ts, `${declared}const e = ${element};`, element);
+  const declared = 'declare const done: number, total: number, url: string, a: any, b: any, c: any, y: any, x: any, rate: any, score: any, Status: any;\n';
+  for (const element of [...PLAIN_LIST_ELEMENTS, ...EXACT_INITIALIZER_ELEMENTS, ...INITIALIZER_LIST_ELEMENTS]) assertTsParses(ts, `${declared}const e = ${element};`, element);
   for (const list of FAILING_LISTS) {
     for (const code of [`interface I { <T>(${list}) }`, `type F = <T>(${list}) => void;`]) assert.ok(parseDiagnosticMessages(ts, code).length > 0, `TypeScript rejects ${JSON.stringify(code)}`);
   }
@@ -3425,6 +3565,304 @@ test('a parameter type that fails at its second token fails the list, wherever T
   assert.ok(failed >= 60000, `only ${failed} lists were read as no list`);
 });
 
+// ─── JSX text that starts with a parenthesis and a label, where the list that the text would be fails ───────────────────────────────────────────────────────────
+//
+// A hint after a label is JSX text: `<p>(Size: 10 MB max, <a href="/x">upgrade</a>)</p>`. In a type the same characters are a parameter list, `Size: 10` and then more, and a call after the element was refused while the
+// text could be one. Each text below is a list that TypeScript rejects in a call signature, a construct signature and a function type alike — the label is a parameter's name, and what follows its colon is a type that
+// fails at its second token — so only the element compiles, and the lexer says so (typeStartFails, genericFunctionTypeFollows):
+//   a number and a name   `10 MB`           a number literal is a type, which ends there; a name after it is TS1005 unless it is a conditional type's `extends`
+//   an object type        `{user.name}`     a member is a name and then `?`, `:`, `(`, `<`, `,`, `;`, the `}` or a line's end; a `.` or an operator after it is TS1131
+//   `new`                 `new <a href=`    a constructor type is `new`, type parameters if a `<` follows, and a `(`: anything else after `new` is TS1005
+//   `import`              `import <a href=` an import type is `import` and a `(`: anything else after it is TS1005
+//   an `=`                `use <code>=</code>`   the `=` after the type `use<code>` is an initializer's, and no expression starts with `</` (TS1109)
+const LIST_FRAMES = [(list) => `interface I { <T>(${list}): string }`, (list) => `interface C { new <T>(${list}): string }`, (list) => `type F = <T>(${list}) => string;`, (list) => `interface I { <T>(${list}) }`];
+const readsAsNoList = (list) => {
+  const read = opensTypeParameters(`<T>(${list}): x</T>`, 0);
+  return !read.generic && read.ambiguity === null;
+};
+const FAILING_LIST_TEXTS = [
+  ['a number and a name', 'Size: 10 MB max, <a href="/x">upgrade</a>', /',' expected/],
+  ['an object type whose first member is no member', 'Name: {user.name}, <a href={profile}>edit</a>', /Property or signature expected/],
+  ['`new` and type parameters that fail', 'Mode: new <a href="/x">beta</a>', /',' expected/],
+  ['`import` and no parenthesis', 'Hint: import <a href="/x">docs</a>', /'\(' expected/],
+  ['an `=` and a closing tag', 'Tip: use <code>=</code>', /Expression expected/],
+];
+// The page an author writes: the hint is in the component, and a button navigates to another page.
+const hintPage = (text) => `import * as React from "react";\n\nexport default function UploadPage() {\n  const open = () => navigateTo({ pageType: "generative", pageId: "PAGEREF_detail" });\n  return (\n    <div>\n      <p>${text}</p>\n      <button onClick={open}>Open</button>\n    </div>\n  );\n}\n`;
+test('JSX text that starts with a parenthesis and a label is an element, for certain, where the list it would be fails: a number and a name, an object type that is none, `new`, `import`, an `=` and a closing tag', (t) => {
+  for (const [what, list] of FAILING_LIST_TEXTS) {
+    assert.deepStrictEqual(opensTypeParameters(`<p>(${list})</p>`, 0), ELEMENT, what);
+    assert.strictEqual(readsAsNoList(list), true, what);
+    // The page resolves: no guess, the one real call is read, its token is the page id and nothing is left over.
+    const page = hintPage(`(${list})`);
+    assert.deepStrictEqual(ambiguities(page), [], `${what}: no guess`);
+    assert.deepStrictEqual(strayPageRefs(page), [], `${what}: no token is left`);
+    assert.deepStrictEqual(navReferencedKeys(page), ['detail'], `${what}: the call is read`);
+    assert.deepStrictEqual(pageStructureProblems(page), [], `${what}: a complete page`);
+  }
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the readings');
+  for (const [what, list, message] of FAILING_LIST_TEXTS) {
+    for (const frame of LIST_FRAMES) assert.match(parseDiagnosticMessages(ts, frame(list)).join('\n'), message, `${what}: TypeScript rejects ${frame(list)}`);
+    const source = cleanSourceFile(ts, hintPage(`(${list})`));
+    assert.ok(source, `${what}: TypeScript parses the page`);
+    assert.ok(isElement(readingAt(ts, source, hintPage(`(${list})`).indexOf('<p>'))), `${what}: and reads an element`);
+  }
+});
+
+// What each rule reads as no list, and what it leaves: every list is put in a call signature, a construct signature and a function type, and TypeScript says which parse. A list read as no list is rejected in all of
+// them; a list that TypeScript parses is never read so. The rows in GUESSED are lists that parse, or that no rule here reads (a number with an exponent or a radix, a name beyond ASCII, a string).
+const LIST_RULES = {
+  number: {
+    failing: ['Size: 10 MB', 'Size: 10 MB max, <a href="/x">upgrade</a>', 'Size: -5 px', 'Size: - 5 px', 'Size: -\n5 px', 'Size: 1.5 GB', 'Size: 0 items', 'Size: 007 MB', 'Size: 10\nMB', 'Size: 10\u00a0MB', 'Size: 10\u0085MB', 'Size: 10\u2028MB',
+      'Size: 10/* c */MB', 'Size: 10 // c\nMB', 'a, b: 10 MB', 'a: this is 10 MB', 'a: Foo<10 MB>', 'a: Foo<10 MB, c>', 'Size: 10 in', 'Size: 10 is', 'Size: 10 as', 'Size: 10 keyof', 'Size: 10 new', 'Size: 10 of x'],
+    guessed: ['Size: 10', 'Size: 10 extends X ? 1 : 2', 'Size: 10\nextends X ? 1 : 2', 'Size: 10 | 20', 'Size: 10[]', 'Size: 10 & X', 'Size: 10, b', 'Size: -10 | 5', 'Size: 10MB', 'Size: 0x1F MB', 'Size: 1e3 MB', 'Size: 1_000 MB',
+      'Size: 10n MB', 'Size: .5 MB', 'Size: 10. MB', 'Size: 1.5.2 MB', 'Size: 10 MB\u00e9', 'Size: 10 \\u004dB', 'Size: 10 \u00e9', 'Size: "10" MB', 'Size: +10 MB', 'Size: --10 MB'],
+  },
+  'object type': {
+    failing: ['Name: {user.name}', 'Name: {a.b.c}', 'Name: { a . b }', 'Name: {a\n.b}', 'Name: {a /* c */ . b}', 'Name: {a // c\n.b}', 'Name: {count + 1}', 'Name: {a - b}', 'Name: {a * b}', 'Name: {a % b}', 'Name: {a & b}', 'Name: {a | b}',
+      'Name: {a ^ b}', 'Name: {a!}', 'Name: {a ~ b}', 'Name: {a / b}', 'Name: {this.x}', 'Name: {readonly.x}', 'Name: {get.x}', 'Name: {set + 1}', 'Name: {items.length}', 'Name: {new.x}', 'Name: {a.}', 'Name: {a...b}',
+      'Name: {a.b}, <a href={profile}>edit</a>', 'a, b: {c.d}', 'a: this is {c.d}', 'a: Foo<{c.d}>'],
+    guessed: ['Name: {count}', 'Name: {a: T}', 'Name: {a?: T}', 'Name: {a(): T}', 'Name: {a<T>(): T}', 'Name: {a, b}', 'Name: {a; b}', 'Name: {a\nb}', 'Name: {readonly a: T}', 'Name: {readonly .5: T}', 'Name: {get .5(): T}', 'Name: {a\n.5}',
+      'Name: {a .5}', 'Name: {a = 1}', 'Name: {a?.b}', 'Name: {"a".b}', 'Name: {1.b}', 'Name: {\u00e9.x}', 'Name: {\\u0061.x}', 'Name: {...a}', 'Name: {[k]: T}', 'Name: {}', 'Name: { }', 'Name: {a b}', 'Name: {a = b.c}'],
+  },
+  new: {
+    failing: ['Mode: new feature', 'Mode: new', 'Mode: new <a href="/x">beta</a>', 'Mode: new <a b>', 'Mode: new <a href=', 'Mode: new, b', 'Mode: new = 1', 'Mode: new.target', 'Mode: new\nfeature', 'Mode: new /* c */ feature', 'Mode: new 1',
+      'Mode: new "x"', 'a, b: new c', 'a: this is new c', 'a: Foo<new c>', 'Mode: new <a b="c">', 'Mode: new [x]', 'Mode: new { a: T }'],
+    guessed: ['Mode: new () => T', 'Mode: new (x: T) => T', 'Mode: new <T>() => T', 'Mode: new <T>(x: T) => T', 'Mode: new <T, U>() => T', 'Mode: new <const T>() => T', 'Mode: new <T extends X>() => T', 'Mode: new <T = X>() => T', 'Mode: new\n() => T',
+      'Mode: new /* c */ () => T', 'Mode: new <in T>() => T', 'Mode: new <private x>() => x', 'Mode: new\\u0078', 'Mode: new\u00e9', 'Mode: newx', 'Mode: abstract new () => T', 'Mode: typeof new', 'Mode: new<T>() => T', 'Mode: new <a.b c>'],
+  },
+  import: {
+    failing: ['Hint: import <a href="/x">docs</a>', 'Hint: import from CSV', 'Hint: import', 'Hint: import.meta', 'Hint: import, b', 'Hint: import\nx', 'Hint: import /* c */ x', 'Hint: import <a>', 'Hint: import = 1', 'Hint: import {a}', 'a, b: import c',
+      'a: this is import c', 'a: Foo<import c>', 'Hint: import "x"', 'Hint: import 1'],
+    guessed: ['Hint: import("x")', 'Hint: import ("x")', 'Hint: import\n("x")', 'Hint: import /* c */ ("x")', 'Hint: typeof import("x")', 'Hint: import("x").A<B>', 'Hint: import("x", { with: { k: "v" } })', 'Hint: imported',
+      'Hint: import\u00e9', 'Hint: import\\u0078'],
+  },
+  'equals and a closing tag': {
+    failing: ['Tip: use <code>=</code>', 'a = </x>', 'a: T = </x>', 'a?: T = </x>', 'a: A<B>=</x>', 'a: A<B> = </x>', 'a, b = </x>', 'a = /* c */ </x>', 'a =\n</x>', 'a = // c\n</x>', 'a: <U = </x>>() => U', 'a: { b: T } = </x>',
+      'a = </ x>', 'a = </>', 'a = \u00a0</x>', 'a = \u0085</x>', 'Tip: <b>a</b> <code>=</code> <b>b</b>', 'a: x<=</c>'],
+    guessed: ['a = </* c */ T,>(x) => x', 'a = </* c */ x>', 'a = <b>=</b>', 'a = <></>', 'a = < /x>', 'a = <b>x</b>', 'a = x</x>', 'a = 1 </x>', 'a: A<B> = x'],
+  },
+};
+test('each rule that reads a list as no list reads the lists it is meant for, and no list that TypeScript parses', (t) => {
+  for (const [rule, { failing, guessed }] of Object.entries(LIST_RULES)) {
+    for (const list of failing) assert.strictEqual(readsAsNoList(list), true, `${rule}: ${JSON.stringify(list)} is no list`);
+    for (const list of guessed) assert.strictEqual(readsAsNoList(list), false, `${rule}: ${JSON.stringify(list)} is not read as no list`);
+  }
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the readings');
+  let parsing = 0;
+  for (const [rule, { failing, guessed }] of Object.entries(LIST_RULES)) {
+    for (const list of failing) for (const frame of LIST_FRAMES) assert.ok(parseDiagnosticMessages(ts, frame(list)).length > 0, `${rule}: TypeScript rejects ${JSON.stringify(frame(list))}`);
+    // The lists the rule leaves are the ones it must: they include lists that parse (the property is not vacuous), each in some frame.
+    for (const list of guessed) if (LIST_FRAMES.some((frame) => parseDiagnosticMessages(ts, frame(list)).length === 0)) parsing += 1;
+  }
+  assert.ok(parsing >= 40, `only ${parsing} of the lists that are left parse in TypeScript`);
+});
+
+// The same, as a sweep over generated variants: the words (every keyword TypeScript has, and names), white space of every kind TypeScript skips between two tokens, comments, line breaks, letters beyond ASCII and
+// escapes, the endings that could complete a list. Wherever the lexer reads a list as no list, TypeScript rejects it in all of the frames: a list that parses and is read as no list would be read as JSX text, and the
+// text of the type after it as an element's.
+test('sweep (TypeScript parser): a list that a rule reads as no list is rejected by TypeScript in a call signature, a construct signature and a function type', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
+  const keywords = [];
+  for (let kind = ts.SyntaxKind.FirstKeyword; kind <= ts.SyntaxKind.LastKeyword; kind += 1) keywords.push(ts.tokenToString(kind));
+  const words = [...keywords, 'MB', 'max', 'x', 'user', 'count', 'a1', '$a', '_a', '\u00e9', '\u03a9mega', '\\u0078'];
+  const space = [' ', '\n', '\t', '\u00a0', '\u0085', '\u200b', '\u2028', '\ufeff', '/* c */', ' /* c\n */ ', ' // c\n ', '\r\n', ''];
+  const lists = new Map();
+  const add = (family, list) => { if (!lists.has(list)) lists.set(list, family); };
+  // A number and a word: every word after a few numbers and every white space after each of them.
+  const numbers = ['10', '1.5', '0', '-10', '- 10', '-1.5', '007', '1e3', '0x1F', '10n', '1_000', '.5', '10.', '1.5.2', '+10'];
+  for (const number of numbers) for (const word of words) add('number', `Size: ${number} ${word} max, <a href="/x">upgrade</a>`);
+  for (const number of ['10', '-5', '1.5']) for (const gap of space) for (const word of ['MB', 'extends', 'in', 'new']) for (const tail of ['', ' T ? 1 : 2', ', b', '[]']) add('number', `Size:${gap}${number}${gap}${word}${tail}`);
+  // An object type: every name before each character that may follow it, with each ending.
+  const junk = ['.', '+', '-', '*', '%', '&', '|', '^', '!', '~', '/', '?', ':', '(', '<', ',', ';', '=', '[', '>', '?.', '...', '.5', '..', '=>', '#', '"x"', '5', '{'];
+  const endings = ['}', ' b }', ': T }', '5 }', '.5: T }', '(): T }', '"x" }', '[k: string]: T }'];
+  for (const name of words) for (const j of junk) for (const end of ['}', ' b }']) add('object type', `Name: {${name}${j}${end}`);
+  for (const gap of [' ', '\n', '/* c */', '\u00a0', '']) for (const name of ['a', 'readonly', 'get', 'set', 'new', 'static', 'break']) for (const j of junk) for (const end of endings) add('object type', `Name: {${gap}${name}${gap}${j}${end}`);
+  // `new` and `import`, with everything that may follow them.
+  const follows = [...words.filter((word) => !word.startsWith('\\')), '<a href="/x">beta</a>', '<T>', '<T,>', '<T extends X>', '<a b>', ')', ',', '=', '[', '{', '(', '()', '(x)', '(x: T) => T', '<T>(x: T) => T', '<T>() => T', '("x")', '(x, y)',
+    '.meta', '*', '/', '|', '&', '?', ':', '...', '1', '"x"', '`x`'];
+  for (const head of ['new', 'import', 'abstract new', 'typeof import', 'keyof new']) {
+    for (const gap of [' ', '\n', '/* c */', '\u00a0', '']) for (const follow of follows) {
+      if (gap === '' && /^[A-Za-z0-9_$\u00e9\u03a9]/.test(follow)) continue;
+      for (const tail of ['', ' end']) add(head, `Mode: ${head}${gap}${follow}${tail}`);
+    }
+  }
+  // An `=` and a closing tag, in every place a default stands.
+  for (const gap of space) for (const before of ['a = ', 'a: T = ', 'a?: T = ', 'a: A<B>=', 'a, b =', 'Tip: use <code>=', 'a: <U = ', 'a: x<=', 'a: { b: T } = ', '{ a }: P = ']) {
+    for (const tag of ['</code>', '</x>', '</ x>', '</>', '</* c */ T,>(x) => x', '</* c */ x>', '< /x>', '<b>=</b>', '<b>x</b>', '<></>', '</x', '</']) add('equals', `${before}${gap}${tag}`);
+  }
+  const claimed = new Map();
+  const unsound = [];
+  for (const [list, family] of lists) {
+    if (!readsAsNoList(list)) continue;
+    claimed.set(family, (claimed.get(family) || 0) + 1);
+    if (LIST_FRAMES.some((frame) => parseDiagnosticMessages(ts, frame(list)).length === 0)) unsound.push(JSON.stringify(list));
+  }
+  t.diagnostic(`${lists.size} lists; read as no list: ${[...claimed].map(([family, n]) => `${family} ${n}`).join(', ')}`);
+  assert.deepStrictEqual(unsound.slice(0, 8), [], `${unsound.length} lists that TypeScript parses are read as no list`);
+  for (const [family, least] of [['number', 800], ['object type', 3000], ['new', 500], ['import', 500], ['equals', 400]]) assert.ok((claimed.get(family) || 0) >= least, `${family}: only ${claimed.get(family) || 0} lists were read as no list`);
+});
+
+// ─── A default value that the scan reads exactly ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//
+// The parenthesis scan of a parameter list reads a regex, JSX and a statement as code, so once a default value may hold one the `)` it finds may be another, and the list is a guess (`interface I { <T>(a = /[)]/); … }`).
+// Three things are read exactly, because TypeScript reads them one way: the first token of a default is a regex if it is a `/` (an expression starts after the `=` and nothing is there to divide), which ends at its
+// own `/` on its line, and an element if it is a `<` that the arrow rule leaves one, which ends at its closing tag; a `/` after a name or a number divides in an expression; and a template with no `${` holds only its own
+// text. The `=` must be an initializer's, so no `<` stands before it (it may be a type parameter's default, where a `<` opens a function type), and a `{` before the `/` may open a function body, where a statement
+// starts. A regex that its line does not close is unterminated (TS1161), and an `=` before `</` is no default at all (TS1109). EXACT_DEFAULTS and UNREAD_DEFAULTS are in helpers/angle-frames.js.
+test('a default value whose first token is a regex or an element, a division of a name or a number, and a template with no substitution are read exactly; every other default stays a guess', (t) => {
+  const GUESS = { generic: false, ambiguity: 'generic' };
+  const call = 'navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})';
+  for (const [kind, defaults] of Object.entries(EXACT_DEFAULTS)) {
+    for (const value of defaults) {
+      for (const label of ['a = ', 'a: T = ', 'a?: T = ', 'a, b = ', 'a=', '{ a }: P = ']) {
+        // The element reading: the closing tag right after the `)`, where no type has one.
+        assert.deepStrictEqual(opensTypeParameters(`<p>(${label}${value})</p>`, 0), ELEMENT, `${kind}: ${JSON.stringify(`<p>(${label}${value})</p>`)}`);
+        // The type reading: the signature ends at the `)`, and the `}` after it ends the type — code, for certain.
+        assert.deepStrictEqual(opensTypeParameters(`<p>(${label}${value}) }`, 0), GENERIC, `${kind}: ${JSON.stringify(`<p>(${label}${value}) }`)}`);
+      }
+      assert.deepStrictEqual(strayPageRefs(`const e = <p>(a = ${value})</p>;\n${call};\n`), [], `${kind}: ${JSON.stringify(value)}: the call after the element is read`);
+    }
+  }
+  for (const value of UNREAD_DEFAULTS) {
+    assert.deepStrictEqual(opensTypeParameters(`<p>(a = ${value})</p>`, 0), GUESS, JSON.stringify(value));
+    assert.deepStrictEqual(opensTypeParameters(`<p>(a = ${value}) }`, 0), GUESS, JSON.stringify(value));
+  }
+  // The `=` is an initializer's only where no `<` stands before it: after one it may be a type parameter's default, where a `<` opens a function type, and the lexer reads nothing exactly.
+  for (const text of ['<p>(a: A<B> = /x/)</p>', '<p>(a: A<B>= <b>c</b>)</p>', '<p>(cb: <U = /x/>() => U)</p>', '<p>(cb: <U = <b>c</b>>() => U)</p>']) assert.deepStrictEqual(opensTypeParameters(text, 0), GUESS, text);
+  // A division that a `{` may precede is a guess (a function body may hold a statement, where a `/` after a `)` begins a regex), but one that no `{` precedes is exact.
+  assert.deepStrictEqual(opensTypeParameters('<p>(a = () => b/c)</p>', 0), ELEMENT);
+  assert.deepStrictEqual(opensTypeParameters('<p>(a = () => { b/c })</p>', 0), GUESS);
+  // A regex that its line does not close is unterminated: no type has the text, and the list is the element's, whatever follows. (A `/` after the `)` on the same line closes it: `(a = /docs)</p>` is the regex
+  // `/docs)</`, and then no `)` follows.)
+  for (const text of ['<p>(a = /docs)\n</p>', '<p>(a = /docs)\r\n</p>', '<p>(a = /docs)\u2028</p>', '<p>(a = /x)\n  more</p>', '<p>(see = /docs and more)\n</p>', '<p>(a = /[)\n</p>', '<p>(a = />)\n</p>', '<p>(a = /\\)\n</p>',
+    '<p>(a = /docs)']) assert.deepStrictEqual(opensTypeParameters(text, 0), ELEMENT, JSON.stringify(text));
+  for (const value of UNTERMINATED_DEFAULTS) {
+    for (const label of ['a = ', 'a: T = ', 'a, b = ']) {
+      assert.deepStrictEqual(opensTypeParameters(`<p>(${label}${value})</p>`, 0), ELEMENT, `${JSON.stringify(`${label}${value}`)} as the text of an element`);
+      assert.deepStrictEqual(opensTypeParameters(`<p>(${label}${value}) }`, 0), ELEMENT, `${JSON.stringify(`${label}${value}`)}: no type has the text either`);
+    }
+  }
+  // The `/` of the closing tag that follows closes no regex, so the list is not read on into the code after the element — where a `)` and a `;` or a `}` could end it for a signature.
+  for (const text of ['<p>(a = /docs)\n</p>;\nf(x);', '<p>(a = /docs)\n</p>;\ng(y) }', '{<p>(a = /docs)\n</p>}</p>;\nh(z);']) assert.deepStrictEqual(opensTypeParameters(text, text.indexOf('<p>')), ELEMENT, JSON.stringify(text));
+  assert.deepStrictEqual(opensTypeParameters(`<p>(a = /${'x'.repeat(2500)})</p>`, 0), GUESS, 'a regex that runs past the window is not told');
+  // An `=` and a closing tag, wherever the `=` stands: no expression and no type starts with `</`; and `</*` is a `<` and a comment, which starts what a `<` does.
+  for (const text of ['<p>(a = </x>)</p>', '<p>(a: A<B>=</x>)</p>', '<p>(cb: <U = </x>>() => U)</p>', '<p>(Tip: use <code>=</code>)</p>', '<p>(a =\n</x>)</p>']) assert.deepStrictEqual(opensTypeParameters(text, 0), ELEMENT, text);
+  for (const text of ['<p>(a = </* c */ T,>(x) => x)</p>', '<p>(a = </* c */ x>)</p>']) assert.deepStrictEqual(opensTypeParameters(text, 0), GUESS, text);
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the readings');
+  // TypeScript: the element parses, and the same text as a signature does not (a closing tag after it is no member); the type reading parses with a `}` where the closing tag was.
+  const declared = 'declare const a: any, b: any, c: any, x: any, y: any, of: any, yield: any, P: any, T: any, X: any;\n';
+  for (const defaults of Object.values(EXACT_DEFAULTS)) {
+    for (const value of defaults) {
+      for (const label of ['a = ', 'a: T = ', 'a, b = ']) {
+        assertTsParses(ts, `${declared}const e = <p>(${label}${value})</p>;`, `the element with ${JSON.stringify(`${label}${value}`)}`);
+        assert.ok(parseDiagnosticMessages(ts, `interface I { <p>(${label}${value})</p> }`).length > 0, `TypeScript rejects the signature with ${JSON.stringify(`${label}${value}`)} and a closing tag`);
+        assertTsParses(ts, `interface I { <p>(${label}${value}) }`, `the signature with ${JSON.stringify(`${label}${value}`)}`);
+      }
+    }
+  }
+  for (const text of ['<p>(a = /docs)\n</p>', '<p>(a = /x)\n  more</p>', '<p>(see = /docs and more)\n</p>', '<p>(a = />)\n</p>']) assert.match(parseDiagnosticMessages(ts, `interface I { ${text.replace('</p>', '')} }`).join('\n'), /Unterminated regular expression literal/, text);
+});
+
+// ─── A `/` after a comment ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//
+// A `/` after a name or a number divides in an expression, and a type has no division, so in no program that parses does a regex start after one (slashFollowsAnOperand). A comment is trivia to TypeScript, though: a block
+// comment ends in a `/`, which is no word, but a line comment ends in whatever its text does, and after it the last token is the one before the comment:
+//   interface I { <T>(a = 1 + // x          the last token is the `+`, so the `/` on the next line begins a regex
+//   /[)]/); m: '</T>;navigateTo(…);//' }    whose `)` is not the one that ends the list
+// A `/` read as a division there ended the parameter list at the `)` in the regex and read the string after it as code, where the token of the call is data. The pages below are TypeScript's: each parses with no diagnostic and holds the
+// text of a navigation call as data — in the string of a type, or in the regex itself — so its token is stray and nothing is rewritten, wherever the scan of a list (genericFunctionTypeFollows) or the reading of the text
+// of a signature (readChildren) meets the regex.
+const COMMENT_CALL = 'navigateTo({pageType:"generative",pageId:"PAGEREF_detail"})';
+const COMMENT_PAGES = [
+  ['a call signature with a default whose regex follows a line comment, and a string that holds a closing tag and a call', `interface I { <T>(a = 1 + // x\n/[)]/); m: '</T>;${COMMENT_CALL};//' }`, 'generic'],
+  ['a matcher: a second default, a line comment that ends in a word, a `)` in the regex', `interface Matcher {\n  <T>(value: T, pattern = /\\s/ || // fallback\n  /\\)/): boolean;\n  hint: '</T>; ${COMMENT_CALL} //';\n}\nexport default function Page() { return null; }\n`, 'generic'],
+  ['a function type in an annotation', `const f: <T>(a?: string, re = 1 && // p\n/[)]/) => T = g;\nconst s = '</T>;${COMMENT_CALL};//';\n`, 'generic'],
+  ["a regex that is the constraint of a function type in a parameter's type", `interface I { <T>(a: <U extends // c\n/x)/>(b: U) => U); m: '</T>;${COMMENT_CALL};//' }`, 'generic'],
+  ['a generic arrow after the end of type arguments and an initializer, with no space', `let v: Array<number>= <T extends X>(a = 1 + // c\n/[)]/) => '</T>;${COMMENT_CALL}//';\n`, 'operator'],
+  ['a call signature with no return type, and a later member whose default holds the closing tag and a call in a regex', `interface I { <T>(x); m(a = 1 + // c\n/[</T>;${COMMENT_CALL}//]/): void }`, 'generic'],
+  ['the same, after a comment that ends in a number, and a line separator', `interface I { <T>(x); m(a = x || // c1\u2028/[</T>;${COMMENT_CALL}//]/): void }`, 'generic'],
+  ['the same, after a comment that ends in a `$`, and a carriage return', `interface I { <T>(a = x ?? // c$\r/[)]/); m: '</T>;${COMMENT_CALL};//' }`, 'generic'],
+];
+test('a `/` after a line comment may begin a regex, as after a block comment: a token in the text of a call after one is data, and the page is refused', (t) => {
+  const ts = loadTypescriptOracle();
+  for (const [what, code, kind] of COMMENT_PAGES) {
+    const tokens = [...code.matchAll(/PAGEREF_detail/g)].map((match) => match.index);
+    assert.strictEqual((earliestAmbiguity(code) || [null, null])[1], kind, `${what}: the guess`);
+    // The build halts on every token, and nothing is rewritten: with no call of its own, and with a real one after the page, which the guess keeps from being trusted.
+    assert.deepStrictEqual(strayPageRefs(code).map((found) => found.start), tokens, `${what}: every token is stray`);
+    const resolved = resolvePageRefs(new Map([['x', { code }]]), new Map([['detail', 'gp-detail']]));
+    assert.strictEqual(resolved.deployment.get('x'), code, `${what}: nothing is rewritten`);
+    const after = `${code}${code.endsWith('\n') ? '' : '\n'}${COMMENT_CALL};\n`;
+    assert.deepStrictEqual(strayPageRefs(after).map((found) => found.start), [...after.matchAll(/PAGEREF_detail/g)].map((match) => match.index), `${what}: the real call after it is refused too`);
+    assert.strictEqual(resolvePageRefs(new Map([['x', { code: after }]]), new Map([['detail', 'gp-detail']])).deployment.get('x'), after, `${what}: and not rewritten`);
+  }
+  // The same text in a list of every kind: after a line comment of every kind a `/` may begin a regex, in the scan of a list and in the reading of the text after it — a block comment, which ends in a `/`, a line comment that
+  // ends in a name, a number, a `$`, a letter beyond ASCII, or in nothing, and a line break of every kind TypeScript has.
+  const GUESS = { generic: false, ambiguity: 'generic' };
+  const gaps = ['/* c */ ', ' /* c */ ', '// c\n', '// x1\n', '// $\n', '// 1\n', '// \u00e9\n', '//\n', '// c\r\n', '// c\r', '// c\u2028', '// c\u2029', '// c\n\n  ', '/* c */ // c\n', '// c /* d\n', '// a/b\n'];
+  for (const gap of gaps) {
+    for (const value of [`1 + ${gap}/[)]/`, `x || ${gap}/\\)/`, `a ${gap}/ (c)`, `1 ${gap}/ 2`]) {
+      assert.deepStrictEqual(opensTypeParameters(`<p>(a = ${value})</p>`, 0), GUESS, `the scan of a list: ${JSON.stringify(value)}`);
+      assert.deepStrictEqual(opensTypeParameters(`<p>(a = ${value}) }`, 0), GUESS, `the scan of a list: ${JSON.stringify(`${value}) }`)}`);
+    }
+    // The text after a call signature with no return type is read to its closing tag, with the comments that it found itself: the token before them tells a regex from a division, as it does to a parser. After a name or a number
+    // the `/` divides, whatever the comment of any kind ends in, and holds nothing; after an operator, a keyword or a bracket a regex may begin, and hold the closing tag.
+    for (const word of ['a', '1', '$x']) assert.strictEqual(elementChildren(`<T>(x) ${word} ${gap}/b </T>`, 3, 'T').hideable, false, `the text of a signature, a division: ${JSON.stringify(`${word} ${gap}`)}`);
+    // ... and after a `)` or a `]`, which end a parenthesised expression, a call, an array and an index.
+    for (const operand of ['(a)', 'f(a, (b))', '[1]', 'a[0]', 'a[b[0]]']) assert.strictEqual(elementChildren(`<T>(x) ${operand} ${gap}/b </T>`, 3, 'T').hideable, false, `the text of a signature, a division after a bracket: ${JSON.stringify(`${operand} ${gap}`)}`);
+    for (const operator of ['+', '=', '||', '(', ',', '?', 'return', 'typeof', 'in', "'a'", '[', '&&', '!', '{ a }']) assert.strictEqual(elementChildren(`<T>(x) ${operator} ${gap}/b </T>`, 3, 'T').hideable, true, `the text of a signature, a regex: ${JSON.stringify(`${operator} ${gap}`)}`);
+  }
+  // Where no comment stands between them a `/` after a name or a number on a later line divides, and so does one after a name that stands on a line of its own after a comment, with any line break between them, or on the
+  // same line as a string that holds a `//` (a line comment ends at the line break): nothing is lost there.
+  const ELEMENT = { generic: false, ambiguity: null };
+  for (const text of ['<p>(a = b\n/c)</p>', '<p>(a = 1\r\n/ 2)</p>', '<p>(a = b // c\n d\n/c)</p>', '<p>(a = b + // c\nd\n/c)</p>', '<p>(a = b\n  /c)</p>', '<p>(a = b\u2028/c)</p>', '<p>(a = b // c\r d\r/c)</p>', '<p>(a = b // c\u2028 d\u2029/c)</p>',
+    '<p>(a = b + // c\rd\r/c)</p>', '<p>(a = b + // c\u2028d\u2029/c)</p>', '<p>(a = "http://x" + y/c)</p>', '<p>(a = b/c\n/d)</p>']) assert.deepStrictEqual(opensTypeParameters(text, 0), ELEMENT, JSON.stringify(text));
+  assert.strictEqual(elementChildren('<T>(x) a\n  /b </T>', 3, 'T').hideable, false);
+  for (const text of ['<T>(x) a // c\n b\n/c </T>', '<T>(x) a + // c\nb\n/c </T>', '<T>(x) a // c\r b\r/c </T>', '<T>(x) a // c\u2028 b\u2029/c </T>', '<T>(x) a/b\n/c </T>']) assert.strictEqual(elementChildren(text, 3, 'T').hideable, false, JSON.stringify(text));
+  // A `//` that is no comment — in a string, which a line may begin inside of — is not told from one: the `/` after the word that ends such a line is a guess too, which is the safe side.
+  assert.deepStrictEqual(opensTypeParameters('<p>(a = "http://x" + y\n/c)</p>', 0), GUESS);
+  // A line that begins before the window is not read, and the answer is the same.
+  assert.deepStrictEqual(opensTypeParameters(`const t = '${'x'.repeat(2100)}'; const e = <p>(a = b\n/c)</p>;`, `const t = '${'x'.repeat(2100)}'; const e = `.length), GUESS);
+  assert.deepStrictEqual(opensTypeParameters(`const t = '${'x'.repeat(1500)}'; const e = <p>(a = b\n/c)</p>;`, `const t = '${'x'.repeat(1500)}'; const e = `.length), ELEMENT);
+  if (!ts) return t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the readings');
+  // The pages are TypeScript's, and the call in each is data: no call is read, though the page has the text of one.
+  const callsRead = (code) => {
+    let found = 0;
+    const visit = (node) => {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'navigateTo') found += 1;
+      ts.forEachChild(node, visit);
+    };
+    visit(ts.createSourceFile('page.tsx', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX));
+    return found;
+  };
+  for (const [what, code] of COMMENT_PAGES) {
+    assertTsParses(ts, code, what);
+    assert.strictEqual(callsRead(code), 0, `${what}: TypeScript reads the text of the call as data`);
+  }
+  // The text where a regex is read after a comment is a regex to TypeScript, and where a division is, a division.
+  // A division after a name, on the next line or after a comment that stands behind an operator, is a division to TypeScript, in the text of an element and in the parameter list of a signature alike.
+  for (const list of ['a = b\n/c', 'a = b + // c\nd\n/c', 'a = b/c\n/d', 'a = "http://x" + y/c', 'a = b // c\n/ d']) {
+    assertTsParses(ts, `declare const a: any, b: any, c: any, d: any, y: any;\nconst e = <p>(${list})</p>;`, `the element with ${JSON.stringify(list)}`);
+    assertTsParses(ts, `interface I { <T>(${list}) }`, `the signature with ${JSON.stringify(list)}`);
+  }
+  for (const [value, kindOfSlash] of [['1 + // x\n/[)]/', 'RegularExpressionLiteral'], ['b // x\n/ 2', 'SlashToken'], ['1 // x\n/ 2', 'SlashToken']]) {
+    const source = ts.createSourceFile('page.tsx', `declare const b: any;\nconst o = { m(a = ${value}) {} };`, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    assert.deepStrictEqual(source.parseDiagnostics.map((d) => d.code), [], JSON.stringify(value));
+    let regexes = 0;
+    const visit = (node) => {
+      if (node.kind === ts.SyntaxKind.RegularExpressionLiteral) regexes += 1;
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    assert.strictEqual(regexes, kindOfSlash === 'RegularExpressionLiteral' ? 1 : 0, `TypeScript reads ${JSON.stringify(value)} with ${kindOfSlash === 'RegularExpressionLiteral' ? 'a regex' : 'a division'}`);
+  }
+});
+
 // readChildren in closing mode, through elementChildren: the children of `<T>` read from its `>` to the closing tag of its own. `fails` is a text no element has, `closes` the closing tag found, `hidden` one that
 // could be inside a string, a template, a comment or a regex that the text opens, and `unknown` a text this does not read.
 test('elementChildren: the text of an element is read to its closing tag; a failure, a hidden closing tag and what is not read are told apart', (t) => {
@@ -3456,16 +3894,106 @@ test('elementChildren: the text of an element is read to its closing tag; a fail
     ['(x) `a </T>', 'hidden'], ['(x) `a ${b} </T>', 'hidden'], ['(x) `a\\` </T> b`</T>', 'hidden'], ["(x) 'a /* </T> */ b'</T>", 'hidden'], ['(x) // it\'s "a </T>', 'hidden'],
     // A comment that no end is in sight for hides the closing tag even after a word, where a lone `/` would divide; so does a template with a `${` that is closed before it.
     ['(x) a // c </T>', 'hidden'], ['(x) a /* c </T>', 'hidden'], ['(x) 1 // c </T>', 'hidden'], ['(x) a /* c */ b </T>', 'closes'], ['(x) `a ${b} c` </T>', 'hidden'], ['(x) `a ${b} c` d </T>', 'hidden'],
+    // A `/` right after a comment is judged by the token before the comment, which is trivia to a type (slashFollowsAnOperand, with the comments that the text opened): after a word, a number, a `)` or a `]` it divides, whatever the
+    // comment ends in — a word, a number, a `$`, nothing, a line break of every kind — and after anything else a regex may begin. A block comment is one of those comments, and so is a run of them. Where the word stands on
+    // a line of its own, with no `//` before it, a line break between it and the `/` is nothing.
+    ['(x) a // c\n/b </T>', 'closes'], ['(x) 1 // c\n/b </T>', 'closes'], ['(x) a // c\r\n/b </T>', 'closes'], ['(x) a // c\u2028/b </T>', 'closes'], ['(x) a // $\n/b </T>', 'closes'], ['(x) a // c\n\n  /b </T>', 'closes'],
+    ['(x) a /* c */ /b </T>', 'closes'], ['(x) a // c\n// d\n/b </T>', 'closes'], ['(x) a /* c */ // d\n/b </T>', 'closes'], ['(x) a // c\n/* d */\n/b </T>', 'closes'], ['(x) a /* c\n */ /b </T>', 'closes'],
+    ['(x) ( /* c */b // d\n/e </T>', 'closes'], ['(x) ( /* c */b /d </T>', 'closes'],
+    ['(x) 1 + // c\n/[</T>]/ </T>', 'hidden'], ['(x) 1 + /* c */ /[</T>]/ </T>', 'hidden'], ['(x) 1 + // c\n// d\n/[</T>]/ </T>', 'hidden'], ['(x) (a) // c\n/b </T>', 'closes'], ["(x) 'a' // c\n/b </T>", 'hidden'],
+    ['(x) [a] // c\n/b </T>', 'closes'], ['(x) f(a, (b)) /* c */ /b </T>', 'closes'], ['(x) a[0] // c\r\n/b </T>', 'closes'], ['(x) (a) // c\n// d\n/b </T>', 'closes'], ['(x) 1 + (a) // c\n/b </T>', 'closes'], ['(x) (a) + // c\n/[</T>]/ </T>', 'hidden'],
+    ['(x) return // c\n/b </T>', 'hidden'], ['(x) a // c\n b\n/c </T>', 'closes'], ['(x) a\n  /b </T>', 'closes'], ['(x) a\r\n/b </T>', 'closes'], ['(x) a\u2028/b </T>', 'closes'],
+    // A comment that the text did not open is not told from a string's text: a `//` before the word on its line is a guess, and a word on a line of its own after a comment is a word.
+    ['(x) "http://x" y\n/b </T>', 'hidden'], ['(x) a // c\n b // d\n/e </T>', 'closes'], ['(x) a /* c */ b\n/d </T>', 'closes'],
     // A `/` that no regex may start at, a comment or a template that is closed before the closing tag, and a line comment that ends before it, hide nothing: the closing tag is in code.
     ['(x) a/b</T>', 'closes'], ['(x) 1/2 </T>', 'closes'], ['(x) a / b </T>', 'closes'], ['(x) a\n/b </T>', 'closes'], ['(x) $/y </T>', 'closes'], ['(x) _/y </T>', 'closes'], ['(x) a//b\n</T>', 'closes'],
     ['(x) `t` </T>', 'closes'], ['(x) `a\\`b` </T>', 'closes'], ['(x) `a` `b` </T>', 'closes'], ['(x) /* c */ </T>', 'closes'], ['(x) /* a */ /* b */ </T>', 'closes'], ['(x) // c\n</T>', 'closes'], ['(x) // c\r\n</T>', 'closes'],
     ['(x) // c\u2028</T>', 'closes'], ["(x) /* ' */ </T> '", 'closes'], ['(x) // c\n// d\n</T>', 'closes'], ['(x) a/ /* c */ b </T>', 'closes'], ['(x) a/* c */b </T>', 'closes'],
-    // A `/` after anything else may begin a regex, which a type holds in a default value or a computed name, and the closing tag may be in it: a `)`, an operator, a keyword, a bracket, a quote, a tag, a letter beyond ASCII.
+    // A `/` after anything else may begin a regex, which a type holds in a default value or a computed name, and the closing tag may be in it: an operator, a keyword, a quote, a tag, a letter beyond ASCII. After a `)` or a `]` it
+    // divides: no regex follows a parenthesised expression, a call, an index or an array, and no type has a `/` after a bracket.
     // `implements` is one of the keywords: its heritage clause takes an expression, as `extends` does (`[class C implements /re/ {}]`); a word that only starts like it divides.
-    ['(x) = /re/ </T>', 'hidden'], ['(x) (a) /b </T>', 'hidden'], ['(x) return/exchange </T>', 'hidden'], ['(x) [a] /b </T>', 'hidden'], ['(x) , /b </T>', 'hidden'], ['(x) é/y </T>', 'hidden'], ['(x)<b>y</b> /z </T>', 'hidden'],
-    ['(x) typeof /b </T>', 'hidden'], ["(x) 'a' /b </T>", 'hidden'], ['(x) /* c */ /b </T>', 'hidden'], ['(x) /b </T>', 'hidden'], ['(x) {y} /b </T>', 'hidden'],
+    ['(x) = /re/ </T>', 'hidden'], ['(x) (a) /b </T>', 'closes'], ['(x) return/exchange </T>', 'hidden'], ['(x) [a] /b </T>', 'closes'], ['(x) , /b </T>', 'hidden'], ['(x) é/y </T>', 'hidden'], ['(x)<b>y</b> /z </T>', 'hidden'],
+    ["(x) 'a' /b </T>", 'hidden'], ['(x) typeof /b </T>', 'hidden'], ['(x) /* c */ /b </T>', 'closes'], ['(x) /b </T>', 'closes'], ['(x) {y} /b </T>', 'hidden'],
     ['(x) implements /b </T>', 'hidden'], ['(x) extends /b </T>', 'hidden'], ['(x) implementsX /b </T>', 'closes'],
     ["(x)<b>'y </b> z </T> w'</T>", 'hidden'], ["(x) 'a' 'b </T>\n", 'closes'],
+    // A nested tag is an element's, or something else to a type: the type arguments of a name (`Array<b>`), a comparison (`a<b>c`), the type parameters of a signature (`<b>(y): T`, `<U extends A>(y): T`). Where it is, the
+    // text after its `>` is code, which a string, a template or a comment holds the closing tags in, and the closing tag of the head may be inside one that the text of the nested element opened. A region that the text of a
+    // nested element opened and that is still open at its closing tag is read both ways, the closing tag of the head is hidden where either hides it, and two such regions are taken for hidden.
+    ["(x); m: Array<b> = '</b>' + '</T>'", 'hidden'], ["(x); <b>(y): '</b>'; q: '</T>'", 'hidden'], ["(x); <U extends A>(y): '</U>'; k: '</T>'", 'hidden'], ["(x); m: A<b>; n: '</b>' + '</T>'", 'hidden'], ["(x); m = a<b>c; n: '</b>' + '</T>'", 'hidden'],
+    ["(x); <const U extends A>(y): '</const>'; k: '</T>'", 'hidden'], ["(x); <in out U extends A>(y): '</in>'; k: '</T>'", 'hidden'], ["(x); <const U>(y): '</const>'; k: '</T>'", 'hidden'],
+    ["(x)<b>'y</b> + '</T>'", 'hidden'], ["(x)<>'y</> + '</T>'", 'hidden'], ['(x)<b>`y</b> `</T>', 'hidden'], ['(x)<b>x // y</b> +\n/[</T>]/', 'hidden'], ["(x) <b>x '</b> 'y</T>' ", 'hidden'], ["(x)<b>'y</b> <i>'z</i> w'</T>", 'hidden'],
+    ['(x)<b>see https://x.y</b></T>', 'hidden'], ['(x)<b>x // y</b> </T>', 'hidden'], ["(x)<U extends A>'y</U> + '</T>'", 'hidden'],
+    // One region that crosses the closing tags of several elements is one place, and a string that closes inside the next element, or that no quote closes on its line, holds nothing. Where the region goes on past the closing tag
+    // of the head (`'y</b></T>'`), the type holds the closing tag in it.
+    ["(x)<b>'y</b><i>z</i> w'</T>", 'closes'], ["(x)<b>'y</b> <i>z' </i> w'</T>", 'closes'], ["(x)<b>'y</b> '</T>", 'closes'], ["(x)<b>'y</b><b d=\"1\">z' </b> w'</T>", 'closes'], ["(x)<U extends A>y '</U> z'</T>", 'closes'],
+    ["(x)<b>'y</b></T>'", 'hidden'], ['(x)<b>`y</b></T>`', 'hidden'], ["(x); m: Array<b> = '</b></T>'", 'hidden'],
+    // A tag that no type has — an attribute with a value, an attribute that `extends` does not introduce, a dotted name with an attribute, a fragment — is an element to every reading, and its text is JSX text: a URL, an apostrophe, a back-tick or a
+    // comment opener in it opens nothing, and the elements in it are JSX too. What stands after its closing tag is code to the type that holds the element, and is read as such.
+    ['(x)<a href="x">see https://x.y</a>\n</T>', 'closes'], ['(x)<a href="x">it\'s https://x.y</a> and <b>that\'s</b></T>', 'closes'], ['(x)<a href="x">see https://x.y</a> <i>b</i> </T>', 'closes'], ['(x)<a href="x">`t</a> `u` </T>', 'closes'],
+    ['(x)<a href="x">/* c</a> </T>', 'closes'], ['(x)<a href="x">// c</a> </T>', 'closes'], ['(x), <>x // y</> </T>', 'closes'], ['(x)<b d>see https://x.y</b></T>', 'closes'], ['(x)<A.B x>see https://x.y</A.B></T>', 'closes'],
+    ['(x)<b d="1">x <i>y // z</i> w</b></T>', 'closes'], ['(x)<a href="x">https://x.y</a> <a href="z">https://z</a></T>', 'closes'], ['(x)<a href="x"><b>https://x.y</b></a></T>', 'closes'],
+    ['(x)<b d="1">x // y</b> +\n/[</T>]/', 'hidden'], ["(x)<b d=\"1\">'y</b> + '</T>'", 'hidden'], ['(x)<b d={1}>`y</b> `</T>', 'hidden'], ['(x)<b d="1">x <i>y // z</i> w</b> + // c\n/[</T>]/', 'hidden'],
+    ["(x)<a href=\"x\"><b>'x</b></a> + '</T>'", 'hidden'], ["(x)<b><a href=\"x\">'x</a></b> + '</T>'", 'hidden'],
+    // A region that a type's `<b>` text opens and that goes on past the closing tag of an element no type has is no reading: that closing tag is in code. The one that the element's own text opens ends at it. And a word that is
+    // given a value is no part of a constraint.
+    ['(x)<a href="x"><b>\'y</b></a></T> z\'', 'closes'], ['(x)<a href="x"><b>`y</b></a></T> z`', 'closes'], ['(x)<b><a href="x">\'y</a></b></T> z\'', 'closes'], ['(x)<U extends A="1" B>see https://x.y</U></T>', 'closes'],
+    // A dotted name is no type parameter's, with a constraint or none. A tag that stands inside what the text of the type opens — a string that holds `<i d="1">` and `</i>` — is no element's, and the text after it is no JSX text.
+    ['(x)<A.B extends X>see https://x.y</A.B></T>', 'closes'], ["(x)<b>'x <i d=\"1\">y' + '</i></b></T>'", 'hidden'], ["(x); m: Array<b> = 'x <i d=\"1\">y' + '</i></b></T>'", 'hidden'],
+    // Where the nested `<b>` is code, a tag that stands inside a string is text — a fragment, a tag with an attribute — and its closing tag in the next string closes nothing: the quote that ends a string is not the one that opens
+    // the next, as an element's tags would pair them. The element reading cuts the second string at the closing tag, and the quotes after it pair differently.
+    ["(x); m: Array<b> = '<>' + '</>' + '</b></T>'", 'hidden'], ["(x); m: A<b>; n: A = '</b> <b d> </b>' || '</T>'", 'hidden'], ['(x); m: Array<b> = `</b><a href="x">y</a>` || `</T>`', 'hidden'], ["(x)<b>'a <>b' + '</>' + '</b></T>'", 'hidden'],
+    ["(x); m: Array<b> = '<a href=\"x\">' + '</a>' + '</b></T>'", 'hidden'], ["(x)<b>'a <i d=\"1\">b' + 'c</i> d' </b></T>", 'closes'], ["(x); m: A<b>; n: A = 'x <>' + '</></b>' ?? '</T>'", 'hidden'],
+    ['(x); m(a?: string, b = <i>"q"`a/b\'<i>\'*/y z</i> + <i>`t`/**/</i>\n\n`</i>` || `</T>`): void', 'hidden'],
+    // One region that crosses the closing tags of the elements around the one that opened it is one place (crossedFrom): the closing tags are in a string, and the head's is not.
+    ["(x)<i><b>'y</b></i> w'</T>", 'closes'], ["(x)<i><b>'y</b> z</i> w'</T>", 'closes'],
+    // Two regions that end at one place are two places, told by where they start: two comments on one line, each opened in an element of its own, are two crossings, and the head's closing tag is for the type to place.
+    ["(x); m(a = <b>//</b> - <i>//</i> ?? `\n</T>`)", 'hidden'], ["(x); m(a = <b>x // y</b> + <i>u // v</i> + `\n</T>`)", 'hidden'], ['(x); [<b>x // y</b> + <i>u // v</i> +\n/[</T>]/]: string', 'hidden'],
+    ['(x); m(a = <b>//</b> - <i>//</i> ?? 1 +\n/[</T>]/): void', 'hidden'], ['(x); m(a = <b>/* x</b> + <i>/* y</i> + `\n</T>`)', 'hidden'],
+    // A string, a template or a comment that the text opens where no element of the type's reading is open holds its tags as text, so the closing tag of the next one cuts nothing short, and what stands after it is code.
+    ["(x); m: A = '<b>' + `x</b>` </T>", 'closes'], ['(x); m: A = `<b>` + `x</b>` </T>', 'closes'], ["(x); m: A = '<b>' + /* x</b> */ 1 </T>", 'closes'],
+    // A tag with a word of TypeScript in it that no attribute gives a value — a modifier, an operator, a type's keyword: `<public U>(y): T`, `<in out U>`, `a <b in c> d`, `Array<keyof X>` — may be the type parameters of a signature, a
+    // comparison or the type arguments of a name, which a tag with no such word cannot be, and what follows its `>` is code: a string there holds the closing tag. (`extends` is the one word that a constraint has.)
+    ["(x); <public U>(y): '</public>'; q: '</T>'", 'hidden'], ["(x); <private U>(y): '</private>'; q: '</T>'", 'hidden'], ["(x); <readonly U>(y): '</readonly>'; q: '</T>'", 'hidden'], ["(x); m<static U>(y): '</static>'; q: '</T>'", 'hidden'],
+    ["(x); new <abstract U>(y): '</abstract>'; q: '</T>'", 'hidden'], ["(x); m(p = x <a in b> '</a>' + '</T>')", 'hidden'], ["(x); m(p = x <a instanceof B> '</a>' + '</T>')", 'hidden'], ["(x); m(p = x <A.B as T> '</A.B>' + '</T>')", 'hidden'],
+    ["(x); m(p = x <new b> '</new>' + '</T>')", 'hidden'], ["(x); m(p = x <typeof U> '</typeof>' + '</T>')", 'hidden'], ["(x); m(p = x <void a> '</void>' + '</T>')", 'hidden'], ["(x); m(p = x <delete x> '</delete>' + '</T>')", 'hidden'],
+    ["(x); m(p = x <await a> '</await>' + '</T>')", 'hidden'], ["(x); m(p = x <a satisfies B> '</a>' + '</T>')", 'hidden'], ["(x); m: Array<keyof X> = '</keyof>' + '</T>'", 'hidden'], ["(x); m: Array<readonly X> = '</readonly>' + '</T>'", 'hidden'],
+    ["(x); m: Array<unique symbol> = '</unique>' + '</T>'", 'hidden'], ["(x); m: Array<infer U extends A> = '</infer>' + '</T>'", 'hidden'], ["(x); m: x <asserts readonly> '</asserts>' + '</T>'", 'hidden'],
+    // A word that has a value is an attribute's, and so is a word in the name of an attribute that a dash or a dot joins to a word that is none (`data-in`): the elements read for JSX text, as a tag with an attribute is.
+    ['(x)<button type="button">https://x.y</button></T>', 'closes'], ['(x)<label for="x">it\'s https://x.y</label></T>', 'closes'], ['(x)<Link as="span" href="/x">`t</Link> `u` </T>', 'closes'], ['(x)<a href="x" default="y">see https://x.y</a></T>', 'closes'],
+    ['(x)<button type={kind}>https://x.y</button></T>', 'closes'], ['(x)<a data-in="1">see https://x.y</a></T>', 'closes'], ['(x)<input readonly>see https://x.y</input></T>', 'hidden'], ['(x)<a data-in>see https://x.y</a></T>', 'hidden'],
+    // The words of a tag are split at the dots and the dashes that join them (hasKeywordPart), so a keyword in a dotted name leaves the tag possible code. No type reads `<A.in x>`: the reading is the conservative one, and the row holds it.
+    ['(x)<A.in x>see https://x.y</A.in></T>', 'hidden'],
+    // A line break ends a member of a type (canParseSemicolon, parseTypeMemberSemicolon), so a tag with a line break between a word and its `=` is the members of a type — an initializer that ends at the break, then a member named by the
+    // word, whose own `=` takes an initializer — and no list of attributes: the text after its `>` is code, and a string there holds the closing tag. Any line break stands for it (LF, CR, CRLF), whether the value is a string or a
+    // container, and wherever a type reads a comparison (an initializer, a default value, a computed name). A `get` or a `set` that has a value after a line break is a member as well (isTypeMemberStart takes either for the start of a
+    // member before it looks at what follows). A `=` on the line of its word is no member (TS1131) — so a tag of attributes, each on a line of its own, is an element's, as prettier writes one — and a line break after the `=` is none either.
+    ["(x); m: A = x <a\nhref\n=\"/x\"> '</a>' + '</T>'", 'hidden'], ["(x); m: A = x <a\r\nhref\r\n=\"/x\"> '</a>' + '</T>'", 'hidden'], ["(x); m: A = x <a\rhref\r=\"/x\"> '</a>' + '</T>'", 'hidden'], ["(x); m: A = x <a href\n=\"/x\"> '</a>' + '</T>'", 'hidden'],
+    ["(x); m: A = x <a\nhref\n='/x'> '</a>' + '</T>'", 'hidden'], ["(x); m: A = x <a\nhref\n={y}> '</a>' + '</T>'", 'hidden'], ["(x); m: A = x <a\nhref\n=\"/x\"\n> '</a>' + '</T>'", 'hidden'], ["(x); m: A = x <a\n  href\n  =\"/x\"\n> '</a>' + '</T>'", 'hidden'],
+    ["(x); m: A = x <a\nb\nc\n=\"/x\"> '</a>' + '</T>'", 'hidden'], ["(x); m: A = x <a\nb\n=\"1\"\nc\n=\"/x\"> '</a>' + '</T>'", 'hidden'], ["(x); m: A = x <A.B\nc\n=\"/x\"> '</A.B>' + '</T>'", 'hidden'],
+    ["(x); m(p = x <a\nhref\n=\"/x\"> '</a>' + '</T>'): void", 'hidden'], ["(x); [x <a\nhref\n=\"/x\"> '</a>' + '</T>']: string", 'hidden'], ["(x); m? = f() <a\nhref\n=\"/x\"> '</a>' + '</T>'", 'hidden'], ["(x); m: A = 1 <a\nhref\n=\"/x\"> '</a>' + '</T>'", 'hidden'],
+    ["(x); m: A = x <a\nget=\"/x\"> '</a>' + '</T>'", 'hidden'], ["(x); m: A = x <a\nset=\"/x\"> '</a>' + '</T>'", 'hidden'], ["(x); m: A = x <a\r\nget='/x'> '</a>' + '</T>'", 'hidden'], ["(x); m: A = x <a\nhref=\"/y\"\nget=\"/x\"> '</a>' + '</T>'", 'hidden'],
+    ['(x)<a\nhref\n="x">see https://x.y</a></T>', 'hidden'], ['(x)<a\nget="x">see https://x.y</a></T>', 'hidden'],
+    ["(x); m: A = x <a get=\"/x\"> '</a>' + '</T>'", 'closes'], ["(x); m: A = x <a\nhref=\"/x\"> '</a>' + '</T>'", 'closes'], ["(x); m: A = x <a\n  href=\"/x\"\n  target=\"_blank\"\n> '</a>' + '</T>'", 'closes'],
+    ["(x); m: A = x <a\nin-x=\"v\"> '</a>' + '</T>'", 'closes'], ["(x); m: A = x <a\ndata-get=\"v\"> '</a>' + '</T>'", 'closes'], ["(x); m: A = x <a\ngetx=\"v\"> '</a>' + '</T>'", 'closes'],
+    ['(x)<a\n  href="x"\n  target="_blank"\n>see https://x.y</a></T>', 'closes'], ['(x)<a href="x"\n>see https://x.y</a></T>', 'closes'], ['(x)<a get="x">see https://x.y</a></T>', 'closes'],
+    // U+2028 and U+2029, U+0085 and U+00A0 are no white space of a tag to this reading: a tag that holds one is not read, and the page is refused after a guess.
+    ["(x); m: A = x <a\u2028href\u2028=\"/x\"> '</a>' + '</T>'", 'unknown'], ["(x); m: A = x <a\u0085href\u0085=\"/x\"> '</a>' + '</T>'", 'unknown'], ["(x); m: A = x <a\u00a0href=\"/x\"> '</a>' + '</T>'", 'unknown'],
+    // A fragment is no element to a type where a name, a bracket, a quote or a back-tick stands before it, or a `(` or a back-tick after it: the empty type parameters of a signature (`<>(y): T`, `m<>(y): T`), the empty type
+    // arguments of a name, a call or an expression (`A<>`, `f<>(1)`, `f(x)<>`, `a[0]<>`, `a!<>`, `'s'<>`, `{}<>`), and a tagged template (`x <>\`t\``) are code, and a string after them holds the closing tag. After a `,`, a `;`, an operator or
+    // nothing it is a fragment, for certain, and its text is JSX text — unless a line break stands before it that a line comment may end (below).
+    ["(x); <>(y): '</>'; q: '</T>'", 'hidden'], ["(x); m<>(y): '</>'; q: '</T>'", 'hidden'], ["(x); new <>(y): '</>'; q: '</T>'", 'hidden'], ["(x); m: A<> = '</>' + '</T>'", 'hidden'], ["(x); m(p = f<>(1) + '</>' + '</T>')", 'hidden'],
+    ["(x); m(p = f(x)<> || '</>' + '</T>')", 'hidden'], ["(x); m(p = a[0]<> || '</>' + '</T>')", 'hidden'], ["(x); m(p = a!<> || '</>' + '</T>')", 'hidden'], ["(x); m(p = 's'<> || '</>' + '</T>')", 'hidden'], ["(x); m(p = {}<> || '</>' + '</T>')", 'hidden'],
+    ["(x); m(p = x <>`t` + '</>' + '</T>')", 'hidden'], ['(x)<>x // y</> </T>', 'hidden'], ['(x); <>x // y</> </T>', 'closes'], ['(x), <>x // y</> </T>', 'closes'], ["(x); 'x//y', <>// y</> </T>", 'closes'],
+    // The character before the fragment is the last one of a line comment, whatever it is, where a line break stands between them: `f // note:` and a line break, then `<> || …` is the instantiation expression `f<> || …`, which
+    // opens no element, and a string after it holds the closing tag. A comment ends in any character; a number ends in a `.` (`1.<>`), and a name may end in a character beyond ASCII. After a line break that no line comment can end — no
+    // `//` stands before the character on its line — the character is read as written: an operator there leaves a fragment, whose text is JSX text (the `//` in it opens nothing).
+    ["(x); m(p = f // note:\n<> || '</>' + '</T>')", 'hidden'], ["(x); m(p = f // note.\n<> || '</>' + '</T>')", 'hidden'], ["(x); m(p = f // note,\n<> || '</>' + '</T>')", 'hidden'], ["(x); m(p = f // note -\n<> || '</>' + '</T>')", 'hidden'],
+    ["(x); m(p = f // note =\n<> || '</>' + '</T>')", 'hidden'], ["(x); m(p = f // note (\n<> || '</>' + '</T>')", 'hidden'], ["(x); m(p = f // note:\r<> || '</>' + '</T>')", 'hidden'], ["(x); m(p = f // note:\u2028<> || '</>' + '</T>')", 'hidden'],
+    ["(x); m(p = f // note:\u2029<> || '</>' + '</T>')", 'hidden'], ["(x); m(p = f // note:\n\n  <> || '</>' + '</T>')", 'hidden'], ["(x); m(p = f(x) // e.g.\n<> || '</>' + '</T>')", 'hidden'], ["(x); m: A = f // note:\n<> || '</>' + '</T>'", 'hidden'],
+    ["(x); [f // note:\n<> || '</>' + '</T>']: string", 'hidden'], ["(x); m(p = 1 + // note:\n<>x // y</>)</T>", 'hidden'], ["(x); m(p = 1 + // c\n// d:\n<>x // y</>)</T>", 'hidden'], ["(x); m(p = 1.<> || '</>' + '</T>')", 'hidden'],
+    ["(x); m(p = \u00e9<> || '</>' + '</T>')", 'hidden'], ["(x); m(p = f\u00e9<> + '</>' + '</T>')", 'hidden'], ["(x); m(p = f /* c */ <> || '</>' + '</T>')", 'hidden'], ["(x); m(p = f\n<> || '</>' + '</T>')", 'hidden'],
+    ["(x); m(p = 1 +\n<>x // y</>)</T>", 'closes'], ["(x); m(p = a ||\n  <>x // y</> || b)</T>", 'closes'], ["(x); m(p = f(\n<>x // y</>))</T>", 'closes'], ["(x); m(p = 1 +\r\n<>x // y</>)</T>", 'closes'],
+    ["(x); m(p = 1 +\u2028<>x // y</>)</T>", 'closes'], ["(x); m(p = 1 +\u0085<>x // y</>)</T>", 'closes'], ["(x); m(p = 1 + // note\n<>x // y</>)</T>", 'hidden'],
     // `</` and a comment is a `<` and a comment to a type, the type parameters of the next signature, and TS1003 to an element; with white space between, it is a closing tag to both.
     ['(x)</* c */T>', 'fails'], ['(x)\n</* c */T>', 'fails'], ['(x)</ /* c */ T>', 'closes'], ['(x)</ T>', 'closes'], ['(x)<b></ /* c */ b></T>', 'closes'], ['(x)<b></* c */b></T>', 'fails'],
     // Strings: one that ends right where the closing tag starts holds nothing of it; a quote inside a string is not the start of another; a quote right after a word that is no keyword is an apostrophe or an
@@ -3509,6 +4037,61 @@ test('elementChildren: the text of an element is read to its closing tag; a fail
     // The text after the closing tag that the reading reaches is no part of the element.
     if (expected === 'closes') assertTsParses(ts, `declare const y: any, t: any;\nconst e = ${element.slice(0, elementChildren(element, 3, 'T').closes + 1)};`, `TypeScript parses ${JSON.stringify(body)} as an element`);
   }
+});
+
+// A nested tag and a fragment that a type reads as code — through line breaks and comments of every kind between the tokens that tell it — leave the closing tag of the head hidden, whatever the text after them holds: a line break ends a
+// member of a type, so `href` and a line break, then `="/x"`, is a member with an initializer; and a line comment may end in any character, so the character before a fragment on the next line says nothing of the operand before the comment.
+// TypeScript says which texts a type reads: for each text in the places where a comparison or an empty list of type arguments stands, a page that parses has the `<` read as code (the closing tags in it are in strings), and the reading
+// must not say that nothing could hide the head's closing tag ('closes'). The tags that no type has — attributes each with its `=` on its own line, as prettier writes them — are read as the element they are.
+test('TypeScript: a tag or a fragment that a type reads through line breaks and comments leaves the closing tag hidden; the attributes of an element, each on a line of its own, do not', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
+  const kindOf = (text) => {
+    const read = elementChildren(`<T>(x)${text}`, 3, 'T');
+    return read === null ? 'unknown' : read.fails !== undefined ? 'fails' : read.hideable ? 'hidden' : 'closes';
+  };
+  const typeReads = (text) => firstDiagnostic(ts, `interface I {\n  <T>(x)${text}\n}\n`) === Infinity;
+  const lineBreaks = ['\n', '\r', '\r\n', '\u2028', '\u2029'];
+  // The tags: a line break between a word and its `=`, before a valued `get` or `set`, after a value, in a dotted name, around several words; and the tags whose `=` is on the line of its word.
+  const tags = [];
+  for (const b of lineBreaks) {
+    tags.push(`<a${b}href${b}="/x">`, `<a href${b}="/x">`, `<a${b}href${b}={y}>`, `<a${b}b${b}c${b}="/x">`, `<a${b}b${b}="1"${b}c${b}="/x">`, `<A.B${b}c${b}="/x">`, `<a${b}get="/x">`, `<a${b}set='/x'>`, `<a${b}href="/y"${b}get="/x">`,
+      `<a${b}href${b}="/x"${b}>`, `<a${b}href="/x"${b}target="_blank"${b}>`, `<a href=${b}"/x">`, `<a${b}href=${b}"/x">`, `<a${b}data-get="v">`, `<a${b}getx="v">`, `<a${b}in-x="v">`);
+  }
+  const places = [(tag) => `; m: A = x ${tag} '</a>' + '</T>'`, (tag) => `; m(p = x ${tag} '</a>' + '</T>'): void`, (tag) => `; [x ${tag} '</a>' + '</T>']: string`, (tag) => `; m? = f() ${tag} '</a>' + '</T>'`];
+  let types = 0;
+  for (const tag of tags) {
+    for (const place of places) {
+      const text = place(tag);
+      if (typeReads(text)) {
+        types += 1;
+        assert.notStrictEqual(kindOf(text), 'closes', `a type reads ${JSON.stringify(text)}`);
+      }
+    }
+  }
+  assert.ok(types >= 40, `only ${types} of the tags were read by a type`);
+  // The tags that no type reads, and that no word of TypeScript is in: an element's attributes, whatever line each stands on.
+  for (const b of ['\n', '\r', '\r\n']) {
+    for (const tag of [`<a${b}href="/x"${b}target="_blank"${b}>`, `<a${b}href="/x">`, `<a href="/x"${b}>`, `<a${b}data-get="v">`, `<a${b}getx="v">`, `<a${b}in-x="v">`, `<a${b}b="1"${b}c="/x">`]) {
+      for (const place of places) assert.ok(!typeReads(place(tag)) && kindOf(place(tag)) === 'closes', `an element's attributes: ${JSON.stringify(place(tag))}`);
+    }
+  }
+  // A fragment after an operand, where a line comment of any ending, a line terminator or nothing stands between: where the text parses, the `<>` is an empty list of type arguments and the closing tag may be in the string after it.
+  const printable = [];
+  for (let c = 33; c < 127; c += 1) printable.push(String.fromCharCode(c));
+  const separators = ['', ' ', ...lineBreaks, ' /* c */ ', ' /*\n*/ ', ...printable.map((c) => ` // note${c}\n`), ...lineBreaks.slice(1).flatMap((b) => [' // note:', ' // note.', ' // note x'].map((note) => `${note}${b}`))];
+  let lists = 0;
+  for (const operand of ['f', 'f(x)', 'a[0]', "'s'", '1', '1.', 'x!', 'this', '\u00e9', 'null', '{}']) {
+    for (const separator of separators) {
+      for (const after of [" || '</>' + '</T>'", ", '</>' + '</T>'"]) {
+        const text = `; m(p = ${operand}${separator}<>${after})`;
+        if (!typeReads(text)) continue;
+        lists += 1;
+        assert.notStrictEqual(kindOf(text), 'closes', `a type reads ${JSON.stringify(text)}`);
+      }
+    }
+  }
+  assert.ok(lists >= 600, `only ${lists} of the fragments were read by a type`);
 });
 
 // A string in a container is skipped exactly where there is a closing tag to find (containerEndWithStrings), and still stops the container reading where there is an arrow (elementFailsAt): the
@@ -4164,8 +4747,8 @@ test('the closer of a cast is read for certain: a "/" after it divides and a "<"
 
 // ─── The text of an element that starts with a parenthesis: the type that could be read from the same text ────────────────────────────────────────────────
 //
-// The text up to the closing tag is scanned as the type would scan it, as code, and what could hide the closing tag is a string, a template or a comment that is open at it, or a regex that may start (slashFollowsAnOperand). Before
-// the first of those, the text must be what a type could hold for its members — a name, a `,` or a `;`, a name and then its own type — or no type holds the closing tag in anything (typeMembersFail).
+// The text up to the closing tag is scanned as the type would scan it, as code, and what could hide the closing tag is a string, a template or a comment that is open at it, or a regex that may start (slashFollowsAnOperand). Up to
+// each of those, the text must be what a type could hold for its members — a name, a `,` or a `;`, a name and then its own type — or no type holds the closing tag in anything (typeMembersFail).
 test('typeMembersFail: text that no type can hold as its members leaves no type for a closing tag to be hidden in', () => {
   const closes = (text, typeFrom) => {
     const read = elementChildren(`<T>${text}`, 3, 'T', null, typeFrom);
@@ -4179,11 +4762,12 @@ test('typeMembersFail: text that no type can hold as its members leaves no type 
     ['(x), a, b c /* </T> */ d</T>', 'closes'], ['(x);\n  see https://x.y more\n  </T>', 'closes'], ['(x), a_1 $b // c </T>', 'closes'],
     // A template or a regex where a member would begin, after a separator or on the next line: no member starts with one (TS1131). After a colon a template is a type, and stays possible.
     ['(x); `a ${b} </T>', 'closes'], ['(x), `a </T> b`', 'closes'], ['(x)\n  `a ${b} </T>', 'closes'], ['(x);\n  /re </T>', 'closes'], ['(x), /a </T> b/', 'closes'], ['(x); m: `a ${b} </T>', 'hidden'],
-    // A name alone, a modifier, a name on the next line, a colon, a bracket, a character beyond ASCII or anything that is no plain prose leaves both programs possible: a comment, a template or a string that is open at the closing tag hides it.
-    ['(x), a // c </T>', 'hidden'], ['(x), a\n  b // c </T>', 'hidden'], ['(x), readonly b // c </T>', 'hidden'], ['(x), get b // c </T>', 'hidden'], ['(x), new b // c </T>', 'hidden'], ['(x), public b // c </T>', 'hidden'],
-    ['(x), declare b // c </T>', 'hidden'], ['(x), a: b // c </T>', 'hidden'], ['(x), a? b // c </T>', 'hidden'], ['(x), [a] b // c </T>', 'hidden'], ['(x), é b // c </T>', 'hidden'], ['(x), a.b c // c </T>', 'hidden'],
-    ["(x), it's // c </T>", 'hidden'], ['(x); // c </T>', 'hidden'], ['(x);\n  /* c </T>', 'hidden'], ["(x); 'a </T> b'", 'hidden'], ['(x), = /re/ </T>', 'hidden'], ['(x), a, // c </T>', 'hidden'],
-    ['(x), a\n  see https://x.y </T>', 'closes'], ['(x),\n  a\n  b\n  // c </T>', 'hidden'], ['(x), 1\n  2 // c </T>', 'hidden'],
+    // A name alone, a modifier, a name on the next line, a colon and a type, or a computed name leaves both programs possible: a comment, a template or a string that is open at the closing tag hides it. A keyword that is
+    // no modifier is a name, and a modifier is one before a `:` too. A bracket after a name, and a `=` where a member would begin, are no member (TS1005, TS1131).
+    ['(x), a // c </T>', 'hidden'], ['(x), a\n  b // c </T>', 'hidden'], ['(x), readonly b // c </T>', 'hidden'], ['(x), get b // c </T>', 'hidden'], ['(x), public b // c </T>', 'hidden'],
+    ['(x), declare b // c </T>', 'hidden'], ['(x), a: b // c </T>', 'hidden'], ['(x), [a] b // c </T>', 'closes'], ['(x), é // c </T>', 'hidden'], ['(x); // c </T>', 'hidden'], ['(x);\n  /* c </T>', 'hidden'],
+    ["(x); 'a </T> b'", 'hidden'], ['(x), = /re/ </T>', 'closes'], ['(x), a, // c </T>', 'hidden'], ['(x), a? // c </T>', 'hidden'], ['(x), default: // c </T>', 'hidden'], ['(x), type: a // c </T>', 'hidden'],
+    ['(x), a\n  see https://x.y </T>', 'closes'], ['(x),\n  a\n  b\n  // c </T>', 'hidden'], ['(x), 1\n  2 // c </T>', 'hidden'], ['(x), new b // c </T>', 'closes'], ['(x), type b // c </T>', 'closes'],
   ];
   for (const [text, expected] of rows) assert.strictEqual(closes(text, 6), expected, JSON.stringify(text));
   // Without the position of the type's members there is no type to ask about: the same texts are guesses wherever something could hide the closing tag.
@@ -4196,6 +4780,277 @@ test('typeMembersFail: text that no type can hold as its members leaves no type 
   // Something that could hide the closing tag inside the parameter list itself is asked of nothing: the type is alive up to there.
   assert.strictEqual(closes('(x: "</T>"), a b</T>', 6), 'hidden');
   assert.strictEqual(closes('(x /* </T> */) a b</T>', 6), 'hidden');
+});
+
+// The claims of the reader of the prose that follows a call signature's `)` (typeMembersFail): for each text after the `)` of `<T>(x)`, and each thing that could hide the closing tag after it — a comment, a regex, a template, a
+// string — the reader says that the closing tag is, or may be, hidden (no claim), or that nothing can hide it: no type has the text for its members up to the probe, which is the claim. TypeScript supports the claim when its
+// parser's first diagnostic for `interface I { <T>(x)TEXT PROBE }` is at or before the closing tag in the probe. A text that ends in a comment, a string or a template that nothing closes is not asked: its diagnostic is at the
+// end of its own literal, which is where the probe's text is.
+const PROSE_HEAD = 'interface I {\n  <T>(x)';
+const PROSE_PROBES = ['// c </T>', '/b </T> /', '`b </T>', "'b </T> c'", '"b </T> c"'];
+function firstDiagnostic(ts, code) {
+  try {
+    const diagnostics = ts.createSourceFile('snippet.tsx', code, ts.ScriptTarget.Latest, false, ts.ScriptKind.TSX).parseDiagnostics;
+    return diagnostics.length === 0 ? Infinity : Math.min(...diagnostics.map((d) => d.start));
+  } catch {
+    return -1;
+  }
+}
+function deadClaims(ts, texts) {
+  const stats = { texts: 0, claims: 0, unterminated: 0 };
+  const unsound = [];
+  const seen = new Set();
+  const endsUnterminated = (code) => {
+    const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.JSX, code);
+    for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) if (scanner.isUnterminated()) return true;
+    return false;
+  };
+  for (const text of texts) {
+    if (seen.has(text)) continue;
+    seen.add(text);
+    // A text that opens a comment and does not close it, or that closes one that its first character opened, is not the text this asks about.
+    if (/\/\/[^\n]*$/.test(text) || /\/\*(?:(?!\*\/)[^])*$/.test(text) || /[/*]$/.test(text)) continue;
+    if (endsUnterminated(`${PROSE_HEAD}${text}`)) {
+      stats.unterminated += 1;
+      continue;
+    }
+    stats.texts += 1;
+    for (const probe of PROSE_PROBES) {
+      const read = elementChildren(`<T>(x)${text}${probe}`, 3, 'T', null, 6);
+      if (read === null || read.fails !== undefined || read.hideable) continue;
+      stats.claims += 1;
+      const code = `${PROSE_HEAD}${text}${probe}\n}\n`;
+      // At the `<` of the closing tag at the latest: after a name a `/` divides, so the closing tag is code, and `</` is one token to TypeScript's scanner in TSX that nothing in a type or an expression after an operand can have.
+      // Any diagnostic before it, or at it, means that the probe hides nothing.
+      if (firstDiagnostic(ts, code) > PROSE_HEAD.length + text.length + probe.indexOf('</T>')) unsound.push(JSON.stringify(code));
+    }
+  }
+  return { stats, unsound };
+}
+
+// The prose after a call signature's `)` is read as the members of a type, through the comments in it and across line breaks, from where the last question left off, up to the first thing that no type has (typeMembersFail).
+// Each row is the text after `(x)`, ending in what could hide the closing tag — a comment that holds it (`// c </T>`), a regex, a template, a string — and says whether it could be hidden there ('hidden') or not ('closes'):
+// the claims are TypeScript's, which the sweep in the test after this one asks for every one of, and the table of keywords is TypeScript's own (isModifierKind).
+test('typeMembersFail: prose is read as the members of a type through comments and line breaks, up to the first thing that no type has', (t) => {
+  const closes = (text) => {
+    const read = elementChildren(`<T>(x)${text}`, 3, 'T', null, 6);
+    return read === null ? 'unknown' : read.fails !== undefined ? 'fails' : read.hideable ? 'hidden' : 'closes';
+  };
+  const rows = [
+    // A name and a colon, then a type that a later line may give: a comment is trivia, and a type may begin on the next line. A `/` where the type must be is TS1110.
+    [';\n  https: // c </T>', 'hidden'], [';\n  https://x.y\n  /b </T>', 'closes'], [',\n  https://x.y\n  /b </T>', 'closes'], ['\n  https://x.y\n  /b </T>', 'closes'], ['; https://x.y\n/b </T>', 'closes'],
+    [';\n  Docs: https://x.y\n  /b </T>', 'closes'], [';\n  Docs: https://x.y </T>', 'closes'], [';\n  a: // c\n  /b </T>', 'closes'], [';\n  a:\n  /b </T>', 'closes'], [';\n  a: // c\n  b // d </T>', 'hidden'],
+    [';\n  a: // c\n  b\n  /d </T>', 'closes'], [';\n  a: b: c // d </T>', 'closes'], [';\n  a:: b // c </T>', 'closes'], [';\n  a: b\n  c // d </T>', 'hidden'], [';\n  a: b\n  | c // d </T>', 'hidden'],
+    // A name and a note: the line break after a name ends its member, and a `/` on the next line is where a member begins (TS1131).
+    [';\n  b // c\n  /d </T>', 'closes'], [';\n  b /* c */ // d\n  /e </T>', 'closes'], [';\n  b // c\n  // d\n  /e </T>', 'closes'], [';\n  b /* c\n  */ /d </T>', 'closes'], [';\n  b\n  // c </T>', 'hidden'],
+    // Comments of every kind are trivia, and a line break in a block comment is a line break.
+    [' /* c */ ; a /* d */ b // e </T>', 'closes'], [';\n  a /* c\n  */ b // d </T>', 'hidden'], [';\n  a /* c */ b // d </T>', 'closes'], [';\n  a: /* c\n  */ b // d </T>', 'hidden'], [';\n  a // c\n  : b // d </T>', 'hidden'],
+    // A line break does not end a member before a `:` or an operator that goes on a type: `m` and a line break, then `: T`; `m: A` and a line break, then `| B`. A line break before `extends` ends the type (no conditional
+    // type goes on over one), so `extends` is the name of the next member. Where a `:` begins the next line the type must follow, and a `/` there is TS1110; after a type a `:` is TS1005, and `&` and `|` that begin a line
+    // go on a type but not on a name.
+    [';\n  m\n  : T // c </T>', 'hidden'], [';\n  m\n  : /b </T>', 'closes'], [';\n  m: A\n  | B // c </T>', 'hidden'], [';\n  m: A\n  & B // c </T>', 'hidden'], [';\n  m: A\n  extends B ? C : D // c </T>', 'closes'], [';\n  m: A\n  .B // c </T>', 'hidden'],
+    [';\n  m: A\n  : B // c </T>', 'closes'], [';\n  m: A\n  || B // c </T>', 'closes'], [';\n  m: A\n  ? B // c </T>', 'closes'], [';\n  m\n  & B // c </T>', 'closes'], [';\n  m\n  | B // c </T>', 'closes'], [';\n  m(y)\n  & B // c </T>', 'closes'],
+    [';\n  (y)\n  &"x" // c\n  /b </T>', 'closes'], [";\n  'm'\n  || // c\n  /b </T>", 'closes'], [';\n  m\n  !\n  /b </T>', 'closes'], [';\n  m\n  @ // c </T>', 'closes'], [';\n  m\n  ? : T // c </T>', 'hidden'], [';\n  a:\n  || // c </T>', 'closes'],
+    [';\n  a: | B // c </T>', 'hidden'], [';\n  in @ // c </T>', 'closes'], [';\n  readonly . // c </T>', 'closes'], [';\n  readonly \\u0061b // c </T>', 'hidden'], [';\n  m @x // c </T>', 'closes'],
+    // A word written with an escape (`\u0061`) is one name, so a name before it, with white space between, is followed by a second name, which TypeScript rejects. The reading takes the escape for no word and says nothing of
+    // what follows it (an escape may go on the name before it, `a\u0061b`, and the word it spells may be a keyword).
+    [';\n  m \\u0061 // c </T>', 'hidden'],
+    // A keyword where a member begins is its name, unless it may be a modifier, which a `:` after it makes a name too; after a colon a keyword is the word of a type.
+    [';\n  type // c\n  /d </T>', 'closes'], [';\n  new // c\n  /d </T>', 'closes'], [';\n  return: https://x.y\n  /d </T>', 'closes'], [';\n  default: https://x.y\n  /d </T>', 'closes'], [';\n  in: https://x.y\n  /d </T>', 'closes'],
+    [';\n  default : https://x.y\n  /d </T>', 'closes'], [';\n  in\t: https://x.y\n  /d </T>', 'closes'], [';\n  in\n  : https://x.y\n  /d </T>', 'closes'], [';\n  in\n  : T // c </T>', 'hidden'], [';\n  typeof\r\n  :https://x.y\n  / x </T>', 'closes'],
+    [';\n  readonly https://x.y\n  /d </T>', 'closes'], [';\n  in // c\n  /d </T>', 'closes'], [';\n  m: keyof T // c </T>', 'hidden'], [';\n  m: typeof x // c </T>', 'hidden'], [';\n  m: new T // c </T>', 'hidden'],
+    [';\n  type b // c </T>', 'closes'], [';\n  new b // c </T>', 'closes'], [';\n  readonly b // c </T>', 'hidden'], [';\n  get b // c </T>', 'hidden'], [';\n  static b // c </T>', 'hidden'],
+    [';\n  https://x.y\n  as: https://z\n  /b </T>', 'closes'], [';\n  a: void // c </T>', 'hidden'], [';\n  a: void b // c </T>', 'closes'], [';\n  a: type b // c </T>', 'closes'], [';\n  a: unique symbol // c </T>', 'hidden'],
+    [';\n  a: readonly b // c </T>', 'hidden'], [';\n  a: import b // c </T>', 'hidden'],
+    // A sign, an operator or a closing bracket where a member begins is TS1131, and after a name on its line TS1005; so is a `.` after a name, unless the name is a number, and a quote after a name (a name and a string).
+    // `&` and `|` begin no member only after a name: a line break puts them at the start of a line that goes on a type.
+    [';\n  - // c </T>', 'closes'], [';\n  * // c </T>', 'closes'], [';\n  ) // c </T>', 'closes'], [';\n  a-b // c </T>', 'closes'], [';\n  a. // c </T>', 'closes'], [';\n  e.g. // c </T>', 'closes'], [';\n  a & b // c </T>', 'closes'],
+    [';\n  a | b // c </T>', 'closes'], [";\n  it's // c </T>", 'closes'], [';\n  5% // c </T>', 'closes'], [';\n  1.5 // c </T>', 'hidden'], [';\n  | // c </T>', 'closes'], [';\n  a? // c </T>', 'hidden'], [';\n  a?: https://x.y\n  /b </T>', 'closes'],
+    [';\n  + // c </T>', 'closes'], [';\n  % // c </T>', 'closes'], [';\n  ^ // c </T>', 'closes'], [';\n  ~ // c </T>', 'closes'], [';\n  ] // c </T>', 'closes'], [';\n  a+b // c </T>', 'closes'], [';\n  a*b // c </T>', 'closes'], [';\n  a^b // c </T>', 'closes'],
+    [';\n  a~b // c </T>', 'closes'], [';\n  a] // c </T>', 'closes'], [';\n  a)b // c </T>', 'closes'], [';\n  a"b // c </T>', 'closes'], [';\n  & // c </T>', 'closes'], [';\n  9.5 // c </T>', 'hidden'], [';\n  0.5 // c </T>', 'hidden'],
+    [';\n  a? b // c </T>', 'closes'], [';\n  a!\n  // c </T>', 'closes'], [';\n  (a) // c </T>', 'hidden'], [";\n  'a' // c </T>", 'hidden'], [';\n  [a] // c </T>', 'hidden'], [';\n  a = 1 // c </T>', 'closes'],
+    // A name, a number, a string or a signature with a `=` right after it on its line is no member (TS1131; TS1005 after a signature): the parser takes a name for a member's only where `?`, `:`, `(`, `<`, `,` or the end of its
+    // line follows it. The initializer that a property signature may have (the checker rejects it, the parser does not) comes after a `?`, a type, a computed name, `get` or `set` (a name there), or a line break.
+    [";\n  'a' = 1 // c </T>", 'closes'], [';\n  1.5 = 1 // c </T>', 'closes'], [';\n  m(y) = 1 // c </T>', 'closes'], [';\n  m(a = 1) = 1 // c </T>', 'closes'], [';\n  new = 1 // c </T>', 'closes'], [';\n  m? = 1 // c </T>', 'hidden'], [';\n  [m] = 1 // c </T>', 'hidden'],
+    [';\n  get = 1 // c </T>', 'hidden'], [';\n  m\n  = 1 // c </T>', 'hidden'], [';\n  m: A = 1 // c </T>', 'hidden'], [';\n  x = // c\n  /b </T>', 'closes'], [';\n  x = b + // c\n  /b </T>', 'closes'], [';\n  x = [ // c\n  /b </T>', 'closes'],
+    [';\n  m? = // c\n  /b </T>', 'hidden'], [';\n  m: A = // c\n  /b </T>', 'hidden'], [';\n  [x] = // c\n  /b </T>', 'hidden'], [';\n  m\n  = // c\n  /b </T>', 'hidden'], [';\n  get = // c\n  /b </T>', 'hidden'],
+    // A parameter list that is not closed on its line: a name or a keyword and a `(` start one, whose first parameter is read as a head's is (parameterListMayStart, parameterSyntaxFails), so a `/` after the comment that follows the
+    // `(` is TS1138, and prose in it — two names, a number, a string, an operator — is no list at all. A default or a type that goes on after a comment may hold a regex, and the closing tag may be in it.
+    [';\n  foo( // note\n  /docs </T>', 'closes'], [',\n  f(\n  /docs </T>', 'closes'], [';\n  a( // c\n  /b </T>', 'closes'], [';\n  if ( // c\n  /b </T>', 'closes'], [';\n  see foo( // c\n  /b </T>', 'closes'], [';\n  Total (x y // c\n  /b </T>', 'closes'],
+    [';\n  m(1) // c\n  /b </T>', 'closes'], [";\n  m('a') // c\n  /b </T>", 'closes'], [';\n  m(see docs) // c </T>', 'closes'], [';\n  m(a b) // c </T>', 'closes'], [';\n  m(Note: <a href="/help">see</a>) // c </T>', 'closes'], [';\n  ( // c\n  /b </T>', 'closes'],
+    [';\n  new ( // c\n  /b </T>', 'closes'], [';\n  readonly ( // c\n  /b </T>', 'closes'], [';\n  (a // c\n  /b </T>', 'closes'], [';\n  m(a = // c\n  /b </T>', 'hidden'], [';\n  m(a: // c\n  /b </T>', 'hidden'], [';\n  m(a) // c </T>', 'hidden'],
+    [';\n  m(a, b?: c) // c </T>', 'hidden'], [';\n  m(... // c\n  /b </T>', 'hidden'], [';\n  [ // c\n  /b </T>', 'hidden'], [';\n  [a] // c\n  /b </T>', 'closes'], [';\n  a: b = // c\n  /b </T>', 'hidden'],
+    // A `[`, a name and a `,` or a `:` are an index signature for certain (isUnambiguouslyIndexSignature), and no parameter or type starts with a `/` (TS1138, TS1110). A keyword or a number there is a computed name with a comma
+    // expression (`[this, /x/]`), which a regex may follow, and a name alone divides.
+    [';\n  [ a, // c\n  /b </T>', 'closes'], [';\n  [ k: // c\n  /b </T>', 'closes'], [';\n  [a,\n  // c\n  /b </T>', 'closes'], [';\n  [a, /b </T>', 'closes'], [';\n  readonly [ a, // c\n  /b </T>', 'closes'], [';\n  m: A\n  [ a, // c\n  /b </T>', 'closes'],
+    [';\n  [ this, // c\n  /b </T>', 'hidden'], [';\n  [ 1, // c\n  /b </T>', 'hidden'], [';\n  [ a // c\n  /b </T>', 'closes'],
+    // ... except after `get` or `set`: parseTypeMember tries parseContextualModifier(get) before isIndexSignature, and canFollowGetOrSetKeyword takes any `[`, on any line, so `get [a, /x/]()` is an accessor whose computed name is a comma
+    // expression with a regex in it, which holds the closing tag. After any other word it is the index signature that no `/` follows.
+    [';\n  get [a, /[</T>]/](): string', 'hidden'], [';\n  set [a, /[</T>]/](v)', 'hidden'], [';\n  get\n  [a, /[</T>]/](): string', 'hidden'], [';\n  get /* c */ [a, /[</T>]/](): string', 'hidden'], [';\n  get // c\n  [a, // note\n  /[</T>]/](): string', 'hidden'],
+    [';\n  static get [a, /[</T>]/](): string', 'hidden'], [';\n  readonly get [a, /[</T>]/](): string', 'hidden'], [';\n  get\u2028[a, /[</T>]/](): string', 'hidden'], [';\n  get [a: // c\n  /[</T>]/](): string', 'hidden'],
+    [';\n  readonly [a, /[</T>]/]: string', 'closes'], [';\n  static [a, /[</T>]/]: string', 'closes'], [';\n  [a, /[</T>]/]: string', 'closes'], [';\n  get: A\n  [a, /[</T>]/]: string', 'closes'], [';\n  get(): A\n  [a, /[</T>]/]: string', 'closes'],
+    [';\n  get;\n  [a, /[</T>]/]: string', 'closes'],
+    // The `(` after `typeof import`, or `import`, is the import type's, which has no line-break rule (isStartOfTypeOfImportType, parseImportType): on a line of its own it is no signature's parameter list, whose first token a string is not, so
+    // the text is no type's only where a name and a `(` stand. The type goes on as any type does: a qualified name, a union, an array. A type query on a name (`typeof A.import`, `typeof a`) is a type that ends, and a `(` on the next line starts
+    // a call signature.
+    [';\n  m: typeof import\n(\'./m\') // c </T>', 'hidden'], [';\n  m: typeof import /* c */\n(\'./m\') // c </T>', 'hidden'], [';\n  m: typeof /* c */ import\n(\'./m\') // c </T>', 'hidden'], [';\n  m: typeof\nimport\n(\'./m\') // c </T>', 'hidden'],
+    [';\n  m: typeof\r\nimport // c\r\n(\'./m\') // c </T>', 'hidden'], [';\n  m: typeof\rimport\r(\'./m\') // c </T>', 'hidden'], [';\n  m: typeof\u2028import\u2029(\'./m\') // c </T>', 'hidden'], [';\n  m: typeof\u0085import\u0085(\'./m\') // c </T>', 'hidden'],
+    [';\n  m: keyof typeof import\n(\'./m\') // c </T>', 'hidden'], [';\n  m: readonly typeof import\n(\'./m\')[] // c </T>', 'hidden'], [';\n  m: A | typeof import\n(\'./m\') // c </T>', 'hidden'], [';\n  m(): typeof import\n(\'./m\').X // c </T>', 'hidden'],
+    [';\n  m: typeof import\n(\'</T>\') ', 'hidden'], [';\n  m: typeof import\n(`./m`) // c </T>', 'hidden'], [';\n  m: import\n(\'./m\') // c </T>', 'hidden'], [';\n  m: typeof import(\'./m\') // c </T>', 'hidden'],
+    [';\n  m: typeof A.import\n(\'x\') // c </T>', 'closes'], [';\n  m: typeof a\n(\'x\') // c </T>', 'closes'], [';\n  m: typeof importer\n(\'x\') // c </T>', 'closes'], [';\n  m: typeof import_\n(\'x\') // c </T>', 'closes'],
+    [';\n  m: typeof import\u00e9\n(\'x\') // c </T>', 'closes'], [';\n  m: A\n(\'x\') // c </T>', 'closes'],
+    // After a `:` or a type, a `[` opens a tuple or an indexed access, whose first token is a type, and a `/` that begins no comment is none (TS1110): `Total: [ // note` and a line break, then `/docs`. After a line break that follows a name or a
+    // type, a `[` begins a member (a computed name or an index signature), and a regex may follow it.
+    [';\n  Total: [ // c\n  /b </T>', 'closes'], [';\n  m: A[ // c\n  /b </T>', 'closes'], [';\n  m: [ /* c */ /b </T>', 'closes'], [';\n  m: A | [ // c\n  /b </T>', 'closes'], [';\n  m: keyof [ // c\n  /b </T>', 'hidden'],
+    [';\n  m\n  [ // c\n  /b </T>', 'hidden'], [';\n  m: A\n  [ // c\n  /b </T>', 'hidden'], [';\n  [ // c\n  /b </T>', 'hidden'], [';\n  m: [ // c\n  a, /b </T>', 'hidden'],
+    // Where a type must be, a `,` or a `;` is TS1110, and so are a sign, a `=` and a closing bracket; a member's type may begin on a line of its own: `a:` and a line break, then `-1`, is a member. A `-` is not told from the
+    // sign of a number, and a `.` from the start of one.
+    [';\n  a:\n  - // c </T>', 'hidden'], [';\n  a:, b c // d </T>', 'closes'], [';\n  a: ; b c // d </T>', 'closes'], [';\n  a: = 1 // c </T>', 'closes'], [';\n  a: + // c </T>', 'closes'], [';\n  a: ) // c </T>', 'closes'],
+    [';\n  a: -1 // c </T>', 'hidden'], [';\n  a: .5 // c </T>', 'hidden'], [';\n  a: * // c </T>', 'hidden'], [';\n  a: ? // c </T>', 'hidden'], [';\n  a: | // c </T>', 'hidden'], [';\n  a: || // c </T>', 'closes'],
+    // A type goes on with a `.`, a `|` or a `&`, on its line or the next, and what follows must be a type; a keyword after a type is TS1005 unless it is `extends` (a conditional type) or `is` (a type predicate); a keyword
+    // that an operator type takes (`keyof`, `typeof`, `unique`) leaves a type to follow.
+    [';\n  a: A.B // c </T>', 'hidden'], [';\n  a: A. // c\n  /b </T>', 'closes'], [';\n  a: A | B // c </T>', 'hidden'], [';\n  a: A | // c\n  /b </T>', 'closes'], [';\n  a: A & // c\n  /b </T>', 'closes'], [';\n  a: A\n  & // c\n  /b </T>', 'closes'],
+    [';\n  a: A.B, // c\n  /b </T>', 'closes'], [';\n  a: A | B; // c\n  /b </T>', 'closes'], [';\n  a: A default // c </T>', 'closes'], [';\n  a: A in // c </T>', 'closes'], [';\n  a: A extends // c </T>', 'hidden'], [';\n  a: A is // c </T>', 'hidden'],
+    [';\n  a: keyof A // c </T>', 'hidden'], [';\n  a: keyof // c\n  /b </T>', 'closes'], [';\n  a: typeof x.y | z, // c\n  /b </T>', 'closes'], [';\n  a: unique symbol, // c\n  /b </T>', 'closes'], [';\n  a: keyof typeof x, // c\n  /b </T>', 'closes'],
+    // A word right after a block comment is no part of it.
+    [';\n  ( /* c */b /d </T>', 'closes'], [';\n  ( /* c */b // d </T>', 'hidden'],
+    // A character beyond ASCII is part of a name or no token at all (TS1127): a name, and then a second name. White space beyond ASCII ends a name.
+    [';\n  caf\u00e9 // c </T>', 'hidden'], [';\n  caf\u00e9 au lait // c </T>', 'closes'], [';\n  \u65e5\u672c\u8a9e https://x.y\n  /b </T>', 'closes'], [';\n  \u2014 // c </T>', 'hidden'], [';\n  a \u2014 // c </T>', 'closes'],
+    [';\n  a\u00a0b // c </T>', 'closes'], [';\n  a\u200bb // c </T>', 'closes'], [';\n  a\ufeffb // c </T>', 'closes'], [';\n  a\u2028b // c </T>', 'hidden'], [';\n  a\u0085b // c </T>', 'closes'],
+    // The openers: a regex where no type has one, after a name, a colon or a type; a template where a member begins and after a name, and a type after a colon; a string after a name, and a name or a type elsewhere.
+    [';\n  /b </T>', 'closes'], [';\n  a: /b </T>', 'closes'], [';\n  a: b ; /c </T>', 'closes'], [';\n  `a </T>`', 'closes'], [';\n  a `b </T>`', 'closes'], [';\n  a: `b </T>`', 'hidden'], [';\n  a: b `c </T>`', 'hidden'],
+    [";\n  'a </T> b'", 'hidden'], [";\n  a 'b </T> c'", 'closes'], [";\n  a: 'b </T> c'", 'hidden'], [";\n  a: b 'c </T> d'", 'hidden'], [';\n  type `a </T>`', 'closes'], [';\n  readonly `a </T>`', 'closes'],
+    // A number is a name, as the scanner reads one (scanNumber): digits, a fraction, and an exponent whose `e` takes a sign — ONE token, a valid name for a member, so `1e-5: …` is a member and a type may hold the closing tag in what
+    // follows it. A sign that no digit follows is TS1124, and a hex literal has no exponent (`0x1e+5` is a name, a sign and a number). Two numbers, or a number and a word, are two names.
+    [';\n  1e-5 // c </T>', 'hidden'], [';\n  1e+5: // c </T>', 'hidden'], [';\n  1E-5?: // c </T>', 'hidden'], [';\n  1_0e+1(): // c </T>', 'hidden'], [';\n  .5e-3 // c </T>', 'hidden'], [';\n  1_0E-1_0 // c </T>', 'hidden'],
+    [';\n  1e-5: A | B // c </T>', 'hidden'], [', 1e+5(): `a </T>`', 'hidden'], [';\n  1e-5\n  2e-5 // c </T>', 'hidden'], [';\n  1e5x // c </T>', 'hidden'], [';\n  1e-5 b // c </T>', 'closes'], [';\n  1e+x // c </T>', 'closes'],
+    [';\n  1e+ // c </T>', 'closes'], [';\n  1e- // c </T>', 'closes'], [';\n  0x1e+5 // c </T>', 'closes'], [';\n  1e+5.5 // c </T>', 'closes'], [';\n  1e+5 https://x.y\n  /b </T>', 'closes'], [';\n  1e-5 2 // c </T>', 'closes'],
+    // An initializer's first operand — a name, a number or a string — and a second one on its line are TS1005, wherever the keyword before them is none (a keyword may be an operator); on the next line the second is a member's name.
+    [';\n  a: A = 1 b // c </T>', 'closes'], [";\n  a: A = 1 'b' // c </T>", 'closes'], [';\n  a: A = b c // c </T>', 'closes'], [';\n  a: A = b.c d // c </T>', 'hidden'], [';\n  a: A = 1 in // c </T>', 'hidden'], [';\n  a: A = 1 as // c </T>', 'hidden'],
+    [';\n  a: A = 1 // c </T>', 'hidden'], [';\n  a: A = 1\n  b // c </T>', 'hidden'], [';\n  a? = 1 b // c </T>', 'closes'], [';\n  [a] = 1 b // c </T>', 'closes'], [';\n  a: A = 1 https://x.y\n  /b </T>', 'closes'],
+    // The text of a nested element is JSX text to a type that reads the element, which has no string, template or comment in it, and code to a reading that does not: what it opens ends with the element, and what stands after
+    // the closing tag is read again — a quote, a back-tick or a regex there may hold the closing tag of the head. A `//` in the text does not decide a `/` on the next line by the word before it.
+    ['; m(a = <b>x // y</b> +\n  /[ </T>', 'hidden'], ['; [<b>x // y</b> +\n  /[ </T>', 'hidden'], ['; m(a = <>x // y</> ||\n  // more\n  /[ </T>', 'hidden'], ['; m(a = <b>x /* y</b> +\n  /[ </T>', 'hidden'],
+    ["; m(a = <b>'x</b> + '</T>'", 'hidden'], ['; m(a = <b>`x</b> + `</T>`', 'hidden'], ['; m(a = <b>x // y</b> + `\n</T>`', 'hidden'], ['; m(a = <b>"x</b> + "</T>"', 'hidden'], ["; m(a = <b><i>'x</i></b> + '</T>'", 'hidden'],
+    // A string, a template or a regex that holds the text of an element is one token: the closing tag inside it closes nothing, and the quote that ends it is no opener, so the string after it still hides the closing tag.
+    ["; m(a = '<b>c</b>' + '</T>')", 'hidden'], ['; m(a = `<b>c</b>` + `</T>`)', 'hidden'], ["; [`<b>x</b>` + '</T>']: string", 'hidden'], ["; m(a = '<b>c</b> d <i>e</i>' + '</T>')", 'hidden'],
+    // ... and the tags in two of them — `<b>` in one, `</b>` in the next — are no element's: they open and close in the element reading and in no other, so what stands between and after the literals is read as code.
+    ["; m(a = 'a <b>' + /* c */ `</b>` && `</T>`)", 'hidden'], ["; m(a = /* <b> */ `</b>` = `\n</T>`)", 'hidden'], ["; m: A = f('<b>') == 'c</b>', '</T>'", 'hidden'], ["; m(a = 'a <b>' instanceof\n  // more\n  `</b>` - `</T>`)", 'hidden'],
+    ["; m(a = '<>' + /* c */ `</>` && `</T>`)", 'hidden'], ["; m: A = <b>`</b> in\n  // more\n  <b>`</b> && `</T>`", 'hidden'], ["; m(a = <>//</> - <i><i/>https://x.y///* c */https://x.y</i> ?? `\n</T>`)", 'hidden'],
+    // The members of a type after a line break or an unclosed string: an initializer goes on after a name or a type on the next line, `?` is an optional mark after a name, and a quote with no closing quote on its line is TS1002.
+    [';\n  m\n  ? https://x.y // c </T>', 'closes'], [';\n  m: A\n  = 1 b // c </T>', 'closes'], [';\n  m\n  = 1 b // c </T>', 'closes'], [";\n  'a b // c </T>", 'closes'], ["; 'a // c </T>", 'closes'], [';\n  a: . // c </T>', 'closes'], [';\n  a: ...b // c </T>', 'closes'],
+  ];
+  for (const [text, expected] of rows) assert.strictEqual(closes(text), expected, JSON.stringify(text));
+  // The reading goes on from where it stopped: a run of comments and of lines is read once, in the window, and a name read before a comment is the name read after it.
+  const lines = `;\n${'  b // c\n'.repeat(150)}  /d </T>`;
+  assert.strictEqual(closes(lines), 'closes');
+  assert.strictEqual(closes(`;\n${'  a: // c\n  b\n'.repeat(100)}  c // d </T>`), 'hidden');
+  assert.strictEqual(closes(`;\n${'  a: // c\n  b\n'.repeat(100)}  c d // d </T>`), 'closes');
+  // The lexer's tables are what the family of elements, the lines it does not read and the hidden ones are: every element of the family is certain, the rest are a guess (helpers/angle-frames.js).
+  const ELEMENT = { generic: false, ambiguity: null };
+  const GUESS = { generic: false, ambiguity: 'generic' };
+  const wrong = [];
+  for (const element of proseElements()) if (opensTypeParameters(element, 0).ambiguity !== ELEMENT.ambiguity) wrong.push(JSON.stringify(element));
+  for (const element of proseElements({ lines: PROSE_SHAPED_LINES })) if (opensTypeParameters(element, 0).ambiguity !== ELEMENT.ambiguity) wrong.push(JSON.stringify(element));
+  for (const element of PROSE_HIDING_ELEMENTS) if (opensTypeParameters(element, 0).ambiguity !== GUESS.ambiguity) wrong.push(JSON.stringify(element));
+  assert.deepStrictEqual(wrong.slice(0, 5), [], 'a text of the family that is guessed at, or one that is not guessed at where it must be');
+  // The keywords, where a member begins: one that TypeScript's parser may take for a modifier (and `get` and `set`) may be followed by a name, and any other is a name that no name follows. (The oracle's own list is checked below.)
+  const modifiers = new Set(['abstract', 'accessor', 'async', 'const', 'declare', 'default', 'export', 'in', 'out', 'override', 'private', 'protected', 'public', 'readonly', 'static', 'get', 'set']);
+  const contextual = ['of', 'await', 'yield', 'let', 'as', 'satisfies', 'type', 'from', 'keyof', 'infer', 'is', 'asserts', 'using', 'module', 'namespace', 'global', 'unique', 'implements', 'interface', 'package'];
+  for (const word of [...RESERVED_WORDS, ...contextual, ...modifiers]) assert.strictEqual(closes(`;\n  ${word} b // c </T>`), modifiers.has(word) ? 'hidden' : 'closes', `${word} and a name`);
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the claims');
+  // The keywords are TypeScript's: where a member begins, one that its parser takes for a modifier — and `get` and `set` — may be followed by a name, and any other is a name that no name follows.
+  if (typeof ts.isModifierKind !== 'function') return t.diagnostic('the oracle has no isModifierKind: the keywords are not checked against it');
+  let keywords = 0;
+  for (let kind = ts.SyntaxKind.FirstKeyword; kind <= ts.SyntaxKind.LastKeyword; kind += 1) {
+    const word = ts.tokenToString(kind);
+    const modifier = ts.isModifierKind(kind) || word === 'get' || word === 'set';
+    keywords += 1;
+    assert.strictEqual(closes(`;\n  ${word} b // c </T>`), modifier ? 'hidden' : 'closes', `${word} and a name`);
+    assert.strictEqual(closes(`;\n  ${word}: https://x.y\n  /b </T>`), 'closes', `${word} and a colon`);
+    if (!modifier) assert.ok(firstDiagnostic(ts, `${PROSE_HEAD};\n  ${word} b // c </T>\n}\n`) <= `${PROSE_HEAD};\n  ${word} `.length, `TypeScript rejects ${word} and a name`);
+    // A word beside an initializer's operand on its line is TS1005 unless it may continue the expression, which a keyword may (`1 in b`, `1 as T`, `1 satisfies T`, `1 instanceof B`): every keyword is left alone, and only a
+    // word that is none is an error. The table of keywords is TypeScript's, every one of them.
+    assert.strictEqual(closes(`;\n  a: A = 1 ${word} // c </T>`), 'hidden', `a: A = 1 and ${word}`);
+    assert.strictEqual(closes(`;\n  a: A = b ${word} // c </T>`), 'hidden', `a: A = b and ${word}`);
+  }
+  assert.ok(keywords > 80, `${keywords} keywords`);
+  for (const word of ['b', 'x1', '$y', '_z', 'caf\u00e9', 'async1', 'Type', 'IN', 'Of', 'asy', 'ofs']) {
+    assert.strictEqual(closes(`;\n  a = 1 ${word} // c </T>`), 'closes', `a = 1 and ${word}`);
+    assert.strictEqual(closes(`;\n  a = 'b' ${word} // c </T>`), 'closes', `a = 'b' and ${word}`);
+    assert.strictEqual(closes(`;\n  a = b ${word} // c </T>`), 'closes', `a = b and ${word}`);
+  }
+});
+
+// A word after a `.` is a name, whatever it spells (`A.new`, `A.unique`: parseRightSideOfDot takes identifier names), and so is one after `typeof`, which takes an entity name, and `infer`, which takes an identifier (`infer
+// keyof`); `keyof`, `readonly` and `unique` take a type, which `new` is the name of there (`keyof new`) and which they themselves may begin. A unicode escape is part of a name (`a\u0061b` is ONE identifier), and a hex,
+// octal or binary literal ends at its last digit: `0x1Fin` is `0x1F` and `in`, which the scanner reads with no diagnostic (a word right after a decimal literal is TS1351). Each row is the text after the `)` of `<T>(x)`, up
+// to and including what holds the closing tag: 'hidden' where a type may hold it, 'closes' where no type has the text. TypeScript says which: where a type is valid up to the closing tag its parser reports nothing before it.
+test('typeMembersFail: a word after a `.` or an operator word, an escape in a name and a literal that ends before its word are read as TypeScript reads them', (t) => {
+  const closes = (text) => {
+    const read = elementChildren(`<T>(x)${text}`, 3, 'T', null, 6);
+    return read === null ? 'unknown' : read.fails !== undefined ? 'fails' : read.hideable ? 'hidden' : 'closes';
+  };
+  const hidden = [
+    // After a `.`, `typeof` and `infer`, every word is a name: the `,` or `;` after it ends a member, and the type goes on.
+    ';\n  a: A.unique; // c </T>', ';\n  a: A.new, // c </T>', ';\n  a: A.keyof; // c </T>', ';\n  a: A.infer, // c </T>', ';\n  a: A.readonly; // c </T>', ';\n  a: A.typeof, // c </T>', ';\n  a: A.B.in; // c </T>',
+    ';\n  a: A | A.unique; // c </T>', ';\n  a: typeof A.keyof; // c </T>', ';\n  a: typeof new; // c </T>', ';\n  a: typeof unique, // c </T>', ';\n  a: infer keyof, // c </T>', ';\n  a: infer infer; // c </T>', ';\n  a: infer unique, // c </T>',
+    // After `keyof`, `readonly` and `unique` a type follows, which a keyword is the name of, or another of those words begins.
+    ';\n  a: keyof new, // c </T>', ';\n  a: keyof typeof new; // c </T>', ';\n  a: readonly new; // c </T>', ';\n  a: keyof readonly A[], // c </T>', ';\n  a: keyof unique symbol, // c </T>', ';\n  a: unique keyof A; // c </T>',
+    ';\n  a: readonly keyof A[]; // c </T>',
+    // A name with an escape in it is one name: the escape goes on the name before it, and the name goes on with what follows.
+    ';\n  a\\u0061b // c </T>', ';\n  a\\u0061b: A; // c </T>', ';\n  a: A\\u0061b; // c </T>', ';\n  a: A.b\\u0061; // c </T>', ';\n  a: \\u0061; // c </T>',
+    // A hex, binary or octal literal ends at its last digit, and a word right after it is a second token — an operator, where it is one: a string or a regex after it begins one.
+    ";\n  a: A = 0x1Fin 'b </T> c'", ";\n  a: A = 0b1in 'b </T> c'", ";\n  a: A = 0o7in 'b </T> c'", ";\n  a: A = 0x1Finstanceof 'b </T> c'", ";\n  a: A = 0x1Fin'b </T> c'", ';\n  a: A = 0x1Fin\n  /[</T>]/', ';\n  a: A = 0x1Fin /re </T>/',
+    ";\n  a: A = 0x1Fnin 'b </T> c'", ";\n  a: A = 0x1Fin 0x1F in 'b </T> c'", ";\n  a: A = 0xFFin'x' // c </T>", ';\n  a: A = 0x1F in\n  /[</T>]/',
+  ];
+  const dead = [
+    // A word that no operand has after it, and no type begins with: TS1110, TS1005.
+    ';\n  a: keyof readonly, // c </T>', ';\n  a: keyof unique, // c </T>', ';\n  a: unique, // c </T>', ';\n  a: keyof, // c </T>', ';\n  a: new, // c </T>',
+    // A word right after a decimal literal, and one that is no operator after a hex literal: two operands side by side, or an `as` and a regex where a type must be.
+    ";\n  a: A = 1in 'b </T> c'", ";\n  a: A = 1.5in 'b </T> c'", ';\n  a: A = 1in\n  /[</T>]/', ';\n  a: A = 1\n  /[</T>]/', ";\n  a: A = 0x1Fb 'b </T> c'", ";\n  a: A = 0x1F 'b </T> c'", ";\n  a: A = 0x1Fn 'b </T> c'", ";\n  a: A = 0B1IN 'b </T> c'",
+    ';\n  a: A = 0x1Fx // c </T>', ';\n  a: A = 0x1Fas\n  /[</T>]/', ';\n  a: A = 0x1F\n  /[</T>]/',
+  ];
+  for (const text of hidden) assert.strictEqual(closes(text), 'hidden', JSON.stringify(text));
+  for (const text of dead) assert.strictEqual(closes(text), 'closes', JSON.stringify(text));
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the readings');
+  for (const text of hidden) assert.ok(firstDiagnostic(ts, `${PROSE_HEAD}${text}\n}\n`) > PROSE_HEAD.length + text.indexOf('</T>'), `TypeScript parses ${JSON.stringify(text)} as a type up to the closing tag`);
+  for (const text of dead) assert.ok(firstDiagnostic(ts, `${PROSE_HEAD}${text}\n}\n`) <= PROSE_HEAD.length + text.indexOf('</T>'), `TypeScript rejects ${JSON.stringify(text)} at or before the closing tag`);
+});
+
+// The claims are made over every text of up to three tokens of the pieces of a member and what TypeScript rejects there (numbers of every spelling, brackets, strings, tags, operators), over seeded draws of more, over runs of
+// valid members that are mutated at one or two places — the texts that are nearest to a type, where a rule that says too much is wrong — and over every keyword of TypeScript where a word may stand, after a `.` or an
+// operator word (`A.new`, `keyof new`, `infer keyof`), and right after a number (`0x1Fin`); over an import type with a line terminator, a space or a comment between its tokens, over `get`, `set` and every other modifier before a
+// computed name that holds a comma and a regex, and over a `[` after a `:` or a type, whose first token is a `/`.
+test('typeMembersFail, sweep (TypeScript parser): every text read as no type\'s members is rejected by TypeScript at or before what could hide the closing tag', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
+  const keywords = [];
+  for (let kind = ts.SyntaxKind.FirstKeyword; kind <= ts.SyntaxKind.LastKeyword; kind += 1) keywords.push(ts.tokenToString(kind));
+  const sweeps = [
+    ['every text of up to three of the first tokens', tokenTexts(BASE_TOKENS, 3), 20000],
+    ['every text of up to two of all the tokens', tokenTexts(ALL_TOKENS, 2), 10000],
+    ['seeded draws of four to seven of all the tokens', drawnTexts(ALL_TOKENS, 20261104, 40000), 30000],
+    ['runs of valid members, mutated', memberTexts(20261105, 60000), 20000],
+    ['every keyword in each place where a word may stand', keywordTexts(keywords), 30000],
+    ['every keyword after each keyword that a type or a member may start with', keywordPairTexts(keywords), 8000],
+    ['every keyword after a `.`, `typeof`, `infer`, `keyof`, `readonly` and `unique`, with what may follow', wordTexts(keywords), 8000],
+    ['a number of every spelling and a word, a quote or a `/` right after it', numberWordTexts(keywords), 2000],
+    ['an import type with trivia between its tokens, and a type query before a `(` on the next line', importTypeTexts(), 1500],
+    ['seeded draws of an import type in each place a type stands', drawnImportTypeTexts(20261301, 20000), 14000],
+    ['`get`, `set` and every other modifier before a computed name that holds a comma or a colon and a regex', accessorNameTexts(), 3000],
+    ['seeded draws of a modifier, a computed name and a regex', drawnAccessorNameTexts(20261302, 20000), 8000],
+    ['a `[` after a `:`, a type or an operator type, then trivia and a `/`', tupleTexts(), 2000],
+    ['a `/` after an operand that ends in a bracket, or in none, behind a comment of every kind', bracketTexts(), 800],
+  ];
+  for (const [what, texts, least] of sweeps) {
+    const { stats, unsound } = deadClaims(ts, texts);
+    t.diagnostic(`${what}: ${stats.texts} texts (${stats.unterminated} end in a literal that nothing closes), ${stats.claims} claims that a type cannot have them, ${unsound.length} that TypeScript does not support`);
+    assert.deepStrictEqual(unsound.slice(0, 5), [], `${what}: a text read as no type's members that TypeScript parses as them, or whose first diagnostic is after the thing that opens`);
+    assert.ok(stats.claims >= least, `${what}: only ${stats.claims} claims were made, so the sweep proves little`);
+  }
 });
 
 // What a closing tag that a string, a template or a comment in the parameter list holds is, in `interface I { <T>(x: "</T>") }`: a call signature, and `const e = <T>(x: "</T>;` is an element: both parse with no diagnostic. So a

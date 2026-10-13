@@ -420,6 +420,28 @@ test('transient auto-retry: a non-transient halt is NOT retried', async () => {
   assert.strictEqual(attempts, 1, 'no retry on a non-transient error');
 });
 
+// With --publish the views a rebuild reconciles are published just before the app is written (sdk-build.js,
+// publishReconciledTables), and a refusal there stops the build before the app. A throttled one must still be re-run at
+// once, as it was when each reconcile published its own view: the halt carries the refusal's status out of the runner.
+test('transient auto-retry: a publish refused with a 429 before the app is written is retried, then succeeds', async () => {
+  const { sdk, calls } = mockSdk();
+  sdk.findArtifact = async (kind) => (kind === 'view' ? 'view-existing' : null);
+  let refused = 0;
+  const publish = sdk.publishArtifact;
+  sdk.publishArtifact = async (type, id) => {
+    calls.push(['publishArtifact', type, id]);
+    if (type !== 'view' || refused > 0) return publish(type, id);
+    refused += 1;
+    return { type, id, shipped: false, publish: { kind: 'failed', error: Object.assign(new Error('HTTP 429 from PublishXml: Rate limit exceeded'), { statusCode: 429 }) } };
+  };
+  const events = [];
+  const journal = { path: 'x', record: (e) => events.push(e), close: () => {} };
+  const r = await buildModelApp(desk, { apply: true, publish: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, journal });
+  assert.strictEqual(r.ok, true, 'the build succeeded after the retry');
+  assert.strictEqual(events.filter((e) => e.status === 'retry').length, 1, 'one retry');
+  assert.strictEqual(calls.filter((c) => c[0] === 'createArtifact' && c[1] === 'app').length, 1, 'only the attempt whose views were published wrote the app');
+});
+
 // With --publish the build defers its default-view enrichment's publish to its final phase
 // (sdk-build.js, 4b), so a build that halts before that phase still owes it. The CLI pays it only once
 // no retry follows: a transient halt is retried at once, and the retry saves the views again and owes
@@ -471,8 +493,8 @@ test('a final halt whose owed publish fails too warns, and still reports the hal
   sdk.createArtifact = (t, def) => { if (t === 'app') throw new Error('bad request'); return create(t, def); };
   const warnings = [];
   await assert.rejects(buildModelApp(desk, { apply: true, publish: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, warn: (m) => warnings.push(m) }), /bad request/);
-  const failed = warnings.filter((w) => /^the build stopped before its publish phase; publish view defview-\w+ FAILED: publish down/.test(w));
-  assert.strictEqual(failed.length, 3, `each enriched table is still attempted, and reported: ${warnings.join('\n')}`);
+  const failed = warnings.filter((w) => /^the build stopped before its publish phase; publish default views of \w+ FAILED: publish down/.test(w));
+  assert.strictEqual(failed.length, 3, `each enriched table is still attempted, and reported by name: ${warnings.join('\n')}`);
 });
 
 test('without --publish a halted build owes nothing: the enrichment published itself', async () => {
@@ -511,6 +533,20 @@ test('a later attempt whose publish phase ran pays what an earlier one owed, and
   assert.deepStrictEqual(await haltAfter([owing(TRANSIENT, [['view', 'defview-a']]), owing('bad request', [], true)]), [], 'nothing left to settle');
   const twice = await haltAfter([owing(TRANSIENT, [['view', 'defview-a'], ['view', 'defview-b']]), owing('bad request', [['view', 'defview-b'], ['view', 'defview-a']])]);
   assert.deepStrictEqual(twice.map((c) => c[1].map((t) => t.id)), [['defview-a', 'defview-b']]);
+});
+
+test('the names an earlier attempt recorded for a debt are kept when a later attempt stops before them, and a failed settle reports them', async () => {
+  const { sdk } = owingSdk();
+  sdk.publishArtifacts = async () => { throw new Error('envelope refused'); };
+  sdk.publishArtifact = async () => { throw new Error('publish down'); };
+  // The first attempt got as far as the form; the retry stopped after the view. One debt, and both names are still owed.
+  const attempts = [owing(TRANSIENT, [['view', 'v1', ['view Open Tickets', 'form Ticket']]]), owing('bad request', [['view', 'v1', ['view Open Tickets']]])];
+  let n = 0;
+  const runBuild = async () => { throw attempts[n++]; };
+  const warnings = [];
+  await assert.rejects(buildModelApp(desk, { apply: true, publish: true, env: 'https://x', retryDelayMs: 0 }, { sdk, provisionSdk: sdk, runBuild, discoverOpDiffState: async () => quietState, warn: (m) => warnings.push(m) }), /bad request/);
+  assert.strictEqual(n, 2, 'every attempt ran');
+  assert.deepStrictEqual(warnings.filter((w) => /FAILED/.test(w)).map((w) => w.replace(/ FAILED:.*/, '')), ['the build stopped before its publish phase; publish view Open Tickets, form Ticket']);
 });
 
 test('transient auto-retry: no retries in dry-run', async () => {
@@ -2187,6 +2223,10 @@ test('main changed-only full-fast-noop cycle uses the real flow', async () => {
     row.content = Buffer.from(o.content, 'utf8').toString('base64');
   };
   sdk.dataverse = { get: async (url) => {
+    // The shared-page scan lists the apps that were never published: the one app here is published, so it is the only row.
+    if (url.startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) {
+      return { status: 200, body: { value: state.app ? [{ appmoduleid: state.app.id, appmoduleidunique: appUniqueValue, uniquename: spec.app.uniqueName, componentstate: 0 }] : [] } };
+    }
     assert.match(url, /^\/EntityDefinitions\(LogicalName='/);
     return state.table && !url.includes("LogicalName='entity'")
       ? { status: 200, body: { LogicalName: state.table.logicalName, EntitySetName: state.table.entitySetName } }

@@ -8,7 +8,9 @@ const path = require('node:path');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const { execFileSync } = require('node:child_process');
-const { loadTypescriptOracle } = require('./helpers/typescript-oracle.js');
+const { loadTypescriptOracle, loadBaseLexer } = require('./helpers/typescript-oracle.js');
+const { tokenVocabulary } = require('./helpers/angle-frames.js');
+const { RESOLVED_PAGES, REFUSED_PAGES, HIDDEN_CLOSING_TAG_PAGES } = require('./helpers/live-shaped-pages.js');
 const { OBJECT_DIVISION_PAGE, MISREAD_PAGES, HIDDEN_CALL_PAGE, PREFIX_INCREMENT_PAGE, TEMPLATE_LINE_PAGE, JSX_TEXT_PAGE, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, ELEMENT_PAGE_TOKEN_LINE, FUNCTION_TYPE_PAGES, FUNCTION_TYPE_CALL_LINE, LONG_KEY, lookBehindPage, runnable } = require('./helpers/misread-page.js');
 const { AMBIGUITY_KINDS } = require('../lib/source-literals.js');
 const { pageStructureProblems } = require('../lib/page-structure.js');
@@ -1126,7 +1128,7 @@ test('a navigateTo spelling whose callee is not the callee, or whose object is n
 // The `(` that opens a parenthesised callee begins a navigation call only after a token that cannot END a callable operand. The
 // tokens that can are many and easy to miss — `!` (a non-null assertion), `>` (a generic instantiation), a back-tick (a tagged
 // template), `}` (a function expression) — so the tokens that may stand there are listed, and everything else is refused:
-//   the start of the source   ;  {  (  [  ,  :  ?  (a ternary)   any operator ending in =   =>   &&   ||   ??
+//   the start of the source   ;  {  (  [  ,  :  ?  (a ternary)   any operator ending in =   =>   &&   ||   ??   the keyword `return` on the line of the `(`
 // What a call or a member access would continue is then refused whether or not anyone thought of it.
 test('a parenthesised callee is a call only after a token on the allowlist', () => {
   const callee = `(navigateTo)(${OBJ})`;
@@ -1136,7 +1138,9 @@ test('a parenthesised callee is a call only after a token on the allowlist', () 
     ['x = ', ';'], ['x == ', ''], ['x === ', ''], ['x != ', ''], ['x !== ', ''], ['x += ', ''], ['x -= ', ''], ['x *= ', ''], ['x /= ', ''], ['x %= ', ''],
     ['x <= ', ''], ['x >= ', ''], ['x **= ', ''], ['x <<= ', ''], ['x >>= ', ''], ['x >>>= ', ''], ['x &= ', ''], ['x |= ', ''], ['x ^= ', ''],
     ['x &&= ', ''], ['x ||= ', ''], ['x ??= ', ''], ['() => ', ''], ['async (x) => ', ''], ['a && ', ''], ['a || ', ''], ['a ?? ', ''],
-    ['\n', ''], ['/* c */ ', ''], ['// c\n', ''], ['void 0, ', '']];
+    ['\n', ''], ['/* c */ ', ''], ['// c\n', ''], ['void 0, ', ''],
+    // The keyword `return`, on the line of the `(`: an expression starts right after it (see the test below for what else is checked).
+    ['return ', ''], ['function f() { return ', ' }'], ['if (x) return ', ''], ['switch (x) { case 1: return ', ' }']];
   for (const [before, after] of allowed) {
     const code = `${before}${callee}${after}`;
     assert.deepStrictEqual(extractNavTargets(code).map((t) => [t.kind, t.key]), [['pageref', 'detail']], JSON.stringify(code));
@@ -1146,7 +1150,7 @@ test('a parenthesised callee is a call only after a token on the allowlist', () 
   // keyword, `)`, `]`, `.`, `?.`, `}` (also at the end of a block), `!`, a `>` that is not `=>`, a quote or a back-tick, `++`/`--`,
   // and the operators that are not on the list.
   const refused = ['x', 'x ', 'foo', 'foo(a)', 'foo[0]', 'foo.', 'foo?.', 'foo?. ', '1', '$', '_', 'αβ', 'a)', 'a]',
-    'new ', 'await ', 'return ', 'typeof ', 'void ', 'while ', 'else ', 'in ', 'of ', 'delete ', 'throw ', 'yield ', 'case ', 'do ', 'instanceof ',
+    'new ', 'await ', 'typeof ', 'void ', 'while ', 'else ', 'in ', 'of ', 'delete ', 'throw ', 'yield ', 'case ', 'do ', 'instanceof ',
     '{}', 'x = {}', '{ a(); }\n', 'function f() {}\n', 'if (a) { }\n', 'function () { return f; }',
     'a!', 'a! ', 'factory!', 'a<unknown>', 'factory<unknown>', 'a > ', 'a >> ', 'a >>> ',
     '`tag`', '`x${y}`', 'tag`x`', '"s"', "'s'", 'a++', 'a--', 'a++ ', 'a-- ',
@@ -1164,6 +1168,171 @@ test('a parenthesised callee is a call only after a token on the allowlist', () 
   assert.deepStrictEqual(strayPageRefs(inTemplate(callee)).map((r) => r.token), ['PAGEREF_detail']);
   assert.deepStrictEqual(extractNavTargets(inTemplate(`navigateTo(${OBJ})`)).map((t) => [t.kind, t.key]), [['pageref', 'detail']]);
   assert.deepStrictEqual(extractNavTargets(inTemplate(`x = ${callee}`)).map((t) => [t.kind, t.key]), [['pageref', 'detail']], 'after an `=` inside the body it is a call again');
+});
+
+// ─── `return (navigateTo)({ … })` ─────────────────────────────────────────────────────────────────────────────────
+//
+// After the keyword `return` an expression starts, so a parenthesised callee there is the callee of a call (followsReturnKeyword). The keyword has to be the whole word, with the `(` on its line — a line
+// break after `return` ends the statement, `return;`, and the call after it is one that never runs — and no `.` may stand before it, which makes it a member's name. `await` and `yield` are not on the
+// list: outside an async function and a generator they are identifiers, and TypeScript parses `function f() { await (navigateTo)({ … }) }` as a call of a function named `await`.
+const RETURN_CALLEE = `(navigateTo)(${OBJ})`;
+const RETURNS_THAT_NAVIGATE = [
+  ['return ', ''], ['return', ''], ['return\t', ''], ['return\u00a0', ''], ['return\u0085', ''], ['return\u200b', ''], ['return\ufeff', ''], ['return /* c */ ', ''], ['return/* c */', ''], ['return /* a */ /* b */ ', ''],
+  ['function f() { return ', ' }'], ['function f() {\n  return ', '\n}'], ['function f() {\n  x();\n  return ', ';\n}'], ['if (x) return ', ''], ['if (x)return ', ''], ['if (x) {} else return ', ''],
+  ['do return ', '; while (x)'], ['switch (x) { case 1: return ', ' }'], ['lbl: return ', ''], [';return ', ''], ['{return ', '}'], ['x()\nreturn ', ''], ['x = 1 // c\nreturn ', ''],
+  ['const f = () => { return ', ' };'], ['async function f() { return ', ' }'], ['function* g() { return ', ' }'], ['const o = { m() { return ', ' } };'], ['class C { m() { return ', ' } }'],
+  ['function f() { return ', '.then(r) }'], ['function f() { return ', '?.then(r) }'], ['function f() { return (', ') }'], ['function f() { return Xrm.Navigation, ', ' }'],
+];
+// A line terminator of any kind between `return` and the `(` — a comment that holds one included — ends the statement there (ECMA-262 §12.10.1, a restricted production): TypeScript parses the call after
+// it as a statement of its own, and the page does not navigate.
+const RETURNS_AFTER_A_LINE_BREAK = ['return\n', 'return\r\n', 'return\r', 'return\u2028', 'return\u2029', 'return // c\n', 'return /* c\n */ ', 'return /* a */ /* b\n */ ', 'return\n\n  ', 'return /* c */\n'];
+// A word that is not the keyword: a member named `return`, and names that end or start with it, with an escape in them, or beyond ASCII.
+const NOT_THE_KEYWORD_RETURN = ['a.return ', 'a?.return ', 'a . return ', 'a.\nreturn ', 'a?.\n/* c */ return ', 'a./* c */return ', 'this.return ', 'a.b.return ', 'f().return ', 'a[0].return ', 'a!.return ',
+  'xreturn ', '$return ', '_return ', 'return1 ', 'returns ', 'returned ', 'Return ', 'RETURN ', 'éreturn ', 'returné ', 'αreturn ', 'return$ ', 'return_ ', '\\u0061return ', '\\u{61}return ', 'r\\u0065turn ',
+  '\\u0072eturn ', 'return\\u0061 ', 'x\\u{61}return ', 'a.#return ', '#return ', '}return ', '1.return '];
+
+// What TypeScript makes of the call whose first argument is the object literal that holds the token: { callee, statement } — the callee with its parentheses stripped, as text, and the kind of the statement the
+// call stands in (the nearest one that holds it) — or null where the program does not parse or has no such call.
+function callReading(ts, code) {
+  const source = ts.createSourceFile('page.tsx', code, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TSX);
+  if (source.parseDiagnostics.length > 0) return null;
+  let found = null;
+  const visit = (node) => {
+    if (found === null && ts.isCallExpression(node) && node.arguments.length > 0 && ts.isObjectLiteralExpression(node.arguments[0]) && node.arguments[0].getText(source).includes('PAGEREF_detail')) {
+      let callee = node.expression;
+      while (ts.isParenthesizedExpression(callee)) callee = callee.expression;
+      let statement = node.parent;
+      while (statement && !/Statement$/.test(ts.SyntaxKind[statement.kind])) statement = statement.parent;
+      found = { callee: callee.getText(source), statement: statement ? ts.SyntaxKind[statement.kind] : null };
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+}
+const navigates = (code) => extractNavTargets(code).some((target) => target.kind === 'pageref' && target.key === 'detail');
+
+test('a parenthesised callee after `return` is a call when the `(` is on its line; after a line break, a `.` or in a longer word it is not', (t) => {
+  for (const [before, after] of RETURNS_THAT_NAVIGATE) {
+    const code = `${before}${RETURN_CALLEE}${after}`;
+    assert.deepStrictEqual(extractNavTargets(code).map((target) => [target.kind, target.key]), [['pageref', 'detail']], JSON.stringify(code));
+    assert.deepStrictEqual(strayPageRefs(code), [], JSON.stringify(code));
+    assert.strictEqual(resolveOne(code).deployment.get('x'), code.replace('"PAGEREF_detail"', '"gp-detail"'), `${JSON.stringify(code)}: the token is resolved`);
+  }
+  for (const before of [...RETURNS_AFTER_A_LINE_BREAK, ...NOT_THE_KEYWORD_RETURN]) {
+    const code = `${before}${RETURN_CALLEE}`;
+    assert.deepStrictEqual(extractNavTargets(code), [], JSON.stringify(code));
+    assert.deepStrictEqual(strayPageRefs(code).map((r) => r.token), ['PAGEREF_detail'], JSON.stringify(code));
+    assert.strictEqual(resolveOne(code).deployment.get('x'), code, `${JSON.stringify(code)}: never rewritten`);
+  }
+  // A word in a string, a template, a regex, a comment or JSX text is blank in the mask and no token.
+  for (const code of [`const s = "return ${RETURN_CALLEE}";`, `const s = \`return \${x} ${RETURN_CALLEE}\`;`, `const r = /return/ ${RETURN_CALLEE};`, `/* return */ x ${RETURN_CALLEE}`, `const e = <p>return ${RETURN_CALLEE}</p>;`]) {
+    assert.deepStrictEqual(extractNavTargets(code), [], JSON.stringify(code));
+  }
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the readings');
+  // TypeScript: every accepted program parses, and the call in it is a call of navigateTo, in the return statement itself.
+  for (const [before, after] of RETURNS_THAT_NAVIGATE) {
+    const code = `${before}${RETURN_CALLEE}${after}`;
+    assert.deepStrictEqual(callReading(ts, code), { callee: 'navigateTo', statement: 'ReturnStatement' }, JSON.stringify(code));
+  }
+  // After a line break the program parses and the call is a statement of its own, which `return;` precedes; and a word that is not the keyword is a call of another function, or no program.
+  for (const before of RETURNS_AFTER_A_LINE_BREAK) {
+    assert.deepStrictEqual(callReading(ts, `${before}${RETURN_CALLEE}`), { callee: 'navigateTo', statement: 'ExpressionStatement' }, JSON.stringify(before));
+  }
+  for (const before of NOT_THE_KEYWORD_RETURN) {
+    const reading = callReading(ts, `${before}${RETURN_CALLEE}`);
+    assert.ok(reading === null || reading.callee !== 'navigateTo', `${JSON.stringify(before)}: TypeScript reads ${JSON.stringify(reading)}`);
+  }
+});
+
+// The page an author writes: a handler that returns the navigation, and a component that calls it. The callee is parenthesised (a generator of pages may spell it so), and the call is the whole `return` statement,
+// so the token is resolved and nothing is left over; after a line break, where `return;` is a statement of its own, the same page is refused.
+const returnPage = (statement) => `import * as React from "react";\n\nexport default function DetailsPage() {\n  const openDetail = () => {\n    ${statement}\n  };\n  return (\n    <div>\n      <button onClick={openDetail}>Open</button>\n    </div>\n  );\n}\n`;
+test('an everyday page that returns a parenthesised navigation call resolves: the call is read, the token is resolved, no token is left and the page is complete', () => {
+  const page = returnPage(`return (navigateTo)({ pageType: "generative", pageId: "PAGEREF_detail" });`);
+  assert.deepStrictEqual(strayPageRefs(page), []);
+  assert.deepStrictEqual(navReferencedKeys(page), ['detail']);
+  assert.deepStrictEqual(pageStructureProblems(page), []);
+  assert.strictEqual(navigationFrontier(page), null, 'no guess is named');
+  const { deployment, unresolved, residual } = resolveOne(page);
+  assert.strictEqual(deployment.get('x'), page.replace('"PAGEREF_detail"', '"gp-detail"'));
+  assert.deepStrictEqual([unresolved, residual].map((found) => found.length), [0, 0]);
+  // A line break after `return` makes the call a statement that never runs; and `await` is a name outside an async function: both are refused, and the token halts the build as stray.
+  for (const statement of ['return\n    (navigateTo)({ pageType: "generative", pageId: "PAGEREF_detail" });', 'await (navigateTo)({ pageType: "generative", pageId: "PAGEREF_detail" });']) {
+    const refused = returnPage(statement);
+    assert.deepStrictEqual(strayPageRefs(refused).map((found) => found.token), ['PAGEREF_detail'], JSON.stringify(statement));
+    assert.strictEqual(resolveOne(refused).deployment.get('x'), refused, `${JSON.stringify(statement)}: never rewritten`);
+  }
+});
+
+// The claim, as a property: wherever the lexer reads `(navigateTo)({ … })` after `return` as a navigation call, TypeScript — for the programs it parses — reads the same call, with navigateTo as its callee and the
+// object as its argument. Every punctuator and keyword TypeScript has stands in front of the `return`, adjacent to it, after a space, a line break and a comment; every kind of white space TypeScript skips stands
+// between `return` and the `(`; and each program is put in the places a statement stands, a class or an interface stands, an object literal, a template and JSX.
+test('sweep (TypeScript parser): a parenthesised callee after `return` that the lexer reads as a call is a call of navigateTo to TypeScript', (t) => {
+  const ts = loadTypescriptOracle();
+  if (!ts) return t.skip('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to run it');
+  const frames = ['function f() { @ }', '@', '{ @ }', 'const o = { @ };', 'class C { @ }', 'interface I { @ }', 'type T = { @ };', 'if (a) @', 'if (a) {} else @', 'switch (a) { case 1: @ }', 'lbl: @', 'async function f() { @ }',
+    'function* g() { @ }', 'x = @', '`${@}`', 'const e = <p>@</p>;', 'const e = <p a={@}/>;', 'class C { m() { @ } }', 'enum E { @ }', 'const o = { m() { @ } };'];
+  const before = [...tokenVocabulary(ts), 'x', '$', '_', 'é', '1', '.5', '\\u0061', 'x\\u{61}', '#', 'a.', 'a?.', 'a . ', 'a.\n', '"s"', '`t`', '/re/'];
+  const separators = ['', ' ', '\n', '/*c*/'];
+  const gaps = ['', ' ', '\t', '\u00a0', '\u0085', '\u200b', '\ufeff', '/*c*/', '\n', '\r\n', '\u2028', '/*\n*/', '//c\n'];
+  const stats = { programs: 0, valid: 0, accepted: 0, otherCallee: 0, lineBreak: 0, refusedNavigations: 0 };
+  const unsound = [];
+  for (const frame of frames) {
+    for (const prefix of before) {
+      for (const separator of separators) {
+        for (const gap of gaps) {
+          const call = `${prefix}${separator}return${gap}${RETURN_CALLEE}`;
+          const code = `declare const a: any, navigateTo: any;\n${frame.replace('@', call)}\n`;
+          stats.programs += 1;
+          const reading = callReading(ts, code);
+          if (reading === null) continue;
+          stats.valid += 1;
+          if (reading.callee !== 'navigateTo') stats.otherCallee += 1;
+          if (navigates(code)) {
+            stats.accepted += 1;
+            if (reading.callee !== 'navigateTo') unsound.push(JSON.stringify(call));
+          } else if (reading.callee === 'navigateTo') {
+            stats.refusedNavigations += 1;
+            if (/[\n\r\u2028\u2029]/.test(gap)) stats.lineBreak += 1;
+          }
+        }
+      }
+    }
+  }
+  t.diagnostic(`${stats.programs} programs, ${stats.valid} valid to TypeScript: ${stats.accepted} read as a navigation (TypeScript agrees on all but ${unsound.length}), ${stats.otherCallee} have another callee in TypeScript; `
+    + `${stats.refusedNavigations} navigations of TypeScript are refused, ${stats.lineBreak} of them for a line break between \`return\` and the \`(\``);
+  assert.deepStrictEqual(unsound.slice(0, 5), [], 'a call read as navigateTo that TypeScript reads with another callee');
+  assert.ok(stats.valid >= 10000 && stats.accepted >= 5000 && stats.otherCallee >= 5000, `${stats.valid} valid, ${stats.accepted} accepted, ${stats.otherCallee} with another callee: the sweep proves little`);
+  // What stays refused is the line break (and a keyword that the lexer cannot tell from a name: a `.` before it, a letter or a digit glued to it).
+  assert.ok(stats.lineBreak > 0 && stats.refusedNavigations >= stats.lineBreak, 'the refused navigations include the line breaks');
+});
+
+// `await` and `yield` before a parenthesised callee stay refused. TypeScript parses them as keywords inside an async function and a generator, and as identifiers anywhere else, where the call is `await(navigateTo)` and
+// its result is called with the object: the same text is a navigation in one function and no navigation in the next, and the lexer does not track the function. JavaScript reads them the same way.
+test('`await` and `yield` before a parenthesised callee are refused: they are identifiers outside an async function and a generator', (t) => {
+  const programs = [
+    ['an async function', 'async function f() { await ', ' }', 'navigateTo'], ['a plain function', 'function f() { await ', ' }', 'await (navigateTo)'], ['an async arrow', 'const f = async () => { await ', ' };', 'navigateTo'],
+    ['a plain arrow, in an async function', 'async function f() { const g = () => { await ', ' }; }', 'await (navigateTo)'], ['a plain function, in an async function', 'async function f() { function g() { await ', ' } }', 'await (navigateTo)'],
+    ['an async arrow with an expression body', 'const f = async () => await ', ';', 'navigateTo'], ['a plain arrow with an expression body, in an async function', 'async function f() { const g = () => await ', '; }', 'await (navigateTo)'],
+    ['a generator', 'function* g() { yield ', ' }', 'navigateTo'], ['a plain function', 'function g() { yield ', ' }', 'yield (navigateTo)'], ['a plain arrow, in a generator', 'function* g() { const h = () => { yield ', ' }; }', 'yield (navigateTo)'],
+  ];
+  const ts = loadTypescriptOracle();
+  for (const [what, before, after, callee] of programs) {
+    const code = `${before}${RETURN_CALLEE}${after}`;
+    assert.deepStrictEqual(extractNavTargets(code), [], `${what}: ${JSON.stringify(code)}`);
+    assert.deepStrictEqual(strayPageRefs(code).map((r) => r.token), ['PAGEREF_detail'], what);
+    if (ts) assert.strictEqual(callReading(ts, code).callee, callee, `${what}: the callee TypeScript reads`);
+  }
+  if (!ts) t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the readings');
+  // JavaScript: outside an async function `await (navigateTo)(…)` calls a function named `await`, which does not exist here, and inside one it calls navigateTo.
+  const calls = [];
+  const sandbox = { navigateTo: (arg) => calls.push(arg.pageId) };
+  vm.runInNewContext(`async function f() { await ${RETURN_CALLEE}; } f();`, sandbox);
+  assert.deepStrictEqual(calls, ['PAGEREF_detail'], 'in an async function');
+  assert.throws(() => vm.runInNewContext(`function f() { await ${RETURN_CALLEE}; } f();`, sandbox), /await is not defined/, 'in a plain function');
+  assert.deepStrictEqual(calls, ['PAGEREF_detail'], 'and nothing more was called');
 });
 
 test('spellings that are not a navigateTo call with an object literal are not mistaken for one', () => {
@@ -1832,7 +2001,7 @@ test('the page whose "/" after an object literal hid a call is refused, naming t
 test('each misread page is refused at its first guess: every token at or after it, or in a call that reaches it, is stray, and nothing there is rewritten', () => {
   assert.deepStrictEqual(Object.keys(MISREAD_PAGES), [
     'brace', 'paren', 'keyword', 'identifier', 'angle', 'jsx-type-arguments', 'newline', 'generic', 'generic, in JSX text',
-    'generic, with await', 'generic, with yield', 'operator, after ">="',
+    'generic, with await', 'generic, with yield', 'generic, a regex after a line comment', 'generic, a regex that holds a closing tag after a line comment', 'operator, after ">="',
     'operator, after ">>=" that ends type arguments', 'operator, after ">>>=" that ends nested type arguments', 'operator, after ">>=" that ends the type arguments of satisfies', 'jsx-attribute',
     'inside an options object',
   ]);
@@ -2159,6 +2328,83 @@ test('a call or construct signature with no return type is code: the token in th
   }
 });
 
+// ─── Pages shaped like a generative page's own text ────────────────────────────────────────────────────────────────────────────────────────────────────
+//
+// The `PAGEREF_` tokens of a page as TypeScript reads it: those in the `pageId` of the options object of a call are real, every other one — in a string, a template, a regex, a comment, text — is data. Null where the page
+// does not parse (a diagnostic of the parser; the type checker is not asked, as it rejects an initializer in a type that the parser accepts).
+function pageIdTokens(ts, code) {
+  const source = ts.createSourceFile('page.tsx', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  if (source.parseDiagnostics.length > 0) return null;
+  const spans = [];
+  const visit = (node) => {
+    if (ts.isCallExpression(node) && node.arguments.length > 0 && ts.isObjectLiteralExpression(node.arguments[0])) {
+      for (const property of node.arguments[0].properties) {
+        if (ts.isPropertyAssignment(property) && ts.isIdentifier(property.name) && property.name.text === 'pageId' && ts.isStringLiteralLike(property.initializer)) spans.push([property.initializer.getStart(source), property.initializer.getEnd()]);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  const tokens = [...code.matchAll(/PAGEREF_[A-Za-z0-9_-]+/g)].map((match) => match.index);
+  const real = tokens.filter((at) => spans.some(([from, to]) => at >= from && at < to));
+  return { real, data: tokens.filter((at) => !real.includes(at)) };
+}
+
+// A component whose text holds prose in parentheses — a note, a hint, a URL on a line of its own, a path that starts a line, a bracketed word, a link with a URL, an apostrophe or a comment opener in its text — or a callee in
+// parentheses, with one real call in a handler. The text is JSX text, or no type's members, for certain: the page is read right, the one call is rewritten, and no token is left.
+test('a page with prose, a URL or a path after a parenthesis in JSX text is read for certain: the one real call is rewritten, and nothing else', (t) => {
+  assert.strictEqual(RESOLVED_PAGES.length, 22);
+  const ts = loadTypescriptOracle();
+  for (const { name, code } of RESOLVED_PAGES) {
+    assert.strictEqual(navigationFrontier(code), null, `${name}: no guess is involved`);
+    assert.deepStrictEqual(extractNavTargets(code).map((target) => [target.kind, target.key, 'afterFrontier' in target]), [['pageref', 'detail', false]], name);
+    assert.deepStrictEqual([strayPageRefs(code), navMalformedRefs(code), pageStructureProblems(code)], [[], [], []], name);
+    const { deployment, unresolved, residual } = resolveOne(code);
+    const resolved = deployment.get('x');
+    assert.strictEqual(resolved, code.replace('"PAGEREF_detail"', '"gp-detail"'), `${name}: the token of the call is the one rewritten`);
+    assert.strictEqual(resolved.split('gp-detail').length - 1, 1, `${name}: one id is written`);
+    assert.deepStrictEqual([unresolved, residual], [[], []], name);
+    if (ts) {
+      const reading = pageIdTokens(ts, code);
+      assert.ok(reading, `${name}: valid TSX`);
+      assert.deepStrictEqual([reading.real.length, reading.data.length], [1, 0], `${name}: TypeScript reads one real call, and no token that is data`);
+    }
+  }
+  if (!ts) t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the pages');
+});
+
+// A call signature whose default value has a `/` after a line comment, and one whose type has a member named by a number with a signed exponent, a nested element in an expression, or a nested tag that is no element (type
+// arguments, a comparison, the type parameters of a signature): each holds a token that is data in a string, a template or a regex, which a type holds the closing tag of its head in. The head may be the element that ends
+// there, so the lexer names the guess at the `<`: both tokens — the data and the real call that follows the head — are stray, and nothing is rewritten. (An element read as the head took the token that is data for a call,
+// and rewrote it.)
+test('a signature whose text can hold the closing tag of its head after a number name, a nested tag or a `/` after a comment is a guess: no token in the page is rewritten', (t) => {
+  const ts = loadTypescriptOracle();
+  const pages = [...REFUSED_PAGES, ...HIDDEN_CLOSING_TAG_PAGES];
+  assert.strictEqual(pages.length, 39);
+  for (const { name, code } of pages) {
+    const at = code.indexOf('<T>');
+    assert.deepStrictEqual(navigationFrontier(code), { start: at, kind: 'generic', ...positionOf(code, at) }, `${name}: the guess is named at the head`);
+    const found = strayPageRefs(code);
+    assert.deepStrictEqual(found.map((r) => r.frontier.kind), ['generic', 'generic'], `${name}: both tokens are stray, after the guess`);
+    const { deployment, unresolved, residual } = resolveOne(code);
+    assert.strictEqual(deployment.get('x'), code, `${name}: nothing is rewritten`);
+    assert.deepStrictEqual([unresolved, navMalformedRefs(code), residual.length], [[], [], 2], name);
+    if (ts) {
+      const reading = pageIdTokens(ts, code);
+      assert.ok(reading, `${name}: valid TSX`);
+      assert.deepStrictEqual([reading.real.length, reading.data.length], [1, 1], `${name}: TypeScript reads one real call and one token that is data`);
+      assert.ok(reading.data.every((token) => found.some((r) => r.start === token)), `${name}: the token that is data is stray`);
+    }
+  }
+  if (!ts) t.diagnostic('no TypeScript parser oracle: set TYPESCRIPT_ORACLE_PATH to a typescript package to check the pages');
+  // The released lexer, where it is given, shows what the pages are for: it rewrites the token that is data in some of them.
+  const base = loadBaseLexer();
+  if (base) {
+    const rewritten = pages.filter(({ code }) => base.resolvePageRefs(new Map([['x', { code }]]), new Map([['detail', 'gp-detail']])).deployment.get('x').split('gp-detail').length - 1 === 2);
+    assert.ok(rewritten.length >= 8, `the released lexer rewrites the token that is data in only ${rewritten.length} of the pages`);
+  }
+});
+
 // A refusal the author can act on names the construct. The page of a live run declared a navigation call that the lexer could not see — `of/2`
 // is read as the start of a regex, whose `/*` opens a comment over the call — and the build said only "declared-but-absent: [detail]".
 test('navigationFrontier and frontierNote name the first place the lexer guessed, and are empty for a page with none', () => {
@@ -2263,6 +2509,13 @@ test('a self-closing tag with trivia between its "/" and its ">", a regex whose 
     ['a signature with no return type and a closing tag after it', `interface I { <T>(x) }\n${TS_DECOY_STRING('T')}\n${DETAIL_CALL}`],
     ['text that starts with a parenthesis and holds a slash', `const e = <p>(a), 1/2 done</p>;\n${TS_DECOY_STRING('p')}\n${DETAIL_CALL}`],
     ['text that starts with a parenthesis and a URL', `const e = <p>(a), see https://x.y</p>;\n${TS_DECOY_STRING('p')}\n${DETAIL_CALL}`],
+    // After an `=`, a `(`, a `[`, a `:` or an `=>` no member of a type begins, so the head is an element, whatever its text holds; and an unclosed `(` or an initializer in a line is read for what TypeScript says of it.
+    ['text that starts with a parenthesis and holds a line comment, after an `=`', `const e = <p>(a); // c </p>;\n${TS_DECOY_STRING('p')}\n${DETAIL_CALL}`],
+    ['text that starts with a parenthesis and a regex-like line, in an argument', `f(<p>(a);\n  /b</p>);\n${TS_DECOY_STRING('p')}\n${DETAIL_CALL}`],
+    ['a line that opens a parenthesis, a comment, and a path', `const e = <p>(optional);\n  foo( // note\n  /docs</p>;\n${TS_DECOY_STRING('p')}\n${DETAIL_CALL}`],
+    ['a line that ends in an initializer, a comment, and a path', `const e = <p>(optional);\n  x = // note\n  /docs</p>;\n${TS_DECOY_STRING('p')}\n${DETAIL_CALL}`],
+    ['a link with a keyword attribute and a URL in its text', `const e = <p>(a); <button type="button">see https://x.y</button></p>;\n${TS_DECOY_STRING('p')}\n${DETAIL_CALL}`],
+    ['a fragment after a comma and a comment in its text', `const e = <p>(a), <>x // y</> more</p>;\n${TS_DECOY_STRING('p')}\n${DETAIL_CALL}`],
   ];
   for (const [what, code] of pages) {
     assert.strictEqual(navigationFrontier(code), null, `${what}: no guess is involved`);
@@ -2281,7 +2534,8 @@ test('a signature whose parameter list or text holds its closing tag in a string
     `interface I { <T>(x: "</T>") }\n${TS_DECOY_STRING('T')}\n${DETAIL_CALL}`,
     `type L = { <T>(x: '</T>'); m: 1 };\n${TS_DECOY_STRING('T')}\n${DETAIL_CALL}`,
     `interface I { <T>(x /* </T> */) }\n${TS_DECOY_STRING('T')}\n${DETAIL_CALL}`,
-    `const e = <p>(a); // c </p>;\n${TS_DECOY_STRING('p')}\n${DETAIL_CALL}`,
+    // Where a member of a type may begin at the head (after a `return`), the element with a comment in its text is a guess; after an `=` it is not.
+    `function g() { return <p>(a); // c </p>; }\n${TS_DECOY_STRING('p')}\n${DETAIL_CALL}`,
   ]) {
     const frontier = navigationFrontier(code);
     assert.ok(frontier && frontier.kind === 'generic', JSON.stringify(code));

@@ -16,12 +16,13 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { sha256 } = require('./lib/hash.js');
 const { validateAppSpec, migrateAppSpec, normalizePageSource, normalizeLanguageCode, specDeclaresAttribute } = require('./lib/app-spec.js');
-const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId, normalizeFormId, settleOwedPublishes } = require('./lib/sdk-build.js');
+const { runSdkBuild, planFor, appUniqueName, compileFormIntent, resolveExistingFormId, normalizeFormId, settleOwedPublishes, collectOwedPublishes } = require('./lib/sdk-build.js');
 const { stagePhasesOrResolve, PHASES, STAGES } = require('./lib/stages.js');
 // #455: resolves the authoring LCID over the transport hatch, BEFORE constructing the SDK that
 // bakes it into the App/Form/Dashboard adapters.
 const { resolveAuthoringLanguage } = require('./lib/entity-provision.js');
 const { createAzHttpClient, SQL_DEADLOCK_VICTIM } = require('./lib/sdk-http-client.js');
+const { workspaceBindingError, workspaceBindingNote } = require('./lib/workspace-binding.js');
 const { parseArgs, validateFlags, readAliasedFlag, readJsonArg, emitResult, dataverseRequest, readProvisionedLanguages, preflightAuth, dataverseOrigin } = require('./lib/dataverse-auth.js');
 const { openJournal } = require('./lib/build-journal.js');
 const { assertSafeOutputDir, assertPlainFileTarget, writeFileSafe } = require('./lib/safe-fs.js');
@@ -43,26 +44,46 @@ const { verifySpec } = require('./lib/verify-spec.js');
 const { readerFor, isolatedReaderFor } = require('./verify-model-app.js');
 const { makeGenpageCli } = require('./lib/genpage-cli.js');
 
+// The folder an app's workspace lives in, checked before anything is built on it. An APPLY makes the folder if it is
+// missing and re-checks it (mkdir on an existing junction succeeds, so the re-check is what refuses one). A DRY RUN
+// only ever reads from it, so a folder that is not there — or cannot be inspected — is just one with no workspace; a
+// link or a file in its place is refused either way, as everywhere the plugin takes a workspace.
+function assertWorkspaceDir(workspaceDir, { create }) {
+  try {
+    assertSafeOutputDir(workspaceDir, { create });
+  } catch (err) {
+    if (create || !(err && err.reason === 'uninspectable')) throw err;
+  }
+}
+
 // Construct the SDK against the vendored bundle + an az-token HttpClient. Two clients:
 //   sdk          — carries solutionUniqueName (metadata + record writes auto-join the
 //                  solution via the MSCRM.SolutionUniqueName header); does no workspace I/O.
-//   provisionSdk — header-less; owns the PERSISTENT workspace. Every discovery read
-//                  (findTables/findColumns/fetchEntityMetadata) and every artifact
-//                  (views/charts/forms/app) lands here, so the app folder accumulates the
-//                  metadata for reuse/edits. Construction is offline (no token until first call).
-async function makeSdk(env, spec, workspaceDir, languageCode) {
+//   provisionSdk — header-less; owns a workspace. In an APPLY (`persistent`) that is the app
+//                  folder's PERSISTENT one: every discovery read (findTables/findColumns/
+//                  fetchEntityMetadata) and every artifact (views/charts/forms/app) lands there, so
+//                  the app folder accumulates the metadata for reuse/edits — and opening it binds it
+//                  to the environment of this run (lib/workspace-binding.js). In a DRY RUN it is a
+//                  throwaway inside the SDK's own temp dir: a preview builds nothing, so it must not
+//                  bind a folder to an environment it only previewed (the next --apply, against the
+//                  environment the operator meant, would be refused), and every read its live plan
+//                  makes goes to the server anyway. The persistent folder is only ASKED, read-only,
+//                  which environment it belongs to, and the answer comes back as `folderNote` so the
+//                  preview can warn that an --apply would stop. Construction is offline (no token
+//                  until first call).
+async function makeSdk(env, spec, workspaceDir, languageCode, { persistent = true } = {}) {
   // A link at the workspace root would make the provision SDK's storage follow it. Refuse
   // before either constructor: the first SDK does not use this directory, but once the
-  // directory has been refused the factory must not run at all. An explicit real directory
-  // is created if missing and then re-checked — mkdir on an existing junction succeeds, so
-  // the re-check is what refuses it.
-  assertSafeOutputDir(workspaceDir, { create: true });
+  // directory has been refused the factory must not run at all.
+  assertWorkspaceDir(workspaceDir, { create: persistent });
   const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
   const httpClient = createAzHttpClient(env);
   const sdkTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-app-'));
   const cleanup = () => {
     fs.rmSync(sdkTempDir, { recursive: true, force: true });
   };
+  // Inside the temp dir that `cleanup` removes, so a preview has nothing more to strand.
+  const provisionDir = persistent ? workspaceDir : path.join(sdkTempDir, 'preview-workspace');
   // Everything fallible after the directory exists runs INSIDE this guard, because the caller's
   // `finally { cleanup() }` only becomes reachable once this function RETURNS — so anything that
   // throws before the return strands the throwaway workspace for the life of the machine.
@@ -77,6 +98,7 @@ async function makeSdk(env, spec, workspaceDir, languageCode) {
   // throwaway, so a failed run must leave it exactly as it found it.
   let sdk;
   let provisionSdk;
+  let folderNote = null;
   try {
     sdk = createMakerSdk({
       workspaceStorage: createNodeWorkspaceStorage(sdkTempDir), // unused (no workspace ops)
@@ -89,30 +111,57 @@ async function makeSdk(env, spec, workspaceDir, languageCode) {
       ...(languageCode ? { languageCode } : {}),
     });
     provisionSdk = createMakerSdk({
-      workspaceStorage: createNodeWorkspaceStorage(workspaceDir),
+      workspaceStorage: createNodeWorkspaceStorage(provisionDir),
       instanceUrl: env,
       httpClient,
       // Must match the `sdk` instance above: `pushArtifact` refuses a push whose stored artifact
       // language disagrees with the SDK performing it (for language-sensitive registrations), so two
       // instances at different LCIDs would make every push of a fetched artifact fail.
       ...(languageCode ? { languageCode } : {}),
+      // A form create whose answer was lost converges instead of halting. The HTTP client re-sends a POST that
+      // got no answer; when the first attempt had committed, the SDK sees the re-send's 412 for the id it minted
+      // and, without this, reports ARTIFACT_ALREADY_EXISTS — a halt a re-run repeats until the workspace is
+      // reset by hand (requireSuccessfulPush). With it the SDK reads that row and adopts it ONLY when it is
+      // exactly what was sent, writing nothing (a Main form only; anything else is refused with the reason,
+      // and the halt is as before). It is on THIS instance because it pushes every form. This instance is
+      // header-less, so no solution membership is demanded of the row — a form joins its solution after its
+      // push. An adoption reports `saved: false`; pushFailed knows that is not a failure.
+      createRecovery: 'adoptExact',
     });
-    await provisionSdk.initWorkspace();
+    if (!persistent) fs.mkdirSync(provisionDir);
+    try {
+      await provisionSdk.initWorkspace();
+    } catch (err) {
+      // `initWorkspace` is where the SDK refuses a workspace that belongs to another environment, before it
+      // reads or writes anything, and where it reads a manifest the JSON parser may reject. That is an
+      // operator's problem to solve, not a crash: say which environments are involved and what the safe ways
+      // forward are (lib/workspace-binding.js). Only an apply can meet it: a preview's workspace is brand new.
+      throw workspaceBindingError(err, { env, workspaceDir }) || err;
+    }
+    if (!persistent) {
+      // The preview did not open the app folder's workspace, so it cannot be refused by it — but an --apply
+      // would be, and the operator is better told now than after the plan has been read and approved.
+      try {
+        const probe = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
+        folderNote = await workspaceBindingNote(probe, { env, workspaceDir });
+      } catch { /* advisory only: nothing here may stop a preview */ }
+    }
   } catch (err) {
     cleanup();
     throw err;
   }
-  // Only the two SDK instances, the cleanup and verify's isolated dashboard reader are returned. The raw
-  // `httpClient` used to come back with them so the caller could wire verify's role-privilege reader — that
-  // read had no SDK surface and had to compose an absolute `EntityDefinitions(...)?$select=Privileges` request
-  // itself. The vendored bundle now exposes `getEntityPrivileges`, so the reader takes the SDK and the raw
-  // client has no caller. Returning it anyway would advertise a bypass this file no longer takes.
+  // Only the two SDK instances, the cleanup and verify's isolated dashboard reader are returned (and, for a
+  // preview, the note it owes about the app folder). The raw `httpClient` used to come back with them so the
+  // caller could wire verify's role-privilege reader — that read had no SDK surface and had to compose an
+  // absolute `EntityDefinitions(...)?$select=Privileges` request itself. The vendored bundle now exposes
+  // `getEntityPrivileges`, so the reader takes the SDK and the raw client has no caller. Returning it anyway
+  // would advertise a bypass this file no longer takes.
   //
   // The isolated reader is built HERE so it shares this client, and with it the Azure CLI token: made by the
   // caller, it created a client of its own, and a second `az account get-access-token`, for every build's
   // dashboard verify. Each read still gets its own throwaway workspace and SDK (verify-model-app.js).
   const isolatedReader = isolatedReaderFor(env, { httpClient });
-  return { sdk, provisionSdk, cleanup, isolatedReader };
+  return { sdk, provisionSdk, cleanup, isolatedReader, folderNote };
 }
 
 // Turn engine progress events into a phase-grouped, status-marked build log:
@@ -575,9 +624,10 @@ async function buildModelApp(spec, opts, deps) {
   // Injectable apply seam: production defaults to runSdkBuild; tests inject a stub to drive verify
   // without a live SDK.
   const runBuild = deps.runBuild || runSdkBuild;
-  // What failed attempts still owe for the default views they enriched (sdk-build.js, 4b), by artifact.
-  // Every attempt re-runs every phase, but a later one can halt before the enrichment an earlier one did,
-  // so each debt is kept until a publish phase pays it (`owedPaid`), and the final halt settles the rest.
+  // What failed attempts still owe for the views and forms they saved and deferred (sdk-build.js: the default-view
+  // enrichment 4b, the reconcile of existing views and forms), by target. Every attempt re-runs every phase, but a
+  // later one can halt before the step an earlier one owed from, so each debt is kept until a publish phase pays it
+  // (`owedPaid`), and the final halt settles the rest.
   const owedAcrossAttempts = new Map();
   let r;
   for (let attempt = 1; ; attempt++) {
@@ -616,7 +666,7 @@ async function buildModelApp(spec, opts, deps) {
       break;
     } catch (err) {
       if (err && err.owedPaid) owedAcrossAttempts.clear();
-      for (const target of (err && Array.isArray(err.owedPublishes) ? err.owedPublishes : [])) owedAcrossAttempts.set(`${target[0]}:${target[1]}`, target);
+      collectOwedPublishes(owedAcrossAttempts, err && err.owedPublishes);
       if (attempt <= maxRetries && isTransientHalt(err, { spec })) {
         const delay = opts.retryDelayMs != null ? opts.retryDelayMs : backoffMs(attempt);
         if (journal) journal.record({ phase: err && err.phase, status: 'retry', label: `transient error (attempt ${attempt}/${maxRetries}) — retrying in ${delay}ms`, detail: String((err && err.message) || err) });
@@ -628,7 +678,7 @@ async function buildModelApp(spec, opts, deps) {
       // Resume by re-running the same command (idempotent): a partial range (--from and the like) is
       // refused on --apply.
       //
-      // First publish the default views this build's attempts had enriched and no publish phase paid: no
+      // First publish the views and forms this build's attempts had saved and no publish phase paid: no
       // retry follows now (see settleOwedPublishes, sdk-build.js). Best-effort, so the halt below is still
       // what this run reports.
       await settleOwedPublishes(deps.provisionSdk || deps.sdk, [...owedAcrossAttempts.values()], deps.warn);
@@ -638,12 +688,17 @@ async function buildModelApp(spec, opts, deps) {
   }
   // #559: a dry run's whole purpose is to say what an apply would DO, so summarise the decision
   // rather than only listing the spec back. `unknown` is counted separately and never folded into
-  // either real decision — an unresolved probe is missing information, not a verdict.
+  // either real decision — an unresolved probe is missing information, not a verdict. Within it, an item
+  // the environment ANSWERED and the answer is "this would stop the build" (`wouldHalt`: a view filter
+  // label that names no option) is a verdict too, so it is not counted as unreadable.
   if (r && r.dryRun && Array.isArray(r.planItems)) {
     const n = (s) => r.planItems.filter((p) => p.state === s).length;
     const unprobed = r.planItems.filter((p) => !p.state).length;
+    const wouldHalt = r.planItems.filter((p) => p.state === 'unknown' && p.wouldHalt).length;
+    const unreadable = n('unknown') - wouldHalt;
     const parts = [`${n('create')} to create`, `${n('reuse')} already present`];
-    if (n('unknown')) parts.push(`${n('unknown')} could not be read`);
+    if (unreadable) parts.push(`${unreadable} could not be read`);
+    if (wouldHalt) parts.push(`${wouldHalt} would stop the build`);
     if (unprobed) parts.push(`${unprobed} not probed`);
     log(r.livePlan
       ? `\n▢ dry run — ${parts.join(', ')} (${r.planItems.length} steps). Re-run with --apply to execute.`
@@ -875,14 +930,19 @@ function assertSnapshotInvalidated(store, workspaceDir) {
 // detect a .tsx / contentPath byte edit, not just a spec-JSON change. It records the content that was
 // actually deployed by THIS apply, stamped with the environment and app it was deployed to, and the
 // dashboard/page ids this apply resolved there (AB#6726727: the sitemap baseline lines entries up by
-// them, and a spec downloaded elsewhere carries another environment's). `write` is a test seam.
+// them, and a spec downloaded elsewhere carries another environment's). A page's hash is the one of the
+// source the pages phase read and sent (`created.pageSourceShas`), not of the file as it is when the build
+// ends: a page saved while the build ran must read as changed next time, and the build's Griffel check
+// judges a page against this record (deployed-baseline.js annotateForBaseline). `write` is a test seam.
 function persistAppliedBaseline(r, { spec, opts, workspaceDir, appDirAbs, baselineIdentity }, write = writeBaseline) {
   const fullPhaseApply = (opts.phases || PHASES).length === PHASES.length;
   const changedOnlyApplied = !!(r && r.changedOnly && (r.changedOnly.decision === 'fast' || r.changedOnly.decision === 'full'));
   const effectiveSuccess = !!(r && r.ok && (!r.verify || r.verify.ok));
   if (!(effectiveSuccess && opts.apply && !r.dryRun && (fullPhaseApply || changedOnlyApplied))) return false;
   try {
-    write(workspaceDir, spec, { appDir: appDirAbs, ...baselineIdentity, created: r.created, previous: opts.baselineSpec });
+    // A changed-only run that found nothing to apply (`noop`, with no `created`) sent nothing, so it has no source to record: every page keeps the record it had.
+    const created = r.created || (r.noop === true ? { pageSourceShas: {} } : r.created);
+    write(workspaceDir, spec, { appDir: appDirAbs, ...baselineIdentity, created, previous: opts.baselineSpec });
     return true;
   } catch {
     return false;
@@ -936,8 +996,9 @@ async function main() {
   const workspaceDir = flags.workspace || path.join(path.dirname(specPath), '.maker-workspace');
   // Before auth, language resolution, and SDK construction. A link planted as the workspace
   // root is refused here so the factory below is never called; a real directory is allowed.
+  // Only an --apply creates it: a dry run never opens this workspace (see makeSdk).
   try {
-    assertSafeOutputDir(workspaceDir, { create: true });
+    assertWorkspaceDir(workspaceDir, { create: flags.apply === true });
   } catch (err) {
     emitResult(false, err instanceof Error ? err : new Error(String(err)));
     return;
@@ -1031,7 +1092,10 @@ async function main() {
   opts.preResolvedLanguageCode = authoringLanguageCode;
   // Construct for both dry-run and apply: proves the vendored bundle + adapter wire up
   // (offline), and apply needs it. A spec validation error short-circuits before any write.
-  const { sdk, provisionSdk, cleanup, isolatedReader } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode);
+  // Only an apply opens (and so binds) the app folder's workspace; a dry run works in a throwaway one and
+  // hands back a note when the folder would stop an --apply.
+  const { sdk, provisionSdk, cleanup, isolatedReader, folderNote } = await makeSdk(env, spec, workspaceDir, authoringLanguageCode, { persistent: opts.apply });
+  if (folderNote) process.stderr.write(`⚠ ${folderNote}\n`);
   // Durable build journal (apply runs only): a per-run record of steps + where a run halted,
   // written to <workspace>/build-log.jsonl. Resume = re-run the same command (idempotent).
   // Opened here, after the SDK exists, so a refusal still runs cleanup. The preflight above

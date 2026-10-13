@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { createAzHttpClient, retryAfterMs, isBatchThrottled, batchRetryAfterMs, RETRY_AFTER_CAP_MS } = require('../lib/sdk-http-client.js');
+const { createAzHttpClient, retryAfterMs, isBatchThrottled, isColumnCreateBatch, batchRetryAfterMs, RETRY_AFTER_CAP_MS } = require('../lib/sdk-http-client.js');
 
 // A fake transport that records the last request and returns a scripted response.
 function fakeTransport(scripted) {
@@ -515,7 +515,7 @@ test('postRaw DOES re-send a $batch of conditional deletes that was refused with
   }
 });
 
-test('postRaw re-sends a 429 $batch ONLY when it is made of conditional deletes and the answer proves nothing ran', async () => {
+test('postRaw re-sends a 429 $batch ONLY when it is made of conditional deletes (or of column creates, below) and the answer proves nothing ran', async () => {
   const answers = {
     'an operation that committed beside the refused one': batchAnswer(['HTTP/1.1 204 No Content'], ['HTTP/1.1 429 Too Many Requests', '{}']),
     'a refusal beside another failure': batchAnswer(['HTTP/1.1 429 Too Many Requests', '{}'], ['HTTP/1.1 500 Internal Server Error', '{}']),
@@ -550,6 +550,116 @@ test('postRaw re-sends a 429 $batch ONLY when it is made of conditional deletes 
   }
 });
 
+// The ordinary columns of a new table go in one change set (the SDK's createColumns): a POST of each column's definition to the
+// table's `Attributes` collection, with the solution header on each operation. It carries no delete and no conditional write, so a
+// 429 — the server refused to START it, as it can while the table the columns were just created in is still held by its
+// customization lock — proves nothing in it ran, and sending it again cannot remove or overwrite anything.
+const columnChangeSet = (...names) => [
+  '--batch_b', 'Content-Type: multipart/mixed;boundary=changeset_c', '',
+  ...names.flatMap((name, i) => [
+    '--changeset_c', 'Content-Type: application/http', 'Content-Transfer-Encoding: binary', `Content-ID: ${i + 1}`, '',
+    "POST https://org.crm.dynamics.com/api/data/v9.0/EntityDefinitions(LogicalName='new_ticket')/Attributes HTTP/1.1",
+    'Content-Type: application/json;type=entry', 'MSCRM.SolutionUniqueName: Tickets', '',
+    JSON.stringify({ '@odata.type': 'Microsoft.Dynamics.CRM.StringAttributeMetadata', SchemaName: name }),
+  ]),
+  '--changeset_c--', '--batch_b--', '',
+].join('\r\n');
+const COLUMNS = columnChangeSet('new_a', 'new_b');
+const TABLE_LOCKED_429 = { statusCode: 429, headers: {}, body: JSON.stringify({ error: { code: '0x80072322', message: 'Cannot start the requested operation [Publish] because there is another [EntityCustomization] running at this moment.' } }) };
+
+test('postRaw DOES re-send a $batch that only creates columns when it was refused with 429, in either shape, on the throttle schedule', async () => {
+  const answers = {
+    'the whole request refused': TABLE_LOCKED_429,
+    'the whole request refused, no body': { statusCode: 429, headers: {}, body: '' },
+    'its change set refused': { statusCode: 429, headers: {}, body: batchAnswer(['HTTP/1.1 429 Too Many Requests', TABLE_LOCKED_429.body]) },
+    'every operation refused, whatever the outer status': { statusCode: 200, headers: {}, body: batchAnswer(['HTTP/1.1 429 Too Many Requests', '{}'], ['HTTP/1.1 429 Too Many Requests', '{}']) },
+  };
+  for (const [what, refused] of Object.entries(answers)) {
+    const slept = [];
+    const { request, calls } = fakeTransport(() => (calls.length <= 2 ? refused : { statusCode: 200, headers: {}, body: BATCH_RESPONSE }));
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, random: () => 0.5, sleep: async (ms) => { slept.push(ms); } });
+    const res = await postBatch(http, COLUMNS);
+    assert.strictEqual(calls.length, 3, `re-sent twice: ${what}`);
+    assert.ok(calls.every((c) => c.body === COLUMNS), `the same change set, byte for byte, each time: ${what}`);
+    assert.deepStrictEqual(slept, [1125, 2250], `the jittered backoff every other throttled request gets: ${what}`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body, BATCH_RESPONSE, `the SDK reads the re-sent batch's own answer: ${what}`);
+  }
+  // It does not give up early, and it stops where every other throttled request stops: six sends in all.
+  const slept = [];
+  const { request, calls } = fakeTransport(TABLE_LOCKED_429);
+  const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, random: () => 0, sleep: async (ms) => { slept.push(ms); } });
+  const gaveUp = await postBatch(http, COLUMNS);
+  assert.strictEqual(calls.length, 6, 'six attempts in all');
+  assert.deepStrictEqual(slept, [1000, 2000, 4000, 8000, 8000]);
+  assert.strictEqual(gaveUp.status, 429, 'after the last attempt the refusal surfaces unchanged');
+  assert.strictEqual(gaveUp.body, TABLE_LOCKED_429.body, 'raw, as the SDK reads it');
+});
+
+test('postRaw sends a $batch of column creates ONCE after every answer but a 429 that proves nothing in it ran', async () => {
+  const answers = {
+    'a 500': { statusCode: 500, headers: {}, body: '{"error":{"message":"An unexpected error occurred."}}' },
+    'a 502': { statusCode: 502, headers: {}, body: 'bad gateway' },
+    'a 503': { statusCode: 503, headers: {}, body: 'busy' },
+    'a 504': { statusCode: 504, headers: {}, body: '' },
+    'a refused change set (the failing operation only)': { statusCode: 400, headers: {}, body: batchAnswer(['HTTP/1.1 400 Bad Request', JSON.stringify({ error: { code: '0x80060304', message: 'Attribute createdon already exists for entity new_ticket.' } })]) },
+    'a plain 400': { statusCode: 400, headers: {}, body: '{"error":{"message":"The attribute metadata is not valid for this table"}}' },
+    // A change set can commit behind any of these.
+    'an accepted change set': { statusCode: 200, headers: {}, body: BATCH_RESPONSE },
+    'a SQL deadlock victim (re-sent for conditional deletes only)': BATCH_DEADLOCK_500,
+    'an operation that committed beside the refused one': { statusCode: 429, headers: {}, body: batchAnswer(['HTTP/1.1 204 No Content'], ['HTTP/1.1 429 Too Many Requests', '{}']) },
+    'a refusal beside another failure': { statusCode: 429, headers: {}, body: batchAnswer(['HTTP/1.1 429 Too Many Requests', '{}'], ['HTTP/1.1 500 Internal Server Error', '{}']) },
+    'a multipart answer cut short': { statusCode: 429, headers: {}, body: batchAnswer(['HTTP/1.1 429 Too Many Requests', '{}']).replace(/--batchresponse_b1--\r\n$/, '') },
+    'a complete answer with no operation results': { statusCode: 429, headers: {}, body: '--batchresponse_b1\r\n--batchresponse_b1--\r\n' },
+  };
+  for (const [what, answer] of Object.entries(answers)) {
+    const { request, calls } = fakeTransport(answer);
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+    const res = await postBatch(http, COLUMNS);
+    assert.strictEqual(calls.length, 1, `sent once: ${what}`);
+    assert.strictEqual(res.body, answer.body, `and the answer reaches the SDK as it came: ${what}`);
+  }
+  // No answer at all, or one cut off after the server had answered: the outcome is unknown, so nothing is sent again.
+  for (const [what, outcome] of [['a transport failure', { error: 'ETIMEDOUT' }], ['an answer cut off after the server answered', { error: 'Connection closed before the response completed', incompleteResponse: true, statusCode: 200 }]]) {
+    const { request, calls } = fakeTransport(outcome);
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+    await assert.rejects(postBatch(http, COLUMNS), /Request failed/, what);
+    assert.strictEqual(calls.length, 1, `sent once: ${what}`);
+  }
+});
+
+test('postRaw never re-sends a 429 $batch that does more than create columns', async () => {
+  const column = ['POST', "https://org.crm.dynamics.com/api/data/v9.0/EntityDefinitions(LogicalName='new_ticket')/Attributes"];
+  const requests = {
+    'a column create beside an update': batchRequest(column, ['PATCH', 'https://org.crm.dynamics.com/api/data/v9.0/appmodules(1)', ['If-Match: *']]),
+    'a column create beside a delete': batchRequest(column, ['DELETE', 'https://org.crm.dynamics.com/api/data/v9.0/appmodules(1)']),
+    'a column create beside a conditional delete': batchRequest(column, ['DELETE', 'https://org.crm.dynamics.com/api/data/v9.0/appmodules(1)', ['If-Match: W/"1"']]),
+    'a table create': batchRequest(['POST', 'https://org.crm.dynamics.com/api/data/v9.0/EntityDefinitions']),
+    'a create in a record collection': batchRequest(['POST', 'https://org.crm.dynamics.com/api/data/v9.0/appmodules']),
+    'a POST to one column, not to the collection': batchRequest(['POST', "https://org.crm.dynamics.com/api/data/v9.0/EntityDefinitions(LogicalName='new_ticket')/Attributes(11111111-1111-1111-1111-111111111111)"]),
+    'an update of one column': batchRequest(['PATCH', "https://org.crm.dynamics.com/api/data/v9.0/EntityDefinitions(LogicalName='new_ticket')/Attributes"]),
+    'no operation at all': '--b\r\n',
+  };
+  for (const [what, body] of Object.entries(requests)) {
+    const { request, calls } = fakeTransport(TABLE_LOCKED_429);
+    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, sleep: async () => {} });
+    await postBatch(http, body);
+    assert.strictEqual(calls.length, 1, `not re-sent: ${what}`);
+  }
+});
+
+test('isColumnCreateBatch accepts a batch only when EVERY operation is a POST to a table\'s Attributes collection', () => {
+  assert.strictEqual(isColumnCreateBatch(COLUMNS), true);
+  assert.strictEqual(isColumnCreateBatch(columnChangeSet('new_a')), true);
+  assert.strictEqual(isColumnCreateBatch(columnChangeSet(...Array.from({ length: 25 }, (_, i) => `new_c${i}`))), true);
+  assert.strictEqual(isColumnCreateBatch(COLUMNS.replace(/\r\n/g, '\n')), true, 'line endings do not matter');
+  assert.strictEqual(isColumnCreateBatch(APP_DELETE), false);
+  assert.strictEqual(isColumnCreateBatch(''), false);
+  assert.strictEqual(isColumnCreateBatch(undefined), false);
+  assert.strictEqual(isColumnCreateBatch(Buffer.from(COLUMNS)), false, 'a body that is not text');
+  assert.strictEqual(isColumnCreateBatch(COLUMNS.replace("POST https://org.crm.dynamics.com/api/data/v9.0/EntityDefinitions(LogicalName='new_ticket')/Attributes HTTP/1.1", "PUT https://org.crm.dynamics.com/api/data/v9.0/EntityDefinitions(LogicalName='new_ticket')/Attributes HTTP/1.1")), false, 'one operation of another method');
+});
+
 test('a throttled answer\u2019s Retry-After is honoured, up to a cap, when it asks for longer than the backoff', async () => {
   const NOW = Date.parse('2026-09-30T10:00:00Z');
   const cases = [
@@ -562,7 +672,7 @@ test('a throttled answer\u2019s Retry-After is honoured, up to a cap, when it as
     ['1', 1125], // shorter than the backoff: the backoff
   ];
   for (const [value, want] of cases) {
-    for (const [what, send] of [['a GET', (h) => h.get('https://org.crm.dynamics.com/x')], ['a record delete', (h) => h.delete('https://org.crm.dynamics.com/api/data/v9.0/solutions(1)')]]) {
+    for (const [what, send] of [['a GET', (h) => h.get('https://org.crm.dynamics.com/x')], ['a record delete', (h) => h.delete('https://org.crm.dynamics.com/api/data/v9.0/solutions(1)')], ['a change set of column creates', (h) => postBatch(h, COLUMNS)]]) {
       const slept = [];
       const { request, calls } = fakeTransport(() => (calls.length <= 1 ? { statusCode: 429, headers: { 'retry-after': value }, body: '' } : { statusCode: 204, headers: {}, body: '' }));
       const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, random: () => 0.5, now: () => NOW, sleep: async (ms) => { slept.push(ms); } });
@@ -592,12 +702,14 @@ test('a batch refused operation by operation waits for the Retry-After in the re
     ['the backoff when neither asks for longer', { headers: {}, parts: [part()] }, 1125],
   ];
   for (const [what, { headers, parts }, want] of cases) {
-    const slept = [];
-    const refused = { statusCode: 429, headers, body: batchAnswer(...parts) };
-    const { request, calls } = fakeTransport(() => (calls.length <= 1 ? refused : { statusCode: 200, headers: {}, body: BATCH_RESPONSE }));
-    const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, random: () => 0.5, now: () => NOW, sleep: async (ms) => { slept.push(ms); } });
-    await postBatch(http);
-    assert.deepStrictEqual(slept, [want], what);
+    for (const [kind, batch] of [['conditional deletes', APP_DELETE], ['column creates', COLUMNS]]) {
+      const slept = [];
+      const refused = { statusCode: 429, headers, body: batchAnswer(...parts) };
+      const { request, calls } = fakeTransport(() => (calls.length <= 1 ? refused : { statusCode: 200, headers: {}, body: BATCH_RESPONSE }));
+      const http = createAzHttpClient('https://org.crm.dynamics.com', { getToken: () => 'TOK', request, random: () => 0.5, now: () => NOW, sleep: async (ms) => { slept.push(ms); } });
+      await postBatch(http, batch);
+      assert.deepStrictEqual(slept, [want], `${what} (${kind})`);
+    }
   }
   assert.strictEqual(batchRetryAfterMs({ body: batchAnswer(['HTTP/1.1 204 No Content\r\nRetry-After: 30']) }), 0, 'only a refused operation\u2019s wait counts');
   assert.strictEqual(batchRetryAfterMs({ body: '{"error":{}}' }), 0, 'a plain answer has no parts');

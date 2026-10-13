@@ -18,7 +18,13 @@ const {
   isLocalizedLabelMap,
   localizedLabelLcids,
   sampleKeyIdentity,
+  lookupLabelFor,
+  lookupParentNeedsEnvironment,
+  isOldLookupColumnLabel,
+  askedPrimaryNameLength,
+  PRIMARY_NAME_MAX_LENGTH,
 } = require('./app-spec.js');
+const { readColumnLabels, makeTableLabelReader, lookupKey } = require('./lookup-labels.js');
 const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 // OData string-literal escaping for spec-controlled values interpolated into $filter (a solution
 // uniquename / publisher prefix with a `'` would otherwise break the query or inject a clause).
@@ -271,6 +277,406 @@ function columnOptions(c, globalChoiceIds, globalChoices, languageCode) {
 
 function choiceOptions(col) {
   return (col.options || []).map((label, i) => ({ value: 100000000 + i, label }));
+}
+
+// What the table's create asks for as its primary name column's length when the spec gives none: 100 — what the previous release
+// always sent, for a plain and an auto-numbered name column alike. It is the SDK's own default for the option, sent explicitly here
+// so that a later change of that default cannot change what a spec without `primaryAttribute.maxLength` gets.
+//
+// What the platform makes of the length it is asked for depends on the environment. Measured on two, as the `MaxLength` of the
+// primary `StringAttributeMetadata` in the request that creates the table:
+//   a create with only the primary name attribute, plain text   one environment keeps the length asked (100 came back as 100);
+//                                                               another IGNORES it — 100 and 120 both came back as 850
+//                                                               characters (DatabaseLength 1700)
+//   the same, with an auto-numbered primary                     the length asked is kept — 100 came back as 100 (200)
+//   a create that also carries other columns                    the length asked is kept, even on the environment that ignores it
+//                                                               for a create with only the primary attribute — 120 came back as 120
+//   more than 850 (in a create that carried other columns)      refused, HTTP 400: "The maximum length of Primary attribute
+//                                                               'new_name' is 4000. The maximum allowed limit is 850."
+//   a PUT of the finished column (the SDK's updateColumn)       honored — 850 -> 120 -> 850, each answered 204; the
+//                                                               DatabaseLength stays 1700
+// So the table is created exactly as the previous release created it — one request that carries ONLY the primary name attribute,
+// asking for 100 — which gives the previous release's result on every environment, whichever of the two behaviours it has; the
+// table's ordinary columns follow in a request of their own (createColumnsInOneRequest). A length the spec asks for is asked in that
+// same create; once the data-model phase has made its last labelled create, it is confirmed with one typed read and set with
+// updateColumn where the environment did not keep it (alignPrimaryNameLength, run last by provisionDataModel).
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-update-entity-definitions-using-web-api#create-table-definitions
+const DEFAULT_PRIMARY_NAME_LENGTH = 100;
+
+// What the table's create asks for as the primary name column's length: the spec's `primaryAttribute.maxLength`, else the default
+// above. Applied when the table is CREATED (an existing table's column is never rewritten).
+function primaryNameLength(primaryAttribute) {
+  const asked = askedPrimaryNameLength({ primaryAttribute });
+  return asked !== undefined ? asked : DEFAULT_PRIMARY_NAME_LENGTH;
+}
+
+// The MaxLength of one text column, from ONE typed request: MaxLength is a member of StringAttributeMetadata, so the attribute
+// is addressed through that cast and nothing else is selected — no labels, the kind of narrow read the build keeps ahead of
+// its labelled writes (findExistingColumns). Dataverse answers
+//   { "@odata.context": "...", "MaxLength": 850, "MetadataId": "..." }
+// The attribute of a table created a moment ago can trail the table (the lag confirmInlineColumns also waits out), so a 404 is
+// asked again, twice; any other answer will not change by asking again. Throws, with the reason, when the length cannot be read.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/query-metadata-web-api#retrieve-attributes
+async function readTextColumnLength(provision, tableLogical, columnLogical, { sleep } = {}) {
+  const raw = provision && provision.dataverse;
+  if (!raw || typeof raw.get !== 'function') throw new Error('there is no Dataverse client to read the column with');
+  const wait = typeof sleep === 'function' ? sleep : ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const url = `/EntityDefinitions(LogicalName='${odataLit(tableLogical)}')/Attributes(LogicalName='${odataLit(columnLogical)}')/Microsoft.Dynamics.CRM.StringAttributeMetadata?$select=MaxLength`;
+  let why = 'no answer';
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (attempt > 0) await wait(1000);
+    const res = await raw.get(url);
+    if (res && res.status >= 200 && res.status < 300) {
+      if (res.body && Number.isInteger(res.body.MaxLength)) return res.body.MaxLength;
+      throw new Error('the answer to the read of the column\'s length carries no MaxLength');
+    }
+    const detail = res && res.body && res.body.error && res.body.error.message;
+    why = `HTTP ${res && res.status}${detail ? `: ${detail}` : ''}`;
+    if (!res || res.status !== 404) break;
+  }
+  throw new Error(`could not read the column's length (${why})`);
+}
+
+// Sets the primary name column of a table THIS build created to the length the spec asks for. The table is created with a
+// request that carries nothing but that column, and some environments ignore the length asked of a plain text name column in
+// such a request (see DEFAULT_PRIMARY_NAME_LENGTH), so the length is read back — one typed request — and only a column that is not
+// already the asked length is updated, with the SDK's updateColumn (the documented PUT of the typed column). Exactly one narrated
+// step, a skip when nothing needed changing (an environment that keeps the length asked). A read or an update that fails is a
+// FAILED step that names the table, the length asked and the length the platform made, plus a warning, the way a failed column
+// update is reported elsewhere in this file: the build goes on, and the column is never left at the wrong length without saying so.
+//
+// It is the LAST thing the data-model phase does (provisionDataModel calls it once every table, column, status reason, alternate
+// key and relationship has been created), not the first thing after the table. The SDK's updateColumn starts by reading the column
+// WITH its labels, and a label-bearing metadata read ahead of a labelled create is what makes Dataverse keep only the base-language
+// label of what is created (measured live — see findExistingColumns, which is why the reads that precede a create in this file are
+// narrow). That read is inside the SDK and cannot be narrowed, so it goes where nothing labelled is created after it — within one
+// attempt. The build runs a phase that halts on a transient answer (a 429, a lock) again (build-model-app.js): the attempt that
+// created the table has set its length by then, because this runs after a halt too, and the retry finds the table and keeps its
+// name column as it finds it, so the length is set once. What the retry creates — a column or a relationship the halt kept the
+// first attempt from — comes after that attempt's read; the loss was measured only for a create straight after the read, so whether
+// it reaches across the pause between two attempts is not known.
+//
+// `halted` says the phase stopped before this step: the warning for a length that could not be set then cannot promise that the build
+// continues, and says what a re-run does instead (it finds the table and leaves an existing table's name column as it is).
+async function alignPrimaryNameLength({ runner, sdk, provision, entity, logical, asked, warn, sleep, halted = false }) {
+  const primaryLogical = String(entity.primaryAttribute.schemaName).toLowerCase();
+  const label = `primary column length ${entity.schemaName}.${entity.primaryAttribute.schemaName}`;
+  let actual;
+  let unread;
+  try { actual = await readTextColumnLength(provision, logical, primaryLogical, { sleep }); } catch (err) { unread = err; }
+  if (!unread && actual === asked) {
+    runner.skip('data-model', `${label} (already ${asked})`);
+    return;
+  }
+  const afterwards = halted
+    ? 'because the data-model phase stopped, and a run that finds the table already there leaves its name column as it is, change the length in Maker if it matters'
+    : 'the rest of the build continues';
+  await runBestEffort(
+    runner,
+    'data-model',
+    `${label} -> ${asked}`,
+    async () => {
+      if (unread) throw new Error(`asked ${asked}, the length the platform made is unknown: ${(unread && unread.message) || unread}`);
+      try {
+        await sdk.updateColumn(logical, primaryLogical, { maxLength: asked });
+      } catch (err) {
+        throw new Error(`asked ${asked}, the platform made ${actual}: ${(err && err.message) || err}`, { cause: err });
+      }
+    },
+    warn,
+    `could not set the length of the primary name column ${logical}.${primaryLogical} to ${asked} — it keeps the length the platform gave it, and ${afterwards}`
+  );
+}
+
+// The primary name column of a table that was found after the create that made it: the answer to that create was lost, or somebody
+// else created the table first. Nothing shows that THIS build made it, so its column is never written — but the length the spec
+// asks for is compared with the one the table has, from one typed read, and a difference is said out loud instead of passing as a
+// bare skip. (Some environments make a plain text name column created with only that column 850 characters long whatever length
+// was asked, see DEFAULT_PRIMARY_NAME_LENGTH, which is the likely cause.) A read that fails is said too. One narrated step, always
+// a skip, and never a failure of the build: it changes nothing.
+async function reportFoundPrimaryNameLength({ runner, provision, entity, logical, asked, warn, sleep }) {
+  const primaryLogical = String(entity.primaryAttribute.schemaName).toLowerCase();
+  const label = `primary column length ${entity.schemaName}.${entity.primaryAttribute.schemaName}`;
+  const found = 'table found after its create — kept';
+  const why = 'the answer to that create was lost or another maker created the table first, so nothing shows that this build made it and its name column is left alone';
+  let actual;
+  try {
+    actual = await readTextColumnLength(provision, logical, primaryLogical, { sleep });
+  } catch (err) {
+    runner.skip('data-model', `${label} (${found}; its length could not be read)`);
+    if (typeof warn === 'function') warn(`could not read the length of the primary name column ${logical}.${primaryLogical} (${(err && err.message) || err}), so the ${asked} the spec asks for is not confirmed — the table was found after its create, and ${why}`);
+    return;
+  }
+  if (actual === asked) {
+    runner.skip('data-model', `${label} (already ${asked})`);
+    return;
+  }
+  runner.skip('data-model', `${label} (${found} at ${actual}, asked ${asked})`);
+  if (typeof warn === 'function') warn(`the primary name column ${logical}.${primaryLogical} is ${actual} characters long, not the ${asked} the spec asks for — the table was found after its create, and ${why}. Change the column in Maker if the length matters`);
+}
+
+// The ordinary columns of a NEW table are created together, in ONE atomic change set, right after the table — instead of one
+// request per column. A change set is an OData `$batch` whose operations are all POSTs to the table's `Attributes` collection (the
+// vendored SDK's createColumns): Dataverse runs them in the order given, and if any operation fails it rolls back the ones already
+// done, so a refused request has created nothing and the build can take the one-request-per-column path it always had. A batch may
+// hold up to 1,000 requests.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/execute-batch-operations-using-web-api#change-sets
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/execute-batch-operations-using-web-api#handling-errors
+//
+// Why a request of its own and not the table's create request, which Dataverse also accepts — columns may be posted in the
+// `Attributes` array beside the primary name attribute
+// (https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/create-update-column-definitions-using-web-api#create-columns)?
+// Because a table create that carries columns is not a request the previous release ever sent, and what the platform makes of it is
+// not what it makes of the previous release's: an environment that ignores the length asked of a primary name column created alone
+// keeps it when the same create also carries other columns (DEFAULT_PRIMARY_NAME_LENGTH), so no one length asked of such a create
+// gives the previous release's result on every environment. The table is created exactly as before; only these columns are new.
+// Each operation's body is the SAME body createColumn posts — the SDK builds both with one function — and the
+// table-columns-in-create test compares them column by column, so a column comes out as it always did.
+//
+// Only a column whose whole definition is ONE such body qualifies. Left to the per-column path, as they have always been, because
+// each needs something a request of its own provides:
+//   Customer               a lookup plus two relationships, made by their own action — not an `Attributes` POST at all
+//   File, Image            each makes companion columns of its own (see inlineColumnsOf), and an Image column is checked against
+//                          the table's one-primary-image rule
+//   Calculated, Rollup     a formula may name a column that has not been created yet, so they are made in spec order
+//   a choice bound to a global option set   the binding refers to a separate record, not to the body
+// A type is in this set only while the platform is not known to create anything beside it that COLUMN_COMPANIONS does not list:
+// Text, Memo, the number types, DateTime and AutoNumber have no companion column at all, and the rest are listed there. (The order
+// rules in inlineColumnsOf do not rely on that list being complete.)
+const INLINE_COLUMN_TYPES = new Set(['Text', 'Memo', 'Integer', 'BigInt', 'Decimal', 'Double', 'Money', 'DateTime', 'Boolean', 'Choice', 'MultiChoice', 'AutoNumber']);
+// At most this many columns go in one change set, so the request — and the one-request-per-column fallback a refusal costs — stays
+// bounded however large a table is; the rest take the per-column path. (The platform allows 1,000 operations in a batch; this is the
+// build's own bound.)
+const INLINE_COLUMN_LIMIT = 25;
+
+// What the platform creates beside a column of the change set, as the suffixes of the column's own name: a Money column's
+// base-currency twin, and the `<name>name` shadow of a Choice, a MultiChoice or a Boolean column. Each companion is a column of its
+// own on the table, marked `AttributeOf` the column it extends. A column of one of these names IN the change set would make the
+// platform refuse the whole of it (see inlineColumnsOf), so the build keeps such a name out up front. A Map, because its key is
+// the spec's column type: an object would answer `constructor` for a spec that says so.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/attributemetadata ("AttributeOf: The name of the attribute that this attribute extends.")
+const COLUMN_COMPANIONS = new Map([
+  ['Money', ['_base']],
+  ['Choice', ['name']],
+  ['MultiChoice', ['name']],
+  ['Boolean', ['name']],
+]);
+
+// Whether a column can be created in the change set at all (INLINE_COLUMN_TYPES, and none of the exceptions listed there).
+const isOrdinaryColumn = (c) => INLINE_COLUMN_TYPES.has(c.type || 'Text') && c.source !== 'Calculated' && c.source !== 'Rollup' && !c.globalChoice;
+
+// The ordinary columns of a NEW table that go in the change set, in spec order.
+//
+// A change set that creates an attribute twice is refused as a whole by the platform — error 0x80060304,
+// "Attribute {0} already exists for entity {1}." — where the one-by-one path meets the same collision in ONE column's
+// own request and skips it. So a column stays out of the change set, and takes that path, when its name is one the
+// platform creates itself or an earlier column already has. Names compare without regard to case, because Dataverse
+// lower-cases logical names:
+//   the primary name column     the table already has it
+//   `<table>id`                 the table's own primary key
+//   a companion                 a name COLUMN_COMPANIONS lists for a column of the table — for EVERY such column, even one that
+//                               is past the limit or takes the per-column path (a choice bound to a global option set, a
+//                               Calculated Money column). Money: `<name>_base`, the hidden twin holding its value in the base
+//                               currency (download emits that twin as a column of its own when it could not read the Money
+//                               column). Choice, MultiChoice, Boolean: `<name>name`.
+//   a repeat of an earlier name in any case spelling — whatever type the earlier column is, because in spec order it
+//                               would have created the name first
+//   a name that EXTENDS the name of a column made by its own request   see below
+// and a column stays out when an EARLIER column has a name that extends its own — the last rule below.
+//
+// The extends rule cannot be a list. A column that takes the per-column path — Customer, File, Image, a Calculated or Rollup column,
+// a choice bound to a global option set — is made AFTER the change set, and the platform makes its companions at that moment,
+// each named after it: `<name>name`, `<name>yominame` and `<name>idtype` beside a Customer column (measured on a polymorphic lookup:
+// each is a stored column marked `AttributeOf` the lookup), `<name>_name` beside a File column, `<name>id`, `<name>_timestamp` and
+// `<name>_url` beside an Image column, `<name>_date` and `<name>_state` beside a rollup column. A column of such a name inside the
+// change set would be made BEFORE its owner, and the owner's own create would then meet it: refused with "already exists",
+// which the build reads as a skip — the owner would vanish from the table without a word, where one by one the owner is made
+// first and the twin is the skip. The build does not claim to know everything the platform makes beside a column, so a column
+// whose name extends such an owner's stays out and is made in spec order, as it always was; for a column that merely happens to
+// start like its neighbour's name (`new_file` and `new_filename`) that costs one request. A column past the limit, or kept out by
+// another rule, is not an owner in this sense: its type has no companion that COLUMN_COMPANIONS does not list.
+//
+// The last rule is the mirror of those two, for the columns that go in the change set themselves. One by one, in spec order, the
+// first column to name something creates it and the next is skipped as already existing — so when a twin is listed BEFORE the column
+// that creates its name as a companion, the twin is the one that is kept and the OWNER is skipped. The change set runs before every
+// per-column create, so an owner in it would be made first and the twin skipped instead: the other column of the pair would vanish
+// from the table, without a word. So a column stays out of the change set when an earlier column of the table has a name that
+// EXTENDS its own — every name creating a column can take is named after it, the ones COLUMN_COMPANIONS lists (a Choice,
+// MultiChoice, Boolean or Money column's) and the ones the platform may make that the build does not know — and is made after that
+// column, in spec order. For a twin listed AFTER its owner nothing changes: the owner goes first either way, and the twin stays out
+// by the rules above. A column kept out for this is made by its own request like any other owner, so a LATER column whose name
+// extends its own stays out too; an earlier one is created before it either way and need not. Where an earlier column merely starts
+// like a later one's name, that costs one request.
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/web-service-error-codes
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/attributemetadata
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/file-column-data#file-name-column
+// See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/image-column-data#download-url
+// See: https://learn.microsoft.com/en-us/power-apps/maker/data-platform/define-rollup-fields
+function inlineColumnsOf(buildable, { primaryName, tableLogical }) {
+  const names = buildable.map((c) => c.schemaName.toLowerCase());
+  const taken = new Set([String(primaryName || '').toLowerCase(), `${tableLogical}id`]);
+  // The names of the columns made by their own request, each with the position after which a name that extends it stays out: any
+  // position (-1) for a column that cannot go in the change set at all, only a later one for a column kept out by the last rule.
+  const ownRequest = [];
+  const lateOwners = new Set();
+  buildable.forEach((c, i) => {
+    const name = names[i];
+    for (const suffix of COLUMN_COMPANIONS.get(c.type) || []) taken.add(`${name}${suffix}`);
+    if (!isOrdinaryColumn(c)) {
+      ownRequest.push({ name, after: -1 });
+      return;
+    }
+    // Every name a column's creation can take — a companion listed for it, or one the build does not know — is named after the column,
+    // so one test covers them all: an earlier column whose name extends this one's.
+    if (names.slice(0, i).some((earlier) => earlier.length > name.length && earlier.startsWith(name))) {
+      lateOwners.add(c);
+      ownRequest.push({ name, after: i });
+    }
+  });
+  const seen = new Set();
+  const inline = [];
+  buildable.forEach((c, i) => {
+    const name = names[i];
+    const repeat = seen.has(name);
+    seen.add(name);
+    const extendsOwner = ownRequest.some((owner) => i > owner.after && name.length > owner.name.length && name.startsWith(owner.name));
+    if (!repeat && !taken.has(name) && !extendsOwner && !lateOwners.has(c) && isOrdinaryColumn(c) && inline.length < INLINE_COLUMN_LIMIT) inline.push(c);
+  });
+  return inline;
+}
+
+// Creates the table with the primary name attribute and nothing else — the request the previous release sent. Its ordinary columns
+// follow in a change set of their own (createColumnsInOneRequest).
+//
+// TABLE_METADATA_NOT_VISIBLE is the SDK's own statement that the table WAS created and must not be created again, so it is the
+// caller's. A length the spec asked for is reported as unconfirmed before the build stops (`askedLength`): some environments make
+// a plain text name column created this way 850 characters long whatever length is asked (DEFAULT_PRIMARY_NAME_LENGTH), and the
+// re-run that follows leaves an existing table's name column as it is. Nothing is said for an auto-numbered name column, which
+// keeps the length asked, or for the longest length there is (850), which the column comes out as either way.
+async function createNewTable(sdk, createOpts, { warn, askedLength } = {}) {
+  try {
+    return await sdk.createTable(createOpts);
+  } catch (err) {
+    if (err && err.code === 'TABLE_METADATA_NOT_VISIBLE' && askedLength !== undefined && askedLength !== PRIMARY_NAME_MAX_LENGTH
+      && !createOpts.primaryColumnAutoNumberFormat && typeof warn === 'function') {
+      warn(`table ${createOpts.schemaName} was created, but its metadata could not be read back yet, so the build stops here — the spec asks for a primary name column length of ${askedLength}, which may not have been applied (some environments make a name column created this way ${PRIMARY_NAME_MAX_LENGTH} characters long), and a re-run leaves an existing table's name column as it is: after the re-run, check ${String(createOpts.primaryColumnSchemaName).toLowerCase()} in Maker and set its length there if it matters`);
+    }
+    throw err;
+  }
+}
+
+// One line saying why a request failed. When the platform answers a `$batch` with its multipart envelope, the SDK's error carries
+// that whole answer as its message, e.g. (line breaks shown as \r\n)
+//   HTTP 400 from https://contoso.crm.dynamics.com/api/data/v9.2/$batch: --batchresponse_1\r\nContent-Type: multipart/mixed; boundary=changesetresponse_1\r\n\r\n--changesetresponse_1\r\nContent-Type: application/http\r\nContent-ID: 3\r\n\r\nHTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n\r\n{"error":{"code":"0x80060304","message":"Attribute createdon already exists for entity new_ticket."}}\r\n--changesetresponse_1--\r\n--batchresponse_1--
+// so the platform's own message is taken out of it when there is one (with the status that opens the SDK's), and anything else
+// is cut to a line.
+function briefReason(err) {
+  const text = String((err && err.message) || err);
+  const status = /^HTTP (\d{3})\b/.exec(text);
+  const platform = /"message"\s*:\s*("(?:[^"\\]|\\.)*")/.exec(text);
+  let reason = text;
+  if (platform) {
+    try { reason = `${status ? `HTTP ${status[1]}: ` : ''}${JSON.parse(platform[1])}`; } catch { /* keep the whole text */ }
+  }
+  reason = reason.replace(/\s+/g, ' ').trim();
+  return reason.length > 300 ? `${reason.slice(0, 297)}...` : reason;
+}
+
+// Whether an error from the change set leaves what it did UNKNOWN, rather than saying it was refused: the answer never arrived (a
+// transport failure, which the SDK reports as a ConnectionError with status 0), was a server error, or could not be read although the
+// platform answered with a success status ("cannot be confirmed"). A change set can commit behind each of those. A 4xx is a refusal —
+// nothing was created — and so is anything the SDK raises before it sends (an error that is not a ConnectionError).
+function outcomeUnknown(err) {
+  if (!err || err.code !== 'CONNECTION_ERROR') return false;
+  const status = err.statusCode;
+  return !status || status >= 500 || (status >= 200 && status < 300);
+}
+
+// Creates a new table's ordinary columns in ONE atomic change set (the SDK's createColumns) and answers the ones the table is then
+// confirmed to have (confirmInlineColumns). `table` is `{ metadataId, logicalName }` as the SDK answered the create of the table.
+//
+// The change set is all or nothing, so an error means the request was refused and no column was created — and the build goes on the
+// way it always did, one request per column, with `warn` saying why. The SDK itself refuses a transport that cannot send the body of
+// a change set verbatim (HttpClient.postRaw, which DataverseClient.supportsAtomicBatch reports; lib/sdk-http-client.js has it),
+// before anything is sent: one more refusal of the same kind. An error is not always a refusal — a request whose answer was lost or
+// could not be read may have created the columns after all (outcomeUnknown) — so the table is read before anything is assumed: when
+// it has every column the change set committed, and each column is answered as it would have been had the answer arrived, with its
+// id. A table that lacks any of them is treated as a refusal, and the one-by-one path covers every other case: a column that is
+// already there answers "already exists" and is skipped, so a lost answer costs requests, never a column or a duplicate.
+// The HTTP client sends this change set again only when the answer is a 429 — the platform refused it, so nothing in it committed (the
+// change set is atomic)
+// (isColumnCreateBatch, lib/sdk-http-client.js) — on the schedule of any other throttled write, honouring `Retry-After`: the table
+// was created a moment ago, and its customization lock can still be held, which one column's own POST rides out the same way. It
+// never sends it again after another transient status or a lost answer, because a change set can commit behind those. A change set
+// still refused with a 429 when that schedule is spent was not a defect of the request, so the warning says the table was throttled
+// instead of blaming the request, and the one-by-one path then takes its own turn at the lock.
+async function createColumnsInOneRequest({ sdk, provision, table, tableSchemaName, columns, optionsFor, warn, sleep }) {
+  try {
+    // The options are built inside the try: a column the options cannot be built for fails the way it always did, in its own step
+    // on the per-column path, instead of failing the phase from here.
+    await sdk.createColumns(table.logicalName, columns.map(optionsFor));
+  } catch (err) {
+    if (outcomeUnknown(err)) {
+      // ONE read, and only an answer that shows EVERY column counts: the change set is atomic, so a table that has only some of them
+      // did not get them from it (a column the platform makes itself under the name of one the spec asks for is there either way).
+      const found = await confirmInlineColumns(provision, table, columns, { sleep, attempts: 1 });
+      if (found.size === columns.length) {
+        if (typeof warn === 'function') warn(`the answer to the request that creates the ${columns.length} ordinary column(s) of table ${tableSchemaName} was lost or could not be read (${briefReason(err)}), but the table has every one of them`);
+        return found;
+      }
+    }
+    if (typeof warn === 'function') {
+      // A ConnectionError carries `.statusCode`; any other error may wrap one as its `cause`.
+      const status = err && (err.statusCode || err.status || (err.cause && (err.cause.statusCode || err.cause.status)));
+      warn(status === 429
+        ? `table ${tableSchemaName} was throttled (${briefReason(err)}), so its ${columns.length} ordinary column(s) are created one by one instead of in one request`
+        : `could not create the ${columns.length} ordinary column(s) of table ${tableSchemaName} in one request (${briefReason(err)}) — creating them one by one`);
+    }
+    return new Map();
+  }
+  return confirmInlineColumns(provision, table, columns, { warn, sleep });
+}
+
+// Which of a new table's columns that went in the change set the table really has, with the MetadataId each createColumn answer
+// would have carried (a change set answers none), from ONE read of the table's `Attributes`, keyed by the column object — never
+// by its name, because two columns of a spec can share one and only the one that went in the request was created by it. `table` is
+// `{ metadataId, logicalName }`: a created table is read by its id, or by its logical name when the SDK's answer carries no id.
+// Only ids and names are selected — no labels, the kind of narrow read that already precedes labelled creates in this file
+// (findExistingColumns) because a label-bearing metadata read is what strips non-base languages.
+//
+// Nothing is assumed: a column this read does not show — it failed, or the answer lags the create, or the platform
+// ignored a posted column — is left out of the result and made by the column loop the per-column way, where an
+// "already exists" answer is a skip. So a lagging read costs requests, never a missing column. Never throws.
+// A short answer is read again, up to `attempts` times (3 unless told otherwise, 1 second apart).
+async function confirmInlineColumns(provision, table, columns, { warn, sleep, attempts = 3 } = {}) {
+  const confirmed = new Map();
+  const raw = provision && provision.dataverse;
+  const byId = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(String(table && table.metadataId));
+  if (!columns.length || !raw || typeof raw.get !== 'function' || (!byId && !(table && table.logicalName))) return confirmed;
+  const tableKey = byId ? `(${table.metadataId})` : `(LogicalName='${odataLit(table.logicalName)}')`;
+  const wait = typeof sleep === 'function' ? sleep : ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const idByLogical = new Map();
+  // The table is readable as soon as it exists; its attribute collection can trail it by a moment
+  // (the metadata-read lag the relationship create also waits out), so a short answer is read again.
+  for (let attempt = 0; attempt < attempts && columns.some((c) => !idByLogical.has(c.schemaName.toLowerCase())); attempt += 1) {
+    if (attempt > 0) await wait(1000);
+    try {
+      const res = await raw.get(`/EntityDefinitions${tableKey}/Attributes?$select=MetadataId,LogicalName`);
+      if (res && res.status >= 200 && res.status < 300 && res.body && Array.isArray(res.body.value)) {
+        for (const a of res.body.value) {
+          if (a && a.LogicalName && a.MetadataId) idByLogical.set(String(a.LogicalName).toLowerCase(), String(a.MetadataId));
+        }
+      }
+    } catch { /* read again, then fall back to the per-column path */ }
+  }
+  for (const c of columns) {
+    const logicalName = c.schemaName.toLowerCase();
+    if (idByLogical.has(logicalName)) confirmed.set(c, { logicalName, metadataId: idByLogical.get(logicalName) });
+  }
+  if (confirmed.size < columns.length && typeof warn === 'function') {
+    warn(`${columns.length} column(s) were created in one request, but ${confirmed.size} could be read back — creating the other ${columns.length - confirmed.size} one by one`);
+  }
+  return confirmed;
 }
 
 const STATE_CODE = { Active: 0, Inactive: 1 };
@@ -546,18 +952,27 @@ async function runBestEffort(runner, phase, label, fn, warn, warning) {
 // found no row yet and created the same view a second time under a new id, which the next fetch
 // then refused as an ambiguous match. Only the first error is rethrown; a later in-flight failure is
 // the same phase failing again and adds nothing the first did not already report.
-async function mapLimit(items, limit, fn) {
+//
+// `firstInOrder` picks WHICH failure is reported when several in-flight items fail: the one of the
+// lowest-indexed item rather than the first to settle. Items start in index order, so every item below
+// a failed one has already started, and once they have drained the reported error is the one a
+// sequential loop over the same items would have met first — independent of response timing. Read-only
+// fan-outs whose report must not depend on which request answered first (verify, download) opt in; the
+// build's write fan-outs keep the first failure in time, which is the one that stopped the phase.
+async function mapLimit(items, limit, fn, { firstInOrder = false } = {}) {
   const out = new Array(items.length);
   let i = 0;
   let failed = false;
   let firstError;
+  let firstErrorIndex = -1;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
     while (!failed && i < items.length) {
       const idx = i++;
       try {
         out[idx] = await fn(items[idx], idx);
       } catch (err) {
-        if (!failed) { failed = true; firstError = err; }
+        if (!failed) { failed = true; firstError = err; firstErrorIndex = idx; }
+        else if (firstInOrder && idx < firstErrorIndex) { firstError = err; firstErrorIndex = idx; }
         return;
       }
     }
@@ -656,6 +1071,11 @@ function operatorRemedy(err) {
 // every caller that reacts to a failed push decides "failed" exactly as the halt does.
 function pushFailed(result) {
   if (!result) return false;
+  // `createRecovery: 'adoptExact'` (build-model-app.js): a create whose answer was lost had already
+  // committed, and the SDK proved the row is exactly what this push would have written, so it adopted it
+  // locally. It says `saved: false` because THIS attempt wrote nothing — but nothing failed. Only the
+  // boolean the SDK sets, and only with no error beside it.
+  if (result.adoptedExisting === true && !result.error) return false;
   const committed = result.saved !== undefined ? result.saved : result.success;
   return committed === false || (committed === undefined && Boolean(result.error));
 }
@@ -740,6 +1160,11 @@ function reportPartialPush(result, what, warn) {
   if (!result || typeof warn !== 'function') return result;
   const label = what || result.type || 'artifact';
   const st = result.publish;
+  // An adoption writes nothing, so there is nothing to confirm — but a build that quietly took over a row it
+  // did not create this attempt would leave the operator unable to tell why the create was never logged.
+  if (result.adoptedExisting === true) {
+    warn(`${label} was already created by an earlier attempt whose answer was lost, and the row is exactly what this build would have written, so it was adopted — nothing was written again`);
+  }
   if (st && st.kind === 'failed') {
     warn(`publish ${label} FAILED: ${(st.error && st.error.message) || 'unknown error'} — the change is SAVED but the runtime still serves the previously published copy; the build is idempotent, so re-run it once the cause is cleared`);
   } else if (st && st.kind === 'unverifiable') {
@@ -863,8 +1288,41 @@ async function findExistingTable(provision, schemaName, { hasLocalizedLabels = f
   return (hits || []).find((t) => t.logicalName === logical) || null;
 }
 
-async function provisionDataModel({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode, sleep }) {
-  const result = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [] };
+// The data-model phase (provisionDataModelSteps) and then — whatever the steps did, a halt included — the one step that has to come
+// after every labelled create of it: setting the primary name column's length of each table THIS run created whose spec asks for
+// one (alignPrimaryNameLength).
+//
+// Last, because that step's read carries labels, and nothing labelled may be created after a read like that (see
+// alignPrimaryNameLength).
+//
+// In a `finally`, because the length is set only for a table this run created: a re-run finds the table and leaves an existing
+// table's name column as it is (a rebuild must not shorten a column that may hold data), so a table created by a run that then
+// halted — a relationship refused, a column rejected, a lock that outlasted the retries — would keep the length the environment made
+// of the create for good. A table this run did not create, or found after a create whose answer was lost, is never queued
+// (provisionDataModelSteps). alignPrimaryNameLength does not throw — a step that cannot set the length is a failed, warned step — so
+// it cannot replace the error that stopped the phase.
+async function provisionDataModel(args) {
+  const createdWithLength = [];
+  let halted = false;
+  try {
+    return await provisionDataModelSteps(args, createdWithLength);
+  } catch (err) {
+    halted = true;
+    throw err;
+  } finally {
+    for (const { entity, logical, asked } of createdWithLength) {
+      await alignPrimaryNameLength({ runner: args.runner, sdk: args.sdk, provision: args.provision, entity, logical, asked, warn: args.warn, sleep: args.sleep, halted });
+    }
+  }
+}
+
+// `createdWithLength` collects `{ entity, logical, asked }` for each table this run creates whose spec asks for a primary name
+// column length, in creation order, for provisionDataModel to set once the phase is done.
+async function provisionDataModelSteps({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode, sleep, reconcileLookupLabels = false, inlineColumns = true }, createdWithLength) {
+  // `lookupLabels` records the label each spec lookup column carries once this phase is done
+  // (`<referencing>|<lookup logical>` -> { label }), so a later phase that repairs something derived
+  // from it — an existing form's cell label — repairs it to what the column now says.
+  const result = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [], lookupLabels: {} };
   // The CLI resolves the authoring LCID BEFORE constructing the SDK, because
   // `MakerSdkOptions.languageCode` is a construction-time option (#455) — the App/Form/Dashboard
   // adapters bake it in. Re-resolving here would repeat the org read and the provisioned-languages
@@ -881,6 +1339,10 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
 
   const globalChoiceIds = result.globalChoiceIds;
   const statusReasonValues = result.statusReasonValues;
+  // The declared tables (lower-case logical names) this run found already in the environment, as opposed
+  // to the ones it created. A lookup to one that sets no displayName of its own is named by the
+  // environment (lookupParentNeedsEnvironment), which only the table loop below can know.
+  const reusedTables = new Set();
 
   // 2a. Global option sets (shared choices) — built before columns that bind to them. The SDK's
   // createGlobalOptionSet is now IDEMPOTENT: it probes by Name and REUSES an existing set (returning
@@ -905,10 +1367,31 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
     const entityIsLocalized = localizedLabelLcidsInSpec({ entities: [e] }).length > 0;
     const hits = await findExistingTable(provision, e.schemaName, { hasLocalizedLabels: entityIsLocalized });
     const existingTable = hits;
+    // Every buildable column: all scalar types + Customer (a Lookup comes from a relationship).
+    const buildable = (e.columns || []).filter((c) => SDK_COLUMN_TYPE[c.type || 'Text'] || c.type === 'Customer');
+    // The new table's ordinary columns are created together, in ONE change set right after the table, when the SDK has
+    // `createColumns` and a read can confirm them afterwards (createColumnsInOneRequest). `inlineColumns: false` is the
+    // one-request-per-column path, which is also the oracle the table-columns-in-create tests compare to.
+    const inlineEnabled = inlineColumns !== false && !!sdk && typeof sdk.createColumns === 'function'
+      && !!provision && !!provision.dataverse && typeof provision.dataverse.get === 'function';
+    // Which of the columns that went in the change set the table was then confirmed to have, keyed by the column object (never
+    // by its name: two columns of a spec can share one, and only the one that went in the request was created by it), each with
+    // the id createColumn would have returned.
+    let inlineConfirmed = new Map();
     let existingCols = new Set();
     let existingColRows = [];
+    // The spec's primary name column length is asked in the table's own create. For a table THIS build creates (`createdTable`) it
+    // is then read back and set where the environment did not keep it — at the end of the phase, once nothing labelled is left to
+    // create (provisionDataModel, alignPrimaryNameLength). It is never WRITTEN for a table the build did not create: an existing
+    // table's column is left as it is, and so is one found after a create whose answer was lost, where nothing shows that this
+    // build, and not someone else, made it — but the length of that one is read, and a difference from the spec's is reported
+    // (reportFoundPrimaryNameLength).
+    let createdTable = null;
+    let foundAfterCreate = false;
+    const askedLength = askedPrimaryNameLength(e);
     if (existingTable) {
       runner.skip('data-model', `table ${e.schemaName} (exists — reuse)`);
+      reusedTables.add(logical);
       result.entities[e.schemaName] = { logicalName: logical, entitySetName: existingTable.entitySetName };
       existingColRows = await findExistingColumns(provision, logical, warn);
       existingCols = new Set(existingColRows.map((c) => String(c.logicalName || c.schemaName || '').toLowerCase()));
@@ -934,15 +1417,19 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
           ? e.displayName
           : (labelText(e.displayName, resolvedLanguageCode) || e.schemaName);
         const createOpts = { schemaName: e.schemaName, displayName: tableDisplayName, pluralName: e.pluralName || `${labelText(tableDisplayName, resolvedLanguageCode) || e.schemaName}s`,
-          primaryColumnSchemaName: e.primaryAttribute.schemaName, primaryColumnDisplayName: e.primaryAttribute.displayName || 'Name', hasNotes: e.hasNotes === true, languageCode: resolvedLanguageCode };
+          primaryColumnSchemaName: e.primaryAttribute.schemaName, primaryColumnDisplayName: e.primaryAttribute.displayName || 'Name', hasNotes: e.hasNotes === true, languageCode: resolvedLanguageCode,
+          // Always sent, so a later change of the SDK's own default cannot change what a spec without a length gets — see
+          // DEFAULT_PRIMARY_NAME_LENGTH.
+          primaryColumnMaxLength: primaryNameLength(e.primaryAttribute) };
         // AutoNumber the primary/title column when requested (the order number IS the identity).
         if (e.primaryAttribute.autoNumberFormat) createOpts.primaryColumnAutoNumberFormat = e.primaryAttribute.autoNumberFormat;
         // Same reasoning as columns: set the description at CREATE time, and omit it when absent so
         // a rebuild never blanks a description someone added in the maker.
         if (e.description) createOpts.description = String(e.description);
         try {
-          const t = await sdk.createTable(createOpts);
+          const t = await createNewTable(sdk, createOpts, { warn, askedLength });
           result.entities[e.schemaName] = { logicalName: (t.logicalName || logical), entitySetName: t.entitySetName, metadataId: t.metadataId };
+          createdTable = t;
         } catch (err) {
           if (!isAlreadyExists(err)) throw err;
           // First POST likely succeeded server-side; a transient-network retry hit "already exists".
@@ -951,8 +1438,18 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
           const found = await findExistingTable(provision, e.schemaName);
           if (!found) throw err;
           result.entities[e.schemaName] = { logicalName: logical, entitySetName: found.entitySetName };
+          foundAfterCreate = true;
         }
       }, { recoverable: true });
+    }
+    // The primary name column's length, when the spec asks for one: one narrated step in every case (the plan counts it). For a
+    // table this build created the step is queued here and runs at the end of the phase (provisionDataModel) — a label-bearing
+    // read must not come before a labelled create. For a table found after its create the length is read and compared here, and
+    // for a table that existed before the step is a skip.
+    if (askedLength !== undefined) {
+      if (createdTable) createdWithLength.push({ entity: e, logical, asked: askedLength });
+      else if (foundAfterCreate) await reportFoundPrimaryNameLength({ runner, provision, entity: e, logical, asked: askedLength, warn, sleep });
+      else runner.skip('data-model', `primary column length ${e.schemaName}.${e.primaryAttribute.schemaName} (table exists — kept)`);
     }
     // Enable "Allow quick create" on the table when the spec opts in (explicit `entities[].quickCreate`
     // OR an authored `formType: 'QuickCreate'` form — see quickCreateEnabledFor). Runs for BOTH a fresh
@@ -965,13 +1462,30 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
         await sdk.updateTable(logical, { quickCreateEnabled: true });
       });
     }
+    // A table THIS build created gets its ordinary columns in one change set (createColumnsInOneRequest). A table found after its
+    // create is not given one: nothing shows what it already holds, and the per-column path below skips what exists.
+    if (createdTable && inlineEnabled) {
+      const inlineSet = inlineColumnsOf(buildable, { primaryName: e.primaryAttribute && e.primaryAttribute.schemaName, tableLogical: logical });
+      if (inlineSet.length) {
+        inlineConfirmed = await createColumnsInOneRequest({
+          sdk,
+          provision,
+          table: { metadataId: createdTable.metadataId, logicalName: createdTable.logicalName || logical },
+          tableSchemaName: e.schemaName,
+          columns: inlineSet,
+          optionsFor: (c) => columnOptions(c, globalChoiceIds, spec.globalChoices, resolvedLanguageCode),
+          warn,
+          sleep,
+        });
+      }
+    }
     // columns: every buildable column (all scalar types + Customer; Lookup comes from a
     // relationship). Existing ones emit a skip; missing ones are created SERIALLY: Dataverse
     // takes a per-entity exclusive [EntityCustomization] lock, so two Attribute POSTs on the
     // same table collide with HTTP 429 ("Cannot start another [EntityCustomization]..."). The
     // outer entity loop is already sequential, so serial columns here means one metadata
-    // customization is in flight per entity at a time — the only order Dataverse permits.
-    const buildable = (e.columns || []).filter((c) => SDK_COLUMN_TYPE[c.type || 'Text'] || c.type === 'Customer');
+    // customization is in flight per entity at a time — the only order Dataverse permits. A column the change set above
+    // created needs no request of its own: its step is narrated here, in spec order, with the id the read-back gave it.
     const requiredDeclared = [
       e.primaryAttribute,
       ...buildable,
@@ -982,9 +1496,9 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
     for (const c of buildable) if (existingCols.has(c.schemaName.toLowerCase())) runner.skip('data-model', `column ${e.schemaName}.${c.schemaName} (exists)`);
     const toCreate = buildable.filter((c) => !existingCols.has(c.schemaName.toLowerCase()));
     const colResults = await runner.mapLimit(toCreate, 1, (c) => runner.run('data-model', `column ${e.schemaName}.${c.schemaName} (${c.type || 'Text'})`,
-      () => c.type === 'Customer'
+      () => inlineConfirmed.get(c) || (c.type === 'Customer'
         ? sdk.createCustomerColumn(logical, { schemaName: c.schemaName, displayName: c.displayName || c.schemaName, required: REQUIRED(c), languageCode: resolvedLanguageCode })
-        : sdk.createColumn(logical, columnOptions(c, globalChoiceIds, spec.globalChoices, resolvedLanguageCode)),
+        : sdk.createColumn(logical, columnOptions(c, globalChoiceIds, spec.globalChoices, resolvedLanguageCode))),
       { skipIf: isAlreadyExists }));
     if (existingTable) {
       const existingColMeta = new Map(existingColRows.map((c) => [String(c.logicalName || c.schemaName || '').toLowerCase(), c]));
@@ -1156,16 +1670,32 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
   //     schema name, so a second 1:N on the same pair, or an N:N that derived the 1:N's name, must
   //     halt rather than be reported as already created.
   const publisherPrefix = spec.solution && spec.solution.publisherPrefix;
-  for (const rel of spec.relationships || []) {
-    if (rel.type !== 'OneToMany' && rel.type !== 'ManyToMany') continue;
+  // Reads the display name of a parent table the spec cannot name, once per table (ADO 6691205). Null when
+  // there is no raw client to read with — callers then use the humanized name without pretending to have asked.
+  const readParentLabel = makeTableLabelReader({ provision, languageCode: resolvedLanguageCode, warn });
+  // Lookups this run CREATED, `<referencing>|<lookup logical>`: the rebuild repair below must not touch
+  // (or even read) a column that was just given the right label.
+  const createdLookups = new Set();
+  // In the order relationshipsInCreateOrder gives: every relationship whose lookup label is LOCALIZED before any
+  // other. The parent-label read below carries labels — the read documented on relationshipExists as making
+  // Dataverse keep only the base-language label of a multi-language create that FOLLOWS it. Each read sits right
+  // before its own single-language create, which is the create it can only harm harmlessly; but a localized create
+  // later in this loop would still have a label-bearing read ahead of it. With every localized lookup created first,
+  // nothing localized follows any such read, whichever order the spec declared the relationships in. Order is
+  // otherwise free: a relationship needs only its two tables, which the loops above have already made.
+  for (const rel of relationshipsInCreateOrder(spec)) {
     const schema = rel.type === 'OneToMany' ? relationshipSchemaName(rel, publisherPrefix) : manyToManySchemaName(rel, publisherPrefix);
     const entityLogical = (rel.type === 'OneToMany' ? rel.referenced : rel.entity1).toLowerCase();
     const label = rel.type === 'OneToMany'
       ? `relationship 1:N ${rel.referenced}->${rel.referencing}`
       : `relationship N:N ${rel.entity1}<->${rel.entity2}`;
     const declared = Object.assign({}, rel, { schemaName: rel.schemaName || schema });
+    // What the lookup column will be labelled. Decided BEFORE the existence probe because it decides how
+    // that probe may fall back: a LOCALIZED label — authored, or inherited from a localized parent table —
+    // must never be preceded by the broad metadata read (see relationshipExists).
+    const lookupLabel = rel.type === 'OneToMany' ? lookupLabelFor(spec, rel) : null;
     const exists = await relationshipExists(provision, entityLogical, schema, rel.type, {
-      hasLocalizedLabels: rel.type === 'OneToMany' && localizedLabelLcids(rel.lookup && rel.lookup.displayName).length > 0,
+      hasLocalizedLabels: !!lookupLabel && localizedLabelLcids(lookupLabel.label).length > 0,
       declared,
     });
     if (exists === true) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
@@ -1177,8 +1707,21 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
       halt.transient = false;
       throw halt;
     }
+    // A parent whose name the spec cannot give — a table it does not declare (account, contact,
+    // systemuser…), or one it declares without a displayName that the build did not create (an
+    // `existing: true` incident is "Case", not "Incident") — is asked of the environment rather than
+    // guessed from the table's logical name. The read is made HERE — after the probe, immediately before
+    // the create it feeds, and only when a create is going to happen. It is label-bearing, which is the
+    // read documented on relationshipExists as making Dataverse keep only the base-language label of the
+    // create that follows; that create carries one single-language label, so nothing can be stripped, and
+    // it must stay next to it rather than drift into the middle of a localized one.
+    let createLabel = lookupLabel;
+    if (createLabel && createLabel.source === 'derived' && readParentLabel && lookupParentNeedsEnvironment(spec, rel, { reused: reusedTables })) {
+      const live = await readParentLabel(rel.referenced);
+      if (live) createLabel = lookupLabelFor(spec, rel, { liveReferencedLabel: live });
+    }
     const createOpts = rel.type === 'OneToMany'
-      ? { type: 'OneToMany', schemaName: schema, referencedEntity: rel.referenced.toLowerCase(), referencingEntity: rel.referencing.toLowerCase(), lookupSchemaName: rel.lookup.schemaName, lookupDisplayName: rel.lookup.displayName, languageCode: resolvedLanguageCode }
+      ? { type: 'OneToMany', schemaName: schema, referencedEntity: rel.referenced.toLowerCase(), referencingEntity: rel.referencing.toLowerCase(), lookupSchemaName: rel.lookup.schemaName, lookupDisplayName: createLabel.label, languageCode: resolvedLanguageCode }
       : { type: 'ManyToMany', schemaName: schema, entity1: rel.entity1.toLowerCase(), entity2: rel.entity2.toLowerCase(), intersectEntityName: rel.intersectEntityName, languageCode: resolvedLanguageCode };
     await runner.run('data-model', label, async () => {
       try {
@@ -1186,6 +1729,11 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
         result.relationships.push(rel.type === 'OneToMany'
           ? { schemaName: res.schemaName || schema, metadataId: res.metadataId, kind: '1n', lookupLogicalName: res.lookupLogicalName }
           : { schemaName: res.schemaName || schema, metadataId: res.metadataId, kind: 'nn' });
+        if (rel.type === 'OneToMany') {
+          const key = lookupKey(rel);
+          createdLookups.add(key);
+          result.lookupLabels[key] = { label: labelText(createLabel.label, resolvedLanguageCode) };
+        }
       } catch (err) {
         if (!isAlreadyExists(err)) throw err;
         // skipIf is synchronous, so classify the holder here and rethrow a marked error. The
@@ -1257,8 +1805,169 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
     }, { skipIf: (e) => isAlreadyExists(e) && e.sameRelationshipExists === true });
   }
 
+  // A rebuild repairs a lookup column an older build labelled with its old default (opt-in: only the app
+  // build budgets the steps this emits — see planFor).
+  if (reconcileLookupLabels) {
+    await reconcileLookupLabelsPass({ spec, sdk, provision, runner, warn, languageCode: resolvedLanguageCode, createdLookups, readParentLabel, reusedTables, result });
+  }
 
   return result;
+}
+
+// The lookups whose label the build owns — the spec sets none (ADO 6691205). One predicate shared by
+// the repair pass and planFor, so the steps the pass emits are exactly the steps the plan budgets.
+function lookupsWithDefaultLabel(spec) {
+  return ((spec && spec.relationships) || []).filter((rel) => rel && rel.type === 'OneToMany' && rel.lookup && rel.lookup.schemaName
+    && lookupLabelFor(spec, rel).source !== 'explicit');
+}
+
+// The relationships, in the order the data-model phase creates them: those whose lookup label is LOCALIZED —
+// an LCID map, authored or inherited from a localized parent table — first, every other relationship after
+// them, each group in declared order. A label that needs a read of the parent's name is never localized (it is
+// the environment's one string), so the reads that precede a create all belong to the second group — see the
+// loop in provisionDataModel for why that matters. planFor lists the relationships in this order too, so the
+// plan shows what the build does.
+function relationshipsInCreateOrder(spec) {
+  const relationships = ((spec && spec.relationships) || []).filter((rel) => rel && (rel.type === 'OneToMany' || rel.type === 'ManyToMany'));
+  const localized = (rel) => {
+    const lookupLabel = rel.type === 'OneToMany' ? lookupLabelFor(spec, rel) : null;
+    return !!lookupLabel && localizedLabelLcids(lookupLabel.label).length > 0;
+  };
+  return [...relationships.filter(localized), ...relationships.filter((rel) => !localized(rel))];
+}
+
+// Repair, on a REBUILD, a lookup column an older build labelled with the vendored SDK's default — the
+// referenced table's logical name (ADO 6691205).
+//
+// Only when ALL of these hold, so a label a maker chose is never touched:
+//   * the spec sets no `lookup.displayName` (an explicit label is the author's, and is never reapplied);
+//   * the relationship already existed (a column created this run already has the right label);
+//   * the column carries exactly ONE label — the old default was written in one language, so a second
+//     means somebody edited it since — and that language is the BUILD's own. An old default in another
+//     language is left alone: the write below would add the build's language next to it, leaving two
+//     languages of which one is still an identifier, and every later rebuild would then see "several
+//     languages" and skip the column for good;
+//   * that label is exactly the old default: the lower-case logical name of the referenced table, case-sensitive
+//     (isOldLookupColumnLabel) — the only label a build ever wrote on a COLUMN.
+// The new label is the one a fresh build would write — lookupLabelFor — but written in ONE language
+// (the authoring one) even when the parent's name is localized: this is an UPDATE preceded by a
+// label-bearing read, and a multi-language write there is exactly the shape the documented base-language
+// hazard strips, so it is not risked for a repair. The other languages of a localized parent come with
+// a fresh build or Maker.
+//
+// Exactly one event per lookup the build owns, so the [n/total] the plan promised holds: planFor budgets
+// the same predicate (lookupsWithDefaultLabel). The labels are read once per CHILD TABLE, not once per
+// lookup, and only for the lookups this run did not just create.
+async function reconcileLookupLabelsPass({ spec, sdk, provision, runner, warn, languageCode, createdLookups, readParentLabel, reusedTables, result }) {
+  const client = provision && provision.dataverse;
+  const owned = lookupsWithDefaultLabel(spec);
+  // child -> the lookup columns of it that need reading, so one request answers for all of them.
+  const toRead = new Map();
+  for (const rel of owned) {
+    if (createdLookups.has(lookupKey(rel))) continue;
+    const child = String(rel.referencing).toLowerCase();
+    if (!toRead.has(child)) toRead.set(child, []);
+    toRead.get(child).push(String(rel.lookup.schemaName).toLowerCase());
+  }
+  const reads = new Map();
+  const labelsOfChild = (child) => {
+    if (!reads.has(child)) {
+      reads.set(child, readColumnLabels(client, child, toRead.get(child)).then((got) => {
+        if (got.state === 'error' && typeof warn === 'function') {
+          warn(`could not read the label of lookup(s) ${toRead.get(child).map((c) => `'${child}.${c}'`).join(', ')} (${got.why}), so a label an older build left on them was not checked. Re-run to retry.`);
+        }
+        return got;
+      }));
+    }
+    return reads.get(child);
+  };
+  const buildLanguage = String(languageCode);
+  // The tables whose lookups this pass relabelled, published below in one envelope.
+  const relabelled = new Set();
+
+  for (const rel of owned) {
+    const child = String(rel.referencing).toLowerCase();
+    const lookupLogical = String(rel.lookup.schemaName).toLowerCase();
+    const step = `lookup label ${child}.${rel.lookup.schemaName}`;
+    const key = lookupKey(rel);
+    if (createdLookups.has(key)) { runner.skip('data-model', `${step} (set when the relationship was created)`); continue; }
+    if (!client || typeof client.get !== 'function') { runner.skip('data-model', `${step} (no metadata client — left as it is)`); continue; }
+    const read = await labelsOfChild(child);
+    if (read.state === 'error') { runner.skip('data-model', `${step} (could not be read — left as it is)`); continue; }
+    const labels = read.state === 'ok' ? read.byColumn.get(lookupLogical) : undefined;
+    if (!labels) { runner.skip('data-model', `${step} (column not found — left as it is)`); continue; }
+
+    const languages = Object.keys(labels);
+    const only = languages.length === 1 ? languages[0] : null;
+    const current = only ? labels[only] : undefined;
+    const shown = labelText(labels, languageCode);
+    if (current === undefined || !isOldLookupColumnLabel(rel, current)) {
+      runner.skip('data-model', `${step} (${languages.length > 1 ? 'labelled in several languages' : `labelled "${shown}"`} — left as it is)`);
+      if (shown) result.lookupLabels[key] = { label: shown };
+      continue;
+    }
+    if (only !== buildLanguage) {
+      runner.skip('data-model', `${step} (the old default "${current}" is in language ${only}, not the build's ${buildLanguage} — left as it is)`);
+      if (typeof warn === 'function') {
+        warn(`lookup '${child}.${lookupLogical}' still carries the old default label "${current}" in language ${only}, and this build writes language ${buildLanguage}: relabelling it would leave two languages side by side, one of them still the old default, so it was left as it is. Rename the column in Maker to relabel it: a build changes an existing lookup's label only where it is the old default in the build's own language, and lookup.displayName names only a lookup the build creates.`);
+      }
+      result.lookupLabels[key] = { label: current };
+      continue;
+    }
+    let want = lookupLabelFor(spec, rel);
+    if (want.source === 'derived' && readParentLabel && lookupParentNeedsEnvironment(spec, rel, { reused: reusedTables })) {
+      const parentLabel = await readParentLabel(rel.referenced);
+      if (parentLabel) want = lookupLabelFor(spec, rel, { liveReferencedLabel: parentLabel });
+    }
+    const next = labelText(want.label, languageCode);
+    if (!next || next === current) {
+      runner.skip('data-model', `${step} (already "${current}")`);
+      result.lookupLabels[key] = { label: current };
+      continue;
+    }
+    await runBestEffort(runner, 'data-model', `${step}: "${current}" -> "${next}"`, async () => {
+      await sdk.updateColumn(child, lookupLogical, { displayName: next, languageCode });
+      result.lookupLabels[key] = { label: next };
+      relabelled.add(child);
+    }, warn, `could not relabel lookup '${child}.${lookupLogical}' from its old default "${current}" to "${next}" — the rest of the build continues`);
+  }
+  if (relabelled.size) await publishRelabelledTables(client, [...relabelled], warn);
+}
+
+// A column's label is part of its table's definition, and a table or column definition change reaches model-driven apps
+// only once it is published: "When you update a table or column definition, use the PublishXml Action before the
+// changes you make are applied to the model-driven applications"
+// (https://learn.microsoft.com/power-apps/developer/data-platform/webapi/create-update-entity-definitions-using-web-api#update-table-definitions).
+// No metadata read shows the difference: measured live, RetrieveEntity returns the new label right after the PUT even
+// with RetrieveAsIfPublished=false, so a live check of this publish has to trace the request, not read the label.
+// Nothing else in the build is sure to publish the child table. Its other table publishes follow from what the spec
+// puts on a table — a form, view, chart or icon, or its enriched default views — and a downloaded spec, whose lookups
+// the download leaves without a label precisely so that this pass repairs them, carries no forms, views, charts or
+// table icons and marks every table existing: true, whose default views the build leaves alone. A rebuild of one would
+// save the new label and leave it to whatever publishes that table next, while reporting the repair done; a re-run
+// finds the label already changed. So the pass publishes the tables it relabelled itself, in ONE envelope, at once —
+// with or without --publish, as the reconcile paths publish what they change — and in the data-model phase, before
+// anything publishes the app: a PublishXml naming only the app, sent after a form's label change and before its table's
+// own publish, leaves the form's labels unpublished for good (measured for forms; see publishReconciledTables,
+// sdk-build.js), and a relabelled table is published first here for the same reason.
+// The request:
+//   POST /PublishXml  { ParameterXml: "<importexportxml><entities><entity>contoso_task</entity></entities></importexportxml>" }
+// Best-effort: the labels are saved whatever it answers, so a failure is a warning that says how to show them.
+async function publishRelabelledTables(client, tables, warn) {
+  const notLive = (why) => {
+    if (typeof warn !== 'function') return;
+    const which = tables.length > 1 ? `tables ${tables.join(', ')}` : `table ${tables[0]}`;
+    warn(`the new lookup label(s) on ${which} are saved but not published (${why}), so the app still shows the old ones: publish ${tables.length > 1 ? 'those tables' : 'that table'} in Power Apps`);
+  };
+  if (!client || typeof client.post !== 'function') { notLive('no client to publish with'); return; }
+  try {
+    const response = await client.post('/PublishXml', {
+      ParameterXml: `<importexportxml><entities>${tables.map((t) => `<entity>${t}</entity>`).join('')}</entities></importexportxml>`,
+    });
+    if (!response || response.status < 200 || response.status >= 300) notLive(`PublishXml answered HTTP ${response && response.status}`);
+  } catch (e) {
+    notLive((e && e.message) || String(e));
+  }
 }
 
 // Factory for entity-set resolver: fresh tables cached in `entities` (from data-model
@@ -1521,4 +2230,4 @@ async function provisionSampleData({ sdk, provision, runner, spec, dataModel }) 
   return { records: result.records, entitySetFor };
 }
 
-module.exports = { makeRunner, runBestEffort, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists };
+module.exports = { makeRunner, mapLimit, runBestEffort, requireSuccessfulPush, pushFailed, reportPartialPush, errorCodeChain, RESET_WORKSPACE, makeEntitySetResolver, resolveLanguageCode, resolveAuthoringLanguage, provisionSolution, provisionDataModel, provisionSampleData, buildSeedGroup, BuildHalt, SDK_COLUMN_TYPE, isVisualizationUnsupported, localizedLabelLcidsInSpec, checkLocalizedLabelLanguages, findExistingTable, findExistingColumns, relationshipExists, lookupsWithDefaultLabel, relationshipsInCreateOrder };

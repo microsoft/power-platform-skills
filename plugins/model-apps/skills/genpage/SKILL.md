@@ -153,7 +153,8 @@ node "${PLUGIN_ROOT}/scripts/generate-page-manifest.js" '<working-dir>' '<kebab-
 > 1. Prerequisite validation (`node --version`, `pac help` version > 2.10.0)
 > 2. Auth verification (`pac auth list`, environment selection)
 > 3. The structured "Create new / Edit existing" question (`AskUserQuestion`)
-> 4. Language detection (`pac model list-languages`) — only on new-page path
+> 4. Language detection (`node "${PLUGIN_ROOT}/scripts/list-languages.js" --env '<envUrl>'`; when that exits
+>    non-zero, `pac model list-languages --environment '<envUrl>'` — the Azure CLI is not needed here) — only on new-page path
 > 5. Entity existence detection (`pac model list-tables --search`)
 > 6. App detection (`pac model list`) with proper selection prompts
 > 7. Plan-mode presentation and approval (`EnterPlanMode` / `ExitPlanMode`)
@@ -746,10 +747,39 @@ subagent. Inline the page-builder workflow directly in the orchestrator:
    `${PLUGIN_ROOT}/references/verified-icons.txt` (one Grep per name).
    Rewrite any unverified names with the closest verified alternative; do not
    load the full icon list into context
-9. Grep the generated file with `['"]?borderWidth['"]?\s*:`. Griffel rejects
-   that shorthand only at runtime; the regex catches unquoted, quoted, and
-   whitespace-separated property syntax. Replace every match with the four
-   explicit border-side widths before deployment.
+9. Check the generated file for the Griffel shorthands that `makeStyles` drops at
+   runtime:
+
+   ```powershell
+   node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<filename>.tsx'
+   ```
+
+   Griffel does not support ten CSS shorthands, and `makeStyles` drops them at
+   runtime: the page type-checks, transpiles and deploys, then renders without the
+   border, color or reset. They are `all`, `borderColor`, `borderStyle`,
+   `borderWidth`, `borderBlock`, `borderBlockStart`, `borderBlockEnd`,
+   `borderInline`, `borderInlineStart` and `borderInlineEnd`. Write longhands
+   instead: `borderColor`, `borderStyle` and `borderWidth` become one longhand per
+   side, `border` + `Top`, `Right`, `Bottom` or `Left` + `Color`, `Style` or `Width`
+   (`borderWidth` → `borderTopWidth`, `borderRightWidth`, `borderBottomWidth`,
+   `borderLeftWidth`); `borderBlock`, `borderInline` and their `Start` and `End`
+   forms become the `Width`, `Style` and `Color` longhands of the sides they name
+   (`borderBlockStart` → `borderBlockStartWidth`, `borderBlockStartStyle`,
+   `borderBlockStartColor`; `borderBlock` → those and the three `borderBlockEnd…`
+   ones); `all` has no longhands, so set the properties you need one by one. Every
+   other shorthand (`padding`, `margin`, `border`, `borderRadius`, `gap`,
+   `outline`) is supported, and an inline `style={{ … }}` is not Griffel at all.
+
+   `check-griffel-styles.js` prints each problem it finds — a key Griffel drops in a
+   `makeStyles` call, at any depth, with its line, column and longhands, or a call
+   or a style object it cannot read, with what to change — and exits 3 while any is
+   left: fix what it reports and run it again, and do not transpile or upload the
+   page until it exits 0. It reads the style objects written inline in the call,
+   `makeStyles({ … })`, so write them there: one passed or spread in from elsewhere
+   (`makeStyles(styles)`, `...base`) is reported, because the check cannot see its
+   keys, and so is a key computed from an expression (`[key]: …`), whose name it
+   cannot see (a template that starts with `--`, `&`, `:` or `@` is read); Fluent's
+   `...shorthands.*(…)` and `...typographyStyles.*` may be spread as they are.
 10. Run the completeness gate on the page you wrote — the same one 5c runs on a
     worker's page, and this is also the page a 5c fallback produces:
 
@@ -842,8 +872,15 @@ recorded it: the worker wrote nothing, and what is there is an earlier attempt's
 or `genpage-worker-output.js` returns `"ok":false`, do not re-dispatch that worker.
 Run the Phase 5b page-builder workflow inline for only the failed page, preserving
 the same plan and dispatch inputs. This is the same inline fallback path for missing
-and invalid worker output. Then Grep every generated page with
-`['"]?borderWidth['"]?\s*:` and replace the unsupported Griffel shorthand before Phase 6.
+and invalid worker output. The workers have no shell, so they cannot run the Griffel
+check themselves; run it on every generated page, exactly as in step 9 of Phase 5b,
+
+```powershell
+node "${PLUGIN_ROOT}/scripts/check-griffel-styles.js" --file '<working-dir>/<filename>.tsx'
+```
+
+and fix what it reports in the page yourself before Phase 6. A page that has not
+exited 0 is not deployed.
 
 ### Phase 6: Deploy
 
@@ -966,6 +1003,27 @@ node "${PLUGIN_ROOT}/scripts/genpage-upload.js" `
 Omit the `--connectors` line when Phase 4.5 did not write `connectors.json`, and the
 `--actions` line when Phase 4.6 did not write `actions.json`.
 
+`genpage-upload.js` reads the code file and refuses a page whose `makeStyles` writes one of the ten Griffel shorthands
+(Phase 5b step 9): a create outright, before it lists, reads or writes anything, and an update for any key the deployed page
+did not already have (below). The result is `"code":"griffel-shorthand"`, with each key's `file:line:column`, its longhands
+and what each way out does in `error` (and the same list in `problems`). That is the same check as
+`check-griffel-styles.js`, held at the one place every upload passes, so a page that skipped the earlier gate still cannot
+ship a key it added without its border. Fix the page and run the upload again; no flag skips it, and
+`--overwrite-deployed` does not. The upload sends `pac` a copy of the bytes it checked, so a change saved to the file after
+the upload started is not sent — run the upload again to send it. It does not take `--compiled-code-file`: `pac` compiles the
+checked file itself.
+
+An update is held to what it **adds**. A page deployed before this check existed can already carry such a key — the old
+`borderWidth` grep never caught `borderColor` under `:hover` — and it renders without it today. The script downloads the
+deployed page anyway (for the base check below) and compares: a key the deployed page already had, set to the same value — the same key
+and value in the same slot and selector, or one that a renamed slot or a moved rule only relocated — goes ahead, and the result's `warnings`
+names each one with both ways out: **delete the key** (nothing changes on screen) or **write the longhands** (the style
+starts to render, so the page changes). Only a key the deployed page did not have — or one it had, given another value, because
+Griffel drops the new value just as it dropped the old, so the page would show none of the change — stops the upload. If the deployed page
+cannot be read (possible only with `--overwrite-deployed`), the update goes ahead with that warning. A `makeStyles` call the
+checker cannot read for certain is refused as one it could not read, with what to change in the code, unless the file is the
+deployed page itself.
+
 **For mock data pages:** Same but omit `--data-sources`.
 
 #### For updating existing pages (subsequent upload):
@@ -1007,6 +1065,11 @@ Before an update, the script downloads the deployed page and compares it with th
 **Attended:** show the summary and ask exactly: "Overwrite the deployed changes" or "Stop so I can merge". Only an explicit "Overwrite the deployed changes" may be re-run with `--overwrite-deployed`. Record the answer as its own line in `workflow-log.md`, before the upload command, exactly `Choice: Overwrite the deployed changes` or `Choice: Stop so I can merge`. **Unattended:** STOP and report the code, the summary, and `deployedCopy` when present. Never pass `--overwrite-deployed` — suppressing a prompt never authorizes an overwrite.
 
 Log the marker, the check result (`code`, `lines`, `deployedCopy`) and that `Choice:` line in `workflow-log.md`. Do not re-run `genpage-base.js record` after a successful upload; the upload records the hash of the file it uploaded. When the readback matches (a BOM or a final CRLF is not a difference), the marker source is `upload`. When the readback differs, or cannot be read, the source is `upload-unverified` and still records that uploaded hash — not the bytes the service returned — and the result warns, so the next update refuses `deployed-changed` until the page is compared with `genpage-base.js check`. A seconds-long gap between the check and the upload is not covered.
+
+**A pac call that stalls is stopped, not waited on forever.** Every `pac model genpage` call these scripts make is bounded — 3 minutes to list or download, 10 minutes to upload (`POWER_PLATFORM_SKILLS_PAC_TIMEOUT_MS`, 1 second to 60 minutes, allows longer) — and its whole process tree is ended when the time is up. A listing or a download that times out is retried once. An **upload is never sent again by the script**: pac writes the page, records its prompt and agent message, then publishes, so one that was stopped may have done most or all of that, and sending it again can record the prompt a second time or overwrite a change someone saved in the meantime. Follow the message the script prints; do not simply re-run the command.
+
+- **An update that timed out, or failed,** "MAY HAVE LANDED" — pac can fail while publishing, after it wrote the page, so neither is sent again by the script. (A failure pac reports for its own arguments or files is an ordinary error: fix what it names and re-run.) Compare the deployed page with your file first: `node "${PLUGIN_ROOT}/scripts/genpage-base.js" check --env '<org-url>' --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>/<file>.tsx'`. `"contentSame": true` means the update landed: do not upload it again — run `genpage-base.js record` for that page and file so the marker matches what is deployed, and confirm in Maker that the page shows your change and is published. `"deployed": "unchanged"` means it did not land, and re-running the update is safe. `"deployed": "changed"` with `"contentSame": false` means someone else saved the page: treat it as the `deployed-changed` refusal above, with its choice and its `Choice:` line.
+- **A create that timed out** is an *uncertain* create, and is never run again — by the script, or by you. If the message says the page was **created as `<page-id>`**, it exists but was stopped before it was published, and before it was placed in the app if you asked for that. Add it to the app's navigation (in Maker, or `pac model genpage add --environment '<org-url>' --app-id '<app-id>' --page-id '<page-id>' --publish`), run `genpage-base.js record --app-id '<app-id>' --page-id '<page-id>' --file '<working-dir>/<file>.tsx'` (the file is what was uploaded), then run the update with `--page-id`. Or delete the page and re-run the create. Without a page id in the message, wait a few minutes and list the environment's pages (`pac model genpage list --environment '<org-url>' --include-unpublished`): a new page of yours is handled as above, and the create is re-run only when none appeared. The same goes for a message that says the environment could not be listed after the create, so nothing is known about what it made. An update of a page that is not in the app's navigation is refused, and a second create makes a duplicate — so neither is the way on. A create that **failed** (not timed out) after pac had printed a `Page ID` is in the same state: its error says the page was **created as `<page-id>`** and that the create was not run again, with the same two ways on rather than "re-run it as an update". The build never re-sends such a create by itself either: every one of these errors is marked as one that is not to be retried.
 
 ### Phase 6.5: Navigation Fix-Up (Multi-Page Only)
 

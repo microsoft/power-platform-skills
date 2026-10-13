@@ -311,6 +311,76 @@ test('getAuthTokenAsync shares the token memo with getAuthToken and honors fresh
   ]);
 });
 
+test('cancelling a getAuthTokenAsync read ends the child\'s whole process tree, not just the wrapper Node starts, and is not a remembered failure', async () => {
+  // check-auth starts this read beside `az account show`; when the account verdict ends the run, the token child is
+  // cancelled. On Windows `az` is a batch shim under cmd.exe, so Node's own abort would end only that wrapper and leave az's
+  // Python process running after this one exits — the abort is handled here, through killProcessTree, and the signal is not
+  // handed to the child's start. The cancellation must also not be recorded as the Azure CLI failing: a later reader of
+  // tokenFailureKind would be told the CLI "failed" when it was simply told to stop.
+  const { getAuthTokenAsync, tokenFailureKind } = require('../lib/dataverse-auth.js');
+  const url = 'https://contoso-abort.crm.dynamics.com';
+  const controller = new AbortController();
+  const child = { pid: 4242 };
+  const killed = [];
+  let seen;
+  let finish;
+  const execFile = (_file, _args, options, cb) => { seen = options; finish = cb; return child; };
+  const pending = getAuthTokenAsync(url, { execFile, signal: controller.signal, killTree: (c) => killed.push(c) });
+  assert.ok(!('signal' in seen), 'the signal is not handed to Node, whose own kill would reach only the cmd.exe wrapper');
+  assert.deepEqual(killed, [], 'nothing is ended before the abort');
+  controller.abort();
+  assert.deepEqual(killed, [child], 'the abort ends the child\'s process tree');
+  finish(Object.assign(new Error('Command failed'), { code: 1 }), '', '');
+  assert.equal(await pending, null);
+  assert.equal(tokenFailureKind(url), null, 'a cancelled read leaves no failure behind');
+});
+
+test('a getAuthTokenAsync read that already finished is not ended by a later abort, and one cancelled before it starts runs nothing', async () => {
+  const { getAuthTokenAsync } = require('../lib/dataverse-auth.js');
+  const controller = new AbortController();
+  const killed = [];
+  const execFile = (_file, _args, _options, cb) => { setImmediate(() => cb(null, 'TOKEN\n', '')); return { pid: 7 }; };
+  assert.equal(await getAuthTokenAsync('https://contoso-finished.crm.dynamics.com', { execFile, signal: controller.signal, killTree: (c) => killed.push(c) }), 'TOKEN');
+  controller.abort();
+  assert.deepEqual(killed, [], 'the child had finished: there is nothing to end');
+  let started = 0;
+  const cancelled = new AbortController();
+  cancelled.abort();
+  assert.equal(await getAuthTokenAsync('https://contoso-never.crm.dynamics.com', { execFile: () => { started += 1; return {}; }, signal: cancelled.signal }), null);
+  assert.equal(started, 0, 'no process is started for a read that was already cancelled');
+});
+
+test('without a signal getAuthTokenAsync starts the CLI with exactly the options it always did, and a real failure is still remembered', async () => {
+  const { getAuthTokenAsync, tokenFailureKind } = require('../lib/dataverse-auth.js');
+  const url = 'https://contoso-plain.crm.dynamics.com';
+  let seen;
+  const execFile = (_file, _args, options, cb) => { seen = options; setImmediate(() => cb(Object.assign(new Error('boom'), { killed: true, signal: 'SIGTERM' }), '', '')); return {}; };
+  assert.equal(await getAuthTokenAsync(url, { execFile }), null);
+  assert.deepEqual(Object.keys(seen).sort(), ['encoding', 'timeout', 'windowsHide'], 'no `signal` key unless the caller supplied one');
+  assert.equal(tokenFailureKind(url), 'timeout');
+});
+
+test('dataverseRequest hands a 401 back without refreshing the token when refreshOn401 is false — the refresh is a synchronous CLI read', async () => {
+  const { dataverseRequest } = require('../lib/dataverse-auth.js');
+  const run = async (options) => {
+    const tokenCalls = [];
+    let sends = 0;
+    const res = await dataverseRequest('https://contoso.crm.dynamics.com', 'GET', 'WhoAmI', null, {
+      getToken: (_url, o) => { tokenCalls.push(Boolean(o && o.fresh)); return 'TOK'; },
+      request: async () => { sends += 1; return { statusCode: 401, body: '' }; },
+      ...options,
+    });
+    return { res, tokenCalls, sends };
+  };
+  const refreshing = await run({});
+  assert.deepEqual(refreshing.tokenCalls, [false, true, true], 'by default each 401 is followed by a fresh token read, twice');
+  assert.equal(refreshing.sends, 3);
+  const handedBack = await run({ refreshOn401: false });
+  assert.equal(handedBack.res.status, 401);
+  assert.deepEqual(handedBack.tokenCalls, [false], 'only the memoized token was used: no synchronous read');
+  assert.equal(handedBack.sends, 1, 'and the 401 was not sent again');
+});
+
 test('emitResult: partial-failure object writes JSON to stdout (not [object Object])', () => {
   // Spawn a tiny script that calls emitResult(false, {errors:[...]}) and
   // verify that stdout contains the JSON payload — not the literal string
@@ -795,6 +865,71 @@ test('dataverseRequest builds the request on the validated origin and requests t
   assert.equal(url, 'https://contoso.crm.dynamics.com/api/data/v9.2/WhoAmI');
 });
 
+test('a path that leaves the Web API root is refused before a token is read or a request sent', async () => {
+  const { dataverseRequest } = require('../lib/dataverse-auth.js');
+  // [path, where it resolves]. Each spelling reached an endpoint outside /api/data/v9.2/ on a live
+  // environment with the released code. The client resolves the first seven itself; the server decodes
+  // %2F / %5C and resolves the next three. The last one leaves the root as the client sends it, although
+  // the server's further decoding would bring it back: the client reading is checked on its own too.
+  const escapes = [
+    ['../v9.0/WhoAmI', '/api/data/v9.0/WhoAmI'],
+    ['../../../XRMServices/2011/Organization.svc/web', '/XRMServices/2011/Organization.svc/web'],
+    ['%2e%2e/%2E%2e/%2e%2E/XRMServices/2011/Organization.svc/web', '/XRMServices/2011/Organization.svc/web'],
+    ['.%2e/v9.0/WhoAmI', '/api/data/v9.0/WhoAmI'],
+    ['..\\..\\..\\XRMServices\\2011\\Organization.svc\\web', '/XRMServices/2011/Organization.svc/web'],
+    ['a%2Fb/../../x', '/api/data/x'],
+    ['..', '/api/data/'],
+    ['..%2Fv9.0%2FWhoAmI', '/api/data/v9.0/WhoAmI'],
+    ['..%5cv9.0%5cWhoAmI', '/api/data/v9.0/WhoAmI'],
+    ['.%2e%2Fv9.0%2FWhoAmI', '/api/data/v9.0/WhoAmI'],
+    ['../x%2F..%2Fv9.2%2FWhoAmI', '/api/data/x%2F..%2Fv9.2%2FWhoAmI'],
+  ];
+  for (const [apiPath, resolved] of escapes) {
+    let tokens = 0;
+    let sent = 0;
+    await assert.rejects(
+      dataverseRequest('https://contoso.crm.dynamics.com', 'GET', apiPath, null, {
+        getToken: () => { tokens += 1; return 'TOK'; },
+        request: async () => { sent += 1; return { statusCode: 200, body: '{}' }; },
+      }),
+      (e) => /leaves the Dataverse Web API root \/api\/data\/v9\.2\//.test(e.message) && e.message.includes(`resolves to '${resolved}'`),
+      apiPath
+    );
+    assert.equal(tokens, 0, apiPath);
+    assert.equal(sent, 0, apiPath);
+  }
+  await assert.rejects(
+    dataverseRequest('https://contoso.crm.dynamics.com', 'GET', undefined, null, { getToken: () => 'TOK', request: async () => ({ statusCode: 200, body: '{}' }) }),
+    /must be text \(got undefined\)/
+  );
+});
+
+test('a path inside the Web API root is sent exactly as before', async () => {
+  const { dataverseRequest } = require('../lib/dataverse-auth.js');
+  const accepted = [
+    'WhoAmI',
+    "EntityDefinitions(LogicalName='account')/Attributes?$select=LogicalName",
+    '$batch',
+    // Dataverse answers /api/data/v9.2//WhoAmI and WhoAmI%2F like WhoAmI (measured).
+    '/WhoAmI',
+    'WhoAmI%2F',
+    // Decoded by the server, this resolves back inside the root.
+    'x/..%2F..%2Fv9.2%2FWhoAmI',
+    // Dot segments inside a query are data, not a path.
+    "accounts?$filter=name eq '../../x'",
+    // An absolute URL is only text under the root: it cannot change where the request goes.
+    'https://example.com/x',
+  ];
+  for (const apiPath of accepted) {
+    let url;
+    await dataverseRequest('https://contoso.crm.dynamics.com', 'GET', apiPath, null, {
+      getToken: () => 'TOK',
+      request: async (o) => { url = o.url; return { statusCode: 200, body: '{}' }; },
+    });
+    assert.equal(url, `https://contoso.crm.dynamics.com/api/data/v9.2/${apiPath}`, apiPath);
+  }
+});
+
 test('createAzHttpClient requests its token for the validated origin, never the text it was given', async () => {
   const { createAzHttpClient } = require('../lib/sdk-http-client.js');
   assert.throws(() => createAzHttpClient('https://contoso.crm.dynamics.com/&whoami', { getToken: () => 'TOK' }), /Invalid Dataverse org URL/);
@@ -842,4 +977,91 @@ test('the Dataverse entry points refuse a non-origin URL before anything runs (r
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
   }
+});
+
+// Cancelling the token read, end to end on a real cmd.exe. `az.cmd` runs the Azure CLI's program as cmd.exe's CHILD, so ending only
+// the cmd.exe Node started (what an AbortSignal handed to execFile does) leaves that program running after the process that
+// cancelled it has exited. Here the "CLI" is a node program that records its pid and idles.
+test('aborting a real getAuthTokenAsync read ends the program the az shim started too, so nothing is left running (real cmd.exe, Windows)', { skip: process.platform !== 'win32' }, () => {
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'dv-abort-e2e-'));
+  const pidFile = path.join(work, 'az-program.pid');
+  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+  let program = 0;
+  try {
+    const bin = path.join(work, 'bin');
+    fs.mkdirSync(bin);
+    // The timer is a backstop: whatever a failing run leaves behind ends by itself.
+    fs.writeFileSync(path.join(bin, 'idle.js'), `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => process.exit(0), 120000);\n`, 'utf8');
+    fs.writeFileSync(path.join(bin, 'az.cmd'), `@echo off\r\n"${process.execPath}" "${path.join(bin, 'idle.js')}" %*\r\n`, 'utf8');
+    const url = 'https://contoso.crm.dynamics.com';
+    const driver = `
+      const fs = require('fs');
+      const { getAuthTokenAsync, tokenFailureKind } = require(${JSON.stringify(path.join(__dirname, '..', 'lib', 'dataverse-auth.js'))});
+      (async () => {
+        const controller = new AbortController();
+        const read = getAuthTokenAsync(${JSON.stringify(url)}, { signal: controller.signal });
+        for (let i = 0; i < 150 && !fs.existsSync(${JSON.stringify(pidFile)}); i += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+        controller.abort();
+        process.stdout.write(JSON.stringify({ token: await read, failure: tokenFailureKind(${JSON.stringify(url)}) }));
+      })();`;
+    const env = { ...process.env, Path: `${bin};${process.env.SystemRoot}\\System32`, PATH: `${bin};${process.env.SystemRoot}\\System32` };
+    const run = spawnSync(process.execPath, ['-e', driver], { cwd: work, env, encoding: 'utf8', timeout: 60000 });
+    assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
+    assert.deepEqual(JSON.parse(run.stdout), { token: null, failure: null }, 'a cancelled read is null and leaves no failure behind');
+    program = Number(fs.readFileSync(pidFile, 'utf8'));
+    assert.ok(program > 0, 'the az shim started its program');
+    // The tree was ended before the reader that cancelled it exited; allow the OS a moment to finish reaping it.
+    const until = Date.now() + 5000;
+    while (alive(program) && Date.now() < until) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    assert.equal(alive(program), false, 'the program the az shim started is no longer running');
+  } finally {
+    // Whatever the assertions above found, never leave the program the shim started running.
+    if (!program && fs.existsSync(pidFile)) program = Number(fs.readFileSync(pidFile, 'utf8')) || 0;
+    if (program && alive(program)) { try { process.kill(program); } catch { /* already gone */ } }
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});
+
+// --- emitResult: `ascii` keeps a script's stdout pure ASCII ----------------------------------------------------
+//
+// An agent reads a script's stdout off a console. Windows PowerShell 5.1 decodes a child's output with the OEM code
+// page, so UTF-8 bytes of an em dash arrive as three other characters; written as a \uXXXX escape the same JSON
+// survives any code page. Only a script that asks for it changes — every other caller keeps the raw text.
+test('emitResult with `ascii` writes every character above U+007E as a \\uXXXX escape, in either outcome, and leaves stderr as written', () => {
+  const { spawnSync } = require('node:child_process');
+  const path = require('node:path');
+  const libPath = path.join(__dirname, '..', 'lib', 'dataverse-auth.js');
+  // An em dash and an accented letter (BMP), an emoji (a surrogate pair, as JSON writes a character outside the BMP),
+  // DEL, and the characters JSON.stringify already escapes.
+  const message = 'Norwegian Bokm\u00e5l \u2014 \ud83d\ude00 \u007f "quoted" \\ back\nline';
+  for (const [ok, status] of [[true, 0], [false, 1]]) {
+    const payload = { ok, error: message, list: ['1025 ar-SA \u2014 RTL: Yes'] };
+    const code = `
+      const { emitResult } = require(${JSON.stringify(libPath)});
+      emitResult(${ok}, ${JSON.stringify(payload)}, { ascii: true });
+    `;
+    const res = spawnSync(process.execPath, ['-e', code], { encoding: 'utf8' });
+    assert.equal(res.status, status, `ok=${ok}: ${res.stderr}`);
+    assert.match(res.stdout, /^[\x00-\x7e\r\n]*$/, `ok=${ok}: pure ASCII`);
+    assert.ok(res.stdout.includes('\\u2014') && res.stdout.includes('\\u00e5') && res.stdout.includes('\\ud83d\\ude00') && res.stdout.includes('\\u007f'), res.stdout);
+    assert.deepEqual(JSON.parse(res.stdout.trim()), payload, `ok=${ok}: the same document, decoded`);
+    if (!ok) assert.equal(res.stderr.trim(), message.trim(), 'stderr is for people and is not escaped');
+  }
+});
+
+test('emitResult without `ascii` still writes the raw text: no other script\u2019s output changes', () => {
+  const { spawnSync } = require('node:child_process');
+  const path = require('node:path');
+  const libPath = path.join(__dirname, '..', 'lib', 'dataverse-auth.js');
+  const code = `
+    const { emitResult } = require(${JSON.stringify(libPath)});
+    emitResult(true, { s: '1025 ar-SA \\u2014 RTL: Yes' });
+  `;
+  const res = spawnSync(process.execPath, ['-e', code], { encoding: 'utf8' });
+  assert.equal(res.status, 0, res.stderr);
+  assert.ok(res.stdout.includes('\u2014') && !res.stdout.includes('\\u2014'), res.stdout);
 });
