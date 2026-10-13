@@ -1170,6 +1170,72 @@ test('REAL BUNDLE (ADO 6691205 rebuild): a form that does not carry the lookup\'
   assert.deepStrictEqual(labels, ['Name', 'contoso_project']);
 });
 
+// A real form carrying the lookup's field TWICE, as a maker can place it: once in the first section and once in a
+// second one, each cell with a label of its own.
+async function formWithLookupCellTwice(firstLabel, secondLabel) {
+  const real = await realSdk([]);
+  const art = await real.sdk.createArtifact('form', { entityLogicalName: 'contoso_task', name: 'Task', formType: 'Main', status: 'Active' });
+  await real.sdk.addElement('form', art.id, '/tabs', {
+    name: 'tab_general', label: 'General', expanded: true, visible: true,
+    columns: [{ width: '100%', sections: [
+      { name: 'section_general', label: 'General', visible: true, showLabel: false, columns: 1, rows: [
+        { cells: [{ control: { fieldName: 'contoso_name', label: 'Name', isRequired: true } }] },
+        { cells: [{ control: { fieldName: 'contoso_projectid', label: firstLabel, isRequired: true } }] },
+      ] },
+      { name: 'section_more', label: 'More', visible: true, showLabel: false, columns: 1, rows: [
+        { cells: [{ control: { fieldName: 'contoso_projectid', label: secondLabel } }] },
+      ] },
+    ] }],
+  });
+  await real.sdk.removeElement('form', art.id, '/tabs/0');
+  return { ...real, formId: art.id };
+}
+
+const lookupControls = async (sdk, formId) => {
+  const form = await sdk.getArtifact('form', formId);
+  const cells = form.tabs.flatMap((t) => t.columns.flatMap((c) => c.sections.flatMap((s) => s.rows.flatMap((r) => r.cells))));
+  return cells.map((c) => c.control).filter((c) => c && c.fieldName === 'contoso_projectid');
+};
+
+// The labels of the lookup's cells in what the SDK would push, in form order.
+const pushedLookupLabels = async (sdk, formId, writes) => {
+  await sdk.pushArtifact('form', formId);
+  const xml = String(writes.map((w) => w.body && w.body.formxml).filter(Boolean).pop());
+  return xml.split('<cell').filter((c) => /datafieldname="contoso_projectid"/.test(c)).map((c) => (/<label description="([^"]*)"/.exec(c) || [])[1]);
+};
+
+test('REAL BUNDLE (ADO 6691205 rebuild): a lookup the form holds twice has its SECOND cell relabelled when the first is already right', async () => {
+  const { sdk, formId, writes } = await formWithLookupCellTwice('Project', 'contoso_project');
+  assert.strictEqual((await lookupControls(sdk, formId)).length, 2, 'the bundle keeps both cells of the field');
+  const before = await lookupControls(sdk, formId);
+  assert.deepStrictEqual(await repairLookupCellLabels({ provision: sdk, formId, ...repairArgs() }), ['contoso_projectid'], 'the lookup is named once');
+  const after = await lookupControls(sdk, formId);
+  assert.deepStrictEqual(after.map((c) => c.label), ['Project', 'Project']);
+  assert.deepStrictEqual(after.map((c) => c.id), before.map((c) => c.id), 'each cell keeps its control');
+  assert.deepStrictEqual(await pushedLookupLabels(sdk, formId, writes), ['Project', 'Project']);
+});
+
+test('REAL BUNDLE (ADO 6691205 rebuild): a lookup the form holds twice keeps a maker\'s label on one cell and has the old default on the other relabelled', async () => {
+  const { sdk, formId, writes } = await formWithLookupCellTwice('Parent project', 'contoso_project');
+  assert.deepStrictEqual(await repairLookupCellLabels({ provision: sdk, formId, ...repairArgs() }), ['contoso_projectid']);
+  assert.deepStrictEqual((await lookupControls(sdk, formId)).map((c) => c.label), ['Parent project', 'Project']);
+  assert.deepStrictEqual(await pushedLookupLabels(sdk, formId, writes), ['Parent project', 'Project']);
+});
+
+test('REAL BUNDLE (ADO 6691205 rebuild): both cells of a lookup the form holds twice, each with an old default, are relabelled', async () => {
+  const { sdk, formId } = await formWithLookupCellTwice('contoso_project', 'contoso_projectid');
+  assert.deepStrictEqual(await repairLookupCellLabels({ provision: sdk, formId, ...repairArgs() }), ['contoso_projectid']);
+  const after = await lookupControls(sdk, formId);
+  assert.deepStrictEqual(after.map((c) => c.label), ['Project', 'Project']);
+  assert.deepStrictEqual(after.map((c) => c.isRequired), [true, undefined], 'each cell keeps the rest of its own control');
+});
+
+test('REAL BUNDLE (ADO 6691205 rebuild): a lookup the form holds twice with no old default on either cell is untouched', async () => {
+  const { sdk, formId } = await formWithLookupCellTwice('Project', 'Parent project');
+  assert.deepStrictEqual(await repairLookupCellLabels({ provision: sdk, formId, ...repairArgs() }), []);
+  assert.deepStrictEqual((await lookupControls(sdk, formId)).map((c) => c.label), ['Project', 'Parent project']);
+});
+
 // ── 7. the whole engine: data-model repair, then the existing form ────────────────────────────────
 
 const { runSdkBuild } = require('../lib/sdk-build.js');

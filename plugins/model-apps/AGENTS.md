@@ -697,7 +697,9 @@ the pipeline and delegates each script's **behavioral spec** to the entries belo
   SDK labels a field with when it cannot resolve the column at push (`isOldLookupFieldLabel`); it is a separate
   module so `entity-provision.js` and `artifact-intent.js` do not
   require each other. A cell that still holds the old default follows the column's CURRENT label — the
-  repaired one, or a maker's. A label-bearing metadata read immediately before a labelled create makes Dataverse
+  repaired one, or a maker's. Every cell of the lookup is held to that rule on its own label: a form can hold a
+  field more than once (`findFieldCellLocations`), and a first cell that is right, or a maker's, says nothing
+  about a second one an older build left. A label-bearing metadata read immediately before a labelled create makes Dataverse
   keep only the base-language label, which is why the existence probe stays narrow for a localized
   label, the live parent-label read sits right before the plain create only (a localized lookup is created
   before any relationship that needs one), and repair reads run

@@ -115,7 +115,8 @@ used to, builds send fewer requests, and verify, download and `check-auth` do mo
   `lookup.displayName` now labels the lookup column — and the form field that carries it — "Project" instead of the
   logical name `new_project`: from the declared parent table, else from the environment (an `existing: true` `incident`
   is "Case"), in every language the label is written in. A rebuild relabels a column or form field still carrying the old
-  default; it never changes a label you set. A download leaves out a label equal to that default.
+  default — each cell of a field the form holds more than once; it never changes a label you set. A download leaves out a
+  label equal to that default.
 - **View filters resolve choice labels against the environment** (AB#6691114), including a column of an existing table
   the spec does not declare (`account.industrycode`) and a global choice that already existed, instead of being sent to
   Dataverse as text or as the spec's own position number. A label that matches no option stops the build, listing the

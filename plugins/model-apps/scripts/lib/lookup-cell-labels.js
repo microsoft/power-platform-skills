@@ -6,11 +6,11 @@
 // lookup-labels.js. Folding the two together would close that loop.
 
 const { lookupColumnsFor, isOldLookupFieldLabel } = require('./app-spec.js');
-const { findFieldCellLocation } = require('./artifact-intent.js');
+const { findFieldCellLocations } = require('./artifact-intent.js');
 const { lookupKey } = require('./lookup-labels.js');
 
 // The value at a JSON pointer such as `/tabs/0/columns/0/sections/0/rows/0/cells/0` — the form of
-// pointer findFieldCellLocation returns, which only ever holds array indices and plain keys.
+// pointer findFieldCellLocations returns, which only ever holds array indices and plain keys.
 function atPointer(root, pointer) {
   let cur = root;
   for (const token of String(pointer).split('/').slice(1)) {
@@ -34,7 +34,11 @@ function atPointer(root, pointer) {
 // column. With no record of the column's label — the phase did not run, or could not read it — the cell is left
 // as it is rather than given a label nothing proves.
 //
-// Returns the logical names of the cells it relabelled.
+// EVERY cell of the lookup is held to the rule, each on its own label: a deployed form can hold a field more than
+// once (a maker can place it in a second section), and a first cell that is already right, or a maker's, says
+// nothing about the label of a second one an older build left.
+//
+// Returns the logical names of the lookups it relabelled a cell of.
 async function repairLookupCellLabels({ provision, formId, entityLogical, spec, lookupLabels }) {
   const repaired = [];
   const child = String(entityLogical || '').toLowerCase();
@@ -42,17 +46,27 @@ async function repairLookupCellLabels({ provision, formId, entityLogical, spec, 
     if (lookup.source === 'explicit') continue;
     const column = lookupLabels && lookupLabels[lookupKey(lookup.rel)];
     if (!column || !column.label) continue;
-    // Re-read per cell: each updateElement rewrites the artifact, so an earlier pointer may be stale.
     // `await` is load-bearing — the SDK's artifact reads are async, and a bare call hands the pure
     // helpers below a Promise that silently matches nothing.
-    const form = (await provision.getArtifact('form', formId)) || {};
-    const location = findFieldCellLocation(form, lookup.logical);
-    const cell = location && atPointer(form, location.cellPointer);
-    const deployed = cell && cell.control && cell.control.label;
-    if (typeof deployed !== 'string' || deployed === column.label || !isOldLookupFieldLabel(lookup.rel, deployed)) continue;
-    // updateElement MERGES an object patch, so classId, isRequired and the rest of the control survive.
-    await provision.updateElement('form', formId, `${location.cellPointer}/control`, { label: column.label });
-    repaired.push(lookup.logical);
+    let form = (await provision.getArtifact('form', formId)) || {};
+    const cells = findFieldCellLocations(form, lookup.logical).length;
+    let relabelled = false;
+    for (let i = 0; i < cells; i++) {
+      const location = findFieldCellLocations(form, lookup.logical)[i];
+      if (!location) break;
+      const cell = atPointer(form, location.cellPointer);
+      const deployed = cell && cell.control && cell.control.label;
+      if (typeof deployed !== 'string' || deployed === column.label || !isOldLookupFieldLabel(lookup.rel, deployed)) continue;
+      // updateElement MERGES an object patch, so classId, isRequired and the rest of the control survive.
+      await provision.updateElement('form', formId, `${location.cellPointer}/control`, { label: column.label });
+      relabelled = true;
+      // Read again after each write, so each label is judged on the form as the SDK holds it now. A label patch moves no
+      // cell — updateElement merges it into that one control — so the later cells keep their indexes; and every write is
+      // decided on the label of the cell at hand, so even an SDK that re-normalised a form as it wrote could not have a
+      // maker's label overwritten here.
+      form = (await provision.getArtifact('form', formId)) || {};
+    }
+    if (relabelled) repaired.push(lookup.logical);
   }
   return repaired;
 }

@@ -815,7 +815,15 @@ function sectionRowsPointer(ti, ci, si) {
 // fragile and unreadable. Same scan and same non-field-control exclusions as findFieldCellPointer —
 // that function is kept as the thin wrapper so existing callers are untouched.
 function findFieldCellLocation(formJson, logical) {
+  return findFieldCellLocations(formJson, logical)[0] || null;
+}
+
+// The location (as findFieldCellLocation gives it) of EVERY cell hosting the bound field `logical`, in form
+// order: tabs → columns → sections → rows → cells. A deployed form can hold a field more than once — a maker can
+// place it in a second section — and each placement is a cell of its own, with its own label and control.
+function findFieldCellLocations(formJson, logical) {
   const lg = String(logical || '').toLowerCase();
+  const found = [];
   const tabs = formJson.tabs || [];
   for (let ti = 0; ti < tabs.length; ti++) {
     const cols = tabs[ti].columns || [];
@@ -837,7 +845,7 @@ function findFieldCellLocation(formJson, logical) {
             const sectionPointer = '/tabs/' + ti + '/columns/' + ci + '/sections/' + si;
             const rowsPointer = sectionPointer + '/rows';
             const rowPointer = rowsPointer + '/' + ri;
-            return {
+            found.push({
               sectionPointer,
               rowsPointer,
               rowPointer,
@@ -847,13 +855,13 @@ function findFieldCellLocation(formJson, logical) {
               cellIndex: celli,
               flatIndex: flat,
               rowCellCount: cells.length,
-            };
+            });
           }
         }
       }
     }
   }
-  return null;
+  return found;
 }
 
 // A deployed section, located by NAME (case-insensitive) across the WHOLE form, or null.
@@ -964,6 +972,7 @@ module.exports = {
   sectionRowsPointer,
   findFieldCellPointer,
   findFieldCellLocation,
+  findFieldCellLocations,
   findSectionLocation,
   findSectionById,
   declaredSectionByField,
