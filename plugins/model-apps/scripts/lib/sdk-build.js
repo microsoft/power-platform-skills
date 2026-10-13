@@ -1113,10 +1113,16 @@ function appHasCrossPageNav(spec) {
 // source hash the build records is the one of what it sent. pac genpage upload takes a file PATH, so the bytes
 // must exist on disk. The dir is created per RUN under <workspace>/.pageref-deploy/<runId>/ and removed in a
 // finally (never leave env GUIDs on disk, no sanitized-name cross-run collision). The key is sanitized to a safe
-// filename. `code` is a string, or the Buffer the scan read (written byte for byte).
+// filename, behind a fixed `page-` prefix: Windows reserves the device names CON, PRN, AUX, NUL, COM1-9 and LPT1-9
+// (the digit may also be a superscript ¹ ² ³) as a file name with or without an extension — `NUL.txt` is NUL
+// (https://learn.microsoft.com/windows/win32/fileio/naming-a-file) — and a page key is a slug that can be one
+// (`con`, `com1`). Where a release treats such a name as the device, `con.tsx` is not a file at all, and pac would be
+// handed the console, or nothing. Windows 11 (build 26200, measured) writes `con.tsx` as an ordinary file, but the
+// name is ours to choose, so no key comes near the rule. `code` is a string, or the Buffer the scan read (written
+// byte for byte).
 function writeStagingFile(stagingDir, key, code) {
   fs.mkdirSync(stagingDir, { recursive: true });
-  const file = path.join(stagingDir, `${String(key).replace(/[^A-Za-z0-9_-]/g, '_')}.tsx`);
+  const file = path.join(stagingDir, `page-${String(key).replace(/[^A-Za-z0-9_-]/g, '_')}.tsx`);
   fs.writeFileSync(file, code, 'utf8');
   return file;
 }

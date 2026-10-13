@@ -127,6 +127,9 @@ used to, builds send fewer requests, and verify, download and `check-auth` do mo
   built one on an option the environment numbers otherwise, `--verify` now reports it.
 - **Quick View sections stay one column**, as Quick Create sections already did. A field-heavy Quick View section got two
   columns, which the platform refuses for this form type, and the build failed part-way.
+- **A page keyed like a Windows device name** (`con`, `nul`, `aux`, `com1`, …) is handed to `pac` as a file: the build's
+  copy of each page it uploads is named `page-<key>.tsx`, which Windows never reads as a device, where 2.13.0 named a
+  navigation page's copy `<key>.tsx`.
 - **Generative pages are checked for the style shorthands Griffel drops** (AB#6691124): `all`, `borderColor`,
   `borderStyle`, `borderWidth`, `borderBlock*` and `borderInline*` in `makeStyles`, which deployed silently without their
   style. A build stops before the pages phase writes anything for a page it creates or whose source changed since the

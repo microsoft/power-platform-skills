@@ -1772,3 +1772,54 @@ test('deploy: every page is uploaded from a staging copy of the bytes the scan r
     assert.strictEqual(fs.readFileSync(path.join(appDir, 'help.tsx'), 'utf8'), saved, 'the canonical file keeps the save, for the next build to check');
   } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
 });
+
+// Windows reserves the device names, with or without an extension (`NUL.txt` is NUL —
+// https://learn.microsoft.com/windows/win32/fileio/naming-a-file), and a page key is a slug that can be one. The
+// staging copy pac uploads must never be named like one: where a release reads `con.tsx` as the console, the build
+// would hand pac a device instead of the page. Checked on the name rather than by writing one, because Windows 11
+// writes `con.tsx` as an ordinary file, so a write would pass here and fail elsewhere.
+test('deploy: a page keyed like a Windows device name is staged under a name that is not one', async () => {
+  const DEVICE = /^(?:con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3])(?:\..*)?$/i;
+  const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pages-deploy-'));
+  try {
+    const keys = ['con', 'nul', 'aux', 'prn', 'com1', 'lpt1'];
+    const source = {};
+    // `con` links to `nul` and `aux`, so both are minted first and `con` goes up with its tokens resolved; the rest link nowhere.
+    for (const key of keys) {
+      source[key] = key === 'con'
+        ? `export default function Con(){ ${NAV('nul')} ${NAV('aux')} return null; }`
+        : `export default function Page_${key}(){ return null; }`;
+      fs.writeFileSync(path.join(appDir, `src-${key}.tsx`), source[key], 'utf8');
+    }
+    const spec = {
+      schemaVersion: 2,
+      solution: { uniqueName: 'PgDeploy', displayName: 'Pg', publisherPrefix: 'contoso' },
+      app: { name: 'Deploy App' },
+      entities: [{ schemaName: 'contoso_item', displayName: 'Item', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] }],
+      pages: keys.map((key) => ({ key, name: `Page ${key}`, ...(key === 'con' ? { navigatesTo: [{ targetKey: 'nul' }, { targetKey: 'aux' }] } : {}), source: { kind: 'tsx', codeFile: `src-${key}.tsx` } })),
+      appShell: { areas: [{ label: 'Main', groups: [{ label: 'Pages', subAreas: keys.map((page) => ({ page, title: page })) }] }] },
+    };
+    const uploads = [];
+    let minted = 0;
+    const genpageCli = {
+      enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }),
+      upload: async (o) => {
+        uploads.push({ name: o.name, codeFile: o.codeFile, content: fs.readFileSync(o.codeFile, 'utf8') });
+        return { pageId: o.pageId || `5${String(++minted).padStart(7, '0')}-0000-4000-8000-000000000000` };
+      },
+    };
+    const { sdk } = mockSdk();
+    await runSdkBuild(spec, { sdk, apply: true, env: 'https://x', appDir, genpageCli, phases: PHASES });
+    assert.deepStrictEqual(uploads.map((u) => u.name).sort(), keys.map((k) => `Page ${k}`).sort(), 'every page goes up once');
+    for (const u of uploads) {
+      const base = path.basename(u.codeFile);
+      assert.doesNotMatch(base, DEVICE, `${u.name}: staged as "${base}", which Windows reserves for a device`);
+      assert.match(base, /\.tsx$/, `${u.name}: still a .tsx file, for pac to transpile`);
+    }
+    assert.strictEqual(new Set(uploads.map((u) => path.basename(u.codeFile))).size, uploads.length, 'one staging file per page');
+    for (const key of keys.filter((k) => k !== 'con')) assert.strictEqual(uploads.find((u) => u.name === `Page ${key}`).content, source[key], `${key}: the bytes the scan read`);
+    assert.doesNotMatch(uploads.find((u) => u.name === 'Page con').content, /PAGEREF_/, 'and the navigation page goes up with its tokens resolved');
+    const stagingRoot = path.join(appDir, '.maker-workspace', '.pageref-deploy');
+    assert.ok(!fs.existsSync(stagingRoot) || fs.readdirSync(stagingRoot).length === 0, 'the copies are removed when the build ends');
+  } finally { fs.rmSync(appDir, { recursive: true, force: true }); }
+});
