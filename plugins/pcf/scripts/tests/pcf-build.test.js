@@ -93,6 +93,27 @@ test('buildControl runs pcf-scripts build through node with shell-free productio
   }
 });
 
+test('buildControl fails a clean exit that produced no processed control', () => {
+  // pcf-scripts can exit 0 without writing out/controls/<Control>/ControlManifest.xml (for example
+  // with an outDir it never fills). With no control the bundle checks pass vacuously, so the build
+  // itself must fail rather than report ok with controls: 0.
+  const { dir, bin } = tempProject();
+  try {
+    const result = buildControl({ projectDir: dir }, {
+      fs,
+      resolvePackageBin: () => bin,
+      runNodeScript: () => ({ status: 0, stdout: 'built', stderr: '' }),
+    });
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.controls, []);
+    assert.match(result.error, /no processed control/i);
+    assert.match(result.error, /ControlManifest\.xml/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('buildControl cleans old output and classifies unexplained files without rejecting localized/legal/preview sidecars', () => {
   const { dir, bin } = tempProject();
   const stale = path.join(dir, 'dist', 'controls', 'Star', 'bundle.js.LICENSE.txt');

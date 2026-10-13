@@ -86,14 +86,24 @@ function buildControl({ projectDir, mode = 'production', clean = true } = {}, de
     shell: false,
   });
   const controls = readBuiltControls(outRoot, { fs: fsDep, path: pathDep });
-  const ok = (executed.status === 0 || executed.status === undefined) && !executed.error && !pcfScriptsFailed(executed);
+  const exitedOk = (executed.status === 0 || executed.status === undefined) && !executed.error && !pcfScriptsFailed(executed);
+  // A clean exit must leave at least one processed control behind:
+  //   out/controls/<ControlName>/ControlManifest.xml
+  // Without one, the bundle and output checks below run over nothing and pass vacuously, so a
+  // build that wrote nothing deployable would be reported ok with zero controls.
+  const missingOutput = exitedOk && controls.length === 0;
+  const ok = exitedOk && !missingOutput;
   return {
     ok,
     mode,
     controls,
     stdout: executed.stdout || '',
     stderr: executed.stderr || '',
-    ...(ok ? {} : { error: buildError(executed) }),
+    ...(ok ? {} : {
+      error: missingOutput
+        ? `pcf-scripts build exited successfully but wrote no processed control under ${outRoot} (expected <ControlName>/ControlManifest.xml). Check the outDir in pcfconfig.json and that the project declares a control, then rebuild.`
+        : buildError(executed),
+    }),
   };
 }
 
