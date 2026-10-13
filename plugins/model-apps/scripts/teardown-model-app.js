@@ -28,6 +28,7 @@ const { checkWorkspaceClearable } = require('./lib/workspace-paths.js');
 const { createAzHttpClient } = require('./lib/sdk-http-client.js');
 const { parseArgs, validateFlags, readJsonArg, emitResult } = require('./lib/dataverse-auth.js');
 const snapStore = require('./lib/apply-snapshot-store.js');
+const { checkPageOwnershipClearable } = require('./lib/page-ownership-records.js');
 
 // Build an SDK client for teardown. Uses the same az-token HttpClient as build-model-app.js.
 async function makeSdk(env) {
@@ -138,7 +139,7 @@ async function teardownModelApp(spec, opts, deps) {
   }
   let r;
   try {
-    r = await runTeardown(spec, { apply: opts.apply }, { sdk: deps.sdk, emit });
+    r = await runTeardown(spec, { apply: opts.apply, workspaceDir: opts.workspaceDir, env: opts.env }, { sdk: deps.sdk, emit });
   } finally {
     if (heartbeat) clearInterval(heartbeat);
     // Every teardown that FINISHES drops its entry from the tombstone's list of teardowns in flight — a
@@ -212,7 +213,7 @@ async function main() {
   let thrown = null;
   try {
     const deps = { log: (m) => process.stderr.write(m + '\n'), sdk };
-    r = await teardownModelApp(spec, { apply, allowDestructive, workspaceDir }, deps);
+    r = await teardownModelApp(spec, { apply, allowDestructive, workspaceDir, env }, deps);
 
     // Clear the local workspace only after a clean apply — stale metadata there would make a
     // subsequent rebuild skip tables that no longer exist. Filesystem-local, opt-in.
@@ -233,7 +234,18 @@ async function main() {
       // The clear itself runs under the workspace's lease, and only while no snapshot has appeared since this
       // teardown's release — another teardown's tombstone, say, which removing the folder in place after the
       // release deleted (apply-snapshot-store.js clearWorkspace).
-      const cleared = clearable.ok ? snapStore.clearWorkspace(clearable.target) : clearable;
+      // The path guard proves this is a cache directory; it cannot decide whether its ownership
+      // records are disposable. Retain all unconsumed records, including foreign scopes.
+      // Check under the clear lease and again after atomic isolation, before recursive removal:
+      // another app can finish a receipt between the first check and the directory rename.
+      const requireDisposable = (dir) => {
+        const ownership = checkPageOwnershipClearable(dir);
+        if (!ownership.ok) throw new Error(ownership.reason);
+      };
+      const cleared = clearable.ok ? snapStore.clearWorkspace(clearable.target, {
+        beforeRename: () => requireDisposable(clearable.target),
+        beforeRemove: requireDisposable,
+      }) : clearable;
       if (cleared.ok) {
         process.stderr.write(`\ncleared workspace ${clearable.target}${cleared.leftover ? ` (${cleared.reason})` : ''}\n`);
       } else {

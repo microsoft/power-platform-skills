@@ -6,16 +6,16 @@ Single source of truth for minimum tool versions. Every skill should reference t
 
 This plugin uses scope-aware checks based on the mobile workflow:
 
-- **Deploy** = `npm run build` + `npx power-apps push`. No local Xcode / Android Studio involvement.
+- **Deploy** = `npm run build` + `pa app push`. No local Xcode / Android Studio involvement.
 - **Local dev** = the user runs `npm run dev` (= `expo start`) directly. Metro starts and prints a QR for native dev clients.
 - **Local native compile** (platform-specific native run commands) is the user's choice and lives **outside** this plugin's skills. Not a prerequisite, not validated, not driven.
 
-Result: the only required tooling is what Node/npm, `npx power-apps`, and the relevant helper scripts need. Xcode/JDK/Android Studio are explicitly out of scope.
+Result: the only required tooling is what Node/npm, the Power Apps CLI (`pa`), and the relevant helper scripts need. Xcode/JDK/Android Studio are explicitly out of scope.
 
 This is also a standard **Expo managed workflow** project. That means:
 
-- `ios/` and `android/` folders are **generated artifacts** — produced by `npx expo prebuild` from `app.json` plugins. They are **git-ignored**. Developers never hand-edit them.
-- Adding a native capability = `npx expo install <plugin>` + add the plugin name to `app.json` plugins array. The plugin's "config plugin" patches `Info.plist` / `AndroidManifest.xml` automatically on the next prebuild (which happens transparently inside `npm run build` and native run workflows when needed).
+- `ios/` and `android/` folders are **generated artifacts** — produced by `expo prebuild` from `app.json` plugins. They are **git-ignored**. Developers never hand-edit them.
+- Adding a native capability = `expo install <plugin>` + add the plugin name to `app.json` plugins array. The plugin's "config plugin" patches `Info.plist` / `AndroidManifest.xml` automatically on the next prebuild (which happens transparently inside `npm run build` and native run workflows when needed).
 - Tamagui, Expo Router, MSAL, secure-store, camera, etc. all ship as plugins — you `npm install` them like any other package. **No Xcode project surgery, no `build.gradle` edits.**
 
 ### What the user owns vs what Expo generates
@@ -37,8 +37,8 @@ If `/add-native` adds `expo-camera`, the only changes that get committed are: `p
 |---|---|---|---|
 | Node.js | `22.0.0` | `node --version` | Expo SDK 55 + React Native 0.83 require Node 22+ |
 | npm | `10.0.0` | `npm --version` | Expo install / lockfile v3 |
-| Expo CLI (via npx) | `0.21.0` | `npx expo --version` | SDK 55 prebuild support |
-| TypeScript (project-local) | `5.4.0` | `npx tsc --version` | Required by generated service types |
+| Expo CLI (via npx) | `0.21.0` | `npx --no-install expo --version` | SDK 55 prebuild support |
+| TypeScript (project-local) | `5.4.0` | `npx --no-install tsc --version` | Required by generated service types |
 | POSIX shell (Windows only) | bash 4+ / zsh 5+ | `echo $BASH_VERSION || echo $ZSH_VERSION` | Skills use `cp -R`, `rm -rf`, `mkdir -p`, `grep`, `sed`, `find`. Native PowerShell / cmd.exe lack these. Use **Git Bash** or **WSL** on Windows. See [shared-instructions.md → Shell Requirement](./shared-instructions.md#shell-requirement-windows-users). |
 
 ## Required only when the relevant skill runs

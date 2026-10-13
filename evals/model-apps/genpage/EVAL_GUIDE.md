@@ -73,6 +73,7 @@ Layers 1 and 2 are automated. Layer 3 is human judgment by design — visual qua
 - Auth results belong to their commands; the latest successful applicable gate precedes mutations, final failures halt, and timeout retry/advice is bounded
 - Failed connection discovery is not an empty success and cannot authorize setup
 - Current upload commands use `genpage-upload.js` with file transport; the preservation fixture compares exact approved/forwarded text and before/after name, model and binding sets
+- A divergence refusal (`no-base`, `deployed-changed`, `deployed-unreadable`) stops an update before PAC writes (`ok: false`, no PAC write, no forwarded args). `--overwrite-deployed` needs the `Choice:` line that upload command consumes to be exactly `Choice: Overwrite the deployed changes`. Each `genpage-upload.js` line consumes the pending choice, so one approval does not cover a later upload
 - Custom API discovery/gates/bindings/runtime/update stages agree; optional packaging names every deployed page and preserves failures/read-back evidence
 - Prefix discipline holds across plan, entity-creation log, and resolved names
 - Per-eval discovery, provisioning, schema and deployment expectations compare structured evidence read by `lib/expectation-evidence.js` — `list-tables`/`list-languages`/`generate-types`/upload flags and their recorded results, the plan's entity blocks, the entity-creation transactions, and the choice enums in the captured `RuntimeTypes.ts` — on either upload transport
@@ -279,7 +280,7 @@ The first seven contract-2 fixtures exercise these current contracts:
 | `10-auth-timeout-halt` | One timeout retry, original advice, no provisioning/upload | Failed auth followed by unrelated `ok:true`; malformed result or wrong environment |
 | `20-upload-preservation` | Wrapper/name/prompt/message files; separate own-name/config snapshots | Inline/rewritten approved text; dropped name/model/bindings; hidden shim/read warnings |
 | `21-discovery-failure` | Unreadable discovery returns `needs_input`, no setup | Failed discovery followed by connection/reference creation or upload |
-| `22-navigation-contract` | Actual before/after TSX and deployed ID map | Unknown/optional-call non-GUID target, runtime override, collateral edit or extra reupload |
+| `22-navigation-contract` | Actual before/after TSX and deployed ID map | Unknown/optional-call non-GUID target, runtime override, a `PAGEREF_` token anywhere but a navigation `pageId` — a comment included (the build refuses it), a page the checker cannot read for certain (it refuses every token at or after the first guess and every call that reaches it, a resolved id literal there included), collateral edit or extra reupload |
 | `23-worker-completeness` | Failed production gate, fresh regeneration, then upload | Valid export plus unfinished statement, stale/missing write or upload before acceptance |
 | `24-custom-api-lifecycle` | Discovery, re-probe, bare actions, runtime and config stages | Disabled/unreadable gate, invented kind/name/parameter, wrong method/bound record, unsafe response or lost bindings |
 | `25-solution-package` | Explicit page IDs, dynamic types, app-first writes and read-back | Omitted page/wrong solution/type/order; invalid ID writes; partial failure reported as success |

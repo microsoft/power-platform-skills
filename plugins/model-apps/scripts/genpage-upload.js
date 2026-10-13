@@ -32,18 +32,20 @@ const path = require('node:path');
 const os = require('node:os');
 const { parseArgs, validateFlags, emitResult } = require('./lib/dataverse-auth.js');
 const { makeGenpageCli, suppliedButBlank, unescapePacName } = require('./lib/genpage-cli.js');
+const genpageBase = require('./lib/genpage-base.js');
+const { writeFileSafe } = require('./lib/safe-fs.js');
 
 const KNOWN = ['env', 'app-id', 'code-file', 'compiled-code-file', 'page-id', 'name', 'name-file',
   'data-sources', 'clear-data-sources', 'prompt', 'prompt-file', 'agent-message', 'agent-message-file',
-  'model', 'connectors', 'actions', 'add-to-sitemap'];
+  'model', 'connectors', 'actions', 'add-to-sitemap', 'overwrite-deployed'];
 // Bare switches; every other flag carries a value.
-const SWITCHES = ['add-to-sitemap', 'clear-data-sources'];
+const SWITCHES = ['add-to-sitemap', 'clear-data-sources', 'overwrite-deployed'];
 const NEED_VALUE = KNOWN.filter((f) => !SWITCHES.includes(f));
 
 const USAGE = 'Usage: node scripts/genpage-upload.js --env <orgUrl> --app-id <guid> --code-file <path> '
   + '--prompt-file <path> --agent-message-file <path> [--page-id <guid>] [--name-file <path> | --name <text>] '
   + '[--data-sources <csv>] [--clear-data-sources] [--compiled-code-file <path>] [--model <id>] '
-  + '[--connectors <path>] [--actions <path>] [--add-to-sitemap]';
+  + '[--connectors <path>] [--actions <path>] [--add-to-sitemap] [--overwrite-deployed]';
 
 // The skill writes these inputs — the prompt, agent-message and page-name files, connectors.json, actions.json —
 // into the working directory just before the upload, and a write through a link left at one of those names (a
@@ -105,6 +107,152 @@ function resolveText(flags, inlineFlag, fileFlag, readFile) {
     }
   }
   return { ok: true, value: hasInline ? inline : undefined };
+}
+
+function bindingRefusal(pageId, why) {
+  return `cannot read the current data-source bindings for page ${pageId} (${why})`
+    + ' — refusing to update, because pac would persist an EMPTY binding list and the page would'
+    + ' keep querying a table it is no longer bound to. Pass --data-sources explicitly, or'
+    + ' --clear-data-sources to unbind deliberately.';
+}
+
+// Every update downloads the deployed page once, both to preserve omitted bindings/model and to
+// hash page.tsx against the base marker. The directory is removed before this returns: the caller
+// emits afterwards, and the real emitter calls process.exit, so a cleanup after emit never runs.
+async function probeDeployedPage(cli, flags) {
+  const result = { deployedText: null, deployedError: null, cfg: null, configError: null };
+  let probe;
+  try {
+    probe = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-ds-'));
+    if (typeof cli.download !== 'function') {
+      throw new Error('this pac wrapper exposes no page download');
+    }
+    await cli.download({ appId: flags['app-id'], outputDir: probe, pageIds: [flags['page-id']] });
+    // pac names the downloaded directory with its own casing of the page id.
+    const pageDir = genpageBase.findDownloadedPageDir(probe, flags['page-id']);
+    if (!pageDir) throw new Error('pac wrote no directory for this page');
+    try {
+      result.deployedText = fs.readFileSync(path.join(pageDir, 'page.tsx'), 'utf8');
+    } catch (e) {
+      result.deployedError = `pac wrote no readable page.tsx (${e.message})`;
+    }
+    try {
+      // pac writes config.json UTF-8 WITH a BOM, which JSON.parse rejects outright.
+      const raw = fs.readFileSync(path.join(pageDir, 'config.json'), 'utf8').replace(/^\uFEFF/, '');
+      const cfg = JSON.parse(raw);
+      if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) {
+        throw new Error('config.json is not a JSON object');
+      }
+      result.cfg = cfg;
+    } catch (e) {
+      result.configError = e;
+    }
+  } catch (e) {
+    result.deployedError = (e && e.message) || String(e);
+    if (!result.configError) result.configError = e;
+  } finally {
+    if (probe) {
+      try { fs.rmSync(probe, { recursive: true, force: true }); } catch { /* leave the temp dir */ }
+    }
+  }
+  return result;
+}
+
+// Page-name failures are warnings, never refusals — the same as when this read ran on its own.
+// A throw must not replace an earlier divergence verdict, so the caller settles the promise.
+function noteCurrentName(nameResult, cli) {
+  if (!nameResult) return {};
+  if (nameResult.missing) return { nameUnread: 'this pac wrapper cannot read a page name' };
+  if (nameResult.failed) {
+    return { nameUnread: (nameResult.error && nameResult.error.message) || String(nameResult.error) };
+  }
+  const current = nameResult.value;
+  if (typeof current !== 'string' || !current.trim()) return {};
+  const name = unescapePacName(current);
+  const refusal = typeof cli.argumentRefusal === 'function' ? cli.argumentRefusal(name) : null;
+  if (refusal) return { nameUnsent: { current, refusal } };
+  const out = { preservedName: name };
+  // Only a `"` pac did not write (no backslash before it) cannot be kept as it is.
+  if (/(?:^|[^\\])"/.test(current)) out.nameChanged = current;
+  return out;
+}
+
+// After a successful upload, record the hash of the file we sent. A readback whose hash equals
+// that file (pac's BOM and final CRLF are not a difference) confirms the service stored it:
+// source 'upload'. A readback that differs must not become the trusted deployed hash — a save
+// can land between the upload and the download, and recording it would make the next update
+// treat someone else's page as our base. Record the uploaded hash as 'upload-unverified', with
+// the line delta, so the next update refuses deployed-changed until genpage-base.js check. A
+// failed readback is the same unverified marker. The whole step is best-effort: the upload
+// already succeeded, and a throw here would report that create as a failure without a page id,
+// so a retry could create a second page. A failed marker write deletes any previous marker: a
+// stale base is worse than no base.
+async function recordObservedBase(args) {
+  try {
+    await writeObservedBase(args);
+  } catch (e) {
+    args.warnings.push(`could not record a base marker (${(e && e.message) || e}) — a later update will refuse no-base until the page is recorded`);
+  }
+}
+
+async function writeObservedBase({ cli, flags, pageId, base, warnings, mkdtempSync, rmSync }) {
+  const codeFile = flags['code-file'];
+  const mkdtemp = mkdtempSync || fs.mkdtempSync;
+  const rm = rmSync || fs.rmSync;
+  let localText;
+  try {
+    localText = base.readPlainText(path.resolve(codeFile));
+  } catch (e) {
+    warnings.push(`could not read ${codeFile} to record a base marker (${e.message}) — a later update will refuse no-base until the page is recorded`);
+    try { base.deleteMarker(codeFile); } catch (del) {
+      warnings.push(`the previous base marker could not be removed (${del.message})`);
+    }
+    return;
+  }
+  const localSha256 = base.pageHash(localText);
+  let deployedSha256 = localSha256;
+  let source = 'upload';
+  let probe;
+  try {
+    probe = mkdtemp(path.join(os.tmpdir(), 'genpage-base-'));
+    if (typeof cli.download !== 'function') throw new Error('this pac wrapper exposes no page download');
+    await cli.download({ appId: flags['app-id'], outputDir: probe, pageIds: [pageId] });
+    const pageDir = base.findDownloadedPageDir(probe, pageId);
+    if (!pageDir) throw new Error('pac wrote no directory for this page');
+    const downloaded = fs.readFileSync(path.join(pageDir, 'page.tsx'), 'utf8');
+    if (base.pageHash(downloaded) === localSha256) {
+      source = 'upload';
+      deployedSha256 = localSha256;
+    } else {
+      source = 'upload-unverified';
+      deployedSha256 = localSha256;
+      const lines = base.lineDelta(localText, downloaded);
+      warnings.push(`the deployed page differs from what was just uploaded (${lines.added} lines added, ${lines.removed} removed) — the service rewrote it or another save landed right after, so the base marker records the uploaded file's hash as unverified. The next update will refuse deployed-changed until the page is compared with genpage-base.js check`);
+    }
+  } catch (e) {
+    source = 'upload-unverified';
+    deployedSha256 = localSha256;
+    warnings.push(`could not re-read the deployed page to confirm its hash (${(e && e.message) || e}), so the base marker records the uploaded file's hash as unverified — a later update may refuse deployed-changed if the service rewrote the page`);
+  } finally {
+    if (probe) {
+      try { rm(probe, { recursive: true, force: true }); } catch { /* leave the temp dir */ }
+    }
+  }
+  try {
+    base.writeMarker(codeFile, {
+      version: 1,
+      pageId,
+      appId: flags['app-id'],
+      deployedSha256,
+      localSha256,
+      source,
+    });
+  } catch (e) {
+    warnings.push(`could not write the base marker (${e.message}) — a later update will refuse no-base until the page is recorded again`);
+    try { base.deleteMarker(codeFile); } catch (del) {
+      warnings.push(`the previous base marker could not be removed (${del.message})`);
+    }
+  }
 }
 
 async function main(argv = process.argv.slice(2), deps = {}) {
@@ -171,6 +319,9 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   // "false" for `--clear-data-sources=false`, which is truthy. Testing the raw flag would have read
   // an explicit refusal to clear as permission to clear — unbinding the page the guard protects.
   const clearDataSources = flags['clear-data-sources'] === true || flags['clear-data-sources'] === 'true';
+  // Same normalization as the switches above: `parseArgs` yields the STRING "false" for
+  // `--overwrite-deployed=false`, which is truthy. An explicit refusal must not authorize an overwrite.
+  const overwriteDeployed = flags['overwrite-deployed'] === true || flags['overwrite-deployed'] === 'true';
   // A contradiction, not a precedence question: one says "remove every binding", the other names the
   // bindings to keep. Silently preferring either is a guess about intent on a destructive operation.
   if (clearDataSources && flags['data-sources']) {
@@ -196,6 +347,7 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   }
 
   const cli = cliFactory(flags.env);
+  const base = deps.base || genpageBase;
 
   // An UPDATE must have a target that EXISTS. pac treats an unknown `--page-id` as a CREATE and
   // returns the NEW page's id, and the wrapper's identity guard compares the returned id to the one
@@ -300,108 +452,132 @@ async function main(argv = process.argv.slice(2), deps = {}) {
   // The page's MODEL follows the same rule: pac stores whatever `--model` an upload sends, and an update
   // without one wiped the deployed model id to "" (live-measured). So an update that omits it re-sends the
   // one config.json records — read from the same download.
+  //
+  // That download now runs on EVERY update, not only when a binding or the model was omitted: the
+  // base-marker check needs page.tsx whether or not the caller named those flags. An unreadable
+  // page is `deployed-unreadable`, independent of the binding options — a model-only miss used to
+  // be a warning, and that must not become the policy for a snapshot we could not take.
+  // `--overwrite-deployed` is the only bypass, and it is never the default. The download and the
+  // upload are separate pac calls; a save that lands between them (seconds) is not detected.
   let preservedDataSources;
   let preservedModel;
   let modelUnread = null; // why the page's current model could not be read, when it could not
-  const preserveBindings = flags['page-id'] && !flags['data-sources'] && !clearDataSources;
-  const preserveModel = flags['page-id'] && !flags.model;
-  if (preserveBindings || preserveModel) {
-    const probe = fs.mkdtempSync(path.join(os.tmpdir(), 'genpage-ds-'));
-    // The failure is RECORDED and emitted after cleanup, never emitted from inside the try. The real
-    // `emitResult` calls `process.exit(1)`, so a `return emit(...)` in the catch never reaches the
-    // `finally` — leaving the probe directory, and the downloaded page source and prompt inside it,
-    // on disk. The injected emitters used in tests return normally and hid that entirely.
-    let probeError = null;
-    try {
-      await cli.download({ appId: flags['app-id'], outputDir: probe, pageIds: [flags['page-id']] });
-      // pac names the downloaded directory with ITS OWN casing of the page id, which need not match
-      // the casing the caller typed. Joining the caller's spelling works on a case-INSENSITIVE
-      // filesystem and fails on Linux, where a differently-cased --page-id would "lose" the config
-      // and refuse a perfectly good update. Resolve the directory case-insensitively instead.
-      const wantDir = String(flags['page-id']).toLowerCase();
-      const entry = fs.readdirSync(probe).find((d) => d.toLowerCase() === wantDir);
-      if (!entry) throw new Error('pac wrote no directory for this page');
-      // pac writes config.json UTF-8 WITH a BOM, which JSON.parse rejects outright — strip it first
-      // or a perfectly good config reads as unparseable and the bindings are "lost" here too.
-      const raw = fs.readFileSync(path.join(probe, entry, 'config.json'), 'utf8').replace(/^\uFEFF/, '');
-      const cfg = JSON.parse(raw);
-      if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) {
-        throw new Error('config.json is not a JSON object');
-      }
-      // An ABSENT `dataSources` key means the page HAS no bindings — the same reading the download
-      // path uses (`config.dataSources || []`), and how an unbound page legitimately looks. A key
-      // that is PRESENT but not an array is neither absent nor readable: it is malformed, and
-      // treating it as "no bindings" would unbind the page on the strength of a value we could not
-      // interpret. Only a MISSING or UNREADABLE config is unknown, and that is refused below. Checked
-      // only when the bindings are what this download preserves — a caller who named them owns them.
-      if (preserveBindings) {
-        if (cfg.dataSources !== undefined && !Array.isArray(cfg.dataSources)) {
-          throw new Error(`config.json dataSources is ${typeof cfg.dataSources}, not an array`);
-        }
-        if (Array.isArray(cfg.dataSources)) {
-          const bad = cfg.dataSources.find((value) => typeof value !== 'string' || !value.trim());
-          if (bad !== undefined) {
-            throw new Error('config.json dataSources must be an array of non-empty table logical names');
-          }
-        }
-        preservedDataSources = Array.isArray(cfg.dataSources) ? cfg.dataSources : [];
-      }
-      // An absent or empty model is the page having none — nothing to re-send.
-      if (preserveModel) {
-        if (typeof cfg.model === 'string' && cfg.model.trim()) preservedModel = cfg.model.trim();
-        else if (cfg.model !== undefined && cfg.model !== null && cfg.model !== '') modelUnread = `config.json model is ${typeof cfg.model}, not a string`;
-      }
-    } catch (e) {
-      // Fail CLOSED for the BINDINGS: guessing "probably none" is exactly the silent unbinding this exists
-      // to stop. The model is metadata — the page works without it — so not knowing it never blocks an
-      // update (a deliberate `--clear-data-sources` included); it is reported instead.
-      if (preserveBindings) {
-        probeError = `cannot read the current data-source bindings for page ${flags['page-id']} (${e.message})`
-          + ' — refusing to update, because pac would persist an EMPTY binding list and the page would'
-          + ' keep querying a table it is no longer bound to. Pass --data-sources explicitly, or'
-          + ' --clear-data-sources to unbind deliberately.';
-      } else {
-        modelUnread = e.message;
-      }
-    } finally {
-      // Best-effort: a cleanup failure must not replace the outcome of the operation, nor abort an
-      // update whose bindings were read successfully.
-      try { fs.rmSync(probe, { recursive: true, force: true }); } catch { /* leave the temp dir */ }
-    }
-    if (probeError) return emit(false, { error: probeError });
-  }
-
-  // An UPDATE without a name keeps the page's CURRENT name. pac otherwise renames it to its navigation
-  // title — live-reproduced: a page renamed by an earlier upload went back to its original title when a
-  // later update omitted the name. The name lives only on the page's Dataverse row, so it is read from
-  // there and sent again, unescaped (`unescapePacName`): pac's escaping then stores exactly the value that
-  // was there. Only a `"` that pac did not write (no backslash before it — a name set some other way)
-  // cannot be kept as it is; the update goes ahead and says so. A name pac cannot be HANDED here — a
-  // `pac.cmd` shim cannot receive `%` or `"` — is not sent at all: the update proceeds as it did before
-  // names were kept, and says so. Metadata, like the model: not knowing or not being able to send the name
-  // never blocks the update, and is reported.
   let preservedName;
   let nameUnread = null;
   let nameChanged = null;
   let nameUnsent = null;
-  if (flags['page-id'] && pageName.value === undefined) {
-    if (typeof cli.pageName !== 'function') {
-      nameUnread = 'this pac wrapper cannot read a page name';
+  let overwroteDeployed = false;
+  if (flags['page-id']) {
+    const preserveBindings = !flags['data-sources'] && !clearDataSources;
+    const preserveModel = !flags.model;
+    // The page-name read is its own Dataverse call. Start it with the probe download, after the
+    // existence and membership guards above have passed, so a guard failure is still the verdict
+    // and neither call is made. Name failures stay warnings, reached only if the update proceeds.
+    // An update without a name keeps the page's current name. pac otherwise renames it to its
+    // navigation title — live-reproduced: a renamed page reverted when a later update omitted
+    // --name. The name is read from the page row and sent again, unescaped, so pac stores the
+    // same value. A name this installation cannot hand to pac (a pac.cmd shim and `%` or `"`)
+    // is not sent; the update still proceeds and says so. Metadata, like the model: not knowing
+    // the name never blocks the update.
+    const wantName = pageName.value === undefined;
+    const settle = (p) => Promise.resolve(p).then((value) => ({ value }), (error) => ({ failed: true, error }));
+    const nameTask = !wantName ? Promise.resolve(null)
+      : typeof cli.pageName !== 'function' ? Promise.resolve({ missing: true })
+        : settle(cli.pageName(flags['page-id']));
+    const probeTask = settle(probeDeployedPage(cli, flags));
+    const [nameResult, probeResult] = await Promise.all([nameTask, probeTask]);
+    ({ preservedName, nameUnread, nameChanged, nameUnsent } = {
+      preservedName, nameUnread, nameChanged, nameUnsent, ...noteCurrentName(nameResult, cli),
+    });
+    const probe = probeResult.failed
+      ? { deployedText: null, deployedError: (probeResult.error && probeResult.error.message) || String(probeResult.error), cfg: null, configError: probeResult.error }
+      : probeResult.value;
+    // Recorded here, emitted below — never from inside the probe. emitResult calls process.exit.
+    if (probe.deployedError && !overwriteDeployed) {
+      return emit(false, {
+        ok: false,
+        code: 'deployed-unreadable',
+        pageId: flags['page-id'],
+        appId: flags['app-id'],
+        error: `cannot read the deployed page ${flags['page-id']} (${probe.deployedError}) — refusing to update, `
+          + 'because the page may have changed and this upload would replace it unseen. Pass --overwrite-deployed '
+          + 'to replace it deliberately, or retry when the page can be downloaded.',
+      });
+    }
+    if (preserveBindings) {
+      let why = null;
+      if (probe.configError || !probe.cfg) {
+        why = (probe.configError && probe.configError.message) || probe.deployedError || 'pac wrote no directory for this page';
+      } else if (probe.cfg.dataSources !== undefined && !Array.isArray(probe.cfg.dataSources)) {
+        why = `config.json dataSources is ${typeof probe.cfg.dataSources}, not an array`;
+      } else if (Array.isArray(probe.cfg.dataSources)) {
+        const bad = probe.cfg.dataSources.find((value) => typeof value !== 'string' || !value.trim());
+        if (bad !== undefined) why = 'config.json dataSources must be an array of non-empty table logical names';
+        else preservedDataSources = probe.cfg.dataSources;
+      } else {
+        // An ABSENT dataSources key means the page HAS no bindings.
+        preservedDataSources = [];
+      }
+      if (why) return emit(false, { error: bindingRefusal(flags['page-id'], why) });
+    }
+    if (preserveModel) {
+      if (probe.configError || !probe.cfg) {
+        modelUnread = (probe.configError && probe.configError.message) || probe.deployedError || 'pac wrote no directory for this page';
+      } else if (typeof probe.cfg.model === 'string' && probe.cfg.model.trim()) {
+        preservedModel = probe.cfg.model.trim();
+      } else if (probe.cfg.model !== undefined && probe.cfg.model !== null && probe.cfg.model !== '') {
+        modelUnread = `config.json model is ${typeof probe.cfg.model}, not a string`;
+      }
+    }
+    if (overwriteDeployed) {
+      overwroteDeployed = true;
     } else {
-      try {
-        const current = await cli.pageName(flags['page-id']);
-        if (typeof current === 'string' && current.trim()) {
-          const name = unescapePacName(current);
-          const refusal = typeof cli.argumentRefusal === 'function' ? cli.argumentRefusal(name) : null;
-          if (refusal) {
-            nameUnsent = { current, refusal };
-          } else {
-            preservedName = name;
-            if (/(?:^|[^\\])"/.test(current)) nameChanged = current;
-          }
+      const marker = base.readMarker(flags['code-file']);
+      const cmp = base.compareWithMarker(marker, {
+        pageId: flags['page-id'],
+        appId: flags['app-id'],
+        deployedText: probe.deployedText,
+      });
+      if (cmp.marker !== 'present') {
+        const why = marker
+          ? `the base marker next to ${flags['code-file']} is for page ${marker.pageId} in app ${marker.appId}, not page ${flags['page-id']} in app ${flags['app-id']}`
+          : `no base marker for page ${flags['page-id']} in app ${flags['app-id']} next to ${flags['code-file']}`;
+        return emit(false, {
+          ok: false,
+          code: 'no-base',
+          pageId: flags['page-id'],
+          appId: flags['app-id'],
+          error: `${why} — refusing to update, because the deployed page may have changed since this file was downloaded or generated. `
+            + 'Record a base with genpage-base.js record, or pass --overwrite-deployed to replace the deployed page deliberately.',
+        });
+      }
+      if (cmp.deployed === 'changed') {
+        let localText = '';
+        try { localText = base.readPlainText(path.resolve(flags['code-file'])); } catch { /* summary against an unreadable local file */ }
+        const lines = base.lineDelta(localText, probe.deployedText);
+        let deployedCopy;
+        let copyError;
+        try {
+          const copyPath = base.deployedCopyPath(flags['code-file']);
+          writeFileSafe(copyPath, probe.deployedText, { encoding: 'utf8' });
+          deployedCopy = copyPath;
+        } catch (e) {
+          copyError = e.message;
         }
-      } catch (e) {
-        nameUnread = (e && e.message) || String(e);
+        return emit(false, {
+          ok: false,
+          code: 'deployed-changed',
+          pageId: flags['page-id'],
+          appId: flags['app-id'],
+          deployedCopy,
+          lines,
+          error: `the deployed page ${flags['page-id']} has changed since the base marker was recorded `
+            + `(${lines.added} lines added, ${lines.removed} removed versus ${flags['code-file']}) — refusing to update, `
+            + 'because this upload would discard those edits. '
+            + (deployedCopy ? `A copy of the deployed page is at ${deployedCopy}. ` : '')
+            + (copyError ? `The deployed copy could not be written (${copyError}). ` : '')
+            + 'Merge it, or pass --overwrite-deployed to replace the deployed page deliberately.',
+        });
       }
     }
   }
@@ -444,10 +620,14 @@ async function main(argv = process.argv.slice(2), deps = {}) {
       ...(nameChanged ? [`page ${flags['page-id']}'s name ${JSON.stringify(nameChanged)} has a double quote (") pac cannot store as it is, so the page now shows \\" there — pass --name-file with typographic quotes (“ ”) or an apostrophe to fix it`] : []),
       ...(nameUnsent ? [`page ${flags['page-id']}'s name ${JSON.stringify(nameUnsent.current)} could not be sent to keep it (${nameUnsent.refusal}), so pac may have renamed the page to its navigation title — give it a name without % or a double quote, or install pac as a .NET tool, which receives any name`] : []),
     ];
+    // After the upload, not before emit's caller returns. The post-upload probe is removed inside
+    // recordObservedBase, so this emit — which may process.exit — does not leak it.
+    if (pageId) await recordObservedBase({ cli, flags, pageId, base, warnings, mkdtempSync: deps.mkdtempSync, rmSync: deps.rmSync });
     return emit(true, {
       ok: true,
       pageId,
       appId: flags['app-id'],
+      ...(overwroteDeployed ? { overwroteDeployed: true } : {}),
       updated: !!flags['page-id'],
       ...(warnings.length ? { warnings } : {}),
     });

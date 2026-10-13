@@ -25,12 +25,15 @@ Choosing a control type, and writing properties and enum values that the compile
 
 ## Discover before you choose
 
-**⚠️ Required — not optional:** run `list_controls` before planning your layout. Controls
-you don't know exist can't influence your design, and the catalog includes high-level
-controls (`ModernTabList`, `ModernCard`, and others) that are easy to miss and expensive
-to reinvent with primitives.
+Run `list_controls` before planning the layout when a required control's discovery name
+is unknown or control selection is still open. Skip the inventory when the approved plan
+already names every required control and their discovery names are known. The catalog
+includes high-level controls (`ModernTabList`, `ModernCard`, and others) that are easy to
+miss and expensive to reinvent with primitives.
 
-The resulting list will also specify if any Code Components or Canvas Components are available as control instances in the app. The result identifies the `ComponentName` to pass to `describe_control`.
+When required, the list also specifies whether Code Components or Canvas Components are
+available as control instances in the app and identifies the `ComponentName` to pass to
+`describe_control`.
 
 Run `describe_control` on every type you plan to use.
 
@@ -65,32 +68,35 @@ cross-device apps MUST use AutoLayout. See `${PLUGIN_ROOT}/references/LayoutGuid
 end when building card UI: the container lays out perfectly but tapping it does nothing.
 
 - **Clickable cards:** use `ModernCard` instead — it has `OnSelect` and is designed for it.
-- **Clickable non-card areas:** overlay a transparent `Button` or `Rectangle` (both have
+- **Clickable non-card areas:** overlay a transparent `ModernButton` or `Rectangle` (both have
   `OnSelect`) at the same position and size. Set the `Appearance` property to transparent
   where available; otherwise `Fill: =RGBA(0,0,0,0)` and `BorderThickness: =0`.
 
 ⚠️ **`ModernCard` fills unset slots with placeholder content.** It is not an empty
-surface. A card that sets only `Title` renders a large stock photograph above it and the
+surface. A card that sets only `Title` renders a placeholder photograph above it and the
 literal words `Subtitle` and `Description` below it, and the photo consumes most of the
 card's height — so the value you did set ends up clipped. Nothing about this reaches
 `compile_canvas`.
 
-Set every slot the card displays, and blank the ones you do not want:
+Set every slot the card displays. Image-bearing cards use the exact stock-image URL or
+media asset assigned by the planner's `## Imagery` section:
 
 ```yaml
 - KpiOpenCard:
     Control: ModernCard
     Properties:
-      Image: =Blank()          # required — otherwise a stock photo appears
-      HeaderImage: =Blank()    # when supported — otherwise header artwork can remain
+      Image: ="https://assigned.example/image.jpg"
       Title: =CountRows(colTasks) & ""
       Subtitle: ="Open tasks"
       Description: ="Across all projects"
 ```
 
 Use only properties returned by `describe_control`; some card versions expose
-`HeaderImage`, `ImageAccessibleLabel` and `HeaderImageAccessibleLabel`. When present,
-blank both image slots for a text-only card and set their accessible labels explicitly.
+`HeaderImage`, `ImageAccessibleLabel` and `HeaderImageAccessibleLabel`. The planner must
+assign every image slot rendered by the selected card variant, and the builder must copy
+those assignments and accessible labels exactly. For an intentionally text-only KPI,
+plan a suitable AutoLayout surface instead of using `ModernCard` and suppressing its
+imagery.
 Do not compress Title, Subtitle and Description into a short fixed-height KPI card; let
 the card size naturally, reduce the displayed slots, or choose a height that fits them.
 
@@ -207,18 +213,19 @@ properties.
 
 ### Trap 2 — assuming text styling is spelled the same everywhere
 
-The modern React controls and the FluentV9 controls disagree about basic names. This is
-the most common single-property mistake:
+Property support differs across modern controls. This is the most common single-property
+mistake:
 
-| Intent | `ModernText`, `ModernButton`, `ModernDropdown`, `ModernTextInput`, `ModernNumberInput`, `PieChart` | `Badge` | `ModernCard` |
-|--------|---------------------------------------------------------------------------------------------------|---------|--------------|
-| Text color | `Color` | `FontColor` | `TitleColor` / `SubtitleColor` / `DescriptionColor` |
-| Font size | `Size` | `FontSize` | `TitleSize` / `SubtitleSize` / `DescriptionSize` |
+| Intent | `ModernText`, `ModernButton`, `ModernDropdown`, `ModernTextInput`, `ModernNumberInput`, `PieChart` | `ModernBadge` | `ModernCard` |
+|--------|---------------------------------------------------------------------------------------------------|---------------|--------------|
+| Text color | `Color` | `Color` | `TitleColor` / `SubtitleColor` / `DescriptionColor` |
+| Font size | `Size` | `Size` | `TitleSize` / `SubtitleSize` / `DescriptionSize` |
 | Displayed string | `Text` | `Content` | `Title` / `Subtitle` / `Description` |
-| Corner rounding | `RadiusTopLeft` … `RadiusBottomRight` | none | `BorderRadius` |
+| Corner rounding | `RadiusTopLeft` … `RadiusBottomRight` | `RadiusTopLeft` … `RadiusBottomRight` | `BorderRadius` |
 
-`Progress` is narrower still: no `Fill`, no `Color`, no `Font*`. It is styled through
-`BasePaletteColor` and its three `Progress.*` enums.
+`ModernProgressBar` is narrower still: no `Fill`, no `Color`, no `Font*`. It is styled
+through `BasePaletteColor`, `FillColor`, `TrackColor`, and its `ProgressColor`,
+`ProgressThickness`, and `ProgressShape` enums.
 
 `Gallery` has `Fill` but no text properties at all — style the labels inside it, not the
 container.
@@ -268,28 +275,28 @@ one, and it cannot be derived from the control name:
 | `ModernTextInput` | `Appearance` | `Appearance` |
 | `ModernNumberInput` | `Appearance` | `Appearance` |
 | `ModernButton` | `Appearance` | `ButtonAppearance` |
-| `Badge` | `Appearance` | `BadgeCanvas.Appearance` |
-| `Badge` | `Shape` | `BadgeCanvas.Shape` |
-| `Badge` | `ThemeColor` | `BadgeCanvas.ThemeColor` |
-| `Progress` | `Shape` | `Progress.Shape` |
-| `Progress` | `Thickness` | `Progress.Thickness` |
+| `ModernBadge` | `Appearance` | `BadgeAppearance` |
+| `ModernBadge` | `Shape` | `BadgeShape` |
+| `ModernBadge` | `ThemeColor` | `BadgeColor` |
+| `ModernProgressBar` | `ProgressColor` | `ProgressColor` |
+| `ModernProgressBar` | `Shape` | `ProgressShape` |
+| `ModernProgressBar` | `Thickness` | `ProgressThickness` |
 | `ModernNumberInput` | `Precision` | `DecimalPrecision` |
 
 Five controls, one property name, four different enum types. Guessed names like
-`BadgeAppearance`, `DropdownAppearance` or `ProgressBar.ProgressColor` all fail with
-`Name isn't recognized`.
+`DropdownAppearance` or `ProgressBar.ProgressColor` fail with `Name isn't recognized`.
 
 Wrap the enum **name** in `'` whenever it contains a dot, a space, or a special
 character. Then append `.Member`:
 
 ```yaml
-# Enum name contains a dot -> quote the name, not the member
+# Modern Badge enum names do not require quoting
 - StatusBadge:
-    Control: Badge
+    Control: ModernBadge
     Properties:
-      Appearance: ='BadgeCanvas.Appearance'.Tint
-      Shape: ='BadgeCanvas.Shape'.Rounded
-      ThemeColor: ='BadgeCanvas.ThemeColor'.Success
+      Appearance: =BadgeAppearance.Tint
+      Shape: =BadgeShape.Circular
+      ThemeColor: =BadgeColor.Success
 
 # Plain enum name -> no quoting needed
 - ProjectPicker:
@@ -400,8 +407,8 @@ appearance is derived from the current screen.
 
 ## Semantic display values
 
-Semantic controls need their visible value property. `Badge.AccessibleLabel` does not
-replace `Badge.Content`; omitting Content can render placeholder text such as `AB`.
+Semantic controls need their visible value property. `ModernBadge.AccessibleLabel` does not
+replace `ModernBadge.Content`; omitting Content can render placeholder text such as `AB`.
 
 ## Common property reference
 
@@ -414,10 +421,10 @@ replace `Badge.Content`; omitting Content can render placeholder text such as `A
 
 **Styling:**
 
-- `Fill` — background color (absent on `Badge` and `Progress`)
-- `Color` — text color on the modern React controls; `Badge` spells it `FontColor`
-- `BasePaletteColor` — theme color for `Badge`, `Progress`, and the modern inputs
-- `Size` — font size on the modern React controls; `Badge` spells it `FontSize`
+- `Fill` — background color (absent on `ModernProgressBar`)
+- `Color` — text color on modern controls
+- `BasePaletteColor` — theme color for `ModernBadge`, `ModernProgressBar`, and the modern inputs
+- `Size` — font size on modern controls
 - `FontWeight` — Bold, Semibold, Normal, Lighter
 
 **Behavior:**
@@ -446,8 +453,8 @@ replace `Badge.Content`; omitting Content can render placeholder text such as `A
   `describe_control`, copy its complete creation-keyword block to every instance of that
   type, and re-compile.
 - **A property works on one control but not a similar one:** property support is per
-  control type, and the modern React, FluentV9 and Classic families disagree. Check the
-  per-control table above rather than reasoning by analogy.
+  control type, and modern and Classic controls disagree. Check the per-control table
+  above rather than reasoning by analogy.
 - **`Name isn't recognized` on an enum:** the enum type name is wrong. Copy the
   `Enum name:` line from `describe_control` verbatim; quote it with `'` if it contains a
   dot. Deleting the qualifier is not a fix.
@@ -458,7 +465,7 @@ replace `Badge.Content`; omitting Content can render placeholder text such as `A
 - **A `ModernCard` renders a large stock photograph, or the words "Title" / "Subtitle" /
   "Description":** those slots were left unset. `ModernCard` fills unset slots with
   placeholder content rather than collapsing them. Set `Image`, `Title`, `Subtitle` and
-  `Description` for every slot the card shows, and set `Image: =Blank()` when the card is
-  meant to be text-only.
+  `Description` for every slot the card shows, using the exact image assignment from the
+  shared plan. If the intended surface is text-only, use the planned non-card surface.
 - **Button text is too small:** set `Size` on `ModernButton` — but confirm the font
   property exists on that control first.

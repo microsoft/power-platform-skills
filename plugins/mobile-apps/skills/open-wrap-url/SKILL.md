@@ -2,7 +2,7 @@
 name: open-wrap-url
 description: Use when the user wants to open the Power Apps Wrap page for an app ID in the active environment.
 user-invocable: true
-allowed-tools: Bash
+allowed-tools: Read, Bash
 model: haiku
 ---
 

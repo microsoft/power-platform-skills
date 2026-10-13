@@ -2,11 +2,7 @@
 
 This guide helps create distinctive, production-grade Canvas App screens that avoid generic "AI slop" aesthetics.
 
-**Who does what.** Discovery tools (`list_controls`, `describe_control`, the data and API
-tools) belong to the orchestrator and the `canvas-app-planner`. A `canvas-screen-builder`
-cannot call them and works from the control definitions recorded in its screen brief.
-Where this guide says "run list_controls", that instruction is addressed to the
-orchestrator and planner.
+**Who does what.** The coordinator, CREATE discovery specialist and EDIT planner discover resources within their assigned scope. CREATE and EDIT builders can describe selected controls directly, but cannot list resources or discover data/APIs. The first three CREATE stages do not read this implementation guide.
 
 ## Contents
 
@@ -32,37 +28,42 @@ Before generating YAML, understand the context and commit to a BOLD aesthetic di
 
 ## Know Your Control Palette Before Designing
 
-**Run list_controls before committing to any layout.** The available controls are not just technical building blocks — they are design options. Designing without knowing what exists means you'll build inferior versions of things that already exist as polished, semantic components.
+Run `list_controls` before committing to a layout when control selection is open or a
+required control's discovery name is unknown. Skip the inventory when the approved plan
+already names every required control and their discovery names are known. The available
+controls are design options, not just technical building blocks. Designing without
+knowing what exists can produce inferior versions of polished, semantic components.
 
 Key controls that directly expand your design vocabulary:
 
 | Control | What it enables |
 |---------|----------------|
-| `ModernCard` | Ready-made card with Title, Subtitle, Description hierarchy, built-in shadow, and `OnSelect` — use this as your card primitive, not `GroupContainer`. **Set `Image` (or `Image: =Blank()`) and every text slot you display: unset slots render a stock photo and the literal words "Subtitle"/"Description".** |
-| `Avatar` | User/entity representation with image, initials fallback, and size variants — no need to fake it with a circle and a label |
-| `Badge` | Status indicators, counts, and labels with semantic color variants — replaces ad-hoc colored rectangles with text |
-| `Progress` | Linear and circular progress display — replaces manual progress bar constructions |
+| `ModernCard` | Ready-made card with Title, Subtitle, Description hierarchy, built-in shadow, and `OnSelect` — use this as your image-bearing card primitive, not `GroupContainer`. **Discover imagery before specifying the card, assign its concrete stock-image URL or media asset in `## Imagery`, and set every rendered slot: unset slots render placeholders. Use a planned AutoLayout surface for intentionally text-only Cards.** |
+| `ModernAvatar` | User/entity representation with image, initials fallback, and size variants — no need to fake it with a circle and a label |
+| `ModernBadge` | Status indicators, counts, and labels with semantic color variants — replaces ad-hoc colored rectangles with text |
+| `ModernProgressBar` | Determinate and indeterminate linear progress display — replaces manual progress bar constructions |
 | `ModernTabList` | In-screen tab/panel navigation with selection state built in. Use ModernButtons for navigation between separate screens. |
 
 **The pattern to avoid:** Choosing an aesthetic direction, then reaching for `GroupContainer` + `Label` + `Rectangle` to assemble something that already exists. The controls above are not conveniences — they are fundamentally better starting points with richer built-in behavior and visual consistency.
 
 ## Know Your Data Sources and APIs Before Creating Collections
 
-**Run list_data_sources and list_apis before creating any local collections with `ClearCollect()` or `Collect()` calls.** The
-data sources and APIs you have access to are not just technical details — they are design constraints and opportunities.
-Designing without knowing what data you can pull in and how means you'll create static, fake content that doesn't reflect
-the real user experience.
+Run `list_data_sources` or `list_apis` before creating local collections with
+`ClearCollect()` or `Collect()` only when the approved plan may use those resource
+families. Available data sources and APIs are design constraints and opportunities.
+Designing without knowing what relevant data is available can produce static content
+that does not reflect the real user experience.
 
 ## Canvas App Aesthetics Guidelines
 
 ### Typography & Text Hierarchy
 
 - **Control Selection**: When there are multiple controls for the same purpose, favor the modern control whose interaction matches the data:
-	- Favor `ModernText` over `Label`, `ModernRadio` or a directly selectable modern dropdown for short static choices, `ModernCombobox` over `Classic/ComboBox` only for large searchable sets, `ModernRadio` over `Classic/Radio`, `Button` or `ModernButton` over `Classic/Button`, `ModernTabList` for in-screen tabs, `ModernButton` rows for cross-screen navigation, `ModernTextInput` over `Classic/TextInput`, and so on. Never choose a searchable control merely because it is modern when a required short choice should take one click or tap.
+	- Favor `ModernText` over `Label`, `ModernRadio` or a directly selectable modern dropdown for short static choices, `ModernCombobox` over `Classic/ComboBox` only for large searchable sets, `ModernRadio` over `Classic/Radio`, `ModernButton` over `Classic/Button`, `ModernTabList` for in-screen tabs, `ModernButton` rows for cross-screen navigation, `ModernTextInput` over `Classic/TextInput`, and so on. Never choose a searchable control merely because it is modern when a required short choice should take one click or tap.
 - **Font Weight**: Use `ModernText` for headlines with `FontWeight: =FontWeight.Bold` and a large font size. Use `ModernText` with `FontWeight: =FontWeight.Normal` for body content.
 - **Size Contrast**: Create dramatic hierarchy with size differences. Headers at 24-32, subheaders at 18-20, body at 14-16.
 - **Alignment as Statement**: Mix `Align.Left`, `Align.Center`, `Align.Right` intentionally. Centered text for impact, left-aligned for readability.
-- **Font Properties**: Leverage `Size`, `FontWeight`, `Align`, `VerticalAlign`, and `Color` to create visual interest. On the modern React controls the text color property is `Color` and the font size property is `Size` — `FontColor` and `FontSize` exist only on `Badge`. Confirm with `describe_control` rather than assuming.
+- **Font Properties**: Leverage `Size`, `FontWeight`, `Align`, `VerticalAlign`, and `Color` to create visual interest. Confirm exact property support with `describe_control` rather than assuming.
 
 ### Color & Visual Theme
 
@@ -122,11 +123,12 @@ Avoid these antipatterns:
 - ❌ Screens that are just vertical lists of identically-styled buttons
 
 **Lazy Control Choices:**
-- ❌ Using `Button` for everything when other controls are better
+- ❌ Using `ModernButton` for everything when other controls are better
 - ❌ Defaulting to `Classic` controls without considering alternatives
 - ❌ Not exploring specialized controls
 - ❌ Generic control names like `Button1`, `Label2`
-- ❌ Building `Avatar`, `Badge`, `Progress`, `ModernTabList`, or card layouts from primitives when the semantic controls exist — always run list_controls first
+- ❌ Building `ModernAvatar`, `ModernBadge`, `ModernProgressBar`, `ModernTabList`, or card layouts from
+  primitives without checking the control inventory when selection is open
 
 **Timid Typography:**
 - ❌ All text at size 12-14 with no hierarchy
@@ -164,7 +166,8 @@ Interpret creatively and make unexpected choices:
 
 ## Design Process Summary
 
-1. **Discover your palette** — Run list_controls before committing to any design direction
+1. **Discover your palette** — When control selection is open, run `list_controls` before
+   committing to a design direction
 2. **Choose an aesthetic direction** — Commit to a specific, bold tone (see Design Thinking Process above)
 3. **Plan visual hierarchy** — What are the primary, secondary, and tertiary elements? How do they relate?
 4. **Choose layout strategy** — ManualLayout for precision; AutoLayout for responsiveness

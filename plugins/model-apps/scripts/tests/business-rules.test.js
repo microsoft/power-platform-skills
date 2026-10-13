@@ -462,12 +462,10 @@ test('verify fails CLOSED when the workflow read itself errors', async () => {
   assert.match(c.detail, /could not be read/);
 });
 
-// --- rebuild repairs legacy duplicates (peer-review finding) ------------------------------------
+// --- rebuild keeps pre-existing same-name definitions -----------------------------------------
 //
-// Before the SDK fix, a build could leave two rows for one rule. The reuse branch queried `top: 1`
-// and returned immediately, so the de-duplication sweep — which lived only on the CREATE path —
-// never ran on a rebuild. Both rules kept firing forever, and because `top: 1` is unordered, the row
-// adopted as "the" rule could be the faulted orphan rather than the good one.
+// An ordered, complete read makes reuse deterministic and reports additional matches. A name
+// does not prove another definition was created by this run, so rebuild must not delete it.
 const { runSdkBuild: runBuild } = require('../lib/sdk-build.js');
 
 function ruleOnlySpec() {
@@ -622,7 +620,7 @@ test('REAL BUNDLE: the validator accepts EVERY shape this spec surface can autho
   assert.match(String(controlErr.message), /NO_ACTION/, 'and name the missing action step');
 });
 
-test('a rebuild REMOVES duplicates an earlier build left behind', async () => {
+test('a rebuild KEEPS and reports pre-existing same-name definitions', async () => {
   const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
   const { provision, calls } = provisionWithRules([
     { workflowid: 'keep-oldest', statecode: 1, createdon: '2026-01-01T00:00:00Z' },
@@ -634,20 +632,21 @@ test('a rebuild REMOVES duplicates an earlier build left behind', async () => {
     phases: ['business-rules'], warn: (m) => warnings.push(m),
   });
 
-  // The extra row is deactivated then deleted; the FIRST (oldest) row is kept.
   const deletes = calls.filter((c) => c[0] === 'deleteRecord').map((c) => c[2]);
-  assert.deepStrictEqual(deletes, ['dupe-1'], `expected only the duplicate to be deleted, got ${JSON.stringify(deletes)}`);
-  assert.ok(warnings.some((w) => /duplicate left by an earlier build/.test(w)), `expected a warning; got ${JSON.stringify(warnings)}`);
+  assert.deepStrictEqual(deletes, []);
+  assert.strictEqual(calls.filter((c) => c[0] === 'updateRecord').length, 0);
+  assert.ok(warnings.some((w) => /kept pre-existing same-name rule dupe-1/.test(w)), `expected a warning; got ${JSON.stringify(warnings)}`);
 });
 
-test('the reuse query is ORDERED and asks for more than one row', async () => {
+test('the reuse query is ORDERED and reads every matching definition', async () => {
   // `top: 1` unordered is what made the survivor arbitrary and hid the duplicates entirely.
   const { sdk } = require('./helpers/mock-sdk.js').makeSimpleMockSdk();
   const { provision, calls } = provisionWithRules([{ workflowid: 'only', statecode: 1, createdon: '2026-01-01T00:00:00Z' }]);
   await runBuild(ruleOnlySpec(), { sdk, provisionSdk: provision, apply: true, phases: ['business-rules'] });
   const q = calls.find((c) => c[0] === 'queryRecords');
   assert.ok(q, 'the reuse query must run');
-  assert.ok(q[2].top > 1, `the reuse query must be able to SEE duplicates; top was ${q[2].top}`);
+  assert.strictEqual(q[2].paginate, true);
+  assert.strictEqual(q[2].top, undefined, 'the matching set is not truncated');
   assert.match(String(q[2].orderBy), /createdon asc/, 'oldest-first makes the surviving row deterministic');
 });
 

@@ -364,8 +364,27 @@ export default GeneratedComponent;
   Do NOT invent a fake GUID. Do NOT use `recordId` for a custom identifier. Do NOT use a page's
   **display name** — only the key / file stem above. **Always wrap the placeholder in double
   quotes and place it as the `pageId` value** — the resolver only rewrites a `"PAGEREF_<token>"`
-  at a real `navigateTo` call site; a single-quoted, back-ticked, or concatenated form, or any
-  decoy string elsewhere, is rejected by the pre-deploy scan. Under `/app-builder` every
+  at a real `navigateTo` call site; a single-quoted, back-ticked, concatenated, or
+  expression-tailed (`"PAGEREF_x".slice(8)`) form, or any decoy string elsewhere, is
+  rejected by the pre-deploy scan. A plain cast right after the literal (`"PAGEREF_x" as const`, or
+  `as Name` / `satisfies Name` with `Name` a plain or dotted identifier) is accepted and kept as written; a generic, a union or
+  a string-literal type is not — write the literal alone unless a type needs the cast.
+  **Write the options object inline in the `navigateTo` call.** An object built in a variable and
+  passed by name (`const options = { pageType: "generative", pageId: "PAGEREF_x" }; navigateTo(options)`)
+  is not recognised, so the token in it halts the build as stray. **Write the plain form,
+  `navigateTo({ … })`** — a parenthesised callee, `(navigateTo)({ … })`, is read only at the start of a
+  statement or after `;` `{` `(` `[` `,` `:` a ternary `?`, an operator ending in `=`, `=>`, `&&`, `||` or `??`,
+  and any other spelling (`factory!(navigateTo)({ … })`) halts as stray. A `PAGEREF_` token may appear
+  nowhere but that double-quoted `pageId` literal — **not in a comment of any kind**: a `//` comment, a
+  block comment, a trailing comment (`navigateTo({ … }); // PAGEREF_x`) and a JSX `{/* PAGEREF_x */}` all halt
+  the build, so write a comment without the token. Keep the
+  code before a navigation call unambiguous: the checker has no parser, so where it cannot tell a division from
+  a regex, or a comparison from an element — a `/` or `<` right after a `}` (write `({ … }) / 2`, not
+  `{ … } / 2`), after a `)` whose `(` is far back, after a word that can be a keyword or a name (`of`, `type`,
+  `get`, `as` …), after a `>`, or on a later line than the operand before it (`type Value = number` then a
+  regex line); an identifier written with a `\u` escape — it does not trust a `PAGEREF_` token at or after
+  that spot, or a `navigateTo` call whose object or arguments reach it. Put the operand in parentheses, end the
+  statement with `;`, or write the navigation call above it. Under `/app-builder` every
   `PAGEREF_<key>` must have a matching `navigatesTo` entry in the spec (the build enforces exact
   parity); under `/genpage` every token must match a `File` in the plan's `## Pages` table.
 - **Every linked page must be sitemap-placed.** A page targeted by a `PAGEREF_<key>` nav

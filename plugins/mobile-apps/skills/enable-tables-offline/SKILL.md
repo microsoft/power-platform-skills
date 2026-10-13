@@ -19,6 +19,33 @@ Flip `IsAvailableOffline=true` AND `ChangeTrackingEnabled=true` on the `EntityMe
 
 Sequential (Dataverse metadata lock) and idempotent: re-running on an already-enabled table is a no-op.
 
+## Invocation context and root binding
+
+This internal helper is always a **child invocation**. Before any project read or
+command, execute [app-working-directory.md](${PLUGIN_ROOT}/shared/references/app-working-directory.md).
+Require the owner's absolute `working_dir`; `--working-dir`, when supplied, must
+identify that same native-canonical root. Missing, relative, or conflicting root
+context returns `NEEDS_CONTEXT` before project access; an inaccessible directory
+is `BLOCKED`. Never use the launch cwd or introduce another root resolver.
+
+Receive `MOBILE_APP_ORCHESTRATING=1`, `orchestrator: setup-offline-profile`,
+`working_dir`, `phase`, `approved_scope`, and supplied answers. Preserve the
+selected environment ID/URL/tenant and exact table/prerequisite/publication
+allowlist. The marker is not approval. Reuse only matching current offline
+approval; a missing or changed scope returns `NEEDS_CONTEXT` to the owner.
+For `--plan-only` or a planning-phase handoff, return the proposed prerequisite
+changes after permitted read-only inspection, before PUT, publication, or
+artifact writes. A gate response cannot lift proposal-only mode.
+
+Apply the canonical root contract to **every shell call and file tool**.
+Re-supply the absolute `PLUGIN_ROOT` and invocation context on each call; no
+prior `cd`, export, or shell variable persists. Missing values return
+`NEEDS_CONTEXT`; never execute an unresolved placeholder.
+All linked recovery commands, re-GET verification, and retries use the same
+root, environment, and explicit tenant. Read only absolute app-local paths,
+including `<working_dir>/power.config.json`, `<working_dir>/memory-bank.md`,
+and the manifest locations below.
+
 ## Workflow
 
 1. Verify project & auth → 2. Resolve table list → 3. Inspect current state → Gate → 4. PUT EntityMetadata per table → 5. Publish → 6. Verify → 7. Summary
@@ -28,23 +55,45 @@ Sequential (Dataverse metadata lock) and idempotent: re-running on an already-en
 ### Step 1 — Verify project & auth
 
 ```bash
-test -f power.config.json && test -f app.config.js
-node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$(node -e \"console.log(require('./power.config.json').environmentId)\")"
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+if [ ! -f power.config.json ] || [ ! -f app.config.js ]; then
+  echo "BLOCKED: working_dir is not an initialized app" >&2
+  exit 1
+fi
 ```
 
-Capture the **Environment URL** from the resolver for `<envUrl>`. STOP if not authenticated.
+Require the app's `environmentId` to match the owner's selected environment
+before any discovery or mutation. Use this non-persisting lookup from the same root:
+
+```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+environment_id=$(node -p "require('./power.config.json').environmentId || ''") || {
+  echo "BLOCKED: unreadable power.config.json" >&2; exit 1;
+}
+if [ -z "$environment_id" ] || [ "$environment_id" != "<selected-environment-id>" ]; then
+  echo "NEEDS_CONTEXT: selected environment does not match working_dir" >&2
+  exit 1
+fi
+node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$environment_id" --no-cache --require-tenant
+```
+
+Capture the **Environment URL** and **Tenant ID** from the resolver for
+`<envUrl>` and `<tenantId>`. Pass this tenant explicitly on every helper call
+and retry below; missing or conflicting tenant context is `NEEDS_CONTEXT`.
+Require the ID, URL, and tenant to match the owner; never switch accounts or
+environments to recover. STOP if not authenticated.
 
 ### Step 2 — Resolve table list
 
-Tables to enable come from one of (in order):
+Use only the exact table allowlist in the owner's `approved_scope`. The comma-
+or space-separated table list in `$ARGUMENTS` must match it; `--working-dir` is
+root context, not a table name. Missing or conflicting table selection returns
+`NEEDS_CONTEXT`; an explicitly empty approved list is a verified no-op.
 
-| Source | Used when |
-|---|---|
-| `$ARGUMENTS` | User passed a comma- or space-separated list of logical names (e.g. `/enable-tables-offline cr123_note,cr123_visit`) |
-| `.datamodel-manifest.json` | Default — read `tables[].logicalName` for every Dataverse-backed table in the app |
-| `AskUserQuestion` | Only if both above are absent. Show the table list from `src/generated/services/*Service.ts` filenames and let the user pick. |
-
-If the resolved list is empty, STOP with: "No Dataverse tables found in this project. Run `/add-dataverse` first."
+Inspect `<working_dir>/.datamodel-manifest.json`, or
+`<working_dir>/docs/plan-artifacts/.datamodel-manifest.json` for newer apps, only
+to verify those selected tables. The manifest is not permission to enable every
+row. Do not discover another app's manifest or expand the allowlist silently.
 
 ### Step 3 — Inspect current state
 
@@ -54,8 +103,10 @@ If the resolved list is empty, STOP with: "No Dataverse tables found in this pro
 For each table, in sequence:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> GET \
-  "EntityDefinitions(LogicalName='<table>')?\$select=LogicalName,DisplayName,IsAvailableOffline,ChangeTrackingEnabled,IsCustomizable"
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<envUrl>" GET \
+  "EntityDefinitions(LogicalName='<table>')?\$select=LogicalName,DisplayName,IsAvailableOffline,ChangeTrackingEnabled,IsCustomizable" \
+  --tenant-id "<tenantId>"
 ```
 
 Build a status table:
@@ -72,7 +123,11 @@ Build a status table:
 
 ### Gate — Approval before mutation
 
-Enter plan mode with the status table from Step 3 plus the planned operation per table. Wait for user `ExitPlanMode` before proceeding.
+Compare the status table from Step 3 with the owner's approved prerequisite and
+publication delta. Matching current Gate 1 approval is reused without a duplicate
+prompt. Otherwise return the status table and `NEEDS_CONTEXT: offline prerequisite
+approval` to `/setup-offline-profile`, which owns the approval gate. Do not widen
+scope or override proposal-only mode.
 
 Plan body:
 
@@ -82,12 +137,12 @@ The following EntityMetadata changes will be PUT in sequence:
 cr123_note   → set IsAvailableOffline=true, ChangeTrackingEnabled=true
 cr123_visit  → set ChangeTrackingEnabled=true (IsAvailableOffline already true)
 
-After all updates, a single PublishAllXml request will commit the changes.
+After all updates, targeted PublishXml will publish only the changed tables.
 
 Tables already in the desired state are skipped (no API call).
 ```
 
-If the user rejects, STOP. If they approve, proceed.
+If the user rejects, STOP. Proceed only with the exact approved delta.
 
 ### Step 4 — PUT EntityMetadata per table
 
@@ -99,10 +154,12 @@ If the user rejects, STOP. If they approve, proceed.
 For each table needing change (skip ones already in target state):
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/update-entity-offline-flags.js" <envUrl> \
-  --table <table> \
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+node "${PLUGIN_ROOT}/scripts/update-entity-offline-flags.js" "<envUrl>" \
+  --table "<table>" \
   --offline true \
-  --tracking true
+  --tracking true \
+  --tenant-id "<tenantId>"
 ```
 
 The helper:
@@ -127,10 +184,11 @@ Print `✓ <table>` after each 204; print `↷ <table> (already enabled)` for no
 **Use targeted `PublishXml`** scoped to the entities that were actually modified — avoids the org-wide rate-limit storms (`0x80071151` "concurrent PublishAll already running") observed on shared envs. Empirical 2026-05-25.
 
 ```bash
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
 # Build the <entities> XML body from the list of tables modified in Step 4
-node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
-  "PublishXml" --body '{
-    "ParameterXml": "<importexportxml><entities><entity>cr720_fcbflag</entity><entity>cr720_rolloutevent</entity></entities></importexportxml>"
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<envUrl>" POST \
+  "PublishXml" --tenant-id "<tenantId>" --body '{
+    "ParameterXml": "<importexportxml><entities><entity><table></entity></entities></importexportxml>"
   }'
 ```
 
@@ -140,11 +198,14 @@ Substitute `<entity>...</entity>` lines for every table the helper PUT'd flags o
 
 **On 429 / 0x80071151 ("concurrent publish already running")**: back off automatically via `dataverse-request.js`'s retry logic. If still failing after 4 retries, return `DONE_WITH_CONCERNS: publish bottlenecked on shared env; metadata changes are committed but maker portal will not refresh until next publish`. The downstream skill (`/setup-offline-profile`) can proceed — metadata-level writes are durable.
 
-**Fallback to `PublishAllXml`** (only when the targeted call returns a non-rate-limit error like `0x80048d19` malformed body):
+**Fallback to `PublishAllXml`** only when the targeted call returns a non-rate-limit
+error such as `0x80048d19` and the owner separately approves the broader publication.
+Table-only approval does not authorize publishing unrelated changes.
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/dataverse-request.js" <envUrl> POST \
-  "PublishAllXml" --body '{}'
+cd -- '<working_dir>' || { echo "BLOCKED: cannot enter working_dir" >&2; exit 1; }
+node "${PLUGIN_ROOT}/scripts/dataverse-request.js" "<envUrl>" POST \
+  "PublishAllXml" --tenant-id "<tenantId>" --body '{}'
 ```
 
 Same timeout-but-success handling as `/setup-offline-profile` Step 8: if the client times out but a follow-up GET on the table's EntityMetadata shows the flags are set, treat as success.
@@ -167,14 +228,16 @@ Print:
 
 Skipped (already enabled): contact
 
-Next: run /setup-offline-profile to design the offline profile that uses these tables.
+Next: return to the current /setup-offline-profile workflow.
 ```
 
-Update `memory-bank.md` under `## Offline profile` with the timestamp and table list.
+Update `<working_dir>/memory-bank.md` under `## Offline profile` with the timestamp
+and verified table list. Return the results to the current owner; do not launch
+another offline setup workflow.
 
 ## Status code
 
-Final line of the skill's response is one of:
+The literal first line of the skill's response is one of:
 - `DONE` — all requested tables now have both flags set
 - `DONE_WITH_CONCERNS: <list>` — some tables skipped (uncustomizable, publish warning, etc.)
 - `NEEDS_CONTEXT: <missing>` — couldn't resolve table list and user didn't provide

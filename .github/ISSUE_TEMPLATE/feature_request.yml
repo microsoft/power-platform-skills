@@ -16,6 +16,7 @@ body:
         - pcf
         - power-automate
         - power-pages
+        - process-intelligence
     validations:
       required: true
 

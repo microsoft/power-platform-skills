@@ -7,7 +7,8 @@ const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const { teardownModelApp, cliEmit } = require(path.join(__dirname, '..', 'teardown-model-app.js'));
+const { teardownModelApp: engineTeardownModelApp, cliEmit } = require(path.join(__dirname, '..', 'teardown-model-app.js'));
+const teardownModelApp = (spec, opts, deps) => engineTeardownModelApp(spec, { env: 'https://contoso.crm.dynamics.com', ...opts }, deps);
 const { validateFlagsFromParsed } = require('./helpers/fake-auth.js');
 
 const desk = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'samples', 'app-spec.support-desk.json'), 'utf8'));
@@ -80,13 +81,16 @@ test('rejects an invalid spec before any teardown', async () => {
   assert.strictEqual(sdk.calls.length, 0, 'no SDK calls on a bad spec');
 });
 
-test('dry-run returns the plan and never touches the SDK', async () => {
-  const throwing = { queryRecords: () => { throw new Error('dry-run must not call the SDK'); } };
-  const r = await teardownModelApp(desk, { apply: false }, { sdk: throwing });
+test('dry-run returns the plan with read-only page discovery', async () => {
+  const reads = [];
+  const sdk = { queryRecords: async (entity) => { reads.push(entity); return []; } };
+  const r = await teardownModelApp(desk, { apply: false }, { sdk });
+  assert.strictEqual(r.ok, true);
   assert.strictEqual(r.dryRun, true);
   assert.ok(r.plan.some((p) => /app module/.test(p)));
   assert.ok(r.plan.some((p) => /^table /.test(p)));
   assert.ok(r.plan.some((p) => /^solution /.test(p)));
+  assert.deepStrictEqual(reads, ['webresource']);
 });
 
 test('apply without --allow-destructive halts before any delete (fail-closed)', async () => {
@@ -307,6 +311,9 @@ function loadTeardownCli({
             : { ok: true, target: dir };
         },
       };
+    }
+    if (id === './lib/page-ownership-records.js') {
+      return { checkPageOwnershipClearable: () => ({ ok: true }) };
     }
     if (id === './lib/sdk-http-client.js') {
       return { createAzHttpClient: (env) => ({ env }) };

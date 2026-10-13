@@ -95,6 +95,12 @@ apart deliberately.
 
 ### Forms, views & charts — ✅ verified live
 - Adaptive main forms (auto + explicit tabs/sections), related-record sub-grids (1:N **and** N:N), Notes/timeline section.
+  Explicit edits order tabs and sections, **not existing fields**. New listed fields and relative
+  `fieldOptions[x].after` placement are occupancy-safe; a full row may split, and an unsafe move is
+  skipped with a warning. Stored overflow repair, idempotent rebuilds and middle insertion are
+  **live-verified**. Atomic failure/retry and dependency-ordered anchor chains are covered by
+  offline SDK workspace tests. Verify rejects duplicate cell/control IDs across each form. See the
+  [form-layout contract](../references/app-spec-schema.md) for placement and verification limits.
 - Quick-create + quick-view forms (`forms[].formType`); quick-view **placement** on a host form via a lookup (`forms[].quickViews[]`).
 - **Per-form security roles** (`forms[].securityRoles`) — offer a form to named `personas[]`, or to
   `everyone`, with optional `fallbackForm` and `order`. The roles are **not** a relationship
@@ -140,6 +146,16 @@ apart deliberately.
 
 ### App shell & navigation — ✅ verified live
 - App module + sitemap; **multi-area sitemaps** — every `appShell.areas[]` maps to its own `<Area>` (icon + groups + subareas; order follows array order). The app is **self-contained for export/import**: its **sitemap** is added to the solution (componenttype 62), and its **tile icon** is an in-solution web resource — `app.icon` (a declared image web resource) or a generated default SVG — never an arbitrary external/managed icon.
+- **App membership (offline-tested; reference transport measured):** `app.tables` preserves hidden
+  table components independently of navigation; `app.mainForms` selects active Main forms by name.
+  Create is exact for Main membership; updates stop adding excluded forms but never remove existing
+  members. Build and download use the current layer; verify checks the published layer.
+  Download carries both fields with a `2.13.0` capability floor, without adopting schema for
+  hidden stock/unclassified type-1 tables even when an asset references them. Mixed SDK/current
+  navigation and unresolved immutable identity are refused rather than emitted as a rebuildable spec. See
+  [the App Spec contract](../references/app-spec-schema.md) for
+  name rules, runtime-lag limits and loss notes; the SDK serialization is covered by
+  `scripts/tests/app-main-forms-real-bundle.test.js`.
 - Generative pages (**genpage-first**) for overview / dashboard surfaces — uploaded via `pac model genpage upload`; the SDK finalizes the sitemap with `GenPage` subareas.
 - Dashboards (chart / list / iframe / webresource tiles) with **sitemap placement** (auto-pinned as an app component). Tiles render in a **multi-column grid** (2-wide) rather than one stacked full-width column.
 - **Rebuilding an existing app keeps its navigation** (AB#6726727). The build used to hand the SDK a sitemap recomputed from the spec with no trace of the live nodes, so every entry was re-created from scratch — new ids and the designer's defaults for a *new* entry — and a designer-made dashboard entry lost its launcher `Url` and with it the dashboard icon. Each entry the spec keeps is now written onto the live entry it corresponds to (`scripts/lib/sitemap-merge.js`), so everything the spec cannot describe survives, and every dashboard entry carries `Url="/workplace/home_dashboards.aspx"`, as the designer writes it. A title or icon changed in the designer since the spec's baseline (the last apply or download for that environment) is kept and reported; with no baseline the build reports each change it makes to an existing entry. A downloaded dashboard is bound by the id the download recorded, so one renamed in the designer is not recreated under its old name.

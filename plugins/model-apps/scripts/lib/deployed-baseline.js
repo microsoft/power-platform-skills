@@ -26,6 +26,7 @@ const path = require('node:path');
 const { annotateContentHashes } = require('./content-hash.js');
 const { migrateAppSpec } = require('./app-spec.js');
 const { writeFileAtomic } = require('./apply-snapshot-store.js');
+const { resolveAppSource } = require('./app-source-path.js');
 
 const FILE = 'last-applied.json';
 // Stored beside the spec's own top-level keys. phase-diff.js compares only its per-phase slices, so
@@ -50,10 +51,7 @@ function confinedReader(appDir) {
   const root = path.resolve(appDir || '.');
   return (relPath) => {
     try {
-      const abs = path.resolve(root, relPath);
-      const rel = path.relative(root, abs);
-      if (rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) return null;
-      return fs.readFileSync(abs);
+      return fs.readFileSync(resolveAppSource(root, relPath));
     } catch {
       return null;
     }

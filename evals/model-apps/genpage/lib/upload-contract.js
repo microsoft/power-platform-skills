@@ -8,6 +8,56 @@ const { artifactText, artifactJson, commandInfo, isGuid, pathKey } = require('./
 const sameJson = (left, right) => isDeepStrictEqual(JSON.parse(JSON.stringify(left)), JSON.parse(JSON.stringify(right)));
 const switchOn = (value) => value === true || value === 'true';
 
+// #673. Before an update, genpage-upload.js compares the deployed page with the base marker beside
+// the code file and refuses with one of these codes. A refusal is a stop: it must come before pac
+// writes anything. `--overwrite-deployed` skips the comparison, and the skill may pass it only
+// after the user chose this answer verbatim. SKILL.md Phase 6, edit-flow.md Edit Phase 6 and
+// verify-flow.md 7.5 record that answer as its own line, before the upload command:
+//   Choice: Overwrite the deployed changes
+//   Choice: Stop so I can merge
+// A Choice line sets the pending answer. Each genpage-upload.js line consumes it and leaves
+// none, so one approval cannot cover a later upload — including a second copy of the same
+// command. indexOf would bind every later copy to the first occurrence. A mention of the words
+// in an options list, a stop, or a choice logged after the command is not consent.
+const DIVERGENCE_CODES = new Set(['no-base', 'deployed-changed', 'deployed-unreadable']);
+const OVERWRITE_CHOICE_LINE = 'Choice: Overwrite the deployed changes';
+
+function uploadChoiceLines(workflowLog) {
+  const entries = [];
+  let pending = null;
+  for (const line of String(workflowLog || '').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('Choice:')) {
+      pending = trimmed;
+      continue;
+    }
+    if (/\bgenpage-upload\.js\b/.test(line)) {
+      entries.push({ line, choice: pending, used: false });
+      pending = null;
+    }
+  }
+  return entries;
+}
+
+function consumedChoice(entries, command) {
+  if (typeof command !== 'string' || !command) return null;
+  const match = entries.find((entry) => !entry.used && lineCarriesCommand(entry.line, command));
+  if (!match) return null;
+  match.used = true;
+  return match.choice;
+}
+
+// The logged line must carry this exact command, not a longer one that merely starts with it: an
+// upload with `--overwrite-deployed=false` is a different command from a later bare
+// `--overwrite-deployed`, and must not lend that later upload its consent entry. Only a closing
+// code span or whitespace may follow the command on its line.
+function lineCarriesCommand(line, command) {
+  for (let at = line.indexOf(command); at >= 0; at = line.indexOf(command, at + 1)) {
+    if (/^[`\s]*$/.test(line.slice(at + command.length))) return true;
+  }
+  return false;
+}
+
 function bindingSet(value, idKey) {
   if (!Array.isArray(value)) throw new Error(`${idKey} bindings must be an array`);
   const names = value.map((entry) => entry?.[idKey]);
@@ -45,6 +95,7 @@ function uploadTransportProblems(fixture) {
   if (!currentContract(fixture)) return [];
   const problems = unassociatedCallProblems(fixture);
   const calls = workflowCalls(fixture).filter((entry) => isUpload(entry.command));
+  const choiceLines = uploadChoiceLines(fixture.workflowLog);
   if (!calls.length) problems.push('no upload invocation recorded');
   for (const call of calls) {
     const { flags, problems: flagProblems } = commandInfo(call);
@@ -65,6 +116,17 @@ function uploadTransportProblems(fixture) {
     if (!flags['page-id'] && !switchOn(flags['add-to-sitemap'])) problems.push('create must include --add-to-sitemap');
     if (result?.ok && (!isGuid(result.pageId) || result.appId !== flags['app-id'] || (flags['page-id'] && result.pageId !== flags['page-id']))) {
       problems.push('upload result does not preserve the requested app/page identity');
+    }
+    // Every upload consumes its own log entry, overwriting or not, so an entry an earlier upload
+    // used can never be reached by a later one.
+    const consumed = consumedChoice(choiceLines, call.command);
+    if (switchOn(flags['overwrite-deployed']) && consumed !== OVERWRITE_CHOICE_LINE) {
+      problems.push('upload passes --overwrite-deployed without the explicit "Overwrite the deployed changes" choice in the workflow log');
+    }
+    // A divergence code is a refusal, whatever else the result claims. ok:true, a PAC write, or
+    // forwarded args on that code would grade a write that the code says did not happen.
+    if (result && DIVERGENCE_CODES.has(result.code) && (result.ok !== false || call.pacWrites !== 0 || call.forwarded !== undefined)) {
+      problems.push(`a ${result.code} refusal must stop the update before PAC writes`);
     }
     for (const [flag, idKey] of [['connectors', 'logicalName'], ['actions', 'name']]) {
       if (flags[flag]) {
@@ -109,6 +171,15 @@ function uploadProblems(fixture) {
     if (flags['name-file']) suppliedName = artifactText(fixture, flags['name-file']).replace(/^\uFEFF/, '').replace(/(?:\r?\n)+$/, '');
     if (explicitName !== undefined && (suppliedName !== explicitName || typeof explicitName !== 'string')) problems.push(`${row.event}: name-file does not preserve the approved name`);
     if (update && explicitName === undefined && flags['name-file']) problems.push(`${row.event}: unrelated edit supplied an unapproved rename`);
+    if (row.outcome === 'refused' && DIVERGENCE_CODES.has(result?.code)) {
+      // Whether pac wrote is graded per call in uploadTransportProblems; a row adds what only the
+      // approved operation knows: the comparison exists only for an update.
+      if (!update) problems.push(`${row.event}: a ${result.code} refusal can only answer an update`);
+      if (result.code === 'deployed-changed' && !(Number.isInteger(result.lines?.added) && Number.isInteger(result.lines?.removed))) {
+        problems.push(`${row.event}: a deployed-changed refusal lacks its added/removed line summary`);
+      }
+      continue;
+    }
     const shim = /\.cmd$/i.test(call.pacExecutable || '');
     const refusedName = suppliedName?.includes('"') || (shim && suppliedName?.includes('%'));
     if (row.outcome === 'refused') {

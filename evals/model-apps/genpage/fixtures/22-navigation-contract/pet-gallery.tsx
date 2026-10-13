@@ -2,7 +2,8 @@ import { makeStyles, tokens } from '@fluentui/react-components';
 type Props = { pageInput?: Record<string, unknown> };
 const rows = [{ name: 'Milo' }, { name: 'Luna' }];
 const useStyles = makeStyles({ root: { padding: tokens.spacingHorizontalM } });
-const help = 'PAGEREF_pet stays unchanged because it is display data.';
+// Xrm.Navigation.navigateTo({pageType:"generative",pageId:"help-text"}); stays unchanged: a comment is not a navigation target.
+const help = 'Pet names are display data.';
 const GeneratedComponent = (props: Props) => {
   const { pageInput } = props;
   void pageInput;

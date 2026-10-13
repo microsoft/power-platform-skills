@@ -14,6 +14,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const CLI = path.join(__dirname, '..', 'promote-intent-pages.js');
+const { OBJECT_DIVISION_PAGE, MISREAD_PAGES, HIDDEN_CALL_PAGE, PREFIX_INCREMENT_PAGE, TEMPLATE_LINE_PAGE, JSX_TEXT_PAGE, ELEMENT_AFTER_OPERATOR_PAGES, ELEMENT_LOOKALIKE_PAGES, ELEMENT_PAGE_TOKEN_LINE, FUNCTION_TYPE_PAGES } = require('./helpers/misread-page.js');
 
 const GOOD = 'export default function P() { return <div>ok</div>; }\n';
 
@@ -26,7 +27,7 @@ function makeWorkspace(spec, files) {
 
 function run(dir) {
   try {
-    const stdout = execFileSync(process.execPath, [CLI, '--spec', '@' + path.join(dir, 'app-spec.json'), '--working-dir', dir], { encoding: 'utf8' });
+    const stdout = execFileSync(process.execPath, [CLI, '--spec', '@' + path.join(dir, 'app-spec.json'), '--working-dir', dir], { encoding: 'utf8', env: { ...process.env, POWER_PLATFORM_SKILLS_TELEMETRY_MODEL_APPS_OPTOUT: '1' } });
     return { code: 0, stdout };
   } catch (e) {
     return { code: e.status, stdout: String(e.stdout || ''), stderr: String(e.stderr || '') };
@@ -150,6 +151,190 @@ test('holds cross-page navigation to the spec before promoting', () => {
   r = run(dir);
   assert.equal(r.code, 3);
   assert.match(r.stderr, /malformed nav pageref/);
+});
+
+// A token the build would not resolve — in a string, behind an expression tail, in a call spelled a way the resolver does not
+// read, in a comment — would deploy as literal text. It aborts promotion here, naming where it is; a page whose only token is a
+// recognised spelling still promotes, and so does one whose comments say what a call looks like with no token in them.
+test('refuses a page holding a PAGEREF_ token no navigation rewrite resolves, and names where', () => {
+  const spec = twoPageSpec();
+  spec.pages[0].navigatesTo = [{ targetKey: 'detail' }];
+  const page = (...lines) => `export default function P(){\n${lines.map((l) => `  ${l}`).join('\n')}\n  return <div/>;\n}\n`;
+  const real = `navigateTo({ pageType: 'generative', pageId: "PAGEREF_detail" });`;
+  for (const [what, code, expected] of [
+    ['a string', page('const route = "PAGEREF_detail";', real), /PAGEREF_ token\(s\) no navigation rewrite will resolve: PAGEREF_detail \(line 2, column 18\)/],
+    ['an expression tail', page(`navigateTo({ pageType: 'generative', pageId: "PAGEREF_detail".slice(8) });`, real), /malformed nav pageref\(s\): PAGEREF_detail/],
+    ['a call through a cast', page(real, `(navigateTo as Navigate)({ pageType: 'generative', pageId: "PAGEREF_other" });`), /PAGEREF_other \(line 3, column /],
+    ['a pageType that is not a literal', page(real, `navigateTo({ pageType: kind, pageId: "PAGEREF_other" });`), /PAGEREF_other \(line 3, column /],
+    ['a member of a cast literal', page(`navigateTo({ pageType: 'generative', pageId: ("PAGEREF_detail" as const).slice(1) });`, real), /malformed nav pageref\(s\): PAGEREF_detail/],
+    ['a cast outside the small grammar', page(`navigateTo({ pageType: 'generative', pageId: "PAGEREF_detail" as Readonly<string> });`, real), /malformed nav pageref\(s\): PAGEREF_detail/],
+    ['a token in a type position, which the compiler erases but the check reads', page('const key = "detail" as "PAGEREF_viaType";', real), /PAGEREF_ token\(s\) no navigation rewrite will resolve: PAGEREF_viaType \(line 2, column \d+\)/],
+    ['a callee that is the argument of another call', page(real, `factory(navigateTo)({ pageType: 'generative', pageId: "PAGEREF_other" });`), /PAGEREF_other \(line 3, column /],
+    ['a callee after a non-null assertion', page(real, `factory!(navigateTo)({ pageType: 'generative', pageId: "PAGEREF_other" });`), /PAGEREF_other \(line 3, column /],
+    ['a callee after a generic instantiation', page(real, `factory<unknown>(navigateTo)({ pageType: 'generative', pageId: "PAGEREF_other" });`), /PAGEREF_other \(line 3, column /],
+    ['a callee after a tagged template', page(real, 'tag`x`(navigateTo)({ pageType: \'generative\', pageId: "PAGEREF_other" });'), /PAGEREF_other \(line 3, column /],
+    ['a callee after a function expression', page(real, `const g = function () { return f; }(navigateTo)({ pageType: 'generative', pageId: "PAGEREF_other" });`), /PAGEREF_other \(line 3, column /],
+    ['a token in a trailing comment, beside the real call', page(`${real} // PAGEREF_detail`), /PAGEREF_ token\(s\) no navigation rewrite will resolve: PAGEREF_detail \(line 2, column \d+\)/],
+    ['a token in a block comment after code', page(real, 'const label = 1; /* PAGEREF_detail */'), /PAGEREF_detail \(line 3, column \d+\)/],
+    ['a token in a block comment on its own line', page('/* PAGEREF_detail is resolved at deploy */', real), /PAGEREF_detail \(line 2, column \d+\)/],
+    ['a token in a doc block', page('/**\n   * PAGEREF_detail is resolved at deploy\n   */', real), /PAGEREF_detail \(line 3, column \d+\)/],
+    ['a token in a // comment on its own line', page('// PAGEREF_detail is resolved at deploy', real), /PAGEREF_ token\(s\) no navigation rewrite will resolve: PAGEREF_detail \(line 2, column 6\)/],
+    ['a token in a // comment on its own line, after code', page(real, '// PAGEREF_detail is resolved at deploy'), /PAGEREF_detail \(line 3, column 6\)/],
+    ['a call written out in a comment', page('// navigateTo({ pageType: "generative", pageId: "PAGEREF_other" });', real), /PAGEREF_other \(line 2, column /],
+    ['a template line that starts with // holding a token', page('const help = `\n// PAGEREF_viaTemplate\n`;', real), /PAGEREF_viaTemplate \(line 3, column 4\)/],
+    ['an options object built in a variable', page(real, `const options = { pageType: 'generative', pageId: "PAGEREF_other" };`, 'navigateTo(options);'), /PAGEREF_other \(line 3, column /],
+  ]) {
+    const dir = makeWorkspace(spec, { 'overview.tsx': code, 'detail.tsx': GOOD });
+    const r = run(dir);
+    assert.equal(r.code, 3, what);
+    assert.match(r.stderr, expected, what);
+    assert.match(r.stderr, /allowed only as the double-quoted pageId literal of a pageType:"generative" navigateTo call[\s\S]*and nowhere else — not in a comment/, `${what}: the report states the rule`);
+    assert.deepEqual(readSpec(dir).pages.map((p) => p.source && p.source.kind), spec.pages.map((p) => p.source && p.source.kind), `${what}: the spec is untouched`);
+  }
+  for (const [what, code] of [
+    ['a parenthesised callee', page(`(navigateTo)({ pageType: 'generative', pageId: "PAGEREF_detail" });`)],
+    ['a computed optional member', page(`Xrm.Navigation?.["navigateTo"]?.({ pageType: 'generative', pageId: "PAGEREF_detail" });`)],
+    ['type-only casts on the pageType and the pageId', page(`navigateTo({ pageType: 'generative' as const, pageId: "PAGEREF_detail" as const });`)],
+    ['a comment that says what a call looks like, with no token', page('// navigateTo({ pageType: "generative", pageId: "help-text" });', real)],
+    ['a comment about the link, with no token', page(real, '// The page key is replaced at deploy.')],
+  ]) {
+    const dir = makeWorkspace(spec, { 'overview.tsx': code, 'detail.tsx': GOOD });
+    const r = run(dir);
+    assert.equal(r.code, 0, `${what}: ${r.stderr}`);
+  }
+});
+
+// A page whose `/` after an object literal hides a call: JavaScript makes both navigations, but the lexer reads the `/` after the object literal on line 4 as a regex
+// and the `/*` in `/\/*$/` as a comment over the second call. Promotion used to pass it, and the build then shipped the second
+// token unresolved. The token is refused here — where the page can be regenerated — naming it and the `/`.
+test('refuses the page whose "/" after an object literal hides a navigation call, naming the call and the "/"', () => {
+  const spec = twoPageSpec();
+  spec.pages[0].navigatesTo = [{ targetKey: 'detail' }];
+  const dir = makeWorkspace(spec, { 'overview.tsx': OBJECT_DIVISION_PAGE, 'detail.tsx': GOOD });
+  const r = run(dir);
+  assert.equal(r.code, 3);
+  assert.match(r.stderr, /PAGEREF_detail \(line 5, column \d+, after the "brace" ambiguity at line 4, column \d+\)/);
+  assert.match(r.stderr, /may be a division or comparison after an object literal, or a regex or JSX element after a block[\s\S]*parentheses/);
+  assert.deepEqual(readSpec(dir).pages.map((p) => p.source && p.source.kind), spec.pages.map((p) => p.source && p.source.kind), 'the spec is untouched');
+  // The same page with the object literal in parentheses is read right, and promotes.
+  const fixed = OBJECT_DIVISION_PAGE.replace('{valueOf(){return 12;}, ...extras}/2', '({valueOf(){return 12;}, ...extras})/2');
+  assert.notEqual(fixed, OBJECT_DIVISION_PAGE);
+  const ok = run(makeWorkspace(spec, { 'overview.tsx': fixed, 'detail.tsx': GOOD }));
+  assert.equal(ok.code, 0, ok.stderr);
+});
+
+// Every misread page (tests/helpers/misread-page.js) is refused at its first guess, naming each token after it
+// and the kind and position of the guess, and the spec is left as it was. A page regenerated here costs a retry; one that reached the
+// build would ship a dead link.
+test('refuses each misread page, naming the token and the guess', () => {
+  const spec = twoPageSpec();
+  spec.pages[0].navigatesTo = [{ targetKey: 'detail' }];
+  for (const [name, { kind, frontier, code, reaching }] of Object.entries(MISREAD_PAGES)) {
+    const at = frontier(code);
+    const where = (offset) => {
+      const lines = code.slice(0, offset).split('\n');
+      return `line ${lines.length}, column ${lines[lines.length - 1].length + 1}`;
+    };
+    const dir = makeWorkspace(spec, { 'overview.tsx': code, 'detail.tsx': GOOD });
+    const r = run(dir);
+    assert.equal(r.code, 3, name);
+    // A call that reaches the guess is untrusted whole, so its token is named though it lies before the guess.
+    assert.ok(r.stderr.includes(`PAGEREF_detail (${where(code.indexOf('PAGEREF_detail', reaching ? 0 : at))}, ${reaching ? 'in a call that reaches' : 'after'} the "${kind}" ambiguity at ${where(at)})`), `${name}: ${r.stderr}`);
+    assert.match(r.stderr, /this check cannot tell for certain how the code after it is read/, name);
+    assert.deepEqual(readSpec(dir).pages.map((p) => p.source && p.source.kind), spec.pages.map((p) => p.source && p.source.kind), `${name}: the spec is untouched`);
+  }
+});
+
+// A declared call the lexer cannot see is reported as one the code "never navigates" to, which is not so: the author can see it. The guess is
+// named once. When the call is hidden its token lies after the guess, and the report of that token names it. When the page has a guess and no
+// call at all, nothing else would, so the parity problem does. A page with no guess is told only what is missing.
+// Pages the lexer reads right after a line break (ASI): a regex after a prefix `++` holds text, a token no rewrite resolves, so promotion refuses
+// it where the page can be regenerated; a call in a template line that starts with `//` runs, so it promotes.
+test('refuses a token in a regex after a prefix "++", and promotes a call in a template line that starts with //', () => {
+  const spec = twoPageSpec();
+  spec.pages[0].navigatesTo = [{ targetKey: 'detail' }];
+  const refused = run(makeWorkspace(spec, { 'overview.tsx': PREFIX_INCREMENT_PAGE, 'detail.tsx': GOOD }));
+  assert.equal(refused.code, 3);
+  assert.match(refused.stderr, /PAGEREF_detail \(line 6, column \d+\)/);
+  assert.doesNotMatch(refused.stderr, /ambiguity/);
+  const ok = run(makeWorkspace(spec, { 'overview.tsx': TEMPLATE_LINE_PAGE, 'detail.tsx': GOOD }));
+  assert.equal(ok.code, 0, ok.stderr);
+});
+
+// JSX text that looks like a parameter list is text (TypeScript reads `<div data-active={e}>` as an element): the regex after the next arrow is
+// data, and the token in it is refused where the page can be regenerated.
+test('refuses a token in the regex after JSX text that looks like parameters', () => {
+  const spec = twoPageSpec();
+  spec.pages[0].navigatesTo = [{ targetKey: 'detail' }];
+  const refused = run(makeWorkspace(spec, { 'overview.tsx': JSX_TEXT_PAGE, 'detail.tsx': GOOD }));
+  assert.equal(refused.code, 3);
+  assert.match(refused.stderr, /PAGEREF_detail \(line 5, column \d+\)/);
+  assert.doesNotMatch(refused.stderr, /ambiguity/);
+});
+
+// After a unary or binary operator a `<` opens an element whatever follows its name (`a === <T extends X>text</T>`), so the regex after it is data and the token
+// in it is a token no rewrite resolves: promotion refuses it where the page can be regenerated, with no guess named and the spec left as it was.
+test('refuses a token in the regex after an element that follows a unary or binary operator', () => {
+  const spec = twoPageSpec();
+  spec.pages[0].navigatesTo = [{ targetKey: 'detail' }];
+  for (const { name, code } of ELEMENT_AFTER_OPERATOR_PAGES) {
+    const dir = makeWorkspace(spec, { 'overview.tsx': code, 'detail.tsx': GOOD });
+    const refused = run(dir);
+    assert.equal(refused.code, 3, `${name}: ${refused.stderr}`);
+    assert.match(refused.stderr, new RegExp(`PAGEREF_detail \\(line ${ELEMENT_PAGE_TOKEN_LINE}, column \\d+\\)`), name);
+    assert.doesNotMatch(refused.stderr, /ambiguity/, name);
+    assert.deepEqual(readSpec(dir).pages.map((p) => p.source && p.source.kind), spec.pages.map((p) => p.source && p.source.kind), `${name}: the spec is untouched`);
+  }
+});
+
+// A generic function type whose parameter list holds a type argument, an object type or a comma between type arguments compiles, and no element does, so it is a type and
+// the page is complete: promotion accepts it. (A rule that took each for a guess at the `<` read an element whose text ran on, and refused the page as truncated.)
+test('promotes a page that holds a generic function type with a type argument or an object type in its parameter list', () => {
+  const spec = twoPageSpec();
+  spec.pages[0].navigatesTo = [{ targetKey: 'detail' }];
+  for (const { name, code } of FUNCTION_TYPE_PAGES) {
+    const dir = makeWorkspace(spec, { 'overview.tsx': code, 'detail.tsx': GOOD });
+    const r = run(dir);
+    assert.equal(r.code, 0, `${name}: ${r.stderr}`);
+  }
+});
+
+// JSX that holds what looks like a function type's parameter list compiles as an element, so the regex after it is data and the token in it is a token no rewrite
+// resolves: promotion refuses it where the page can be regenerated, with no guess named and the spec left as it was.
+test('refuses a token in the regex after an element whose text looks like a parameter list', () => {
+  const spec = twoPageSpec();
+  spec.pages[0].navigatesTo = [{ targetKey: 'detail' }];
+  for (const { name, code } of ELEMENT_LOOKALIKE_PAGES) {
+    const dir = makeWorkspace(spec, { 'overview.tsx': code, 'detail.tsx': GOOD });
+    const refused = run(dir);
+    assert.equal(refused.code, 3, `${name}: ${refused.stderr}`);
+    assert.match(refused.stderr, new RegExp(`PAGEREF_detail \\(line ${ELEMENT_PAGE_TOKEN_LINE}, column \\d+\\)`), name);
+    assert.doesNotMatch(refused.stderr, /ambiguity/, name);
+    assert.deepEqual(readSpec(dir).pages.map((p) => p.source && p.source.kind), spec.pages.map((p) => p.source && p.source.kind), `${name}: the spec is untouched`);
+  }
+});
+
+test('names the guess when a declared call is absent, once, and only a guess the page has', () => {
+  const spec = twoPageSpec();
+  spec.pages[0].navigatesTo = [{ targetKey: 'detail' }];
+  const { code, frontier } = HIDDEN_CALL_PAGE;
+  const before = code.slice(0, frontier(code)).split('\n');
+  const where = `"keyword" ambiguity at line ${before.length}, column ${before[before.length - 1].length + 1}`;
+  const hidden = run(makeWorkspace(spec, { 'overview.tsx': code, 'detail.tsx': GOOD }));
+  assert.equal(hidden.code, 3);
+  assert.ok(hidden.stderr.includes('navigatesTo declares detail but the code never navigates there'), hidden.stderr);
+  assert.match(hidden.stderr, /PAGEREF_detail \(line 4, column \d+, after the "keyword" ambiguity at line 3, column \d+\)/);
+  assert.equal(hidden.stderr.split(where).length - 1, 1, `named once: ${hidden.stderr}`);
+  const guessed = 'const type = 4;\nconst half = type/2; const re = /x/;\nexport default function Overview() { return null; }\n';
+  const none = run(makeWorkspace(spec, { 'overview.tsx': guessed, 'detail.tsx': GOOD }));
+  assert.equal(none.code, 3);
+  const column = guessed.split('\n')[1].indexOf('/') + 1;
+  assert.ok(none.stderr.includes(`navigatesTo declares detail but the code never navigates there — the page has a "keyword" ambiguity at line 2, column ${column}, so a navigation call written after it may not be seen`), none.stderr);
+  assert.match(none.stderr, /this check cannot tell for certain how the code after it is read[\s\S]*parentheses/);
+  const bare = run(makeWorkspace(spec, { 'overview.tsx': 'export default function Overview() { return null; }\n', 'detail.tsx': GOOD }));
+  assert.equal(bare.code, 3);
+  assert.match(bare.stderr, /navigatesTo declares detail but the code never navigates there/);
+  assert.doesNotMatch(bare.stderr, /ambiguity/);
 });
 
 test('already-built pages are left alone and are not required to exist', () => {

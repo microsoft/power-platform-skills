@@ -22,8 +22,7 @@
 
 const { sha256 } = require('./hash.js');
 const { normalizePageSource } = require('./app-spec.js');
-const fs = require('node:fs');
-const path = require('node:path');
+const { isAppSourcePath, resolveAppSource } = require('./app-source-path.js');
 
 // Resolve the on-disk source path a page's content lives at, or null for an intent (design-only) page
 // that has nothing on disk to hash. Delegates to the canonical page-source normalizer so the legacy
@@ -78,42 +77,49 @@ function annotateContentHashes(spec, readFile) {
 // so tests stay hermetic.
 function pageSourceFileErrors(spec, appDir, deps = {}) {
   if (!spec || !Array.isArray(spec.pages) || !appDir) return [];
-  // Function shorthand is retained for existing tests/callers. In that injected mode realpath is
-  // identity unless supplied explicitly; production takes the object/default path and canonicalizes.
-  const isFile = typeof deps === 'function'
-    ? deps
-    : deps.isFile || ((absolutePath) => fs.statSync(absolutePath).isFile());
-  const realpath = typeof deps === 'function'
-    ? (absolutePath) => absolutePath
-    : deps.realpath || ((absolutePath) => (fs.realpathSync.native || fs.realpathSync)(absolutePath));
-  const root = path.resolve(appDir);
-  let realRoot;
-  try { realRoot = realpath(root); } catch { realRoot = root; }
+  const sourceDeps = typeof deps === 'function' ? { isFile: deps, realpath: (p) => p } : deps;
   const errors = [];
   for (const page of spec.pages) {
     const rel = pageContentPath(page);
     if (!rel) continue;
-    const absolute = path.resolve(root, rel);
-    const confined = path.relative(root, absolute);
-    // Confinement is reported by validateAppSpec; do not touch an out-of-workspace path here.
-    if (confined === '..' || confined.startsWith(`..${path.sep}`) || path.isAbsolute(confined)) continue;
-    let exists = false;
-    try { exists = isFile(absolute) === true; } catch { exists = false; }
-    if (!exists) {
-      errors.push(`page '${page.key || page.name}': codeFile '${rel}' does not exist or is not a file`);
-      continue;
-    }
-    let realFile;
-    try { realFile = realpath(absolute); } catch {
-      errors.push(`page '${page.key || page.name}': codeFile '${rel}' does not exist or is not a file`);
-      continue;
-    }
-    const realRelative = path.relative(realRoot, realFile);
-    if (realRelative === '..' || realRelative.startsWith(`..${path.sep}`) || path.isAbsolute(realRelative)) {
-      errors.push(`page '${page.key || page.name}': codeFile '${rel}' resolves outside the workspace`);
+    try {
+      resolveAppSource(appDir, rel, sourceDeps);
+    } catch (e) {
+      errors.push(`page '${page.key || page.name}': codeFile '${rel}' ${e.message}`);
     }
   }
   return errors;
 }
 
-module.exports = { annotateContentHashes, pageContentPath, pageSourceFileErrors };
+// The same on-disk check for a web resource read from `contentPath`. Schema validation proves only
+// that the path TEXT stays in the app folder; the filesystem decides whether it names a regular file
+// that does not leave the folder through a link or junction. Without this, the build found out in its
+// web-resources phase — after the solution and tables were already written — and halted half-built.
+function webResourceSourceFileErrors(spec, appDir, deps = {}) {
+  if (!spec || !Array.isArray(spec.webResources) || !appDir) return [];
+  const sourceDeps = typeof deps === 'function' ? { isFile: deps, realpath: (p) => p } : deps;
+  const errors = [];
+  for (const wr of spec.webResources) {
+    if (!wr || typeof wr !== 'object') continue;
+    // Same precedence as sdk-build.js webResourceOpts: inline `contentBase64`, then inline `content`, and only
+    // then `contentPath`. A file the build will never read is not this check's to refuse.
+    if (wr.contentBase64 !== undefined || wr.content !== undefined) continue;
+    const rel = wr.contentPath;
+    // An unconfined path is already a schema error from validateAppSpec, so it is not reported a
+    // second time here.
+    if (typeof rel !== 'string' || !isAppSourcePath(rel)) continue;
+    try {
+      resolveAppSource(appDir, rel, sourceDeps);
+    } catch (e) {
+      errors.push(`webResource '${wr.name}': contentPath '${rel}' ${e.message}`);
+    }
+  }
+  return errors;
+}
+
+// Every app source the build reads from disk: page code files and web resource contentPath files.
+function appSourceFileErrors(spec, appDir, deps = {}) {
+  return [...pageSourceFileErrors(spec, appDir, deps), ...webResourceSourceFileErrors(spec, appDir, deps)];
+}
+
+module.exports = { annotateContentHashes, pageContentPath, pageSourceFileErrors, webResourceSourceFileErrors, appSourceFileErrors };

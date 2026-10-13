@@ -242,7 +242,7 @@ node -e "JSON.parse(require('fs').readFileSync('auth.config.json','utf8')); cons
 If dependencies are installed, optionally run:
 
 ```bash
-npx tsc --noEmit
+npx --no-install tsc --noEmit
 ```
 
 Do not run npm install or native builds from this skill.

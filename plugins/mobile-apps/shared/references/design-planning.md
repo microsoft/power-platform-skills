@@ -149,7 +149,7 @@ Only used when deviating from default. Map the user's aesthetic + mood to concre
 
 **Font installation:**
 - `@tamagui/font-inter` / `@tamagui/font-mono` — already listed as optional deps in template, add to `tamagui.config.ts`
-- Custom fonts (Nunito, Playfair, etc.) — `npx expo install expo-font`, add to `app/_layout.tsx` `useFonts()`
+- Custom fonts (Nunito, Playfair, etc.) — `npx --no-install expo install expo-font`, add to `app/_layout.tsx` `useFonts()`
 
 ---
 
@@ -274,7 +274,7 @@ per-screen specs so the builder knows which sections to apply.
 |---|---|
 | `tamagui-design-system: add-aliases` | Verify that `tamagui.config.ts` calls `createPowerAppsTamaguiConfig`. The host already supplies the semantic aliases. |
 | `tamagui-design-system: required` | Apply `skills/design-system/references/tamagui-integration.md` with brand tokens + theme from the `## Design` section. |
-| Custom font only (no design-system line) | `npx expo install expo-font` + `useFonts()` in `app/_layout.tsx`, preserving the host Tamagui factory. |
+| Custom font only (no design-system line) | `npx --no-install expo install expo-font` + `useFonts()` in `app/_layout.tsx`, preserving the host Tamagui factory. |
 
 **There is no unchecked Step 9b path.** Every plan includes a
 `tamagui-design-system` line. `add-aliases` verifies host ownership; `required`

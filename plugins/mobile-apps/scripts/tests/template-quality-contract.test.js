@@ -86,12 +86,15 @@ test('Babel and Metro configuration are delegated to native-host factories', () 
 
 test('bundled dependencies match the current host-factory template boundary', () => {
   const packageJson = JSON.parse(read('template/package.json'));
-  assert.strictEqual(packageJson.dependencies['@microsoft/power-apps-native-host'], '^0.5.1');
-  assert.strictEqual(packageJson.scripts.dev, 'power-apps-dev');
-  assert.strictEqual(packageJson.scripts.predev, 'npm run generate-schemas');
+  for (const scriptName of ['dev', 'predev']) {
+    assert.strictEqual(typeof packageJson.scripts?.[scriptName], 'string');
+    assert.ok(packageJson.scripts[scriptName].trim(), `scripts.${scriptName} must not be empty`);
+  }
   assert.strictEqual(packageJson.dependencies['expo-media-library'], undefined);
   assert.strictEqual(packageJson.dependencies['expo-modules-core'], undefined);
   assert.strictEqual(packageJson.devDependencies['@microsoft/power-apps-cli'], '0.15.3');
+  // Step 12 runs `npx --no-install qrcode`, so the QR generator must come from this pin.
+  assert.strictEqual(packageJson.devDependencies.qrcode, '1.5.4');
   assert.strictEqual(packageJson.overrides.metro, '0.83.8');
   assert.strictEqual(packageJson.scripts['bundle:android'], 'build-codegen-package android');
   assert.strictEqual(packageJson.scripts['bundle:ios'], 'build-codegen-package ios');

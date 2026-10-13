@@ -218,6 +218,155 @@ test('native implicit quote names preserve existing escaping and warn for newly 
   }
 });
 
+test('#673 divergence refusals stop before PAC writes, and only the logged explicit choice authorizes an overwrite', () => {
+  for (const code of ['no-base', 'deployed-changed', 'deployed-unreadable']) {
+    const refused = uploadFixture(true);
+    refused.manifest.uploads[0].outcome = 'refused';
+    refused.events[0].result = {
+      ok: false, code, pageId: PAGE, appId: APP, error: `refused: ${code}`,
+      ...(code === 'deployed-changed' && { lines: { added: 3, removed: 1 }, deployedCopy: 'page.tsx.deployed.tsx' }),
+    };
+    refused.events[0].pacWrites = 0;
+    delete refused.events[0].forwarded;
+    assert.equal(score(refused).status, 'pass', code);
+    refused.events[0].pacWrites = 1;
+    assert.equal(score(refused).status, 'fail', `${code}: the refusal must precede the PAC write`);
+  }
+  const noSummary = uploadFixture(true);
+  noSummary.manifest.uploads[0].outcome = 'refused';
+  noSummary.events[0].result = { ok: false, code: 'deployed-changed', pageId: PAGE, appId: APP, error: 'refused' };
+  noSummary.events[0].pacWrites = 0;
+  delete noSummary.events[0].forwarded;
+  assert.equal(score(noSummary).status, 'fail', 'deployed-changed must carry its line summary');
+  const createRefused = uploadFixture();
+  createRefused.manifest.uploads[0].outcome = 'refused';
+  createRefused.events[0].result = { ok: false, code: 'no-base', pageId: PAGE, appId: APP, error: 'refused' };
+  createRefused.events[0].pacWrites = 0;
+  delete createRefused.events[0].forwarded;
+  assert.equal(score(createRefused).status, 'fail', 'a divergence refusal can only answer an update');
+
+  const overwrite = uploadFixture(true);
+  overwrite.events[0].command += ' --overwrite-deployed';
+  overwrite.events[0].result.overwroteDeployed = true;
+  assert.equal(score(overwrite).status, 'fail', 'an overwrite without the logged choice is unauthorized');
+
+  function logAround(fixture, before, after = '') {
+    fixture.workflowLog = `${before}## Phase 6 - Deploy\n${fixture.events[0].command}\n${after}Prompt scope: delta\n`;
+  }
+  const optionsOnly = uploadFixture(true);
+  optionsOnly.events[0].command += ' --overwrite-deployed';
+  logAround(optionsOnly, 'Options: Overwrite the deployed changes | Stop so I can merge\n');
+  assert.equal(score(optionsOnly).status, 'fail', 'an options list is not a choice');
+  const stopped = uploadFixture(true);
+  stopped.events[0].command += ' --overwrite-deployed';
+  logAround(stopped, 'Choice: Stop so I can merge\n');
+  assert.equal(score(stopped).status, 'fail', 'stopping is not consent to overwrite');
+  const after = uploadFixture(true);
+  after.events[0].command += ' --overwrite-deployed';
+  logAround(after, '', 'Choice: Overwrite the deployed changes\n');
+  assert.equal(score(after).status, 'fail', 'a choice after the command does not authorize it');
+  const before = uploadFixture(true);
+  before.events[0].command += ' --overwrite-deployed';
+  before.events[0].result.overwroteDeployed = true;
+  logAround(before, 'Choice: Overwrite the deployed changes\n');
+  assert.equal(score(before).status, 'pass', 'the last Choice line before the command authorizes the overwrite');
+
+  const contradictory = uploadFixture(true);
+  contradictory.events[0].result = {
+    ok: true, code: 'deployed-changed', pageId: PAGE, appId: APP,
+    lines: { added: 3, removed: 1 },
+  };
+  const contradicted = score(contradictory);
+  assert.equal(contradicted.status, 'fail', 'a divergence code cannot ride on ok:true / pacWrites:1 / forwarded');
+  assert.match(contradicted.reason, /must stop the update before PAC writes/);
+
+  // Each clause on its own: a recorded refusal row skips the row-level write checks, so only the
+  // per-call rule can catch these.
+  const okWithoutWrite = uploadFixture(true);
+  okWithoutWrite.manifest.uploads[0].outcome = 'refused';
+  okWithoutWrite.events[0].result = { ok: true, code: 'no-base', pageId: PAGE, appId: APP };
+  okWithoutWrite.events[0].pacWrites = 0;
+  delete okWithoutWrite.events[0].forwarded;
+  assert.equal(score(okWithoutWrite).status, 'fail', 'a divergence code is never a success, even with no PAC write');
+  const forwardedRefusal = uploadFixture(true);
+  forwardedRefusal.manifest.uploads[0].outcome = 'refused';
+  forwardedRefusal.events[0].result = { ok: false, code: 'deployed-unreadable', pageId: PAGE, appId: APP, error: 'refused' };
+  forwardedRefusal.events[0].pacWrites = 0;
+  assert.equal(score(forwardedRefusal).status, 'fail', 'a refusal cannot have forwarded arguments to PAC');
+});
+
+test('an overwrite approval is consumed by one upload and does not cover a later one', () => {
+  const PAGE2 = '88888888-8888-4888-8888-888888888888';
+  const commandFor = (pageId) => uploadFixture(true).events[0].command.replace(`--page-id ${PAGE}`, `--page-id ${pageId}`) + ' --overwrite-deployed';
+  const pair = (lines, pageIds) => {
+    const fixture = uploadFixture(true);
+    delete fixture.manifest.uploads;
+    fixture.events = pageIds.map((pageId, index) => {
+      const call = uploadFixture(true).events[0];
+      call.id = `upload-${index}`;
+      call.command = commandFor(pageId);
+      call.result = { ...call.result, pageId, overwroteDeployed: true };
+      call.forwarded = { ...call.forwarded, pageId };
+      return call;
+    });
+    fixture.workflowLog = `${lines.join('\n')}\n`;
+    return fixture;
+  };
+  const same = commandFor(PAGE);
+  const reused = score(pair([
+    'Choice: Overwrite the deployed changes',
+    same,
+    'Choice: Stop so I can merge',
+    same,
+  ], [PAGE, PAGE]));
+  assert.equal(reused.status, 'fail', 'a later identical upload must not reuse the first approval');
+  assert.match(reused.reason, /Overwrite the deployed changes/);
+
+  const twoPages = score(pair([
+    'Choice: Overwrite the deployed changes',
+    commandFor(PAGE),
+    commandFor(PAGE2),
+  ], [PAGE, PAGE2]));
+  assert.equal(twoPages.status, 'fail', 'one approval cannot cover overwrite uploads to two pages');
+  assert.match(twoPages.reason, /Overwrite the deployed changes/);
+
+  const each = score(pair([
+    'Choice: Overwrite the deployed changes',
+    commandFor(PAGE),
+    'Choice: Overwrite the deployed changes',
+    commandFor(PAGE2),
+  ], [PAGE, PAGE2]));
+  assert.equal(each.status, 'pass', 'an approval immediately before each upload authorizes that upload only');
+
+  // An approval consumed by an upload that did NOT overwrite (`=false`) is spent: a later bare
+  // `--overwrite-deployed`, whose command starts with the earlier one's text, gets the Stop answer.
+  const explicitFalse = commandFor(PAGE).replace(/ --overwrite-deployed$/, ' --overwrite-deployed=false');
+  const spent = pair([
+    'Choice: Overwrite the deployed changes',
+    explicitFalse,
+    'Choice: Stop so I can merge',
+    commandFor(PAGE),
+  ], [PAGE, PAGE]);
+  spent.events[0].command = explicitFalse;
+  delete spent.events[0].result.overwroteDeployed;
+  const spentScore = score(spent);
+  assert.equal(spentScore.status, 'fail', 'an approval spent by an =false upload cannot authorize a later overwrite');
+  assert.match(spentScore.reason, /Overwrite the deployed changes/);
+
+  // The logged line must carry the call's exact command. Out-of-order evidence makes the bare
+  // overwrite look for its entry first; a prefix match would hand it the approval logged before the
+  // `=false` command, instead of the Stop logged before its own.
+  const outOfOrder = pair([
+    'Choice: Overwrite the deployed changes',
+    explicitFalse,
+    'Choice: Stop so I can merge',
+    commandFor(PAGE),
+  ], [PAGE, PAGE]);
+  outOfOrder.events[1].command = explicitFalse;
+  delete outOfOrder.events[1].result.overwroteDeployed;
+  assert.equal(score(outOfOrder).status, 'fail', 'a longer command that merely starts with this one is a different upload');
+});
+
 test('current upload evidence cannot hide missing or unassociated calls', () => {
   const empty = uploadFixture();
   empty.events = [];

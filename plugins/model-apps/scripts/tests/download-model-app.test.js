@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { untypedColumnNames, collectGlobalChoices, finalizeGlobalChoices, resolveAppId, collectSitemap, parseDownloadedPages, entityFromMetadata, readEntityWithDescriptions, readDescriptionInventory, iconWebResources, readDashboards, readRelationships, droppedSubareaCount, preserveAuthoredLanguageCode } = require('../download-model-app.js');
+const { currentReadSdk, APP: COMPONENT_APP_ID, CURRENT: COMPONENT_LAYER_ID } = require('./helpers/app-membership-sdk.js');
 
 test('resolveAppId returns a guid as-is, else resolves by uniquename', async () => {
   const guid = '11111111-2222-3333-4444-555555555555';
@@ -897,7 +898,9 @@ test('readDescriptionInventory captures view, chart, form, business-rule, and gl
     },
   };
 
-  const inv = await readDescriptionInventory(sdk, 'app-1', 'ContosoSolution');
+  const inv = await readDescriptionInventory(currentReadSdk(sdk, {
+    appId: COMPONENT_APP_ID, layerId: APP_UNIQ_VALUE,
+  }), COMPONENT_APP_ID, 'ContosoSolution');
 
   assert.deepStrictEqual(inv.views[0], { id: VIEW_ID, name: 'Active Orders', entity: 'new_order', description: 'Work queue.' });
   assert.strictEqual('description' in inv.charts[0], false, 'null chart descriptions are omitted');
@@ -1094,6 +1097,7 @@ const { validateAppSpec } = require('../lib/app-spec.js');
 const { enrichesDefaultViews } = require('../lib/sdk-build.js');
 const { appUniqueName } = require('../lib/sdk-build.js');
 const { resolvePageRefs, reverseResolveNavIds } = require('../lib/pageref-resolver.js');
+const { OBJECT_DIVISION_PAGE, LONG_KEY, lookBehindPage } = require('./helpers/misread-page.js');
 
 test('runDownload translates a fail-closed app read into a graceful error, not a raw SDK throw', async () => {
   // `fetchArtifact('app')` fails closed (`APP_SITEMAP_UNRESOLVED`) rather than hand back an app whose
@@ -1202,7 +1206,8 @@ test('lexical navigation variants survive deploy-download-rebuild', async () => 
     { key: 'detail', name: 'Detail' },
   ] }, new Map([['overview', overviewId], ['detail', detailId]]));
   const manifestB64 = Buffer.from(JSON.stringify(manifest), 'utf8').toString('base64');
-  // Only the target arguments depend on this parameter; comments, escapes and Unicode are the oracle.
+  // Only the target arguments depend on this parameter; comments, escapes and Unicode are the oracle. A Unicode escape in a quoted KEY is inside
+  // a string and stays certain; one in an identifier in code (`navigate\u0054o`) is a trust frontier, so the callees are spelled plainly.
   const overviewCode = (target) => [
     'export default function Overview() {',
     `  const idText = "${detailId}"; const token = "PAGEREF_detail";`,
@@ -1211,7 +1216,7 @@ test('lexical navigation variants survive deploy-download-rebuild', async () => 
     `  // another inert pageId\u2029  Xrm.Navigation.navigateTo?.({pageType:"generative",pageId:"${target}"});`,
     String.raw`  Xrm?.Navigation?.navigateTo({"page\u0054ype":"generative","page\u{49}d":"` + target + '"});',
     `  Xrm.Navigation.navigateTo({pageType:"generative",pageId:"${target}",// keep pageId\u2029data:{}});`,
-    String.raw`  Xrm.Navigation.navigate\u0054o?.({"pageType":"generative",'page\x49d':"` + target + '"});',
+    String.raw`  Xrm.Navigation.navigateTo?.({"pageType":"generative",'page\x49d':"` + target + '"});',
     `  Xrm.Navigation.navigateTo({pageType:"entityrecord",entityName:"contoso_item",entityId:"${detailId}"});`,
     '  return null;',
     '}',
@@ -1220,7 +1225,7 @@ test('lexical navigation variants survive deploy-download-rebuild', async () => 
   const deployed = overviewCode(detailId);
   const canonical = overviewCode('PAGEREF_detail');
   const detailCode = 'export default function Detail() { const text = "left\u2028right\u2029"; return null; }\r\n';
-  const xml = `<SiteMap><Area><Group><SubArea GenPageId="${overviewId}" Title="Navigation A"/><SubArea GenPageId="${detailId}" Title="Navigation B"/></Group></Area></SiteMap>`;
+  const xml = `<SiteMap><Area><Group><SubArea GenPageId="${overviewId}" Title="Navigation A"/><SubArea GenPageId="${detailId}" Title="Navigation B"/><SubArea Entity="contoso_item"/></Group></Area></SiteMap>`;
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'download-lexical-'));
   try {
     const sdk = {
@@ -1255,7 +1260,10 @@ test('lexical navigation variants survive deploy-download-rebuild', async () => 
         return true;
       },
     };
-    const downloaded = await runDownload({ sdk, genpageCli, outDir: out, appId, appUnique });
+    const downloaded = await runDownload({
+      sdk: currentReadSdk(sdk, { appId, layerId: appUniqueId, sitemapXml: xml }),
+      genpageCli, outDir: out, appId, appUnique,
+    });
     assert.ok(downloaded.ok, JSON.stringify(downloaded));
     const validation = validateAppSpec(downloaded.spec);
     assert.ok(validation.ok, validation.errors.join('; '));
@@ -1271,6 +1279,195 @@ test('lexical navigation variants survive deploy-download-rebuild', async () => 
     assert.deepStrictEqual(unresolved, []);
     assert.strictEqual(deployment.get('overview'), deployed, 're-resolution reproduces every deployed byte, including inert IDs and LS/PS');
   } finally { fs.rmSync(out, { recursive: true, force: true }); }
+});
+
+// What a download turns back into a "PAGEREF_<key>" is only what it is sure of: a DOUBLE-quoted id literal (the one a build writes), and only
+// before any place the lexer reads by guess. An id it leaves is left as the id, reported on stderr and on the result, so the author is told
+// what a rebuild will refuse (a hardcoded page id) instead of finding it there. The detail page's key is the one the manifest names; a long one
+// makes the token longer than the id, which is what moves the code after it.
+async function downloadOverview(deployedOverview, detailKey = 'detail') {
+  const overviewId = 'aaaaaaaa-0000-4000-8000-000000000001';
+  const detailId = 'bbbbbbbb-0000-4000-8000-000000000002';
+  const appId = 'cccccccc-0000-4000-8000-000000000003';
+  const appUniqueId = 'cccccccc-0000-4000-8000-000000000004';
+  const sitemapId = 'cccccccc-0000-4000-8000-000000000005';
+  const appUnique = 'contoso_navids';
+  const manifest = buildManifest({ pages: [
+    { key: 'overview', name: 'Overview', navigatesTo: [{ targetKey: detailKey }] },
+    { key: detailKey, name: 'Detail' },
+  ] }, new Map([['overview', overviewId], [detailKey, detailId]]));
+  const manifestB64 = Buffer.from(JSON.stringify(manifest), 'utf8').toString('base64');
+  const xml = `<SiteMap><Area><Group><SubArea GenPageId="${overviewId}" Title="Navigation A"/><SubArea GenPageId="${detailId}" Title="Navigation B"/><SubArea Entity="contoso_item"/></Group></Area></SiteMap>`;
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'download-navids-'));
+  const sdk = {
+    fetchArtifact: async () => ({
+      name: 'Nav Ids App', description: '',
+      siteMap: { areas: [{ title: 'Main', groups: [{ title: 'Pages', subAreas: [
+        { type: 'GenPage', genPageId: overviewId, title: 'Navigation A' },
+        { type: 'GenPage', genPageId: detailId, title: 'Navigation B' },
+        { type: 'Entity', entity: 'contoso_item' },
+      ] }] }] },
+    }),
+    queryRecords: async (logical, opts = {}) => {
+      if (logical === 'appmodule') return [{ appmoduleid: appId, appmoduleidunique: appUniqueId, uniquename: appUnique }];
+      if (logical === 'appmodulecomponent') return [{ objectid: sitemapId, componenttype: 62 }];
+      if (logical === 'sitemap') return [{ sitemapxml: xml }];
+      if (logical === 'webresource') return /_pagemanifest'/.test(opts.filter || '') ? [{ content: manifestB64 }] : [];
+      return [];
+    },
+    fetchEntityMetadata: async (logical) => ({ schemaName: logical, displayName: 'Item', primaryNameAttribute: 'contoso_name', attributes: [], relationships: [] }),
+    dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
+  };
+  const genpageCli = {
+    enumerateEnv: async () => ({ ok: true, ids: [overviewId, detailId], pages: [{ pageId: overviewId, name: 'Overview' }, { pageId: detailId, name: 'Detail' }] }),
+    download: async ({ outputDir, pageIds }) => {
+      for (const id of pageIds) {
+        const dir = path.join(outputDir, id);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'page.tsx'), id === overviewId ? deployedOverview(detailId) : 'export default function Detail() { return null; }\n', 'utf8');
+        fs.writeFileSync(path.join(dir, 'config.json'), '\uFEFF{"dataSources":[]}', 'utf8');
+      }
+      return true;
+    },
+  };
+  const warned = [];
+  const realWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk) => { warned.push(String(chunk)); return true; };
+  let downloaded;
+  try {
+    downloaded = await runDownload({ sdk: currentReadSdk(sdk, { appId, layerId: appUniqueId, sitemapXml: xml }), genpageCli, outDir: out, appId, appUnique });
+  } finally { process.stderr.write = realWrite; }
+  const overview = downloaded.ok && downloaded.spec.pages.find((p) => p.key === 'overview');
+  return {
+    downloaded,
+    detailId,
+    warned: warned.join(''),
+    code: overview ? fs.readFileSync(path.join(out, overview.source.codeFile), 'utf8') : '',
+    cleanup: () => fs.rmSync(out, { recursive: true, force: true }),
+  };
+}
+
+test('download turns back a double-quoted id only, leaves any other as the id, and reports each one it leaves', async () => {
+  const deployed = (id) => [
+    'export default function Overview() {',
+    `  navigateTo({pageType:"generative",pageId:"${id}"});`,
+    `  navigateTo({pageType:"generative",pageId:'${id}'});`,
+    `  navigateTo({pageType:"generative",pageId:\`${id}\`});`,
+    '  return null;',
+    '}',
+    '',
+  ].join('\n');
+  const run = await downloadOverview(deployed);
+  try {
+    assert.ok(run.downloaded.ok, JSON.stringify(run.downloaded));
+    const lines = deployed(run.detailId).split('\n');
+    assert.strictEqual(run.code, [lines[0], lines[1].replace(`"${run.detailId}"`, '"PAGEREF_detail"'), lines[2], lines[3], lines[4], lines[5], ''].join('\n'),
+      'the double-quoted id is a token again; the single-quoted and back-ticked ids are as deployed, quotes and all');
+    assert.deepStrictEqual(run.downloaded.navIdsLeft, [
+      { page: 'Overview', key: 'detail', id: run.detailId, line: 3, column: lines[2].indexOf(run.detailId) + 1, why: 'quote' },
+      { page: 'Overview', key: 'detail', id: run.detailId, line: 4, column: lines[3].indexOf(run.detailId) + 1, why: 'quote' },
+    ]);
+    assert.match(run.warned, /WARNING: 2 page id\(s\) of this app remain in the downloaded page source instead of PAGEREF_ tokens \(page "Overview" line 3, column \d+: not a double-quoted literal; page "Overview" line 4, column \d+: not a double-quoted literal\)/);
+    assert.match(run.warned, /a navigation call that keeps one is a hardcoded page id, which a rebuild refuses: write it as a double-quoted "PAGEREF_<key>" literal in a navigateTo call whose options object is written inline/);
+    assert.match(run.warned, /An id that is data — a record id, text, a comment — can stay\./);
+  } finally { run.cleanup(); }
+});
+
+// The id of a call the lexer reads by guess is left alone, whatever its quotes: the corruption was a single-quoted id inside a
+// double-quoted string, which the lexer read as code after a misread, and which was rewritten to "PAGEREF_detail" — quotes ending the string.
+// The call after it is hidden by the same misread, and its id stays too: each is reported.
+test('download leaves an id after a place the lexer reads by guess, and says where that is', async () => {
+  const deployed = (id) => [
+    'export default function Overview() {',
+    `  navigateTo({pageType:"generative",pageId:"${id}"});`,
+    '  const of = 12;',
+    '  const count = of/2; const re = /\\/*$/;',
+    `  const note = "*/ navigateTo({pageType:'generative', pageId:'${id}'}) /*";`,
+    `  navigateTo({pageType:"generative",pageId:"${id}"});`,
+    '  return null;',
+    '}',
+    '',
+  ].join('\n');
+  const run = await downloadOverview(deployed);
+  try {
+    assert.ok(run.downloaded.ok, JSON.stringify(run.downloaded));
+    const lines = deployed(run.detailId).split('\n');
+    assert.strictEqual(run.code, [lines[0], lines[1].replace(`"${run.detailId}"`, '"PAGEREF_detail"'), ...lines.slice(2)].join('\n'),
+      'the call before the guess is a token again; the text after it, the string included, is exactly as deployed');
+    assert.deepStrictEqual(run.downloaded.navIdsLeft.map((l) => [l.page, l.id, l.line, l.why, l.frontier.kind, l.frontier.line]), [
+      ['Overview', run.detailId, 5, 'frontier', 'keyword', 4],
+      ['Overview', run.detailId, 6, 'frontier', 'keyword', 4],
+    ]);
+    assert.match(run.warned, /WARNING: 2 page id\(s\) of this app remain in the downloaded page source instead of PAGEREF_ tokens \(page "Overview" line 5, column \d+: after the "keyword" ambiguity at line 4, column \d+; page "Overview" line 6, column \d+: after the "keyword" ambiguity at line 4, column \d+\)/);
+  } finally { run.cleanup(); }
+});
+
+// A call the lexer hid keeps its id, and no call it recognised holds it. The ids a download leaves are found by reading the result as text,
+// so the call is reported, and the warning fires: before, `left` was empty and nothing was said.
+test('download reports the id in a call the lexer hid, though no call it recognised holds it', async () => {
+  const run = await downloadOverview((id) => OBJECT_DIVISION_PAGE.replaceAll('"PAGEREF_detail"', `"${id}"`));
+  try {
+    assert.ok(run.downloaded.ok, JSON.stringify(run.downloaded));
+    assert.strictEqual(run.code.split('PAGEREF_detail').length - 1, 1, 'the call before the guess is a token again');
+    assert.strictEqual(run.code.split(run.detailId).length - 1, 1, 'the hidden call keeps its id');
+    assert.deepStrictEqual(run.downloaded.navIdsLeft.map((l) => [l.page, l.id, l.line, l.why, l.frontier.kind, l.frontier.line]), [['Overview', run.detailId, 5, 'frontier', 'brace', 4]]);
+    assert.match(run.warned, /WARNING: 1 page id\(s\) of this app remain in the downloaded page source instead of PAGEREF_ tokens \(page "Overview" line 5, column \d+: after the "brace" ambiguity at line 4, column \d+\)/);
+  } finally { run.cleanup(); }
+});
+
+test('download reports an id that stays as data, with its place in the page it is written to, and says it can stay', async () => {
+  const deployed = (id) => `export default function Overview() {\n  navigateTo({pageType:"generative",pageId:"${id}",data:{recordId:"${id}"}});\n  return null;\n}\n`;
+  const run = await downloadOverview(deployed);
+  try {
+    assert.ok(run.downloaded.ok, JSON.stringify(run.downloaded));
+    assert.ok(run.code.includes('pageId:"PAGEREF_detail"'), 'the navigation id is a token again');
+    const column = run.code.split('\n')[1].indexOf(run.detailId) + 1;
+    assert.deepStrictEqual(run.downloaded.navIdsLeft, [{ page: 'Overview', key: 'detail', id: run.detailId, line: 2, column, why: 'text' }]);
+    assert.match(run.warned, new RegExp(`WARNING: 1 page id\\(s\\) of this app remain in the downloaded page source instead of PAGEREF_ tokens \\(page "Overview" line 2, column ${column}: not a navigation pageId literal \\(data, text or a comment\\)\\)`));
+    assert.match(run.warned, /An id that is data — a record id, text, a comment — can stay\./);
+  } finally { run.cleanup(); }
+});
+
+// A token is longer than the id it replaces when the key is long, and the code after it moves. This page's `if` head holds twenty calls: inside
+// the lexer's 2,000-character look-behind with ids, outside it with tokens. Written as tokens the page would have a `paren` ambiguity before the
+// call after the statement, and the build would refuse it, with nothing said at the download. So the download writes none: the page is as it was
+// deployed, every id is reported with the reason and the ambiguity, and the warning fires.
+test('download keeps every id of a page whose tokens the build would refuse, and says why', async () => {
+  const deployed = (id) => `${lookBehindPage(id, 20)}export default function Overview() { return null; }\n`;
+  const run = await downloadOverview(deployed, LONG_KEY);
+  try {
+    assert.ok(run.downloaded.ok, JSON.stringify(run.downloaded));
+    assert.strictEqual(run.code, deployed(run.detailId), 'the page is written exactly as it was deployed: no token');
+    const left = run.downloaded.navIdsLeft;
+    assert.strictEqual(left.length, 21, 'every id of the page is reported: twenty in the head and the one after the statement');
+    assert.ok(left.every((l) => l.page === 'Overview' && l.key === LONG_KEY && l.id === run.detailId && l.why === 'would-not-rebuild'));
+    const slash = run.code.split('\n')[1].indexOf(') /abc/') + 3;
+    assert.deepStrictEqual([...new Set(left.map((l) => JSON.stringify(l.frontier)))], [JSON.stringify({ kind: 'paren', line: 2, column: slash })], 'the ambiguity is told in the columns of the page as written');
+    assert.match(run.warned, /WARNING: 21 page id\(s\) of this app remain in the downloaded page source instead of PAGEREF_ tokens \(page "Overview" line 2, column \d+: kept as the id: written as tokens the page would not rebuild — it would have a "paren" ambiguity at line 2, column \d+, where the build stops trusting what it reads; /);
+    assert.match(run.warned, /a navigation call that keeps one is a hardcoded page id, which a rebuild refuses/);
+  } finally { run.cleanup(); }
+});
+
+// The same page with a short key: the tokens are shorter than the ids, the head only gets shorter, and the forward path takes the page. It is
+// the length of the token, not the construct, that decides.
+test('download writes the tokens of that page when they are shorter than the ids', async () => {
+  const deployed = (id) => `${lookBehindPage(id, 20)}export default function Overview() { return null; }\n`;
+  const run = await downloadOverview(deployed);
+  try {
+    assert.ok(run.downloaded.ok, JSON.stringify(run.downloaded));
+    assert.strictEqual(run.code, deployed(run.detailId).replaceAll(run.detailId, 'PAGEREF_detail'));
+    assert.ok(!('navIdsLeft' in run.downloaded), 'nothing left, nothing to report');
+  } finally { run.cleanup(); }
+});
+
+test('download is silent about page ids when every one is turned back into a token', async () => {
+  const run = await downloadOverview((id) => `export default function Overview() {\n  navigateTo({pageType:"generative",pageId:"${id}"});\n  return null;\n}\n`);
+  try {
+    assert.ok(run.downloaded.ok, JSON.stringify(run.downloaded));
+    assert.ok(run.code.includes('pageId:"PAGEREF_detail"'));
+    assert.ok(!('navIdsLeft' in run.downloaded), 'no field when there is nothing to report');
+    assert.ok(!/navigation page id/.test(run.warned), run.warned);
+  } finally { run.cleanup(); }
 });
 
 test('Task-6: Maker-added page (sitemap, not in manifest) gets a minted key, keeps pageId (C3)', () => {
@@ -1336,7 +1533,7 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
   const APP_UNIQ_VALUE = 'c0ffee00-0000-4000-8000-00000000dddd'; // appmoduleidunique lookup GUID
   const SM_ID    = '5111e0f2-0000-4000-8000-0000000000aa';
   const APP_UNIQUE = 'test_roundtrip';
-  const SM_XML = `<SiteMap><Area><Group><SubArea GenPageId="${GP_A}" Title="Sitemap A"/><SubArea GenPageId="${GP_B}" Title="Sitemap B"/></Group></Area></SiteMap>`;
+  const SM_XML = `<SiteMap><Area><Group><SubArea GenPageId="${GP_A}" Title="Sitemap A"/><SubArea GenPageId="${GP_B}" Title="Sitemap B"/><SubArea Entity="contoso_item"/></Group></Area></SiteMap>`;
 
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-rt-'));
   try {
@@ -1387,7 +1584,10 @@ test('Task-6: full round-trip via runDownload → hydrateSpec → validateAppSpe
       },
     };
 
-    const result = await runDownload({ sdk: mockSdk, genpageCli: mockGenpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
+    const result = await runDownload({
+      sdk: currentReadSdk(mockSdk, { appId: APP_ID, layerId: APP_UNIQ_VALUE, sitemapXml: SM_XML }),
+      genpageCli: mockGenpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE,
+    });
     assert.ok(result.ok, JSON.stringify(result));
     const { spec } = result;
     // Full spec validates (profile:'plan' enforces every page is a sitemap subarea)
@@ -1424,7 +1624,7 @@ test('download writes page names without pac\'s \\" escaping, from the env-wide 
   const GP_B = '5c0a4889-45fd-46ea-91a8-ff876914d644';
   const APP_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
   const SM_XML = `<SiteMap><Area><Group><SubArea GenPageId="${GP_A}" Title="Plain A"/>`
-    + `<SubArea GenPageId="${GP_B}" Title="Title \\&quot;B\\&quot; \\\\path"/></Group></Area></SiteMap>`;
+    + `<SubArea GenPageId="${GP_B}" Title="Title \\&quot;B\\&quot; \\\\path"/><SubArea Entity="contoso_item"/></Group></Area></SiteMap>`;
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-esc-'));
   try {
     const sdk = {
@@ -1467,7 +1667,10 @@ test('download writes page names without pac\'s \\" escaping, from the env-wide 
     process.stderr.write = (chunk, ...rest) => { warned.push(String(chunk)); return true; };
     let result;
     try {
-      result = await runDownload({ sdk, genpageCli, outDir: out, appId: APP_ID, appUnique: 'test_roundtrip' });
+      result = await runDownload({
+        sdk: currentReadSdk(sdk, { appId: APP_ID, layerId: 'c0ffee00-0000-4000-8000-00000000dddd', sitemapXml: SM_XML }),
+        genpageCli, outDir: out, appId: APP_ID, appUnique: 'test_roundtrip',
+      });
     } finally {
       process.stderr.write = write;
     }
@@ -1613,7 +1816,7 @@ test('recoverAppSolution never picks between several unmanaged solutions, whatev
 function ambiguousAppSdk(APP_ID, APP_UNIQUE, { members, prefixOf = () => 'contoso', manyToMany = [], order = ['a', 'b'] } = {}) {
   const base = twoSolutionSdk(order, prefixOf);
   const RULE = '5111e0f2-0000-4000-8000-0000000000d9';
-  return {
+  return currentReadSdk({
     fetchArtifact: async () => ({ name: 'Ambig', description: '', siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'Entity', entity: 'contoso_item' }] }] }] } }),
     queryRecords: async (logical, opts) => {
       const filter = (opts && opts.filter) || '';
@@ -1637,7 +1840,8 @@ function ambiguousAppSdk(APP_ID, APP_UNIQUE, { members, prefixOf = () => 'contos
     getSolution: base.getSolution,
     fetchEntityMetadata: async (logical) => ({ schemaName: logical, displayName: 'Item', primaryNameAttribute: 'contoso_name', attributes: [] }),
     dataverse: { get: async (url) => ({ status: 200, headers: {}, body: { value: /ManyToManyRelationships/.test(url) ? manyToMany : [] } }) },
-  };
+  }, { appId: APP_ID, layerId: 'c0ffee00-0000-4000-8000-0000000000d3',
+    sitemapXml: '<SiteMap><Area><Group><SubArea Entity="contoso_item"/></Group></Area></SiteMap>' });
 }
 
 async function runCapturing(sdk, APP_ID, APP_UNIQUE) {
@@ -1823,8 +2027,8 @@ test('recoverAppSolution reports no prefix when none can be used, and names a pu
 
 // The nine entities from the filed repro: an app on account/contact also carries activity, user and
 // note tables that have no sitemap entry of their own. Their membership is recovered from the app's
-// VIEW/CHART/FORM components — componenttype 1 (Entities) is unusable because every such row carries
-// the same objectid (the `entity` metadata table's own id), LIVE-verified.
+// VIEW/CHART/FORM components in this legacy fixture. Correct type-1 rows are an additional source;
+// a row that resolves to the `entity` metadata table is corruption and is filtered separately.
 const NINE = ['account', 'contact', 'task', 'email', 'appointment', 'phonecall', 'systemuser', 'team', 'annotation'];
 const componentSdk = (opts = {}) => {
   const entities = opts.entities || NINE;
@@ -1832,16 +2036,17 @@ const componentSdk = (opts = {}) => {
   const viewId = (n) => `1000${NINE.indexOf(n)}000-0000-4000-8000-000000000001`;
   const chartId = (n) => `2000${NINE.indexOf(n)}000-0000-4000-8000-000000000002`;
   const formId = (n) => `3000${NINE.indexOf(n)}000-0000-4000-8000-000000000003`;
+  const tableId = (n) => `4000${NINE.indexOf(n)}000-0000-4000-8000-000000000004`;
   return {
     queryRecords: async (set, o) => {
       const filter = (o && o.filter) || '';
-      if (set === 'appmodule') return [{ appmoduleidunique: 'appuniq-1' }];
+      if (set === 'appmodule') return [{ appmoduleidunique: COMPONENT_LAYER_ID }];
       if (set === 'appmodulecomponent') {
-        assert.match(filter, /_appmoduleidunique_value eq appuniq-1/);
+        assert.ok(filter.startsWith(`_appmoduleidunique_value eq ${COMPONENT_LAYER_ID} and componenttype eq `));
         if (/componenttype eq 26/.test(filter)) return entities.map((n) => ({ objectid: viewId(n), componenttype: 26 }));
         if (/componenttype eq 59/.test(filter)) return entities.map((n) => ({ objectid: chartId(n), componenttype: 59 }));
         if (/componenttype eq 60/.test(filter)) return entities.map((n) => ({ objectid: formId(n), componenttype: 60 }));
-        // componenttype 1 must NOT be consulted — it cannot identify a table.
+        if (/componenttype eq 1$/.test(filter)) return (opts.type1Entities || []).map((n) => ({ objectid: tableId(n), componenttype: 1 }));
         assert.fail(`unexpected componenttype filter: ${filter}`);
       }
       // Resolve each component id back to its owning entity via that table's own entity field.
@@ -1850,21 +2055,38 @@ const componentSdk = (opts = {}) => {
       if (set === 'systemform') return entities.filter((n) => filter.includes(formId(n))).map((n) => ({ formid: formId(n), objecttypecode: n }));
       return [];
     },
+    dataverse: { get: async (url) => {
+      if (url.startsWith('/appmodules/Microsoft.Dynamics.CRM.RetrieveUnpublishedMultiple()')) {
+        return { status: 200, body: { value: [{ appmoduleid: COMPONENT_APP_ID, appmoduleidunique: COMPONENT_LAYER_ID, componentstate: 1 }] } };
+      }
+      const name = (opts.type1Entities || []).find((logical) => url.includes(`EntityDefinitions(${tableId(logical)})`));
+      return name ? { status: 200, body: { LogicalName: name, IsCustomEntity: false } } : { status: 404, body: null };
+    } },
   };
 };
 
 test('appComponentEntities recovers ALL app entity components, not just sitemap-visible ones', async () => {
-  const got = await appComponentEntities(componentSdk(), 'app-1');
+  const got = await appComponentEntities(componentSdk(), COMPONENT_APP_ID);
   assert.deepStrictEqual(got.slice().sort(), NINE.slice().sort());
 });
 
+test('appComponentEntities also recovers hidden tables found only through correct type-1 components', async () => {
+  const got = await appComponentEntities(componentSdk({ entities: [], type1Entities: ['task', 'team'] }), COMPONENT_APP_ID);
+  assert.deepStrictEqual(got.slice().sort(), ['task', 'team']);
+});
 test('appComponentEntities is best-effort — every failure path yields [] so download still works', async () => {
   assert.deepStrictEqual(await appComponentEntities(componentSdk(), null), []);
-  assert.deepStrictEqual(await appComponentEntities({ queryRecords: async () => { throw new Error('x'); } }, 'app-1'), []);
+  assert.deepStrictEqual(await appComponentEntities({
+    dataverse: { get: async () => { throw new Error('x'); } },
+    queryRecords: async () => assert.fail('a failed layer lookup must not query component rows'),
+  }, COMPONENT_APP_ID), []);
   // An app whose components resolve to nothing.
-  assert.deepStrictEqual(await appComponentEntities(componentSdk({ entities: [] }), 'app-1'), []);
+  assert.deepStrictEqual(await appComponentEntities(componentSdk({ entities: [] }), COMPONENT_APP_ID), []);
   // An app row without appmoduleidunique (the lookup parent) cannot be queried.
-  assert.deepStrictEqual(await appComponentEntities({ queryRecords: async () => [{}] }, 'app-1'), []);
+  assert.deepStrictEqual(await appComponentEntities({
+    dataverse: { get: async () => ({ status: 200, body: { value: [{ appmoduleid: COMPONENT_APP_ID }] } }) },
+    queryRecords: async () => assert.fail('an unresolved layer must not query component rows'),
+  }, COMPONENT_APP_ID), []);
 });
 
 test('runDownload: a sitemap table with no primary name HARD-FAILS naming it; a component-only one is dropped', async () => {
@@ -1880,7 +2102,7 @@ test('runDownload: a sitemap table with no primary name HARD-FAILS naming it; a 
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-pn-'));
   // `account` is in the sitemap; `annotation` is reachable ONLY as a view component. Neither has a
   // primary name, so they must take different branches.
-  const mkSdk = () => ({
+  const mkSdk = () => currentReadSdk({
     fetchArtifact: async () => ({
       name: 'PN App', description: '',
       siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [{ type: 'Entity', entity: 'account' }] }] }] },
@@ -1904,7 +2126,7 @@ test('runDownload: a sitemap table with no primary name HARD-FAILS naming it; a 
     },
     // Both report an EMPTY PrimaryNameAttribute (the shape the SDK really returns).
     fetchEntityMetadata: async (logical) => ({ logicalName: logical, schemaName: logical, displayName: logical, primaryNameAttribute: '' }),
-  });
+  }, { appId: APP_ID, layerId: APP_UNIQ_VALUE, sitemapXml: SM_XML });
   const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), download: async () => true };
   try {
     const failed = await runDownload({ sdk: mkSdk(), genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
@@ -2175,7 +2397,10 @@ test('runDownload WARNS on stderr about a role-restricted form, naming it', asyn
   process.stderr.write = (chunk, ...rest) => { written.push(String(chunk)); return origWrite(chunk, ...rest); };
   let res;
   try {
-    res = await runDownload({ sdk, genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
+    res = await runDownload({
+      sdk: currentReadSdk(sdk, { appId: APP_ID, layerId: APP_ID, sitemapXml: SM_XML }),
+      genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE,
+    });
   } finally {
     process.stderr.write = origWrite;
     fs.rmSync(out, { recursive: true, force: true });
@@ -2219,6 +2444,7 @@ test('runDownload stays SILENT when no form is role-restricted', async () => {
   const APP_ID = '6333e0f2-0000-4000-8000-000000000001';
   const SM_ID = '6333e0f2-0000-4000-8000-000000000002';
   const FORM_ID = '6333e0f2-0000-4000-8000-000000000003';
+  const SM_XML = '<SiteMap><Area Id="A"><Group Id="G"><SubArea Id="S" Entity="new_order" /></Group></Area></SiteMap>';
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-nowarn-'));
   const sdk = {
     fetchArtifact: async () => ({
@@ -2233,7 +2459,7 @@ test('runDownload stays SILENT when no form is role-restricted', async () => {
         if (/componenttype eq 62/.test(filter)) return [{ objectid: SM_ID, componenttype: 62 }];
         return [];
       }
-      if (logical === 'sitemap') return [{ sitemapxml: '<SiteMap><Area Id="A"><Group Id="G"><SubArea Id="S" Entity="new_order" /></Group></Area></SiteMap>' }];
+      if (logical === 'sitemap') return [{ sitemapxml: SM_XML }];
       if (logical === 'systemform') return [{ formid: FORM_ID, name: 'Main', objecttypecode: 'new_order', description: '', formxml: '<form><tabs /></form>' }];
       return [];
     },
@@ -2249,7 +2475,11 @@ test('runDownload stays SILENT when no form is role-restricted', async () => {
   const written = [];
   process.stderr.write = (chunk, ...rest) => { written.push(String(chunk)); return origWrite(chunk, ...rest); };
   try {
-    await runDownload({ sdk, genpageCli, outDir: out, appId: APP_ID, appUnique: 'new_nowarn' });
+    const result = await runDownload({
+      sdk: currentReadSdk(sdk, { appId: APP_ID, layerId: APP_ID, sitemapXml: SM_XML }),
+      genpageCli, outDir: out, appId: APP_ID, appUnique: 'new_nowarn',
+    });
+    assert.strictEqual(result.ok, true, JSON.stringify(result));
   } finally {
     process.stderr.write = origWrite;
     fs.rmSync(out, { recursive: true, force: true });
@@ -2822,7 +3052,11 @@ test('REVIEW-C runDownload emits ONLY referenced globalChoices (drives the real 
       },
     };
     const genpageCli = { enumerateEnv: async () => ({ ok: true, ids: [], pages: [] }), download: async () => true };
-    const res = await runDownload({ sdk, genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE });
+    const res = await runDownload({
+      sdk: currentReadSdk(sdk, { appId: APP_ID, layerId: 'c0ffee00-0000-4000-8000-0000000000c3',
+        sitemapXml: '<SiteMap><Area><Group><SubArea Entity="contoso_item"/></Group></Area></SiteMap>' }),
+      genpageCli, outDir: out, appId: APP_ID, appUnique: APP_UNIQUE,
+    });
     assert.ok(res.ok, JSON.stringify(res));
     assert.deepStrictEqual((res.spec.globalChoices || []).map((g) => g.name), ['bound_set'],
       'a set bound only by a filtered SYSTEM attribute must not be declared — the build writes every declaration into the target org');
@@ -3067,15 +3301,16 @@ test('readRelationships carries a divergent N:N SchemaName, and omits it when it
   assert.strictEqual(nn2.length, 1);
   assert.ok(!('schemaName' in nn2[0]), `a name equal to the generated default adds nothing; got ${JSON.stringify(nn2[0])}`);
 
-  // 3. FOREIGN publisher prefix -> reported as a rename, NOT carried (it would fail the spec's own
-  //    lint) and NOT counted as skipped (the relationship is still in the spec).
+  // 3. FOREIGN publisher prefix -> carried, with a warning that a new environment cannot create
+  //    that name. Omitting it made a same-environment rebuild CREATE under the generated name and
+  //    halt. Lint warns on existing: true rather than refusing the download.
   const warnings = [];
   const foreign = await readRelationships(mk('zzz_ForeignPrefixLink'), ['new_ticket', 'new_tag'], 'new', (m) => warnings.push(m));
   const nn3 = (foreign.relationships || []).filter((r) => r.type === 'ManyToMany');
   assert.strictEqual(nn3.length, 1, 'the relationship is still carried');
-  assert.ok(!('schemaName' in nn3[0]), 'but not under a name that fails the publisher-prefix lint');
-  assert.ok(warnings.some((w) => /zzz_ForeignPrefixLink/.test(w) && /publisher prefix/.test(w)),
-    `the rename must be reported; got ${JSON.stringify(warnings)}`);
+  assert.strictEqual(nn3[0].schemaName, 'zzz_ForeignPrefixLink');
+  assert.ok(warnings.some((w) => /zzz_ForeignPrefixLink/.test(w) && /new environment/i.test(w) && /cannot create/i.test(w)),
+    `the foreign name must be warned, not renamed; got ${JSON.stringify(warnings)}`);
   assert.deepStrictEqual((foreign.skipped || []).filter((s) => /zzz_ForeignPrefixLink/.test(s.name)), [],
     'and never counted as skipped — it IS in the rebuildable spec');
 });
@@ -3150,7 +3385,7 @@ test('runDownload REFUSES to emit a spec when a page config is unreadable, unles
   const SM_XML = `<SiteMap><Area><Group><SubArea GenPageId="${GP}" Title="Sitemap Page"/><SubArea Entity="contoso_item"/></Group></Area></SiteMap>`;
 
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-gate-'));
-  const mkSdk = () => ({
+  const mkSdk = () => currentReadSdk({
     fetchArtifact: async () => ({
       name: 'Gate App', description: '',
       siteMap: { areas: [{ title: 'M', groups: [{ title: 'G', subAreas: [
@@ -3172,7 +3407,7 @@ test('runDownload REFUSES to emit a spec when a page config is unreadable, unles
     fetchEntityMetadata: async (logical) => ({
       schemaName: logical, displayName: 'Item', primaryNameAttribute: `${String(logical).split('_')[0]}_name`,
     }),
-  });
+  }, { appId: APP_ID, layerId: APP_UNIQ_VALUE, sitemapXml: SM_XML });
   // pac downloads the page, but its config.json is unreadable — the live BOM case before the fix,
   // and any future pac format change after it.
   const genpageCli = {
@@ -3333,7 +3568,7 @@ test('complete reads use SDK pagination where truncation would change download d
   const sdk = {
     queryRecords: async (set, opts) => {
       calls.push({ set, opts });
-      if (set === 'appmodule') return [{ appmoduleidunique: 'app-unique' }];
+      if (set === 'appmodule') return [{ appmoduleidunique: COMPONENT_LAYER_ID }];
       if (set === 'appmodulecomponent') return [];
       if (set === 'solution') return [{ solutionid: 'sol-1' }];
       if (set === 'solutioncomponent') return [];
@@ -3342,8 +3577,9 @@ test('complete reads use SDK pagination where truncation would change download d
     dataverse: { get: async () => ({ status: 200, body: { value: [] } }) },
   };
 
-  await appComponentEntities(sdk, 'app-1');
-  await readDescriptionInventory(sdk, 'app-1', 'ContosoSolution', new Set());
+  const current = currentReadSdk(sdk, { appId: COMPONENT_APP_ID, layerId: COMPONENT_LAYER_ID });
+  await appComponentEntities(current, COMPONENT_APP_ID);
+  await readDescriptionInventory(current, COMPONENT_APP_ID, 'ContosoSolution', new Set());
 
   const appComponentReads = calls.filter((c) => c.set === 'appmodulecomponent');
   assert.ok(appComponentReads.length >= 4, 'component reads should be exercised');

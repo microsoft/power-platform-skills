@@ -187,6 +187,11 @@ function azIdentity(deps = {}) {
  *
  * Dependencies are injected for tests. Returns `{ ok: true, identity }` or `{ ok: false, error }`
  * and never throws — it is a diagnostic.
+ *
+ * `deps.identityOnSuccess: false` drops `identity` from a SUCCESSFUL result. Reading it costs an
+ * `az account show` — a cold Azure CLI start, seconds on Windows — and build and download paid that on
+ * every run for a value they then discarded. A 401 still reads it: naming the rejected identity is the
+ * whole point of that message.
  * WhoAmI: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/webapi/reference/whoami
  */
 async function preflightAuth(envUrl, deps = {}) {
@@ -247,7 +252,9 @@ async function preflightAuth(envUrl, deps = {}) {
 
   const status = res && (res.status !== undefined ? res.status : res.statusCode);
   if (status >= 200 && status < 300) {
-    return { ok: true, identity: who() || { user: '(unknown)', tenantId: '(unknown)' }, userId: res.data && (res.data.UserId || res.data.userId) };
+    const userId = res.data && (res.data.UserId || res.data.userId);
+    if (deps.identityOnSuccess === false) return { ok: true, userId };
+    return { ok: true, identity: who() || { user: '(unknown)', tenantId: '(unknown)' }, userId };
   }
 
   if (status === 401) {
@@ -307,16 +314,19 @@ async function preflightAuth(envUrl, deps = {}) {
  */
 function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHeaders = false, timeout = 60000 }) {
   return new Promise((resolve) => {
-    let settled = false;
-    const settle = (result) => {
-      if (settled) return;
-      settled = true;
-      resolve(result);
-    };
     const https = require('https');
     const http = require('http');
     const u = new URL(url);
     const mod = u.protocol === 'https:' ? https : http;
+    // Set once the status line and headers arrive. Every failure after that point is reported as an
+    // incomplete RESPONSE, not as a request that never reached the server: the server answered, so a
+    // POST may already have been applied and must not be replayed blindly (see dataverseRequest and
+    // sdk-http-client). That includes a timeout or a socket error that fires while the body is still
+    // streaming — they are delivered on the request, not the response, but the answer had arrived.
+    let answeredStatus = null;
+    const fail = (error) => resolve(answeredStatus === null
+      ? { error }
+      : { error, incompleteResponse: true, statusCode: answeredStatus });
     const req = mod.request(
       {
         method,
@@ -327,29 +337,31 @@ function makeRequest({ url, method = 'GET', headers = {}, body = null, includeHe
         timeout,
       },
       (res) => {
+        answeredStatus = res.statusCode;
         const chunks = [];
-        let ended = false;
         res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
         res.on('end', () => {
-          ended = true;
           const data = Buffer.concat(chunks).toString('utf8');
           const result = { statusCode: res.statusCode, body: data };
           if (includeHeaders) result.headers = res.headers;
-          settle(result);
+          resolve(result);
         });
-        // A severed response never emits end. Its aborted/error/close events can overlap, so settle
-        // once and report a transport error rather than hang or hand callers a partial JSON body.
-        res.on('error', (e) => settle({ error: e.message }));
-        res.on('aborted', () => settle({ error: 'Response aborted before the body completed' }));
+        // A response cut off after its headers (the connection reset or closed mid-body) emits
+        // 'aborted' / 'error' / 'close' but never 'end', and the socket timeout cannot fire on a
+        // closed socket — so without these the promise never settled. A bounded fan-out that waits
+        // for its in-flight writes before reporting a failure (mapLimit) then waited forever.
+        // Resolving `{ error }` is the same contract as a request-level failure; a later call is a no-op.
+        res.on('aborted', () => fail('Response aborted before it completed'));
+        res.on('error', (e) => fail(`Response failed before it completed: ${e.message}`));
         res.on('close', () => {
-          if (!ended) settle({ error: 'Response closed before the body completed' });
+          if (!res.complete) fail('Connection closed before the response completed');
         });
       }
     );
-    req.on('error', (e) => settle({ error: e.message }));
+    req.on('error', (e) => fail(e.message));
     req.on('timeout', () => {
       req.destroy();
-      settle({ error: 'Request timed out' });
+      fail(answeredStatus === null ? 'Request timed out' : 'Request timed out before the response completed');
     });
     if (body) req.write(body);
     req.end();
@@ -406,6 +418,12 @@ async function dataverseRequest(envUrl, method, apiPath, body = null, opts = {})
     const res = await send({ url, method, headers, body: bodyStr, includeHeaders, timeout });
 
     if (res.error) {
+      // The server answered and the body was then cut off (makeRequest's incompleteResponse). A POST
+      // creates or runs something, so it may already have been applied; re-sending it can create a
+      // second row. Report the uncertain outcome instead — reads and idempotent methods still retry.
+      if (res.incompleteResponse && String(method).toUpperCase() === 'POST') {
+        throw new Error(`Request failed: ${res.error} — the server had already answered ${res.statusCode}, so this POST may have been applied; it was not re-sent. Check the result before running it again.`);
+      }
       if (attempt < maxRetries) continue;
       throw new Error(`Request failed: ${res.error}`);
     }

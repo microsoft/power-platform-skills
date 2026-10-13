@@ -30,6 +30,14 @@ function reader({ tables = {}, rows = {}, failMetadata = false, failQuery = fals
           if (!t) return { status: 404, body: {} };
           return { status: 200, body: { value: (t.relationships || []).map((s) => ({ SchemaName: s })) } };
         }
+        // ManyToOne is a real collection the case-insensitive fallback reads. Answering it with the
+        // entity body (the fallthrough below) is not "no rows" — it is an unreadable collection.
+        const otherRel = /EntityDefinitions\(LogicalName='([^']+)'\)\/\w+Relationships/.exec(url);
+        if (otherRel) {
+          const t = tables[otherRel[1]];
+          if (!t) return { status: 404, body: {} };
+          return { status: 200, body: { value: [] } };
+        }
         // /EntityDefinitions(LogicalName='x')?$select=... and .../Attributes?$select=...
         const m = /EntityDefinitions\(LogicalName='([^']+)'\)(\/Attributes)?/.exec(url);
         const logical = m && m[1];
@@ -434,4 +442,155 @@ test('#559 the long halt reason is printed on the table line only; dependents ge
   assert.ok(why('column new_loc.new_a').length < 100, `a column must not repeat it: ${why('column new_loc.new_a')}`);
   assert.ok(why('view "V"').length < 100, `a view must not repeat it: ${why('view "V"')}`);
   assert.ok(why('column new_loc.new_a').length > 0 && why('view "V"').length > 0, 'but they still say WHY they are unknown');
+});
+
+test('a live plan does not call a name held by a different relationship reuse', async () => {
+  const declared = {
+    type: 'OneToMany',
+    referenced: 'contoso_project',
+    referencing: 'contoso_task',
+    lookup: { schemaName: 'contoso_ProjectId' },
+    schemaName: 'contoso_project_contoso_task',
+  };
+  const plan = [{
+    phase: 'data-model',
+    label: 'relationship 1:N contoso_project->contoso_task',
+    key: {
+      kind: 'relationship',
+      entity: 'contoso_project',
+      name: 'contoso_project_contoso_task',
+      relType: 'OneToMany',
+      declared,
+    },
+  }];
+  const provision = {
+    dataverse: {
+      get: async (url) => {
+        if (url.includes("/EntityDefinitions(LogicalName='contoso_project')/OneToManyRelationships")) {
+          return { status: 200, body: { value: [{
+            SchemaName: 'contoso_project_contoso_task',
+            ReferencingEntity: 'contoso_task',
+            ReferencingAttribute: 'contoso_ownerid',
+          }] } };
+        }
+        return { status: 200, body: { value: [] } };
+      },
+    },
+  };
+  await annotateLivePlan(plan, { spec: {}, provision });
+  assert.notStrictEqual(plan[0].state, 'reuse', 'a different lookup must not be reported as the declared relationship');
+  assert.strictEqual(plan[0].state, 'unknown');
+  assert.match(plan[0].stateWhy, /1:N contoso_project -> contoso_task \(lookup contoso_ownerid\)/);
+});
+
+test('planFor to annotateLivePlan: an N:N whose name a 1:N holds is not create', async () => {
+  const spec = {
+    solution: { uniqueName: 'Contoso', publisherPrefix: 'contoso' },
+    app: { name: 'Projects' },
+    entities: [
+      { schemaName: 'contoso_project', displayName: 'Project', pluralName: 'Projects', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] },
+      { schemaName: 'contoso_task', displayName: 'Task', pluralName: 'Tasks', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] },
+    ],
+    relationships: [{ type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_task' }],
+  };
+  const plan = planFor(spec, { sampleData: false, publish: false });
+  const paths = [];
+  const provision = {
+    dataverse: {
+      get: async (url) => {
+        paths.push(url);
+        if (/ManyToManyRelationships/.test(url)) return { status: 200, body: { value: [] } };
+        if (/OneToManyRelationships|ManyToOneRelationships/.test(url)) return { status: 200, body: { value: [] } };
+        if (/RelationshipType/.test(url)) {
+          return { status: 200, body: { '@odata.type': '#Microsoft.Dynamics.CRM.OneToManyRelationshipMetadata', SchemaName: 'contoso_project_contoso_task', RelationshipType: 'OneToManyRelationship' } };
+        }
+        if (/OneToManyRelationshipMetadata/.test(url)) {
+          return { status: 200, body: { SchemaName: 'contoso_project_contoso_task', ReferencedEntity: 'contoso_project', ReferencingEntity: 'contoso_task', ReferencingAttribute: 'contoso_projectid' } };
+        }
+        if (/EntityDefinitions\(LogicalName=/.test(url)) return { status: 404, body: { error: { message: 'does not exist' } } };
+        return { status: 200, body: { value: [] } };
+      },
+    },
+    findTables: async () => [],
+    queryRecords: async () => [],
+  };
+  await annotateLivePlan(plan, { spec, provision });
+  const item = plan.find((p) => /N:N/.test(p.label));
+  assert.ok(item, 'planFor must emit the N:N line');
+  assert.notStrictEqual(item.state, 'create');
+  assert.strictEqual(item.state, 'unknown');
+  assert.match(item.stateWhy, /1:N contoso_project -> contoso_task \(lookup contoso_projectid\)/);
+  const exact = paths.filter((p) => p.startsWith('/RelationshipDefinitions('));
+  assert.strictEqual(exact.length, 2, `one base read and its cast, not a collection scan: ${JSON.stringify(exact)}`);
+});
+
+test('a case-different holder is not create, and a fresh plan does not repeat collection reads', async () => {
+  const spec = {
+    solution: { uniqueName: 'Contoso', publisherPrefix: 'contoso' },
+    app: { name: 'Projects' },
+    entities: [
+      { schemaName: 'contoso_project', displayName: 'Project', pluralName: 'Projects', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] },
+      { schemaName: 'contoso_task', displayName: 'Task', pluralName: 'Tasks', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] },
+    ],
+    relationships: [
+      { type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_task' },
+      { type: 'OneToMany', referenced: 'contoso_project', referencing: 'contoso_task', lookup: { schemaName: 'contoso_OtherId', displayName: 'Other' } },
+    ],
+  };
+  const plan = planFor(spec, { sampleData: false, publish: false });
+  const paths = [];
+  const provision = {
+    dataverse: {
+      get: async (url) => {
+        paths.push(url);
+        if (/ManyToManyRelationships/.test(url)) return { status: 200, body: { value: [] } };
+        if (/OneToManyRelationships/.test(url) && /contoso_project/.test(url)) {
+          return { status: 200, body: { value: [{ SchemaName: 'Contoso_Project_Contoso_Task', ReferencingEntity: 'contoso_task', ReferencingAttribute: 'contoso_projectid' }] } };
+        }
+        if (/ManyToOneRelationships|OneToManyRelationships/.test(url)) return { status: 200, body: { value: [] } };
+        if (url.startsWith('/RelationshipDefinitions(')) return { status: 404, body: { error: { message: "RelationshipMetadataBase With Id = SchemaName='contoso_project_contoso_task' does not exist." } } };
+        if (/EntityDefinitions\(LogicalName=/.test(url)) return { status: 404, body: { error: { message: 'does not exist' } } };
+        return { status: 200, body: { value: [] } };
+      },
+    },
+    findTables: async () => [],
+    queryRecords: async () => [],
+  };
+  await annotateLivePlan(plan, { spec, provision });
+  const nn = plan.find((p) => /N:N/.test(p.label));
+  assert.notStrictEqual(nn.state, 'create', 'a case-different 1:N holder must not be planned as create');
+  assert.strictEqual(nn.state, 'unknown');
+  assert.match(nn.stateWhy, /1:N contoso_project -> contoso_task/);
+  const collections = paths.filter((p) => /\/(OneToMany|ManyToOne|ManyToMany)Relationships/.test(p));
+  const unique = new Set(collections);
+  assert.strictEqual(collections.length, unique.size, `collection reads must be memoized: ${JSON.stringify(collections)}`);
+});
+
+test('a fresh plan whose tables 404 still says create, with a bounded relationship read count', async () => {
+  const spec = {
+    solution: { uniqueName: 'Contoso', publisherPrefix: 'contoso' },
+    app: { name: 'Projects' },
+    entities: [
+      { schemaName: 'contoso_project', displayName: 'Project', pluralName: 'Projects', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] },
+      { schemaName: 'contoso_task', displayName: 'Task', pluralName: 'Tasks', primaryAttribute: { schemaName: 'contoso_name', displayName: 'Name' }, columns: [] },
+    ],
+    relationships: [{ type: 'ManyToMany', entity1: 'contoso_project', entity2: 'contoso_task' }],
+  };
+  const plan = planFor(spec, { sampleData: false, publish: false });
+  const paths = [];
+  const provision = {
+    dataverse: {
+      get: async (url) => {
+        paths.push(url);
+        return { status: 404, body: { error: { message: 'does not exist' } } };
+      },
+    },
+    findTables: async () => [],
+    queryRecords: async () => [],
+  };
+  await annotateLivePlan(plan, { spec, provision });
+  const nn = plan.find((p) => /N:N/.test(p.label));
+  assert.strictEqual(nn.state, 'create');
+  const relReads = paths.filter((p) => /Relationships/.test(p));
+  assert.ok(relReads.length > 0 && relReads.length <= 8, `bounded relationship reads, got ${relReads.length}: ${JSON.stringify(relReads)}`);
 });

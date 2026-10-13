@@ -24,6 +24,7 @@ Create and manage one or more Power Pages Server Logic files — server-side Jav
 - **Five functions only**: A server logic file can only export these top-level functions: `get`, `post`, `put`, `patch`, `del`. The name `delete` is a reserved word in JavaScript and cannot be used.
 - **Always return a string**: Every function must return a string. Use `JSON.stringify()` when returning objects or arrays.
 - **Use TaskCreate/TaskUpdate**: Track all progress throughout all phases — create the todo list upfront with all phases before starting any work.
+- **Preserve frontend integrity**: If Phase 9 adds or changes SPA UI, first read `${PLUGIN_ROOT}/references/site-modification-integrity.md`; synchronize visible states across configured locale resources and keep the UI bidirectional and expansion-safe. Backend-only runs do not need localization changes.
 
 > **Prerequisites:**
 > - An existing Power Pages code site created
@@ -1167,6 +1168,19 @@ Re-read each `.serverlogic.yml` file and verify:
 - [ ] `display_name` and `description` are populated
 - [ ] Fields are alphabetically sorted
 - [ ] File names match: folder name, `.js` name, `.serverlogic.yml` name, and `name` field all use the same value
+
+### 10.1b Final site-integrity gate
+
+After server logic and any optional client-side integration are complete, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every blocking error before presenting completion or asking to deploy. Inspect and report
+review findings in both directions and with expanded content. Backend-only runs still execute this
+gate; it is a no-op for visible-source integrity when no SPA source changed. Rerun it after any
+later source change.
 
 ### 10.2 Provide API URL
 

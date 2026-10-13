@@ -8,6 +8,7 @@ const path = require('path');
 const test = require('node:test');
 const { createSnapshot } = require('../create-dataverse-snapshot');
 const { loadAndValidateArchitectEvidence } = require('../render-dataverse-architect-evidence');
+const { shellBlocks } = require('./helpers/markdown-shell-blocks');
 
 const skillPath = path.resolve(
   __dirname,
@@ -16,10 +17,10 @@ const skillPath = path.resolve(
 const skill = fs.readFileSync(skillPath, 'utf8');
 
 function planningAttemptBlock(source) {
-  const match = source.replace(/\r\n/g, '\n')
-    .match(/```bash\n(SNAPSHOT_PATH=[\s\S]*?\nrun_dataverse_planning_attempt)\n```/);
-  assert.ok(match, 'foreground snapshot commands must expose one recoverable attempt');
-  return match[1];
+  const block = shellBlocks(source)
+    .find((command) => command.includes('run_dataverse_planning_attempt() {'));
+  assert.ok(block, 'foreground snapshot commands must expose one recoverable attempt');
+  return block;
 }
 
 test('foreground command extraction accepts LF and Windows CRLF checkouts', () => {
@@ -37,10 +38,11 @@ test('foreground Dataverse planning resolves and validates environment in one re
   assert.notStrictEqual(planningStart, -1);
   assert.notStrictEqual(planningEnd, -1);
   const planning = skill.slice(planningStart, planningEnd);
-  const commands = [...planning.matchAll(/```bash\r?\n([\s\S]*?)\r?\n```/g)];
+  const commands = shellBlocks(planning);
   assert.strictEqual(commands.length, 1);
   assert.strictEqual(
-    commands[0][1].trim(),
+    commands[0],
+    "cd -- '<working_dir>' || { echo \"BLOCKED: cannot enter working_dir\" >&2; exit 1; }\n" +
     'node "${PLUGIN_ROOT}/scripts/resolve-environment.js" "$ACTIVE_ENV_ID" --no-cache --require-tenant',
   );
   assert.doesNotMatch(planning, /PLANNING_ENV_JSON|node -e|JSON\.parse/);
@@ -54,7 +56,7 @@ test('approved architecture precedes typed discovery without retrying the normal
   const publisher = skill.indexOf('Now execute the deferred Step 1.7');
   const snapshotStart = skill.indexOf('### Foreground Dataverse planning');
   const conceptsStart = skill.indexOf('Build `<working_dir>/.tmp/dataverse-concepts.json`');
-  const commandsStart = skill.indexOf('SNAPSHOT_PATH="');
+  const commandsStart = skill.indexOf("SNAPSHOT_PATH='");
   assert.ok(architectureStart >= 0 && architectureStart < publisher);
   assert.ok(publisher < snapshotStart && snapshotStart < conceptsStart);
   assert.ok(conceptsStart < commandsStart);
@@ -106,7 +108,7 @@ node() {
         printf 'injected snapshot failure\\n' >&2
         return 1
       fi
-      "$REAL_NODE" -e 'require("node:fs").writeFileSync(process.argv[1], process.env.FIXTURE_SNAPSHOT)' "$SNAPSHOT_PATH"
+      "$REAL_NODE" -e 'const fs=require("node:fs"); require("node:assert/strict").equal(fs.realpathSync.native(process.cwd()), fs.realpathSync.native(process.env.OWNER_ROOT)); fs.writeFileSync(process.argv[1], process.env.FIXTURE_SNAPSHOT)' "$SNAPSHOT_PATH"
       ;;
     */render-dataverse-architect-evidence.js)
       if [ "$FAILURE_STAGE" = evidence ]; then
@@ -120,23 +122,30 @@ node() {
 }
 `;
   for (const failureStage of ['snapshot', 'evidence']) {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'planning recovery '));
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "planning owner's $root `printf value` "));
     testContext.after(() => fs.rmSync(directory, { recursive: true, force: true }));
     const temporary = path.join(directory, '.tmp');
     fs.mkdirSync(temporary);
+    const caller = path.join(directory, 'different app');
+    fs.mkdirSync(caller);
+    for (const root of [directory, caller]) {
+      fs.writeFileSync(path.join(root, 'power.config.json'), '{"environmentId":"same-environment"}');
+      fs.writeFileSync(path.join(root, 'app.config.js'), 'module.exports = {};');
+    }
     const snapshotFile = path.join(temporary, 'dataverse-foreground-planning-snapshot.json');
     const evidenceFile = path.join(temporary, 'dataverse-architect-evidence.json');
     fs.writeFileSync(snapshotFile, '{"stale":true}');
     fs.writeFileSync(evidenceFile, '{"stale":true}');
-    const block = commands.replaceAll('<working_dir>', directory.replaceAll('\\', '/'));
+    const block = commands.replaceAll('<working_dir>', directory.replaceAll('\\', '/').replaceAll("'", "'\\''"));
     const env = {
       ...process.env, PLUGIN_ROOT: pluginRoot.replaceAll('\\', '/'), REAL_NODE: process.execPath.replaceAll('\\', '/'),
       FIXTURE_SNAPSHOT: JSON.stringify(snapshot), FAILURE_STAGE: failureStage,
+      OWNER_ROOT: directory,
       POWER_PLATFORM_SKILLS_TELEMETRY_MOBILE_APP_OPTOUT: '1',
     };
     const failed = spawnSync(bash, ['-s'], {
       input: `${stub}\n${block}\nresult=$?\nprintf 'CONTROLLER_READY:%s\\n' "$result"\nexit "$result"`,
-      env, encoding: 'utf8', timeout: 10000,
+      env, cwd: caller, encoding: 'utf8', timeout: 10000,
     });
     assert.equal(failed.status, 2, failed.stderr);
     assert.match(failed.stderr, /NEEDS_RECOVERY: dataverse-(snapshot|evidence)/);
@@ -149,11 +158,19 @@ node() {
 
     const recovered = spawnSync(bash, ['-s'], {
       input: `${stub}\n${block}`,
-      env: { ...env, FAILURE_STAGE: '' }, encoding: 'utf8', timeout: 10000,
+      env: { ...env, FAILURE_STAGE: '' }, cwd: caller, encoding: 'utf8', timeout: 10000,
     });
     assert.equal(recovered.status, 0, recovered.stderr);
     assert.match(recovered.stdout, /Dataverse inventory:/);
     loadAndValidateArchitectEvidence(snapshotFile, evidenceFile);
+    const missing = commands.replaceAll('<working_dir>',
+      path.join(directory, 'missing app').replaceAll('\\', '/').replaceAll("'", "'\\''"));
+    const invalidRoot = spawnSync(bash, ['-s'], {
+      input: `${stub}\n${missing}`,
+      env: { ...env, FAILURE_STAGE: '' }, cwd: caller, encoding: 'utf8', timeout: 10000,
+    });
+    assert.equal(invalidRoot.status, 1);
+    assert.match(invalidRoot.stderr, /BLOCKED: cannot enter working_dir/);
   }
 });
 
@@ -212,7 +229,13 @@ test('Power Apps initialization directly invokes the CLI with approved values', 
   const initializeStart = skill.indexOf('### Step 6 — Initialize');
   const initializeEnd = skill.indexOf('### Step 6.5 — Verify dependencies');
   const initialize = skill.slice(initializeStart, initializeEnd);
-  assert.match(initialize, /npx power-apps init -t MobileApp/);
+  // `$PA` is only safe because every resolver assignment keeps `--no-install`; without it, npx
+  // would download a registry package when the local shim is missing.
+  const cliBinary = fs.readFileSync(path.resolve(__dirname, '../../shared/cli-binary.md'), 'utf8');
+  assert.match(initialize, /\$PA app init -t MobileApp/);
+  assert.match(cliBinary, /PA="npx --no-install pa"/);
+  assert.match(cliBinary, /PA="npx --no-install power-apps"/);
+  assert.doesNotMatch(cliBinary, /PA="npx (?!--no-install )/);
   assert.match(initialize, /--display-name "<displayName>"/);
   assert.match(initialize, /--environment-id "<environment-id>"/);
   assert.match(initialize, /approved Step 2 display name and Step 4 environment ID/);

@@ -46,7 +46,7 @@ const WRITTEN = [
 ].join('\r\n');
 const PAGE_ID = '6e0c28a2-cdbf-41ec-9186-d10fd5de6e35';
 const EDIT_PREVIEW = `## Genpage Edit Plan\n\n### Current State\n- **File:** ${PAGE_ID}/page.tsx\n- **Data:** Mock data\n\n### Proposed Changes\n1. Add a search box\n`;
-const EDIT_WRITTEN = `# Genpage Edit Plan\n\n## File Being Edited\n- **Absolute path:** D:\\work\\edit\\${PAGE_ID}\\page.tsx\n- **App ID:** 11111111-2222-3333-4444-555555555555\n- **Page ID:** ${PAGE_ID}\n`;
+const EDIT_WRITTEN = `# Genpage Edit Plan\n\n## File Being Edited\n- **Absolute path:** D:\\work\\edit\\${PAGE_ID}\\page.tsx\n- **App ID:** 11111111-2222-3333-4444-555555555555\n- **Page ID:** ${PAGE_ID}\n\n## Requested Changes\n1. Add a search box\n`;
 
 // An edit plan lives in `genpage-edit-plan.md` (skills/genpage/edit-flow.md), and verify reads each file as the
 // kind its name says.
@@ -194,11 +194,11 @@ test('an overlong or malformed page id is refused, never truncated to a valid-lo
   const quoted = `${overlong}\n## User Request\n> "Change the page, **Page ID:** ${PAGE_ID}"\n`;
   assert.equal(planTargets(quoted), null, 'a malformed label is not rescued by a later valid one');
   const other = '7f1d39b3-cdbf-41ec-9186-d10fd5de6e35';
-  assert.equal(planTargets(`${EDIT_WRITTEN}\n- **Page ID:** ${other}\n`), null, 'two labels in the section naming different pages are ambiguous');
-  assert.deepEqual(planTargets(`${EDIT_WRITTEN}\n- **Page ID:** \`${PAGE_ID}\`\n`), { kind: 'edit', targets: [PAGE_ID] }, 'labels that agree are fine');
+  assert.equal(planTargets(EDIT_WRITTEN.replace(`- **Page ID:** ${PAGE_ID}\n`, `- **Page ID:** ${PAGE_ID}\n- **Page ID:** ${other}\n`)), null, 'two labels in the section naming different pages are ambiguous');
+  assert.deepEqual(planTargets(EDIT_WRITTEN.replace(`- **Page ID:** ${PAGE_ID}\n`, `- **Page ID:** ${PAGE_ID}\n- **Page ID:** \`${PAGE_ID}\`\n`)), { kind: 'edit', targets: [PAGE_ID] }, 'labels that agree are fine');
 });
 
-// The written plan copies the page's earlier prompts in full, and quoted text there may carry a label of
+// Earlier written plans copied the page's prompts in full, and quoted context may still carry a label of
 // its own. Only the structured `## File Being Edited` section is read, so such a prompt can no longer
 // block every later edit of the page.
 test('a Page ID label quoted in the embedded prompt neither blocks nor redirects an edit', () => {

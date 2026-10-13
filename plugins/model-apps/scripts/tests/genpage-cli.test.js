@@ -5,7 +5,14 @@ const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { makeGenpageCli, parsePageId, parseList, buildPacInvocation, classifyListOutput, parseListCount, runPac } = require('../lib/genpage-cli.js');
+const { makeGenpageCli: realMakeGenpageCli, parsePageId, parseList, buildPacInvocation, classifyListOutput, parseListCount, runPac } = require('../lib/genpage-cli.js');
+
+// Keep every new Dataverse read offline, including one added by a future recovery change.
+const makeGenpageCli = (env, deps = {}) => realMakeGenpageCli(env, {
+  request: async () => { throw new Error('unexpected offline Dataverse read'); },
+  ...deps,
+});
+const createdPage = (name = 'Overview') => async () => ({ status: 200, data: { name, createdon: new Date().toISOString() } });
 
 const GUID = '6e0c28a2-cdbf-41ec-9186-d10fd5de6e35';
 // Scratch goes in the OS temp dir, never beside this file. Tests that walk scripts/ (the await scan in
@@ -366,10 +373,8 @@ test('upload retries a transient pac failure then succeeds', async () => {
   assert.ok(n >= 2, 'retried after the transient failure');
 });
 
-// Updated for Plan 5 (C2): recovery now uses a strict env-wide before/after id diff (no name matching).
-// The mock returns an empty env BEFORE the first CREATE and a page-present env AFTER so the diff finds
-// exactly one new id, which is adopted — the second attempt is an UPDATE (not another CREATE).
-test('upload converts a failed CREATE to an UPDATE on retry (env-id-diff recovery, no duplicate)', async () => {
+// The diff discovers a candidate, not authority to turn a failed CREATE into an UPDATE.
+test('upload reports a failed CREATE candidate without an automatic UPDATE', async () => {
   const uploadArgs = [];
   let up = 0;
   let listN = 0;
@@ -382,10 +387,10 @@ test('upload converts a failed CREATE to an UPDATE on retry (env-id-diff recover
     up += 1; uploadArgs.push(args);
     return up === 1 ? { status: 1, stdout: '', stderr: 'flaky' } : { status: 0, stdout: `Page ID: ${GUID}`, stderr: '' };
   };
-  const r = await makeGenpageCli('https://x', { run, sleep: async () => {} }).upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' });
-  assert.strictEqual(r.pageId, GUID);
+  await assert.rejects(makeGenpageCli('https://x', { run, sleep: async () => {}, request: createdPage() }).upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' }),
+    (e) => e.message.includes(GUID) && /createdon|--page-id/.test(e.message));
+  assert.strictEqual(uploadArgs.length, 1);
   assert.ok(!uploadArgs[0].includes('--page-id'), 'first attempt was a create (no page-id)');
-  assert.ok(uploadArgs[1].includes('--page-id') && uploadArgs[1].includes(GUID), 'retry updates in place via the env-diff adopted id (never duplicates)');
 });
 
 // Updated for Plan 5 (C2): the BEFORE-snapshot is taken PRIOR to issuing any CREATE; if it fails,
@@ -531,8 +536,8 @@ test('upload: a possibly-successful CREATE + a failing enumeration NEVER issues 
   assert.ok(lists >= 1, 'it tried to enumerate before deciding');
 });
 
-// Updated for Plan 5 (C2): adopt by strict env-id diff (before=empty, after=GUID appeared), not name.
-test('upload: an uncertain CREATE adopts the one new env id and UPDATES it (no duplicate)', async () => {
+// A matching name and recent creation time are still only diagnostic data.
+test('upload: an uncertain CREATE stops at the new env id without a duplicate or update', async () => {
   let creates = 0, updates = 0;
   let listN = 0;
   const run = async (args) => {
@@ -544,11 +549,10 @@ test('upload: an uncertain CREATE adopts the one new env id and UPDATES it (no d
     // before-snapshot (listN=1): env empty; after-snapshot (listN=2): GUID appeared
     return { status: 0, stdout: listN === 1 ? LIST_EMPTY : LIST_ONE, stderr: '' };
   };
-  const cli = makeGenpageCli('env', { run, sleep: async () => {}, attempts: 3 });
-  const r = await cli.upload({ appId: 'app-1', codeFile: 'x.tsx', name: 'Overview' });
-  assert.strictEqual(r.pageId, GUID);
+  const cli = makeGenpageCli('env', { run, sleep: async () => {}, attempts: 3, request: createdPage() });
+  await assert.rejects(cli.upload({ appId: 'app-1', codeFile: 'x.tsx', name: 'Overview' }), (e) => e.message.includes(GUID) && /--page-id/.test(e.message));
   assert.strictEqual(creates, 1, 'one create attempt');
-  assert.strictEqual(updates, 1, 'retry UPDATED the adopted env-diff id in place — no second create');
+  assert.strictEqual(updates, 0, 'no candidate is automatically updated');
 });
 
 test('upload: an uncertain CREATE whose enumeration shows ZERO matches safely retries the CREATE', async () => {
@@ -568,7 +572,7 @@ test('upload: an uncertain CREATE whose enumeration shows ZERO matches safely re
 test('upload (I7): direct UPDATE with caller-provided pageId returns wrong Page ID → throws', async () => {
   const WRONG_ID = 'aaaaaaaa-0000-0000-0000-000000000000';
   const run = async () => ({ status: 0, stdout: `Page ID: ${WRONG_ID}`, stderr: '' });
-  const cli = makeGenpageCli('env', { run, sleep: async () => {} });
+  const cli = makeGenpageCli('env', { run, sleep: async () => {}, request: createdPage() });
   // pageId: GUID but pac returns WRONG_ID → mismatch must halt
   await assert.rejects(
     cli.upload({ appId: 'app-1', pageId: GUID, codeFile: 'x.tsx', name: 'Overview' }),
@@ -576,25 +580,26 @@ test('upload (I7): direct UPDATE with caller-provided pageId returns wrong Page 
   );
 });
 
-// Updated for Plan 5 (C2): adoption is now by strict env-id diff. Before=empty, after=GUID → adopt
-// GUID → UPDATE returns WRONG_ID → I7 guard fires (adopted id != returned id → refuse to persist).
-test('upload (I7): uncertain-CREATE adopts env id then UPDATE returns wrong Page ID → throws', async () => {
+// Stop before any candidate update; the explicit-update returned-id guard remains above.
+test('upload: uncertain CREATE cannot reach a candidate UPDATE returning another id', async () => {
   const WRONG_ID = 'aaaaaaaa-0000-0000-0000-000000000000';
   let listN = 0;
+  let updates = 0;
   const run = async (args) => {
     if (args.includes('upload')) {
-      if (args.includes('--page-id')) return { status: 0, stdout: `Page ID: ${WRONG_ID}`, stderr: '' }; // UPDATE returns wrong id
+      if (args.includes('--page-id')) { updates++; return { status: 0, stdout: `Page ID: ${WRONG_ID}`, stderr: '' }; }
       return { status: 0, stdout: 'no id', stderr: '' }; // CREATE uncertain
     }
     listN++;
-    // before-snapshot (listN=1): empty; after-snapshot (listN=2): GUID appeared → adopt GUID
+    // Before is empty; after contains the candidate, which must be reported without an update.
     return { status: 0, stdout: listN === 1 ? LIST_EMPTY : LIST_ONE, stderr: '' };
   };
-  const cli = makeGenpageCli('env', { run, sleep: async () => {} });
+  const cli = makeGenpageCli('env', { run, sleep: async () => {}, request: createdPage() });
   await assert.rejects(
     cli.upload({ appId: 'app-1', codeFile: 'x.tsx', name: 'Overview' }),
-    /unexpected Page ID|mismatched/i
+    (e) => e.message.includes(GUID) && /refusing.*update/i.test(e.message)
   );
+  assert.strictEqual(updates, 0);
 });
 
 // ── Task 2: enumerateEnv (env-wide EXISTENCE authority) ──────────────────────────────────────────
@@ -643,13 +648,13 @@ test('enumerateEnv is FAIL-CLOSED on a non-zero exit, returns ok:false after ret
 
 // ── Task 2: uncertain-CREATE strict env-id diff (C2 / addenda) ───────────────────────────────────
 
-test('upload uncertain-CREATE: strict env-id diff finds ONE new id → adopt and UPDATE (C2)', async () => {
+test('upload uncertain-CREATE: one new id requires explicit user resolution', async () => {
   let uploadCalls = 0;
   let listN = 0;
   const run = async (args) => {
     if (args.includes('upload')) {
       uploadCalls++;
-      // First call is the uncertain CREATE (returns no id); second is the UPDATE after adoption
+      // A second mutation would be a failure of the stop rule.
       if (uploadCalls === 1) return { status: 0, stdout: 'created, no id returned', stderr: '' };
       return { status: 0, stdout: `Page ID: ${GP_A}`, stderr: '' };
     }
@@ -657,10 +662,10 @@ test('upload uncertain-CREATE: strict env-id diff finds ONE new id → adopt and
     if (listN === 1) return { status: 0, stdout: envList([]), stderr: '' };                 // before: empty
     return { status: 0, stdout: envList([{ pageId: GP_A, name: 'Overview' }]), stderr: '' }; // after: GP_A appeared
   };
-  const r = await makeGenpageCli('https://x', { run, sleep: async () => {}, attempts: 3 })
-    .upload({ appId: 'app', codeFile: 'o.tsx', name: 'Overview', prompt: 'p', agentMessage: 'm' });
-  assert.strictEqual(r.pageId, GP_A, 'adopted the single new env id (== the env-diff result)');
-  assert.strictEqual(uploadCalls, 2, 'first CREATE (uncertain) + one UPDATE (adopted id) — never a blind 2nd CREATE');
+  await assert.rejects(makeGenpageCli('https://x', { run, sleep: async () => {}, attempts: 3, request: createdPage() })
+    .upload({ appId: 'app', codeFile: 'o.tsx', name: 'Overview', prompt: 'p', agentMessage: 'm' }),
+    (e) => e.message.includes(GP_A) && /otherwise.*leave.*create/i.test(e.message));
+  assert.strictEqual(uploadCalls, 1, 'no automatic second mutation');
 });
 
 test('upload uncertain-CREATE: newIds>1 → throws (ambiguous — cannot attribute) (C2)', async () => {
@@ -751,12 +756,9 @@ test('download passes --page-id for a single id (no trailing comma)', async () =
   assert.ok(i > 0 && seen[i + 1] === GP_A, 'single id, no trailing comma');
 });
 
-// --- PR review: duplicate-create recovery must not depend on a NAME ------------------------------
-// Both the pre-create snapshot and the uncertain-result reconciliation used to require `name`, so a
-// name-less create skipped both and retried BLINDLY after an uncertain result — the way pac ends up
-// with duplicate pages. The recovery is pure id arithmetic (enumerateEnv is id-keyed and name
-// matching is explicitly never used), so the name was vestigial in those gates.
-test('a name-less create still snapshots and reconciles an uncertain result (no blind retry)', async () => {
+// A nameless request still needs the id snapshot to detect a possible landed create, but it cannot
+// corroborate the resulting candidate by name and must not turn it into an UPDATE.
+test('a name-less uncertain create reports its candidate without retrying or updating it', async () => {
   const GP_NEW = '13ecbc57-a3a4-4132-b0a2-a6c6b12691e8';
   const seen = [];
   let uploads = 0;
@@ -774,15 +776,12 @@ test('a name-less create still snapshots and reconciles an uncertain result (no 
     },
     sleep: async () => {},
   });
-  const res = await cli.upload({ appId: 'a1', codeFile: 'p.tsx', prompt: 'p', agentMessage: 'm' }); // NO name
-  assert.strictEqual(res.pageId, GP_NEW,
-    'the landed create must be ADOPTED, not created a second time');
-  // The retry must have run as an UPDATE against the adopted id, never as a second blind create.
+  await assert.rejects(cli.upload({ appId: 'a1', codeFile: 'p.tsx', prompt: 'p', agentMessage: 'm' }), (e) =>
+    e.message.includes(GP_NEW) && /--page-id/.test(e.message));
   const uploadCalls = seen.filter((a) => a.includes('upload'));
-  assert.strictEqual(uploadCalls.length, 2, `expected one create + one adopted update; got ${uploadCalls.length}`);
+  assert.strictEqual(uploadCalls.length, 1);
   assert.ok(!uploadCalls[0].includes('--page-id'), 'the first attempt is a create');
-  assert.deepStrictEqual(uploadCalls[1].slice(uploadCalls[1].indexOf('--page-id'), uploadCalls[1].indexOf('--page-id') + 2),
-    ['--page-id', GP_NEW], 'the retry targets the adopted page instead of creating a duplicate');
+  assert.strictEqual(seen.filter((a) => a.includes('list')).length, 2, 'both id snapshots still run');
 });
 
 // --- #588.1: a page NAME must not be able to supply the list summary ----------------------------
@@ -831,7 +830,7 @@ test('parsePageId still accepts a real id, in either case, with trailing output'
 });
 
 // A malformed id must not simply vanish: with no parsable identity the upload is UNCERTAIN, and the
-// env-wide before/after diff has to run so a landed create is adopted rather than blindly retried.
+// env-wide before/after diff must still run, so a candidate is reported rather than blindly retried.
 test('a malformed Page ID drives uncertain-create reconciliation, not a blind retry', async () => {
   const seen = [];
   let uploads = 0;
@@ -847,13 +846,11 @@ test('a malformed Page ID drives uncertain-create reconciliation, not a blind re
       return { status: 0, stdout: `Page ID: ${GUID}`, stderr: '' };
     },
     sleep: async () => {},
+    request: createdPage('N'),
   });
-  const res = await cli.upload({ appId: 'a1', codeFile: 'p.tsx', name: 'N', prompt: 'p', agentMessage: 'm' });
-  assert.strictEqual(res.pageId, GUID,
-    'the landed create must be ADOPTED by id diff, not identified by the malformed token');
+  await assert.rejects(cli.upload({ appId: 'a1', codeFile: 'p.tsx', name: 'N', prompt: 'p', agentMessage: 'm' }), (e) => e.message.includes(GUID) && /--page-id/.test(e.message));
   const uploadCalls = seen.filter((a) => a.includes('upload'));
-  assert.strictEqual(uploadCalls.length, 2, 'one create + one adopted update');
-  assert.ok(uploadCalls[1].includes('--page-id'), 'the retry targets the adopted page');
+  assert.strictEqual(uploadCalls.length, 1, 'one create, no automatic adopted update');
 });
 
 // --- G4: keep the diagnostic pac produced, and do not retry a deterministic failure -------------
@@ -1109,13 +1106,8 @@ test('a transient failure on an ordinary update is still retried', async () => {
     `a transient fault must still be retried; ran ${attempts} attempt(s)`);
 });
 
-// The ONE case the deterministic-failure stop must not break: an uncertain CREATE that actually
-// landed. Once the env diff adopts the new page, the next attempt is an UPDATE by id — a different
-// command — so the create's argument fault says nothing about it. Every other adoption test used a
-// transient error, so a guard that ignored the adoption transition survived the whole suite; and
-// that mutant is a duplicate-create hazard, because the call throws without returning the id the
-// create already minted.
-test('a deterministic-looking error on a CREATE that landed is still adopted and returned', async () => {
+// Even a deterministic-looking failure can leave a row, but its id does not authorize another mutation.
+test('a deterministic-looking uncertain CREATE reports its candidate and stops', async () => {
   const uploads = [];
   let listN = 0;
   const run = async (args) => {
@@ -1129,12 +1121,10 @@ test('a deterministic-looking error on a CREATE that landed is still adopted and
       ? { status: 1, stdout: '', stderr: "Error: The value passed to '--code-file' is invalid. The file 'o.tsx' could not be found." }
       : { status: 0, stdout: `Successfully pushed page. Page ID: ${GUID}`, stderr: '' };
   };
-  const r = await makeGenpageCli('https://x', { run, sleep: async () => {} })
-    .upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' });
-  assert.strictEqual(r.pageId, GUID, 'the adopted page must be returned, not lost to a thrown error');
-  assert.strictEqual(uploads.length, 2, 'exactly one follow-up attempt — the UPDATE of the adopted page');
+  await assert.rejects(makeGenpageCli('https://x', { run, sleep: async () => {}, request: createdPage() })
+    .upload({ appId: 'a', codeFile: 'o.tsx', name: 'Overview' }), (e) => e.message.includes(GUID) && /--page-id/.test(e.message));
+  assert.strictEqual(uploads.length, 1, 'the uncertain create is the only mutation');
   assert.ok(!uploads[0].includes('--page-id'), 'the first attempt was the create');
-  assert.ok(uploads[1].includes('--page-id') && uploads[1].includes(GUID), 'the second attempt updated the adopted id');
 });
 
 

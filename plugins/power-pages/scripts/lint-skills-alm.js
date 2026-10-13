@@ -229,6 +229,7 @@ const INTENT_HELPERS = [
 // values are flagged so typos surface.
 const CANCEL_LEAVES_VOCAB = new Set([
   'nothing',
+  'localized-site-files',
   'validated-stage-run',
   'partial-manifest',
   'partial-solution',

@@ -6,7 +6,7 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, WebFetch, AskUserQuestion
 model: opus
 ---
 
-**Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - skip its version check and `memory-bank.md` handling because this skill performs its own plugin check and must not create unrelated project state.
+**Shared instructions: [shared-instructions.md](../../shared/shared-instructions.md)** - read first, then skip its version check and `memory-bank.md` handling because this skill performs its own plugin check and must not create unrelated project state.
 
 # Check Updates (`/check-updates`)
 
@@ -65,7 +65,7 @@ For each approved package update:
 
 1. Snapshot `package.json`, existing npm lockfiles, and `native-app-plan.md` when that package will change it under `.tmp/dependency-maintenance/`.
 2. Install with `--ignore-scripts`; use `--package-lock=false` when the project had no npm lockfile.
-3. Run `npm install --ignore-scripts`, `npx expo install --check`, the project's `type-check` script (or `npx tsc --noEmit` when TypeScript is declared), and `validate-mobile-files.js` for each changed file. Never run `npx expo install --fix`.
+3. Run `npm install --ignore-scripts`, `npx --no-install expo install --check`, the project's `type-check` script (or `npx --no-install tsc --noEmit` when TypeScript is declared), and `validate-mobile-files.js` for each changed file. Never run `npx expo install --fix`.
 4. If any command fails, restore that package's snapshot, reconcile `node_modules`, return `BLOCKED` with the failed command, and do not offer later packages. Otherwise delete the snapshot and continue.
 
 Do not update transitive packages directly, add overrides, move packages between dependency sections, or use Git to roll back project files.

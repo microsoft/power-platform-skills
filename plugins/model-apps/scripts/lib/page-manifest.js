@@ -187,31 +187,37 @@ function parseManifestBase64(b64) {
 //      A spec pageId may ONLY bind when its ownership is proven. Binding an unprovenanced GUID
 //      that merely exists env-wide would silently overwrite an UNRELATED live page.
 //      Binding is allowed ONLY when EITHER: (i) ∈ sitemapIds (proven this app's page via
-//      membership), OR (ii) === manifest id (manifest confirms the same id). AND the id must be
+//      membership), OR (ii) a local creation receipt for this key/id plus a corroborating stored name. The id must be
 //      ∈ existenceIds (page still exists). Stale or unprovenanced ids fall through to the manifest.
 //
-//   2. Manifest key→pageId — confirmed live: id still ∈ existenceIds. Crash-safe: a manifested id
-//      that exists but is not yet in the sitemap (finalizer died) is reused, not recreated (C1).
+//   2. Manifest key→pageId — live and proven by membership or a local creation receipt plus name.
+//      This retains interrupted-create recovery without treating an editable manifest as proof.
 //
 //   3. Absent → create (mint a fresh id).
 //
 // `existenceIds` — array/Set of ALL page ids that EXIST in the environment (create-vs-reuse).
 // `sitemapIds`   — array/Set of ids in THIS app's sitemap (membership / ownership proof).
+// `storedNames`  — Map<id, decoded stored name>, read only for unplaced live manifest candidates.
+// `createdIds`   — Map<key, Set<id>> from this app's local creation receipts; never remote metadata.
 //
 // Conflicts (caller HALTs `pages-identity-conflict` when conflicts.length > 0):
 //   { key, reason:'invalid-pageid', pageId }          — p.pageId is not a valid 36-char GUID.
 //   { key, reason:'spec-manifest-disagree', pageId, manifestId }
 //                                                     — both ids live and differ (C3).
+//   { key, reason:'unproven-manifest-id', manifestId, storedName, requestedName }
+//                                                     — no membership or corroborated local receipt.
 //   { pageId, keys:[…] }                              — ≥2 distinct keys → same live id (1:1 violation).
 //
 // Returns { keyToId: Map<key,id>, absentKeys: string[], conflicts: object[] }.
 // No name-based lookup; no `ambiguous` field — id matching is unambiguous.
-function reconcilePageIds(pages, manifest, existenceIds, sitemapIds) {
+function reconcilePageIds(pages, manifest, existenceIds, sitemapIds, storedNames = new Map(), createdIds = new Map()) {
   // Normalise id sets to lower-case for case-insensitive membership tests. Original-case ids are
   // preserved on source objects (mp.pageId, p.pageId) so keyToId and conflict payloads round-trip
   // the casing the caller provided.
-  const existSet = new Set((existenceIds || []).map((id) => String(id).toLowerCase()));
-  const sitemapSet = new Set((sitemapIds || []).map((id) => String(id).toLowerCase()));
+  const existSet = new Set(Array.from(existenceIds || [], (id) => String(id).toLowerCase()));
+  const sitemapSet = new Set(Array.from(sitemapIds || [], (id) => String(id).toLowerCase()));
+  const names = new Map(Array.from(storedNames, ([id, name]) => [String(id).toLowerCase(), name]));
+  const receipts = new Map(Array.from(createdIds, ([key, ids]) => [key, new Set(Array.from(ids, (id) => String(id).toLowerCase()))]));
 
   // Manifest pages indexed by key for O(1) lookup.
   const manifestByKey = new Map(
@@ -223,6 +229,11 @@ function reconcilePageIds(pages, manifest, existenceIds, sitemapIds) {
   const keyToId = new Map();
   const absentKeys = [];
   const conflicts = [];
+  const proveManifest = (key, page, mp, id) => {
+    if (sitemapSet.has(id) || (receipts.get(key)?.has(id) && typeof names.get(id) === 'string' && names.get(id) === page.name)) return true;
+    conflicts.push({ key, reason: 'unproven-manifest-id', manifestId: mp.pageId, storedName: names.get(id) ?? null, requestedName: page.name, hasCreationReceipt: receipts.get(key)?.has(id) === true });
+    return false;
+  };
 
   for (const p of pages || []) {
     const key = p.key || p.name;
@@ -254,10 +265,11 @@ function reconcilePageIds(pages, manifest, existenceIds, sitemapIds) {
 
       // Provenance-gated binding: adopt the spec pageId only when ownership is proven.
       //   (i)  ∈ sitemapIds → page is a confirmed member of THIS app.
-      //   (ii) === manId    → manifest agrees (consistent edit-snapshot of this page).
+      //   (ii) local receipt → this build created the key/id, and the stored name corroborates it.
       // An id that merely exists env-wide but satisfies neither condition is unprovenanced —
       // it could belong to an entirely different app. Fall through to the manifest instead.
-      if (specInExistence && (sitemapSet.has(specIdLow) || specIdLow === manId)) {
+      if (specInExistence) {
+        if (!proveManifest(key, p, mp || { pageId: specId }, specIdLow)) continue;
         keyToId.set(key, specId);
         continue;
       }
@@ -265,12 +277,22 @@ function reconcilePageIds(pages, manifest, existenceIds, sitemapIds) {
       // Unprovenanced or stale spec pageId — do not bind; fall through to manifest lookup.
     }
 
-    // Manifest authority (C1): a manifested id confirmed in existenceIds is reused even when the
-    // sitemap finalizer died before writing the SubArea (crash-safe round-trip correctness).
+    // A live but unproven candidate is a conflict, not absence: recreating it would hide the
+    // unresolved identity while leaving the original page behind.
     if (manId !== null && existSet.has(manId)) {
+      if (!proveManifest(key, p, mp, manId)) continue;
       keyToId.set(key, mp.pageId);
     } else {
-      absentKeys.push(key);
+      // A crash can precede remote manifest persistence. A local CREATE receipt remains discovery
+      // evidence, but multiple live receipts for one key are ambiguous and must not be guessed.
+      const local = [...(receipts.get(key) || [])].filter((id) => existSet.has(id));
+      if (local.length > 1) {
+        conflicts.push({ key, reason: 'multiple-created-page-ids', pageIds: local });
+      } else if (local.length === 1) {
+        if (proveManifest(key, p, { pageId: local[0] }, local[0])) keyToId.set(key, local[0]);
+      } else {
+        absentKeys.push(key);
+      }
     }
   }
 

@@ -3,14 +3,14 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { runCliSync } = require('./process-runner');
 
 const HOST_PROCESS = /^(?:node|nodejs|copilot|claude|codex|opencode|hermes|openclaw|code(?: helper(?: \(plugin\))?)?)(?:\.exe)?$/i;
 let cachedScope;
 
 function readProcessScope(opts = {}) {
   if (cachedScope !== undefined && !opts.exec) return cachedScope;
-  const exec = opts.exec || execFileSync;
+  const exec = opts.exec || runCliSync;
   const platform = opts.platform || process.platform;
   let scope = '';
   try {

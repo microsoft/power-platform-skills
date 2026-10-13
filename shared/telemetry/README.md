@@ -12,7 +12,12 @@ For the repository-level user disclosure, see [Telemetry](../../README.md#teleme
 
 ## What it does
 
-`skill_started` usage telemetry over the 1DS Common Schema 4.0 envelope. A detached dispatcher child resolves the destination iKey + collector URL (env override → plugin `resolver.js` → static key in `ikey.json`), then POSTs the event; the hook that emitted it returns before the POST happens.
+Usage telemetry over the 1DS Common Schema 4.0 envelope. All
+adopters emit `skill_started`; plugins may also emit allowlisted configuration,
+validation, and completion events. A detached dispatcher child resolves the
+destination iKey + collector URL (env override → plugin `resolver.js` → static
+key in `ikey.json`), then POSTs the event; the process that emitted it returns
+before the POST happens.
 
 ```
 hook (~5ms when disabled, ~3-5s otherwise — incl. when the user opted out)
@@ -58,7 +63,7 @@ choice cannot override `disabled: true`.
 
 | Plugin | Committed state | Current behavior | Plugin-specific fields |
 |---|---|---|---|
-| Power Pages | `disabled: false` | Enabled and default-on for transmission. Organization-based geo routing selects a regional collector; without an organization ID, the configured US default is used. Events are written to the local mirror even after a user transmission opt-out. | `eventInfo.aadObjectId` when PAC exposes the signed-in user's Entra object ID; `eventInfo.framework` when the Power Pages code-site framework can be determined. |
+| Power Pages | `disabled: false` | Enabled and default-on for transmission. Organization-based geo routing selects a regional collector; without an organization ID, the configured US default is used. Events are written to the local mirror even after a user transmission opt-out. | `eventInfo.aadObjectId` when PAC exposes the signed-in user's Entra object ID; `eventInfo.framework` when the Power Pages code-site framework can be determined; `eventInfo.auditPermissions` (aggregate, identity-free) on the `audit-permissions` completion event. |
 | Mobile Apps | `disabled: false` | Enabled and default-on for transmission. Its project environment selects the regional collector. Until that cluster is resolved, events remain in the local mirror and are not transmitted. | `eventInfo.invocationSource`; random per-project `eventInfo.appInstanceId` (or `null` outside a prepared project); optional validated checkpoint `eventInfo.additionalInfo`; and `eventInfo.appInsightsSelection`. |
 | Model Apps | `disabled: false` | Enabled and default-on for transmission. A public-cloud organization is geo-routed to the US or EU collector (US default only without an organization ID; an organization whose geo cannot be determined is not transmitted); a sovereign or internal PAC cloud is routed from the cloud stamp alone, never to a public collector; an unrecognized cloud, or a signed-in organization with no cloud, is not transmitted. Events are written to the local mirror even after a user transmission opt-out. | No signed-in user object ID. The base event can include `orgId` and `tenantId` when PAC is signed in. |
 | PCF | `disabled: false` | Enabled and default-on for transmission. Shares Model Apps' tenant and keys through a byte-identical config; routes as model-apps does. Uses `clientType: "PcfAIPlugin"` with `pluginName: "pcf"` in the shared Power Apps client `event` stream; keeps its local mirror after transmission opt-out. | Base fields only (`skill_started`, including `orgId`/`tenantId` when PAC is signed in); no signed-in user object ID or `eventInfo` payload. |
@@ -128,6 +133,12 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 
   - `aadObjectId` — the signed-in user's stable Entra ID / AAD directory object ID, parsed from `pac auth who`, when available. Omitted when `pac auth who` does not surface an object ID.
   - `framework` — the SPA framework of the Power Pages **code site** the skill is running against, drawn from the closed set `react`, `vue`, `angular`, `astro`. Omitted unless the working directory resolves to a site with a `powerpages.config.json`.
+  - `auditPermissions` — present only on the `audit_permissions_run_completed` event, emitted once per `audit-permissions` run when it produces its HTML report or reaches a controlled failure. It is built by a deterministic allowlist-only emitter (`plugins/power-pages/scripts/emit-audit-permissions-telemetry.js`) and must pass a closed outbound gate (`plugins/power-pages/scripts/lib/audit-telemetry-gate.js`) immediately before dispatch; raw report values are never copied into it. Every string is a fixed enum value or a random UUID v4, and every number is a bounded count, score, or version.
+    - Always: `schemaVersion` (`1`), `auditRunId` (random per-run UUID v4, not derived from any site, user, or environment value), and `reportGenerated` (boolean).
+    - Success (`outcome: success`, `reportGenerated: true`, recorded only after the final HTML report passes semantic validation): `scoringStatus` (`complete` | `partial`), `verdict` (`safe_to_go` | `needs_revision` | `not_scored`), `majorIssueCount`, `minorIssueCount`, `totalIssueCount`, `categories` (`overExposure`, `underExposure`, `correctness`, each `{ major, minor }`), `dimensions` (`intentCoverage`, `privilegeCalibration`, `scopeCorrectness`, `roleCompleteness`, `tableCoverage`, `anonymousAccessHygiene`, `dataModelAlignment`, `internalConsistency`, `securityPosture`, each `{ major, minor }`), `majorRootCauses` (`permissions`, `mixed`, `dataModel`, `webApiCode`, `webApiSettings`, each a count), and, when scoring is complete, `scores` (`overExposure`, `underExposure`, `correctness`, each 1–5).
+    - Failure (`outcome: failure`, `reportGenerated: false`): `failureStage` only, one of `site_verification`, `configuration_gathering`, `schema_validation`, `relationship_discovery`, `audit_checks`, `scoring`, `root_cause_attribution`, `report_rendering`, `report_validation`, `metrics_validation`, or `unknown_controlled_failure`.
+
+    The completion event also carries the top-level `outcome` and `durationMs` fields. It deliberately omits `orgId`, `tenantId`, `aadObjectId`, and `framework`, so it routes to the configured default region, and it never includes site, environment, table, role, permission, path, finding, or report text.
 
   Each key is omitted independently when its source is unavailable; `eventInfo` itself is omitted only when every key would be absent.
 
@@ -156,9 +167,32 @@ Every event carries a fixed allowlist enforced by `lib/events.js`. Field names m
 
   `emitSkillStartedFromPrompt(promptText, opts)` accepts an optional `opts.eventInfo` so a plugin can contribute its own approved keys from the `UserPromptSubmit` hook. It takes either a plain object or a **thunk** returning one; the thunk is preferred, and is invoked only *after* the slash-command, `disabled`, and `isProvisioned` gates pass — that hook fires on every user prompt, so any real work (filesystem probing, shellouts) must not run on untracked prompts. A thunk that throws contributes nothing and never blocks the event. Non-object values (including arrays) are ignored.
 
+Power Pages additionally emits:
+
+- `skill_configured` for approved `create-site` and `add-localization`
+  configuration. Create-site records framework, canonical content locale,
+  fixed purpose/audience categories, and whether the choice came from the
+  initial request or a prompt. Localization records framework, operation,
+  invocation source, existing-setup flag, mode, canonical default/added/resulting
+  locales, package name/version/selection/verification, and `agent` versus
+  `blank` translation population.
+- `localization_package_validation` for each package-validation attempt. It
+  records intended canonical locales, package/mode selection, validation
+  status, prerelease/unverified flags, and stable failure codes. Raw npm errors,
+  exception messages, and evidence URLs are never included.
+- `skill_completed` only for Power Pages `add-localization`. It records outcome,
+  duration, a stable error class on failure, validation outcome, readiness
+  status, configured/unavailable locale counts, and translation method.
+
+Locale telemetry strips private-use (`-x-*`) and extension sequences before
+emission. Private-use-only identifiers are dropped.
+
 ## What is NEVER sent
 
-File paths, cwd, env vars, site names, Dataverse URLs, stack traces, `err.message` text, skill arguments, tool inputs, prompt text, usernames, hostnames.
+File paths, cwd, env vars, site names, site descriptions, page/route/component
+names, free-text requirements, Dataverse URLs, stack traces, `err.message` text,
+raw npm errors, evidence URLs, skill arguments, tool inputs, prompt text,
+usernames, hostnames, or private-use locale subtags.
 
 The dispatcher runs a defense-in-depth allowlist filter against `FIELD_TYPES` before serializing, so any top-level field that bypasses the builders is dropped before it reaches the wire. This filter does not inspect nested `eventInfo` keys; the caller restriction above is part of the telemetry contract.
 
@@ -194,7 +228,7 @@ The `disabled` flag is checked at every layer that could perform user-facing wor
 shared/telemetry/
 ├─ ikey.json                 # placeholder template config (each plugin keeps its own real ikey.json)
 ├─ lib/
-│  ├─ events.js              # FIELD_TYPES allowlist + buildSkillStarted
+│  ├─ events.js              # FIELD_TYPES allowlist + event builders
 │  ├─ emit-spawn.js          # fireAndForget — spawn detached dispatcher
 │  ├─ emit-dispatcher.js     # detached child — kill switches, opt-out, destination resolve (resolver.js or static key), sanitize, POST
 │  ├─ emit-from-prompt.js    # UserPromptSubmit hook helper — detect slash command + emit skill_started

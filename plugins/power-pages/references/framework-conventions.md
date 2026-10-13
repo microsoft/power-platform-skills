@@ -1,6 +1,6 @@
 # Framework Conventions
 
-Shared reference for skills that need to detect the frontend framework and locate key files in a Power Pages code site. Used by `create-site`, `add-seo`, and any future skills that interact with the site project structure.
+Shared reference for skills that need to detect the frontend framework and locate key files in a Power Pages code site. Used by `create-site`, `add-seo`, `add-localization`, and any future skills that interact with the site project structure.
 
 ---
 
@@ -14,7 +14,7 @@ Only static SPA frameworks are supported. Server-rendered frameworks (Next.js, N
 |-----------|-----------|--------|--------------|-----------------|------------|
 | React | Vite | react-router-dom | `dist` | `public/` | `index.html` (project root) |
 | Vue | Vite | vue-router | `dist` | `public/` | `index.html` (project root) |
-| Angular | Angular CLI | @angular/router | `dist/__SITE_NAME__/browser` | `public/` | `src/index.html` |
+| Angular | Angular CLI | @angular/router | `dist/__SITE_NAME__/browser` | `public/` | `angular.json` build target `index`; defaults to `src/index.html` |
 | Astro | Astro | File-based + View Transitions | `dist` | `public/` | `src/layouts/*.astro` or `src/pages/*.astro` |
 
 ## Framework Detection
@@ -25,6 +25,12 @@ Read `package.json` to determine the framework by checking dependencies:
 - **Vue**: `vue` in dependencies
 - **Angular**: `@angular/core` in dependencies
 - **Astro**: `astro` in dependencies
+
+When a workflow must reject ambiguous multi-framework evidence rather than
+perform a simple lookup, use
+`${PLUGIN_ROOT}/scripts/detect-framework.js --projectRoot "<PROJECT_ROOT>"`.
+It returns all primary evidence and does not guess when multiple supported
+framework dependencies or configuration markers are present.
 
 ## Route Discovery
 

@@ -17,11 +17,14 @@
 // a copy that keeps ordinary string bodies, accepted prose that merely MENTIONS an export:
 //   /* export default */                                -> accepted
 //   const prose = "export default GeneratedComponent";   -> accepted
-const { blankLiterals, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets } = require('./source-literals.js');
+const { blankLiterals, endsMidStatement, findElisionMarker, hasDefaultExport, hasUnbalancedBrackets, trimTrivia, WS } = require('./source-literals.js');
+
+// A line that opens a markdown fence, after the white space TypeScript skips (source-literals.js, isTrivia): U+0085 and the zero-width space before a fence are white space to it.
+const MARKDOWN_FENCE = new RegExp(`^${WS}*(\`\`\`|~~~)`, 'm');
 
 function pageStructureProblems(code) {
   const text = String(code == null ? '' : code);
-  if (!text.trim()) return ['file is empty'];
+  if (!trimTrivia(text)) return ['file is empty'];
   const problems = [];
   // hasDefaultExport also refuses a file cut off INSIDE its export (`export default function P(props)`
   // with no body), so the message says so: the fix is to write the whole page, not to add an export.
@@ -35,7 +38,7 @@ function pageStructureProblems(code) {
   // A worker that answers in prose usually still opens a fence, and a real .tsx never has one in CODE.
   // Both CommonMark fence markers count. On the blanked source, a fence inside a template literal (a page
   // rendering markdown help) is data, while a fence wrapping the file is code-position text.
-  if (/^\s*(```|~~~)/m.test(blankLiterals(text))) {
+  if (MARKDOWN_FENCE.test(blankLiterals(text))) {
     problems.push('contains a markdown code fence — the worker returned prose, not a module');
   }
   // Elided code (`// TODO: …`, `// ...`, "omitted for brevity"), the same rule the genpage evals apply.

@@ -32,6 +32,7 @@ Configure authentication (login/logout) and role-based authorization for a Power
 - **Client-side auth is UX only** — Power Pages authentication is server-side (session cookies). Client-side role checks control what users see, not what they can access. Server-side table permissions enforce actual security.
 - **Framework-appropriate patterns** — Every auth artifact (hooks, composables, services, directives, guards) must match the detected framework's idioms and conventions.
 - **Development parity** — Include mock data for local development so developers can test auth flows and role-based UI without deploying to Power Pages.
+- **Preserve site integrity** — Before changing navigation, auth pages, dialogs, or role-based UI, read `${PLUGIN_ROOT}/references/site-modification-integrity.md`. Synchronize all visible auth states across configured locale resources and keep them bidirectional and expansion-safe.
 
 **Initial request:** $ARGUMENTS
 
@@ -2106,6 +2107,18 @@ Use Playwright to navigate to the site and take a snapshot to confirm the auth b
 - Verify the auth button (Sign In / mock user) appears in the navigation area
 
 If the auth button is not visible or the page has rendering errors, fix the issues.
+
+#### 7.4 Final site-integrity gate
+
+After all auth source changes, the build, and browser verification are complete, run:
+
+```bash
+node "${PLUGIN_ROOT}/scripts/validate-site-integrity.js" --projectRoot "<PROJECT_ROOT>"
+```
+
+Fix every blocking error before presenting completion or asking to deploy. Inspect and report
+review findings in both directions and with expanded content. Rerun this gate after any later
+source change.
 
 ### Output
 

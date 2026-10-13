@@ -274,26 +274,33 @@ for (const [name, columns, rows, fields, wantShape, wantRowRemovals] of [
 
 // The move paths (`fieldOptions[x].after`) remove a row they empty too, and must keep one a span above
 // still reserves: deleting it pulled every row beneath it up under the span.
-function movedSpec(fields) {
-  return specFor({ columns: 2, fields, forms: [{ entity: 'new_project', name: 'Probe', formType: 'Main', layout: 'explicit', prune: false,
+function movedSpec(fields, columns = 2) {
+  return specFor({ columns, fields, forms: [{ entity: 'new_project', name: 'Probe', formType: 'Main', layout: 'explicit', prune: false,
     fieldOptions: { new_c: { after: 'new_d' } },
-    tabs: [{ name: 'probe', label: 'Probe', sections: [{ name: 'fields', label: 'Fields', columns: 2, fields }] }] }] });
+    tabs: [{ name: 'probe', label: 'Probe', sections: [{ name: 'fields', label: 'Fields', columns, fields }] }] }] });
 }
 
 test('form rows after a move: a row the moved field emptied is removed', async () => {
   const { section } = await runTwice(movedSpec(['new_a', 'new_b', 'new_d', 'new_e']), existingForm(2, [[cell('a'), cell('b')], [cell('c')], [cell('d'), cell('e')]]));
-  assert.deepStrictEqual(rowShape(section), [['a', 'b'], ['d', 'c', 'e']]);
+  assert.deepStrictEqual(rowShape(section), [['a', 'b'], ['d', 'c'], ['e']]);
+  assertFits(section);
 });
 
 test('form rows after a move: an emptied row a span above still reserves is kept', async () => {
   const { section } = await runTwice(movedSpec(['new_a', 'new_b', 'new_d', 'new_e']), existingForm(2, [[cell('a', { rowspan: 2 }), cell('b')], [cell('c')], [cell('d'), cell('e')]]));
-  assert.deepStrictEqual(rowShape(section), [['a rs2', 'b'], [], ['d', 'c', 'e']]);
+  assert.deepStrictEqual(rowShape(section), [['a rs2', 'b'], [], ['d', 'c'], ['e']]);
+  assertFits(section);
 });
 
 test('form rows after a move: a moved spanning field frees the rows its span covered', async () => {
   // Row 2 holds nothing but c's reserved slot. Once c leaves, both of its rows are blank.
-  const { section } = await runTwice(movedSpec(['new_a', 'new_b', 'new_d', 'new_e']), existingForm(2, [[cell('a'), cell('b')], [cell('c', { rowspan: 2 })], [], [cell('d'), cell('e')]]));
+  // The destination has room for c without splitting a row whose following cell depends on its span.
+  const { section, calls } = await runTwice(movedSpec(['new_a', 'new_b', 'new_d', 'new_e'], 3), existingForm(3, [[cell('a'), cell('b')], [cell('c', { rowspan: 2 })], [], [cell('d'), cell('e')]]));
   assert.deepStrictEqual(rowShape(section), [['a', 'b'], ['d', 'c rs2', 'e']]);
+  const writes = calls.filter((c) => c.name === 'updateElement' && /\/rows$/.test(c.args[2]));
+  assert.strictEqual(writes.length, 1, 'both freed rows are removed in the same atomic layout write');
+  assert.deepStrictEqual(rowRemovals(calls), [], 'no separate cleanup can be interrupted');
+  assertFits(section);
 });
 
 // The other move path: a field the layout puts in ANOTHER section is relocated there, and the rows it

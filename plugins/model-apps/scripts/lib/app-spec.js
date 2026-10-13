@@ -2,6 +2,7 @@
 // the app-builder's LLM proposal and the deterministic builder.
 
 const path = require('node:path');
+const { isAppSourcePath } = require('./app-source-path.js');
 const { normalizeSpecShape } = require('./spec-shape.js');
 const { isMainForm, selectDefaultForm, ordersByHand } = require('./form-order.js');
 
@@ -22,6 +23,12 @@ function isSafeHttpUrl(u) {
 // rows. Shared here (the lowest-level spec module) so build + verify agree. Values per the option set:
 // https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/systemform#type-choicesoptions
 const FORM_TYPE_CODE = { Main: 2, QuickView: 6, QuickCreate: 7, Card: 11 };
+
+// Later phases must address the same type-scoped identity as the forms phase, not whichever
+// same-named Main/QuickView sibling happened to be built last.
+function formIdentityKey(f) {
+  return `${String(f.entity).toLowerCase()}|${f.formType || 'Main'}|${f.name || ''}`;
+}
 
 // A canonical GUID (used to validate an author-pinned forms[].formId, which is interpolated UNQUOTED into
 // an Edm.Guid OData filter). Anchored so it can neither over-match nor be an injection seam.
@@ -386,6 +393,63 @@ function manyToManySchemaName(rel, publisherPrefix) {
   return prefixedRelationshipName(a, b, publisherPrefix);
 }
 
+// Effective schema name, or null when the entry cannot name one. An explicit schemaName wins
+// verbatim (the same rule relationshipSchemaName / manyToManySchemaName use). Incomplete entries
+// are skipped: composing them would yield a shared "_" name and a false collision.
+function effectiveRelationshipSchemaName(rel, publisherPrefix) {
+  if (!rel || typeof rel !== 'object' || Array.isArray(rel)) return null;
+  const explicit = typeof rel.schemaName === 'string' && rel.schemaName.trim() ? rel.schemaName : '';
+  if (rel.type === 'ManyToMany') {
+    if (explicit) return explicit;
+    if (typeof rel.entity1 !== 'string' || !rel.entity1.trim() || typeof rel.entity2 !== 'string' || !rel.entity2.trim()) return null;
+    return manyToManySchemaName(rel, publisherPrefix);
+  }
+  if (rel.type === 'OneToMany') {
+    if (explicit) return explicit;
+    if (typeof rel.referenced !== 'string' || !rel.referenced.trim() || typeof rel.referencing !== 'string' || !rel.referencing.trim()) return null;
+    return relationshipSchemaName(rel, publisherPrefix);
+  }
+  return null;
+}
+
+// Pairs whose EFFECTIVE schema names compare equal, ignoring case.
+// Dataverse allows one relationship per name. The RelationshipDefinitions alternate key is
+// case-sensitive (a differently-cased spelling 404s), but a create of the other casing still
+// collides, so the gate compares the names the build would actually send.
+// -> [{ name, first, second }] with name lower-cased and indices into relationships[].
+function relationshipNameCollisions(relationships, publisherPrefix) {
+  const named = [];
+  (Array.isArray(relationships) ? relationships : []).forEach((rel, index) => {
+    let name;
+    try { name = effectiveRelationshipSchemaName(rel, publisherPrefix); } catch { name = null; }
+    if (!name) return;
+    named.push({ index, name: String(name).toLowerCase() });
+  });
+  const hits = [];
+  for (let i = 0; i < named.length; i += 1) {
+    for (let j = i + 1; j < named.length; j += 1) {
+      if (named[i].name === named[j].name) hits.push({ name: named[i].name, first: named[i].index, second: named[j].index });
+    }
+  }
+  return hits;
+}
+
+function relationshipEndsBrief(rel) {
+  const lc = (v) => String(v || '').toLowerCase();
+  if (!rel || typeof rel !== 'object') return 'invalid relationship';
+  if (rel.type === 'ManyToMany') return `N:N ${lc(rel.entity1)} <-> ${lc(rel.entity2)}`;
+  if (rel.type === 'OneToMany') return `1:N ${lc(rel.referenced)} -> ${lc(rel.referencing)}`;
+  return String(rel.type || 'relationship');
+}
+
+// Both gates must emit this exact sentence. Built here so they cannot drift.
+function relationshipCollisionMessage(relationships, collision) {
+  const list = Array.isArray(relationships) ? relationships : [];
+  const a = relationshipEndsBrief(list[collision.first]);
+  const b = relationshipEndsBrief(list[collision.second]);
+  return `relationships[${collision.first}] (${a}) and relationships[${collision.second}] (${b}) both use the schema name '${collision.name}'. Dataverse allows one relationship per name, so the second would not be created. Give one of them an explicit "schemaName".`;
+}
+
 // Turn author-friendly sample records into Web-API bodies: Choice / MultiChoice values
 // written as labels ("Platinum", or "Low,High" for multi-select) are resolved to their
 // option ints — for inline-option AND global-choice columns (pass `spec` so global
@@ -734,6 +798,32 @@ function declaredColumnLogicals(spec, entitySchemaName) {
     }
   }
   return cols;
+}
+
+// Does the spec itself create column `attributeLogical` on table `tableLogical`? Counts the table's primary
+// name column, its declared columns, and the lookup a 1:N relationship places on its referencing side.
+//
+// Both names compare case-insensitively, because the caller holds what DATAVERSE reported — logical, so
+// lower-case ('new_customerid') — while the spec carries schema names ('new_CustomerId'). That is also why
+// this is not `declaredColumnLogicals`: that one matches the entity schemaName EXACTLY, the contract the
+// business-rule and BPF validators were written against, and loosening it would change what they accept.
+function specDeclaresAttribute(spec, tableLogical, attributeLogical) {
+  const table = String(tableLogical || '').toLowerCase();
+  const attribute = String(attributeLogical || '').toLowerCase();
+  if (!spec || !table || !attribute) return false;
+  const lc = (v) => String(v || '').toLowerCase();
+  for (const ent of spec.entities || []) {
+    if (!ent || lc(ent.schemaName) !== table) continue;
+    // Only attributes this build can MATERIALIZE count — lag can explain a column the build just
+    // created, never one it skips. A `Lookup` entry in columns[] is skipped by provisioning (a lookup is
+    // the side effect of a OneToMany relationship, handled below), so it is not a column this build
+    // creates. The primary attribute always counts: `existing: true` records ownership, not presence —
+    // a downloaded spec rebuilt into another environment still creates the table and its primary column.
+    if (ent.primaryAttribute && lc(ent.primaryAttribute.schemaName) === attribute) return true;
+    if ((ent.columns || []).some((c) => c && lc(c.type) !== 'lookup' && lc(c.schemaName) === attribute)) return true;
+  }
+  return (spec.relationships || []).some((rel) => rel && rel.type === 'OneToMany'
+    && lc(rel.referencing) === table && rel.lookup && lc(rel.lookup.schemaName) === attribute);
 }
 
 // Normalize a Dataverse language identifier (LCID) to a positive integer, or null if it is not one.
@@ -1364,6 +1454,103 @@ function compareVersions(a, b) {
   return 0;
 }
 
+const APP_MEMBERSHIP_MIN_VERSION = '2.13.0';
+const isPluginVersion = (value) => typeof value === 'string' && /^\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?$/.test(value);
+
+function sitemapEntityTables(spec) {
+  const tables = new Set();
+  for (const area of (spec.appShell && spec.appShell.areas) || []) {
+    for (const group of area.groups || []) {
+      for (const sub of group.subAreas || []) {
+        if (sub && typeof sub.entity === 'string' && !sub.page && !sub.dashboard && !sub.url) {
+          tables.add(sub.entity.toLowerCase());
+        }
+      }
+    }
+  }
+  return [...tables];
+}
+
+function validateAppMembership(spec, errors) {
+  const app = spec.app || {};
+  if (app.tables !== undefined) {
+    if (!Array.isArray(app.tables) || app.tables.some((name) => typeof name !== 'string' || !name.trim())) {
+      errors.push('app.tables must be an array of non-empty table logical names');
+    } else {
+      const seen = new Set();
+      for (const table of app.tables) {
+        const key = table.toLowerCase();
+        if (seen.has(key)) errors.push(`app.tables lists table '${table}' more than once (logical names compare case-insensitively)`);
+        seen.add(key);
+      }
+    }
+  }
+  if (app.mainForms === undefined) return;
+  if (!app.mainForms || typeof app.mainForms !== 'object' || Array.isArray(app.mainForms)) {
+    errors.push('app.mainForms must be an object mapping a sitemap table to a non-empty list of Main form names');
+    return;
+  }
+  const navigated = new Set(sitemapEntityTables(spec));
+  const seenTables = new Set();
+  for (const [table, names] of Object.entries(app.mainForms)) {
+    const key = table.toLowerCase();
+    const label = `app.mainForms['${table}']`;
+    if (seenTables.has(key)) errors.push(`${label}: table is listed more than once (logical names compare case-insensitively)`);
+    seenTables.add(key);
+    if (!navigated.has(key)) {
+      errors.push(`${label}: '${table}' is not a sitemap Entity table (sitemap tables: ${[...navigated].join(', ') || 'none'})`);
+    }
+    if (!Array.isArray(names) || !names.length || names.some((name) => typeof name !== 'string' || !name.trim())) {
+      errors.push(`${label}: must be a non-empty array of Main form names; an app with no Main form offers every form of the table`);
+      continue;
+    }
+    const seenNames = new Set();
+    const mains = (spec.forms || []).filter((form) => isMainForm(form) && String(form.entity || '').toLowerCase() === key);
+    for (const name of names) {
+      const normalized = dashboardNameKey(name);
+      if (seenNames.has(normalized)) errors.push(`${label}: Main form '${name}' is listed more than once (names compare ignoring case and accents)`);
+      seenNames.add(normalized);
+      if (mains.filter((form) => dashboardNameKey(form.name) === normalized).length > 1) {
+        errors.push(`${label}: '${name}' is ambiguous among the declared Main forms of this table — rename one`);
+      }
+      // A declared QuickView named "Information" can coexist with an undeclared stock Main of that
+      // name. Only the active Main catalog can prove a wrong type, so resolution makes that decision.
+    }
+  }
+}
+
+function appMembershipWarnings(spec) {
+  const warnings = [];
+  const app = spec.app || {};
+  if (app.tables === undefined && app.mainForms === undefined) return warnings;
+  const floor = spec.minimumPluginVersion;
+  if (!isPluginVersion(floor) || compareVersions(floor, APP_MEMBERSHIP_MIN_VERSION) < 0) {
+    warnings.push(`set minimumPluginVersion to '${APP_MEMBERSHIP_MIN_VERSION}' or newer when using app.tables or app.mainForms — older plugins ignore these fields`);
+  }
+  const navigated = new Set(sitemapEntityTables(spec));
+  for (const table of Array.isArray(app.tables) ? app.tables : []) {
+    if (typeof table === 'string' && navigated.has(table.toLowerCase())) {
+      warnings.push(`app.tables: '${table.toLowerCase()}' is already in the navigation; listing it again is redundant`);
+    }
+  }
+  if (!app.mainForms || typeof app.mainForms !== 'object' || Array.isArray(app.mainForms)) return warnings;
+  for (const [table, names] of Object.entries(app.mainForms)) {
+    if (!Array.isArray(names)) continue;
+    const allowed = new Set(names.filter((name) => typeof name === 'string').map(dashboardNameKey));
+    const key = table.toLowerCase();
+    const flagged = (spec.forms || []).find((form) => isMainForm(form) && String(form.entity || '').toLowerCase() === key && form.isDefault === true);
+    const entity = (spec.entities || []).find((entry) => entry && String(entry.schemaName || '').toLowerCase() === key);
+    const ordered = entity && Array.isArray(entity.mainFormOrder) && entity.mainFormOrder[0];
+    const defaults = new Set([flagged && flagged.name, ordered].filter(Boolean));
+    for (const name of defaults) {
+      if (!allowed.has(dashboardNameKey(name))) {
+        warnings.push(`app.mainForms['${table}'] excludes '${name}', the explicit default or first mainFormOrder form — the app cannot offer that form`);
+      }
+    }
+  }
+  return warnings;
+}
+
 // Keys an author reasonably reaches for that FormXml has no place for. Naming the real mechanism is
 // the difference between an actionable error and a scavenger hunt — the SDK's own refusal reports a
 // JSON pointer into the compiled intent, which an author who wrote a spec cannot map back to a key.
@@ -1820,7 +2007,7 @@ function validateAppSpec(spec, opts = {}) {
     // and compareVersions' `parseInt(n, 10) || 0` then read the empty component as 0 and enforced
     // 2.0.9 — a different floor than the author wrote, with no error. The optional `-pre`/`+build`
     // suffix is permitted because compareVersions deliberately compares the release CORE.
-    if (typeof want !== 'string' || !/^\d+(?:\.\d+)*(?:[-+][0-9A-Za-z.-]+)?$/.test(want)) {
+    if (!isPluginVersion(want)) {
       errors.push(`minimumPluginVersion must be a dotted version string like '2.9.0', got ${JSON.stringify(want)}`);
     } else {
       const have = pluginVersion();
@@ -1872,6 +2059,7 @@ function validateAppSpec(spec, opts = {}) {
     errors.push('app.headerNavigationRefresh must be a boolean');
   }
   validateAiDescription(spec.app && spec.app.aiDescription, errors);
+  if (profile !== 'structural') validateAppMembership(spec, errors);
   if (spec.languageCode !== undefined && normalizeLanguageCode(spec.languageCode) === null) {
     // Keep the leading clause stable — the CLI flag and two test suites match on it. The appended
     // guidance exists because the bare message named the mistake without naming the fix, and a
@@ -2082,6 +2270,14 @@ function validateAppSpec(spec, opts = {}) {
     }
     if (wr.content === undefined && wr.contentBase64 === undefined && !wr.contentPath) {
       errors.push(`webResource ${wr.name}: needs content, contentBase64, or contentPath`);
+    }
+    // The path is read only when it is the effective source (sdk-build.js webResourceOpts takes
+    // contentBase64, then content, then contentPath) and only by a profile that builds or verifies.
+    // Teardown's structural profile reads no source, so a spec an earlier release accepted with an
+    // unconfined path can still be torn down; build and verify refuse it until the path is fixed.
+    const readsContentPath = wr.contentBase64 === undefined && wr.content === undefined && wr.contentPath !== undefined;
+    if (readsContentPath && profile !== 'structural' && !isAppSourcePath(wr.contentPath)) {
+      errors.push(`webResource ${wr.name}: contentPath must be an app-folder-confined relative path (no parent escape, rooted or drive path, or alternate stream)`);
     }
   }
   // AB#6686426: `isDefault` picks which Main form a table opens with. Explicit beats the fallback
@@ -2771,23 +2967,6 @@ function validateAppSpec(spec, opts = {}) {
   // (e.g. a cross-env GUID that happens to match an unrelated page). Addenda Task 4 / C3.
   const PAGE_ID_GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
   const pageCodeFilesNorm = new Set(); // implemented-page normalized codeFile uniqueness (Critical 4)
-  // A codeFile must resolve INSIDE the working directory. Use path.normalize to canonicalize before
-  // checking — this catches aliases like 'pages/./x.tsx' and 'pages/../pages/x.tsx' that resolve to
-  // the same file but evade a naive string-split check (addendum Crit 4). path.isAbsolute is
-  // platform-specific (on POSIX it does NOT flag a Windows drive-letter path like 'C:/x'), so we ALSO
-  // match a drive-letter prefix explicitly — a spec authored on Windows must be rejected the same way
-  // on a Linux CI runner. After normalization, a path starting with '..' has escaped the workspace
-  // root. sdk-build resolves codeFile with path.resolve(appDir, codeFile) at :1037-1041, so an
-  // unconfined path reaches the filesystem outside the app folder — reject it here, before any write. Design §7.2.
-  const codeFileConfined = (codeFile) => {
-    const cf = String(codeFile);
-    // Drive-letter guard (/^[a-zA-Z]:[/\\]/) catches 'C:\x'/'C:/x' on POSIX where path.isAbsolute misses it.
-    if (path.isAbsolute(cf) || /^[a-zA-Z]:[/\\]/.test(cf)) return false;
-    const normalized = path.normalize(cf);
-    // normalized === '..' means the codeFile IS the parent directory.
-    // normalized.startsWith('..' + path.sep) means it is a path beneath the parent directory.
-    return normalized !== '..' && !normalized.startsWith('..' + path.sep);
-  };
   for (const p of spec.pages || []) {
     if (!p || !p.name) { errors.push('a page is missing a name'); continue; }
     pageNamesSet.add(p.name);
@@ -2833,10 +3012,10 @@ function validateAppSpec(spec, opts = {}) {
     // duplicates of 'pages/x.tsx' (addendum Crit 4). Replace backslashes with forward slashes before
     // lowercasing for cross-platform-safe comparison in the set.
     if (src && src.kind === 'tsx' && typeof src.codeFile === 'string' && src.codeFile) {
-      if (!codeFileConfined(src.codeFile)) {
-        errors.push(`page '${p.key || p.name}': codeFile '${src.codeFile}' must be a workspace-confined relative path (no '..' escape, no absolute path)`);
+      if (!isAppSourcePath(src.codeFile)) {
+        errors.push(`page '${p.key || p.name}': codeFile '${src.codeFile}' must be a workspace-confined relative path (no parent escape, rooted or drive path, or alternate stream)`);
       }
-      const cfNorm = path.normalize(src.codeFile).replace(/\\/g, '/').toLowerCase();
+      const cfNorm = path.posix.normalize(src.codeFile.replace(/\\/g, '/')).toLowerCase();
       if (pageCodeFilesNorm.has(cfNorm)) errors.push(`page '${p.key || p.name}': duplicate codeFile '${src.codeFile}' (another page already uses this path)`);
       else pageCodeFilesNorm.add(cfNorm);
     }
@@ -3485,6 +3664,18 @@ function validateAppSpec(spec, opts = {}) {
   (spec.relationships || []).forEach((r, i) => {
     if (r && r.lookup) validateLabel(r.lookup.displayName, `relationships[${i}] (${r.lookup.schemaName || '?'}): lookup.displayName`, errors, { warnings, baseLanguageCode: spec.languageCode });
   });
+  // Structural is teardown: an already-built colliding spec must still tear down. Read-only verify
+  // passes relationshipCollisions: 'warn' so a spec built before this check can still be verified;
+  // the endpoint-aware checks then name whatever holds the name. Every other profile refuses,
+  // because the second create would be swallowed as "already exists" and never materialize.
+  if (profile !== 'structural') {
+    const prefix = spec.solution && spec.solution.publisherPrefix;
+    for (const hit of relationshipNameCollisions(spec.relationships, prefix)) {
+      const msg = relationshipCollisionMessage(spec.relationships, hit);
+      if (opts.relationshipCollisions === 'warn') warnings.push(msg);
+      else errors.push(msg);
+    }
+  }
   for (const e of spec.entities || []) {
     (e && Array.isArray(e.alternateKeys) ? e.alternateKeys : []).forEach((k, i) => {
       if (k) validateLabel(k.displayName, `entity ${e.schemaName}: alternateKeys[${i}] displayName`, errors, { warnings, baseLanguageCode: spec.languageCode });
@@ -3738,6 +3929,11 @@ module.exports = {
   rejectLocalizedGlobalChoice,
   sampleKeyIdentity,
   dashboardNameKey,
+  compareVersions,
+  APP_MEMBERSHIP_MIN_VERSION,
+  isPluginVersion,
+  sitemapEntityTables,
+  appMembershipWarnings,
   generatedTabName,
   generatedSectionName,
   formColumnsOf,
@@ -3759,6 +3955,7 @@ module.exports = {
   isPlatformIconRef,
   webResourceNameFromRef,
   FORM_TYPE_CODE,
+  formIdentityKey,
   FORM_GUID_RE,
   PAGE_MODEL_RE,
   ACCESS_LEVELS,
@@ -3804,6 +4001,9 @@ module.exports = {
   prefixedRelationshipName,
   manyToManyFor,
   manyToManySchemaName,
+  relationshipNameCollisions,
+  relationshipCollisionMessage,
+  specDeclaresAttribute,
   isSafeHttpUrl,
   CHART_TYPES,
 };

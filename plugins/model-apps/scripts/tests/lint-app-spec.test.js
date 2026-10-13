@@ -166,6 +166,15 @@ test('CLI rejects an implemented page whose codeFile is missing on disk', () => 
   assert.ok(payload.errors.some((error) => /missing\.tsx.*does not exist or is not a file/.test(error)), out.stdout);
 });
 
+test('CLI rejects a web resource whose contentPath file is missing on disk', () => {
+  const s = good();
+  s.webResources = [{ name: 'c_missing.js', displayName: 'Missing', type: 'js', contentPath: 'scripts/missing.js' }];
+  const out = runCli(s, ['--profile', 'deploy', '--json']);
+  assert.strictEqual(out.code, 1);
+  const payload = JSON.parse(out.stdout);
+  assert.ok(payload.errors.some((error) => /^schema: webResource 'c_missing\.js': contentPath 'scripts\/missing\.js' does not exist or is not a file/.test(error)), out.stdout);
+});
+
 // Regression contract. The JSON payload's `ok` must describe the COMMAND's outcome. A warnings-only
 // --strict run exits 1, so emitting ok:true there would let a machine consumer read a failure as
 // a success.

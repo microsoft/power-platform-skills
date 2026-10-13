@@ -17,9 +17,12 @@ const { verifySpec } = require('./lib/verify-spec.js');
 const { readBaseline } = require('./lib/deployed-baseline.js');
 const { appUniqueName } = require('./lib/sdk-build.js');
 const { validateAppSpec, migrateAppSpec } = require('./lib/app-spec.js');
+const { readRelationshipsOf, findRelationshipHolder } = require('./lib/relationship-metadata.js');
 const { odataLit } = require('./lib/odata.js');
 const { makeGenpageCli } = require('./lib/genpage-cli.js');
+const { assertSafeOutputDir } = require('./lib/safe-fs.js');
 const { depthFromMask } = require('./lib/role-privileges.js');
+const { appEntityComponentsFor, appMainFormsFor, appComponentRows } = require('./lib/app-components.js');
 
 // A throwaway SDK workspace for ONE dashboard read (readerFor's dashboardComponents), deleted after it. The tiles
 // verify checks must be the server's: read through the build's own workspace, a copy holding unpushed edits — or
@@ -45,8 +48,11 @@ function isolatedReaderFor(env, opts = {}) {
 }
 
 async function makeProvision(env, workspaceDir, httpClient = createAzHttpClient(env)) {
+  // A link at the workspace root would make the SDK storage follow it. Refuse before the
+  // factory runs. An explicit real directory is created if missing, then re-checked.
+  // The module's own fs, not a second copy: a caller that replaced fs must see the same create.
+  assertSafeOutputDir(workspaceDir, { create: true, fs });
   const { createMakerSdk, createNodeWorkspaceStorage } = require('./vendor/cds-maker-sdk.cjs');
-  fs.mkdirSync(workspaceDir, { recursive: true });
   const sdk = createMakerSdk({ workspaceStorage: createNodeWorkspaceStorage(workspaceDir), instanceUrl: env, httpClient });
   await sdk.initWorkspace();
   // Only the SDK is returned. The raw `httpClient` used to come back with it because the role
@@ -63,7 +69,7 @@ async function sitemapXmlFor(sdk, appUnique) {
   const apps = await sdk.queryRecords('appmodule', { select: ['appmoduleid', 'appmoduleidunique'], filter: `uniquename eq '${odataLit(appUnique)}'`, top: 1 });
   const app = apps && apps[0];
   if (!app) return '';
-  const comps = await sdk.queryRecords('appmodulecomponent', { select: ['objectid', 'componenttype'], filter: `_appmoduleidunique_value eq ${app.appmoduleidunique} and componenttype eq 62`, top: 1 });
+  const comps = await appComponentRows(sdk, app.appmoduleidunique, 62, { top: 1 });
   const smId = comps && comps[0] && comps[0].objectid;
   if (!smId) return '';
   const sms = await sdk.queryRecords('sitemap', { select: ['sitemapxml'], filter: `sitemapid eq ${smId}`, top: 1 });
@@ -100,67 +106,6 @@ async function appRoleIdsFor(sdk, appUnique) {
   }
 }
 
-// Which of `wanted` (table logical names) are real TABLE components of the app
-// (`appmodulecomponent` componenttype 1), plus whether the app carries an `entity` PLACEHOLDER row.
-//
-// Returns `{ ok: true, present, placeholder }` or `{ ok: false, reason }`. The caller fails the check
-// on `ok: false` rather than passing, because "we could not look" and "the app is fine" must never be
-// the same answer here.
-//
-// Direction matters, and an earlier version had it backwards. Resolving every COMPONENT id to a
-// logical name meant: a read per component (unbounded by anything the spec controls), a whole-answer
-// failure whenever one foreign id would not resolve — reported as an opaque GUID an operator cannot
-// act on — and a cap on the component query. This resolves only the tables the SPEC asks about, so
-// the cost is bounded by the spec (LIVE-MEASURED ~100 ms per table), a component pointing at a
-// deleted table is simply not one of ours, and every message names a table.
-//
-// `paginate: true`, never `top`. Dataverse honours `$top` as a HARD cap and omits
-// `@odata.nextLink`, so a capped page silently truncates — and for a membership check a row that
-// fell off the end reads as NOT PRESENT, i.e. verify reports a correctly built app as broken. The
-// same trap was already found live on `roleprivileges` in this file (see `rolePrivileges` below);
-// using `top` here would have reintroduced it, and would additionally have hidden the placeholder
-// rows this check exists to find, since those are exactly what accumulates in a corrupted app.
-//
-// An EMPTY component list is returned as `ok: true` with nothing present, NOT as a read failure:
-// that is the reported defect itself (a sitemap naming tables the app does not contain). It cannot
-// mask a permissions problem, because the sitemap is read from the SAME `appmodulecomponent` table
-// (componenttype 62) and would fail visibly first.
-async function appEntityComponentsFor(sdk, appUnique, wanted) {
-  try {
-    const apps = await sdk.queryRecords('appmodule', { select: ['appmoduleid', 'appmoduleidunique'], filter: `uniquename eq '${odataLit(appUnique)}'`, top: 1 });
-    const app = apps && apps[0];
-    if (!app || !app.appmoduleidunique) return { ok: false, reason: `app '${appUnique}' could not be resolved` };
-    const rows = await sdk.queryRecords('appmodulecomponent', {
-      select: ['objectid', 'componenttype'],
-      filter: `_appmoduleidunique_value eq ${app.appmoduleidunique} and componenttype eq 1`,
-      paginate: true,
-    });
-    const ids = new Set((rows || []).map((r) => r && r.objectid).filter(Boolean).map((s) => String(s).toLowerCase()));
-    // A type-1 `objectid` is a table's MetadataId, not a row id. `fetchEntityMetadata` resolves by
-    // LOGICAL NAME and is a disk-cached projection, so this goes through the raw client instead.
-    // A 404 means the table does not exist at all, which the separate `entity` existence check
-    // already reports — so it is "not a component", not a read failure.
-    const metadataId = async (logical) => {
-      const res = await sdk.dataverse.get(`/EntityDefinitions(LogicalName='${odataLit(logical)}')?$select=MetadataId`);
-      if (res && res.status === 404) return null;
-      if (!res || res.status < 200 || res.status >= 300 || !res.body || !res.body.MetadataId) {
-        throw new Error(`could not resolve table '${logical}' (HTTP ${res && res.status})`);
-      }
-      return String(res.body.MetadataId).toLowerCase();
-    };
-    const present = [];
-    for (const logical of wanted || []) {
-      const id = await metadataId(logical);
-      if (id && ids.has(id)) present.push(logical);
-    }
-    // The known corruption: a table pinned as an `entity` INSTANCE pins the `entity` METADATA table.
-    const entityId = await metadataId('entity');
-    return { ok: true, present, placeholder: !!(entityId && ids.has(entityId)) };
-  } catch (err) {
-    return { ok: false, reason: (err && err.message) ? String(err.message).slice(0, 200) : 'read failed' };
-  }
-}
-
 function readerFor(sdk, appUnique, opts) {
   opts = opts || {};
   const genpageCli = opts.genpageCli;
@@ -177,6 +122,7 @@ function readerFor(sdk, appUnique, opts) {
   const memoSitemap = () => (sitemapP || (sitemapP = _fetchSitemap(sdk, appUnique)));
   // Memoized app TABLE components — one live read per verify run, keyed by the wanted-table set.
   const appComponentsP = new Map();
+  const appMainFormsP = new Map();
   // The user running verify, read once: servedMainForms asks the platform what THIS user is served. The id
   // is interpolated into the function's `User` alias, so only a canonical GUID is accepted.
   let callerIdP;
@@ -191,27 +137,54 @@ function readerFor(sdk, appUnique, opts) {
   // (the old all-pages downloadP). Each id gets its own output dir to avoid directory collision.
   const codeById = new Map();
 
+  // One catalog scan per verification pass, not per reader. A reader is reused across verifies;
+  // keeping the first scan would report a table created between passes as missing, and a rejected
+  // scan would fail every later pass. verifySpec calls beginVerificationPass at the start of each.
+  let catalogP;
+  const beginVerificationPass = () => { catalogP = null; };
+  const catalog = () => {
+    if (!catalogP) {
+      catalogP = Promise.resolve().then(() => sdk.findTables('')).catch((err) => {
+        catalogP = null;
+        throw err;
+      });
+    }
+    return catalogP;
+  };
+
+
   const base = {
-    findTable: async (logical) => { const l = String(logical).toLowerCase(); const t = await sdk.findTables(l); return (t || []).find((x) => String(x.logicalName).toLowerCase() === l) || null; },
+    // findTables scans the whole EntityDefinitions catalog and filters client-side, so one
+    // unfiltered read serves every findTable in this verify run. Caching a filtered page would
+    // hide a later table whose name does not contain the first query.
+    beginVerificationPass,
+    findTable: async (logical) => {
+      const l = String(logical).toLowerCase();
+      const tables = await catalog();
+      return (tables || []).find((x) => String(x.logicalName).toLowerCase() === l) || null;
+    },
     findColumns: async (logical) => sdk.findColumns(logical),
     // Grid data visualization (preview) for one column. Passed straight through — including the raw
     // 404 the SDK emits on an environment where the preview is not provisioned, which verify-spec
     // interprets (it must stay distinguishable from the legitimate 'None' answer).
     columnVisualization: async (logical, columnLogical) => sdk.getColumnVisualization(String(logical).toLowerCase(), String(columnLogical).toLowerCase()),
     queryRecords: (set, o) => sdk.queryRecords(set, o),
-    // entityRelationships(childLogical): the relationship SCHEMA NAMES defined on a child entity, for the
-    // content-verify relationship-existence check. Best-effort — a metadata read failure yields [] so the
-    // check simply can't confirm (never a false pass: [] => the declared relationship reads as missing,
-    // which is the fail-closed direction for a read-only reconcile). Reads OneToMany + ManyToMany schema
-    // names from the entity metadata (the shape download's fetchEntityMetadata already returns).
+    // entityRelationships(childLogical): detailed rows for the relationship check. ManyToOne is
+    // the 1:N seen from the child; ManyToMany is read from entity1. A failed read throws so
+    // verify-spec's catch turns it into an empty list — fail closed, same as before.
     entityRelationships: async (childLogical) => {
-      const meta = await sdk.fetchEntityMetadata(String(childLogical).toLowerCase());
-      const rels = (meta && (meta.relationships || meta.Relationships)) || [];
-      return rels
-        .map((r) => r && (r.schemaName || r.SchemaName || r.name))
-        .filter(Boolean)
-        .map((n) => String(n).toLowerCase());
+      const client = sdk.dataverse;
+      if (!client || typeof client.get !== 'function') throw new Error('relationship metadata client is not available');
+      const logical = String(childLogical).toLowerCase();
+      const manyToOne = await readRelationshipsOf(client, logical, 'ManyToOne');
+      if (!manyToOne.ok) throw new Error(manyToOne.error || `HTTP ${manyToOne.status}`);
+      const manyToMany = await readRelationshipsOf(client, logical, 'ManyToMany');
+      if (!manyToMany.ok) throw new Error(manyToMany.error || `HTTP ${manyToMany.status}`);
+      return [...manyToOne.rows, ...manyToMany.rows];
     },
+    // Used when the typed collection on one side cannot see the holder (a 1:N is not in the
+    // parent's ManyToMany list). The SchemaName key is case-sensitive; the helper falls back.
+    relationshipHolder: async (schemaName, candidates) => findRelationshipHolder(sdk.dataverse, schemaName, { candidates }),
     // commandBar(entity): truthy when a command bar (appaction set) exists for the entity — the identity
     // the build/teardown use (resolveArtifact('command', { entity })). Best-effort — a resolve failure
     // reads as absent (fail-closed for a read-only check).
@@ -254,10 +227,23 @@ function readerFor(sdk, appUnique, opts) {
     // feature and reports the read failure as a not-present check, which is the fail-closed direction —
     // a verify that cannot prove a feature is in effect must not claim it is.
     retrieveSetting: async (name, opts) => sdk.retrieveSetting(name, opts || {}),
-    // formDefaultState(entity, formId): a Main form's actual default flag. The identity
-    // check in verify-spec proves the form row exists; this separate read proves both the selected
-    // default and any spec-declared sibling that must no longer hold the default slot. Errors propagate as a fail-closed
-    // finding, because a missing proof is not evidence that promotion succeeded.
+    // isdefault and formxml are two proofs of the same published systemform row. verifySpec asks
+    // for both, so one select replaces the two GETs the verify trace counted. Not cached on the
+    // reader: the same reader is reused across verifies, and the row can change between them.
+    // verifySpec memoizes the promise for a single pass. The dashboard published/draft bracket
+    // stays its own read.
+    formRow: async (_entity, formId) => {
+      const rows = await sdk.queryRecords('systemform', {
+        select: ['formid', 'isdefault', 'formxml'],
+        filter: `formid eq ${formId}`,
+        top: 1,
+      });
+      const row = rows && rows[0];
+      if (!row) return null;
+      return { isDefault: row.isdefault === true, formxml: row.formxml || null };
+    },
+    // formDefaultState(entity, formId): a Main form's actual default flag. Kept for a reader that
+    // is asked for the flag alone. Errors propagate as a fail-closed finding.
     // See: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/systemform
     formDefaultState: async (_entity, formId) => {
       const rows = await sdk.queryRecords('systemform', {
@@ -270,7 +256,8 @@ function readerFor(sdk, appUnique, opts) {
     },
     // formTopology(entity, formId): the deployed FormXml, so verify can prove the LAYOUT and not just
     // that a form row exists. Errors propagate to verify-spec, which reports the read failure as a
-    // not-present check — a layout nobody could read is unverified, not correct.
+    // not-present check — a layout nobody could read is unverified, not correct. A direct call
+    // always re-reads: a later verify on this reader must see a row that changed after the last one.
     formTopology: async (_entity, formId) => {
       const rows = await sdk.queryRecords('systemform', {
         select: ['formid', 'formxml'],
@@ -369,6 +356,11 @@ function readerFor(sdk, appUnique, opts) {
       if (!appComponentsP.has(key)) appComponentsP.set(key, appEntityComponentsFor(sdk, appUnique, wanted));
       return appComponentsP.get(key);
     },
+    appMainForms: (unique, tables) => {
+      const key = JSON.stringify([unique, tables]);
+      if (!appMainFormsP.has(key)) appMainFormsP.set(key, appMainFormsFor(sdk, unique || appUnique, tables));
+      return appMainFormsP.get(key);
+    },
     appRoleIds: () => appRoleIdsFor(sdk, appUnique),
   };
 
@@ -443,20 +435,24 @@ function readerFor(sdk, appUnique, opts) {
       const key = String(pageId).toLowerCase();
       if (codeById.has(key)) return codeById.get(key);
       const id = await appId();
-      // Per-id output dir so parallel/sequential calls for different ids don't clobber each other.
-      const outDir = path.join(workspaceDir, 'verify-pages', key);
-      fs.rmSync(outDir, { recursive: true, force: true });
-      fs.mkdirSync(outDir, { recursive: true });
-      // Fail-closed: genpageCli.download throws on pac exit != 0 (design §13.1).
-      await genpageCli.download({ appId: id, outputDir: outDir, pageIds: [pageId] });
-      // pac writes to <outDir>/<pageId>/page.tsx; scan subdirs to be case-tolerant (pac may differ in casing).
-      let code = '';
-      for (const entry of fs.readdirSync(outDir)) {
-        const tsx = path.join(outDir, entry, 'page.tsx');
-        if (fs.existsSync(tsx)) { code = fs.readFileSync(tsx, 'utf8'); break; }
+      // A fixed name under the workspace (verify-pages/<id>) is a place a link can be left.
+      // pac follows links, and removing that name would delete through the link. The download
+      // therefore goes to a private temp directory this call creates and always removes.
+      const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-page-'));
+      try {
+        // Fail-closed: genpageCli.download throws on pac exit != 0 (design §13.1).
+        await genpageCli.download({ appId: id, outputDir: outDir, pageIds: [pageId] });
+        // pac writes to <outDir>/<pageId>/page.tsx; scan subdirs to be case-tolerant (pac may differ in casing).
+        let code = '';
+        for (const entry of fs.readdirSync(outDir)) {
+          const tsx = path.join(outDir, entry, 'page.tsx');
+          if (fs.existsSync(tsx)) { code = fs.readFileSync(tsx, 'utf8'); break; }
+        }
+        codeById.set(key, code);
+        return code;
+      } finally {
+        try { fs.rmSync(outDir, { recursive: true, force: true }); } catch { /* leave the temp dir */ }
       }
-      codeById.set(key, code);
-      return code;
     };
   }
   return base;
@@ -487,9 +483,20 @@ async function main() {
   const spec = migrateAppSpec(readJsonArg('@' + specPath));
   // Validate the spec up front (consistent with teardown) so malformed input yields a structured
   // error instead of a later throw when dereferencing spec.entities / schemaName.
-  const v = validateAppSpec(spec, { profile: 'deploy' });
+  // 'warn' is verify-only. A spec built before the collision gate must still be verifiable; the
+  // endpoint check below names the holder. Every other entry point keeps the error.
+  const v = validateAppSpec(spec, { profile: 'deploy', relationshipCollisions: 'warn' });
   if (!v.ok) { emitResult(false, { ok: false, errors: v.errors }); return; }
+  for (const w of v.warnings || []) process.stderr.write(`WARNING: ${w}\n`);
   const workspaceDir = workspaceArg || path.join(path.dirname(specPath), '.maker-workspace');
+  // Before the SDK. A link planted as the workspace root is refused here so the factory
+  // is never called; a real directory is allowed.
+  try {
+    assertSafeOutputDir(workspaceDir, { create: true, fs });
+  } catch (err) {
+    emitResult(false, err instanceof Error ? err : new Error(String(err)));
+    return;
+  }
   const httpClient = createAzHttpClient(env);
   const sdk = await makeProvision(env, workspaceDir, httpClient);
   const genpageCli = makeGenpageCli(env);

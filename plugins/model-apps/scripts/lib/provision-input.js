@@ -5,7 +5,7 @@
 // App-Spec subset: { solution, entities, relationships, globalChoices?, sampleData? }.
 // Entities carry FULL schema names (e.g. cr_candidate), not bare suffixes.
 
-const { TYPE_MAP, normalizeLanguageCode, validateLabel, validateChoiceOptionLabels, isLocalizedLabelMap, labelIsMissing, rejectLocalizedGlobalChoice, validateSampleDataRows, ENTITY_KEYS, ENTITY_KEY_HINTS, invalidLanguageCodeMessage } = require('./app-spec.js');
+const { TYPE_MAP, normalizeLanguageCode, validateLabel, validateChoiceOptionLabels, isLocalizedLabelMap, labelIsMissing, rejectLocalizedGlobalChoice, validateSampleDataRows, ENTITY_KEYS, ENTITY_KEY_HINTS, invalidLanguageCodeMessage, relationshipNameCollisions, relationshipCollisionMessage } = require('./app-spec.js');
 
 // Validates provision-entities input. Returns { ok, errors }.
 function validateProvisionInput(input) {
@@ -228,6 +228,13 @@ function validateProvisionInput(input) {
           errors.push(`ManyToMany relationship: entity2 '${r.entity2}' not found in entities[]`);
         }
       }
+    }
+    // Same helper and the same sentence as validateAppSpec. Two entry points that disagree about
+    // whether a shared schema name is an error would let the standalone provision path create the
+    // first relationship and silently skip the second.
+    const relPrefix = input.solution && input.solution.publisherPrefix;
+    for (const hit of relationshipNameCollisions(input.relationships, relPrefix)) {
+      errors.push(relationshipCollisionMessage(input.relationships, hit));
     }
   }
 

@@ -106,6 +106,22 @@ Omitting `--data-sources` here is safe: the page's existing table bindings are
 read and re-sent, so a fix re-deploy does not unbind it. Pass `--data-sources`
 to change the bindings, or `--clear-data-sources` to remove them deliberately.
 
+Pass the same `--code-file` that Phase 6 (or Edit Phase 6) uploaded: that upload
+wrote the page's base marker beside it from the hash of the file it uploaded.
+When the readback matched, the marker source is `upload` and this update's
+divergence check passes unless someone else saved the page since. When the
+readback differed, the source is `upload-unverified` and records that uploaded
+hash, not the bytes the service returned, so this update refuses
+`deployed-changed` until the page is compared with `genpage-base.js check`. A
+`no-base`, `deployed-changed`, or `deployed-unreadable` refusal is a stop:
+**attended**, show the summary and ask exactly "Overwrite the deployed changes"
+or "Stop so I can merge", and record the answer as its own line before the
+upload command, exactly `Choice: Overwrite the deployed changes` or
+`Choice: Stop so I can merge`; **unattended**, STOP and report the code and
+`deployedCopy` when present. Never pass `--overwrite-deployed` unless the user
+chose "Overwrite the deployed changes". Log the refusal and that `Choice:` line
+in `workflow-log.md`.
+
 Check and clear `prompt.txt` and `agent-message.txt` as in SKILL.md Phase 6, then write them with your
 file-writing tool — `prompt.txt` holding the fix delta and `agent-message.txt` holding
 `Phase 7.5 fix re-deploy` — and deploy:

@@ -185,7 +185,7 @@ What happens:
 3. **Industry confirmation** — only fires if the inference is shaky (your description matched multiple industries, or none)
 4. **Up to 4 approval gates** — data platform + native capabilities + connectors → Dataverse model when selected → screen graph → screen specs (reviewed in markdown before code is written)
 5. **Design system** — brand inputs (logo, brand doc, website, or free-text) → cost picker → style picker → component reference sheet → branded screen previews
-6. **Scaffold + build** — validates the prepared template folder, runs `npx power-apps init`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, spawns N parallel screen-builders for the TSX
+6. **Scaffold + build** — validates the prepared template folder, runs `pa app init`, verifies installed dependencies, generates schemas, builds Dataverse tables, wires connectors, spawns N parallel screen-builders for the TSX
 7. **Dev server** — the plugin starts a portable Metro session; scan the QR with your native dev client and use `/debug-app` against its persisted sanitized log
 
 End state: a working app you can iterate on with hot reload. ~5–12 minutes for the planning gates, then scaffolding runs.
@@ -196,7 +196,11 @@ End state: a working app you can iterate on with hot reload. ~5–12 minutes for
 > /add-dataverse I need an Asset table with name, serial number, and a lookup to an existing Account
 ```
 
-Or paste an ER diagram (image / Mermaid / text). The data-model-architect agent discovers what already exists in your environment, scores reuse vs extend vs create, walks through approval, then creates the tables in dependency order and regenerates `src/generated/services/`.
+Or paste an ER diagram (image / Mermaid / text). For an existing app, this first
+asks whether to integrate through `/edit-app`, do data-only work, or cancel.
+Full integration approves the schema delta and affected screens together.
+The data-model-architect checks reuse vs extend vs create before the Dataverse
+leaf applies approved operations and regenerates services.
 
 ### 3. Add a native capability
 
@@ -204,7 +208,13 @@ Or paste an ER diagram (image / Mermaid / text). The data-model-architect agent 
 > /add-native camera
 ```
 
-Generates `src/native/camera.ts` (typed wrapper around `expo-camera` + `expo-image-picker`) and — if Dataverse image columns exist — a `cameraUpload.ts` helper that bridges to `Service.upload()`. The Expo modules are already in the upstream template; no `package.json` or `app.config.js` edits.
+On an existing app, `/add-native` first asks whether to do implementation-only
+work, full app integration, or cancel. Only full integration invokes `/edit-app`,
+which resolves how the camera will be used, updates the Native Capabilities and
+Screens plan, and asks about retention only when needed. It then generates the supported
+wrappers/helpers and integrates the approved screen flow. Dataverse schema
+changes are conditional, not required for every capture. Native modules must
+already ship in the template; no native dependency or permission-config edits.
 
 For other capabilities (only those actually shipped by the template):
 ```text
@@ -224,13 +234,46 @@ Native modules are allowlist-bound by the current template `package.json`. If th
 > /add-connector                 # any other Power Platform connector
 ```
 
-Runs `npx power-apps add-data-source` under the hood, regenerates services, prints how to import in your screens.
+On an existing app, these entry points ask before invoking the fuller, more
+costly `/edit-app` workflow. Choose implementation-only work, full integration,
+or cancel. Full integration clarifies the operation and consuming screens,
+approves the Connectors delta, generates services with `pa app add data-source`,
+and wires the intended behavior. Teams/email actions and profile lookups
+do not automatically create a Dataverse model. SQL/Excel/SharePoint tables
+also stay in the connector plan unless Dataverse storage is separately required.
+
+Choose implementation-only in that question, or use `--implementation-only` (for example,
+`/add-native secure-store --implementation-only`) or explicitly request only a
+wrapper/service registration. The skill keeps applicable plan entries current,
+but leaves screens unchanged and reports that integration was not performed.
+When the change is already part of an approved creation/edit workflow, the
+extra entry question is skipped. This choice runs before costly app scans or
+planners and does not replace mutation/removal approval.
+
+### Data-source planning, refresh, and retirement
+
+Use `/setup-datamodel` or `/add-dataverse` to review and approve a data change.
+Add `--plan-only` to preview it without changing the app or its data.
+
+For existing sources, use the dedicated refresh/removal operation:
+
+```text
+> /add-dataverse --refresh --data-source-name <registered-name>
+> /add-connector --refresh --data-source-name <registered-name>
+> /add-sharepoint --remove --data-source-name <registered-name>
+```
+
+Refresh updates an existing source without adding it again. Removal stops if
+app code still uses the source and never deletes server tables, records, lists,
+or connections. For a fully integrated removal, `/edit-app` updates the approved
+consumers before retiring their data sources. Offline-profile changes require
+separate approval. Cloud-flow integration is not supported.
 
 ### 5. Iterate on the generated app after the fact
 
 ```text
 > /edit-app "Improve the search screen to make it easier to use on mobile"
-> /deploy                        # npm run build + npx power-apps push
+> /deploy                        # npm run build + pa app push
 > /open-wrap-url --app-id <id> --env-id <env-id>   # open make.powerapps.com Wrap page for this app
 > /preview-screens               # browser preview of generated screens (no Metro needed)
 > /list-connections              # diagnostic when a service call returns 401
@@ -238,7 +281,7 @@ Runs `npx power-apps add-data-source` under the hood, regenerates services, prin
 > /report-issue                  # copy-paste-ready GitHub issue body
 ```
 
-Use `/edit-app` for post-generation improvements. It first inspects the existing app and asks only for missing intent details (which screen, table, scanned field, launch point, brand source, etc.). Then it updates `native-app-plan.md` when the request changes the plan, applies the generated app edits, runs the relevant verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. You do not need to manually run `npm run generate-schemas`, `npx tsc --noEmit`, or `/preview-screens` after each edit unless you are doing diagnostics outside the skill.
+Use `/edit-app` for post-generation improvements. It first inspects the existing app and asks only for missing intent details (which screen, table, scanned field, launch point, brand source, etc.). Then it updates `native-app-plan.md` when the request changes the plan, applies the generated app edits, runs the relevant verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. You do not need to manually run `npm run generate-schemas`, `npx --no-install tsc --noEmit`, or `/preview-screens` after each edit unless you are doing diagnostics outside the skill.
 
 Common follow-ups:
 
@@ -268,24 +311,24 @@ Example edit flows:
 
 | Command | Status | Description |
 | --- | --- | --- |
-| `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `npx power-apps init`, resolves the selected environment tenant, discovers tenant-visible app registrations and checks the complete required permission profile, lets the user select or create one (or skip auth), then applies data/native/connectors, builds screens, starts dev server |
+| `/create-mobile-app` | ✅ v0 | Orchestrator — starts from a fresh installed `expo-app-standalone` template folder, gates planning, runs `pa app init`, resolves the selected environment tenant, discovers tenant-visible app registrations and checks the complete required permission profile, lets the user select or create one (or skip auth), then applies data/native/connectors, builds screens, starts dev server |
 | `/set-app-registration-native` | ✅ v0 | Auth helper — discovers tenant-visible app registrations, checks the applicable native runtime permission profile, opens the environment-specific Wrap page for creation or repair, and writes the selected client ID to `auth.config.json`. |
 | `/add-dataverse` | ✅ v0 | Add Dataverse — connect to existing tables, or create / extend tables in Tier 0 → N order via the Dataverse Web API, then generate TS services. Accepts ER diagrams via image / Mermaid / text, or spawns the data-model-architect agent. |
-| `/setup-datamodel` | ✅ v0 | Discoverable alias for `/add-dataverse` optimized for the design-first entry point ("how do I plan my Dataverse schema?"). Same workflow under a more searchable name. |
-| `/add-connector` | ✅ v0 | Generic connector — runs `npx power-apps add-data-source` for any first-party or custom connector |
+| `/setup-datamodel` | ✅ v0 | Plan and approve a scoped Dataverse/connector change. Choose data-only work or full `/edit-app` integration; `--plan-only` returns a proposal without applying it. |
+| `/add-connector` | ✅ v0 | Generic connector — runs `pa app add data-source` for any first-party or custom connector |
 | `/add-native` | ✅ v0 | Add a supported native capability/control (camera, image-picker, barcode/QR scanner, document-picker, PDF viewer/report, pen/signature, secure-store, file-system, sharing, haptics, etc.) — verifies the module already ships in the template and writes typed wrappers under `src/native/` without installing native packages or editing `app.config.js` |
-| `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `npx power-apps add-data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
+| `/list-connections` | ✅ v0 | Finds or creates a Power Platform connection ID, or resolves a solution connection reference, for `pa app add data-source`. Use when adding non-Dataverse connectors or re-binding after a 401. |
 | `/edit-app` | ✅ v0 | Post-generation app editor — updates affected sections of `native-app-plan.md`, applies Dataverse/native/design/connector changes, rebuilds affected screens, runs verification, updates `memory-bank.md`, and regenerates `preview.html` when UI changed. `--plan-only` preserves the old docs-only behavior. |
 | `/debug-app` | ✅ v0 | Monitors live `.powernative/metro-logs/` files with a durable byte cursor, stores host-neutral cursor/audit/health state under `.powernative/debug-app/`, diagnoses runtime and silent data-path failures, and verifies bounded fixes without depending on host terminal IDs. |
 | `/setup-app-insights` | ✅ v0 | Configure optional customer-owned Application Insights telemetry — discover or accept an existing Azure resource and wire `app.json` → `expo.extra.appInsightsConfig` + `PowerAppsProvider`, change the resource, or disable it. Off by default; invoking it is the opt-in. Also delegated to by `/edit-app`. Never provisions Azure resources or stores the connection string. |
 | `/check-updates` | ✅ v0 | Standalone dependency maintenance — checks for a plugin update and restart first, then presents, approves, updates, and validates direct packages one at a time in host, other `@microsoft/*`, and remaining npm package order. |
-| `/deploy` | ✅ v0 | Build + push — `npm run build` then `npx power-apps push` to the env in `power.config.json`. **Does not** drive `expo run:ios` or `expo run:android` (out of scope for v0). |
+| `/deploy` | ✅ v0 | Build + push — `npm run build` then `pa app push` to the env in `power.config.json`. **Does not** drive `expo run:ios` or `expo run:android` (out of scope for v0). |
 | `/open-wrap-url` | ✅ v0 | Opens the Wrap URL in browser for an app ID using `https://make.powerapps.com/environments/<envID>/wrap?appID=<appID>`. Requires both `--app-id` and `--env-id`. |
 | `/report-issue` | ✅ v0 | Read-only diagnostic — collects env / Expo / Node versions, project context, recent errors, and renders a copy-paste-ready GitHub issue body. Sanitizes secrets. |
 | `/telemetry` | ✅ v0 | Enable, disable, or show the per-user Mobile Apps telemetry transmission preference. |
 | `/design-system` | ✅ v0 | End-to-end design system — collects brand inputs (logo, brand doc, website, free text, canvas app, code app, Figma), runs a 3-style visual picker, writes `brand/design-system.md` + `brand/tokens.ts`, renders branded screen previews. Auto-invoked at Step 6.75 of `/create-mobile-app`; also standalone. |
 | `/preview-screens` | ✅ v0 | Renders generated TSX screens as a browser-viewable HTML preview (no Metro needed). Uses Tamagui → HTML mapping. |
-| `/add-datasource` | ✅ v0 | Alias for `/add-connector` — discoverable name for "how do I connect to X?" |
+| `/add-datasource` | ✅ v0 | Intent-aware entry point for data/action integrations; asks full `/edit-app` integration vs implementation-only, then uses the approved Dataverse/SharePoint/connector leaf. |
 | `/add-sharepoint`, `/add-teams`, `/add-office365`, `/add-excel`, `/add-onedrive`, `/add-azuredevops` | 🟡 v1 | Pre-filled wrappers around `/add-connector` |
 | `/setup-offline-profile` | 🟡 v0.1 | Create a Dataverse Mobile Offline Profile for the app's tables. One consolidated configuration questionnaire (no per-step approval clicks), schema+screen-aware architect proposal, single `accept` confirm. Writes `offline-profile.json`; never mutates `power.config.json`. The bundled offline package is consumed by the native host for local storage, queued synchronization, reconnect handling, and status UX, so the skill configures the host runtime instead of generating duplicate app-owned offline infrastructure. Offered explicitly by `/create-mobile-app` after Dataverse materialization; connectivity wording in the initial prompt does not auto-enable it. Also runs standalone on existing apps. |
 | `/enable-tables-offline` | 🟡 v0.1 | Pre-flight pass — flip `IsAvailableOffline` + `ChangeTrackingEnabled` on selected tables' EntityMetadata, then `PublishAllXml`. Idempotent. Mostly a no-op for fresh scaffolds since `/add-dataverse` Step 5b now sets these flags at create time; primary use case is fixing legacy / imported tables. |

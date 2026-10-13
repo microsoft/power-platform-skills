@@ -57,6 +57,26 @@ test('in-sync when every manifest table is covered and no new columns', () => {
   assert.strictEqual(delta.summary.newColumnCount, 0);
 });
 
+test('addition-only in-sync does not prove that retired profile tables were removed', () => {
+  const profile = {
+    tables: [
+      { logicalName: 'contoso_customer', schemaColumns: ['contoso_name'] },
+      { logicalName: 'contoso_order', schemaColumns: ['contoso_total'] },
+    ],
+  };
+  const original = JSON.stringify(profile);
+  for (const tables of [
+    [{ logicalName: 'contoso_customer', columns: ['contoso_name'] }],
+    [],
+  ]) {
+    const delta = computeOfflineProfileDelta({ tables }, profile);
+    assert.strictEqual(delta.status, 'in-sync');
+    assert.deepStrictEqual(delta.missingTables, []);
+    assert.deepStrictEqual(delta.tablesWithNewColumns, []);
+    assert.strictEqual(JSON.stringify(profile), original);
+  }
+});
+
 test('flags a table present in the manifest but missing from the profile', () => {
   const manifest = {
     tables: [

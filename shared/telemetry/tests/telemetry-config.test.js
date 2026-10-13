@@ -38,6 +38,7 @@ test("off writes the per-plugin opt-out and confirms", () => {
   assert.match(stdout, /When plugin telemetry is enabled/);
   assert.match(stdout, /committed telemetry\s+config has disabled: true/);
   assert.match(stdout, /hard-disabled and writes no log/);
+  assert.match(stdout, /Telemetry records usage fields/);
   assert.doesNotMatch(stdout, /anonymous/i);
   const cfg = JSON.parse(fs.readFileSync(path.join(dir, "config.json"), "utf8"));
   assert.equal(cfg.telemetry["power-pages"], "off");
@@ -83,6 +84,7 @@ test("status reports ON by default and never reads ikey.json", () => {
   assert.match(stdout, /When plugin telemetry is enabled/);
   assert.match(stdout, /committed telemetry\s+config has disabled: true/);
   assert.match(stdout, /hard-disabled and writes no log/);
+  assert.match(stdout, /Telemetry records usage fields/);
   assert.doesNotMatch(stdout, /anonymous/i);
 });
 

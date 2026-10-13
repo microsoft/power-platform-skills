@@ -1,0 +1,10 @@
+{
+  "name": "process-intelligence",
+  "version": "0.7.0",
+  "description": "Analyze Power Automate Process Mining processes, bottlenecks, variants, cohorts and object-centric executions through MCP.",
+  "author": { "name": "Microsoft", "url": "https://www.microsoft.com" },
+  "homepage": "https://github.com/microsoft/power-platform-skills/",
+  "repository": "https://github.com/microsoft/power-platform-skills/",
+  "license": "MIT",
+  "keywords": ["process-intelligence", "power-automate", "power-platform", "mcp", "analytics"]
+}

@@ -228,7 +228,7 @@ when the app uses Dataverse only.
 
 To publish as a Code App, run `npm run bundle:web`, set `appType` to `CodeApp`
 and `buildPath` to `dist-web` in `power.config.json`, then run
-`npx power-apps push`. Ensure Code App and the Mobile App have different app id by removing the appId field before pushing the app
+`npx --no-install pa app push`. Ensure Code App and the Mobile App have different app id by removing the appId field before pushing the app
 
 To publish to Power Pages, run `npm run bundle:web -- powerpages`, then use the Power Pages
 skills to upload the generated `dist-web` directory.

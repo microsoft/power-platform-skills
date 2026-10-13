@@ -23,6 +23,7 @@ const { topoOrderEntities, entityByLogical } = require('./_graph.js');
 // OData string-literal escaping for spec-controlled values interpolated into $filter (a solution
 // uniquename / publisher prefix with a `'` would otherwise break the query or inject a clause).
 const { odataLit } = require('./odata.js');
+const { readRelationshipsOf, findRelationshipHolder, sameRelationship, describeRelationship, pickProjectionRow, projectionHolder } = require('./relationship-metadata.js');
 // Transport-level language reads. Needed here because `MakerSdkOptions.languageCode` is a
 // construction-time option, so the LCID must be known before the SDK that would normally read it.
 const { readOrgLanguageCode, readProvisionedLanguages } = require('./dataverse-auth.js');
@@ -419,12 +420,15 @@ async function findExistingColumns(provision, logical, warn) {
 // (C,F,F,C): `createRelationship` alone kept a bilingual `lookupDisplayName` 2/2;
 // `fetchEntityMetadata` then `createRelationship` kept it 0/2.
 //
-// `$select=SchemaName` on the relationship collection is the smallest question that answers this.
-// Falls back to `fetchEntityMetadata` when the raw client is unavailable (unit-test doubles).
+// The collection select is SchemaName plus the endpoint scalars (readRelationshipsOf). Still no
+// labels — a label-bearing select here is what strips every non-base language. Falls back to
+// `fetchEntityMetadata` when the raw client is unavailable (unit-test doubles).
 //
-// Returns `true`/`false`, or `null` when it genuinely could not tell — the caller treats null the
-// way the old `catch {}` did (assume absent and let the create's own already-exists handling deal
-// with it), because a table created moments ago legitimately 404s here.
+// Without `declared`, returns `true`/`false`/`null` (name-only; the live plan). With `declared`, a
+// name whose type or endpoints differ returns `{ mismatch: true, holder }` so the build halts
+// instead of skipping. `null` is still "could not tell" — the caller treats it as absent and lets
+// the create's own already-exists handling deal with it, because a table created moments ago
+// legitimately 404s here.
 //
 // `hasLocalizedLabels` closes the same hole `findExistingTable` documents, for the same reason and
 // with the same rule. `fetchEntityMetadata` → `createRelationship` is one of the three broad-read →
@@ -435,28 +439,56 @@ async function findExistingColumns(provision, logical, warn) {
 // "assume absent" costs at most a redundant create that already-exists handling absorbs, whereas the
 // poisoning read costs a label nobody can see is wrong until a user switches language.
 // A relationship with a plain-string label keeps the fallback exactly as before.
-async function relationshipExists(provision, entityLogical, schemaName, type, { hasLocalizedLabels = false } = {}) {
-  const collection = type === 'ManyToMany' ? 'ManyToManyRelationships' : 'OneToManyRelationships';
+async function relationshipExists(provision, entityLogical, schemaName, type, opts = {}) {
+  const hasLocalizedLabels = opts.hasLocalizedLabels === true;
+  const declared = opts.declared;
+  const collectionKind = type === 'ManyToMany' ? 'ManyToMany' : 'OneToMany';
   const raw = provision && provision.dataverse;
+  let probed = null;
   if (raw && typeof raw.get === 'function') {
+    // Same narrow collection read as before, now selecting the endpoint scalars too. Scalars only —
+    // readRelationshipsOf documents why a label-bearing select must not precede createRelationship.
+    const read = await readRelationshipsOf(raw, entityLogical, collectionKind, opts.cache);
+    if (read.ok) {
+      const want = String(schemaName).toLowerCase();
+      const hit = (read.rows || []).find((r) => String(r.schemaName || '').toLowerCase() === want);
+      probed = hit ? { state: 'present', holder: hit } : { state: 'absent' };
+    } else if (hasLocalizedLabels) {
+      // Inconclusive AND localized: never resolve it with the broad read.
+      probed = { state: 'unknown' };
+    }
+  }
+  if (!probed && typeof (provision && provision.fetchEntityMetadata) === 'function') {
     try {
-      const res = await raw.get(`/EntityDefinitions(LogicalName='${odataLit(entityLogical)}')/${collection}?$select=SchemaName`);
-      if (res && res.status >= 200 && res.status < 300 && res.body && Array.isArray(res.body.value)) {
-        return res.body.value.some((r) => String(r.SchemaName || '').toLowerCase() === String(schemaName).toLowerCase());
-      }
-      if (res && res.status === 404) return false;
-    } catch { /* fall through */ }
-    // Inconclusive AND localized: never resolve it with the broad read.
-    if (hasLocalizedLabels) return null;
+      const meta = await provision.fetchEntityMetadata(entityLogical);
+      const hit = pickProjectionRow(meta && meta.relationships, schemaName);
+      // A ManyToOne projection has no lookup (relatedAttribute is the parent key). Two
+      // self-references can share a name and differ only by lookup, so an unknown lookup is not
+      // a match — return null and let the create's holder classification read the cast, which has it.
+      // Only an OneToMany projection row can decide a 1:N match from this fallback.
+      const lookupUnknown = hit && hit.type === 'ManyToOne' && declared && declared.lookup && declared.lookup.schemaName;
+      probed = !hit
+        ? { state: 'absent' }
+        : lookupUnknown
+          ? { state: 'unknown' }
+          : { state: 'present', holder: projectionHolder(hit, entityLogical) };
+    } catch {
+      probed = { state: 'unknown' };
+    }
   }
-  if (typeof (provision && provision.fetchEntityMetadata) !== 'function') return null;
-  try {
-    const meta = await provision.fetchEntityMetadata(entityLogical);
-    return ((meta && meta.relationships) || []).some((r) => String(r.schemaName || '').toLowerCase() === String(schemaName).toLowerCase());
-  } catch {
-    return null;
+  if (!probed) probed = { state: 'unknown' };
+  // Callers that do not pass the declared relationship (the live plan) keep the name-only answer.
+  if (!declared) {
+    if (probed.state === 'unknown') return null;
+    return probed.state === 'present';
   }
+  if (probed.state === 'unknown') return null;
+  if (probed.state === 'absent') return false;
+  const declaredWithName = Object.assign({}, declared, { schemaName: declared.schemaName || schemaName });
+  if (sameRelationship(declaredWithName, probed.holder)) return true;
+  return { mismatch: true, holder: probed.holder };
 }
+
 
 async function readAttributeRequiredLevels({ sdk, provision, logical }) {
   const client = (provision && provision.dataverse) || (sdk && sdk.dataverse);
@@ -506,16 +538,32 @@ async function runBestEffort(runner, phase, label, fn, warn, warning) {
 
 // Bounded-concurrency map — parallelize independent ops without flooding Dataverse (which
 // raises SQL-deadlock risk). Preserves input order in the result.
+//
+// On the first failure, no further item is STARTED, and the failure is reported only after every
+// item already in flight has settled. Rejecting at once (a plain Promise.all over the workers) left
+// the other workers running — still writing — after the phase had already failed. The build's
+// transient retry then re-ran the phase while one of those writes was still pending; its discovery
+// found no row yet and created the same view a second time under a new id, which the next fetch
+// then refused as an ambiguous match. Only the first error is rethrown; a later in-flight failure is
+// the same phase failing again and adds nothing the first did not already report.
 async function mapLimit(items, limit, fn) {
   const out = new Array(items.length);
   let i = 0;
+  let failed = false;
+  let firstError;
   const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (i < items.length) {
+    while (!failed && i < items.length) {
       const idx = i++;
-      out[idx] = await fn(items[idx], idx);
+      try {
+        out[idx] = await fn(items[idx], idx);
+      } catch (err) {
+        if (!failed) { failed = true; firstError = err; }
+        return;
+      }
     }
   });
   await Promise.all(workers);
+  if (failed) throw firstError;
   return out;
 }
 
@@ -815,7 +863,7 @@ async function findExistingTable(provision, schemaName, { hasLocalizedLabels = f
   return (hits || []).find((t) => t.logicalName === logical) || null;
 }
 
-async function provisionDataModel({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode }) {
+async function provisionDataModel({ sdk, provision, runner, spec, apply, languageCode, warn, provisionedLanguages, preResolvedLanguageCode, sleep }) {
   const result = { entities: {}, globalChoiceIds: {}, statusReasonValues: {}, columns: {}, relationships: [] };
   // The CLI resolves the authoring LCID BEFORE constructing the SDK, because
   // `MakerSdkOptions.languageCode` is a construction-time option (#455) — the App/Form/Dashboard
@@ -1104,40 +1152,111 @@ async function provisionDataModel({ sdk, provision, runner, spec, apply, languag
   // 2c. Relationships — 1:N and N:N; skip those already present. The publisher prefix is threaded
   //     into the schema-name defaulting so a relationship to a standard/system table gets a valid,
   //     prefixed name Dataverse accepts (see prefixedRelationshipName).
+  //     A name that already exists is not enough to skip: Dataverse allows one relationship per
+  //     schema name, so a second 1:N on the same pair, or an N:N that derived the 1:N's name, must
+  //     halt rather than be reported as already created.
   const publisherPrefix = spec.solution && spec.solution.publisherPrefix;
   for (const rel of spec.relationships || []) {
-    if (rel.type === 'OneToMany') {
-      const schema = relationshipSchemaName(rel, publisherPrefix);
-      // `null` (could not tell) is treated as absent, exactly as the previous `catch {}` did: a table
-      // created moments earlier legitimately 404s here, and the create's own already-exists handling
-      // covers the race. A localized lookup label suppresses the broad-read fallback inside the
-      // probe — see relationshipExists.
-      const exists = await relationshipExists(provision, rel.referenced.toLowerCase(), schema, 'OneToMany',
-        { hasLocalizedLabels: localizedLabelLcids(rel.lookup && rel.lookup.displayName).length > 0 });
-      if (exists === true) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
-      await runner.run('data-model', `relationship 1:N ${rel.referenced}->${rel.referencing}`, async () => {
-        const res = await sdk.createRelationship({ type: 'OneToMany', schemaName: schema, referencedEntity: rel.referenced.toLowerCase(), referencingEntity: rel.referencing.toLowerCase(), lookupSchemaName: rel.lookup.schemaName, lookupDisplayName: rel.lookup.displayName, languageCode: resolvedLanguageCode });
-        result.relationships.push({
-          schemaName: res.schemaName || schema,
-          metadataId: res.metadataId,
-          kind: '1n',
-          lookupLogicalName: res.lookupLogicalName
-        });
-      }, { skipIf: isAlreadyExists });
-    } else if (rel.type === 'ManyToMany') {
-      const schema = manyToManySchemaName(rel, publisherPrefix);
-      const exists = await relationshipExists(provision, rel.entity1.toLowerCase(), schema, 'ManyToMany');
-      if (exists === true) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
-      await runner.run('data-model', `relationship N:N ${rel.entity1}<->${rel.entity2}`, async () => {
-        const res = await sdk.createRelationship({ type: 'ManyToMany', schemaName: schema, entity1: rel.entity1.toLowerCase(), entity2: rel.entity2.toLowerCase(), intersectEntityName: rel.intersectEntityName, languageCode: resolvedLanguageCode });
-        result.relationships.push({
-          schemaName: res.schemaName || schema,
-          metadataId: res.metadataId,
-          kind: 'nn'
-        });
-      }, { skipIf: isAlreadyExists });
+    if (rel.type !== 'OneToMany' && rel.type !== 'ManyToMany') continue;
+    const schema = rel.type === 'OneToMany' ? relationshipSchemaName(rel, publisherPrefix) : manyToManySchemaName(rel, publisherPrefix);
+    const entityLogical = (rel.type === 'OneToMany' ? rel.referenced : rel.entity1).toLowerCase();
+    const label = rel.type === 'OneToMany'
+      ? `relationship 1:N ${rel.referenced}->${rel.referencing}`
+      : `relationship N:N ${rel.entity1}<->${rel.entity2}`;
+    const declared = Object.assign({}, rel, { schemaName: rel.schemaName || schema });
+    const exists = await relationshipExists(provision, entityLogical, schema, rel.type, {
+      hasLocalizedLabels: rel.type === 'OneToMany' && localizedLabelLcids(rel.lookup && rel.lookup.displayName).length > 0,
+      declared,
+    });
+    if (exists === true) { runner.skip('data-model', `relationship ${schema} (exists)`); continue; }
+    if (exists && exists.mismatch) {
+      const halt = new BuildHalt(
+        `relationship schema name '${schema}' is already used by ${describeRelationship(exists.holder)}; the spec declares ${describeRelationship(declared)}. Give it an explicit "schemaName".`,
+        { phase: 'data-model', code: 'relationship-name-taken', recoverable: false },
+      );
+      halt.transient = false;
+      throw halt;
     }
+    const createOpts = rel.type === 'OneToMany'
+      ? { type: 'OneToMany', schemaName: schema, referencedEntity: rel.referenced.toLowerCase(), referencingEntity: rel.referencing.toLowerCase(), lookupSchemaName: rel.lookup.schemaName, lookupDisplayName: rel.lookup.displayName, languageCode: resolvedLanguageCode }
+      : { type: 'ManyToMany', schemaName: schema, entity1: rel.entity1.toLowerCase(), entity2: rel.entity2.toLowerCase(), intersectEntityName: rel.intersectEntityName, languageCode: resolvedLanguageCode };
+    await runner.run('data-model', label, async () => {
+      try {
+        const res = await sdk.createRelationship(createOpts);
+        result.relationships.push(rel.type === 'OneToMany'
+          ? { schemaName: res.schemaName || schema, metadataId: res.metadataId, kind: '1n', lookupLogicalName: res.lookupLogicalName }
+          : { schemaName: res.schemaName || schema, metadataId: res.metadataId, kind: 'nn' });
+      } catch (err) {
+        if (!isAlreadyExists(err)) throw err;
+        // skipIf is synchronous, so classify the holder here and rethrow a marked error. The
+        // SchemaName key is case-sensitive; findRelationshipHolder falls back to the declared
+        // endpoints when the exact spelling 404s.
+        let holder = await findRelationshipHolder(provision && provision.dataverse, schema, {
+          candidates: rel.type === 'ManyToMany' ? [rel.entity1, rel.entity2] : [rel.referenced, rel.referencing],
+        });
+        if (holder.found === true && sameRelationship(declared, holder.holder)) {
+          err.sameRelationshipExists = true;
+          throw err;
+        }
+        if (holder.found === true) {
+          const taken = new Error(`relationship schema name '${schema}' is already used by ${describeRelationship(holder.holder)}; the spec declares ${describeRelationship(declared)}. Give it an explicit "schemaName".`);
+          taken.transient = false;
+          throw taken;
+        }
+        if (holder.found === false) {
+          // The generated name is free, but the lookup column may already belong to a relationship
+          // under a different name (a download that omitted the deployed name, or an authored spec
+          // that derived one). That is not lag: say which name to set.
+          if (rel.type === 'OneToMany' && rel.lookup && rel.lookup.schemaName) {
+            const owned = await readRelationshipsOf(provision && provision.dataverse, rel.referencing, 'ManyToOne');
+            const wantLookup = String(rel.lookup.schemaName).toLowerCase();
+            const owner = owned.ok && (owned.rows || []).find((row) => String(row.referencingAttribute || '').toLowerCase() === wantLookup);
+            if (owner) {
+              // The row may have become visible on this read — the lag case. If it is the
+              // relationship we declared, skip. Only a different owner (same lookup, other name) halts.
+              if (sameRelationship(declared, owner)) {
+                err.sameRelationshipExists = true;
+                throw err;
+              }
+              const at = (spec.relationships || []).indexOf(rel);
+              const taken = new Error(`lookup '${wantLookup}' on '${String(rel.referencing).toLowerCase()}' already belongs to relationship '${owner.schemaName}' (${describeRelationship(owner)}); set relationships[${at}].schemaName to '${owner.schemaName}' to reuse it`);
+              taken.transient = false;
+              throw taken;
+            }
+          }
+          // The create said the name is taken, but neither the case-sensitive key nor the endpoint
+          // collections showed a row. A create the SDK retried after the server had already created
+          // it looks exactly like this until the metadata read catches up — the same lag family as
+          // the view retry. Two more reads, ~2s then ~4s, before calling the name unidentified.
+          const wait = typeof sleep === 'function' ? sleep : ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+          const candidates = rel.type === 'ManyToMany' ? [rel.entity1, rel.entity2] : [rel.referenced, rel.referencing];
+          for (const delay of [2000, 4000]) {
+            await wait(delay);
+            holder = await findRelationshipHolder(provision && provision.dataverse, schema, { candidates });
+            if (holder.found === true && sameRelationship(declared, holder.holder)) {
+              err.sameRelationshipExists = true;
+              throw err;
+            }
+            if (holder.found === true) {
+              const taken = new Error(`relationship schema name '${schema}' is already used by ${describeRelationship(holder.holder)}; the spec declares ${describeRelationship(declared)}. Give it an explicit "schemaName".`);
+              taken.transient = false;
+              throw taken;
+            }
+            if (holder.found !== false) break;
+          }
+          if (holder.found === false) {
+            const unknown = new Error(`relationship schema name '${schema}' is already used by a relationship the build could not identify. Give it an explicit "schemaName".`);
+            unknown.transient = false;
+            throw unknown;
+          }
+        }
+        const unread = new Error(`could not identify the relationship that already uses schema name '${schema}' (${holder.error || 'read failed'}); the create failed because it already exists: ${(err && err.message) || err}`);
+        unread.statusCode = holder.status;
+        throw unread;
+      }
+    }, { skipIf: (e) => isAlreadyExists(e) && e.sameRelationshipExists === true });
   }
+
 
   return result;
 }

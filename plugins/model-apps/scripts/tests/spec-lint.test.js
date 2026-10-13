@@ -362,6 +362,22 @@ test('errors on an explicit relationship schemaName that lacks the publisher pre
   assert.ok(r.errors.some((m) => /must start with the publisher prefix 'new_'/.test(m)), JSON.stringify(r.errors));
 });
 
+test('an existing relationship keeps a foreign-prefix schemaName as a warning, not an error', () => {
+  const adopted = base();
+  adopted.relationships[0].schemaName = 'zzz_CustomerLink';
+  adopted.relationships[0].existing = true;
+  const kept = lintAppSpec(adopted);
+  assert.strictEqual(kept.ok, true, JSON.stringify(kept.errors));
+  assert.ok(kept.warnings.some((m) => /zzz_CustomerLink/.test(m) && /publisher prefix/.test(m) && /already exists/.test(m)), JSON.stringify(kept.warnings));
+  assert.ok(!kept.errors.some((m) => /publisher prefix/.test(m)));
+
+  const authored = base();
+  authored.relationships[0].schemaName = 'zzz_CustomerLink';
+  const fresh = lintAppSpec(authored);
+  assert.strictEqual(fresh.ok, false);
+  assert.ok(fresh.errors.some((m) => /must start with the publisher prefix 'new_'/.test(m)), JSON.stringify(fresh.errors));
+});
+
 test('a system-table relationship with NO schemaName is clean (auto-prefixed default is valid)', () => {
   const s = base();
   s.entities.push({ schemaName: 'systemuser', displayName: 'User', primaryAttribute: { schemaName: 'fullname', displayName: 'Name' }, columns: [] });
