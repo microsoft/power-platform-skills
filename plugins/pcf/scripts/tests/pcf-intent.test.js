@@ -200,6 +200,17 @@ test('validateIntent reports schema, name, enum, template, recipe, and binding s
   }
 });
 
+test('validateIntent accepts a solution or a publisher prefix as the deploy target', () => {
+  // pcf-push.js deploys into an existing solution or under a publisher prefix, so either selector
+  // alone is a valid intent; neither, or a blank solution, is not.
+  assert.deepEqual(validateIntent(exampleIntent({ deploy: { publisherPrefix: 'contoso' } })), []);
+  assert.deepEqual(validateIntent(exampleIntent({ deploy: { solution: 'contoso_pcf', publisherPrefix: null } })), []);
+  const neither = validateIntent(exampleIntent({ deploy: {} }));
+  assert.ok(neither.some((error) => /deploy needs a solution or a publisherPrefix/.test(error)), neither.join('\n'));
+  const blank = validateIntent(exampleIntent({ deploy: { solution: ' ', publisherPrefix: 'contoso' } }));
+  assert.ok(blank.some((error) => error.includes('deploy.solution must be a non-empty string')), blank.join('\n'));
+});
+
 test('validateIntent accepts quick-view form bindings, as verify-pcf does', () => {
   const binding = { ...exampleIntent().bindings[0], formType: 'quick-view' };
   assert.deepEqual(validateIntent(exampleIntent({ bindings: [binding] })), []);

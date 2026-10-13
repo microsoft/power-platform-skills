@@ -157,7 +157,15 @@ function validateProperties(properties, errors) {
 function validateDeploy(deploy, errors) {
   const d = asObject(deploy, 'deploy', errors);
   if (!d) return;
-  if (typeof d.solution !== 'string' || !d.solution.trim()) errors.push('deploy.solution is required.');
+  // pcf-push.js deploys into an existing solution (--solution) or under a publisher prefix
+  // (--publisher-prefix), so either selector alone is a complete deploy target.
+  const hasSolution = typeof d.solution === 'string' && Boolean(d.solution.trim());
+  if (d.solution !== null && d.solution !== undefined && !hasSolution) {
+    errors.push('deploy.solution must be a non-empty string when supplied.');
+  }
+  if (!hasSolution && (d.publisherPrefix === null || d.publisherPrefix === undefined)) {
+    errors.push('deploy needs a solution or a publisherPrefix: name an existing solution, or a publisher prefix to deploy under.');
+  }
   if (d.publisherPrefix !== null && d.publisherPrefix !== undefined) {
     if (typeof d.publisherPrefix !== 'string' || !d.publisherPrefix) {
       errors.push('deploy.publisherPrefix must be null or a non-empty string.');
