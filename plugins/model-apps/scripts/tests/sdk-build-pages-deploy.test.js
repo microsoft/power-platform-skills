@@ -890,6 +890,8 @@ const GRIFFEL_BAD = `${GRIFFEL_IMPORT}const useStyles = makeStyles({\n  root: {\
 const GRIFFEL_CLEAN = `${GRIFFEL_IMPORT}// borderWidth: 1\nconst useStyles = makeStyles({ root: { borderTopWidth: '1px', padding: '4px' } });\nexport default function Detail() { return <div style={{ borderColor: 'red' }}>{'borderStyle'}</div>; }\n`;
 // Valid TSX that the lexer cannot read for certain: after `if (s) { }` a `/` could start a regex or divide, so the makeStyles call below it is not one the checker can vouch for.
 const GRIFFEL_UNREADABLE = `${GRIFFEL_IMPORT}export function skip(s: string) { if (s) { } /x/.test(s); }\nconst useStyles = makeStyles({ root: { padding: '4px' } });\nexport default function Detail() { return null; }\n`;
+// A style object written elsewhere: its keys — here one Griffel drops — are not in the call, so the checker cannot see them.
+const GRIFFEL_INDIRECT = `${GRIFFEL_IMPORT}const styles = { root: { borderWidth: '1px' } };\nconst useStyles = makeStyles(styles);\nexport default function Detail() { return null; }\n`;
 const BOTH_WAYS_OUT = 'Deleting a key changes nothing on screen, because Griffel never applied it; writing the longhands (for `all`, the properties you want) makes the style start to render, which changes how the page looks.';
 
 // What an earlier APPLY left in last-applied.json, read back as build-model-app.js reads it for the next build (`opts.baselineSpec`): the real writer and the real reader, so each page's
@@ -1113,6 +1115,27 @@ test('deploy: a page that exists but has no record in this workspace is warned a
     );
     assert.deepStrictEqual(genpageCli.uploads, []);
   } finally { fs.rmSync(fresh.appDir, { recursive: true, force: true }); }
+});
+
+// A style object written elsewhere hides its keys from the check, so the page is held as one the check could not read — as an unreadable call is — and an unchanged page
+// that is already deployed only warns.
+test('deploy: a page whose style object is written elsewhere is held as one the check could not read; sent unchanged it only warns', async () => {
+  const app = deployedApp(GRIFFEL_INDIRECT);
+  try {
+    const baselineSpec = recordApply(app.spec, app.appDir);
+    const ok = app.rebuild({ baselineSpec });
+    await ok.run();
+    assert.strictEqual(ok.warnings.length, 1);
+    assert.match(ok.warnings[0], /^page "Detail" is already deployed, and its source is the one the last build recorded for it, so this build sends it again as it is and goes on\. It has makeStyles calls the Griffel check could not read/);
+    app.edit(`${GRIFFEL_INDIRECT}// edited\n`);
+    const held = app.rebuild({ baselineSpec });
+    await assert.rejects(held.run(), (e) => {
+      assert.strictEqual(e.code, 'pages-griffel-shorthand');
+      assert.match(e.message, /^page "Detail" has makeStyles calls the Griffel check could not read, so it cannot tell whether the page writes CSS that Griffel drops at runtime — detail\.tsx:3:\d+: this makeStyles call is given a style object written elsewhere/);
+      return true;
+    });
+    assert.deepStrictEqual(held.genpageCli.uploads, []);
+  } finally { app.cleanup(); }
 });
 
 // A call the checker cannot read is not a key Griffel drops, and a refusal that says so sends the author looking for CSS that is not there: nothing gets past it but rewriting the code, which

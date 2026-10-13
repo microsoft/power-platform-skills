@@ -2187,6 +2187,25 @@ test('an UPDATE of an unreadable page that IS the deployed page only warns; one 
   assert.strictEqual(edited.cli.calls.length, 0);
 });
 
+// A style object written elsewhere — `const styles = { root: { borderWidth: '1px' } }; makeStyles(styles)` — holds keys the check cannot see, and this one holds a key
+// Griffel drops. The page is refused as one the check could not read, as an unreadable call is: a create before anything is sent, and an update that changes the page;
+// an update that IS the deployed page only warns, because sending the same bytes again ships nothing new.
+const GRIFFEL_INDIRECT = `${GRIFFEL_IMPORT}const styles = { root: { borderWidth: '1px' } };\nconst useStyles = makeStyles(styles);\nexport default function P() { return null; }\n`;
+test('a page whose style object is written elsewhere is refused before anything is sent, as one the check could not read', async () => {
+  const r = await divRun(['--env', 'https://contoso.crm.dynamics.com/', '--app-id', DIV_APP, '--code-file', divCode(GRIFFEL_INDIRECT), '--name', 'N', '--prompt', 'p', '--agent-message', 'm'], untouchableCli());
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.payload.code, 'griffel-shorthand');
+  assert.deepStrictEqual(r.payload.problems.map((p) => p.code), ['unread-style-object']);
+  assert.match(r.payload.error, /has makeStyles calls the Griffel check could not read, so it cannot tell whether the page writes CSS that Griffel drops at runtime — refusing to upload\. [^ ]+:3:\d+: this makeStyles call is given a style object written elsewhere/);
+  const same = await griffelUpdate(GRIFFEL_INDIRECT, GRIFFEL_INDIRECT);
+  assert.strictEqual(same.r.ok, true, JSON.stringify(same.r.payload));
+  assert.match(same.r.payload.warnings[0], /It has makeStyles calls the Griffel check could not read/);
+  const edited = await griffelUpdate(`${GRIFFEL_INDIRECT}// edited\n`, GRIFFEL_INDIRECT);
+  assert.strictEqual(edited.r.ok, false);
+  assert.deepStrictEqual(edited.r.payload.problems.map((p) => p.code), ['unread-style-object']);
+  assert.strictEqual(edited.cli.calls.length, 0);
+});
+
 // ── What pac is sent is what was checked ────────────────────────────────────────────────────────────────────────────────────────────
 // The upload reads the page once and checks those bytes, but pac reads the code file itself — after an update's listing and download, seconds
 // later. A save in between would ship bytes nothing here checked, so pac is sent a copy of the checked bytes, and the base marker records them.

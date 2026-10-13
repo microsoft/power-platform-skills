@@ -290,10 +290,12 @@ const GRIFFEL_RULE = [
 // What the documents that RUN the checker add: its output, its exit code, and that nothing is transpiled or uploaded before it exits 0.
 const GRIFFEL_GATE = [
   '`check-griffel-styles.js` prints each problem it finds — a key Griffel drops in a `makeStyles` call, at any depth, with its line, column and longhands,',
-  'or a call it cannot read for certain, with what to change — and exits 3 while any is left:',
+  'or a call or a style object it cannot read, with what to change — and exits 3 while any is left:',
   'fix what it reports and run it again, and do not transpile or upload the page until it exits 0.',
-  'It reads the style objects written inline in the call, `makeStyles({ … })`, so write them there;',
-  'a call whose object is built elsewhere comes back under `notRead`, and that object is yours to check by eye.',
+  'It reads the style objects written inline in the call, `makeStyles({ … })`, so write them there:',
+  'one passed or spread in from elsewhere (`makeStyles(styles)`, `...base`) is reported, because the check cannot see its keys,',
+  'and so is a key computed from an expression (`[key]: …`), whose name it cannot see (a template that starts with `--`, `&`, `:` or `@` is read);',
+  'Fluent\'s `...shorthands.*(…)` and `...typographyStyles.*` may be spread as they are.',
 ].join(' ');
 const OLD_BORDER_WIDTH_GREP = `['"]?borderWidth['"]?\\s*:`;
 

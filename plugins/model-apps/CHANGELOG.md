@@ -129,10 +129,15 @@ used to, builds send fewer requests, and verify, download and `check-auth` do mo
   style. A build stops before the pages phase writes anything for a page it creates or whose source changed since the
   last recorded build, and only warns for a page it sends again unchanged; `/genpage` refuses a create, or an update that
   adds such a key or changes its value. `node scripts/check-griffel-styles.js --file <page.tsx>` lists each key and the
-  longhands to write. What is uploaded is what was checked: the build sends every page from a copy of the bytes it checked,
-  and `genpage-upload.js` reads the page once and uploads a copy of those bytes, so a save to the file while either runs is
-  not sent unchecked. `genpage-upload.js` no longer takes `--compiled-code-file`, whose JavaScript `pac` would deploy
-  instead of the checked page.
+  longhands to write. A style object the check cannot see — passed in (`makeStyles(styles)`), given to a slot or a
+  selector as a variable, or spread in (`...base`) — is reported too, and so are a key computed from an expression
+  (`[key]: …`) and a getter that runs on a style object (`get color() { … }`), whose code the check does not read;
+  all are held like a call the check cannot read, and Fluent's own `shorthands.*(…)` helpers and
+  `typographyStyles.*` entries may be spread (`shorthands.transition` with one argument only as an array, a string or
+  a number written in place). What is uploaded is what was checked: the build sends every page from a copy of
+  the bytes it checked, and `genpage-upload.js` reads the page once and uploads a copy of those bytes, so a save to the
+  file while either runs is not sent unchecked. `genpage-upload.js` no longer takes `--compiled-code-file`, whose
+  JavaScript `pac` would deploy instead of the checked page.
 - **A `PAGEREF_` token in a string, template or regular expression of a page's types is no longer rewritten** in shapes
   2.13.0 misread: a nested element in a parameter default or a computed name whose text holds a quote, a back-tick or
   `//` (two on one line included); a regular expression on the line after a `//` note that follows an open bracket, an

@@ -11,14 +11,16 @@
 //   node check-griffel-styles.js --file <page.tsx>
 //
 // Output (one JSON line) and exit code:
-//   0  {"ok":true,"filePath":…,"calls":1,"notRead":[],"problems":[]}
+//   0  {"ok":true,"filePath":…,"calls":1,"problems":[]}
 //   3  {"ok":false,…,"problems":[{"code","property","line","column","longhands","within","value","message"}]}   — rewrite those keys with the longhands, then check again
 //   1  {"ok":false,"error":…}   — usage error, or the file cannot be read
-// `calls` is how many makeStyles calls were read. `notRead` lists the calls whose style object is not written in the call (`makeStyles(styles)`): this checks the
-// keys written inline, so read those objects yourself. A problem's `code` is `unsupported-shorthand`, or — where the checker cannot read the code for certain —
-// `unverifiable-style-call` and `unbalanced-style-call`. `within` is the slot, selectors and at-rules a key sits under (`["root", ":hover"]`): where it is apart from its line,
-// and `value` is what the key is set to, as written (a quoted string as its text in double quotes, anything else as its source text): together they let genpage-upload.js tell a key
-// a page already had, set the same, from a new or a changed one.
+// `calls` is how many makeStyles calls were read. A problem's `code` is `unsupported-shorthand`; or `unread-style-object`, a style object the checker cannot see — one
+// passed to the call (`makeStyles(styles)`), a slot or a selector given a variable, a spread of anything but an inline object — whose keys may be any of the ten, or a
+// computed key it cannot read as a name (`[key]: …`), so it is never reported as clean (write it inline); or — where the checker cannot read the code for certain —
+// `unverifiable-style-call` and `unbalanced-style-call`. `within` is
+// the slot, selectors and at-rules a key sits under (`["root", ":hover"]`): where it is apart from its line, and `value` is what the key is set to, as written (a quoted
+// string as its text in double quotes, anything else as its source text): together they let genpage-upload.js tell a key a page already had, set the same, from a new or
+// a changed one.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -33,8 +35,8 @@ function checkGriffelStyles({ filePath }) {
   } catch (e) {
     return { exit: 1, result: { ok: false, filePath: abs, error: `--file could not be read: ${(e && e.code) || e}` } };
   }
-  const { calls, notRead, problems } = griffelStyleProblems(source);
-  return { exit: problems.length ? 3 : 0, result: { ok: problems.length === 0, filePath: abs, calls, notRead, problems } };
+  const { calls, problems } = griffelStyleProblems(source);
+  return { exit: problems.length ? 3 : 0, result: { ok: problems.length === 0, filePath: abs, calls, problems } };
 }
 
 function parseArgv(argv) {
