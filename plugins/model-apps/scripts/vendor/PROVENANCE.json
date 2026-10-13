@@ -1,14 +1,14 @@
 {
-  "commit": "5c5889d907b72f558e9fcea8179a638fc5abb8b7",
-  "subject": "cds-maker-sdk: connections and connector metadata without pac (Public cloud, opt-in); remove 19 merged design docs",
+  "commit": "2d6f9c9f556cb20fce36d4764f3b618c6268b711",
+  "subject": "Custom tools: consistent behavior hints and Model/App visibility for all tool types",
   "dirtySdkPackage": 0,
-  "libBuiltAt": "2026-10-12T19:27:28.356Z",
-  "newestSrcAt": "2026-10-12T19:23:54.429Z",
+  "libBuiltAt": "2026-10-13T23:12:08.257Z",
+  "newestSrcAt": "2026-10-13T23:06:00.253Z",
   "libIsStale": false,
   "nostub": false,
   "esbuildVersion": "0.28.1",
   "nodeVersion": "v20.20.2",
-  "builtAt": "2026-10-12T19:39:01.466Z",
-  "bundleSha256": "c935066ac3855115c9bd1333680b3c57d9eb69fd2f6de6fc84a8ba8a4fefb84d",
-  "bundleBytes": 974617
+  "builtAt": "2026-10-13T23:12:43.825Z",
+  "bundleSha256": "8e0316becce9e45f9641a067eba9e653869cde77dc82da080676da5c152cfebf",
+  "bundleBytes": 1005262
 }
