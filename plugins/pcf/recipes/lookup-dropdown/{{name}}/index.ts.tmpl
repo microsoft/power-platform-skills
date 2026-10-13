@@ -159,8 +159,11 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     }
 
     public getOutputs(): IOutputs {
+        // An empty array clears the bound lookup. `undefined` reads as "no new value", which can leave
+        // the previous record in place, so the "(Clear lookup)" choice must send [].
+        // See the Learn lookup component sample: https://learn.microsoft.com/power-apps/developer/component-framework/sample-controls/lookup-control
         return {
-            lookupValue: this.selected ? [this.selected] : undefined,
+            lookupValue: this.selected ? [this.selected] : [],
         };
     }
 

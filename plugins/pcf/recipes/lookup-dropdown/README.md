@@ -31,7 +31,7 @@ bound lookup without relying on undocumented lookup-property methods.
 - Loads target rows with `context.webAPI.retrieveMultipleRecords` using explicit `$select`, the
   optional configured `selectableFilter`, page size, and `nextLink` paging.
 - Keeps an already-selected inactive record visible so users can see and clear the existing value.
-- Returns `LookupValue[]` from `getOutputs()` when selected, or `undefined` to clear the lookup.
+- Returns `LookupValue[]` from `getOutputs()` when selected, or an empty array `[]` to clear the lookup (`undefined` would leave the previous value in place).
 - Does not notify the host when the selected value is unchanged.
 - Shows disabled, unreadable, non-editable, loading and permission-failure states.
 - Works on unsaved forms because it never reads a current record id.
