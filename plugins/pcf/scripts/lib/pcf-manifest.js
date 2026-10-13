@@ -9,6 +9,15 @@ const { validateVersion } = require('./pcf-names.js');
 const MANIFEST_REFERENCE = 'https://learn.microsoft.com/power-apps/developer/component-framework/manifest-schema-reference/';
 const SKIP_DIRS = new Set(['node_modules', 'out', 'obj', 'bin', 'generated']);
 const PROPERTY_USAGES = new Set(['bound', 'input', 'output']);
+// The `of-type` values a manifest property may declare. FormXML records the same names as a static
+// parameter's type, e.g. <max type="Whole.None" static="true">5</max>, so verify-pcf.js uses this list
+// to tell a `static:<value>:<type>` suffix from a value that itself holds a colon.
+// https://learn.microsoft.com/power-apps/developer/component-framework/manifest-schema-reference/property#using-of-type
+const PROPERTY_TYPES = Object.freeze([
+  'Currency', 'DateAndTime.DateAndTime', 'DateAndTime.DateOnly', 'Decimal', 'Enum', 'FP', 'Lookup.Simple',
+  'Multiple', 'MultiSelectOptionSet', 'Object', 'OptionSet', 'SingleLine.Email', 'SingleLine.Phone',
+  'SingleLine.Text', 'SingleLine.TextArea', 'SingleLine.Ticker', 'SingleLine.URL', 'TwoOptions', 'Whole.None',
+]);
 
 function finding(code, severity, message, fix) {
   return { code, severity, message, fix };
@@ -430,4 +439,5 @@ module.exports = {
   lintManifest,
   diffManifests,
   findManifests,
+  PROPERTY_TYPES,
 };

@@ -37,6 +37,8 @@ node "${PLUGIN_ROOT}/scripts/verify-pcf.js" --env <url> --control <prefix_ns.cto
 node "${PLUGIN_ROOT}/scripts/verify-pcf.js" --env <url> --control <prefix_ns.ctor> [--version <x.y.z>] --intent @pcf-intent.json [--workspace <dir>]
 ```
 
+In `--param name=static:<value>[:<type>]`, the text after the last colon is the type only when it is a PCF property type such as `Whole.None`; otherwise it is part of the value, so `site=static:https://contoso.example` keeps its colons.
+
 Two checks are distinct and must not be conflated:
 
 - **Clients**: `--clients` names clients that must use this control. Default is web. Intent `clients` arrays must contain at least one of `web`, `phone` or `tablet` after trimming. If a requested client does not use the control, verifier reports `PCF_BIND_CLIENT_MISSING`.

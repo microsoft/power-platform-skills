@@ -17,6 +17,7 @@ const {
   validateVersion,
 } = require('./lib/pcf-names.js');
 const { verifyBinding } = require('./lib/pcf-binding-verify.js');
+const { PROPERTY_TYPES } = require('./lib/pcf-manifest.js');
 
 const USAGE = `Usage:
   node scripts/verify-pcf.js --env <url> --control <prefix_ns.ctor> [--version <x.y.z>] --table <logical> --form <name|guid> (--column <col>|--control-id <id>) [--clients web,phone,tablet] [--param name=column:<col>] [--param name=static:<value>[:<type>]] [--workspace <dir>]
@@ -54,7 +55,7 @@ async function main(argv = process.argv.slice(2)) {
     needValue: NEED_VALUE,
     hints: {
       clients: 'comma-separated values: web,phone,tablet',
-      param: 'name=column:<col> or name=static:<value>[:<type>]',
+      param: 'name=column:<col> or name=static:<value>[:<type>], where a trailing :<type> counts only when it is a PCF property type such as Whole.None',
       intent: '@path-to-json',
     },
   });
@@ -241,10 +242,15 @@ function parseParam(raw) {
     return { name, value: { column: body.slice('column:'.length) } };
   }
   if (body.startsWith('static:')) {
+    // `static:<value>[:<type>]`. A value can hold colons, as in `site=static:https://contoso.example`,
+    // so the text after the last colon is the type only when it is a PCF property type such as
+    // Whole.None; otherwise all of it is the value. A value that itself ends in such a type name takes
+    // an explicit type: `note=static:a:Whole.None:SingleLine.Text`.
     const rest = body.slice('static:'.length);
     const colon = rest.lastIndexOf(':');
-    if (colon === -1) return { name, value: { static: rest } };
-    return { name, value: { static: rest.slice(0, colon), type: rest.slice(colon + 1) } };
+    const type = colon === -1 ? '' : rest.slice(colon + 1);
+    if (!PROPERTY_TYPES.includes(type)) return { name, value: { static: rest } };
+    return { name, value: { static: rest.slice(0, colon), type } };
   }
   usageError(`invalid --param '${raw}'`);
 }

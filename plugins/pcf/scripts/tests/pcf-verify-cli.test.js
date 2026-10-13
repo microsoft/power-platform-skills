@@ -121,6 +121,44 @@ test('verify-pcf rejects an unknown explicit intent form type before creating an
   assert.match(cli.stderrText(), /formType.*side-pane/);
 });
 
+test('verify-pcf reads a static value with colons, and a type only from a known PCF property type', async () => {
+  const seen = [];
+  const stubs = {
+    './lib/pcf-dataverse': {
+      makePcfSdk: async () => ({ tag: 'sdk' }),
+      findCustomControl: async (sdk, name) => ({ id: '11111111-1111-4111-8111-111111111111', name, version: '1.2.3', componentState: 0 }),
+      findForm: async () => ({ formid: '22222222-2222-4222-8222-222222222222', name: 'Main' }),
+      readFormXml: async () => '<form />',
+    },
+    './lib/pcf-binding-verify': {
+      verifyBinding: (formxml, expected) => {
+        seen.push(expected.parameters);
+        return { ok: true, status: 'bound', issues: [], cells: [] };
+      },
+    },
+  };
+
+  await run([
+    '--env', 'https://contoso.crm.dynamics.com',
+    '--control', 'new_Contoso.Controls.StarRating',
+    '--table', 'new_review',
+    '--form', 'Main',
+    '--column', 'new_rating',
+    '--param', 'site=static:https://contoso.example',
+    '--param', 'label=static:Mode:Fast',
+    '--param', 'max=static:5:Whole.None',
+    '--param', 'note=static:a:Whole.None:SingleLine.Text',
+  ], stubs);
+
+  assert.ok(seen.length > 0, 'verifyBinding must receive the parsed parameters');
+  assert.deepEqual(seen[0], {
+    site: { static: 'https://contoso.example' },
+    label: { static: 'Mode:Fast' },
+    max: { static: '5', type: 'Whole.None' },
+    note: { static: 'a:Whole.None', type: 'SingleLine.Text' },
+  });
+});
+
 test('verify-pcf reports a registered control separately from draft-only binding evidence', async () => {
   const calls = [];
   const stubs = {
