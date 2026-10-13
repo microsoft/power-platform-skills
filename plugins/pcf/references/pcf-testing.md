@@ -28,7 +28,7 @@ Unit tests cover pure rendering, parsing, adapters and state transitions without
 - Test missing parameter objects, `security.readable=false`, `security.editable=false`, null values and permission failures.
 - Test two instances on one page: no shared singleton state or duplicate ids.
 - Test current-record recipes with missing `entityId` as an unsaved-record disabled state.
-- For lookup outputs, assert the `LookupValue[]` shape or `undefined` clear value expected by the recipe contract.
+- For lookup outputs, assert the `LookupValue[]` shape, and an empty array `[]` as the clear value: `undefined` reads as no new value and can leave the previous lookup in place.
 - For grid customizers, assert renderers return elements or `null`/`undefined`, and never mutate grid data.
 
 ### Harness tests

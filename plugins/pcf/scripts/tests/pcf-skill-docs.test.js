@@ -806,3 +806,12 @@ test('Microsoft Learn links in PCF references use the en-us canonical prefix', (
     }
   }
 });
+
+test('lookup testing guidance clears with an empty array, matching the lookup-dropdown recipe', () => {
+  // undefined from getOutputs reads as "no new value"; the recipe clears a lookup with [].
+  const testing = readPluginFile('references/pcf-testing.md');
+  const lookupLine = testing.split('\n').find((line) => /lookup outputs/i.test(line));
+  assert.ok(lookupLine, 'pcf-testing.md must give lookup output guidance');
+  assert.match(lookupLine, /empty array `\[\]`/);
+  assert.doesNotMatch(lookupLine, /or `undefined` clear value/);
+});
