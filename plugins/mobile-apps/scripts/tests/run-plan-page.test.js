@@ -41,13 +41,14 @@ function node(id, attributes = {}) {
     set innerHTML(value) { this._html = String(value); },
     appendChild(child) { this.children.push(child); return child; },
     append(...kids) { this.children.push(...kids); },
-    setAttribute() {},
+    setAttribute(name, value) { attributes[name] = String(value); },
     getAttribute(name) { return Object.hasOwn(attributes, name) ? attributes[name] : null; },
     removeAttribute() {},
     addEventListener() {}, removeEventListener() {}, remove() {},
     querySelector() { return null; }, querySelectorAll() { return []; },
     closest() { return null; }, focus() {}, scrollIntoView() {},
     getBoundingClientRect() { return { top: 0, left: 0, width: 0, height: 0 }; },
+    clientWidth: 282, clientHeight: 602,
   };
 }
 
@@ -144,6 +145,26 @@ async function runPage(htmlPath, { session = {} } = {}) {
       },
     },
     navigator: { userAgent: 'node' },
+    // Parsing/sanitizing decisions have separate node-level tests below. The page harness
+    // retains the source only to exercise the srcdoc handoff, not to emulate an HTML parser.
+    DOMParser: class {
+      parseFromString(source) {
+        const head = node('head');
+        head.prepend = (child) => head.children.unshift(child);
+        return {
+          head,
+          createElement: document.createElement,
+          querySelectorAll: () => [],
+          documentElement: {
+            get outerHTML() {
+              const policies = head.children.map((child) =>
+                `<meta http-equiv="${child.getAttribute('http-equiv')}" content="${child.getAttribute('content')}">`).join('');
+              return `<html><head>${policies}</head><body>${source}</body></html>`;
+            },
+          },
+        };
+      }
+    },
     console: { log() {}, warn() {}, error(message) { errors.push(String(message)); } },
     setTimeout() { return 0; }, clearTimeout() {},
     setInterval() { return 0; }, clearInterval() {},
@@ -673,6 +694,7 @@ function sanitize(nodes, options) {
   nodes.forEach((n) => { n.parentNode = parent; });
   const context = vm.createContext({
     document: { createElement: () => ({ innerHTML: '', content: { querySelectorAll: () => nodes } }) },
+    DOMParser: class { parseFromString() { return { querySelectorAll: () => nodes }; } },
     options,
   });
   vm.runInContext(`${source}\nsanitizeMockup('', options);`, context);
@@ -712,7 +734,7 @@ test('the sanitizer removes SVG-cased elements and disguised script URLs', () =>
   assert.deepEqual(image.attrs, { src: 'data:image/png;base64,AAAA' }, 'images stay; handlers go');
 });
 
-test('Mermaid output keeps its own stylesheet, and nothing else does', () => {
+test('styles survive only in Mermaid output or isolated screen documents', () => {
   // Mermaid scopes its rules to the SVG's id, and the diagram is unstyled without them.
   const kept = element('style');
   const script = element('script');
@@ -722,8 +744,96 @@ test('Mermaid output keeps its own stylesheet, and nothing else does', () => {
 
   const template = fs.readFileSync(path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8');
   const calls = [...template.matchAll(/sanitizeMockup\(([^)]*)\)/g)].map((m) => m[1]);
-  assert.deepEqual(calls.filter((c) => /keepStyle/.test(c)), ['result.svg, { keepStyle: true }'],
-    'only the Mermaid render may keep a stylesheet; mockups must not');
+  const styled = calls.filter((c) => /keepStyle/.test(c));
+  assert.ok(styled.includes('result.svg, { keepStyle: true }'));
+  assert.ok(styled.filter((c) => !c.startsWith('result.svg')).every((c) => /asDocument: true/.test(c)),
+    'mockup styles must stay in a separate document');
+});
+
+test('isolated screen documents retain CSS but refuse handlers, scripts, and remote navigation', () => {
+  const style = element('style');
+  const script = element('SCRIPT');
+  const link = element('a', { href: 'https://contoso.com/', onclick: 'void(0)' });
+  const icon = element('use', { href: '#check' });
+  const refresh = element('META', { 'http-equiv': 'refresh', content: '0;url=https://contoso.com/' });
+  sanitize([style, script, link, icon, refresh], { keepStyle: true, asDocument: true });
+  assert.equal(style.removed, false);
+  assert.equal(script.removed, true);
+  assert.deepEqual(link.attrs, {});
+  assert.equal(icon.attrs.href, '#check');
+  assert.equal(refresh.removed, true);
+});
+
+test('preview extraction keeps shared styles, theme attributes, and ancestors without gallery chrome', () => {
+  function markup(tag, attributes = {}, children = [], text = '') {
+    const attrs = { ...attributes };
+    const created = {
+      children: [],
+      textContent: text,
+      get id() { return attrs.id; },
+      getAttribute(name) { return attrs[name] || null; },
+      removeAttribute(name) { delete attrs[name]; },
+      classList: { add(name) { attrs.class = `${attrs.class || ''} ${name}`.trim(); } },
+      style: { setProperty(name, value, priority) { attrs.style = `${name}:${value}!${priority}`; } },
+      appendChild(child) { this.children.push(child); child.parentElement = this; },
+      cloneNode(deep) {
+        return markup(tag, attrs, deep ? this.children.map((child) => child.cloneNode(true)) : [], this.textContent);
+      },
+      get outerHTML() {
+        const encodedAttrs = Object.entries(attrs).map(([name, value]) => ` ${name}="${value}"`).join('');
+        return `<${tag}${encodedAttrs}>${this.textContent}${this.children.map((child) => child.outerHTML).join('')}</${tag}>`;
+      },
+    };
+    children.forEach((child) => created.appendChild(child));
+    return created;
+  }
+
+  const products = markup('div', { id: 'products', class: 'screen', hidden: '' }, [], 'Products');
+  const detail = markup('div', { id: 'detail', class: 'screen' }, [], 'Details');
+  const area = markup('div', { class: 'screen-area', style: '--spacing:12px' }, [products, detail]);
+  const wrap = markup('div', { class: 'screen-wrap' }, [markup('div', { class: 'notch' }), area]);
+  const body = markup('body', { class: 'brand', style: '--brand:#0078d4' }, [
+    markup('div', { class: 'page-title' }, [], 'Gallery'),
+    markup('div', { class: 'phone' }, [wrap]),
+  ]);
+  const style = markup('style', {}, [], ':root{--brand:#0078d4}.card{display:flex;gap:12px}');
+  const source = {
+    documentElement: markup('html', { lang: 'en', class: 'dark' }),
+    body,
+    querySelectorAll(selector) {
+      return {
+        '[data-screen]': [
+          markup('button', { 'data-screen': 'products' }, [], 'Products'),
+          markup('button', { 'data-screen': 'detail' }, [], 'Product details'),
+        ],
+        '.screen': [products, detail],
+        style: [style],
+      }[selector];
+    },
+  };
+  const template = fs.readFileSync(path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8');
+  const extract = template.slice(template.indexOf('  function previewScreens('), template.indexOf('  function mockupDocument('));
+  const context = vm.createContext({
+    document: { createElement: (tag) => markup(tag) },
+    sanitizeMockup(input, options) {
+      assert.equal(input, 'complete preview');
+      assert.equal(options.keepStyle, true);
+      assert.equal(options.asDocument, true);
+      return source;
+    },
+  });
+  const screens = vm.runInContext(`${extract}\npreviewScreens('complete preview')`, context);
+  assert.deepEqual(Array.from(screens, (screen) => screen.name), ['Products', 'Product details']);
+  for (const screen of screens) {
+    assert.match(screen.html, /<html lang="en" class="dark">/);
+    assert.match(screen.html, /<body class="brand" style="--brand:#0078d4">/);
+    assert.match(screen.html, /\.card\{display:flex;gap:12px\}/);
+    assert.match(screen.html, /class="screen-area" style="--spacing:12px"/);
+    assert.match(screen.html, /class="screen active" style="display:flex!important"/);
+    assert.doesNotMatch(screen.html, /class="page-title"|class="notch"| hidden=/);
+  }
+  assert.doesNotMatch(screens[0].html, /id="detail"/);
+  assert.doesNotMatch(screens[1].html, /id="products"/);
 });
 
 test('the topbar pills say what their numbers mean', async () => {
@@ -814,13 +924,16 @@ test('the create skill renders the screen preview but never opens it', () => {
   // opening mid-run interrupts a user who is already watching the plan.
   for (const block of skill.matchAll(/```(?:bash|sh)\n([\s\S]*?)```/g)) {
     assert.ok(
-      !/_plan_preview\.html/.test(block[1]),
-      `a runnable command still touches the screen preview: ${block[1].trim().slice(0, 80)}`,
+      !/_plan_preview\.html/.test(block[1])
+        || /app-docs\.js"[^\n]*phone --stage screens --preview-file/.test(block[1]),
+      `a command opens the preview instead of embedding it: ${block[1].trim().slice(0, 80)}`,
     );
   }
   // It must still be rendered - the carousel takes its markup from those blocks - and it is
   // written into docs/ with every other artifact the user is asked to look at.
   assert.match(skill, /Render `_plan_preview\.html`/);
+  assert.match(skill, /phone --stage screens --preview-file '<working_dir>\/_plan_preview\.html'/);
+  assert.doesNotMatch(skill, /screens-preview\.json/);
 });
 
 test('the QR is drawn in the phone and linked for scanning full size', async () => {
@@ -961,6 +1074,44 @@ test('the carousel says the mockups are not the built app, and only while they a
   assert.equal((await await runPage(outputPath(root))).elements.get('railNote').hidden, true);
 });
 
+test('screen documents are sandboxed and scaled, with carousel controls outside the device', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-frame-'));
+  const state = initState(root, { appName: 'Screens' });
+  setPhone(state, { stage: 'screens', screens: [
+    { name: 'Products', html: '<style>.card{display:flex;gap:12px}</style><div class="card">Products</div>' },
+  ] });
+  save(root, state);
+  const { elements, thrown } = await runPage(outputPath(root));
+  assert.deepEqual(thrown.map((error) => error.message), []);
+  const device = elements.get('deviceScreen');
+  const frame = device.children[0].children[0];
+  const viewport = frame.children[0];
+  assert.equal(viewport.tagName, 'IFRAME');
+  assert.equal(viewport.getAttribute('sandbox'), '');
+  assert.equal(viewport.getAttribute('referrerpolicy'), 'no-referrer');
+  assert.equal(viewport.getAttribute('title'), 'Products');
+  assert.match(viewport.srcdoc, /script-src 'none'/);
+  assert.match(viewport.srcdoc, /default-src 'none'/);
+  assert.match(viewport.srcdoc, /\.card\{display:flex;gap:12px\}/);
+  const scale = Number(viewport.style.transform.match(/scale\(([^)]+)\)/)[1]);
+  assert.equal(scale, Math.min(282 / 375, 602 / 812));
+  assert.equal(elements.get('railControls').hidden, false);
+  assert.equal(elements.get('railControls').children[0].className, 'car-nav');
+});
+
+test('a preview without screen blocks reports the problem instead of silently showing an animation', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'run-plan-invalid-preview-'));
+  const state = initState(root, { appName: 'Invalid preview' });
+  setPhone(state, { stage: 'screens', previewHtml: '<html><body>No screens</body></html>' });
+  save(root, state);
+  const { elements, errors, thrown } = await runPage(outputPath(root));
+  assert.deepEqual(thrown.map((error) => error.message), []);
+  assert.equal(elements.get('railTitle').textContent, 'Screen preview unavailable');
+  assert.match(elements.get('railCaption').textContent, /no \.screen blocks/);
+  assert.equal(errors.length, 1);
+  assert.equal(elements.get('railControls').hidden, true);
+});
+
 test('the page carries a policy that makes injected mockup markup inert', () => {
   const template = fs.readFileSync(path.resolve(__dirname, '..', '..', 'assets', 'run-plan.html'), 'utf8');
 
@@ -989,16 +1140,18 @@ test('generated markup is cleaned before it reaches the document', () => {
 
   // Parsed into a <template>, whose content is inert: nothing runs and no resource is fetched
   // while it is being cleaned.
-  assert.match(template, /holder\.content\.querySelectorAll\('\*'\)/);
+  assert.match(template, /content\.querySelectorAll\('\*'\)/);
   for (const tag of ['SCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'FORM']) {
     assert.ok(template.includes(`'${tag}'`), `${tag} must be stripped from mockups`);
   }
   assert.match(template, /\/\^on\/i\.test\(name\)/, 'every on* handler must be removed');
   assert.match(template, /javascript:\|data:text\\\/html/, 'executing and navigating URLs must be refused');
 
-  // The two places that take generated markup both go through it.
+  // Mermaid inserts a cleaned fragment; screens serialize a cleaned, sandboxed document.
   const sanitized = [...template.matchAll(/appendChild\(sanitizeMockup\(/g)];
-  assert.equal(sanitized.length, 2, 'mockups and mermaid output both need cleaning');
+  assert.equal(sanitized.length, 1, 'Mermaid output must be cleaned');
+  assert.match(template, /viewport\.srcdoc = mockupDocument\(current\.html\)/);
+  assert.match(template, /function mockupDocument\(markup\) \{\s+var source = sanitizeMockup/);
   // And neither assigns it straight in.
   assert.doesNotMatch(template, /frame\.innerHTML/);
   assert.doesNotMatch(template, /panel\.innerHTML = result\.svg/);
@@ -1117,6 +1270,8 @@ test('mockup CSS cannot reach past the phone frame', () => {
   // against the viewport. `contain: paint` makes the frame a containing block for fixed and
   // absolute descendants, so an injected overlay stays inside the phone.
   assert.match(template, /\.car-frame\{[^}]*contain:layout paint/);
+  assert.match(template, /viewport\.setAttribute\('sandbox', ''\)/);
+  assert.doesNotMatch(template, /sandbox', 'allow-/);
 });
 
 test('a table status tints the whole entity box, not just its header', () => {

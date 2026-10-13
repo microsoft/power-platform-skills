@@ -1821,23 +1821,23 @@ Offline profile setup is intentionally deferred until after the approved
 Dataverse model has been materialized. Follow the shared connectivity-intent
 ownership contract during this phase.
 
-**Switch the plan's phone to the screen carousel.** `/design-system` has just rendered
-`_plan_preview.html` — plan-time mockups built from the locked brand tokens, before a single line
-of TSX exists. Those same per-screen blocks become the carousel:
+**Switch the plan's phone to the screen carousel.**
+`/design-system` has just rendered `_plan_preview.html`, with plan-time mockups built from the locked brand tokens before any TSX exists.
+Pass that complete file to the carousel:
 
 ```bash
-node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' phone --stage screens --screens-file <tmp>/screens-preview.json
+node "${PLUGIN_ROOT}/scripts/app-docs.js" --working-dir '<working_dir>' phone --stage screens --preview-file '<working_dir>/_plan_preview.html'
 ```
 
-`screens-preview.json` is `[{ "name": "Today's route", "html": "<the screen's markup>" }, …]`, in
-navigation order.
+The page extracts every `.screen` block in document order and takes its label from the matching `data-screen` tab.
+It preserves shared styles, root tokens, and ancestor selectors inside a sandboxed 375 × 812 viewport, scaled to fit the phone.
+The gallery's outer phone shell and controls stay outside the carousel.
+Pass the file unchanged; copying only a screen's markup loses its stylesheet.
+The legacy `--screens-file` JSON input remains supported for self-contained screen documents.
 
-**Carry over exactly the screens `_plan_preview.html` contains — no more, no fewer.** How many
-that is depends on what the user chose at `/design-system` Sub-step 6.5: option (a) renders every
-screen, and the default (b) renders only the List, Form and Detail archetypes. Take the markup
-from those blocks rather than re-authoring any of it: a hand-written block would drift from
-`_plan_preview.html` and from the screen the builder later generates, which is the one thing the
-carousel exists to rule out. A three-screen carousel is the expected shape, not a failure.
+**Carry over exactly the screens `_plan_preview.html` contains - no more, no fewer.**
+Option (a) at `/design-system` Sub-step 6.5 renders every screen; the default (b) renders only the List, Form and Detail archetypes.
+A three-screen carousel is the expected shape, not a failure.
 
 **When there is no preview to carry over, leave the phone on the building animation.** That is
 `--no-design`, or Sub-step 6.5 option (c) "Skip preview" — in both cases `_plan_preview.html` was
