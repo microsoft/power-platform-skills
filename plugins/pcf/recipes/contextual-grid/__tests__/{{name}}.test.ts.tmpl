@@ -354,6 +354,26 @@ test("changed query inputs restart contextual grid exactly once", async () => {
     expect(mounted.container.textContent).not.toContain("First");
 });
 
+test("a changed page size restarts paging at the first page with the new size", async () => {
+    const retrieveMultipleRecords = jest.fn()
+        .mockResolvedValueOnce(response([{ contactid: "1", fullname: "First" }], "https://contoso.crm.dynamics.com/api/data/v9.2/contacts?fetchXml=page2"))
+        .mockResolvedValueOnce(response([{ contactid: "2", fullname: "Resized" }]));
+    const mounted = mount({ webAPI: mockWebApi({ retrieveMultipleRecords }) });
+
+    await flushPromises();
+    mounted.context.parameters.pageSize = mockProperty(10) as IInputs["pageSize"];
+    mounted.control.updateView(mounted.context);
+    await flushPromises();
+
+    // A fresh first page at the new size, not the old continuation: rows fetched at 25 per page
+    // must not be mixed with pages fetched at 10.
+    expect(retrieveMultipleRecords).toHaveBeenCalledTimes(2);
+    expect(retrieveMultipleRecords.mock.calls[1][1]).not.toBe("?fetchXml=page2");
+    expect(retrieveMultipleRecords.mock.calls[1][2]).toBe(10);
+    expect(mounted.container.textContent).toContain("Resized");
+    expect(mounted.container.textContent).not.toContain("First");
+});
+
 test("two instances keep independent state and paging", async () => {
     const first = mount({ webAPI: mockWebApi({ retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([{ contactid: "1", fullname: "First" }])) }) });
     const second = mount({ webAPI: mockWebApi({ retrieveMultipleRecords: jest.fn(async (_entityLogicalName: string, _options?: string, _maxPageSize?: number) => response([{ contactid: "2", fullname: "Second" }])) }) });

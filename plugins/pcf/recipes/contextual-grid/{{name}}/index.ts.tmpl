@@ -213,11 +213,14 @@ export class {{name}} implements ComponentFramework.StandardControl<IInputs, IOu
     }
 }
 
-function gridQueryKey(config: { entityName: string; fetchXmlTemplate: string; recordId: string }): string {
+function gridQueryKey(config: { entityName: string; fetchXmlTemplate: string; recordId: string; pageSize: number }): string {
+    // The page size is part of the query: rows and the continuation link were fetched at one size,
+    // so a configured change restarts at the first page rather than mixing sizes on "Load more".
     return [
         config.entityName.trim().toLowerCase(),
         normalizeGuid(config.recordId) ?? config.recordId.trim().toLowerCase(),
         config.fetchXmlTemplate,
+        String(config.pageSize),
     ].join("\n");
 }
 
