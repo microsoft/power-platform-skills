@@ -73,7 +73,7 @@ test('PCF script CI watches every bundled telemetry source without widening unre
   const text = workflow(t, 'pcf-script-tests.yml');
   if (text === null) return;
   const globs = [];
-  for (const line of text.slice(text.indexOf('paths:')).split('\n').slice(1)) {
+  for (const line of text.slice(text.indexOf('paths:')).split(/\r?\n/).slice(1)) {
     const entry = /^\s+-\s+"([^"]+)"\s*$/.exec(line);
     if (entry) { globs.push(entry[1]); continue; }
     if (/^\s*(?:#.*)?$/.test(line)) continue;
