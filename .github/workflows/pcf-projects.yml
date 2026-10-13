@@ -20,6 +20,13 @@ on:
             # The package smoke starts pac through these two, so a change to either must run it.
             - "plugins/pcf/scripts/lib/pac-exec.js"
             - "plugins/pcf/scripts/lib/process-runner.js"
+            # pcf-ci-build.js and the gates it starts also load these, copies of model-apps helpers among
+            # them; pcf-projects-workflow.test.js fails if a file it loads is missing here.
+            - "plugins/pcf/scripts/lib/cli-failure.js"
+            - "plugins/pcf/scripts/lib/dataverse-auth.js"
+            - "plugins/pcf/scripts/lib/nearest-name.js"
+            - "plugins/pcf/scripts/lib/source-literals.js"
+            - "plugins/pcf/scripts/lib/xml-lite.js"
             - ".github/workflows/pcf-projects.yml"
 
 permissions:
