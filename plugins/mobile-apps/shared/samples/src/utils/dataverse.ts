@@ -4,6 +4,7 @@
  * re-implement these inline in screen files.
  */
 
+// @ts-ignore: expo-crypto is provided by the target Expo project
 import * as Crypto from 'expo-crypto';
 
 /**
@@ -47,6 +48,13 @@ export function formattedValue(
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
+/**
+ * Extracts the $skiptoken value from a Dataverse OData nextLink URL.
+ * Falls back to regex parsing if the URL constructor fails.
+ * 
+ * @param nextLink The @odata.nextLink string returned by a paginated query
+ * @returns The decoded skiptoken string, or undefined if not found
+ */
 export function extractSkipToken(nextLink: string | null | undefined): string | undefined {
   if (!nextLink) return undefined;
   try {
@@ -59,10 +67,25 @@ export function extractSkipToken(nextLink: string | null | undefined): string | 
 
 export const extractSkiptoken = extractSkipToken;
 
+/**
+ * Escapes single quotes in a string for safe inclusion in an OData query.
+ * Dataverse uses single quotes for string literals.
+ *
+ * @param value The string to escape
+ * @returns The escaped string
+ */
 export function escapeODataString(value: string): string {
   return value.replace(/'/g, "''");
 }
 
+/**
+ * Builds an OData contains() filter expression for a text column.
+ * Escapes the search text automatically.
+ *
+ * @param columnLogicalName The logical name of the Dataverse column
+ * @param searchText The text to search for
+ * @returns The OData filter string, or undefined if the text is empty
+ */
 export function containsFilter(columnLogicalName: string, searchText: string): string | undefined {
   const trimmed = searchText.trim();
   if (!trimmed) return undefined;
@@ -93,11 +116,12 @@ export function normalizeDataverseGuid(value: string | undefined | null): string
  * Usage:
  *   import { newId, lookupName } from '@/utils';
  *   const inspectionId = newId();
- *   await Cr3e9_inspectionService.create({
+ *   const payload: Pick<Parameters<typeof Cr3e9_inspectionService.create>[0], 'cr3e9_inspectionid' | 'cr3e9_aircraftid'> = {
  *     cr3e9_inspectionid: inspectionId,
  *     cr3e9_aircraftid: aircraftId,
  *     // ...
- *   } as any);
+ *   };
+ *   await Cr3e9_inspectionService.create(payload as Parameters<typeof Cr3e9_inspectionService.create>[0]);
  *   router.replace(`/inspections/${inspectionId}`);
  *
  * Guardrails:

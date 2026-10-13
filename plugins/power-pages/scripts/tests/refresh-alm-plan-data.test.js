@@ -210,6 +210,42 @@ test('refresh deploy-pipeline writes pipelineMeta.lastDeploy from docs/alm/last-
   assert.equal(planData.pipelineMeta.lastDeploy.stageName, 'Staging');
 });
 
+test('refresh I/O errors log to stderr when DEBUG is set', (t) => {
+  const root = makeProject(t);
+  writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
+    SITE_NAME: 'TestSite',
+    hostResolution: { status: 'NoHost' },
+  });
+  writeJson(path.join(root, 'docs', 'alm', 'last-host-check.json'), {
+    resolutionStatus: 'AvailableUsingCustomHost',
+  });
+
+  // Force an I/O error during mirrorHostResolutionSnapshot by making the temp target a directory
+  fs.mkdirSync(path.join(root, 'docs', 'alm', 'alm-host-resolution.json.tmp'), { recursive: true });
+
+  const origDebug = process.env.DEBUG;
+  process.env.DEBUG = '1';
+  const origError = console.error;
+  let loggedError = '';
+  console.error = (...args) => {
+    loggedError = args.join(' ');
+  };
+
+  try {
+    const result = refresh({ projectRoot: root, phase: 'setup-pipeline', render: false });
+    assert.equal(result.ok, true, 'refresh still succeeds (swallowed error)');
+    assert.match(loggedError, /Failed to mirror host resolution snapshot/);
+  } finally {
+    if (origDebug === undefined) {
+      delete process.env.DEBUG;
+    } else {
+      process.env.DEBUG = origDebug;
+    }
+    console.error = origError;
+  }
+});
+
+
 test('refresh test-site populates validationRuns[stage] from docs/alm/last-test-site.json', (t) => {
   const root = makeProject(t);
   writeJson(path.join(root, 'docs', '.alm-plan-data.json'), {
