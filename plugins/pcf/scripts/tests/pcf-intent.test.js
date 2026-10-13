@@ -200,6 +200,11 @@ test('validateIntent reports schema, name, enum, template, recipe, and binding s
   }
 });
 
+test('validateIntent accepts quick-view form bindings, as verify-pcf does', () => {
+  const binding = { ...exampleIntent().bindings[0], formType: 'quick-view' };
+  assert.deepEqual(validateIntent(exampleIntent({ bindings: [binding] })), []);
+});
+
 test('validateIntent requires every binding to declare kind', () => {
   const { kind, ...bindingWithoutKind } = {
     ...exampleIntent().bindings[0],
