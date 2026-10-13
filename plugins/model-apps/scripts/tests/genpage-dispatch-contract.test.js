@@ -437,7 +437,8 @@ test('the docs say the gates hold a page to what a run would add, and say what e
   assert.match(holds, /`griffelProblemsNotIn`: the same key set to the same value in the same place \(`within`: its slot, selectors and at-rules\), or failing that the same key and value anywhere that nothing else has claimed/);
   assert.match(holds, /A key given \*\*another value\*\* is new too: Griffel drops the new value as it dropped the old one, so the page would show none of the change the maker meant/);
   assert.match(holds, /the hash recorded is of the source the pages phase \*read and checked\* \(`created\.pageSourceShas`\), not of the file when the baseline is written as the build ends/);
-  assert.match(holds, /One gap is left: a non-navigation page is sent from its own file, which pac reads a moment after the build's check, so a page saved in between ships unchecked — the next build checks it, because the record holds the source that was checked and the file no longer matches it\./);
+  assert.match(holds, /What is sent is what was checked: every page, a navigation source or not, goes to pac from a staging copy of the bytes the scan read \(`writeStagingFile`\), never from its own file, so a save made after the check does not ship until a build has checked it\./);
+  assert.doesNotMatch(holds, /sent from its own file|ships unchecked/, 'no page is uploaded from its canonical file any more, so the guide must not describe the gap that closed');
   assert.match(holds, /`--overwrite-deployed` is no way past that/);
   assert.match(holds, /A call the checker cannot read\*\* is not CSS Griffel drops, and is not said to be/);
   assert.match(holds, /quotes a path that has white space/);
