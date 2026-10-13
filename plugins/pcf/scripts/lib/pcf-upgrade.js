@@ -341,13 +341,22 @@ function applyUpgrade(plan, projectDir, deps = {}) {
     if (deps.noInstall) {
       prepared.skipped.push('REINSTALL: run npm install in the PCF project');
     } else {
+      // npm can rewrite package-lock.json, or create one, before it fails, so snapshot it first.
+      const lockfile = snapshotFile(fsDep, path.join(projectDir, 'package-lock.json'));
       const install = runNpm(['install'], { cwd: projectDir, npmCli: deps.npmCli });
       if (install.status !== 0) {
+        // Leaving the pinned package.json beside a lockfile npm never refreshed is exactly the drift
+        // REINSTALL exists to prevent, so a failed install rolls the upgrade back like a failed write:
+        // the lockfile returns to its pre-install bytes, then every rewritten file to its original.
+        // node_modules cannot be restored this way; npm ci rebuilds it from the restored lockfile.
+        const lockRestore = restoreSnapshot(fsDep, lockfile);
+        const restored = restoreWrites(attempted, fsDep);
         const detail = [install.stderr, install.stdout, install.error].filter(Boolean).join('\n').trim();
-        const err = new Error(`npm install failed${detail ? `:\n${detail}` : ''}`);
-        err.changedFiles = changedFiles;
-        err.applied = prepared.applied;
+        const err = new Error(`npm install failed, so the upgrade was rolled back${restored.changedFiles.length || lockRestore.failed ? ' (some files could not be restored; see changedFiles)' : ''}. node_modules may be partly updated: run npm ci in the PCF project before retrying.${detail ? `\n${detail}` : ''}`);
+        err.applied = [];
         err.skipped = prepared.skipped;
+        err.restored = [...(lockRestore.restored ? [lockfile.file] : []), ...restored.restored];
+        err.changedFiles = [...(lockRestore.failed ? [lockfile.file] : []), ...restored.changedFiles];
         throw err;
       }
       prepared.applied.push('REINSTALL');
@@ -355,6 +364,33 @@ function applyUpgrade(plan, projectDir, deps = {}) {
   }
 
   return { applied: prepared.applied, skipped: prepared.skipped, changedFiles };
+}
+
+function snapshotFile(fsDep, file) {
+  try {
+    return { file, existed: true, bytes: fsDep.readFileSync(file) };
+  } catch {
+    return { file, existed: false, bytes: null };
+  }
+}
+
+function restoreSnapshot(fsDep, snapshot) {
+  // Put the lockfile back exactly as it was before npm ran: same bytes if it existed, gone if npm
+  // created it. `restored` is true only when npm had changed it, so an untouched file is not listed.
+  let current = null;
+  try { current = fsDep.readFileSync(snapshot.file); } catch { current = null; }
+  try {
+    if (snapshot.existed) {
+      if (current && Buffer.compare(Buffer.from(current), Buffer.from(snapshot.bytes)) === 0) return { restored: false, failed: false };
+      writeReplacement(fsDep, snapshot.file, snapshot.bytes);
+      return { restored: true, failed: false };
+    }
+    if (current === null) return { restored: false, failed: false };
+    fsDep.unlinkSync(snapshot.file);
+    return { restored: true, failed: false };
+  } catch {
+    return { restored: false, failed: true };
+  }
 }
 
 function writeReplacement(fsDep, file, content) {

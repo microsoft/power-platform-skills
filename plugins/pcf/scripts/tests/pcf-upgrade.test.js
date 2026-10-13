@@ -749,13 +749,15 @@ test('applyUpgrade writes a project reached through a linked parent directory', 
   }
 });
 
-test('runUpgrade reports changedFiles when reinstall fails after safe writes', () => {
+test('runUpgrade rolls back every rewritten file when reinstall fails after safe writes', () => {
   const { runUpgrade } = require('../lib/pcf-upgrade.js');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-upgrade-install-fail-'));
   try {
     const projectDir = path.join(tmp, 'StarRating');
     writeScaffold(renderedProject(), projectDir);
-    fs.writeFileSync(path.join(projectDir, 'package.json'), packageText('standard'));
+    const pkg = path.join(projectDir, 'package.json');
+    fs.writeFileSync(pkg, packageText('standard'));
+    const originalPackage = fs.readFileSync(pkg);
 
     const result = runUpgrade({ project: projectDir, apply: true, allowDirty: true }, {
       runNpm: () => ({ status: 1, stdout: 'nope', stderr: 'install failed' }),
@@ -763,10 +765,57 @@ test('runUpgrade reports changedFiles when reinstall fails after safe writes', (
 
     assert.equal(result.ok, false);
     assert.match(result.error, /npm install failed/);
-    assert.deepEqual(result.changedFiles.map((file) => path.basename(file)), ['package.json']);
+    assert.match(result.error, /rolled back/i);
+    assert.match(result.error, /npm ci/);
+    // Pinned package.json beside a lockfile npm never refreshed is the state REINSTALL exists to
+    // prevent, so nothing stays applied: the file is back to its original bytes.
+    assert.deepEqual(result.applied, []);
+    assert.deepEqual(result.changedFiles, []);
+    assert.deepEqual(result.restored.map((file) => path.basename(file)), ['package.json']);
+    assert.deepEqual(fs.readFileSync(pkg), originalPackage);
     assert.equal(result.after, null);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyUpgrade restores the lockfile a failed reinstall rewrote and removes one it created', () => {
+  const { applyUpgrade } = require('../lib/pcf-upgrade.js');
+  for (const hadLockfile of [true, false]) {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pcf-upgrade-lock-restore-'));
+    try {
+      const projectDir = path.join(tmp, 'StarRating');
+      fs.mkdirSync(projectDir, { recursive: true });
+      const pkg = path.join(projectDir, 'package.json');
+      const lock = path.join(projectDir, 'package-lock.json');
+      fs.writeFileSync(pkg, '{"name":"before"}\n');
+      const originalLock = Buffer.from('{"lockfileVersion":3,"name":"before"}\n');
+      if (hadLockfile) fs.writeFileSync(lock, originalLock);
+
+      assert.throws(() => applyUpgrade({
+        steps: [
+          { id: 'DEPS_TO_MATRIX', file: pkg, apply: () => '{"name":"after"}\n' },
+          { id: 'REINSTALL' },
+        ],
+      }, projectDir, {
+        runNpm: () => {
+          // npm can rewrite or create the lockfile before it fails.
+          fs.writeFileSync(lock, '{"lockfileVersion":3,"partial":true}\n');
+          return { status: 1, stdout: '', stderr: 'ETIMEDOUT' };
+        },
+      }), (err) => {
+        assert.match(err.message, /npm install failed/);
+        assert.deepEqual(err.applied, []);
+        assert.deepEqual(err.changedFiles, []);
+        return true;
+      });
+
+      assert.equal(fs.readFileSync(pkg, 'utf8'), '{"name":"before"}\n', `hadLockfile=${hadLockfile}`);
+      if (hadLockfile) assert.deepEqual(fs.readFileSync(lock), originalLock);
+      else assert.equal(fs.existsSync(lock), false, 'a lockfile the failed install created is removed');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   }
 });
 
