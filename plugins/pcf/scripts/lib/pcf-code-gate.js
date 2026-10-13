@@ -83,9 +83,9 @@ const SOURCE_RULES = [
 ];
 
 function scanSource(file, text, { controlType, lex = blankNonCodePreservingTemplateExpressions, indexer = indexSource } = {}) {
-  const src = String(text || '');
-  const lexed = lexSource(file, src, lex);
+  const lexed = lexSource(file, String(text || ''), lex);
   if (lexed.finding) return [lexed.finding];
+  const src = lexed.source;
   const mask = lexed.mask;
   const findings = [];
   let index;
@@ -438,10 +438,13 @@ function featureCoherence(manifestModel, sources, hosts = [], { lex = blankNonCo
 
   for (const source of sources || []) {
     const file = source.file || '<source>';
-    const text = String(source.text || '');
-    const lexed = lexSource(file, text, lex);
+    const raw = String(source.text || '');
+    const lexed = lexSource(file, raw, lex);
     if (lexed.finding) findings.push(lexed.finding);
-    const mask = lexed.finding ? text : lexed.mask;
+    // After a lexer failure there is no mask: the fallback reads the raw text. Otherwise read the
+    // lexed source, in which a .ts file's angle-bracket types are blanked.
+    const text = lexed.finding ? raw : lexed.source;
+    const mask = lexed.finding ? raw : lexed.mask;
     const fileUsed = new Set();
     const start = findings.length;
     const analyze = (index) => {
@@ -619,15 +622,130 @@ function unparseableFinding(file) {
     file, 1);
 }
 
+// Returns `source`, the text every later check reads. For a .ts file that is the text with its
+// angle-bracket types blanked (see lexTypeScriptAngleTypes); offsets and line numbers are unchanged.
 function lexSource(file, text, lex, opts) {
   try {
-    return { mask: lex(text, opts), finding: null };
+    if (isPlainTypeScript(file)) return { ...lexTypeScriptAngleTypes(text, lex, opts), finding: null };
+    return { source: text, mask: lex(text, opts), finding: null };
   } catch (err) {
     return {
+      source: text,
       mask: '',
       finding: unparseableFinding(file),
     };
   }
+}
+
+// The shared lexer reads TSX. A .ts file can hold two TypeScript forms that TypeScript itself parses
+// as JSX in a .tsx file, where they must be written `value as T` and `<T,>(…) =>` instead:
+//   this._input = <HTMLInputElement>document.createElement("input");    type assertion
+//   const first = <T>(items: T[]): T | undefined => items[0];           generic arrow
+// Lexed as TSX, each opens a JSX element, and the code after it is blanked as JSX text: a later
+// `context.device.captureImage()` went unreported, and a guard's proof stopped at the arrow.
+// A .ts file has no JSX, so a `<` where an operand starts can only open a type. Blank that `<…>` span
+// (types carry no calls) and lex again, until no such `<` remains. Only the span from the first
+// operand `<` on is in doubt after a pass, because the lexer read everything after it as JSX.
+// See TypeScript's TSX rules: https://www.typescriptlang.org/docs/handbook/jsx.html#the-as-operator
+const TS_ANGLE_TYPE_PASSES = 256;
+// Total characters lexed across passes. Past it, or past the pass limit, the file goes to the
+// lexer-failure path: one PCF_CODE_UNPARSEABLE warning, and its Pages API calls are treated as
+// unguarded (fail closed). Each pass re-lexes the whole file, because the lexer cannot restart midway
+// and its reading after the first JSX misread is not trusted, so the cost is the file size times its
+// angle-bracket types. 6M characters is a 40 KB control with 150 of them, about 1.5 s on a dev box.
+const TS_ANGLE_TYPE_BUDGET = 6000000;
+// Longest `<…>` type read. A longer one is far more likely an unbalanced `<` than a type.
+const TS_ANGLE_TYPE_MAX_CHARS = 4096;
+
+function isPlainTypeScript(file) {
+  // .ts, .mts and .cts. A .tsx file keeps the lexer's JSX reading.
+  return /\.[cm]?ts$/i.test(String(file || ''));
+}
+
+function lexTypeScriptAngleTypes(text, lex, opts) {
+  let source = text;
+  let from = 0;
+  let lexed = 0;
+  for (let pass = 0; ; pass += 1) {
+    lexed += source.length;
+    if (pass > TS_ANGLE_TYPE_PASSES || lexed > TS_ANGLE_TYPE_BUDGET) {
+      throw new Error('too many TypeScript angle-bracket types to analyze');
+    }
+    const mask = lex(source, opts);
+    const at = nextOperandAngle(mask, from);
+    if (at === -1) return { source, mask };
+    const end = angleTypeEnd(source, at);
+    if (end === -1) throw new Error('unterminated TypeScript angle-bracket type');
+    source = blankKeepingLines(source, at, end + 1);
+    from = end + 1;
+  }
+}
+
+function nextOperandAngle(mask, from) {
+  // The mask has strings, comments and template text blanked, so every `<` left in it is code.
+  // `a < b`, `f<T>(x)`, `Array<T>` and `x << 2` follow an operand; only a `<` where an operand
+  // starts (after `=`, `(`, `,`, `return`, ...) opens a type here.
+  for (let i = mask.indexOf('<', from); i !== -1; i = mask.indexOf('<', i + 1)) {
+    if (mask[i + 1] === '<' || mask[i + 1] === '=' || mask[i - 1] === '<') continue;
+    if (expressionPosition(mask, i)) return i;
+  }
+  return -1;
+}
+
+function angleTypeEnd(source, at) {
+  // Index of the `>` that closes the type opened at `at`, or -1. Type shapes this reads:
+  //   <HTMLInputElement>   <Array<Map<string, number>>>   <(x: number) => void>
+  //   <{ a: string; b: number }>   <"a" | "b">   <T extends Base = Base>
+  // `=>` is an arrow inside a function type, not a closer. A `;` outside braces, or a closer with
+  // no opener, cannot be in a type, so the `<` was not one.
+  let angles = 1;
+  let nest = 0;
+  const limit = Math.min(source.length, at + TS_ANGLE_TYPE_MAX_CHARS);
+  for (let i = at + 1; i < limit; i += 1) {
+    const c = source[i];
+    if (c === '"' || c === "'" || c === '`') {
+      i = quotedEnd(source, i, limit);
+      if (i === -1) return -1;
+    } else if (c === '/' && source[i + 1] === '/') {
+      i = source.indexOf('\n', i);
+      if (i === -1) return -1;
+    } else if (c === '/' && source[i + 1] === '*') {
+      const close = source.indexOf('*/', i + 2);
+      if (close === -1) return -1;
+      i = close + 1;
+    } else if (c === '(' || c === '[' || c === '{') {
+      nest += 1;
+    } else if (c === ')' || c === ']' || c === '}') {
+      if (nest === 0) return -1;
+      nest -= 1;
+    } else if (c === '<') {
+      angles += 1;
+    } else if (c === '>' && source[i - 1] !== '=') {
+      angles -= 1;
+      if (angles === 0) return nest === 0 ? i : -1;
+    } else if (c === ';' && nest === 0) {
+      return -1;
+    }
+  }
+  return -1;
+}
+
+function quotedEnd(source, start, limit) {
+  // A string or template literal type: `"a"`, `'b'`, `` `on${string}` ``. Index of its closing quote.
+  const quote = source[start];
+  for (let i = start + 1; i < limit; i += 1) {
+    if (source[i] === '\\') i += 1;
+    else if (source[i] === quote) return i;
+    else if (quote !== '`' && /[\n\r\u2028\u2029]/.test(source[i])) return -1;
+  }
+  return -1;
+}
+
+function blankKeepingLines(source, start, end) {
+  // Line terminators stay, so lineOf() reports the same line for every later finding.
+  return source.slice(0, start)
+    + source.slice(start, end).replace(/[^\n\r\u2028\u2029]/g, ' ')
+    + source.slice(end);
 }
 
 function stringLikeRanges(src, mask) {

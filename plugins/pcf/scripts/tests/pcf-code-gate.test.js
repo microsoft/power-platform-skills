@@ -6,6 +6,7 @@ const { parseManifest } = require('../lib/pcf-manifest.js');
 const { scanSource, featureCoherence, gateSources } = require('../lib/pcf-code-gate.js');
 
 const FILE = 'src/index.ts';
+const TSX_FILE = 'src/index.tsx';
 
 function codes(findings) {
   return findings.map((finding) => finding.code).sort();
@@ -73,7 +74,7 @@ const sourceRuleCases = [
   ['PCF_CODE_HOST_DOM', 'document.querySelector("#app");', 'container.querySelector("#app");'],
   ['PCF_CODE_HOST_DOM', 'document.body.classList.add("x");', 'container.classList.add("x");'],
   ['PCF_CODE_INNERHTML', 'container.innerHTML = "<p>x</p>";', 'container.textContent = "x";'],
-  ['PCF_CODE_INNERHTML', 'return <div dangerouslySetInnerHTML={{ __html: label }} />;', 'return <div>{label}</div>;'],
+  ['PCF_CODE_INNERHTML', 'return <div dangerouslySetInnerHTML={{ __html: label }} />;', 'return <div>{label}</div>;', TSX_FILE],
   ['PCF_CODE_STORAGE', 'localStorage.setItem("key", value);', 'this.state.value = value;'],
   ['PCF_CODE_STORAGE', 'sessionStorage.getItem("key");', 'this.state.value;'],
   ['PCF_CODE_DIRECT_API', 'const url = "/api/data/v9.2/accounts";', 'context.webAPI.retrieveMultipleRecords("account");'],
@@ -84,20 +85,22 @@ const sourceRuleCases = [
   ['PCF_CODE_INTERNAL_CONTEXT', '(context as any).factory.fireEvent(eventName, customizer);', 'context.factory.requestRender();'],
 ];
 
-for (const [code, bad, good] of sourceRuleCases) {
+// JSX samples are scanned as .tsx: JSX is not valid in a .ts file, which reads `<div …>` where an
+// operand starts as a TypeScript type.
+for (const [code, bad, good, file = FILE] of sourceRuleCases) {
   test(`scanSource reports ${code} for unsupported source`, () => {
-    assertCode(scan(bad), code, code === 'PCF_CODE_HOST_DOM' || code === 'PCF_CODE_INNERHTML' || code === 'PCF_CODE_STORAGE' || code === 'PCF_CODE_DIRECT_API' || code === 'PCF_CODE_REFRESH_IN_UPDATEVIEW' ? 'warning' : 'error');
+    assertCode(scanFile(file, bad), code, code === 'PCF_CODE_HOST_DOM' || code === 'PCF_CODE_INNERHTML' || code === 'PCF_CODE_STORAGE' || code === 'PCF_CODE_DIRECT_API' || code === 'PCF_CODE_REFRESH_IN_UPDATEVIEW' ? 'warning' : 'error', file);
   });
 
   test(`scanSource does not report ${code} for supported source`, () => {
-    assert.ok(!codes(scan(good)).includes(code));
+    assert.ok(!codes(scanFile(file, good)).includes(code));
   });
 
   test(`scanSource ignores ${code} tokens that appear only in comments or strings`, () => {
     if (code === 'PCF_CODE_DIRECT_API') {
-      assert.deepEqual(scan('// "/api/data/v9.2/accounts"'), []);
+      assert.deepEqual(scanFile(file, '// "/api/data/v9.2/accounts"'), []);
     } else {
-      assert.deepEqual(scan(`// ${bad}\nconst note = ${JSON.stringify(bad)};`), []);
+      assert.deepEqual(scanFile(file, `// ${bad}\nconst note = ${JSON.stringify(bad)};`), []);
     }
   });
 }
@@ -398,7 +401,9 @@ test('featureCoherence ignores Pages API words that appear only in comments or s
 });
 
 test('scanSource warns on hard-coded element ids and allows derived ids', () => {
-  const warned = (source) => scan(source).filter((finding) => finding.code === 'PCF_CODE_FIXED_ELEMENT_ID');
+  // JSX samples (those starting with `<`) are scanned as .tsx; DOM samples keep the .ts file.
+  const warned = (source) => scanFile(source.startsWith('<') ? TSX_FILE : FILE, source)
+    .filter((finding) => finding.code === 'PCF_CODE_FIXED_ELEMENT_ID');
   const positives = [
     '<div id="popup" />',
     "<label htmlFor={'popup'} />",
@@ -440,7 +445,7 @@ test('scanSource warns on hard-coded element ids and allows derived ids', () => 
   for (const source of negatives) {
     assert.deepEqual(warned(source), [], source);
   }
-  const gated = gateSources({ manifestModel: manifest(), sources: [{ file: FILE, text: '<div id="popup" />' }], hosts: ['model'] });
+  const gated = gateSources({ manifestModel: manifest(), sources: [{ file: TSX_FILE, text: '<div id="popup" />' }], hosts: ['model'] });
   assert.equal(gated.ok, true);
   assert.equal(gated.warnings.some((finding) => finding.code === 'PCF_CODE_FIXED_ELEMENT_ID'), true);
 });

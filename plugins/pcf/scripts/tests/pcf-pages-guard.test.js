@@ -449,13 +449,15 @@ test('Pages proof treats every root occurrence in a recognized head as a barrier
   for (const body of [
     `const f = (event = context) => { ${CALL}; };`,
     `const f = (event: context) => { ${CALL}; };`,
-    `const f = <context>(event) => { ${CALL}; };`,
     `const h = { [context.name](event) { ${CALL}; } };`,
     `const h = { get value(): context { ${CALL}; } };`,
     `const f = function named(event = context) { ${CALL}; };`,
   ]) {
     assert.deepEqual(codesFor(withinGuard(body)), ['PCF_PAGES_API'], body);
   }
+  // In a .ts file, `<context>` before a parameter list is a type-parameter list. A type cannot shadow
+  // the `context` value, so the gate blanks it as a type and the proof crosses.
+  assert.deepEqual(codesFor(withinGuard(`const f = <context>(event) => { ${CALL}; };`)), []);
 });
 
 test('Pages proof crosses recognized root-free callbacks, methods and accessors', () => {
@@ -974,13 +976,14 @@ test('Pages proof traverses input-sized positive conjunction nesting iteratively
 });
 
 test('Fixed-id detection keeps later JSX after unmatched braces and inside template expressions', () => {
+  // JSX is TSX, so scan these as a .tsx file; a .ts file reads `<div …>` where an operand starts as a type.
   for (const text of [
     'const value = a<{ broken; const node = <div id="fixed" />;',
     'const note = `prefix ${<div id="fixed" />} suffix`;',
     '<div title={">"} id="fixed" />',
     '<div title={"\\\" >"} id="fixed" />',
   ]) {
-    assert.deepEqual(scanSource(FILE, text).map((finding) => finding.code), ['PCF_CODE_FIXED_ELEMENT_ID'], text);
+    assert.deepEqual(scanSource('src/pages-control.tsx', text).map((finding) => finding.code), ['PCF_CODE_FIXED_ELEMENT_ID'], text);
   }
 });
 
@@ -1140,11 +1143,16 @@ for (const [name, receiver] of [['distinct receiver names', (i) => `p${i}`], ['o
   });
 }
 
-const LEXER_FAILURE_PREFIX = '!'.repeat(20000) + '/x/.test(value);';
+// The shared lexer no longer overflows on long unary chains (it used to throw on 20,000 `!`), and no
+// valid input is known to make it throw. Inject a lexer that throws as such a failure would: the
+// gate reaches the same lexSource catch path either way.
+const failingLex = () => { throw new RangeError('Maximum call stack size exceeded'); };
+const LEXER_FAILURE_PREFIX = 'const value = 1;';
+const LEX_FAILS = { lex: failingLex };
 
-test('Real lexer failures retain used features and fail closed for Pages calls', () => {
-  const text = '!'.repeat(20000) + '/x/.test(value); context.device.captureImage();';
-  const findings = findingsFor(text);
+test('Lexer failures retain used features and fail closed for Pages calls', () => {
+  const text = `${LEXER_FAILURE_PREFIX} context.device.captureImage();`;
+  const findings = findingsFor(text, undefined, undefined, LEX_FAILS);
   assert.deepEqual(findings.map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE', 'PCF_PAGES_API']);
   assert.equal(findings[0].severity, 'warning');
   assert.equal(findings[0].file, FILE);
@@ -1153,7 +1161,7 @@ test('Real lexer failures retain used features and fail closed for Pages calls',
   const gated = gateSources({
     manifestModel: { features: [{ name: 'Device.captureImage' }] },
     sources: [{ file: FILE, text }], hosts: ['pages'],
-  });
+  }, LEX_FAILS);
   assert.equal(gated.ok, false);
   assert.deepEqual(gated.warnings.map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE']);
   assert.deepEqual(gated.errors.map((finding) => finding.code), ['PCF_PAGES_API']);
@@ -1161,8 +1169,8 @@ test('Real lexer failures retain used features and fail closed for Pages calls',
 
 test('API-free lexer failures emit one combined warning and no Pages finding', () => {
   const text = LEXER_FAILURE_PREFIX;
-  assert.deepEqual(findingsFor(text, null).map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE']);
-  const gated = gateSources({ manifestModel: EMPTY_MANIFEST, sources: [{ file: FILE, text }], hosts: ['pages'] });
+  assert.deepEqual(findingsFor(text, null, undefined, LEX_FAILS).map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE']);
+  const gated = gateSources({ manifestModel: EMPTY_MANIFEST, sources: [{ file: FILE, text }], hosts: ['pages'] }, LEX_FAILS);
   assert.equal(gated.ok, true);
   assert.deepEqual(gated.errors, []);
   assert.deepEqual(gated.warnings.map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE']);
@@ -1171,8 +1179,9 @@ test('API-free lexer failures emit one combined warning and no Pages finding', (
 test('Lexer-failure fallback is conservatively allowed to detect comments and strings', () => {
   for (const inert of [`// ${CALL};`, `const note = "${CALL};";`]) {
     const text = `${LEXER_FAILURE_PREFIX}\n${inert}`;
-    assert.deepEqual(findingsFor(text).map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE', 'PCF_PAGES_API']);
-    assert.equal(findingsFor(text)[1].line, 2);
+    const findings = findingsFor(text, undefined, undefined, LEX_FAILS);
+    assert.deepEqual(findings.map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE', 'PCF_PAGES_API']);
+    assert.equal(findings[1].line, 2);
   }
 });
 
@@ -1180,13 +1189,86 @@ test('Lexer-failure fallback retains each namespace feature and warning file ide
   const manifestModel = { features: ['Device.captureImage', 'Utility', 'WebAPI'].map((name) => ({ name })) };
   const text = `${LEXER_FAILURE_PREFIX}\nprops.context.device.captureImage(); this._ctx.utils.lookupObjects(); ctx.webAPI.retrieveRecord();`;
   const sources = [{ file: FILE, text }, { file: 'src/helper.ts', text: LEXER_FAILURE_PREFIX }];
-  assert.deepEqual(featureCoherence(manifestModel, sources, ['model']).map((finding) => finding.code),
+  assert.deepEqual(featureCoherence(manifestModel, sources, ['model'], LEX_FAILS).map((finding) => finding.code),
     ['PCF_CODE_UNPARSEABLE', 'PCF_CODE_UNPARSEABLE']);
-  const gated = gateSources({ manifestModel, sources, hosts: ['pages'] });
+  const gated = gateSources({ manifestModel, sources, hosts: ['pages'] }, LEX_FAILS);
   assert.equal(gated.ok, false);
   assert.deepEqual(gated.errors.map((finding) => finding.code), ['PCF_PAGES_API', 'PCF_PAGES_API']);
   assert.deepEqual(gated.warnings.map((finding) => [finding.code, finding.file]),
     [['PCF_CODE_UNPARSEABLE', FILE], ['PCF_CODE_UNPARSEABLE', 'src/helper.ts']]);
+});
+
+// TypeScript-only angle brackets in a .ts file (FILE is .ts). The shared lexer reads TSX, where these
+// would open JSX elements and blank the code after them.
+const TS_ANGLE_TYPES = [
+  ['type assertion', 'this._input = <HTMLInputElement>document.createElement("input");'],
+  ['nested generic type', 'const items = <Array<Map<string, number>>>value;'],
+  ['function type', 'const handler = <(x: number) => void>callback;'],
+  ['object type with semicolons', 'const shape = <{ a: string; b: number }>raw;'],
+  ['string literal union', 'const kind = <"a" | "b">mode;'],
+  ['generic arrow', 'const first = <T>(items: T[]): T | undefined => items[0];'],
+  ['parenthesized assertion', 'const parsed = (<Record<string, unknown>>JSON.parse(text)).value;'],
+  ['multi-line type', 'const typed = <\n    Record<string, unknown>\n  >raw;'],
+];
+
+for (const [name, statement] of TS_ANGLE_TYPES) {
+  test(`.ts ${name} does not hide later calls from the gate`, () => {
+    const text = `function init(context) {\n  ${statement}\n  ${CALL};\n}`;
+    const callLine = text.split('\n').findIndex((line) => line.includes('captureImage')) + 1;
+    assert.deepEqual(findingsFor(text).map((finding) => [finding.code, finding.line]), [['PCF_PAGES_API', callLine]]);
+    const utility = text.replace(CALL, 'context.utils.lookupObjects()');
+    assert.deepEqual(findingsFor(utility, null, ['model']).map((finding) => finding.code), ['PCF_FEATURE_UNDECLARED']);
+  });
+}
+
+test('.ts guards prove calls inside generic arrows and after type assertions', () => {
+  assert.deepEqual(codesFor(withinGuard(`const run = <T>(item: T): T => { ${CALL}; return item; };`)), []);
+  assert.deepEqual(codesFor(withinGuard(`const el = <HTMLDivElement>document.createElement("div"); ${CALL};`)), []);
+  // Comparisons, generic calls and type arguments are not types where an operand starts.
+  assert.deepEqual(codesFor(withinGuard(`if (count < limit) { run<number>(1); ${CALL}; }`)), []);
+});
+
+test('.tsx sources keep TypeScript\'s JSX reading of angle brackets', () => {
+  const tsx = (text) => featureCoherence({ features: [{ name: 'Device.captureImage' }] },
+    [{ file: 'src/App.tsx', text }], ['pages']).map((finding) => finding.code);
+  // A TSX generic arrow is written <T,>; the guard proof still crosses it.
+  assert.deepEqual(tsx(withinGuard(`const run = <T,>(item: T): T => { ${CALL}; return item; };`)), []);
+  assert.deepEqual(tsx(`export const App = () => <div className="x">{label}</div>;\nexport function capture(context) { return ${CALL}; }`),
+    ['PCF_PAGES_API']);
+});
+
+test('.ts angle-bracket types the gate cannot blank fall back fail closed', () => {
+  for (const [name, text] of [
+    ['unterminated type', `const value = <Record<string, unknown>raw;\n${CALL};`],
+    ['more types than the pass limit', `let v;\n${'v = <T>v;\n'.repeat(300)}${CALL};`],
+  ]) {
+    assert.deepEqual(scanSource(FILE, text).map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE'], name);
+    const gated = gateSources({
+      manifestModel: { features: [{ name: 'Device.captureImage' }] },
+      sources: [{ file: FILE, text }], hosts: ['pages'],
+    });
+    assert.deepEqual(gated.warnings.map((finding) => finding.code), ['PCF_CODE_UNPARSEABLE'], name);
+    assert.deepEqual(gated.errors.map((finding) => finding.code), ['PCF_PAGES_API'], name);
+  }
+});
+
+test('Source analysis bounds a .ts control with many angle-bracket types', (t) => {
+  // Each blanked type costs one more lex of the whole file; a large control with 30 assertions
+  // must still finish well within the bound and keep its findings.
+  const lines = ['export class C {', '  public init(context: ComponentFramework.Context<IInputs>): void {'];
+  for (let i = 0; i < 900; i += 1) {
+    lines.push(i % 30 === 0
+      ? `    const el${i} = <HTMLDivElement>document.createElement("div"); el${i}.className = "row-${i}";`
+      : `    const value${i}: Array<number> = [${i}, ${i + 1}]; total += value${i}.length > 1 ? ${i} : 0;`);
+  }
+  lines.push(`    ${CALL};`, '  }', '}');
+  const text = lines.join('\n');
+  const started = performance.now();
+  const findings = findingsFor(text);
+  const elapsed = performance.now() - started;
+  t.diagnostic(`.ts angle-type timing: ${elapsed.toFixed(3)} ms; ${Buffer.byteLength(text)} bytes`);
+  assert.ok(elapsed < PATHOLOGICAL_SCAN_LIMIT_MS, `${elapsed.toFixed(3)} ms exceeds ${PATHOLOGICAL_SCAN_LIMIT_MS} ms`);
+  assert.deepEqual(findings.map((finding) => [finding.code, finding.line]), [['PCF_PAGES_API', lines.length - 2]]);
 });
 
 for (const relative of [
@@ -1202,8 +1284,8 @@ for (const relative of [
     if (relative === 'AGENTS.md') {
       assert.match(text, /later release[^.\n]*parameter-default writes[^.\n]*body declarations/i);
       assert.match(text, /computed class member keys/i);
-      assert.match(text, /U\+2028\/U\+2029[^.\n]*comments/i);
-      assert.match(text, /copied lexer's recursion limit[^.\n]*unguarded reporting/i);
+      assert.match(text, /\.ts` files[^.\n]*angle-bracket types[^.\n]*JSX/i);
+      assert.match(text, /unterminated such type[^.\n]*lexer-failure path/i);
     } else {
       assert.doesNotMatch(text, /parameter-default writes|computed class member keys|U\+2028\/U\+2029|copied lexer's recursion limit/i);
     }
