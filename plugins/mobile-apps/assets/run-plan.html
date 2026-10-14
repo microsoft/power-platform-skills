@@ -74,7 +74,9 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 .layout{display:flex;min-height:calc(100vh - 65px);flex:1;min-width:0;}
 .rail{width:430px;flex-shrink:0;position:sticky;top:65px;height:calc(100vh - 65px - var(--footer-h));display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px 20px;border-left:1px solid var(--border);background:var(--surface);}
 .rail-title{font-size:11px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;}
-.device{width:300px;height:620px;border-radius:40px;background:#1f1f1f;border:9px solid #2e2e2e;box-shadow:var(--shadow-4),0 18px 46px rgba(0,0,0,0.22);position:relative;overflow:hidden;flex-shrink:0;}
+/* The sticky rail is shorter than the viewport because the topbar and footer remain visible.
+   Fit the phone to that space so its label and caption do not disappear on laptop-height windows. */
+.device{height:min(620px,calc(100vh - 65px - var(--footer-h) - 150px));width:auto;max-width:calc(100vw - 44px);aspect-ratio:300/620;border-radius:40px;background:#1f1f1f;border:9px solid #2e2e2e;box-shadow:var(--shadow-4),0 18px 46px rgba(0,0,0,0.22);position:relative;overflow:hidden;flex-shrink:0;}
 .device-notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:118px;height:22px;background:#2e2e2e;border-radius:0 0 14px 14px;z-index:5;}
 .device-screen{position:absolute;inset:0;background:#faf9f8;overflow:hidden;}
 .device-screen iframe{border:0;}
@@ -111,11 +113,11 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14
 .rail-caption{font-size:12px;color:var(--text-dim);text-align:center;min-height:32px;padding:0 10px;}
 /* Stage 3 - QR */
 .qr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:#fff;padding:0 26px;text-align:center;}
-.qr img{width:196px;height:196px;}
+.qr img{width:min(196px,100%);height:auto;}
 .qr-title{font-size:16px;font-weight:700;color:#201f1e;}
 .qr-sub{font-size:12.5px;color:#605e5c;line-height:1.55;}
 .qr-url{font-family:var(--mono);font-size:11px;color:#0078d4;word-break:break-all;}
-@media(max-width:1180px){.shell{flex-direction:column;}.rail{width:100%;position:static;height:auto;border-left:none;border-top:1px solid var(--border);}}
+@media(max-width:1180px){.shell{flex-direction:column;}.rail{width:100%;position:static;height:auto;border-left:none;border-top:1px solid var(--border);}.device{height:auto;width:min(300px,calc(100vw - 44px));}}
 .sidebar{width:240px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;}
 .nav-group-label{font-size:10px;font-weight:700;color:var(--text-dim);text-transform:uppercase;letter-spacing:1.2px;padding:16px 22px 6px;}
 .nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:11px 22px;background:none;border:none;border-left:2px solid transparent;color:var(--text-dim);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--sans);text-align:left;transition:all 0.15s;}
